@@ -1,41 +1,30 @@
-[2026-07-18 11:46:05] [print:] === System Monitor: Usage Snapshot ===
-[2026-07-18 11:46:05] [print:] Filter='' IncludedPhases=Draw,Main,Update Rows=43 Printed=15 IncludedAvgTotal=4.597ms
-[2026-07-18 11:46:05] [print:] [Mission Map +.py] total_avg=1.170ms draw=1.168ms main=0.003ms update=0.000ms members=2
-[2026-07-18 11:46:05] [print:] subjects=Mission Map +.py
-[2026-07-18 11:46:05] [print:] scripts=Guild Wars\Screen Overlays/Mission Map +.py
-[2026-07-18 11:46:05] [print:] [WidgetManager] total_avg=1.166ms draw=1.160ms main=0.000ms update=0.006ms members=2
-[2026-07-18 11:46:05] [print:] subjects=Draw, Update
-[2026-07-18 11:46:05] [print:] [Widget Profiler.py] total_avg=0.382ms draw=0.350ms main=0.000ms update=0.032ms members=2
-[2026-07-18 11:46:05] [print:] subjects=Widget Profiler.py
-[2026-07-18 11:46:05] [print:] scripts=Coding\Debug\Py4GW/Widget Profiler.py
-[2026-07-18 11:46:05] [print:] [HeroAI.py] total_avg=0.382ms draw=0.000ms main=0.382ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=HeroAI.py
-[2026-07-18 11:46:05] [print:] scripts=Automation\Multiboxing/HeroAI.py
-[2026-07-18 11:46:05] [print:] [System Monitor.py] total_avg=0.360ms draw=0.336ms main=0.000ms update=0.024ms members=2
-[2026-07-18 11:46:05] [print:] subjects=System Monitor.py
-[2026-07-18 11:46:05] [print:] scripts=Coding\Debug\Py4GW/System Monitor.py
-[2026-07-18 11:46:05] [print:] [SharedMemory] total_avg=0.299ms draw=0.299ms main=0.000ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=SharedMemory
-[2026-07-18 11:46:05] [print:] [Tick] total_avg=0.136ms draw=0.136ms main=0.000ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=Interrupt
-[2026-07-18 11:46:05] [print:] [InventoryPlus.py] total_avg=0.117ms draw=0.000ms main=0.117ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=InventoryPlus.py
-[2026-07-18 11:46:05] [print:] scripts=Guild Wars\Items & Loot/InventoryPlus.py
-[2026-07-18 11:46:05] [print:] [Switch Character.py] total_avg=0.109ms draw=0.000ms main=0.109ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=Switch Character.py
-[2026-07-18 11:46:05] [print:] scripts=Guild Wars/Switch Character.py
-[2026-07-18 11:46:05] [print:] [Travel.py] total_avg=0.062ms draw=0.000ms main=0.062ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=Travel.py
-[2026-07-18 11:46:05] [print:] scripts=Guild Wars/Travel.py
-[2026-07-18 11:46:05] [print:] [ServerRegion] total_avg=0.049ms draw=0.049ms main=0.000ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=ServerRegion
-[2026-07-18 11:46:05] [print:] [Environment Upkeeper.py] total_avg=0.048ms draw=0.000ms main=0.048ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=Environment Upkeeper.py
-[2026-07-18 11:46:05] [print:] scripts=System/Environment Upkeeper.py
-[2026-07-18 11:46:05] [print:] [TextParser] total_avg=0.041ms draw=0.041ms main=0.000ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=TextParser
-[2026-07-18 11:46:05] [print:] [Enemy Tracker.py] total_avg=0.037ms draw=0.000ms main=0.037ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=Enemy Tracker.py
-[2026-07-18 11:46:05] [print:] scripts=System/Enemy Tracker.py
-[2026-07-18 11:46:05] [print:] [SystemSharedMemory] total_avg=0.035ms draw=0.035ms main=0.000ms update=0.000ms members=1
-[2026-07-18 11:46:05] [print:] subjects=SystemSharedMemory
+[2026-07-19 01:21:36] [print:] === System Monitor: Deep Profile for Launchpad ===
+[2026-07-19 01:21:36] [print:] FramesCaptured=120 RootCount=1 Zoomed=no
+[2026-07-19 01:21:36] [print:] Top roots by cumulative/frame:
+[2026-07-19 01:21:36] [print:] - LaunchBar.main: cum=0.682ms/frame
+[2026-07-19 01:21:36] [print:] Top functions by cumulative/frame:
+[2026-07-19 01:21:36] [print:] - LaunchBar.main: self=0.006ms/frame cum=0.682ms/frame calls/frame=0.66
+[2026-07-19 01:21:36] [print:] - manager.draw: self=0.010ms/frame cum=0.671ms/frame calls/frame=0.66
+[2026-07-19 01:21:36] [print:] - host.draw: self=0.065ms/frame cum=0.567ms/frame calls/frame=1.32
+[2026-07-19 01:21:36] [print:] - host._draw_content: self=0.032ms/frame cum=0.335ms/frame calls/frame=1.32
+[2026-07-19 01:21:36] [print:] - host._draw_tile: self=0.121ms/frame cum=0.288ms/frame calls/frame=14.48
+[2026-07-19 01:21:36] [print:] - widget_runtime.get: self=0.047ms/frame cum=0.093ms/frame calls/frame=13.17
+[2026-07-19 01:21:36] [print:] - host._draw_strip: self=0.027ms/frame cum=0.090ms/frame calls/frame=1.32
+[2026-07-19 01:21:36] [print:] - manager._sync_preset_bars: self=0.003ms/frame cum=0.078ms/frame calls/frame=0.66
+[2026-07-19 01:21:36] [print:] - manager._sync_preset_bar: self=0.018ms/frame cum=0.075ms/frame calls/frame=0.66
+[2026-07-19 01:21:36] [print:] - manager._preset_items: self=0.007ms/frame cum=0.051ms/frame calls/frame=0.66
+[2026-07-19 01:21:36] [print:] - pybind11_detail_function_record_v1_msvc_md_mscver19.IconTile: self=0.041ms/frame cum=0.041ms/frame calls/frame=14.48
+[2026-07-19 01:21:36] [print:] - sorted: self=0.013ms/frame cum=0.036ms/frame calls/frame=0.66
+[2026-07-19 01:21:36] [print:] - getattr: self=0.027ms/frame cum=0.030ms/frame calls/frame=45.42
+[2026-07-19 01:21:36] [print:] - widget_runtime._handler: self=0.024ms/frame cum=0.027ms/frame calls/frame=15.14
+[2026-07-19 01:21:36] [print:] - manager.<lambda>: self=0.018ms/frame cum=0.022ms/frame calls/frame=11.85
+[2026-07-19 01:21:36] [print:] - host._draw_grip_dots: self=0.010ms/frame cum=0.021ms/frame calls/frame=1.32
+[2026-07-19 01:21:36] [print:] - host._geometry: self=0.006ms/frame cum=0.020ms/frame calls/frame=1.32
+[2026-07-19 01:21:36] [print:] - host._tile_face: self=0.010ms/frame cum=0.015ms/frame calls/frame=14.48
+[2026-07-19 01:21:36] [print:] - dict.get: self=0.015ms/frame cum=0.015ms/frame calls/frame=33.58
+[2026-07-19 01:21:36] [print:] - pybind11_detail_function_record_v1_msvc_md_mscver19.set_next_window_pos: self=0.014ms/frame cum=0.014ms/frame calls/frame=1.32
+[2026-07-19 01:21:36] [print:] - pybind11_detail_function_record_v1_msvc_md_mscver19.push_style_color: self=0.013ms/frame cum=0.013ms/frame calls/frame=5.27
+[2026-07-19 01:21:36] [print:] - model.content_size: self=0.010ms/frame cum=0.012ms/frame calls/frame=1.32
+[2026-07-19 01:21:36] [print:] - pybind11_detail_function_record_v1_msvc_md_mscver19.add_rect_filled: self=0.010ms/frame cum=0.010ms/frame calls/frame=1.32
+[2026-07-19 01:21:36] [print:] - pybind11_detail_function_record_v1_msvc_md_mscver19.add_circle_filled: self=0.009ms/frame cum=0.009ms/frame calls/frame=3.95
+[2026-07-19 01:21:36] [print:] - widget_runtime.list_widgets: self=0.003ms/frame cum=0.009ms/frame calls/frame=0.66

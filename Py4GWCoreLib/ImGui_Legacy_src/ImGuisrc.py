@@ -1073,72 +1073,25 @@ class ImGui_Legacy:
                                         
     @staticmethod
     def image_button(label: str, texture_path: str, width: float=32, height: float=32, disabled: bool=False, appearance: ControlAppearance=ControlAppearance.Default) -> bool:
-        #MATCHING IMGUI SIGNATURES AND USAGE
-        enabled = not disabled
-        clicked = False
-        
-        if disabled: PyImGui.begin_disabled(disabled)
-        style = ImGui_Legacy.get_style()
-        
-        current_style_var = style.ButtonPadding.get_current()
-        btn_padding = (width / 8, height / 8)
-        
-        if current_style_var.img_style_enum:
-            PyImGui.push_style_var_vec2(current_style_var.img_style_enum, (btn_padding[0], btn_padding[1]))             
-        
+        # The button + transparent label + textured draw is done in one native call
+        # (PyImGui.Ext.ImageButton), collapsing the ~8 Python<->C++ crossings this
+        # used to make per call. Only the optional Primary/Danger appearance colors
+        # are still resolved from the Style here and pushed around the native call.
+        # Every caller of image_button gets the speed-up without any call-site change.
         button_colors = []
-            
-        match (appearance):
-            case ControlAppearance.Primary:
-                button_colors = [
-                    style.PrimaryButton,
-                    style.PrimaryButtonHovered,
-                    style.PrimaryButtonActive,
-                ]
-
-            case ControlAppearance.Danger:
-                button_colors = [
-                    style.DangerButton,
-                    style.DangerButtonHovered,
-                    style.DangerButtonActive,
-                ]
-
-        if enabled:
+        if not disabled and appearance != ControlAppearance.Default:
+            style = ImGui_Legacy.get_style()
+            if appearance == ControlAppearance.Primary:
+                button_colors = [style.PrimaryButton, style.PrimaryButtonHovered, style.PrimaryButtonActive]
+            elif appearance == ControlAppearance.Danger:
+                button_colors = [style.DangerButton, style.DangerButtonHovered, style.DangerButtonActive]
             for button_color in button_colors:
                 button_color.push_color()
-        
-        ImGui_Legacy.push_style_color(PyImGui.ImGuiCol.Text, (0, 0, 0, 0))
-        ImGui_Legacy.push_style_color(PyImGui.ImGuiCol.TextDisabled, (0, 0, 0, 0))
-        clicked = PyImGui.button("##image_button " + label, width, height)
-        ImGui_Legacy.pop_style_color(2)
-        
-        item_rect_min = PyImGui.get_item_rect_min()
-        item_rect_max = PyImGui.get_item_rect_max()
-        
-        width = item_rect_max[0] - item_rect_min[0] + 2
-        height = item_rect_max[1] - item_rect_min[1] + 2
 
-        x,y = item_rect_min
-        button_texture_rect = (x, y, width, height)
+        clicked = PyImGui.Ext.ImageButton("##image_button " + label, texture_path, width, height, disabled)
 
-        texture_pos = (button_texture_rect[0] + btn_padding[0], button_texture_rect[1] + (btn_padding[1] or 0))
-        texture_size = (width - (btn_padding[0] * 2), height - ((btn_padding[1] or 0) * 2))
-        texture_tint = (255, 255, 255, 255) if enabled else (255, 255, 255, 155)
-        ImGui_Legacy.DrawTextureInDrawList(
-            texture_pos,
-            texture_size,
-            texture_path,
-            tint=texture_tint
-        )
-        
-        if enabled:
-            for button_color in button_colors:
-                button_color.pop_color()
-
-        if current_style_var.img_style_enum:
-            PyImGui.pop_style_var(1)
-            
-        if disabled: PyImGui.end_disabled()
+        for button_color in button_colors:
+            button_color.pop_color()
         return clicked
     
     @staticmethod

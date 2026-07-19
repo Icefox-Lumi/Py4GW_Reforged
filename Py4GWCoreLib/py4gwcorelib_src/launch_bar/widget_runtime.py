@@ -32,6 +32,47 @@ def _validated_icon(raw: str) -> str:
     return cached
 
 
+# Static per-widget fields (name / icon / category / folder / configurable) do not
+# change frame to frame, but _meta() runs ~180x/frame (once per tile). Compute them
+# once per widget id and cache; each frame only the dynamic enabled/configuring are
+# read. Keyed by the stable widget id -- a reloaded widget keeps its cached static
+# fields until the process restarts, which is fine for a launch bar.
+_STATIC_META: dict[str, tuple] = {}
+
+# Whole-list cache: list_widgets() rebuilds only when the handler's widgets_revision
+# changes (see WidgetHandler.widgets_revision), so nothing-changed frames cost O(1).
+_LIST_CACHE: list = []
+_LIST_REV: int = -1
+
+# {id: WidgetMeta} index for O(1) get() by id, rebuilt from the cached list only
+# when widgets_revision changes. Tiles resolve their meta every frame, so this
+# avoids a get_widget_info + _meta per tile per frame.
+_META_BY_ID: dict = {}
+_META_BY_ID_REV: int = -1
+
+
+def _static_meta(widget_id: str, w) -> tuple:
+    """(name, icon, category, folder, configurable) for a widget, cached by id."""
+    cached = _STATIC_META.get(widget_id)
+    if cached is not None:
+        return cached
+    folder = str(getattr(w, "widget_path", "") or "")
+    if not folder:  # derive from the id: "a/b/c/Widget.py" -> "a/b/c"
+        rel = widget_id.replace("\\", "/").rsplit(".", 1)[0]
+        folder = rel.rsplit("/", 1)[0] if "/" in rel else ""
+    folder = folder.replace("\\", "/").strip("/")
+    category = str(getattr(w, "category", "") or "") or (folder.split("/")[0] if folder else "")
+    static = (
+        str(getattr(w, "name", "") or widget_id),
+        _validated_icon(str(getattr(w, "image", "") or "")),
+        category,
+        folder,
+        bool(getattr(w, "has_configure_property", False)),
+    )
+    _STATIC_META[widget_id] = static
+    return static
+
+
 @dataclass
 class WidgetMeta:
     """Read-only view of one widget for the launch bar."""
@@ -61,19 +102,17 @@ class WidgetRuntime:
     """Enumerate + toggle + configure widgets through the handler. Safe when it's unavailable."""
 
     def _meta(self, widget_id: str, w) -> WidgetMeta:
-        folder = str(getattr(w, "widget_path", "") or "")
-        if not folder:  # derive from the id: "a/b/c/Widget.py" -> "a/b/c"
-            rel = widget_id.replace("\\", "/").rsplit(".", 1)[0]
-            folder = rel.rsplit("/", 1)[0] if "/" in rel else ""
-        folder = folder.replace("\\", "/").strip("/")
-        category = str(getattr(w, "category", "") or "") or (folder.split("/")[0] if folder else "")
+        # Static fields are cached (see _static_meta); only enabled/configuring are
+        # read per frame -- this drops ~6 getattrs + all the string work per call,
+        # and _meta runs ~180x/frame.
+        name, icon, category, folder, configurable = _static_meta(widget_id, w)
         return WidgetMeta(
             id=widget_id,
-            name=str(getattr(w, "name", "") or widget_id),
-            icon=_validated_icon(str(getattr(w, "image", "") or "")),
+            name=name,
+            icon=icon,
             category=category,
             enabled=bool(getattr(w, "enabled", False)),
-            configurable=bool(getattr(w, "has_configure_property", False)),
+            configurable=configurable,
             folder=folder,
             configuring=bool(getattr(w, "configuring", False)),
         )
@@ -82,13 +121,36 @@ class WidgetRuntime:
         h = _handler()
         if h is None:
             return []
+        # Rebuild only when the handler signals a real change (widgets_revision);
+        # otherwise return the cached list. list_widgets() runs several times/frame
+        # (preset bars, browser), so this turns ~180 _meta() calls/frame into 0
+        # while nothing changes. Falls back to per-call rebuild if the signal is
+        # absent (older handler).
+        global _LIST_CACHE, _LIST_REV
+        rev = getattr(h, "widgets_revision", None)
+        if rev is not None and rev == _LIST_REV:
+            return _LIST_CACHE
         out = []
         for widget_id, w in getattr(h, "widgets", {}).items():
             try:
                 out.append(self._meta(widget_id, w))
             except Exception:
                 continue
+        if rev is not None:
+            _LIST_CACHE = out
+            _LIST_REV = rev
         return out
+
+    def revision(self) -> int:
+        """The handler's widget-set revision (bumps on enable/disable/discover).
+
+        Callers cache per-widget derived data (labels, tooltips, enabled state) against
+        this so they rebuild only when the widget set actually changes. Returns 0 when
+        the handler or the signal is unavailable (older handler) -- a constant, so such
+        callers should treat 0 as "no change signal" if they need per-frame freshness.
+        """
+        h = _handler()
+        return int(getattr(h, "widgets_revision", 0)) if h is not None else 0
 
     def _widget(self, widget_id: str):
         h = _handler()
@@ -100,8 +162,21 @@ class WidgetRuntime:
             return None
 
     def get(self, widget_id: str) -> Optional[WidgetMeta]:
-        w = self._widget(widget_id)
-        return self._meta(widget_id, w) if w is not None else None
+        # Tiles call this every frame; resolve from a revision-cached {id: meta}
+        # index (built off the already-cached list_widgets) instead of re-running
+        # get_widget_info + _meta per tile per frame.
+        h = _handler()
+        if h is None:
+            return None
+        rev = getattr(h, "widgets_revision", None)
+        if rev is None:  # no change signal -> uncached fallback
+            w = self._widget(widget_id)
+            return self._meta(widget_id, w) if w is not None else None
+        global _META_BY_ID, _META_BY_ID_REV
+        if rev != _META_BY_ID_REV:
+            _META_BY_ID = {m.id: m for m in self.list_widgets()}
+            _META_BY_ID_REV = rev
+        return _META_BY_ID.get(widget_id)
 
     def tooltip_text(self, widget_id: str) -> str:
         m = self.get(widget_id)
@@ -229,12 +304,14 @@ class WidgetRuntime:
             pass
 
     def set_configuring(self, widget_id: str, value: bool = True) -> None:
-        h = _handler()
+        # _widget() resolves by the FULL unique id; set the flag on that exact widget
+        # rather than round-tripping through the handler's non-unique plain_name lookup
+        # (which could toggle configure on a different widget that shares a plain_name).
         w = self._widget(widget_id)
-        if h is None or w is None:
+        if w is None:
             return
         try:
-            h.set_widget_configuring(w.plain_name, value)
+            w.set_configuring(value)
         except Exception:
             pass
 

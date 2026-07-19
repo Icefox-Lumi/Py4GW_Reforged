@@ -1400,3 +1400,14 @@ class _ImPlotModule:
     def bust_color_cache(self) -> None: ...
 
 implot: _ImPlotModule
+
+
+# PyImGui.Ext — composite native widgets (kept separate from the core surface).
+class _ExtLaunchBarModule:
+    def IconTile(self, label: str, x: float, y: float, width: float, height: float, texture_path: str = "", disabled: bool = False, tooltip: str = "", overlay_fill: int = 0, overlay_outline: int = 0) -> bool: ...
+
+class _ExtModule:
+    def ImageButton(self, label: str, texture_path: str, width: float = 32.0, height: float = 32.0, disabled: bool = False) -> bool: ...
+    LaunchBar: _ExtLaunchBarModule
+
+Ext: _ExtModule

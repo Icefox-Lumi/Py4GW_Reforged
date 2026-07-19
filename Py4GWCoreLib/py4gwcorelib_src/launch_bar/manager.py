@@ -239,12 +239,19 @@ class LaunchBarManager:
 
     # ---- persistence (account Settings document) ------------------------------------
     def _persist(self) -> None:
-        """Mirror the current state into the Settings document each frame.
+        """Mirror the current state into the Settings document -- only when it changed.
 
-        We do NOT throttle or force-save: ``Settings.set`` dedups an unchanged value (so a frame
-        with no changes writes nothing), and the native settings system is self-throttled — it owns
-        the debounced disk write and the shutdown flush. See ``Settings`` for the contract.
+        The model bumps ``model_revision()`` on every real mutation, so we serialize
+        (to_dict) and hand off to ``save_state`` only when the revision differs from the
+        last persisted one, instead of every frame. ``Settings.set`` still dedups the
+        write and the native settings system owns the debounced disk flush.
         """
+        from .model import model_revision
+
+        rev = model_revision()
+        if rev == getattr(self, "_persisted_model_rev", -1):
+            return
+        self._persisted_model_rev = rev
         try:
             from .persistence import save_state
 

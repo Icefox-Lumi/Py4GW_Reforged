@@ -22,6 +22,7 @@ from .function_runtime import resolve_icon
 from .model import BarSide
 from .model import LaunchBar
 from .model import Tile
+from .model import model_revision
 from .tween import AnimFloat
 
 # repo root: .../Py4GWCoreLib/py4gwcorelib_src/launch_bar/host.py -> four dirs up
@@ -143,6 +144,7 @@ class LaunchBarHost:
     def draw(self, manager, now_ms: float) -> None:
         bar = self.bar
         editing = manager.editing_id == bar.id
+        self._frame_hover_widget = None  # widget tile under the cursor this frame (for the unified menu)
 
         # animations (alpha uses previous frame's hover to avoid a chicken/egg with begin)
         self._collapse.set_target(1.0 if bar.collapsed else 0.0, now_ms)
@@ -185,9 +187,25 @@ class LaunchBarHost:
                 self._draw_content(manager, editing, content_off, win_pos)
             # bar menu opens on right-click ANYWHERE over the bar window (not just the strip).
             # Tiles/empty-cells in edit mode still get their own item menus first.
-            if PyImGui.begin_popup_context_window("##barmenu_%s" % bar.id):
+            # ONE context menu for the whole bar. Normal mode: opens on right-click
+            # anywhere (over tiles too) and prepends the hovered widget's options
+            # (enable/disable/configure) above the bar/editor options. Edit mode: uses
+            # NoOpenOverItems so the per-tile edit menu (grow/shrink/remove) wins over
+            # tiles and this opens only on empty space. The widget id is latched while the
+            # popup is open so it doesn't change if the cursor drifts off the tile.
+            # Alpha=1.0 so the bar's idle-fade style.Alpha doesn't render it near-invisible.
+            menu_id = "##barmenu_%s" % bar.id
+            if not PyImGui.is_popup_open(menu_id):
+                self._ctx_widget_id = self._frame_hover_widget
+            flags = PyImGui.PopupFlags.NoOpenOverItems if editing else PyImGui.PopupFlags.NoFlag
+            PyImGui.push_style_var(PyImGui.ImGuiStyleVar.Alpha, 1.0)
+            if PyImGui.begin_popup_context_window(menu_id, flags):
+                if (not editing) and self._ctx_widget_id:
+                    self._tile_context_menu(manager, self._ctx_widget_id)
+                    PyImGui.separator()
                 self._bar_menu(manager)
                 PyImGui.end_popup()
+            PyImGui.pop_style_var(1)
         PyImGui.end()
 
         PyImGui.pop_style_var(4)
@@ -264,20 +282,82 @@ class LaunchBarHost:
             manager.request_delete_bar(bar)
 
     # ---- content (grid divisions + tiles) -------------------------------------------
+    def _rev_cache(self, manager) -> None:
+        """Rebuild this bar's static render data ONCE per change, not per frame.
+
+        Tile geometry, parsed colors, AND the full per-tile draw spec (label, icon,
+        tooltip, active overlay) are static between edits — "nothing changes that fast,
+        everything else is static 99.9%". They are rebuilt only when the model
+        (geometry/colors/layout, via ``model_revision``) or the widget set (enabled
+        state/names, via the runtime revision) actually changes; every frame in between
+        just replays the cached spec through one native IconTile call. Only action tiles
+        recompute their active state per frame — it is not revision-tracked and is a
+        cheap bool.
+
+        Each spec entry is ``(label, texpath, tooltip, fill, outline, is_action, action,
+        widget_id, function_id)``: the trailing keys drive click handling, ``is_action``
+        marks the tiles whose overlay must be recomputed live.
+        """
+        runtime = getattr(manager, "runtime", None)
+        funcs = getattr(manager, "functions", None)
+        wrev = runtime.revision() if runtime is not None else 0
+        sig = (model_revision(), wrev)
+        if sig == getattr(self, "_cache_sig", None):
+            return
+        self._cache_sig = sig
+        bar = self.bar
+        self._geom = {t.id: bar.tile_rect(t) for t in bar.tiles}
+        fa = bar.colors.face_a
+        self._col_face = _hex_rgba01(bar.colors.face, fa)
+        self._col_face_hover = _hex_rgba01(_lighten(bar.colors.face, 0.12), fa)
+        self._col_face_active = _hex_rgba01(_lighten(bar.colors.face, 0.20), fa)
+        mask = _hex_u32(bar.active_color, 77)
+        outline = _hex_u32(bar.active_color, 255)
+        self._col_ind_mask = mask
+        self._col_ind_outline = outline
+        ind_mask_on = bool(bar.ind_mask)
+        ind_outline_on = bool(bar.ind_outline)
+
+        spec = {}
+        for tile in bar.tiles:
+            meta = runtime.get(tile.widget_id) if (tile.widget_id and runtime is not None) else None
+            fmeta = funcs.get(tile.function_id) if (tile.function_id and funcs is not None) else None
+            action = tile.action
+            label, texpath = self._tile_face(bar, tile, meta, fmeta)
+            if meta is not None:
+                active = bool(meta.enabled)
+                state = "Active - click to stop" if active else "Inactive - click to launch"
+                tooltip = "%s\n%s\n%s" % (meta.name, meta.category, state)
+                fill = mask if (active and ind_mask_on) else 0
+                ol = outline if (active and ind_outline_on) else 0
+                spec[tile.id] = (label, texpath, tooltip, fill, ol, False, "", tile.widget_id, "")
+            elif action:
+                # active is dynamic for actions -> overlay recomputed per frame in _draw_tile
+                tooltip = _ACTION_TOOLTIP.get(action, action)
+                spec[tile.id] = (label, texpath, tooltip, 0, 0, True, action, "", "")
+            elif fmeta is not None:
+                path = "%s > %s" % (fmeta.group or "Uncategorized", fmeta.category or "General")
+                tooltip = "%s\n%s\n%s" % (fmeta.name, path, fmeta.tooltip or "Click to run")
+                spec[tile.id] = (label, texpath, tooltip, 0, 0, False, "", "", tile.function_id)
+            else:
+                spec[tile.id] = (label, texpath, "", 0, 0, False, "", "", "")
+        self._spec = spec
+
     def _draw_content(self, manager, editing, content_off, win_pos) -> None:
         bar = self.bar
         ox, oy = content_off
         dl = PyImGui.get_window_draw_list()
+
+        self._rev_cache(manager)  # geometry + colors + per-tile spec; rebuilt only on change
 
         if editing:
             self._draw_slot_grid(dl, win_pos, ox, oy)
 
         # Every tile in a bar shares the same face colors, so push them ONCE around the
         # loop instead of 3 push + 1 pop per tile (the button reads the current style).
-        fa = bar.colors.face_a
-        PyImGui.push_style_color(PyImGui.ImGuiCol.Button, _hex_rgba01(bar.colors.face, fa))
-        PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, _hex_rgba01(_lighten(bar.colors.face, 0.12), fa))
-        PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, _hex_rgba01(_lighten(bar.colors.face, 0.20), fa))
+        PyImGui.push_style_color(PyImGui.ImGuiCol.Button, self._col_face)
+        PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, self._col_face_hover)
+        PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, self._col_face_active)
         for tile in list(bar.tiles):
             self._draw_tile(manager, editing, tile, ox, oy, win_pos, dl)
         PyImGui.pop_style_color(3)
@@ -298,35 +378,33 @@ class LaunchBarHost:
                 dl.add_rect((x0, y0), (x0 + bar.cell, y0 + bar.cell), col_u32, rounding=2.0, thickness=1.0)
 
     def _draw_tile(self, manager, editing, tile: Tile, ox, oy, win_pos, dl) -> None:
-        bar = self.bar
-        x, y, tw, th = bar.tile_rect(tile)
+        # Everything static (geometry, label, icon, tooltip, widget-active overlay) was
+        # precomputed in _rev_cache and is just replayed here through one native crossing.
+        # Only action tiles refresh their overlay live (active state is not revision-tracked).
+        spec = self._spec.get(tile.id)
+        if spec is None:
+            return  # tile not in the current rebuilt spec (transient) — skip this frame
+        geom = self._geom.get(tile.id)
+        if geom is None:
+            geom = self.bar.tile_rect(tile)
+        x, y, tw, th = geom
         cx, cy = ox + x, oy + y
-        runtime = getattr(manager, "runtime", None)
-        funcs = getattr(manager, "functions", None)
-        meta = runtime.get(tile.widget_id) if (tile.widget_id and runtime is not None) else None
-        fmeta = funcs.get(tile.function_id) if (tile.function_id and funcs is not None) else None
-        action = tile.action
-        active = meta.enabled if meta is not None else (manager.is_action_active(action) if action else False)
+        label, texpath, tooltip, fill, outline, is_action, action, widget_id, function_id = spec
+        if is_action:
+            active = manager.is_action_active(action) if action else False
+            fill = self._col_ind_mask if (active and self.bar.ind_mask) else 0
+            outline = self._col_ind_outline if (active and self.bar.ind_outline) else 0
+        clicked = PyImGui.Ext.LaunchBar.IconTile(label, cx, cy, tw, th, texpath, False, tooltip, fill, outline)
 
-        PyImGui.set_cursor_pos((cx, cy))
-        clicked = self._tile_button(bar, tile, meta, fmeta, tw, th)
-
-        # widget / action / function tiles: tooltip (+ active indicator for stateful kinds).
-        # Functions are fire-and-forget, so they never light the active indicator.
-        if meta is not None:
-            state = "Active - click to stop" if active else "Inactive - click to launch"
-            PyImGui.set_item_tooltip("%s\n%s\n%s" % (meta.name, meta.category, state))
-        elif action:
-            PyImGui.set_item_tooltip(_ACTION_TOOLTIP.get(action, action))
-        elif fmeta is not None:
-            path = "%s > %s" % (fmeta.group or "Uncategorized", fmeta.category or "General")
-            PyImGui.set_item_tooltip("%s\n%s\n%s" % (fmeta.name, path, fmeta.tooltip or "Click to run"))
-        if active:
-            self._draw_active_indicator(dl, win_pos[0] + cx, win_pos[1] + cy, tw, th)
-
-        if editing and PyImGui.begin_popup_context_item("##tilemenu_%s_%s" % (bar.id, tile.id)):
+        if editing and PyImGui.begin_popup_context_item("##tilemenu_%s_%s" % (self.bar.id, tile.id)):
             self._tile_menu(manager, tile)
             PyImGui.end_popup()
+
+        # Normal mode has ONE context menu for the whole bar (built in draw()); here we
+        # just record which widget tile the cursor is over so that single menu can show
+        # its widget options above the editor options.
+        if (not editing) and widget_id and PyImGui.is_item_hovered():
+            self._frame_hover_widget = widget_id
 
         if editing:
             if clicked:
@@ -336,47 +414,62 @@ class LaunchBarHost:
                 x0, y0 = win_pos[0] + cx, win_pos[1] + cy
                 dl.add_rect((x0, y0), (x0 + tw, y0 + th), _rgba01_u32(*_ACCENT), rounding=3.0, thickness=2.0)
         elif clicked:
-            # normal mode: launch/toggle the widget, fire the system action, or run the function
-            if meta is not None:
-                runtime.toggle(tile.widget_id)
+            # normal mode: launch/toggle the widget, fire the system action, or run the function.
+            # Click is rare, so resolve the runtime lazily here instead of per frame.
+            if widget_id:
+                runtime = getattr(manager, "runtime", None)
+                if runtime is not None:
+                    runtime.toggle(widget_id)
             elif action:
                 manager.do_action(action)
-            elif tile.function_id:
-                manager.invoke_function(tile.function_id)
+            elif function_id:
+                manager.invoke_function(function_id)
 
-    def _tile_button(self, bar, tile, meta, fmeta, tw, th) -> bool:
-        """Draw the tile's clickable face: action icon/label, function glyph, widget icon, or placeholder."""
+    def _tile_context_menu(self, manager, widget_id) -> None:
+        """Normal-mode right-click menu for a widget tile: enable/disable + configure.
 
+        Configure works whether or not the widget is running (set_configuring loads the
+        module and does not gate on enabled), so this is a full peer to the browser cog.
+        Only runs while the popup is open, so the meta lookup here is not a per-frame cost.
+        """
+        runtime = getattr(manager, "runtime", None)
+        if runtime is None:
+            return
+        m = runtime.get(widget_id)
+        if m is None:
+            return
+        if PyImGui.menu_item("Disable" if m.enabled else "Enable"):
+            runtime.toggle(widget_id)
+        if m.configurable:
+            if PyImGui.menu_item("Stop configuring" if m.configuring else "Configure"):
+                runtime.set_configuring(widget_id, not m.configuring)
+
+    def _tile_face(self, bar, tile, meta, fmeta):
+        """Return ``(label, texture_path)`` for a tile's clickable face.
+
+        A non-empty ``texture_path`` -> textured (icon) button; ``""`` -> plain label
+        button (action label, function glyph/initials, widget initials, or placeholder).
+        ``label`` always carries the unique ``##id`` suffix so ImGui keys the item.
+        """
+        tid = "##tile_%s_%s" % (bar.id, tile.id)
         if tile.action:
             icon = _ACTION_ICONS.get(tile.action)
             if icon:
-                from Py4GWCoreLib._legacy_facade import ImGui_Legacy
-
-                return ImGui_Legacy.image_button("##tile_%s_%s" % (bar.id, tile.id), icon, tw, th)
-            label = _ACTION_LABELS.get(tile.action, "?")
-            return PyImGui.button("%s##tile_%s_%s" % (label, bar.id, tile.id), tw, th)
+                return tid, icon
+            return "%s%s" % (_ACTION_LABELS.get(tile.action, "?"), tid), ""
         if tile.function_id:
             # tile.icon override wins; fall back to the catalog default; then to initials/"FN"
             glyph = resolve_icon(tile.icon) or (resolve_icon(fmeta.icon) if fmeta is not None else None)
             if glyph:
-                return PyImGui.button("%s##tile_%s_%s" % (glyph, bar.id, tile.id), tw, th)
+                return "%s%s" % (glyph, tid), ""
             label = (fmeta.name[:2].upper() if (fmeta is not None and fmeta.name) else "FN")
-            return PyImGui.button("%s##tile_%s_%s" % (label, bar.id, tile.id), tw, th)
+            return "%s%s" % (label, tid), ""
         if meta is None:
-            return PyImGui.button("%dx%d##tile_%s_%s" % (tile.w, tile.h, bar.id, tile.id), tw, th)
+            return "%dx%d%s" % (tile.w, tile.h, tid), ""
         if meta.icon:
-            from Py4GWCoreLib._legacy_facade import ImGui_Legacy
-
-            return ImGui_Legacy.image_button("##tile_%s_%s" % (bar.id, tile.id), meta.icon, tw, th)
+            return tid, meta.icon
         label = (meta.name[:2].upper() if meta.name else "?")
-        return PyImGui.button("%s##tile_%s_%s" % (label, bar.id, tile.id), tw, th)
-
-    def _draw_active_indicator(self, dl, sx, sy, tw, th) -> None:
-        bar = self.bar
-        if bar.ind_mask:
-            dl.add_rect_filled((sx, sy), (sx + tw, sy + th), _hex_u32(bar.active_color, 77), rounding=3.0)
-        if bar.ind_outline:
-            dl.add_rect((sx, sy), (sx + tw, sy + th), _hex_u32(bar.active_color, 255), rounding=3.0, thickness=2.0)
+        return "%s%s" % (label, tid), ""
 
     def _tile_menu(self, manager, tile: Tile) -> None:
         bar = self.bar

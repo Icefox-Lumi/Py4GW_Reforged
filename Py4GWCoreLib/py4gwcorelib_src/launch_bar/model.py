@@ -32,6 +32,35 @@ class BarSide(str, Enum):
     BOTTOM = "bottom"
 
 
+# Model revision: bumped on any real mutation of the persisted model (via the
+# __setattr__ hooks below + LaunchBarSet.add/remove). The manager re-serializes
+# (to_dict) only when this changes, instead of every frame.
+_MODEL_REVISION = 0
+
+
+def model_revision() -> int:
+    return _MODEL_REVISION
+
+
+def _touch_model() -> None:
+    global _MODEL_REVISION
+    _MODEL_REVISION += 1
+
+
+def _set_and_touch(obj, name, value) -> None:
+    """Set an attribute and bump the model revision ONLY if the value actually
+    changed. Redundant same-value writes (which the draw path may do every frame)
+    must not mark the model dirty, or persistence would re-serialize every frame."""
+    try:
+        if getattr(obj, name) == value:
+            object.__setattr__(obj, name, value)
+            return
+    except AttributeError:
+        pass  # first assignment (during __init__): fall through and count it
+    object.__setattr__(obj, name, value)
+    _touch_model()
+
+
 @dataclass
 class BarColors:
     """The only three per-bar color overrides pushed on top of the system theme.
@@ -47,6 +76,9 @@ class BarColors:
     drag_a: float = 1.0
     face: str = "#2b2b31"
     face_a: float = 1.0
+
+    def __setattr__(self, name, value):
+        _set_and_touch(self, name, value)
 
 
 @dataclass
@@ -71,6 +103,9 @@ class Tile:
     function_id: Optional[str] = None  # catalog function id (functions_catalog.py)
     icon: Optional[str] = None         # chosen Font Awesome constant NAME, e.g. "ICON_BOLT"
     deletable: bool = True             # False for fixed system buttons; everything else True
+
+    def __setattr__(self, name, value):
+        _set_and_touch(self, name, value)
 
     def cells(self):
         """Yield every ``(col, row)`` cell this tile covers."""
@@ -133,6 +168,9 @@ class LaunchBar:
     collapsed: bool = False
     tiles: list[Tile] = field(default_factory=list)
     _tile_seq: int = 0
+
+    def __setattr__(self, name, value):
+        _set_and_touch(self, name, value)
 
     # ---- scaled metrics -------------------------------------------------------------
     @property
@@ -373,6 +411,7 @@ class LaunchBarSet:
         name = overrides.pop("name", f"Bar {self._bar_seq}")
         bar = LaunchBar(id=bar_id, name=name, **overrides)
         self.bars.append(bar)
+        _touch_model()
         return bar
 
     def remove(self, bar_id: str) -> bool:
@@ -380,6 +419,7 @@ class LaunchBarSet:
         if bar is None or bar.system:   # system bars are non-deletable
             return False
         self.bars = [b for b in self.bars if b.id != bar_id]
+        _touch_model()
         return True
 
     def to_dict(self) -> dict:

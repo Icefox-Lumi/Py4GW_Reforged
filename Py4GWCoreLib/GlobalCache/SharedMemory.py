@@ -613,14 +613,30 @@ class Py4GWSharedMemoryManager:
     @staticmethod
     def enable():
         import PyCallback
+        from Py4GWCoreLib.py4gwcorelib_src.Profiling import ProfilingRegistry
+
         Callback_name = "SharedMemory.Update"
+        _update = Py4GWSharedMemoryManager().update_callback
+
+        # Route the callback through the profiling registry when a capture is
+        # active, so it can be deep-profiled (cProfile -> flame graph) like a
+        # widget; direct call otherwise (no overhead). Declaring the name via
+        # register() marks it profilable for consumers (e.g. System Monitor).
+        def _profiled_update():
+            reg = ProfilingRegistry()
+            if reg.enabled:
+                reg.runcall_scope("widgets", "%s:update" % Callback_name, _update)
+            else:
+                _update()
+
         PyCallback.PyCallback.Register(
             Callback_name,
             PyCallback.Phase.Data,
-            Py4GWSharedMemoryManager().update_callback,
+            _profiled_update,
             priority=99,
             context=PyCallback.Context.Draw
         )
+        ProfilingRegistry().register(Callback_name)
 
 
 Py4GWSharedMemoryManager.enable()

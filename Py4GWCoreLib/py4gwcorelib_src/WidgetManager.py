@@ -40,6 +40,17 @@ def _get_profiling():
         _profiling_registry = ProfilingRegistry()
     return _profiling_registry
 
+# Monotonic "widgets changed" signal. Bumped at the source of every state change
+# (Widget.enable/disable/set_configuring and WidgetHandler.discover), so any caller
+# triggers it. Consumers read WidgetHandler.widgets_revision and cache derived views
+# against it, rebuilding only on real change instead of every frame.
+_widgets_revision = 0
+
+
+def _bump_widgets_revision() -> None:
+    global _widgets_revision
+    _widgets_revision += 1
+
 #region Py4GW Library
 class LayoutMode(IntEnum):
     Library = 0
@@ -434,8 +445,17 @@ class Widget:
         return True
     
     def set_configuring(self, state: bool):
-        """Set configuring state"""
+        """Set configuring state.
+
+        Also ensures the module is loaded so ``configure`` is available: a widget's
+        config panel must render whether or not the widget is enabled/running, and
+        only ``load_module`` populates ``self.configure``. (It is loaded at discovery,
+        but this keeps the guarantee local to the one action that needs it.)
+        """
+        if state and self.configure is None and self.has_configure_property:
+            self.load_module()
         self.__configuring = state
+        _bump_widgets_revision()
         
     def enable_configuring(self):
         """Enable configuring state"""
@@ -543,14 +563,16 @@ class Widget:
                     PySystem.Console.Log("WidgetManager", f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
                 
             self.__enabled = False
-        
+            _bump_widgets_revision()
+
     def enable(self):
         """Enable the widget"""
-        if self.enabled and self.module is not None: 
+        if self.enabled and self.module is not None:
             return  # Already enabled
-        
+
         # enable widget only if module loads successfully
         self.__enabled = self.load_module()
+        _bump_widgets_revision()
         
         if self.enabled:
             self.__paused = False
@@ -729,6 +751,15 @@ class WidgetHandler:
         # document any other consumer gets — no key to pass around or look up.
         return Settings(f"{self.MANAGER_INI_PATH}/{self.MANAGER_INI_FILENAME}", "account")
 
+    @property
+    def widgets_revision(self) -> int:
+        """Monotonic counter that changes only when widgets or their state change.
+
+        Consumers cache derived views (metadata lists, preset bars) against this and
+        rebuild only when it changes, instead of every frame.
+        """
+        return _widgets_revision
+
     def _set_widget_state(self, name: str, state: bool):
         widget = self._get_widget_by_plain_name(name)
         if not widget:
@@ -837,10 +868,11 @@ class WidgetHandler:
                                 
         """Phase 1: Discover widgets without INI configuration"""
         self.widgets.clear()
-        
+
         try:
             self._scan_widget_folders()
             self.discovered = True
+            _bump_widgets_revision()
         except Exception as e:
             self._log_error(f"Discovery failed: {e}")
             raise
@@ -1079,15 +1111,20 @@ class WidgetHandler:
             style.Push()
         
     def execute_configuring_widgets(self):
-        for widget_name, widget_info in self.widgets.items():
+        # Render the configure() panel of every widget currently in the configuring
+        # state, whether or not it is running. Scans the handler's own widget dict
+        # (a cold path -- config panels are rarely open, and a bool check over the
+        # dict never showed as a cost) instead of a module-global index, so it can't
+        # desync from the live widget set.
+        for widget_info in self.widgets.values():
             if not widget_info.configuring:
                 continue
             try:
                 if widget_info.configure:
                     widget_info.configure()
-                    
+
             except Exception as e:
-                PySystem.Console.Log("WidgetHandler", f"Error executing widget {widget_name}: {str(e)}", PySystem.Console.MessageType.Error)
+                PySystem.Console.Log("WidgetHandler", f"Error executing widget {widget_info.folder_script_name}: {str(e)}", PySystem.Console.MessageType.Error)
                 PySystem.Console.Log("WidgetHandler", f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
       
       
