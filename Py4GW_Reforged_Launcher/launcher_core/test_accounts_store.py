@@ -407,7 +407,12 @@ class TestLegacyImportAutoFillsDllPath(unittest.TestCase):
         profiles = accounts_store.load_profiles(self.path)
         self.assertEqual(profiles[0].gmod_dll_path, "C:/fake/mod/root/gMod.dll")
 
-    def test_import_with_injection_disabled_does_not_get_dll_path_filled(self):
+    def test_fresh_import_forces_py4gw_enabled_and_fills_path_even_when_source_disabled_it(self):
+        # Chris: "we should ALWAYS fill in the Py4GW.dll path and Enable the
+        # injection toggle -- regardless of what we find in the old
+        # accounts.json." This app's whole purpose is Py4GW multiboxing, so
+        # a legacy file's own inject_py4gw=False (or missing) is not trusted
+        # on first import.
         account = {
             "character_name": "No Injection",
             "email": "test@fake.com",
@@ -416,7 +421,24 @@ class TestLegacyImportAutoFillsDllPath(unittest.TestCase):
         self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
 
         profiles = accounts_store.load_profiles(self.path)
-        self.assertEqual(profiles[0].py4gw_dll_path, "")
+        self.assertTrue(profiles[0].py4gw_enabled)
+        self.assertEqual(profiles[0].py4gw_dll_path, "C:/fake/mod/root/Py4GW.dll")
+
+    def test_fresh_import_keeps_existing_path_when_mod_root_cannot_be_resolved(self):
+        # If auto-detection fails (e.g. mod root not found), a manually-set
+        # path from the source data must not be blanked out.
+        accounts_store.mod_root.find_dll_under_mod_root = lambda filename: ""
+        account = {
+            "character_name": "Manual Path",
+            "email": "test@fake.com",
+            "inject_py4gw": True,
+            "py4gw_dll_path": "C:/manual/Py4GW.dll",
+        }
+        self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertTrue(profiles[0].py4gw_enabled)
+        self.assertEqual(profiles[0].py4gw_dll_path, "C:/manual/Py4GW.dll")
 
     def test_already_owned_profile_explicit_blank_is_left_alone(self):
         # RELAY 060's original rule must still hold: an `id` present in the

@@ -178,9 +178,20 @@ def _account_from_dict(raw: dict) -> tuple[GameProfile, dict]:
     # a restart). An already-owned profile's own explicit blank (profile_id
     # present) is still left alone, same as before -- this is a first-import
     # convenience, not a standing "fill in whatever's missing" behavior.
+    #
+    # Py4GW injection is unconditional on fresh import (Chris: "we should
+    # ALWAYS fill in the Py4GW.dll path and Enable the injection toggle --
+    # regardless of what we find in the old accounts.json") -- this app's
+    # whole purpose is Py4GW multiboxing, so the old file's inject_py4gw
+    # flag/path are not trusted, only overwritten when auto-detection
+    # actually finds the DLL (an unresolved mod root leaves whatever path
+    # the source data had rather than blanking a working value). gMod stays
+    # opt-in, matching whatever the source data specified.
     if profile_id is None:
-        if profile.py4gw_enabled and not profile.py4gw_dll_path:
-            profile.py4gw_dll_path = mod_root.find_dll_under_mod_root("Py4GW.dll")
+        profile.py4gw_enabled = True
+        detected_py4gw = mod_root.find_dll_under_mod_root("Py4GW.dll")
+        if detected_py4gw:
+            profile.py4gw_dll_path = detected_py4gw
         if profile.gmod_enabled and not profile.gmod_dll_path:
             profile.gmod_dll_path = mod_root.find_dll_under_mod_root("gMod.dll")
 
