@@ -266,7 +266,7 @@ def _parse_raw_traced(
 
         for account in accounts:
             if not isinstance(account, dict):
-                trace.append({"team": team_name, "outcome": "skipped_not_a_dict"})
+                trace.append({"team_fingerprint": _fingerprint(team_name), "outcome": "skipped_not_a_dict"})
                 continue
             profile, extras = _account_from_dict(account)
             keys = _dedup_keys(profile)
@@ -280,8 +280,8 @@ def _parse_raw_traced(
                     break
 
             entry: dict[str, Any] = {
-                "team": team_name,
-                "character_name": profile.character_name,
+                "team_fingerprint": _fingerprint(team_name),
+                "character_name_fingerprint": _fingerprint(profile.character_name),
                 "email_fingerprint": _fingerprint(profile.email),
                 "gw_path_tail": _path_tail(profile.executable_path),
                 "py4gw_enabled": profile.py4gw_enabled,
@@ -368,12 +368,12 @@ def diagnose_legacy_file(path: Path | str) -> dict:
         else 0
     )
     missing_py4gw_dll = [
-        e["character_name"]
+        e["profile_id"]
         for e in trace
         if e.get("outcome") == "new_profile" and e.get("py4gw_enabled") and not e.get("py4gw_dll_path_set")
     ]
     missing_gmod_dll = [
-        e["character_name"]
+        e["profile_id"]
         for e in trace
         if e.get("outcome") == "new_profile" and e.get("gmod_enabled") and not e.get("gmod_dll_path_set")
     ]

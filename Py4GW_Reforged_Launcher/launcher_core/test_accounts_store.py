@@ -490,22 +490,61 @@ class TestDiagnoseLegacyFile(unittest.TestCase):
         self.assertEqual(report["resulting_profile_count"], 2)
         self.assertEqual(report["entries_merged_count"], 0)
 
-    def test_never_contains_plaintext_email_or_full_path(self):
+    def test_never_contains_plaintext_email_full_path_character_name_or_team_name(self):
+        # RELAY 083 follow-up -- Chris: revealing character names (and
+        # possibly team names) is generally a "do not reveal" norm in the
+        # Discord community, so neither may appear in plaintext even though
+        # the report is meant to be shared for troubleshooting.
         account = {
-            "character_name": "Secret",
+            "character_name": "Secret Character",
             "email": "realaddress@example.com",
             "gw_path": "C:/Users/RealName/Games/GW1/Client 00/Gw.exe",
         }
-        self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+        self.path.write_text(json.dumps({"Very Secret Team": [account]}), encoding="utf-8")
 
         report = accounts_store.diagnose_legacy_file(self.path)
         report_text = json.dumps(report)
         self.assertNotIn("realaddress@example.com", report_text)
         self.assertNotIn("RealName", report_text)
+        self.assertNotIn("Secret Character", report_text)
+        self.assertNotIn("Very Secret Team", report_text)
         entry = report["entries"][0]
         self.assertEqual(entry["gw_path_tail"], "Client 00")
         self.assertTrue(entry["email_fingerprint"])
         self.assertNotEqual(entry["email_fingerprint"], "realaddress@example.com")
+        self.assertTrue(entry["character_name_fingerprint"])
+        self.assertNotEqual(entry["character_name_fingerprint"], "Secret Character")
+        self.assertTrue(entry["team_fingerprint"])
+        self.assertNotEqual(entry["team_fingerprint"], "Very Secret Team")
+
+    def test_character_name_fingerprint_stable_across_entries_so_merges_stay_visible(self):
+        # The whole point of fingerprinting instead of dropping the field
+        # entirely: two entries for the same character must still show the
+        # same fingerprint, so a human reviewing the report can still see
+        # "these two rows are the same character" without ever being told
+        # the actual name.
+        char_a = {"character_name": "Repeat Char", "email": "a@fake.com", "gw_path": "C:/Games/GW1/Client 00/Gw.exe"}
+        char_b = {"character_name": "Repeat Char", "email": "b@fake.com", "gw_path": "C:/Games/GW1/Client 01/Gw.exe"}
+        self.path.write_text(json.dumps({"Team A": [char_a], "Team B": [char_b]}), encoding="utf-8")
+
+        report = accounts_store.diagnose_legacy_file(self.path)
+        fingerprints = {e["character_name_fingerprint"] for e in report["entries"]}
+        self.assertEqual(len(fingerprints), 1)
+
+    def test_missing_dll_lists_use_profile_id_not_character_name(self):
+        orig_find = accounts_store.mod_root.find_dll_under_mod_root
+        accounts_store.mod_root.find_dll_under_mod_root = lambda filename: ""
+        try:
+            account = {"character_name": "No DLL Found", "email": "test@fake.com"}
+            self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+
+            report = accounts_store.diagnose_legacy_file(self.path)
+            self.assertEqual(len(report["profiles_missing_py4gw_dll_path"]), 1)
+            missing_id = report["profiles_missing_py4gw_dll_path"][0]
+            self.assertNotIn("No DLL Found", missing_id)
+            self.assertEqual(missing_id, report["entries"][0]["profile_id"])
+        finally:
+            accounts_store.mod_root.find_dll_under_mod_root = orig_find
 
     def test_missing_file_reports_error_not_exception(self):
         report = accounts_store.diagnose_legacy_file(self.path)  # never written in this test
