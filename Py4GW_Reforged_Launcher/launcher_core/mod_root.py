@@ -81,6 +81,35 @@ def _mod_root() -> Path:
     return _LAUNCHER_DIR.parent
 
 
+def find_dll_under_mod_root(filename: str) -> str:
+    """RELAY 083: auto-default a DLL path when a profile is created (new or
+    imported) with the matching injection enabled and no path already set.
+    Globs for the real filename under the resolved mod root rather than
+    assuming a specific subfolder -- confirmed directly against a real
+    checkout: Py4GW.dll sits at the mod root itself, gMod.dll under
+    Addons/, two different depths, so a fixed relative path would be
+    wrong for at least one of them. Returns "" (leave blank, keep the
+    existing "must be set manually" warning) unless EXACTLY one match is
+    found -- an ambiguous multi-match is a worse guess than no guess.
+
+    Moved here from pywebview_shell.bridge's former _find_dll_under_mod_root
+    (RELAY 060) -- that function's own docstring already promised "new or
+    imported", but the only real call site was save_profile()'s brand-new-
+    profile branch; the legacy-import path (accounts_store._account_from_dict)
+    had no equivalent call at all, so every imported profile got a
+    permanently-empty DLL path regardless of injection being enabled. Needed
+    a shared, launcher_core-side home (not bridge.py-private) so both the
+    UI-driven new-profile path and the import/parse path can call the same
+    logic -- same reasoning resolve_mod_repo_path() itself already moved
+    here for.
+    """
+    root = resolve_mod_repo_path()
+    if not root.is_dir():
+        return ""
+    matches = list(root.rglob(filename))
+    return str(matches[0]) if len(matches) == 1 else ""
+
+
 def resolve_mod_repo_path() -> Path:
     """The real, currently-effective mod-repo root: settings_store's saved
     override if the user has set one, otherwise _mod_root()'s own

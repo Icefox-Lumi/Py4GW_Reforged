@@ -1409,6 +1409,21 @@ async function onRestoreAccountsClick() {
   }
 }
 
+// RELAY 083: no warning modal first (unlike Backup) -- this file never
+// contains a password or a full email/path, only counts and one-way
+// fingerprints (see accounts_store.diagnose_legacy_file), so there's
+// nothing here that needs the same "store it securely" caution.
+async function onExportDiagnosticsClick() {
+  const chosen = await window.pywebview.api.browse_for_save_file(
+    "py4gw_reforged_import_diagnostics.json", "JSON files", "*.json"
+  );
+  if (!chosen) return;
+  const res = await window.pywebview.api.export_import_diagnostics(chosen);
+  const statusEl = document.getElementById("roster-status-message");
+  statusEl.style.display = "block";
+  statusEl.textContent = res.ok ? `Diagnostic report saved to ${chosen}` : `Export failed: ${res.error}`;
+}
+
 // ---------- Add/Edit profile (RELAY 011) ----------
 
 function openEditDrawer(profileId) {

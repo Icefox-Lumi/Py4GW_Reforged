@@ -301,6 +301,13 @@
             <button class="ghost-btn" onclick="onRestoreAccountsClick()">Restore accounts…</button>
           </div>
           <div id="roster-status-message" style="display:none;font-size:11px;color:var(--faint,#5f6491);line-height:1.5;margin-top:8px"></div>
+          <p style="font-size:11px;color:var(--faint,#5f6491);line-height:1.5;margin:12px 0 8px">
+            Import looking wrong (missing characters, duplicate teams, a mod
+            path that won't fill in)? Export a diagnostic report instead --
+            counts and structure only, emails/paths reduced to short
+            fingerprints, safe to share for troubleshooting.
+          </p>
+          <button class="ghost-btn" onclick="onExportDiagnosticsClick()">Export import diagnostics…</button>
         </div>
         <div>
           <h4 style="margin-bottom:8px">Launcher</h4>

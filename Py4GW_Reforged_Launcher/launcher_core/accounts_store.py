@@ -40,6 +40,7 @@ selectable team in the UI -- just a storage bucket, matching the same
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -164,6 +165,25 @@ def _account_from_dict(raw: dict) -> tuple[GameProfile, dict]:
         kwargs["id"] = profile_id
 
     profile = GameProfile(**kwargs)
+
+    # RELAY 083: auto-default DLL paths on a fresh legacy-format entry only
+    # (profile_id absent means this app has never owned/saved this account
+    # before) -- exact same "brand-new profile" gate save_profile() already
+    # uses (RELAY 060), just applied at parse-time instead of save-time.
+    # Real bug this closes: every legacy-imported profile got a permanently
+    # empty py4gw_dll_path/gmod_dll_path regardless of injection being
+    # enabled, since this parse path never called the auto-detect helper at
+    # all (only the UI's "create one new profile" path did) -- Apo hit this
+    # directly ("py4gw_dll_path not found: ''" on every account, even after
+    # a restart). An already-owned profile's own explicit blank (profile_id
+    # present) is still left alone, same as before -- this is a first-import
+    # convenience, not a standing "fill in whatever's missing" behavior.
+    if profile_id is None:
+        if profile.py4gw_enabled and not profile.py4gw_dll_path:
+            profile.py4gw_dll_path = mod_root.find_dll_under_mod_root("Py4GW.dll")
+        if profile.gmod_enabled and not profile.gmod_dll_path:
+            profile.gmod_dll_path = mod_root.find_dll_under_mod_root("gMod.dll")
+
     return profile, extras
 
 
@@ -177,20 +197,54 @@ def _dedup_keys(p: GameProfile) -> list[tuple]:
     file at least once, ids are the primary, most reliable match; the
     content-based keys keep working for the very first load and for a
     hand-edited entry a user pastes in without an id.
+
+    RELAY 083: the bare `("email", p.email)` key used to apply unconditionally,
+    which was wrong -- a real setup can legitimately have several DIFFERENT
+    characters sharing one login email (Apo's own multibox setup: "accounts
+    are re-used and teams are the sorting mechanism for a different
+    configuration"). That collapsed every character past the first one seen
+    for a given email into a single merged profile, silently discarding the
+    rest -- matched his exact symptoms ("only 19 characters detected, 1 per
+    account", teams showing duplicate/wrong data, since the collapse happens
+    globally across the whole file, not per-team). `character_name` is the
+    real distinguishing signal once it's present, so the email-only key now
+    only applies when there's no character name to disambiguate with --
+    `exe_char` (path + character name together) already handles the "same
+    profile repeated across team listings" case standalone, confirmed
+    against TestDuplicateDedup's existing coverage (both its cases share an
+    identical character_name + gw_path across listings, so exe_char alone
+    already matched them -- this narrowing doesn't regress either test).
     """
     keys: list[tuple] = [("id", p.id), ("exe_char", p.executable_path, p.character_name)]
-    if p.email:
+    if p.email and not p.character_name:
         keys.append(("email", p.email))
     return keys
 
 
-def _parse_raw(raw: dict) -> tuple[list[GameProfile], list[Team]]:
+def _parse_raw_traced(
+    raw: dict, populate_extras_cache: bool = True
+) -> tuple[list[GameProfile], list[Team], list[dict]]:
+    """Real implementation of the merge loop -- _parse_raw() and
+    diagnose_legacy_file() (RELAY 083) are both thin wrappers around this,
+    so there's exactly one copy of the merge/dedup logic, not two that
+    could drift apart. Third return value is a per-entry trace (team,
+    redacted identity, and the merge decision) -- always built (the loop
+    already visits every entry regardless), just ignored by _parse_raw()'s
+    normal callers.
+
+    `populate_extras_cache` exists so diagnose_legacy_file() can run this
+    same real logic against an arbitrary file (e.g. the untouched
+    pre-migration root accounts.json, re-diagnosed after the fact) without
+    polluting _EXTRA_FIELDS_CACHE with entries keyed by throwaway ids that
+    have nothing to do with the real, currently-loaded roster.
+    """
     existing_by_key: dict[tuple, GameProfile] = {}
     ordered_profiles: list[GameProfile] = []
     teams: list[Team] = []
+    trace: list[dict] = []
 
     if not isinstance(raw, dict):
-        return [], []
+        return [], [], []
 
     for team_name, accounts in raw.items():
         if not isinstance(accounts, list):
@@ -201,29 +255,129 @@ def _parse_raw(raw: dict) -> tuple[list[GameProfile], list[Team]]:
 
         for account in accounts:
             if not isinstance(account, dict):
+                trace.append({"team": team_name, "outcome": "skipped_not_a_dict"})
                 continue
             profile, extras = _account_from_dict(account)
             keys = _dedup_keys(profile)
 
             existing = None
+            matched_via = None
             for key in keys:
                 existing = existing_by_key.get(key)
                 if existing is not None:
+                    matched_via = key[0]
                     break
 
+            entry: dict[str, Any] = {
+                "team": team_name,
+                "character_name": profile.character_name,
+                "email_fingerprint": _fingerprint(profile.email),
+                "gw_path_tail": _path_tail(profile.executable_path),
+                "py4gw_enabled": profile.py4gw_enabled,
+                "gmod_enabled": profile.gmod_enabled,
+            }
+
             if existing is not None:
+                entry["outcome"] = "merged_into_existing"
+                entry["merged_via_key"] = matched_via
+                entry["merged_into_profile"] = existing.id[:8]
                 if is_real_team and team_name not in existing.team_ids:
                     existing.team_ids.append(team_name)
                 for key in keys:
                     existing_by_key[key] = existing
             else:
+                entry["outcome"] = "new_profile"
+                entry["profile_id"] = profile.id[:8]
+                entry["py4gw_dll_path_set"] = bool(profile.py4gw_dll_path)
+                entry["gmod_dll_path_set"] = bool(profile.gmod_dll_path)
                 profile.team_ids = [team_name] if is_real_team else []
                 for key in keys:
                     existing_by_key[key] = profile
                 ordered_profiles.append(profile)
-                _EXTRA_FIELDS_CACHE[profile.id] = extras
+                if populate_extras_cache:
+                    _EXTRA_FIELDS_CACHE[profile.id] = extras
 
-    return ordered_profiles, teams
+            trace.append(entry)
+
+    return ordered_profiles, teams, trace
+
+
+def _parse_raw(raw: dict) -> tuple[list[GameProfile], list[Team]]:
+    profiles, teams, _trace = _parse_raw_traced(raw)
+    return profiles, teams
+
+
+def _fingerprint(value: str) -> str:
+    """Short, stable, one-way fingerprint (RELAY 083) -- lets a diagnostic
+    report show "these two entries share the same email" without ever
+    containing the real email. Truncated sha256, not a reversible
+    encoding; empty input stays empty (no need to fingerprint "no email")."""
+    if not value:
+        return ""
+    return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()[:8]
+
+
+def _path_tail(path: str) -> str:
+    """Just the immediate parent folder name (e.g. "Client 00"), not the
+    full gw_path (RELAY 083) -- a real path can carry the user's actual
+    Windows username if installed under their profile; the folder name
+    alone is still enough to see "these share one client install"."""
+    if not path:
+        return ""
+    return Path(path).parent.name
+
+
+def diagnose_legacy_file(path: Path | str) -> dict:
+    """RELAY 083: a safe-to-share report of exactly how a legacy
+    accounts.json parses -- counts plus a per-entry trace of every merge
+    decision, with email/path redacted to one-way fingerprints, never
+    plaintext. Exists so a user who isn't comfortable sharing a real
+    backup (real emails, character names, DLL paths -- Apo explicitly
+    declined this) can still hand over something that shows whether/why
+    an import collapsed distinct profiles, without exposing any of that.
+
+    Read-only: never writes to the real accounts store, never mutates
+    _EXTRA_FIELDS_CACHE (population_extras_cache=False), only parses
+    whatever file `path` points at.
+    """
+    resolved = Path(path)
+    if not resolved.exists():
+        return {"error": f"file not found: {resolved}"}
+    try:
+        raw = json.loads(resolved.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return {"error": f"not valid JSON: {e}"}
+
+    profiles, teams, trace = _parse_raw_traced(raw, populate_extras_cache=False)
+
+    raw_entry_count = sum(len(v) for v in raw.values() if isinstance(v, list)) if isinstance(raw, dict) else 0
+    raw_team_count = (
+        sum(1 for k, v in raw.items() if isinstance(v, list) and k != _UNASSIGNED_TEAM_KEY)
+        if isinstance(raw, dict)
+        else 0
+    )
+    missing_py4gw_dll = [
+        e["character_name"]
+        for e in trace
+        if e.get("outcome") == "new_profile" and e.get("py4gw_enabled") and not e.get("py4gw_dll_path_set")
+    ]
+    missing_gmod_dll = [
+        e["character_name"]
+        for e in trace
+        if e.get("outcome") == "new_profile" and e.get("gmod_enabled") and not e.get("gmod_dll_path_set")
+    ]
+
+    return {
+        "source_path": str(resolved),
+        "raw_team_count": raw_team_count,
+        "raw_entry_count": raw_entry_count,
+        "resulting_profile_count": len(profiles),
+        "resulting_team_count": len(teams),
+        "entries_merged_count": sum(1 for e in trace if e.get("outcome") == "merged_into_existing"),
+        "profiles_missing_py4gw_dll_path": missing_py4gw_dll,
+        "profiles_missing_gmod_dll_path": missing_gmod_dll,
+        "entries": trace,
+    }
 
 
 def _load_and_parse(path: Path) -> tuple[list[GameProfile], list[Team]]:

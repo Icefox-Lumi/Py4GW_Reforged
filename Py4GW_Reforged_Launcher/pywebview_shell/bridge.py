@@ -76,20 +76,14 @@ def _resolve_mod_repo_path():
 
 
 def _find_dll_under_mod_root(filename: str) -> str:
-    """RELAY 060: auto-default a DLL path when a profile is created (new or
-    imported) with the matching injection enabled and no path already set.
-    Globs for the real filename under the resolved mod root rather than
-    assuming a specific subfolder -- confirmed directly against a real
-    checkout: Py4GW.dll sits at the mod root itself, gMod.dll under
-    Addons/, two different depths, so a fixed relative path would be
-    wrong for at least one of them. Returns "" (leave blank, keep the
-    existing "must be set manually" warning) unless EXACTLY one match is
-    found -- an ambiguous multi-match is a worse guess than no guess."""
-    root = _resolve_mod_repo_path()
-    if not root.is_dir():
-        return ""
-    matches = list(root.rglob(filename))
-    return str(matches[0]) if len(matches) == 1 else ""
+    """RELAY 083: the real logic now lives in mod_root.find_dll_under_mod_root()
+    -- launcher_core.accounts_store needed the exact same DLL-autodetection
+    (the import/parse path never called this at all, unlike save_profile()'s
+    brand-new-profile branch, which is why every legacy-imported profile got
+    a permanently-empty DLL path) and this was bridge.py-private. Kept as a
+    thin wrapper here, same pattern as _resolve_mod_repo_path above, so this
+    file's own existing call sites needed zero edits."""
+    return mod_root.find_dll_under_mod_root(filename)
 
 
 class ShellBridge:
@@ -734,6 +728,34 @@ class ShellBridge:
                 include_passwords=bool(include_passwords),
             )
             return {"ok": True, "path": path}
+        except OSError as e:
+            return {"ok": False, "error": str(e)}
+
+    def export_import_diagnostics(self, dest_path: str) -> dict:
+        """RELAY 083: exists so a user who won't share a real backup (real
+        emails, character names, DLL paths) can still hand over something
+        that shows whether/why their import collapsed distinct profiles --
+        counts + a per-entry trace, emails/paths reduced to one-way
+        fingerprints, never plaintext (see accounts_store.diagnose_legacy_file).
+
+        Diagnoses the ORIGINAL pre-migration root-level accounts.json, not
+        the already-migrated Settings/ copy -- _ensure_migrated() never
+        touches the root file (it's the permanent, untouched de facto
+        backup, per its own docstring), but by the time a user notices
+        something's wrong, the Settings/ copy already has this app's own
+        `id` on every profile, which would trivially match the `id` dedup
+        key and show every entry as "new" regardless of what actually
+        happened during the real import. Falls back to whatever
+        default_accounts_path() resolves to if no root-level file exists at
+        all (e.g. this install has never seen an old-format file, only its
+        own).
+        """
+        root_file = mod_root.resolve_mod_repo_path() / accounts_store.ACCOUNTS_FILENAME
+        source = root_file if root_file.is_file() else accounts_store.default_accounts_path()
+        report = accounts_store.diagnose_legacy_file(source)
+        try:
+            Path(dest_path).write_text(json.dumps(report, indent=2), encoding="utf-8")
+            return {"ok": True, "path": dest_path, "source": str(source)}
         except OSError as e:
             return {"ok": False, "error": str(e)}
 

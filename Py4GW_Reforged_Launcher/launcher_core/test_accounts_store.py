@@ -294,6 +294,213 @@ class TestDuplicateDedup(unittest.TestCase):
         self.assertEqual(sorted(profiles[0].team_ids), ["Team A", "Team B"])
 
 
+class TestSharedEmailDifferentCharactersNotCollapsed(unittest.TestCase):
+    """RELAY 083 -- the real bug Apo hit: several DIFFERENT characters
+    legitimately sharing one login email (his own multibox setup) were all
+    getting merged into a single profile past the first one seen, because
+    the old dedup logic matched on a bare email key with no character name
+    in it at all. Reported symptoms this reproduces: "only 19 characters
+    detected, 1 per account" and teams showing duplicate/wrong rosters."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmpdir.name) / "accounts.json"
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_same_email_different_characters_stay_separate_profiles(self):
+        char_a = {
+            "character_name": "Alpha Char",
+            "email": "shared@fake.com",
+            "gw_path": "C:/Games/Guild Wars 1/Client 00/Gw.exe",
+        }
+        char_b = {
+            "character_name": "Beta Char",
+            "email": "shared@fake.com",
+            "gw_path": "C:/Games/Guild Wars 1/Client 00/Gw.exe",
+        }
+        data = {"Team A": [char_a, char_b]}
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertEqual(len(profiles), 2, "both characters must survive as distinct profiles")
+        self.assertEqual(sorted(p.character_name for p in profiles), ["Alpha Char", "Beta Char"])
+
+    def test_same_email_different_characters_across_different_teams_stay_separate(self):
+        # The reported shape specifically: one team per character, same
+        # login reused across all of them -- teams must NOT end up sharing
+        # the same collapsed roster.
+        char_a = {
+            "character_name": "Alpha Char",
+            "email": "shared@fake.com",
+            "gw_path": "C:/Games/Guild Wars 1/Client 00/Gw.exe",
+        }
+        char_b = {
+            "character_name": "Beta Char",
+            "email": "shared@fake.com",
+            "gw_path": "C:/Games/Guild Wars 1/Client 00/Gw.exe",
+        }
+        data = {"Team A": [char_a], "Team B": [char_b]}
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertEqual(len(profiles), 2)
+        by_name = {p.character_name: p for p in profiles}
+        self.assertEqual(by_name["Alpha Char"].team_ids, ["Team A"])
+        self.assertEqual(by_name["Beta Char"].team_ids, ["Team B"])
+
+    def test_same_email_and_same_character_still_merges_across_teams(self):
+        # Confirms the fix didn't just delete the email key's usefulness --
+        # the genuinely-same profile repeated across team listings (the
+        # original RELAY 061 case) still merges, now via exe_char.
+        account = {
+            "character_name": "Shared Char",
+            "email": "shared@fake.com",
+            "gw_path": "C:/Games/Guild Wars 1/Client 00/Gw.exe",
+        }
+        data = {"Team A": [account], "Team B": [dict(account)]}
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(sorted(profiles[0].team_ids), ["Team A", "Team B"])
+
+
+class TestLegacyImportAutoFillsDllPath(unittest.TestCase):
+    """RELAY 083 -- the bug Chris independently found: every legacy-imported
+    profile got a permanently-empty py4gw_dll_path/gmod_dll_path, since the
+    auto-detect helper was only ever wired into the UI's "create one new
+    profile" path, never the bulk import/first-load path. Apo hit this
+    directly: "py4gw_dll_path not found: ''" on every account, even after a
+    restart."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmpdir.name) / "accounts.json"
+        self._orig_find = accounts_store.mod_root.find_dll_under_mod_root
+        accounts_store.mod_root.find_dll_under_mod_root = lambda filename: f"C:/fake/mod/root/{filename}"
+
+    def tearDown(self):
+        accounts_store.mod_root.find_dll_under_mod_root = self._orig_find
+        self.tmpdir.cleanup()
+
+    def test_fresh_import_with_py4gw_enabled_gets_dll_path_filled(self):
+        account = {
+            "character_name": "Needs DLL",
+            "email": "test@fake.com",
+            "inject_py4gw": True,
+        }
+        self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertEqual(profiles[0].py4gw_dll_path, "C:/fake/mod/root/Py4GW.dll")
+
+    def test_fresh_import_with_gmod_enabled_gets_dll_path_filled(self):
+        account = {
+            "character_name": "Needs GMod DLL",
+            "email": "test@fake.com",
+            "inject_gmod": True,
+        }
+        self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertEqual(profiles[0].gmod_dll_path, "C:/fake/mod/root/gMod.dll")
+
+    def test_import_with_injection_disabled_does_not_get_dll_path_filled(self):
+        account = {
+            "character_name": "No Injection",
+            "email": "test@fake.com",
+            "inject_py4gw": False,
+        }
+        self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertEqual(profiles[0].py4gw_dll_path, "")
+
+    def test_already_owned_profile_explicit_blank_is_left_alone(self):
+        # RELAY 060's original rule must still hold: an `id` present in the
+        # raw dict means this app already owns/saved this profile before --
+        # a blank here is the user's own explicit state, not a fresh
+        # import, and must NOT be force-filled.
+        account = {
+            "id": "already-owned-id",
+            "character_name": "Deliberately Blank",
+            "email": "test@fake.com",
+            "inject_py4gw": True,
+            "py4gw_dll_path": "",
+        }
+        self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertEqual(profiles[0].py4gw_dll_path, "")
+
+
+class TestDiagnoseLegacyFile(unittest.TestCase):
+    """RELAY 083 -- the diagnostic export Apo asked for after declining to
+    share a real backup. Must report accurate counts/trace without ever
+    containing plaintext email or a full local path."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmpdir.name) / "accounts.json"
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_reports_accurate_counts_when_entries_collapse(self):
+        char_a = {"character_name": "Alpha", "email": "same@fake.com", "gw_path": "C:/Games/GW1/Client 00/Gw.exe"}
+        char_b = {"character_name": "Alpha", "email": "same@fake.com", "gw_path": "C:/Games/GW1/Client 00/Gw.exe"}
+        self.path.write_text(json.dumps({"Team A": [char_a], "Team B": [char_b]}), encoding="utf-8")
+
+        report = accounts_store.diagnose_legacy_file(self.path)
+        self.assertEqual(report["raw_entry_count"], 2)
+        self.assertEqual(report["resulting_profile_count"], 1)
+        self.assertEqual(report["entries_merged_count"], 1)
+
+    def test_reports_accurate_counts_when_entries_stay_distinct(self):
+        char_a = {"character_name": "Alpha", "email": "same@fake.com", "gw_path": "C:/Games/GW1/Client 00/Gw.exe"}
+        char_b = {"character_name": "Beta", "email": "same@fake.com", "gw_path": "C:/Games/GW1/Client 00/Gw.exe"}
+        self.path.write_text(json.dumps({"Team A": [char_a, char_b]}), encoding="utf-8")
+
+        report = accounts_store.diagnose_legacy_file(self.path)
+        self.assertEqual(report["raw_entry_count"], 2)
+        self.assertEqual(report["resulting_profile_count"], 2)
+        self.assertEqual(report["entries_merged_count"], 0)
+
+    def test_never_contains_plaintext_email_or_full_path(self):
+        account = {
+            "character_name": "Secret",
+            "email": "realaddress@example.com",
+            "gw_path": "C:/Users/RealName/Games/GW1/Client 00/Gw.exe",
+        }
+        self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+
+        report = accounts_store.diagnose_legacy_file(self.path)
+        report_text = json.dumps(report)
+        self.assertNotIn("realaddress@example.com", report_text)
+        self.assertNotIn("RealName", report_text)
+        entry = report["entries"][0]
+        self.assertEqual(entry["gw_path_tail"], "Client 00")
+        self.assertTrue(entry["email_fingerprint"])
+        self.assertNotEqual(entry["email_fingerprint"], "realaddress@example.com")
+
+    def test_missing_file_reports_error_not_exception(self):
+        report = accounts_store.diagnose_legacy_file(self.path)  # never written in this test
+        self.assertIn("error", report)
+
+    def test_does_not_pollute_extras_cache_for_real_roster(self):
+        # The diagnostic run must not leave stale entries in
+        # _EXTRA_FIELDS_CACHE that could confuse a later real load/save.
+        account = {"character_name": "Diagnosed Only", "email": "diag@fake.com"}
+        self.path.write_text(json.dumps({"Team A": [account]}), encoding="utf-8")
+        cache_size_before = len(accounts_store._EXTRA_FIELDS_CACHE)
+
+        accounts_store.diagnose_legacy_file(self.path)
+
+        self.assertEqual(len(accounts_store._EXTRA_FIELDS_CACHE), cache_size_before)
+
+
 class TestMigration(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
