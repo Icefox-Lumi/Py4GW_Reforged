@@ -42,7 +42,8 @@ class MapOverlay:
         self.terrain = Terrain()
         self.interaction = Interaction(self.cfg)
         self.agent_pass = AgentPass(self.cfg)
-        self.agent_pass.hit_sink = self.interaction.register_hit
+        # Interaction reads the very list the agent pass fills — no per-marker callback.
+        self.interaction.hit_targets = self.agent_pass.hits
 
         self._last_map_id = -1
         self._new_custom_name = "Custom Agent Name"   # config UI scratch
@@ -149,7 +150,6 @@ class MapOverlay:
             if cfg.mode is OverlayMode.MISSION:
                 self._draw_player_ranges(self.mission_proj)
             self._draw_rings(proj)
-            self.interaction.reset_hits()
             self.agent_pass.draw(proj)
             self.interaction.draw_overlay(proj)
         self._end_window()

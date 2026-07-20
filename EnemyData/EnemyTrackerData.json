@@ -43665,6 +43665,186 @@
         }
       },
       "observed_skills": {}
+    },
+    "model:4058": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4058
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4064": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4064
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4069": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4069
+      ],
+      "observed_maps": {},
+      "observed_skills": {}
+    },
+    "model:4071": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4071
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4072": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4072
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4083": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4083
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4085": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4085
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4093": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4093
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4094": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4094
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4095": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4095
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
+    },
+    "model:4266": {
+      "encoded_names": [],
+      "inferred_primary": "",
+      "inferred_secondary": "",
+      "model_ids": [
+        4266
+      ],
+      "observed_maps": {
+        "198": {
+          "base_id": 198,
+          "id": 198,
+          "instance_type": "Explorable",
+          "name": "Archipelagos"
+        }
+      },
+      "observed_skills": {}
     }
   },
   "schema": "py4gw_enemy_tracker",

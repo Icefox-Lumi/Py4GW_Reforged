@@ -126,9 +126,12 @@ def _draw_triangle(x, y, size, color, accent, offset_angle, R):
     for ux, uy in _TRI_UNIT:
         rx = ux * cos_o - uy * sin_o
         ry = ux * sin_o + uy * cos_o
-        pts.append(R(x + rx * size, y + ry * size))
-    DLTriangleFilled(pts[0][0], pts[0][1], pts[1][0], pts[1][1], pts[2][0], pts[2][1], color)
-    DLTriangle(pts[0][0], pts[0][1], pts[1][0], pts[1][1], pts[2][0], pts[2][1], accent, 2.0)
+        pts.append((x + rx * size, y + ry * size))
+    if R is not _identity:
+        pts = [R(p[0], p[1]) for p in pts]
+    (x1, y1), (x2, y2), (x3, y3) = pts
+    PyImGui.draw_list_add_triangle_filled(x1, y1, x2, y2, x3, y3, color)
+    PyImGui.draw_list_add_triangle(x1, y1, x2, y2, x3, y3, accent, 2.0)
 
 
 def _draw_circle(x, y, size, color, accent, offset_angle, R, segments=16):
@@ -160,6 +163,7 @@ def _draw_teardrop(x, y, size, color, accent, offset_angle, R):
 
 
 def _draw_tear(x, y, size, color, accent, offset_angle, R):
+    # Hottest shape in the profile: avoid the identity transform calls and the DL wrapper layer.
     angle = -(BASE_ANGLE + offset_angle)
     cos_a = math.cos(angle)
     sin_a = math.sin(angle)
@@ -167,10 +171,12 @@ def _draw_tear(x, y, size, color, accent, offset_angle, R):
     for ux, uy in _TEAR_UNIT:
         px = ux * size
         py = uy * size
-        pts.append(R(px * cos_a - py * sin_a + x, px * sin_a + py * cos_a + y))
+        pts.append((px * cos_a - py * sin_a + x, px * sin_a + py * cos_a + y))
+    if R is not _identity:
+        pts = [R(p[0], p[1]) for p in pts]
     (x1, y1), (x2, y2), (x3, y3), (x4, y4) = pts
-    DLQuadFilled(x1, y1, x2, y2, x3, y3, x4, y4, color)
-    DLQuad(x1, y1, x2, y2, x3, y3, x4, y4, accent, 2.0)
+    PyImGui.draw_list_add_quad_filled(x1, y1, x2, y2, x3, y3, x4, y4, color)
+    PyImGui.draw_list_add_quad(x1, y1, x2, y2, x3, y3, x4, y4, accent, 2.0)
 
 
 def _draw_square(x, y, size, color, accent, offset_angle, R):
@@ -289,8 +295,16 @@ def draw_marker(
 ) -> None:
     """Draw ``shape`` at screen ``(x, y)``. Unknown shapes fall back to a circle."""
     fn = _SHAPES.get(shape, _draw_circle)
-    R = _make_rot(x, y, map_rotation)
-    fn(x, y, size, pack(color), pack(accent), offset_angle, R)
+    # Hot path (called once per agent): inline the pack cache lookups and skip building a
+    # rotation transform entirely when the map does not rotate.
+    c = _PACK_CACHE.get(color)
+    if c is None:
+        c = pack(color)
+    a = _PACK_CACHE.get(accent)
+    if a is None:
+        a = pack(accent)
+    R = _identity if not map_rotation else _make_rot(x, y, map_rotation)
+    fn(x, y, size, c, a, offset_angle, R)
 
 
 def draw_aura(x: float, y: float, radius: float, color: RGBA, segments: int = 24) -> None:

@@ -146,7 +146,8 @@ class Interaction:
         self.last_click_x = 0.0
         self.last_click_y = 0.0
 
-        # target hit-list, refilled by the agent pass each frame
+        # Target hit boxes. The host points this at the agent pass's own list, which the pass
+        # refills each frame; do not rebind it per frame.
         self.hit_targets: list[tuple[int, float, float, float]] = []
 
         # NavMesh snap state
@@ -178,13 +179,6 @@ class Interaction:
             or len(self.snap_target_queue) > 0
             or len(self.snap_current_path) > 0
         )
-
-    # ── target hit registration (called by the agent pass) ───────────────────────────────
-    def reset_hits(self) -> None:
-        self.hit_targets = []
-
-    def register_hit(self, agent_id: int, sx: float, sy: float, radius: float) -> None:
-        self.hit_targets.append((agent_id, sx, sy, radius))
 
     # ── snap helpers ─────────────────────────────────────────────────────────────────────
     def _clear_snap_bt_draw_state(self) -> None:
@@ -385,32 +379,27 @@ class Interaction:
 
     def draw_overlay(self, proj: Projection) -> None:
         """2D snap overlay (click marker, snapped crosshair, path + queue) inside a draw window."""
-        def to_screen(gx: float, gy: float) -> tuple[float, float]:
-            return proj.game_to_screen(gx, gy)
+        to_screen = proj.game_to_screen
 
         click_screen = to_screen(*self.snap_clicked_target) if self.snap_clicked_target is not None else None
         snapped_screen = to_screen(*self.snap_snapped_target) if self.snap_snapped_target is not None else None
 
-        if len(self.snap_current_path) >= 2:
-            path_color = Utils.RGBToColor(80, 160, 255, 210)
-            prev: Optional[tuple[float, float]] = None
-            for px, py in self.snap_current_path:
-                cur = to_screen(px, py)
-                if prev is not None:
-                    shapes.DLLine(prev[0], prev[1], cur[0], cur[1], path_color, 2.5)
-                prev = cur
+        # Paths go through AddPolyline: one native call for the whole path instead of one
+        # AddLine per segment (a 30-point path was 29 crossings), and the segments join
+        # properly instead of being drawn disjoint.
+        if len(self.snap_current_path) >= 2 or len(self.snap_target_queue_paths) > 0:
+            dl = PyImGui.get_window_draw_list()
 
-        if len(self.snap_target_queue_paths) > 0:
-            q_color = Utils.RGBToColor(120, 190, 255, 170)
-            for queue_path in self.snap_target_queue_paths:
-                if len(queue_path) < 2:
-                    continue
-                prev_q: Optional[tuple[float, float]] = None
-                for qpx, qpy in queue_path:
-                    cur_q = to_screen(qpx, qpy)
-                    if prev_q is not None:
-                        shapes.DLLine(prev_q[0], prev_q[1], cur_q[0], cur_q[1], q_color, 1.8)
-                    prev_q = cur_q
+            if len(self.snap_current_path) >= 2:
+                pts = [to_screen(px, py) for px, py in self.snap_current_path]
+                dl.add_polyline(pts, Utils.RGBToColor(80, 160, 255, 210), 0, 2.5)
+
+            if len(self.snap_target_queue_paths) > 0:
+                q_color = Utils.RGBToColor(120, 190, 255, 170)
+                for queue_path in self.snap_target_queue_paths:
+                    if len(queue_path) < 2:
+                        continue
+                    dl.add_polyline([to_screen(qpx, qpy) for qpx, qpy in queue_path], q_color, 0, 1.8)
 
         draw_click = click_screen is not None
         if click_screen is not None and snapped_screen is not None:

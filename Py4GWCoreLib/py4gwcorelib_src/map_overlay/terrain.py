@@ -34,11 +34,25 @@ def _packed(rgba: RGBA) -> int:
 
 
 class Terrain:
+    """Owns the pathing renderers.
+
+    The two modes configure a renderer **incompatibly** — the mission map drives it in
+    world space (``set_world_space(True)``, pan/zoom/scale, rectangular mask) while the
+    compass drives it with a rotated transform and a circular mask and never enables world
+    space at all. Sharing one renderer let mission-mode state leak into compass mode and
+    threw its alignment off, so each mode gets its own instance and is configured exactly
+    the way its original widget did.
+    """
+
     def __init__(self) -> None:
+        # mission-map renderers (world space)
         self.renderer = DXOverlay()
         self.mega_renderer = DXOverlay()
         self.renderer.world_space.set_world_space(True)
         self.mega_renderer.world_space.set_world_space(True)
+
+        # compass renderer — deliberately left in its default transform mode, as Compass+ did
+        self.compass_renderer = DXOverlay()
 
         self._built_map_id: int = -1
         self._built_color: Optional[RGBA] = None
@@ -66,8 +80,6 @@ class Terrain:
         self.renderer.inverse_rendering(terrain.inverted)
         self.mega_renderer.inverse_rendering(terrain.inverted)
 
-        self.renderer.mask.set_circular_mask(False)
-        self.mega_renderer.mask.set_circular_mask(False)
         self.renderer.mask.set_rectangle_mask(True)
         self.mega_renderer.mask.set_rectangle_mask(True)
         self.renderer.mask.set_rectangle_mask_bounds(proj.left, proj.top, proj.width, proj.height)
@@ -97,24 +109,24 @@ class Terrain:
         if not terrain.enabled or not Map.IsMapReady():
             return
 
+        r = self.compass_renderer
         if not self._compass_primitives_set:
-            self.renderer.build_pathing_trapezoid_geometry(_dx(terrain.color))
+            r.build_pathing_trapezoid_geometry(_dx(terrain.color))
             self._compass_primitives_set = True
 
-        self.renderer.inverse_rendering(terrain.inverted)
+        r.inverse_rendering(terrain.inverted)
 
         map_bounds = Map.GetMapBoundaries()
         x_off, y_off, zoom = Map.MiniMap.MapProjection.ComputedPathingGeometryToScreen(
             map_bounds, proj.player_pos[0], proj.player_pos[1],
             proj.center[0], proj.center[1], proj.size, proj.rotation,
         )
-        self.renderer.world_space.set_zoom(zoom)
-        self.renderer.world_space.set_rotation(-proj.rotation)
-        self.renderer.world_space.set_pan(proj.center[0] + x_off, proj.center[1] - y_off)
+        r.world_space.set_zoom(zoom)
+        r.world_space.set_rotation(-proj.rotation)
+        r.world_space.set_pan(proj.center[0] + x_off, proj.center[1] - y_off)
 
-        self.renderer.mask.set_rectangle_mask(False)
-        self.renderer.mask.set_circular_mask(True)
-        self.renderer.mask.set_mask_radius(proj.size * proj.position.culling / float(Range.Compass.value))
-        self.renderer.mask.set_mask_center(proj.center[0], proj.center[1])
+        r.mask.set_circular_mask(True)
+        r.mask.set_mask_radius(proj.size * proj.position.culling / float(Range.Compass.value))
+        r.mask.set_mask_center(proj.center[0], proj.center[1])
 
-        self.renderer.render()
+        r.render()

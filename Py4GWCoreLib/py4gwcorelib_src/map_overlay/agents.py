@@ -11,7 +11,6 @@ and passes ``projection.rotation`` to the shapes as the rigid glyph rotation. In
 it additionally distance-culls agents (Compass behaviour); the mission map shows everything.
 """
 
-from typing import Callable
 from typing import Optional
 
 from Py4GWCoreLib.Agent import Agent
@@ -19,7 +18,6 @@ from Py4GWCoreLib.AgentArray import AgentArray
 from Py4GWCoreLib.Item import Item
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.native_src.context.AgentContext import AgentArray as AgentArrayContext
-from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
 
 from . import shapes
 from .model import CHEST_GADGET_IDS
@@ -54,8 +52,9 @@ TARGET_SIZE_BONUS = 2.0
 class AgentPass:
     def __init__(self, cfg: OverlayConfig) -> None:
         self.cfg = cfg
-        # Set by the host to Interaction.register_hit so clicks can target a drawn marker.
-        self.hit_sink: Optional[Callable[[int, float, float, float], None]] = None
+        # Click-target hit boxes, refilled each pass. The Interaction shares this exact list
+        # object (a plain list.append per marker beats a callback frame per marker).
+        self.hits: list[tuple[int, float, float, float]] = []
         # Screen rect (padded) used to skip markers projected outside the frame.
         self._clip: Optional[tuple[float, float, float, float]] = None
         # Merchant-ness never changes within a map; name decoding is expensive, so memoize it.
@@ -84,6 +83,7 @@ class AgentPass:
         color_override: Optional[RGBA] = None,
         shape_override: Optional[str] = None,
         size_bonus: float = 0.0,
+        accent_override: Optional[RGBA] = None,
     ) -> None:
         if not style.visible:
             return
@@ -94,14 +94,16 @@ class AgentPass:
         if agent_id == target_id:
             accent = TARGET_ACCENT
             size_bonus += TARGET_SIZE_BONUS
+        elif accent_override is not None:
+            accent = accent_override
         else:
             accent = style.accent
         color = color_override if color_override is not None else style.color
         shape = shape_override if shape_override is not None else style.shape
         total_size = style.size + size_bonus
         shapes.draw_marker(shape, sx, sy, total_size, color, accent, facing, proj.rotation)
-        if self.hit_sink is not None and agent_id:
-            self.hit_sink(agent_id, sx, sy, total_size)
+        if agent_id:
+            self.hits.append((agent_id, sx, sy, total_size))
 
     def _spirit(
         self,
@@ -143,9 +145,8 @@ class AgentPass:
                 return True
         return False
 
-    @staticmethod
-    def _alive(living) -> bool:
-        return living.hp > 0.0 and not (living.is_dead or living.is_dead_by_type_map)
+    # NOTE: the alive test is inlined at each call site rather than factored into a helper —
+    # it runs once per agent per frame and the method-call overhead showed up in profiling.
 
     # ── main pass ────────────────────────────────────────────────────────────────────────
     def draw(self, proj: Projection) -> None:
@@ -156,14 +157,17 @@ class AgentPass:
         cull = cfg.mode is OverlayMode.COMPASS
         cull_r2 = float(cfg.position.culling) ** 2
         px, py = proj.player_pos
+        # Short-circuits below keep these out of the per-agent path when they do not apply:
+        # with no custom markers configured the lookup is skipped entirely, and the range test
+        # is only called in compass mode (the mission map never culls).
+        has_custom = bool(cfg.custom_markers)
+        self.hits.clear()
 
         left, top, right, bottom = proj.content_rect()
         margin = 40.0
         self._clip = (left - margin, top - margin, right + margin, bottom + margin)
 
-        def visible(gx: float, gy: float) -> bool:
-            if not cull:
-                return True
+        def in_range(gx: float, gy: float) -> bool:
             dx = gx - px
             dy = gy - py
             return (dx * dx + dy * dy) <= cull_r2
@@ -181,29 +185,29 @@ class AgentPass:
         # Neutral
         for agent_id in AgentArray.GetNeutralArray():
             obj, living = living_of(agent_id)
-            if obj is None or living is None or not self._alive(living) or not visible(obj.pos.x, obj.pos.y):
+            if obj is None or living is None or not (living.hp > 0.0 and not (living.is_dead or living.is_dead_by_type_map)) or (cull and not in_range(obj.pos.x, obj.pos.y)):
                 continue
-            if self._custom_marker(proj, obj, living, agent_id, target_id):
+            if has_custom and self._custom_marker(proj, obj, living, agent_id, target_id):
                 continue
             self._marker(proj, cfg.markers[MARKER_NEUTRAL], obj.pos.x, obj.pos.y, obj.rotation_angle, agent_id, target_id)
 
         # Minions
         for agent_id in AgentArray.GetMinionArray():
             obj, living = living_of(agent_id)
-            if obj is None or living is None or not self._alive(living) or not visible(obj.pos.x, obj.pos.y):
+            if obj is None or living is None or not (living.hp > 0.0 and not (living.is_dead or living.is_dead_by_type_map)) or (cull and not in_range(obj.pos.x, obj.pos.y)):
                 continue
-            if self._custom_marker(proj, obj, living, agent_id, target_id):
+            if has_custom and self._custom_marker(proj, obj, living, agent_id, target_id):
                 continue
             self._marker(proj, cfg.markers[MARKER_MINION], obj.pos.x, obj.pos.y, obj.rotation_angle, agent_id, target_id)
 
         # Spirits / pets
         for agent_id in AgentArray.GetSpiritPetArray():
             obj, living = living_of(agent_id)
-            if obj is None or living is None or not visible(obj.pos.x, obj.pos.y):
+            if obj is None or living is None or (cull and not in_range(obj.pos.x, obj.pos.y)):
                 continue
-            if living.is_spawned and not self._alive(living):
+            if living.is_spawned and not (living.hp > 0.0 and not (living.is_dead or living.is_dead_by_type_map)):
                 continue
-            if self._custom_marker(proj, obj, living, agent_id, target_id):
+            if has_custom and self._custom_marker(proj, obj, living, agent_id, target_id):
                 continue
             if not living.is_spawned:
                 self._marker(proj, cfg.markers[MARKER_PET], obj.pos.x, obj.pos.y, obj.rotation_angle, agent_id, target_id)
@@ -217,17 +221,27 @@ class AgentPass:
         # Enemies
         for agent_id in AgentArray.GetEnemyArray():
             obj, living = living_of(agent_id)
-            if obj is None or living is None or not self._alive(living) or not visible(obj.pos.x, obj.pos.y):
+            if obj is None or living is None or not (living.hp > 0.0 and not (living.is_dead or living.is_dead_by_type_map)) or (cull and not in_range(obj.pos.x, obj.pos.y)):
                 continue
-            if self._custom_marker(proj, obj, living, agent_id, target_id):
+            if has_custom and self._custom_marker(proj, obj, living, agent_id, target_id):
                 continue
             enemy_style = cfg.markers[MARKER_ENEMY]
             model_id = int(living.player_number)
-            if Agent.HasBossGlow(agent_id):
-                prof = Agent.GetProfessionIDs(agent_id)
-                color = PROFESSION_COLORS[prof[0]] if prof and 0 <= prof[0] < len(PROFESSION_COLORS) else enemy_style.color
+            # Struct fields, not Agent.HasBossGlow / Agent.GetProfessionIDs — both of those
+            # refetch the whole living agent to read a single field we already hold.
+            if living.has_boss_glow:
+                # Profession 0 is "None" (grey in the table) and plenty of bosses report it —
+                # selecting it would make a boss read *duller* than a normal enemy, so only
+                # real professions (1..10) recolour; otherwise keep the enemy colour. The boss
+                # accent + size bump keep bosses distinct either way.
+                color = enemy_style.color
+                if cfg.boss_profession_colors:
+                    prof = int(living.primary)
+                    if 1 <= prof < len(PROFESSION_COLORS):
+                        color = PROFESSION_COLORS[prof]
                 self._marker(proj, enemy_style, obj.pos.x, obj.pos.y, obj.rotation_angle, agent_id, target_id,
-                             color_override=color, size_bonus=enemy_style.size * 0.2)
+                             color_override=color, size_bonus=enemy_style.size * 0.2,
+                             accent_override=cfg.boss_accent)
                 continue
             if not living.is_spawned:
                 key = MARKER_ENEMY_PET if model_id in PET_MODEL_IDS else MARKER_ENEMY
@@ -243,11 +257,11 @@ class AgentPass:
         # Allies (party players + allied NPCs)
         for agent_id in AgentArray.GetAllyArray():
             obj, living = living_of(agent_id)
-            if obj is None or living is None or not self._alive(living) or not visible(obj.pos.x, obj.pos.y):
+            if obj is None or living is None or not (living.hp > 0.0 and not (living.is_dead or living.is_dead_by_type_map)) or (cull and not in_range(obj.pos.x, obj.pos.y)):
                 continue
             if agent_id == player_id:
                 continue
-            if self._custom_marker(proj, obj, living, agent_id, target_id):
+            if has_custom and self._custom_marker(proj, obj, living, agent_id, target_id):
                 continue
             key = MARKER_ALLY_NPC if living.is_npc else MARKER_PLAYERS
             self._marker(proj, cfg.markers[key], obj.pos.x, obj.pos.y, obj.rotation_angle, agent_id, target_id)
@@ -255,15 +269,15 @@ class AgentPass:
         # Player
         if Player.IsPlayerLoaded():
             obj, living = living_of(player_id)
-            if obj is not None and living is not None and (not cull or visible(obj.pos.x, obj.pos.y)):
+            if obj is not None and living is not None and (not cull or in_range(obj.pos.x, obj.pos.y)):
                 self._marker(proj, cfg.markers[MARKER_PLAYER], obj.pos.x, obj.pos.y, obj.rotation_angle, player_id, target_id)
 
         # NPCs / minipets / merchants
         for agent_id in AgentArray.GetNPCMinipetArray():
             obj, living = living_of(agent_id)
-            if obj is None or living is None or not self._alive(living) or not visible(obj.pos.x, obj.pos.y):
+            if obj is None or living is None or not (living.hp > 0.0 and not (living.is_dead or living.is_dead_by_type_map)) or (cull and not in_range(obj.pos.x, obj.pos.y)):
                 continue
-            if self._custom_marker(proj, obj, living, agent_id, target_id):
+            if has_custom and self._custom_marker(proj, obj, living, agent_id, target_id):
                 continue
             if int(living.level) > 1:
                 if living.has_quest:   # struct field; Agent.HasQuest would refetch the agent
@@ -282,7 +296,7 @@ class AgentPass:
             if not obj:
                 continue
             gadget = obj.GetAsAgentGadget()
-            if not gadget or not visible(obj.pos.x, obj.pos.y):
+            if not gadget or (cull and not in_range(obj.pos.x, obj.pos.y)):
                 continue
             key = MARKER_CHEST if int(gadget.gadget_id) in CHEST_GADGET_IDS else MARKER_GADGET
             self._marker(proj, cfg.markers[key], obj.pos.x, obj.pos.y, obj.rotation_angle, agent_id, target_id)
@@ -293,7 +307,7 @@ class AgentPass:
             if not obj:
                 continue
             item_agent = obj.GetAsAgentItem()
-            if not item_agent or not visible(obj.pos.x, obj.pos.y):
+            if not item_agent or (cull and not in_range(obj.pos.x, obj.pos.y)):
                 continue
             try:
                 rarity = int(Item.item_instance(item_agent.item_id).rarity.value)

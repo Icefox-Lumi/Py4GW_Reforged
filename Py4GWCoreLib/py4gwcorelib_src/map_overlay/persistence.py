@@ -57,6 +57,8 @@ def load(cfg: OverlayConfig) -> None:
     cfg.mode = OverlayMode(s.get_str("general", "mode", cfg.mode.value))
     cfg.spirit_alpha = s.get_int("general", "spirit_alpha", cfg.spirit_alpha)
     cfg.show_spirit_range = s.get_bool("general", "show_spirit_range", cfg.show_spirit_range)
+    cfg.boss_profession_colors = s.get_bool("general", "boss_profession_colors", cfg.boss_profession_colors)
+    cfg.boss_accent = _to_rgba(s.get_int("general", "boss_accent", _to_int(cfg.boss_accent)))
 
     t = cfg.terrain
     t.enabled = s.get_bool("terrain", "enabled", t.enabled)
@@ -129,6 +131,8 @@ def save(cfg: OverlayConfig) -> None:
     s.set("general", "mode", cfg.mode.value)
     s.set("general", "spirit_alpha", cfg.spirit_alpha)
     s.set("general", "show_spirit_range", cfg.show_spirit_range)
+    s.set("general", "boss_profession_colors", cfg.boss_profession_colors)
+    s.set("general", "boss_accent", _to_int(cfg.boss_accent))
 
     t = cfg.terrain
     s.set("terrain", "enabled", t.enabled)

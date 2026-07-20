@@ -365,5 +365,11 @@ class OverlayConfig:
     terrain: TerrainConfig = field(default_factory=TerrainConfig)
     snap: SnapConfig = field(default_factory=SnapConfig)
     position: PositionConfig = field(default_factory=PositionConfig)
+    #: Colour bosses by primary profession when the agent reports one. Profession 0 is
+    #: "None" (grey) and many bosses report it, so index 0 is never selected — those fall
+    #: back to the enemy colour. Bosses stay identifiable via ``boss_accent`` regardless.
+    boss_profession_colors: bool = True
+    boss_accent: RGBA = (0, 200, 45, 255)
+
     spirit_alpha: int = 50          # aura alpha for spirit range fills
     show_spirit_range: bool = True  # Mission Map always drew spirit auras; keep them on
