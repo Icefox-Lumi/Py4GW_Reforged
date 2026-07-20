@@ -9,6 +9,17 @@ manager (no import cycle) and just duck-types the few attributes/methods it need
     manager.editing_id         -> str | None   (bar currently in edit mode)
     manager.selected_tile_id   -> str | None   (tile selected within the editing bar)
     manager.request_delete_bar(bar)            (opens the confirm modal)
+    manager.open_editor(bar_id)                (shows the editor windows)
+    manager.runtime                            (widget enumerate/toggle/configure)
+
+RULE -- ONE context menu per bar. A launchpad is small and is routinely full, so any menu
+that needs a particular patch of pixels (an empty cell, bare background) is a menu the
+user cannot reach; and options split across several popups are options they cannot find.
+There is therefore exactly one right-click provider, ``_context_menu``, opened by the
+single ``begin_popup_context_window`` in :meth:`draw` from anywhere over the bar. It has a
+fixed set of rows in a fixed order; rows that do not apply to the current target are
+DISABLED, never hidden or reordered. Do not add ``begin_popup_context_item`` here -- give
+the new target a hover latch and a row in ``_context_menu`` instead.
 
 This pass is UI/layout only — tiles render as labeled placeholders; clicking one outside edit
 mode does nothing yet (execution binding is a later pass).
@@ -100,6 +111,14 @@ class LaunchBarHost:
         self._grab_c = 0
         self._grab_r = 0
         self._drag_target = None  # (col, row, ok)
+        # context menu: what the cursor is over this frame, and what was latched when the
+        # bar's single right-click menu opened (see _context_menu)
+        self._frame_hover_widget: str | None = None
+        self._frame_hover_tile: str | None = None
+        self._frame_hover_cell: tuple[int, int] | None = None
+        self._ctx_widget_id: str | None = None
+        self._ctx_tile_id: str | None = None
+        self._ctx_cell: tuple[int, int] | None = None
 
     # ---- geometry -------------------------------------------------------------------
     def _geometry(self, p: float):
@@ -144,7 +163,10 @@ class LaunchBarHost:
     def draw(self, manager, now_ms: float) -> None:
         bar = self.bar
         editing = manager.editing_id == bar.id
-        self._frame_hover_widget = None  # widget tile under the cursor this frame (for the unified menu)
+        # what the cursor is over this frame, feeding the ONE context menu below
+        self._frame_hover_widget = None  # widget tile (normal mode: enable/disable/configure)
+        self._frame_hover_tile = None    # any tile (edit mode: grow/shrink/remove)
+        self._frame_hover_cell = None    # empty grid cell (edit mode: add here)
 
         # animations (alpha uses previous frame's hover to avoid a chicken/egg with begin)
         self._collapse.set_target(1.0 if bar.collapsed else 0.0, now_ms)
@@ -185,25 +207,24 @@ class LaunchBarHost:
             self._draw_strip(manager, strip_rect, win_pos, p, now_ms, alpha)
             if p < 0.999:
                 self._draw_content(manager, editing, content_off, win_pos)
-            # bar menu opens on right-click ANYWHERE over the bar window (not just the strip).
-            # Tiles/empty-cells in edit mode still get their own item menus first.
-            # ONE context menu for the whole bar. Normal mode: opens on right-click
-            # anywhere (over tiles too) and prepends the hovered widget's options
-            # (enable/disable/configure) above the bar/editor options. Edit mode: uses
-            # NoOpenOverItems so the per-tile edit menu (grow/shrink/remove) wins over
-            # tiles and this opens only on empty space. The widget id is latched while the
-            # popup is open so it doesn't change if the cursor drifts off the tile.
-            # Alpha=1.0 so the bar's idle-fade style.Alpha doesn't render it near-invisible.
+            # THE bar's one and only right-click menu, in BOTH modes. It opens on
+            # right-click ANYWHERE over the bar -- a tile, an empty cell, the strip, or
+            # bare background -- because nothing here uses NoOpenOverItems and there are
+            # no competing per-tile/per-cell popups. That is the point: the bar is tiny
+            # and often completely full, so a menu that needs empty space is a menu you
+            # cannot reach. The bar/editor block is always at the bottom, so edit mode is
+            # never a trap -- you can always open the Editor, leave edit mode, or delete
+            # the launchpad. Alpha=1.0 so the bar's idle-fade doesn't render it
+            # near-invisible. The hovered target is latched while the popup is open so it
+            # doesn't change if the cursor drifts off.
             menu_id = "##barmenu_%s" % bar.id
             if not PyImGui.is_popup_open(menu_id):
                 self._ctx_widget_id = self._frame_hover_widget
-            flags = PyImGui.PopupFlags.NoOpenOverItems if editing else PyImGui.PopupFlags.NoFlag
+                self._ctx_tile_id = self._frame_hover_tile
+                self._ctx_cell = self._frame_hover_cell
             PyImGui.push_style_var(PyImGui.ImGuiStyleVar.Alpha, 1.0)
-            if PyImGui.begin_popup_context_window(menu_id, flags):
-                if (not editing) and self._ctx_widget_id:
-                    self._tile_context_menu(manager, self._ctx_widget_id)
-                    PyImGui.separator()
-                self._bar_menu(manager)
+            if PyImGui.begin_popup_context_window(menu_id, PyImGui.PopupFlags.NoFlag):
+                self._context_menu(manager, editing)
                 PyImGui.end_popup()
             PyImGui.pop_style_var(1)
         PyImGui.end()
@@ -269,16 +290,89 @@ class LaunchBarHost:
     def _point_in(self, rect) -> bool:
         return True  # coarse; refined hover handled by is_window_hovered
 
-    def _bar_menu(self, manager) -> None:
+    def _ctx_label(self, tile, meta, cell) -> str:
+        """One-line description of what the menu is currently pointed at."""
+
+        if meta is not None:
+            return meta.name or "widget"
+        if tile is not None:
+            return tile.name or ("%dx%d item" % (tile.w, tile.h))
+        if cell is not None:
+            return "empty cell %d,%d" % cell
+        return "launchpad"
+
+    def _context_menu(self, manager, editing) -> None:
+        """Build the bar's single right-click menu.
+
+        The menu has a FIXED shape: every entry is always present, in the same order,
+        wherever you clicked and whichever mode the bar is in. Entries that cannot act on
+        the current target are DISABLED, never removed. Nothing is hidden -- a menu that
+        reshuffles itself by context is what made these options feel scattered and
+        unreachable, and it makes the same click do different things on different frames.
+        A greyed row still tells you the option exists; the header line says what the
+        menu is pointed at, which is why a row is greyed.
+
+        Enablement tracks only whether the action is genuinely possible for the target --
+        never the edit-mode flag. Edit mode drives the grid overlay and drag/drop, not
+        which menu entries you may use.
+        """
         bar = self.bar
-        if PyImGui.menu_item("Editor..."):
+        runtime = getattr(manager, "runtime", None)
+        wid = self._ctx_widget_id
+        tile = bar.get_tile(self._ctx_tile_id) if self._ctx_tile_id else None
+        meta = runtime.get(wid) if (runtime is not None and wid) else None
+        cell = self._ctx_cell
+        # Preset (auto-populated) bars rebuild their tiles from the live widget set every
+        # frame, so hand edits to their layout cannot stick -> those rows are disabled.
+        editable = bar.source == "manual"
+        if tile is not None:
+            manager.selected_tile_id = tile.id
+
+        PyImGui.text_disabled("%s - %s" % (bar.name, self._ctx_label(tile, meta, cell)))
+        PyImGui.separator()
+
+        # ---- the widget under the cursor ----
+        on = bool(meta and meta.enabled)
+        if PyImGui.menu_item("Disable" if on else "Enable", "", False, meta is not None) and wid:
+            if runtime is not None:
+                runtime.toggle(wid)
+        cfg = bool(meta and meta.configuring)
+        if PyImGui.menu_item("Stop configuring" if cfg else "Configure", "", False,
+                             bool(meta and meta.configurable)) and wid:
+            if runtime is not None:
+                runtime.set_configuring(wid, not cfg)
+        PyImGui.separator()
+
+        # ---- the item / empty cell under the cursor ----
+        sizable = tile is not None and editable
+        if PyImGui.menu_item("Grow width", "", False, sizable) and tile:
+            bar.resize_tile(tile.id, tile.w + 1, tile.h)
+        if PyImGui.menu_item("Shrink width", "", False, sizable) and tile:
+            bar.resize_tile(tile.id, tile.w - 1, tile.h)
+        if PyImGui.menu_item("Grow height", "", False, sizable) and tile:
+            bar.resize_tile(tile.id, tile.w, tile.h + 1)
+        if PyImGui.menu_item("Shrink height", "", False, sizable) and tile:
+            bar.resize_tile(tile.id, tile.w, tile.h - 1)
+        removable = bool(tile is not None and editable and tile.deletable)
+        if PyImGui.menu_item("Remove item", "", False, removable) and tile:
+            bar.remove_tile(tile.id)
+            if manager.selected_tile_id == tile.id:
+                manager.selected_tile_id = None
+        if PyImGui.menu_item("Add item here", "", False, cell is not None and editable) and cell:
+            t = bar.add_tile(1, 1, col=cell[0], row=cell[1])
+            if t is not None:
+                manager.selected_tile_id = t.id
+        PyImGui.separator()
+
+        # ---- the bar itself: ALWAYS reachable, whatever the cursor is over ----
+        if PyImGui.menu_item("Editor...", "", False, True):
             manager.open_editor(bar.id)
-        editing = manager.editing_id == bar.id
-        if PyImGui.menu_item("Stop editing" if editing else "Edit layout"):
+        if PyImGui.menu_item("Stop editing" if editing else "Edit layout", "", False, True):
             manager.editing_id = None if editing else bar.id
             manager.selected_tile_id = None
         PyImGui.separator()
-        if PyImGui.menu_item("Delete launchpad"):
+        # system bars are not deletable (the editor forbids it too) -> greyed, not hidden
+        if PyImGui.menu_item("Delete launchpad", "", False, not bar.system):
             manager.request_delete_bar(bar)
 
     # ---- content (grid divisions + tiles) -------------------------------------------
@@ -396,15 +490,14 @@ class LaunchBarHost:
             outline = self._col_ind_outline if (active and self.bar.ind_outline) else 0
         clicked = PyImGui.Ext.LaunchBar.IconTile(label, cx, cy, tw, th, texpath, False, tooltip, fill, outline)
 
-        if editing and PyImGui.begin_popup_context_item("##tilemenu_%s_%s" % (self.bar.id, tile.id)):
-            self._tile_menu(manager, tile)
-            PyImGui.end_popup()
-
-        # Normal mode has ONE context menu for the whole bar (built in draw()); here we
-        # just record which widget tile the cursor is over so that single menu can show
-        # its widget options above the editor options.
-        if (not editing) and widget_id and PyImGui.is_item_hovered():
-            self._frame_hover_widget = widget_id
+        # No per-tile popup: the bar has ONE context menu (built in draw()). All this tile
+        # does is record that the cursor is over it, in EITHER mode, so that menu can
+        # enable this tile's rows (resize/remove, and widget enable/configure) instead of
+        # greying them.
+        if PyImGui.is_item_hovered():
+            self._frame_hover_tile = tile.id
+            if widget_id:
+                self._frame_hover_widget = widget_id
 
         if editing:
             if clicked:
@@ -424,25 +517,6 @@ class LaunchBarHost:
                 manager.do_action(action)
             elif function_id:
                 manager.invoke_function(function_id)
-
-    def _tile_context_menu(self, manager, widget_id) -> None:
-        """Normal-mode right-click menu for a widget tile: enable/disable + configure.
-
-        Configure works whether or not the widget is running (set_configuring loads the
-        module and does not gate on enabled), so this is a full peer to the browser cog.
-        Only runs while the popup is open, so the meta lookup here is not a per-frame cost.
-        """
-        runtime = getattr(manager, "runtime", None)
-        if runtime is None:
-            return
-        m = runtime.get(widget_id)
-        if m is None:
-            return
-        if PyImGui.menu_item("Disable" if m.enabled else "Enable"):
-            runtime.toggle(widget_id)
-        if m.configurable:
-            if PyImGui.menu_item("Stop configuring" if m.configuring else "Configure"):
-                runtime.set_configuring(widget_id, not m.configuring)
 
     def _tile_face(self, bar, tile, meta, fmeta):
         """Return ``(label, texture_path)`` for a tile's clickable face.
@@ -470,24 +544,6 @@ class LaunchBarHost:
             return tid, meta.icon
         label = (meta.name[:2].upper() if meta.name else "?")
         return "%s%s" % (label, tid), ""
-
-    def _tile_menu(self, manager, tile: Tile) -> None:
-        bar = self.bar
-        manager.selected_tile_id = tile.id
-        if PyImGui.menu_item("Grow width"):
-            bar.resize_tile(tile.id, tile.w + 1, tile.h)
-        if PyImGui.menu_item("Shrink width"):
-            bar.resize_tile(tile.id, tile.w - 1, tile.h)
-        if PyImGui.menu_item("Grow height"):
-            bar.resize_tile(tile.id, tile.w, tile.h + 1)
-        if PyImGui.menu_item("Shrink height"):
-            bar.resize_tile(tile.id, tile.w, tile.h - 1)
-        if tile.deletable:
-            PyImGui.separator()
-            if PyImGui.menu_item("Remove tile"):
-                bar.remove_tile(tile.id)
-                if manager.selected_tile_id == tile.id:
-                    manager.selected_tile_id = None
 
     def _handle_tile_drag(self, manager, tile: Tile, win_pos, ox, oy) -> None:
         bar = self.bar
@@ -542,14 +598,10 @@ class LaunchBarHost:
                     t = bar.add_tile(1, 1, col=col, row=row)
                     if t is not None:
                         manager.selected_tile_id = t.id
-                if PyImGui.begin_popup_context_item("##cellmenu_%s_%d_%d" % (bar.id, col, row)):
-                    if PyImGui.menu_item("Add 1x1 here"):
-                        t = bar.add_tile(1, 1, col=col, row=row)
-                        if t is not None:
-                            manager.selected_tile_id = t.id
-                    PyImGui.end_popup()
-                # a faint "+" hint on hover
+                # No per-cell popup either: record the cell so the bar's ONE context menu
+                # can offer "Add 1x1 here", and draw a faint "+" hint on hover.
                 if PyImGui.is_item_hovered():
+                    self._frame_hover_cell = (col, row)
                     dl = PyImGui.get_window_draw_list()
                     hx = win_pos[0] + ox + cx + bar.cell / 2.0
                     hy = win_pos[1] + oy + cy + bar.cell / 2.0
