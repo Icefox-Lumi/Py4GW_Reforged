@@ -5,7 +5,7 @@ import importlib.util
 import os
 import sys
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from Py4GWCoreLib._legacy_facade import ImGui_Legacy
+from Py4GWCoreLib.ImGui import ImGui
 from Py4GWCoreLib.py4gwcorelib_src.AutoInventoryHandler import AutoInventoryHandler
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color, ColorPalette
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
@@ -1110,7 +1110,7 @@ class InventoryPlusWidget:
                 if use_texture_button:
                     PyImGui.invisible_button(f"##{icon_label}_disabled", (icon_button_size, icon_button_size))
                     item_rect_min = PyImGui.get_item_rect_min()
-                    ImGui_Legacy.DrawTextureInDrawList(
+                    ImGui.DrawTextureInDrawList(
                         item_rect_min,
                         (icon_button_size, icon_button_size),
                         self._xunlai_sort_icon_path,
@@ -1128,7 +1128,7 @@ class InventoryPlusWidget:
                     clicked = PyImGui.invisible_button(f"##{icon_label}", (icon_button_size, icon_button_size))
                     item_rect_min = PyImGui.get_item_rect_min()
                     tint = (255, 255, 255, 255) if PyImGui.is_item_hovered() else (235, 235, 235, 255)
-                    ImGui_Legacy.DrawTextureInDrawList(
+                    ImGui.DrawTextureInDrawList(
                         item_rect_min,
                         (icon_button_size, icon_button_size),
                         self._xunlai_sort_icon_path,
@@ -2457,7 +2457,7 @@ class InventoryPlusWidget:
         from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
         from Sources.ApoSource.InvPlus.Coroutines import BuyMerchantItems
         from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
-        from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+        from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 
         merchant_item_list = list(GLOBAL_CACHE.Trading.Trader.GetOfferedItems())
         combo_items = [self._resolve_merchant_item_name(item_id) for item_id in merchant_item_list]
@@ -2506,12 +2506,12 @@ class InventoryPlusWidget:
                 if PyImGui.begin_tab_item("Sell"):
                     if PyImGui.button(f"{IconsFontAwesome5.ICON_SQUARE_CHECK}##Select All"):
                         self._set_merchant_checkbox_state(True)
-                    ImGui_Legacy.show_tooltip("Mark all sell-eligible stacks in bags 1-4.")
+                    ImGui.show_tooltip("Mark all sell-eligible stacks in bags 1-4.")
                     
                     PyImGui.same_line(0, -1)
                     if PyImGui.button(f"{IconsFontAwesome5.ICON_SQUARE}##Clear All"):
                         self._set_merchant_checkbox_state(False)
-                    ImGui_Legacy.show_tooltip("Clear all currently selected stacks.")
+                    ImGui.show_tooltip("Clear all currently selected stacks.")
                     
                     if not selected_item_ids:
                         PyImGui.text("No material available for sale.")  
@@ -2545,7 +2545,7 @@ class InventoryPlusWidget:
                                 except Exception:
                                     item_model_id = 0
                                 texture_file = get_texture_for_model(item_model_id)
-                                ImGui_Legacy.DrawTexture(texture_file, 30, 30)
+                                ImGui.DrawTexture(texture_file, 30, 30)
                                 PyImGui.same_line(0, -1)
                                 PyImGui.text(self._resolve_merchant_item_name(item_id))
                                 PyImGui.table_next_column()
@@ -2592,7 +2592,7 @@ class InventoryPlusWidget:
                                     sell_plan[item_id] = requested_qty
                             if sell_plan:
                                 GLOBAL_CACHE.Coroutines.append(self._sell_selected_material_items(sell_plan))
-                        ImGui_Legacy.show_tooltip("Sell all checked stacks.")
+                        ImGui.show_tooltip("Sell all checked stacks.")
 
                     PyImGui.end_tab_item()
 
@@ -2627,7 +2627,7 @@ class InventoryPlusWidget:
                                     self.merchant_buy_quantity
                                 )
                             )
-                    ImGui_Legacy.show_tooltip("Buy the selected offered item using the configured quantity.")
+                    ImGui.show_tooltip("Buy the selected offered item using the configured quantity.")
                     PyImGui.end_tab_item()
 
                 PyImGui.end_tab_bar()
@@ -2697,7 +2697,7 @@ class InventoryPlusWidget:
             return new_val
 
         
-        expanded = ImGui_Legacy.Begin(ini_key=self.ini_key, name="Inventory Plus Configuration", p_open=self.show_config_window, flags=PyImGui.WindowFlags.AlwaysAutoResize)
+        expanded = ImGui.Begin(ini_key=self.ini_key, name="Inventory Plus Configuration", p_open=self.show_config_window, flags=PyImGui.WindowFlags.AlwaysAutoResize)
         if expanded:
             auto_state_color = GW_GREEN if self.auto_inventory_handler.module_active else ColorPalette.GetColor("dark_red")
             auto_state_label = "Enabled" if self.auto_inventory_handler.module_active else "Disabled"
@@ -2866,7 +2866,7 @@ class InventoryPlusWidget:
                                 PyImGui.text_wrapped("Upgrades/Components prefers a non-material text match when available, otherwise the first visible option.")
                     PyImGui.end_tab_item()
                 if PyImGui.begin_tab_item("Deposit"):
-                    from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+                    from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
                     cfg = self.deposit_settings
                     cfg.use_ctrl_click = ini_colored_checkbox(label="Use Ctrl + Left Click To Deposit Items",section="Deposit",var_name="use_ctrl_click",cfg_obj=cfg,color=GW_WHITE,default=cfg.use_ctrl_click)
                     
@@ -3036,7 +3036,7 @@ class InventoryPlusWidget:
                 self.save_to_ini()
                 self.load_from_ini()
                 self.show_config_window = False"""
-        ImGui_Legacy.End(self.ini_key)
+        ImGui.End(self.ini_key)
 
 
 

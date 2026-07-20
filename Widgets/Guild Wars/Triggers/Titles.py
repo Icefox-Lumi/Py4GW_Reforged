@@ -3,7 +3,7 @@ from Py4GWCoreLib import Routines
 from Py4GWCoreLib import Map
 from Py4GWCoreLib import Player
 from Py4GWCoreLib import TitleID
-from Py4GWCoreLib import ImGui_Legacy, Color
+from Py4GWCoreLib import ImGui, Color
 from Py4GWCoreLib import Quest
 import PyImGui
 
@@ -25,9 +25,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Set title on map load", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     
     PyImGui.spacing()
     PyImGui.separator()

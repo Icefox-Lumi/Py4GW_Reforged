@@ -1,5 +1,5 @@
 """
-In-client smoke test for Dear ImGui_Legacy multi-viewport support.
+In-client smoke test for Dear ImGui multi-viewport support.
 
 Workflow:
 1. Rebuild and inject the current native DLL.
@@ -10,7 +10,7 @@ Workflow:
 
 import PyImGui
 
-MODULE_NAME = 'ImGui_Legacy Multi-Viewport Test'
+MODULE_NAME = 'ImGui Multi-Viewport Test'
 _show_probe = True
 _show_demo = False
 _initialized = False
@@ -63,7 +63,7 @@ def main() -> None:
     supported = PyImGui.has_multi_viewport_support()
     io = PyImGui.get_io()
 
-    PyImGui.text('Detached ImGui_Legacy windows require ViewportsEnable plus backend support.')
+    PyImGui.text('Detached ImGui windows require ViewportsEnable plus backend support.')
     PyImGui.separator()
 
     new_enabled = PyImGui.checkbox('Enable multi-viewport', enabled)
@@ -73,7 +73,7 @@ def main() -> None:
 
     _show_probe = PyImGui.checkbox('Show detachable probe window', _show_probe)
     _detach_probe = PyImGui.checkbox('Detach probe window only', _detach_probe)
-    _show_demo = PyImGui.checkbox('Show Dear ImGui_Legacy demo window', _show_demo)
+    _show_demo = PyImGui.checkbox('Show Dear ImGui demo window', _show_demo)
 
     PyImGui.separator()
     PyImGui.text(f'Docking enabled: {_bool_label(PyImGui.is_docking_enabled())}')

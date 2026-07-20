@@ -34,11 +34,11 @@ from Py4GWCoreLib import (
     Timer,
     GLOBAL_CACHE,
     ModelID,
-    ImGui_Legacy, Color,
+    ImGui, Color,
 )
 from Py4GWCoreLib.Pathing import AutoPathing
 from Py4GWCoreLib.enums import SharedCommandType
-from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 
 MODULE_NAME = "Quest Auto-Runner (Simple)"
@@ -769,9 +769,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Quest Auto-Runner (Simple)", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

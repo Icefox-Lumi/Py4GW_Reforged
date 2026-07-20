@@ -9,7 +9,7 @@ from Py4GWCoreLib import Color, ColorPalette
 from Py4GWCoreLib import ProfessionShort, Profession, Campaign
 from Py4GWCoreLib import UIManager
 from Py4GWCoreLib import PyImGui
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 from Py4GWCoreLib import Routines
 from Py4GWCoreLib import GLOBAL_CACHE
 from Py4GWCoreLib import Map
@@ -237,9 +237,9 @@ def DrawWindow():
                         PyImGui.table_setup_column("Name", PyImGui.TableColumnFlags.WidthFixed, 150)
                         PyImGui.table_next_row()
                         PyImGui.table_set_column_index(0)
-                        ImGui_Legacy.DrawTexture(primary_texture,32,32)
+                        ImGui.DrawTexture(primary_texture,32,32)
                         PyImGui.table_set_column_index(1)
-                        ImGui_Legacy.DrawTexture(secondary_texture,32,32)
+                        ImGui.DrawTexture(secondary_texture,32,32)
                         PyImGui.table_set_column_index(2)
                         PyImGui.text(f"{profession_name}")
                         PyImGui.text(f"{secondary_prof_name}")
@@ -272,7 +272,7 @@ def DrawWindow():
             
     global tmp_is_selected
 
-    expanded, _ = ImGui_Legacy.begin_with_close(MODULE_NAME, None, PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize))
+    expanded, _ = ImGui.begin_with_close(MODULE_NAME, None, PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize))
     if expanded:
         characters = sorted(Map.Pregame.GetAvailableCharacterList(), key=lambda c: c.player_name.lower())
         
@@ -324,12 +324,12 @@ def DrawWindow():
   
                     #Primary
                     PyImGui.table_set_column_index(0)
-                    ImGui_Legacy.DrawTexture(primary_texture,img_size,img_size)
+                    ImGui.DrawTexture(primary_texture,img_size,img_size)
                     _show_tooltip()
                     _item_clicked()
                     # Secondary
                     PyImGui.table_set_column_index(1)
-                    ImGui_Legacy.DrawTexture(secondary_texture,img_size,img_size)
+                    ImGui.DrawTexture(secondary_texture,img_size,img_size)
                     _show_tooltip()
                     _item_clicked()
 
@@ -349,15 +349,15 @@ def DrawWindow():
                 PyImGui.end_table()
         PyImGui.end_child()
 
-    ImGui_Legacy.end()
+    ImGui.end()
 
 def tooltip():
     PyImGui.begin_tooltip()
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Switch Character", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     
@@ -424,7 +424,7 @@ def main():
         if UIManager.FrameExists(frame_id): 
             left, top, right, bottom = UIManager.GetFrameCoords(frame_id)
             
-        is_visible = ImGui_Legacy.floating_toggle_button(
+        is_visible = ImGui.floating_toggle_button(
             caption="Switch Character",
             x=left,
             y=top-25,

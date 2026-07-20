@@ -622,7 +622,7 @@ def _action_dump_full_state() -> None:
 
 
 # =========================================================================
-# ImGui_Legacy Widget â€” Individual Test Buttons
+# ImGui Widget â€” Individual Test Buttons
 # =========================================================================
 
 def configure():

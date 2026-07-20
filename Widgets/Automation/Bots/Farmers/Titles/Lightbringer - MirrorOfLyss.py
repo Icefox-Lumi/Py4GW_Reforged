@@ -1,6 +1,6 @@
 from Py4GWCoreLib import *
 from Py4GWCoreLib.botting_src.property import Property
-from Py4GWCoreLib.ImGui_Legacy_src.ImGuisrc import ImGui_Legacy
+from Py4GWCoreLib.ImGui_src.ImGuisrc import ImGui
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 import Py4GW
 import PyImGui
@@ -331,10 +331,10 @@ def _draw_hero_icon(hero_id: int, size: int = 24):
     if path:
         try:
             cx, cy = PyImGui.get_cursor_screen_pos()
-            ImGui_Legacy.DrawTextureInDrawList(pos=(float(cx), float(cy)), size=(float(size), float(size)), texture_path=path)
+            ImGui.DrawTextureInDrawList(pos=(float(cx), float(cy)), size=(float(size), float(size)), texture_path=path)
         except Exception:
             try:
-                ImGui_Legacy.DrawTexture(texture_path=path, width=size, height=size)
+                ImGui.DrawTexture(texture_path=path, width=size, height=size)
             except Exception:
                 pass
     PyImGui.dummy(int(size), int(size))
@@ -721,9 +721,9 @@ def _draw_settings(bot:Botting):
 def _draw_help(bot:Botting):
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored(BotSettings.BOT_NAME + " bot", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     # Description
@@ -743,9 +743,9 @@ def tooltip():
     PyImGui.begin_tooltip()
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored(BotSettings.BOT_NAME + " bot", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     # Description
@@ -821,9 +821,9 @@ def _draw_title_track():
         next_rank_progress_total = max(next_required, 1)
 
         PyImGui.separator()
-        ImGui_Legacy.push_font("Regular", 18)
+        ImGui.push_font("Regular", 18)
         PyImGui.text("Statistics")
-        ImGui_Legacy.pop_font()
+        ImGui.pop_font()
 
         PyImGui.text(f"{name} - {tier_name} [{tier_rank}/{tier_max_rank}]")
         PyImGui.text(f"Total Points: {pts:,}")

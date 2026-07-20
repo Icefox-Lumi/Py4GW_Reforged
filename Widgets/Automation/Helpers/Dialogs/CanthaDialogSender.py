@@ -5,7 +5,7 @@ import Py4GW  # type: ignore
 from HeroAI.cache_data import CacheData
 from Py4GWCoreLib import GLOBAL_CACHE
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from Py4GWCoreLib import PyImGui, Color, ImGui_Legacy
+from Py4GWCoreLib import PyImGui, Color, ImGui
 from Py4GWCoreLib import Routines
 from Py4GWCoreLib import Timer, Player
 
@@ -173,9 +173,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("CanthaDialogSender", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

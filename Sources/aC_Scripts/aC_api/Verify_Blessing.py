@@ -67,7 +67,7 @@ def find_first_active_blessing(me):
 def has_any_blessing(me):
     return any(Effects.EffectExists(me, sid) for sid in Blessings.all_ids())
 
-# Called once per-gameâ€‘frame by your Py4GW ImGui_Legacy hook
+# Called once per-gameâ€‘frame by your Py4GW ImGui hook
 def on_imgui_render(me):
     PyImGui.begin("Blessing Checker")
 

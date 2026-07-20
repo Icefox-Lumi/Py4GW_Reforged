@@ -268,7 +268,7 @@ try:
         GLOBAL_CACHE,
         ModelID,
         Map,
-        ImGui_Legacy,          # NEW: needed for persisted windows
+        ImGui,          # NEW: needed for persisted windows
         SharedCommandType,
     )
     from Py4GWCoreLib import ItemArray, Bag, Item, Effects, Player, Party, Bags, Agent, AgentArray, Range, SpiritModelID
@@ -438,7 +438,7 @@ try:
     FLOATING_ICON_WINDOW_NAME = "Pycons Toggle"
 
     def _init_window_persistence_once() -> bool:
-        """Create/load separate ImGui_Legacy ini files for main, settings, and floating icon UI."""
+        """Create/load separate ImGui ini files for main, settings, and floating icon UI."""
         global _ini_ready, INI_KEY_MAIN, INI_KEY_SETTINGS, INI_KEY_FLOATING_UI
         if _ini_ready:
             return True
@@ -478,7 +478,7 @@ try:
 
     def _ensure_floating_ui():
         if _rt.floating_button is None:
-            _rt.floating_button = ImGui_Legacy.FloatingIcon(
+            _rt.floating_button = ImGui.FloatingIcon(
                 icon_path=_get_floating_icon_path(),
                 window_id=FLOATING_ICON_WINDOW_ID,
                 window_name=FLOATING_ICON_WINDOW_NAME,
@@ -4021,7 +4021,7 @@ try:
                     if alpha_var is not None and hasattr(PyImGui, "push_style_var"):
                         PyImGui.push_style_var(alpha_var, 0.45)
                         pushed_alpha = True
-                if ImGui_Legacy.ImageButton(f"##{id_prefix}_icon_{key}", icon_path, float(icon_size), float(icon_size)):
+                if ImGui.ImageButton(f"##{id_prefix}_icon_{key}", icon_path, float(icon_size), float(icon_size)):
                     current = not current
             finally:
                 if pushed_alpha:
@@ -4082,7 +4082,7 @@ try:
                 pushed_colors = 3
             except Exception:
                 pushed_colors = 0
-            ImGui_Legacy.ImageButton(f"##{id_prefix}_icon_{key}", icon_path, float(icon_size), float(icon_size))
+            ImGui.ImageButton(f"##{id_prefix}_icon_{key}", icon_path, float(icon_size), float(icon_size))
         except Exception:
             return False
         finally:
@@ -11368,15 +11368,15 @@ try:
         flags: int = PyImGui.WindowFlags.NoFlag,
     ) -> tuple[bool, bool]:
         # Window persistence handled natively by ImGui; ini_key retained for compatibility.
-        begin_result = ImGui_Legacy.begin_with_close(name, True, flags)
+        begin_result = ImGui.begin_with_close(name, True, flags)
         if isinstance(begin_result, tuple) and len(begin_result) == 2:
             expanded, window_open = bool(begin_result[0]), bool(begin_result[1])
         else:
             expanded = bool(begin_result)
             window_open = bool(begin_result)
 
-        if ImGui_Legacy._is_textured_theme():
-            window = ImGui_Legacy.WindowModule._windows.get(name)
+        if ImGui._is_textured_theme():
+            window = ImGui.WindowModule._windows.get(name)
             if window is not None:
                 window_open = bool(window.open)
                 expanded = bool(window.open and not window.collapse)
@@ -11400,10 +11400,10 @@ try:
         window_expanded, window_open = _begin_persistent_window_with_close_state(INI_KEY_MAIN, BOT_NAME)
         _set_main_window_visible(bool(window_open), persist=True, expand_on_show=False)
         if not window_open:
-            ImGui_Legacy.End(INI_KEY_MAIN)
+            ImGui.End(INI_KEY_MAIN)
             return
         if not window_expanded:
-            ImGui_Legacy.End(INI_KEY_MAIN)
+            ImGui.End(INI_KEY_MAIN)
             return
 
         if PyImGui.button("Settings##pycons_settings"):
@@ -11826,7 +11826,7 @@ try:
                             _draw_main_regular_row(k, c["label"], "pycons_party", int(c.get("model_id", 0)))
                     PyImGui.end_child()
 
-        ImGui_Legacy.End(INI_KEY_MAIN)
+        ImGui.End(INI_KEY_MAIN)
 
     # -------------------------
     # Settings Window
@@ -12276,10 +12276,10 @@ try:
         )
         if not window_open:
             show_settings[0] = False
-            ImGui_Legacy.End(INI_KEY_SETTINGS)
+            ImGui.End(INI_KEY_SETTINGS)
             return
         if not window_expanded:
-            ImGui_Legacy.End(INI_KEY_SETTINGS)
+            ImGui.End(INI_KEY_SETTINGS)
             return
 
         _section_text("General behavior:", "settings_select")
@@ -13770,7 +13770,7 @@ try:
             _show_setting_tooltip("tooltip_show_why")
             PyImGui.separator()
 
-        ImGui_Legacy.End(INI_KEY_SETTINGS)
+        ImGui.End(INI_KEY_SETTINGS)
 
     def configure():
         pass

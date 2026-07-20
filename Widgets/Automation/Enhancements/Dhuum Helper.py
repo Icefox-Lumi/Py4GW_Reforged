@@ -6,7 +6,7 @@ from Py4GWCoreLib import (
 	AgentArray,
 	Color,
 	GLOBAL_CACHE,
-	ImGui_Legacy,
+	ImGui,
 	Map,
 	Player,
 	Py4GW,
@@ -280,9 +280,9 @@ def _refresh_active_combat_widget_after_skillbar_change() -> None:
 def tooltip():
 	PyImGui.begin_tooltip()
 	title_color = Color(255, 200, 100, 255)
-	ImGui_Legacy.push_font("Regular", 20)
+	ImGui.push_font("Regular", 20)
 	PyImGui.text_colored("Dhuum Helper", title_color.to_tuple_normalized())
-	ImGui_Legacy.pop_font()
+	ImGui.pop_font()
 	PyImGui.spacing()
 	PyImGui.separator()
 	PyImGui.text("Auto rez at Dhuum for Multiboxaccounts")

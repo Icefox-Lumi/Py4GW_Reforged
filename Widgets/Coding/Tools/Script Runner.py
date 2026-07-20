@@ -3,7 +3,7 @@ import os
 import Py4GW
 import PyImGui
 
-from Py4GWCoreLib import Color, ImGui_Legacy
+from Py4GWCoreLib import Color, ImGui
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 
 
@@ -190,8 +190,8 @@ def draw_widget() -> None:
     global DELAY_MS_INPUT
     global LOG_TAIL_LINE_COUNT
 
-    if not ImGui_Legacy.Begin(INI_KEY, MODULE_NAME, flags=PyImGui.WindowFlags.AlwaysAutoResize):
-        ImGui_Legacy.End(INI_KEY)
+    if not ImGui.Begin(INI_KEY, MODULE_NAME, flags=PyImGui.WindowFlags.AlwaysAutoResize):
+        ImGui.End(INI_KEY)
         return
 
     script_path = _normalize_existing_path(SCRIPT_PATH_INPUT)
@@ -245,7 +245,7 @@ def draw_widget() -> None:
     for line in _read_log_tail():
         PyImGui.text_wrapped(line)
 
-    ImGui_Legacy.End(INI_KEY)
+    ImGui.End(INI_KEY)
 
 
 initialized = False

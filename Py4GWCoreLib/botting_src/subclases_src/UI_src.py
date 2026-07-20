@@ -101,7 +101,7 @@ class _UI:
     def BagItemDoubleClick(self, bag_id:int, slot:int):
         self._helpers.UI.bag_item_double_click(bag_id, slot)
 
-    #region ImGui_Legacy
+    #region ImGui
     def _find_current_header_step(self):
         import re
 
@@ -153,7 +153,7 @@ class _UI:
 
 
     def _draw_texture(self, texture_path:str, size:Tuple[float,float]=(96.0,96.0), tint:Color=Color(255,255,255,255), border_col:Color=Color(0,0,0,0)):
-        from ...ImGui_Legacy import ImGui_Legacy
+        from ...ImGui import ImGui
         from ...enums import get_texture_for_model
         from ...Routines import Routines
         
@@ -167,7 +167,7 @@ class _UI:
         if not texture_path:
             texture_path = get_texture_for_model(0)
         
-        ImGui_Legacy.DrawTextureExtended(texture_path=texture_path, size=size,
+        ImGui.DrawTextureExtended(texture_path=texture_path, size=size,
                                 uv0=(0.0, 0.0),   uv1=(1.0, 1.0),
                                 tint=tint.to_tuple(), border_color=border_col.to_tuple())
         
@@ -332,8 +332,8 @@ class _UI:
     def _draw_main_child (self, main_child_dimensions: Tuple[int, int]  = (350, 275), 
                             icon_path:str = "",
                             iconwidth: int = 96) -> None:
-        from ...ImGui_Legacy import ImGui_Legacy
-        from ...ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+        from ...ImGui import ImGui
+        from ...ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
         from ...Py4GWcorelib import ConsoleLog, Console
         from ...GlobalCache import GLOBAL_CACHE
         
@@ -364,15 +364,15 @@ class _UI:
             PyImGui.table_set_column_index(1)
             
             PyImGui.dummy(0,3)
-            ImGui_Legacy.push_font("Regular", 22)
+            ImGui.push_font("Regular", 22)
             PyImGui.push_style_color(PyImGui.ImGuiCol.Text, Color(255, 255, 0, 255).to_tuple_normalized())
             PyImGui.text(f"{self._config.bot_name}")
             PyImGui.pop_style_color(1)
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
     
-            ImGui_Legacy.push_font("Bold", 18)
+            ImGui.push_font("Bold", 18)
             PyImGui.text(f"[{max(current_header_step, 0)}] {header_for_current or 'Not started'}")
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
             if total_steps <= 0:
                 PyImGui.text("Step: â€”/â€” - (No steps)")
             else:
@@ -481,8 +481,8 @@ class _UI:
         PyImGui.separator()
         
     def draw_configure_window(self):
-        from ...ImGui_Legacy import ImGui_Legacy
-        from ...ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+        from ...ImGui import ImGui
+        from ...ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 
         if PyImGui.begin("Bot Configuration", PyImGui.WindowFlags.AlwaysAutoResize):
             self._draw_settings_child()    
@@ -635,7 +635,7 @@ class _UI:
     ) -> bool:
         from ...py4gwcorelib_src.Settings import Settings
         from ...Routines import Routines
-        from ...ImGui_Legacy import ImGui_Legacy
+        from ...ImGui import ImGui
 
         if not self._config.ini_key_initialized:
             ini_key = Settings(f"{f"BottingClass/bot_{self._config.bot_name}"}/{f"bot_{self._config.bot_name}.ini"}", "account").name
@@ -648,7 +648,7 @@ class _UI:
             # Skip drawing until a real key exists, then retry on the next frame.
             return False
 
-        if ImGui_Legacy.Begin(ini_key=self._config.ini_key, name=self._config.bot_name, p_open=True, flags= PyImGui.WindowFlags.AlwaysAutoResize):
+        if ImGui.Begin(ini_key=self._config.ini_key, name=self._config.bot_name, p_open=True, flags= PyImGui.WindowFlags.AlwaysAutoResize):
             if PyImGui.begin_tab_bar(self._config.bot_name + "_tabs"):
                 if PyImGui.begin_tab_item("Main"):
                     if PyImGui.begin_child(f"{self._config.bot_name} - Main", main_child_dimensions, True, PyImGui.WindowFlags.NoFlag):
@@ -688,7 +688,7 @@ class _UI:
                     
                 PyImGui.end_tab_bar()
 
-        ImGui_Legacy.End(self._config.ini_key)
+        ImGui.End(self._config.ini_key)
         
         if Routines.Checks.Map.MapValid():
             self.parent.UI.DrawPath(

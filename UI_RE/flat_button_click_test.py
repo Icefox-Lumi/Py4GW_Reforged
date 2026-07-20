@@ -120,7 +120,7 @@ _last_status: str = "idle"
 _last_poll_time: float = 0.0
 _initialized: bool = False
 
-# Input buffers (mutated by ImGui_Legacy)
+# Input buffers (mutated by ImGui)
 _input_width: float = BUTTON_WIDTH
 _input_height: float = BUTTON_HEIGHT
 _input_text: str = BUTTON_LABEL
@@ -701,7 +701,7 @@ def main() -> None:
         _last_poll_time = now
         _auto_poll()
 
-    # â”€â”€ Draw ImGui_Legacy window â”€â”€
+    # â”€â”€ Draw ImGui window â”€â”€
     if not PyImGui.begin(f"{MODULE_NAME}##flat_btn_test", True, PyImGui.WindowFlags.AlwaysAutoResize):
         PyImGui.end()
         return

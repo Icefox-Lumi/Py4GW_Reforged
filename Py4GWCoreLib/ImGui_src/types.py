@@ -10,8 +10,7 @@ class ControlAppearance(Enum):
     Danger = 2
 
 class StyleTheme(IntEnum):
-    ImGui_Legacy = 0
-    ImGui = 0  # legacy alias: pre-migration saved configs stored the name "ImGui"; resolves to ImGui_Legacy, .name reads back as "ImGui_Legacy"
+    ImGui = 0
     Guild_Wars = 1
     Minimalus = 2
     Smoke = 3

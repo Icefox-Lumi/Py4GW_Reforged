@@ -1,7 +1,7 @@
 from Py4GWCoreLib import Botting, Routines, GLOBAL_CACHE, ModelID, Map, Agent, AgentArray, ConsoleLog, Player, Timer, SharedCommandType, HeroType
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from Py4GWCoreLib.enums_src.Title_enums import TitleID, TITLE_TIERS
-from Py4GWCoreLib.ImGui_Legacy_src.ImGuisrc import ImGui_Legacy
+from Py4GWCoreLib.ImGui_src.ImGuisrc import ImGui
 import Py4GW
 import PyImGui
 import os
@@ -851,10 +851,10 @@ def _draw_hero_icon(hero_id: int, size: int = 24):
     if path:
         try:
             cx, cy = PyImGui.get_cursor_screen_pos()
-            ImGui_Legacy.DrawTextureInDrawList(pos=(float(cx), float(cy)), size=(float(size), float(size)), texture_path=path)
+            ImGui.DrawTextureInDrawList(pos=(float(cx), float(cy)), size=(float(size), float(size)), texture_path=path)
         except Exception:
             try:
-                ImGui_Legacy.DrawTexture(texture_path=path, width=size, height=size)
+                ImGui.DrawTexture(texture_path=path, width=size, height=size)
             except Exception:
                 pass
     PyImGui.dummy(int(size), int(size))

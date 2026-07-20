@@ -1,8 +1,8 @@
-"""In-client smoke test for the direct ImGui_Legacy-Addons file browser binding."""
+"""In-client smoke test for the direct ImGui-Addons file browser binding."""
 
 import PyImGui
 
-MODULE_NAME = 'ImGui_Legacy FileBrowser Test'
+MODULE_NAME = 'ImGui FileBrowser Test'
 
 _browser = None
 _last_selected = ''

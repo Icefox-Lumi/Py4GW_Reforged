@@ -15,7 +15,7 @@ folder-tree rebuild from the metadata, plain selectables/rows, no per-frame snap
 import PyImGui
 
 try:  # real FontAwesome glyphs in-client; ASCII fallback keeps the module import-safe offline
-    from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5 as _IC
+    from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5 as _IC
 except Exception:  # pragma: no cover
 
     class _IC:

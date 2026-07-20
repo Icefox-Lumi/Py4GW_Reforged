@@ -1,7 +1,7 @@
 from turtle import title
 
 from PyParty import Hero
-from Py4GWCoreLib import ImGui_Legacy, ColorPalette, Color, TITLE_TIERS, TITLE_NAME, GLOBAL_CACHE, TITLE_CATEGORIES, Utils
+from Py4GWCoreLib import ImGui, ColorPalette, Color, TITLE_TIERS, TITLE_NAME, GLOBAL_CACHE, TITLE_CATEGORIES, Utils
 from Py4GWCoreLib import Routines, Map
 import PyImGui
 import Py4GW
@@ -43,7 +43,7 @@ def render_wrapped_bullet(text: str, max_width: float = 400.0):
         PyImGui.table_next_row()
         PyImGui.table_set_column_index(0)
         #PyImGui.text("â€¢")  # draw bullet manually (you could use u2022 or custom icon)
-        PyImGui.bullet_text("")  # draw bullet using ImGui_Legacy's bullet
+        PyImGui.bullet_text("")  # draw bullet using ImGui's bullet
         PyImGui.table_set_column_index(1)
 
         PyImGui.push_text_wrap_pos(PyImGui.get_cursor_pos_x() + text_col_width)
@@ -74,7 +74,7 @@ def strip_markup_tags(text: str) -> str:
 # ========================================
 def render_markup_text(text: str, max_width: float = 400.0):
     """
-    Tokenizes and renders Guild Wars-style quest markup directly to ImGui_Legacy.
+    Tokenizes and renders Guild Wars-style quest markup directly to ImGui.
     Performs safe pre-splitting to avoid breaking inside paired tags (<c=@...>...</c>),
     while still handling standalone tags like <brx>, {s}, and {sc}.
     """
@@ -383,7 +383,7 @@ def draw_window():
             PyImGui.set_window_size(new_width, new_height, PyImGui.ImGuiCond.Always)
 
         PyImGui.push_style_color(PyImGui.ImGuiCol.Text, COLOR_MAP["Header"])
-        ImGui_Legacy.text("Active Quests:", font_size=18)
+        ImGui.text("Active Quests:", font_size=18)
         PyImGui.pop_style_color(1)
         PyImGui.same_line(0, -1)
         
@@ -457,11 +457,11 @@ def draw_window():
                     ).lower()
                 )
 
-                ImGui_Legacy.push_font("Regular", 18)
+                ImGui.push_font("Regular", 18)
                 PyImGui.push_style_color(PyImGui.ImGuiCol.Text, COLOR_MAP["Header"])
                 opened = PyImGui.tree_node(f"{location} Quests ({len(sorted_qids)})")
                 PyImGui.pop_style_color(1)
-                ImGui_Legacy.pop_font()
+                ImGui.pop_font()
 
                 if opened:
                     for qid in sorted_qids:
@@ -548,15 +548,15 @@ def draw_window():
             if GLOBAL_CACHE.Quest.IsQuestNameReady(active_quest):
                 quest_name = GLOBAL_CACHE.Quest.GetQuestName(active_quest)
                 PyImGui.push_style_color(PyImGui.ImGuiCol.Text, COLOR_MAP["Header"])
-                ImGui_Legacy.text(f"{quest_name}", font_size=20)
+                ImGui.text(f"{quest_name}", font_size=20)
                 PyImGui.pop_style_color(1)
             else:
                 PyImGui.push_style_color(PyImGui.ImGuiCol.Text, COLOR_MAP["Header"])
-                ImGui_Legacy.text(f"Quest Name Not Fetched Yet", font_size=20)
+                ImGui.text(f"Quest Name Not Fetched Yet", font_size=20)
                 PyImGui.pop_style_color(1)
 
             PyImGui.push_style_color(PyImGui.ImGuiCol.Text, COLOR_MAP["Header"])
-            ImGui_Legacy.text("Quest Summary:", font_size=18)
+            ImGui.text("Quest Summary:", font_size=18)
             PyImGui.pop_style_color(1)
             
             if GLOBAL_CACHE.Quest.IsQuestObjectivesReady(active_quest):
@@ -599,9 +599,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Quest Data Viewer", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

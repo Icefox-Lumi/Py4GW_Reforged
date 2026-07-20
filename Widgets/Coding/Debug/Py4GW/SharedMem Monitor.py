@@ -25,9 +25,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Shared Memory Monitor", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 
@@ -264,7 +264,7 @@ class FactionNode:
 
             # --- Column 1: Texture ---
             PyImGui.table_next_column()
-            ImGui_Legacy.DrawTexture(self.texture_path, *texture_size)
+            ImGui.DrawTexture(self.texture_path, *texture_size)
 
             # --- Column 2: Text + Bar ---
             PyImGui.table_next_column()
@@ -853,7 +853,7 @@ class HealthData:
             # -----------------------------------------
             if self.player.AgentData.Is_Hexed:
                 PyImGui.set_cursor_pos((x, icon_y))
-                ImGui_Legacy.DrawTextureExtended(
+                ImGui.DrawTextureExtended(
                     texture_path=GAME_UI_TEXTURE_BASE_PATH + "ui_skill_identifier.png",
                     size=(16, 16),
                     uv0=(0.125, 0.5),
@@ -868,7 +868,7 @@ class HealthData:
             # -----------------------------------------
             if self.player.AgentData.Is_Conditioned:
                 PyImGui.set_cursor_pos((x, icon_y))
-                ImGui_Legacy.DrawTextureExtended(
+                ImGui.DrawTextureExtended(
                     texture_path=GAME_UI_TEXTURE_BASE_PATH + "ui_skill_identifier.png",
                     size=(16, 16),
                     uv0=(0.125, 0.5),
@@ -883,7 +883,7 @@ class HealthData:
             # -----------------------------------------
             if self.player.AgentData.Is_Enchanted:
                 PyImGui.set_cursor_pos((x, icon_y))
-                ImGui_Legacy.DrawTextureExtended(
+                ImGui.DrawTextureExtended(
                     texture_path=GAME_UI_TEXTURE_BASE_PATH + "ui_skill_identifier.png",
                     size=(16, 16),
                     uv0=(0.625, 0.0),
@@ -898,7 +898,7 @@ class HealthData:
             # -----------------------------------------
             if self.player.AgentData.Is_WeaponSpelled:
                 PyImGui.set_cursor_pos((x, icon_y - 2))
-                ImGui_Legacy.DrawTextureExtended(
+                ImGui.DrawTextureExtended(
                     texture_path=GAME_UI_TEXTURE_BASE_PATH + "ui_skill_identifier.png",
                     size=(20, 20),
                     uv0=(0.35, 0.5),
@@ -964,7 +964,7 @@ def main():
             PyImGui.text(f"Max Number of Players: {SMM.max_num_players}")
             PyImGui.text(f"Number of Active Players: {SMM.GetNumActivePlayers()}")
             PyImGui.text(f"Number of active Slots: {SMM.GetNumActiveSlots()}")
-            ImGui_Legacy.show_tooltip("\n".join([f"{i}. | Slot:{acc.SlotNumber} {acc.AccountEmail} | {acc.AgentData.CharacterName}" for i, acc in enumerate(SMM.GetAllAccounts().AccountData) if SMM.GetAllAccounts()._is_slot_active(i)]))                        
+            ImGui.show_tooltip("\n".join([f"{i}. | Slot:{acc.SlotNumber} {acc.AccountEmail} | {acc.AgentData.CharacterName}" for i, acc in enumerate(SMM.GetAllAccounts().AccountData) if SMM.GetAllAccounts()._is_slot_active(i)]))                        
         
         MIN_WIDTH = 500
         MIN_HEIGHT = 700

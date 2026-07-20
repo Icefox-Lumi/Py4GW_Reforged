@@ -374,7 +374,7 @@ def main():
     """Main function - entry point for the script"""
     try:
         # Bot control window
-        expanded, _ = ImGui_Legacy.begin_with_close("Simple Farming Bot", None, PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize))
+        expanded, _ = ImGui.begin_with_close("Simple Farming Bot", None, PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize))
         if expanded:
 
             # Bot Title
@@ -418,7 +418,7 @@ def main():
             
             PyImGui.separator()
             
-        ImGui_Legacy.end()
+        ImGui.end()
 
         # Run bot logic
         if bot_state.is_running:
@@ -429,14 +429,14 @@ def main():
         
 def tooltip():
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Color
+    from Py4GWCoreLib import ImGui, Color
     PyImGui.begin_tooltip()
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Farmer Hamnet Bot", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     # Description

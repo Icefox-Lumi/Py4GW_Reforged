@@ -2,7 +2,7 @@ import Py4GW
 import math
 
 import PyImGui
-from Py4GWCoreLib import (Routines,Botting,ActionQueueManager, ConsoleLog, GLOBAL_CACHE, Agent, Utils, ImGui_Legacy, Color, ColorPalette)
+from Py4GWCoreLib import (Routines,Botting,ActionQueueManager, ConsoleLog, GLOBAL_CACHE, Agent, Utils, ImGui, Color, ColorPalette)
 from Py4GWCoreLib import ThrottledTimer, Map, Player
 from Py4GWCoreLib.enums import ModelID, Range, TitleID
 
@@ -560,9 +560,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Yet Another Vaettir Bot (Y.A.V.B) 2.0", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

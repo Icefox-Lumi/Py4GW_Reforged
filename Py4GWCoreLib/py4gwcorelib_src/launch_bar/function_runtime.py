@@ -19,7 +19,7 @@ def _icons_module():
     """The IconsFontAwesome5 module, or None when unavailable (offline)."""
 
     try:
-        from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+        from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 
         return IconsFontAwesome5
     except Exception:

@@ -174,7 +174,7 @@ class WidgetHandler:
         return widget_module
         
     def execute_enabled_widgets(self):
-        style = ImGui_Legacy.Selected_Style.pyimgui_style
+        style = ImGui.Selected_Style.pyimgui_style
         alpha = style.Alpha
         ui_enabled = self.__show_widget_ui
         pause_optional = self.__pause_optional_widgets
@@ -290,7 +290,7 @@ handler : WidgetHandler = sys.modules["_Py4GW_GLOBAL_WIDGET_HANDLER"].handler
 enable_all = ini_handler.get_bool(module_name, "enable_all", True)
 old_enable_all = enable_all
 
-window_module = ImGui_Legacy.WindowModule(module_name, window_name="Widgets", window_size=(130, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+window_module = ImGui.WindowModule(module_name, window_name="Widgets", window_size=(130, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 
 window_x = ini_handler.get_int(module_name, "x", 100)
 window_y = ini_handler.get_int(module_name, "y", 100)
@@ -327,30 +327,30 @@ def write_ini():
 
 def draw_widget_ui():
     global enable_all, initialized
-    style = ImGui_Legacy.get_style()
+    style = ImGui.get_style()
     
-    if ImGui_Legacy.icon_button(IconsFontAwesome5.ICON_RETWEET + "##Reload Widgets", 40):
+    if ImGui.icon_button(IconsFontAwesome5.ICON_RETWEET + "##Reload Widgets", 40):
         ConsoleLog(module_name, "Reloading Widgets...", PySystem.Console.MessageType.Info)
         initialized = False
         handler.discover_widgets()
         initialized = True        
-    ImGui_Legacy.show_tooltip("Reload all widgets")
+    ImGui.show_tooltip("Reload all widgets")
     PyImGui.same_line(0, 5)
 
-    new_enable_all = ImGui_Legacy.toggle_icon_button((IconsFontAwesome5.ICON_TOGGLE_ON if enable_all else IconsFontAwesome5.ICON_TOGGLE_OFF) + "##widget_disable", enable_all, 40)
+    new_enable_all = ImGui.toggle_icon_button((IconsFontAwesome5.ICON_TOGGLE_ON if enable_all else IconsFontAwesome5.ICON_TOGGLE_OFF) + "##widget_disable", enable_all, 40)
     if new_enable_all != enable_all:
         enable_all = new_enable_all
         ini_handler.set(module_name, "enable_all", str(enable_all))        
-    ImGui_Legacy.show_tooltip(f"{("Run" if not enable_all else "Pause")} all widgets")
+    ImGui.show_tooltip(f"{("Run" if not enable_all else "Pause")} all widgets")
     
     PyImGui.same_line(0, 5)
-    show_widget_ui = ImGui_Legacy.toggle_icon_button((IconsFontAwesome5.ICON_EYE if handler.show_widget_ui else IconsFontAwesome5.ICON_EYE_SLASH) + "##Show Widget UIs", handler.show_widget_ui, 40)
+    show_widget_ui = ImGui.toggle_icon_button((IconsFontAwesome5.ICON_EYE if handler.show_widget_ui else IconsFontAwesome5.ICON_EYE_SLASH) + "##Show Widget UIs", handler.show_widget_ui, 40)
     if show_widget_ui != handler.show_widget_ui:
         handler.set_widget_ui_visibility(show_widget_ui)
-    ImGui_Legacy.show_tooltip(f"{("Show" if not handler.show_widget_ui else "Hide")} all widget UIs")
+    ImGui.show_tooltip(f"{("Show" if not handler.show_widget_ui else "Hide")} all widget UIs")
     
     PyImGui.same_line(0, 5)
-    pause_non_env = ImGui_Legacy.toggle_icon_button((IconsFontAwesome5.ICON_PAUSE if handler.pause_optional_widgets else IconsFontAwesome5.ICON_PLAY) + "##Pause Non-Env Widgets", not handler.pause_optional_widgets, 40)
+    pause_non_env = ImGui.toggle_icon_button((IconsFontAwesome5.ICON_PAUSE if handler.pause_optional_widgets else IconsFontAwesome5.ICON_PLAY) + "##Pause Non-Env Widgets", not handler.pause_optional_widgets, 40)
     if pause_non_env != (not handler.pause_optional_widgets):
         if not handler.pause_optional_widgets:
             handler.pause_widgets()
@@ -364,8 +364,8 @@ def draw_widget_ui():
             
             GLOBAL_CACHE.ShMem.SendMessage(own_email, acc.AccountEmail, SharedCommandType.PauseWidgets if handler.pause_optional_widgets else SharedCommandType.ResumeWidgets)
         
-    ImGui_Legacy.show_tooltip(f"{("Pause" if not handler.pause_optional_widgets else "Resume")} all optional widgets")
-    ImGui_Legacy.separator()
+    ImGui.show_tooltip(f"{("Pause" if not handler.pause_optional_widgets else "Resume")} all optional widgets")
+    ImGui.separator()
     
     categorized_widgets = {}
     for name, info in handler.widgets.items():
@@ -376,7 +376,7 @@ def draw_widget_ui():
         categorized_widgets.setdefault(cat, {}).setdefault(sub, []).append(name)
 
     for cat, subs in categorized_widgets.items():
-        open = ImGui_Legacy.collapsing_header(f"{cat}##CategoryHeader")
+        open = ImGui.collapsing_header(f"{cat}##CategoryHeader")
         
         if not open:
             continue
@@ -385,19 +385,19 @@ def draw_widget_ui():
             if not sub:
                 continue
             
-            if style.Theme not in ImGui_Legacy.Textured_Themes:
+            if style.Theme not in ImGui.Textured_Themes:
                 style.TextTreeNode.push_color((255, 200, 100, 255))
                 
-            open = ImGui_Legacy.tree_node(f"{sub}##{cat} Subcategory")
+            open = ImGui.tree_node(f"{sub}##{cat} Subcategory")
             
-            if style.Theme not in ImGui_Legacy.Textured_Themes:
+            if style.Theme not in ImGui.Textured_Themes:
                 style.TextTreeNode.pop_color()
             
             if not open:
                 continue
                         
-            if not ImGui_Legacy.begin_table(f"Widgets {cat}{sub}", 2, PyImGui.TableFlags.Borders):
-                ImGui_Legacy.tree_pop()
+            if not ImGui.begin_table(f"Widgets {cat}{sub}", 2, PyImGui.TableFlags.Borders):
+                ImGui.tree_pop()
                 continue
             
             for name in names:
@@ -405,17 +405,17 @@ def draw_widget_ui():
                 PyImGui.table_next_row()
                 PyImGui.table_set_column_index(0)
 
-                new_enabled = ImGui_Legacy.checkbox(name, widget.enabled)
+                new_enabled = ImGui.checkbox(name, widget.enabled)
 
                 if new_enabled != widget.enabled:
                     handler._set_widget_state(name, new_enabled)
 
                 PyImGui.table_set_column_index(1)
-                widget.configuring = ImGui_Legacy.toggle_icon_button(IconsFontAwesome5.ICON_COG + f"##Configure{name}", widget.configuring)
+                widget.configuring = ImGui.toggle_icon_button(IconsFontAwesome5.ICON_COG + f"##Configure{name}", widget.configuring)
                 
 
-            ImGui_Legacy.end_table()
-            ImGui_Legacy.tree_pop()
+            ImGui.end_table()
+            ImGui.tree_pop()
 
 
 

@@ -10,15 +10,15 @@ import PyDXOverlay
 import PyAgentEvents
 import PyImGui
 from Py4GWCoreLib.HotkeyManager import HOTKEY_MANAGER, HotKey
-from Py4GWCoreLib.ImGui_Legacy_src.Style import Style
-from Py4GWCoreLib.ImGui_Legacy_src.types import Alignment, StyleTheme
+from Py4GWCoreLib.ImGui_src.Style import Style
+from Py4GWCoreLib.ImGui_src.types import Alignment, StyleTheme
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from Py4GWCoreLib._legacy_facade import ImGui_Legacy
+from Py4GWCoreLib.ImGui import ImGui
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 from Py4GWCoreLib.enums_src.IO_enums import Key, ModifierKey
 from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
 from Py4GWCoreLib.Player import Player
-from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 import importlib.util
 import os
 import sys
@@ -821,14 +821,14 @@ class WidgetHandler:
             widget = self._pending_disable_widget
 
             if widget:
-                ImGui_Legacy.text_colored(
+                ImGui.text_colored(
                     "Warning - This widget is required for core functionality!",
                     (1.0, 0.2, 0.2, 1.0),
                     font_size=16
                 )
                 PyImGui.separator()
 
-                ImGui_Legacy.text_wrapped(
+                ImGui.text_wrapped(
                     f"The widget '{widget.name}' is a SYSTEM widget.\n\n"
                     "Disabling it may break core functionality.\n\n"
                     "Are you sure you want to continue?"
@@ -839,12 +839,12 @@ class WidgetHandler:
                 PyImGui.spacing()
 
                 PyImGui.columns(2, "widget_manager_confirmation_buttons", False)
-                if ImGui_Legacy.button("Cancel", -1, 0):
+                if ImGui.button("Cancel", -1, 0):
                     self._pending_disable_widget = None
                     PyImGui.close_current_popup()
 
                 PyImGui.next_column()
-                if ImGui_Legacy.button("Disable", -1, 0):
+                if ImGui.button("Disable", -1, 0):
                     self.disable_widget(widget.plain_name)
                     self._pending_disable_widget = None
                     PyImGui.close_current_popup()
@@ -1027,7 +1027,7 @@ class WidgetHandler:
     def execute_enabled_widgets_draw(self):
         profiling = _get_profiling()
         profiling_enabled = profiling.enabled
-        style = ImGui_Legacy.Selected_Style.pyimgui_style
+        style = ImGui.Selected_Style.pyimgui_style
         alpha = style.Alpha
         ui_enabled = self.show_widget_ui
         pause_optional = self.optional_widgets_paused
@@ -1070,7 +1070,7 @@ class WidgetHandler:
     def execute_enabled_widgets_main(self):
         profiling = _get_profiling()
         profiling_enabled = profiling.enabled
-        style = ImGui_Legacy.Selected_Style.pyimgui_style
+        style = ImGui.Selected_Style.pyimgui_style
         alpha = style.Alpha
         ui_enabled = self.show_widget_ui
         pause_optional = self.optional_widgets_paused

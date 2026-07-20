@@ -1,7 +1,7 @@
 
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 import PyImGui
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 from Py4GWCoreLib import Overlay
 from Py4GWCoreLib import Timer
 from Py4GWCoreLib import FormatTime
@@ -54,7 +54,7 @@ class Config:
 
 
 widget_config = Config()
-window_module = ImGui_Legacy.WindowModule(
+window_module = ImGui.WindowModule(
     module_name, 
     window_name="Intance Timer##Instance Timer",
     window_size=(100, 100), 
@@ -66,7 +66,7 @@ window_module = ImGui_Legacy.WindowModule(
     )
 )
 
-config_module = ImGui_Legacy.WindowModule(f"Config {module_name}", window_name="Instance Timer Configuration##Instance Timer", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+config_module = ImGui.WindowModule(f"Config {module_name}", window_name="Instance Timer Configuration##Instance Timer", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 # Window geometry delegated to ImGui native persistence
 
 game_throttle_time = 50
@@ -120,11 +120,11 @@ def DrawWindow():
     PyImGui.set_next_window_pos(widget_config.x, widget_config.y)
 
     if PyImGui.begin(window_module.window_name, window_module.window_flags):
-        ImGui_Legacy.push_font("Regular", widget_config.font_size)
+        ImGui.push_font("Regular", widget_config.font_size)
         PyImGui.push_style_color(PyImGui.ImGuiCol.Text,widget_config.color.to_tuple_normalized())
         PyImGui.text(widget_config.string)
         PyImGui.pop_style_color(1)
-        ImGui_Legacy.pop_font()
+        ImGui.pop_font()
     PyImGui.end()
 
 def tooltip():
@@ -132,9 +132,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Instance Timer", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     
     PyImGui.spacing()
     PyImGui.separator()

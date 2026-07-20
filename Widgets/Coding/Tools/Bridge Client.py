@@ -20,7 +20,7 @@ from BridgeRuntime.protocol import (
 )
 from Py4GWCoreLib import (
     GLOBAL_CACHE,
-    ImGui_Legacy,
+    ImGui,
     Map,
     Player,
     AgentArray,
@@ -1025,9 +1025,9 @@ def _process_inbox():
 def tooltip():
     PyImGui.begin_tooltip()
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored(MODULE_NAME, title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.separator()
     PyImGui.text("TCP bridge client for the external bridge daemon.")
     PyImGui.text("Executes namespaced commands in the injected runtime.")
@@ -1037,7 +1037,7 @@ def tooltip():
 def draw():
     if not INI_KEY:
         return
-    if ImGui_Legacy.Begin(INI_KEY, MODULE_NAME, flags=PyImGui.WindowFlags.AlwaysAutoResize):
+    if ImGui.Begin(INI_KEY, MODULE_NAME, flags=PyImGui.WindowFlags.AlwaysAutoResize):
         PyImGui.text(f"Connected: {STATE.connected}")
         PyImGui.text(f"Daemon: {STATE.daemon_host}:{STATE.daemon_port}")
         PyImGui.text(f"HWND: {STATE.get_hwnd()}")
@@ -1080,7 +1080,7 @@ def draw():
         if PyImGui.button("Reconnect"):
             STATE.stop()
             STATE.start()
-    ImGui_Legacy.End(INI_KEY)
+    ImGui.End(INI_KEY)
 
 
 def main():

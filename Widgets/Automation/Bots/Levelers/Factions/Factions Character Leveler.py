@@ -4,10 +4,10 @@ import os, time
 import PyImGui
 import PyGameThread
 from Py4GWCoreLib import (GLOBAL_CACHE, Routines, Range, Py4GW, ConsoleLog, ModelID, Bags, Botting,
-                          AutoPathing, ImGui_Legacy, ActionQueueManager, Map, Agent, Player, UIManager, GWUI, HeroType, Skill, AgentArray)
+                          AutoPathing, ImGui, ActionQueueManager, Map, Agent, Player, UIManager, GWUI, HeroType, Skill, AgentArray)
 from Py4GWCoreLib.Builds.Any.KeiranThackerayEOTN import KeiranThackerayEOTN
 from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
-from Py4GWCoreLib.ImGui_Legacy_src.types import Alignment
+from Py4GWCoreLib.ImGui_src.types import Alignment
 from Py4GWCoreLib.enums_src.UI_enums import UIMessage
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color
 
@@ -2541,19 +2541,19 @@ def _draw_texture():
     border_col = (0, 0, 0, 0)  # <- ints, not normalized floats
 
     if level <= 5:
-        ImGui_Legacy.DrawTextureExtended(texture_path=path, size=size,
+        ImGui.DrawTextureExtended(texture_path=path, size=size,
                                   uv0=(0.0, 0.0),   uv1=(0.25, 1.0),
                                   tint=tint, border_color=border_col)
     elif level <= 8:
-        ImGui_Legacy.DrawTextureExtended(texture_path=path, size=size,
+        ImGui.DrawTextureExtended(texture_path=path, size=size,
                                   uv0=(0.25, 0.0), uv1=(0.5, 1.0),
                                   tint=tint, border_color=border_col)
     elif level <= 9:
-        ImGui_Legacy.DrawTextureExtended(texture_path=path, size=size,
+        ImGui.DrawTextureExtended(texture_path=path, size=size,
                                   uv0=(0.5, 0.0),  uv1=(0.75, 1.0),
                                   tint=tint, border_color=border_col)
     else:
-        ImGui_Legacy.DrawTextureExtended(texture_path=path, size=size,
+        ImGui.DrawTextureExtended(texture_path=path, size=size,
                                   uv0=(0.75, 0.0), uv1=(1.0, 1.0),
                                   tint=tint, border_color=border_col)
 
@@ -2686,11 +2686,11 @@ def tooltip():
     
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.image(MODULE_ICON, (32, 32))
+    ImGui.image(MODULE_ICON, (32, 32))
     PyImGui.same_line(0, 10)
-    ImGui_Legacy.push_font("Regular", 20)
-    ImGui_Legacy.text_aligned(MODULE_NAME, alignment=Alignment.MidLeft, color=title_color.color_tuple, height=32)
-    ImGui_Legacy.pop_font()
+    ImGui.push_font("Regular", 20)
+    ImGui.text_aligned(MODULE_NAME, alignment=Alignment.MidLeft, color=title_color.color_tuple, height=32)
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.spacing()
     PyImGui.separator()

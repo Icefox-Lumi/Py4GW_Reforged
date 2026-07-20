@@ -2,7 +2,7 @@ from typing import Any
 
 import PyImGui
 import PyProfiler
-from Py4GWCoreLib import UIManager, ThrottledTimer, Color, ColorPalette, ImGui_Legacy
+from Py4GWCoreLib import UIManager, ThrottledTimer, Color, ColorPalette, ImGui
 from Py4GWCoreLib import ProfilingRegistry, SimpleProfiler, WidgetHandler
 
 MODULE_NAME = "System Monitor"
@@ -733,9 +733,9 @@ def _draw_widget_window() -> None:
 def tooltip() -> None:
     """Hover tooltip shown by the widget manager / launchpad."""
     PyImGui.begin_tooltip()
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("System Monitor", Color(255, 200, 100, 255).to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     PyImGui.text("Live per-widget frame cost: fps, frame time and usage share.")

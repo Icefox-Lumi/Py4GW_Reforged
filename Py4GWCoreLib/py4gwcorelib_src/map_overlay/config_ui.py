@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import PyImGui
 
 from Py4GWCoreLib import Agent
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 from Py4GWCoreLib import Player
 from Py4GWCoreLib.Overlay import Overlay
 
@@ -39,7 +39,7 @@ def _rgba(t) -> RGBA:
 def _tip(text: str) -> None:
     """Tooltip for the control just emitted."""
     if PyImGui.is_item_hovered():
-        ImGui_Legacy.show_tooltip(text)
+        ImGui.show_tooltip(text)
 
 
 #: X offset where a row's controls start, so every row's name column lines up.

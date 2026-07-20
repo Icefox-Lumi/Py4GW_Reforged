@@ -3003,7 +3003,7 @@ def _get_storage_anchor_position(anchor_window_width=None):
 # UI rendering and interactions
 # -----------------------------------------------------------------------------
 def _draw_storage_hover_modelid_tooltip(available_storage_bags):
-	"""Show an ImGui_Legacy tooltip with type and model info when hovering over a storage item."""
+	"""Show an ImGui tooltip with type and model info when hovering over a storage item."""
 	try:
 		hovered_item_id = int(GLOBAL_CACHE.Inventory.GetHoveredItemID())
 	except Exception:
@@ -3060,7 +3060,7 @@ def _draw_toggle_icon_window():
 		| PyImGui.WindowFlags.NoCollapse
 		| PyImGui.WindowFlags.NoBackground
 	)
-	PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.WindowPadding, 0.0, 0.0)
+	PyImGui.push_style_var2(ImGui.ImGuiStyleVar.WindowPadding, 0.0, 0.0)
 	if PyImGui.begin("##XunlaiManagerToggle", icon_window_flags):
 		icon_path = MODULE_ICON
 		absolute_icon_path = os.path.join(project_root, MODULE_ICON)
@@ -3072,7 +3072,7 @@ def _draw_toggle_icon_window():
 		cursor_x, cursor_y = PyImGui.get_cursor_screen_pos()
 		draw_pos = (cursor_x + icon_offset, cursor_y + icon_offset)
 		try:
-			ImGui_Legacy.DrawTextureInDrawList(draw_pos, (icon_size, icon_size), icon_path)
+			ImGui.DrawTextureInDrawList(draw_pos, (icon_size, icon_size), icon_path)
 		except Exception:
 			PyImGui.set_cursor_screen_pos(draw_pos[0] + 6.0, draw_pos[1] + 8.0)
 			PyImGui.text("CM")

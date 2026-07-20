@@ -1,6 +1,6 @@
 # PyImGui stub â€” Reforged Native surface (2026-07-06)
 # Matches imgui_bindings.cpp + sub-module registrars (types, enums, style, docking, drawlist, io, addons).
-# ImGui_Legacy 1.92.x docking branch. Full parity with legacy API surface preserved.
+# ImGui 1.92.x docking branch. Full parity with legacy API surface preserved.
 
 from typing import Optional, Tuple, List, Any, overload
 from enum import Enum, IntEnum

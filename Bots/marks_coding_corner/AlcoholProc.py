@@ -13,7 +13,7 @@ from Py4GWCoreLib import GLOBAL_CACHE, Player
 from Py4GWCoreLib import Bags
 from Py4GWCoreLib import Effects
 from Py4GWCoreLib import IconsFontAwesome5
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from Py4GWCoreLib import Item
 from Py4GWCoreLib import ItemArray
@@ -302,7 +302,7 @@ def draw_widget():
 
     if is_window_opened:
         # Toggle suppression via your UI
-        should_suppress_key = ImGui_Legacy.toggle_button(
+        should_suppress_key = ImGui.toggle_button(
             f'Alcohol Support is {"ON" if should_suppress_key else "OFF"}##StartAlcoholSupport', should_suppress_key
         )
 
@@ -321,7 +321,7 @@ def draw_widget():
                     PyImGui.table_next_column()
 
                     texture_file = os.path.join(project_root, GLOBAL_CACHE.Skill.ExtraData.GetTexturePath(skill_id))
-                    ImGui_Legacy.DrawTexture(texture_file, 44, 44)
+                    ImGui.DrawTexture(texture_file, 44, 44)
 
                     # Keybind column
                     PyImGui.table_next_column()
@@ -339,7 +339,7 @@ def draw_widget():
             PyImGui.table_next_row()
             PyImGui.table_next_column()
             PyImGui.text_wrapped(IconsFontAwesome5.ICON_HANDS_HELPING + " Keybinds Help")
-            ImGui_Legacy.show_tooltip(
+            ImGui.show_tooltip(
                 f"Update your current skill keybinds in '{BASE_DIR}\\alcohol_procs.json' - by default it uses 1-8 keys"
             )
             PyImGui.end_table()

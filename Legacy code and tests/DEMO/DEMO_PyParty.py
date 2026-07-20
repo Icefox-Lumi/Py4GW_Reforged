@@ -1,6 +1,6 @@
 # Impor# Necessary Imports
 import Py4GW        #Miscelanious functions and classes
-import PyImGui     #ImGui_Legacy wrapper
+import PyImGui     #ImGui wrapper
 import PyParty      #Party functions and classes
 
 # End Necessary Imports

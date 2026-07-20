@@ -1,4 +1,4 @@
-from Py4GWCoreLib import Routines, EnumPreference, FrameLimiter, ThrottledTimer, UIManager, Color, ColorPalette, ImGui_Legacy
+from Py4GWCoreLib import Routines, EnumPreference, FrameLimiter, ThrottledTimer, UIManager, Color, ColorPalette, ImGui
 import PyImGui
 
 update_timer = ThrottledTimer(5000)  # 1 second timer
@@ -12,9 +12,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Frame Limiter", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     red = ColorPalette.GetColor("red")
     PyImGui.text_colored("This is a system Widget, deactivating it will cause issues.", red.to_tuple_normalized())
     PyImGui.separator()

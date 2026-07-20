@@ -3,7 +3,7 @@ from typing import List, Tuple
 
 import PyImGui
 from Py4GWCoreLib import (GLOBAL_CACHE, Keystroke, Key, Py4GW, UIManager, ControlAction, Botting,
-                          AutoPathing, ImGui_Legacy)
+                          AutoPathing, ImGui)
 
 started = False
 toggle = False

@@ -14,7 +14,7 @@ class Shape(ABC):
 
     @abstractmethod
     def draw(self):
-        """Each shape must implement its own ImGui_Legacy drawing logic."""
+        """Each shape must implement its own ImGui drawing logic."""
         pass
 
     @abstractmethod

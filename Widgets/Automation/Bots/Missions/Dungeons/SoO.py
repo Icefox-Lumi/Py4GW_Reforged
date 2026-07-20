@@ -2155,7 +2155,7 @@ def _accumulate_gb(account_key: str, run_count: int) -> None:
 
 def _draw_bds_stats() -> None:
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Color
+    from Py4GWCoreLib import ImGui, Color
 
     _ensure_ini_initialized()
 
@@ -2239,7 +2239,7 @@ def _draw_bds_stats() -> None:
     # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _bds_icon_exists = os.path.isfile(_BDS_ICON_PATH)
     if _bds_icon_exists:
-        ImGui_Legacy.image(_BDS_ICON_PATH, (24, 24))
+        ImGui.image(_BDS_ICON_PATH, (24, 24))
         PyImGui.same_line(0, 8)
     PyImGui.text_colored("BDS Statistics", gold)
     PyImGui.separator()
@@ -3322,7 +3322,7 @@ bot.UI.override_draw_config(_draw_bds_settings)
 
 def _draw_bds_window_with_stats_tab() -> None:
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Routines
+    from Py4GWCoreLib import ImGui, Routines
     from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 
     main_child_dimensions = (500, 350)
@@ -3336,7 +3336,7 @@ def _draw_bds_window_with_stats_tab() -> None:
     if not bot.config.ini_key:
         return
 
-    if ImGui_Legacy.Begin(
+    if ImGui.Begin(
         ini_key=bot.config.ini_key,
         name=bot.config.bot_name,
         p_open=True,
@@ -3374,7 +3374,7 @@ def _draw_bds_window_with_stats_tab() -> None:
 
             PyImGui.end_tab_bar()
 
-    ImGui_Legacy.End(bot.config.ini_key)
+    ImGui.End(bot.config.ini_key)
 
     if Routines.Checks.Map.MapValid():
         bot.UI.DrawPath(
@@ -3386,14 +3386,14 @@ def _draw_bds_window_with_stats_tab() -> None:
 
 def tooltip():
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Color
+    from Py4GWCoreLib import ImGui, Color
     PyImGui.begin_tooltip()
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Bone Dragon Staff Farmer bot", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     # Description

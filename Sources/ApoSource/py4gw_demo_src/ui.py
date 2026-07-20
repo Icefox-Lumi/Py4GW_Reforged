@@ -1,5 +1,5 @@
 """
-Render kit for Py4GW DEMO 2.0 — raw PyImGui only (no ImGui_Legacy, no reflection).
+Render kit for Py4GW DEMO 2.0 — raw PyImGui only (no ImGui, no reflection).
 
 Design (see docs/demo_replacement/reengineer/SPEC_reengineer.md):
   * A section's ``build_*()`` returns a list of **Blocks** — already-cast display data.

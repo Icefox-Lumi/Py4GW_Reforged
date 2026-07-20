@@ -2320,9 +2320,9 @@ class LaunchSurfaceImGuiHost:
         icon = renderable.tile.custom_icon or (definition.icon if definition is not None else '')
         disabled = not renderable.available
         if icon and os.path.isfile(icon):
-            from Py4GWCoreLib._legacy_facade import ImGui_Legacy
+            from Py4GWCoreLib.ImGui import ImGui
 
-            return ImGui_Legacy.image_button(
+            return ImGui.image_button(
                 f'##launch_{renderable.tile.tile_id}',
                 icon,
                 width,
@@ -2981,7 +2981,7 @@ class LaunchSurfaceImGuiHost:
 
         import PyImGui
 
-        from Py4GWCoreLib._legacy_facade import ImGui_Legacy
+        from Py4GWCoreLib.ImGui import ImGui
         from Py4GWCoreLib.enums_src.IO_enums import Key, ModifierKey
 
         binding = self.surface.state.shortcuts.get(tile.tile_id, {})
@@ -2991,7 +2991,7 @@ class LaunchSurfaceImGuiHost:
         except KeyError:
             key = Key.Unmapped
         modifiers = ModifierKey(int(binding.get('modifiers', 0)))
-        new_key, new_modifiers, changed = ImGui_Legacy.keybinding(
+        new_key, new_modifiers, changed = ImGui.keybinding(
             f'Shortcut##{self.surface.surface_id}_{tile.tile_id}', key, modifiers
         )
         if changed:

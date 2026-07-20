@@ -16,7 +16,7 @@ import PyImGui
 import PySystem
 from Py4GWCoreLib import Range, TitleID
 from Py4GWCoreLib import Routines
-from Py4GWCoreLib import Utils, ImGui_Legacy, Color, ColorPalette
+from Py4GWCoreLib import Utils, ImGui, Color, ColorPalette
 from Py4GWCoreLib import SharedCommandType
 from Py4GWCoreLib import UIManager
 from Py4GWCoreLib import AutoPathing
@@ -160,7 +160,7 @@ def _get_pycons_widget_module():
         return None
     return getattr(widget_info, "module", None)
 
-# region ImGui_Legacy
+# region ImGui
 def configure():
     DrawWindow()
     
@@ -169,9 +169,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Messaging", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     red = ColorPalette.GetColor("red")
     PyImGui.text_colored("This is a system Widget, deactivating it will cause issues.", red.to_tuple_normalized())
     PyImGui.separator()

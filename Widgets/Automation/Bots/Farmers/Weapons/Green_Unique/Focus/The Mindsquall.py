@@ -70,14 +70,14 @@ def _find_shared_textures_folder() -> str:
 
 def tooltip():
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Color
+    from Py4GWCoreLib import ImGui, Color
     PyImGui.begin_tooltip()
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("The Mindsquall Farmer bot", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     # Description

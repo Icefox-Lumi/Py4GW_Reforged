@@ -386,7 +386,7 @@ def _draw_item_section() -> None:
 
 
 def main() -> None:
-    """Per-frame ImGui_Legacy window. Acts only on button clicks; polls a live status line."""
+    """Per-frame ImGui window. Acts only on button clicks; polls a live status line."""
     global _ui_agent_id, _ui_color_hex
 
     if not PyImGui.begin(MODULE_NAME):

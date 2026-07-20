@@ -3,7 +3,7 @@ from Py4GWCoreLib import Botting, Routines, GLOBAL_CACHE, ModelID, Agent, Player
 from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.enums_src.Title_enums import TitleID, TITLE_TIERS
 from Py4GWCoreLib.botting_src.property import Property
-from Py4GWCoreLib.ImGui_Legacy_src.ImGuisrc import ImGui_Legacy
+from Py4GWCoreLib.ImGui_src.ImGuisrc import ImGui
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 import Py4GW
 import os
@@ -1046,10 +1046,10 @@ def _draw_hero_icon(hero_id: int, size: int = 24):
     if path:
         try:
             cx, cy = PyImGui.get_cursor_screen_pos()
-            ImGui_Legacy.DrawTextureInDrawList(pos=(float(cx), float(cy)), size=(float(size), float(size)), texture_path=path)
+            ImGui.DrawTextureInDrawList(pos=(float(cx), float(cy)), size=(float(size), float(size)), texture_path=path)
         except Exception:
             try:
-                ImGui_Legacy.DrawTexture(texture_path=path, width=size, height=size)
+                ImGui.DrawTexture(texture_path=path, width=size, height=size)
             except Exception:
                 pass
     PyImGui.dummy(int(size), int(size))
@@ -1420,14 +1420,14 @@ def _draw_settings(bot: Botting):
 
 def tooltip():
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Color
+    from Py4GWCoreLib import ImGui, Color
     PyImGui.begin_tooltip()
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Asura Title Farm", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     # Description

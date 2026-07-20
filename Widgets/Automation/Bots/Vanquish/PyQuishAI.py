@@ -74,7 +74,7 @@ class FSMVars:
 
 class BotVars:
     def __init__(self):
-        self.window_module = ImGui_Legacy.WindowModule(
+        self.window_module = ImGui.WindowModule(
             module_name,
             window_name="MQVQ Bot",
             window_size=(300, 300),
@@ -549,7 +549,7 @@ header_active_color   = Color(95, 145,  95, 255).to_tuple_normalized()
 # --------------------------------------------------------------------------------------------------
 
 def DrawWindow():
-    """Renders a single, themed ImGui_Legacy window using our new neutralâ€gray buttons,
+    """Renders a single, themed ImGui window using our new neutralâ€gray buttons,
     paleâ€gold headings, offâ€white body text, and punchy icon color."""
     # 1) Begin the window
     if not PyImGui.begin(module_name, PyImGui.WindowFlags.AlwaysAutoResize):

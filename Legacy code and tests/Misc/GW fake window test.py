@@ -61,7 +61,7 @@ def draw_region_in_drawlist(x: float, y: float,
 
     uv0, uv1 = Utils.PixelsToUV(x0, y0, source_width, source_height, atlas_dimensions[0], atlas_dimensions[1])
 
-    ImGui_Legacy.DrawTextureInDrawList(
+    ImGui.DrawTextureInDrawList(
         pos=(x, y),
         size=(_width, _height),
         texture_path=texture_path,
@@ -86,7 +86,7 @@ def main():
     else:
         flags = (PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoBackground)
     
-    PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.WindowPadding, 0, 0)
+    PyImGui.push_style_var2(ImGui.ImGuiStyleVar.WindowPadding, 0, 0)
   
     window_open = PyImGui.begin(MODULE_NAME, flags)
     collapsed = PyImGui.is_window_collapsed()
@@ -211,7 +211,7 @@ def main():
             PyImGui.set_window_collapsed(collapsed, PyImGui.ImGuiCond.Always)
             
         # Draw CLOSE BUTTON in the title bar
-        ImGui_Legacy.DrawTextureInDrawList(
+        ImGui.DrawTextureInDrawList(
             pos=(x, y),
             size=(cb_width, cb_height),
             texture_path=TEXTURE_FOLDER + CLOSE_BUTTON_ATLAS,
@@ -411,7 +411,7 @@ def main():
         uv0, uv1 = Utils.PixelsToUV(x0, y0, border_tex_width, border_tex_height,
                                     FRAME_ATLAS_DIMENSIONS[0], FRAME_ATLAS_DIMENSIONS[1])
 
-        ImGui_Legacy.DrawTextureInDrawList(
+        ImGui.DrawTextureInDrawList(
             pos=(border_start_x, bottom - border_tex_height),
             size=(border_draw_width, border_tex_height),
             texture_path=TEXTURE_FOLDER + FRAME_ATLAS,
@@ -435,7 +435,7 @@ def main():
 
         color = Color(0, 0, 0, 200)
         PyImGui.push_style_color(PyImGui.ImGuiCol.ChildBg, color.to_tuple_normalized())
-        PyImGui.push_style_var(ImGui_Legacy.ImGuiStyleVar.ChildRounding, 6.0)
+        PyImGui.push_style_var(ImGui.ImGuiStyleVar.ChildRounding, 6.0)
 
         # Create a child window for the content area
         padding = 8.0
