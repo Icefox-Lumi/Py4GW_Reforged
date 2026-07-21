@@ -70,8 +70,8 @@ class MapOverlay:
             | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.NoSavedSettings
             | PyImGui.WindowFlags.NoBackground | PyImGui.WindowFlags.NoInputs
         )
-        PyImGui.push_style_var2(ImGui.ImGuiStyleVar.WindowPadding, 0.0, 0.0)
-        PyImGui.push_style_var2(ImGui.ImGuiStyleVar.FramePadding, 0.0, 0.0)
+        PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (0.0, 0.0))
+        PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.FramePadding, (0.0, 0.0))
         return PyImGui.begin("##map_overlay_drawlist", flags)
 
     @staticmethod
@@ -218,8 +218,8 @@ def _floating_move_toggle(x: float, y: float, enabled: bool, show_stop: bool, ma
         PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoScrollbar
         | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoBackground
     )
-    PyImGui.push_style_var2(ImGui.ImGuiStyleVar.WindowPadding, 2.0, 2.0)
-    PyImGui.push_style_var2(ImGui.ImGuiStyleVar.FramePadding, 1.0, 1.0)
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (2.0, 2.0))
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.FramePadding, (1.0, 1.0))
     PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
     PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg, (0.0, 0.0, 0.0, 0.0))
     result = enabled
@@ -245,7 +245,7 @@ def _floating_map_id_strip(x: float, y: float, map_id: int, margin: int = 8) -> 
         PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoScrollbar
         | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoBackground
     )
-    PyImGui.push_style_var2(ImGui.ImGuiStyleVar.WindowPadding, 2.0, 2.0)
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (2.0, 2.0))
     PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
     PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg, (0.0, 0.0, 0.0, 0.0))
     if PyImGui.begin("##mo_map_id_strip", flags):
@@ -262,8 +262,8 @@ def _floating_coords_strip(x: float, y: float, last_x: float, last_y: float, wid
         PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoScrollbar
         | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoBackground
     )
-    PyImGui.push_style_var2(ImGui.ImGuiStyleVar.WindowPadding, 4.0, 4.0)
-    PyImGui.push_style_var2(ImGui.ImGuiStyleVar.FramePadding, 2.0, 2.0)
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (4.0, 4.0))
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.FramePadding, (2.0, 2.0))
     PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
     PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg, (0.0, 0.0, 0.0, 0.0))
     if PyImGui.begin("##mo_coords_strip", flags):
@@ -283,7 +283,7 @@ def _floating_slider(caption: str, value: float, x: float, y: float, min_v: floa
         PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar
         | PyImGui.WindowFlags.NoScrollbar | PyImGui.WindowFlags.AlwaysAutoResize
     )
-    PyImGui.push_style_var2(ImGui.ImGuiStyleVar.WindowPadding, 0.0, 0.0)
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (0.0, 0.0))
     PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
     result = value
     if PyImGui.begin(f"##mo_slider_{caption}", flags):

@@ -774,9 +774,9 @@ def draw_buffs_bar(account_data: AccountStruct, win_pos: tuple, win_size: tuple,
     style = ImGui.get_style()
 
     PyImGui.push_style_var(ImGuiStyleVar.WindowRounding,0.0)
-    PyImGui.push_style_var(ImGuiStyleVar.WindowPadding,0.0)
+    PyImGui.push_style_var_vec2(ImGuiStyleVar.WindowPadding, (0.0, 0.0))
     PyImGui.push_style_var(ImGuiStyleVar.WindowBorderSize,0.0)
-    PyImGui.push_style_var2(ImGuiStyleVar.WindowPadding,0.0,0.0)
+    PyImGui.push_style_var_vec2(ImGuiStyleVar.WindowPadding, (0.0, 0.0))
     
     flags=( PyImGui.WindowFlags.NoCollapse | 
                 PyImGui.WindowFlags.NoTitleBar |
@@ -1821,7 +1821,7 @@ hotbar_offsets : dict[StyleTheme, dict[str, dict]] = {
             VerticalAlignment.Below.name: 8,
             },
     },
-    StyleTheme.ImGui: {
+    StyleTheme.Py4GW: {
         "PartyWindow": {
             HorizontalAlignment.LeftOf.name: -8,
             HorizontalAlignment.Left.name: 0,
@@ -1906,7 +1906,7 @@ def draw_hotbar(hotbar: Settings.CommandHotBar, cached_data: CacheData):
                 if party_window:
                     left, top, right, bottom = party_window
                     
-                    offsets = hotbar_offsets.get(style.Theme, hotbar_offsets.get(StyleTheme.ImGui, {})).get("PartyWindow", {})                    
+                    offsets = hotbar_offsets.get(style.Theme, hotbar_offsets.get(StyleTheme.Py4GW, {})).get("PartyWindow", {})                    
                     x_offset = offsets.get(hotbar.alignment.horizontal.name, 0)
                     y_offset = offsets.get(hotbar.alignment.vertical.name, 0)
                     
@@ -1925,7 +1925,7 @@ def draw_hotbar(hotbar: Settings.CommandHotBar, cached_data: CacheData):
                 if skillbar_window:
                     left, top, right, bottom = skillbar_window
                     
-                    offsets = hotbar_offsets.get(style.Theme, hotbar_offsets.get(StyleTheme.ImGui, {})).get("Skillbar", {})       
+                    offsets = hotbar_offsets.get(style.Theme, hotbar_offsets.get(StyleTheme.Py4GW, {})).get("Skillbar", {})       
                     x_offset = offsets.get(hotbar.alignment.horizontal.name, 0)
                     y_offset = offsets.get(hotbar.alignment.vertical.name, 0)
                     
