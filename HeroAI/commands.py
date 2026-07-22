@@ -3,7 +3,7 @@ from typing import Callable
 
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
-from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
@@ -215,7 +215,9 @@ class HeroAICommands:
                 char_name = account.AgentData.CharacterName
                 def send_invite(name = char_name):
                     ConsoleLog("HeroAI", f"Inviting {name} to party.")
-                    Player.SendChatCommand("invite " + name)
+                    # /invite needs the REAL name; name obfuscation may make the shared name an alias.
+                    from Py4GWCoreLib.py4gwcorelib_src.name_obfuscation.resolve import require_real_name
+                    Player.SendChatCommand("invite " + require_real_name(name))
                     SetWaitingActions(250)
                     
                 send_invite()

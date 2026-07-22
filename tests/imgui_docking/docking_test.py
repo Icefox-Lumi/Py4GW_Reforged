@@ -2,9 +2,9 @@
 In-client docking test for the PyImGui docking surface.
 
 What docking is:
-- Docking lets multiple ImGui_Legacy windows live inside one dockspace.
+- Docking lets multiple ImGui windows live inside one dockspace.
 - A dockspace is a container that can host tabs, splits, and re-arrangeable panes.
-- This is separate from multi-viewport. Docking stays inside the main ImGui_Legacy host window.
+- This is separate from multi-viewport. Docking stays inside the main ImGui host window.
 
 Useful patterns:
 - Manual docking:
@@ -23,7 +23,7 @@ Useful patterns:
 
 import PyImGui
 
-MODULE_NAME = 'ImGui_Legacy Docking Test'
+MODULE_NAME = 'ImGui Docking Test'
 DOCK_HOST_TITLE = 'Dock Host'
 TOOLS_TITLE = 'Dock Tools'
 SCENE_TITLE = 'Dock Scene'
@@ -101,7 +101,7 @@ def _draw_host() -> None:
     PyImGui.same_line(0, -1)
     PyImGui.text(f'Docking enabled: {_bool_label(PyImGui.is_docking_enabled())}')
 
-    # Toggle: drives ImGui_Legacy.begin(dockable=...) for the panes below.
+    # Toggle: drives ImGui.begin(dockable=...) for the panes below.
     _dockable = PyImGui.checkbox('Panes dockable (adds WindowFlags.Docking)', _dockable)
 
     available_size = PyImGui.get_content_region_avail()

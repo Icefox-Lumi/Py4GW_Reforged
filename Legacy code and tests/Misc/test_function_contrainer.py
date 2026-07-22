@@ -1,6 +1,6 @@
 # Necessary Imports
 import Py4GW        #Miscelanious functions and classes
-import PyImGui     #ImGui_Legacy wrapper
+import PyImGui     #ImGui wrapper
 import PyKeystroke  #keystroke functions and classes
 import traceback    #traceback to log stack traces
 # End Necessary Imports

@@ -1,6 +1,6 @@
 import PyImGui
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 from Py4GWCoreLib import Timer
 from Py4GWCoreLib import Overlay
 from Py4GWCoreLib import Map
@@ -10,7 +10,7 @@ from Py4GWCoreLib import Color
 import Py4GW
 import os
 
-from Py4GWCoreLib.ImGui_Legacy_src.types import Alignment
+from Py4GWCoreLib.ImGui_src.types import Alignment
 
 MODULE_NAME = "Vanquish Monitor"
 MODULE_ICON = "Textures\\Module_Icons\\Vanquish Monitor.png"
@@ -48,7 +48,7 @@ class Config:
         ini_handler.set(module_name, "color_a", str(self.color.get_a()))
         
 widget_config = Config()
-window_module = ImGui_Legacy.WindowModule(
+window_module = ImGui.WindowModule(
     module_name, 
     window_name="Vanquish Monitor##Vanquish Monitor",
     window_size=(100, 100), 
@@ -60,7 +60,7 @@ window_module = ImGui_Legacy.WindowModule(
     )
 )
 
-config_module = ImGui_Legacy.WindowModule(f"Config {module_name}", window_name="Vanquish Monitor##Vanquish Monitor config", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+config_module = ImGui.WindowModule(f"Config {module_name}", window_name="Vanquish Monitor##Vanquish Monitor config", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 # Window geometry delegated to ImGui native persistence
 
 is_map_ready = False
@@ -80,9 +80,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Vanquish Monitor", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     
     PyImGui.spacing()
     PyImGui.separator()
@@ -151,8 +151,8 @@ def DrawWindow():
     widget_config.string = f"{killed}/{total}"
 
     PyImGui.set_next_window_pos(widget_config.x, widget_config.y)
-    ImGui_Legacy.push_font("Regular", widget_config.font_size)
-    text_size = ImGui_Legacy.calc_text_size("999/999")
+    ImGui.push_font("Regular", widget_config.font_size)
+    text_size = ImGui.calc_text_size("999/999")
     width = text_size[0] + 20
     height = text_size[1] + 20
     
@@ -160,12 +160,12 @@ def DrawWindow():
     
     if PyImGui.begin(window_module.window_name, window_module.window_flags):
         PyImGui.push_style_color(PyImGui.ImGuiCol.Text,widget_config.color.to_tuple_normalized())
-        ImGui_Legacy.text_aligned(widget_config.string, text_size[0], text_size[1], alignment=Alignment.MidRight)
+        ImGui.text_aligned(widget_config.string, text_size[0], text_size[1], alignment=Alignment.MidRight)
         PyImGui.pop_style_color(1)
         
     PyImGui.end()
     
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
   
   
 def main():

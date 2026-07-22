@@ -1,7 +1,7 @@
 import PyImGui
 import traceback
 
-from Py4GWCoreLib import GLOBAL_CACHE, ImGui_Legacy, Color, Routines, ThrottledTimer
+from Py4GWCoreLib import GLOBAL_CACHE, ImGui, Color, Routines, ThrottledTimer
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 
 MODULE_NAME = "Shared Memory Isolation Manager"
@@ -28,9 +28,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored(MODULE_NAME, title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 
@@ -197,7 +197,7 @@ def draw():
         PyImGui.set_next_window_collapsed(True, 0)
         _first_draw = False
 
-    if ImGui_Legacy.Begin(MODULE_NAME, MODULE_NAME, flags=PyImGui.WindowFlags.AlwaysAutoResize):
+    if ImGui.Begin(MODULE_NAME, MODULE_NAME, flags=PyImGui.WindowFlags.AlwaysAutoResize):
         try:
             if _last_error:
                 PyImGui.text_colored(f"Error: {_last_error[:200]}", (1.0, 0.3, 0.3, 1.0))
@@ -297,7 +297,7 @@ def draw():
             _last_error = traceback.format_exc()
             PyImGui.text_colored(f"Draw error: {_last_error[:200]}", (1.0, 0.3, 0.3, 1.0))
 
-    ImGui_Legacy.End(MODULE_NAME)
+    ImGui.End(MODULE_NAME)
 
 
 def main():

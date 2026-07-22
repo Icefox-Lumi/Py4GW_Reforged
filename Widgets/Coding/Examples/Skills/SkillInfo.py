@@ -52,12 +52,12 @@ def DrawCompareSkills():
                 # Texture + Name
                 PyImGui.table_next_row()
                 PyImGui.table_next_column()
-                ImGui_Legacy.DrawTexture(GLOBAL_CACHE.Skill.ExtraData.GetTexturePath(askill_a), 96, 96)
+                ImGui.DrawTexture(GLOBAL_CACHE.Skill.ExtraData.GetTexturePath(askill_a), 96, 96)
                 PyImGui.text(f"ID: {askill_a}")
                 PyImGui.text(f"Name: {GLOBAL_CACHE.Skill.GetNameFromWiki(askill_a)}")
 
                 PyImGui.table_next_column()
-                ImGui_Legacy.DrawTexture(GLOBAL_CACHE.Skill.ExtraData.GetTexturePath(askill_b), 96, 96)
+                ImGui.DrawTexture(GLOBAL_CACHE.Skill.ExtraData.GetTexturePath(askill_b), 96, 96)
                 PyImGui.text(f"ID: {askill_b}")
                 PyImGui.text(f"Name: {GLOBAL_CACHE.Skill.GetNameFromWiki(askill_b)}")
 
@@ -300,7 +300,7 @@ class SkillData:
         # Texture column
         PyImGui.begin_group()
         texture_path = GLOBAL_CACHE.Skill.ExtraData.GetTexturePath(self.skill_id)
-        ImGui_Legacy.DrawTexture(texture_path, 96, 96)
+        ImGui.DrawTexture(texture_path, 96, 96)
         if self.is_elite:
             text_color = ColorPalette.GetColor("GW_Gold").to_tuple_normalized()
             PyImGui.text_colored("Elite Skill", text_color)
@@ -326,14 +326,14 @@ class SkillData:
                 
     def draw_title(self):
         PyImGui.begin_group()
-        ImGui_Legacy.push_font("Bold", 22)
+        ImGui.push_font("Bold", 22)
         if self.is_elite:
             text_color = ColorPalette.GetColor("GW_Gold").to_tuple_normalized()
         else:
             text_color = ColorPalette.GetColor("GW_White").to_tuple_normalized()
             
         PyImGui.text_colored(f"{self.name_from_wiki}", text_color)
-        ImGui_Legacy.pop_font()
+        ImGui.pop_font()
         PyImGui.end_group()
         
         if PyImGui.is_item_hovered():
@@ -370,11 +370,11 @@ class SkillData:
     def draw_upkeep(self):
         if self.is_maintained():
             PyImGui.begin_group()
-            ImGui_Legacy.push_font("Bold", 20)
+            ImGui.push_font("Bold", 20)
             PyImGui.text("-1")
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
             PyImGui.same_line(0,5)
-            ImGui_Legacy.DrawTexture(TEXTURE_FOLDER + "upkeep.png", 22, 22)
+            ImGui.DrawTexture(TEXTURE_FOLDER + "upkeep.png", 22, 22)
             PyImGui.end_group()
             if PyImGui.is_item_hovered():
                 if PyImGui.begin_tooltip():
@@ -386,11 +386,11 @@ class SkillData:
     def draw_sacrifice(self):
         if self.is_sacrifice():
             PyImGui.begin_group()
-            ImGui_Legacy.push_font("Bold", 20)
+            ImGui.push_font("Bold", 20)
             PyImGui.text(f"{self.health_cost}%")
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
             PyImGui.same_line(0,5)
-            ImGui_Legacy.DrawTexture(TEXTURE_FOLDER + "sacrifice.png", 22, 22)
+            ImGui.DrawTexture(TEXTURE_FOLDER + "sacrifice.png", 22, 22)
             PyImGui.end_group()
             if PyImGui.is_item_hovered():
                 if PyImGui.begin_tooltip():
@@ -402,11 +402,11 @@ class SkillData:
     def draw_overcast(self):
         if self.is_overcast():
             PyImGui.begin_group()
-            ImGui_Legacy.push_font("Bold", 20)
+            ImGui.push_font("Bold", 20)
             PyImGui.text(f"{self.overcast_cost}")
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
             PyImGui.same_line(0,5)
-            ImGui_Legacy.DrawTexture(TEXTURE_FOLDER + "overcast.png", 22, 22)
+            ImGui.DrawTexture(TEXTURE_FOLDER + "overcast.png", 22, 22)
             PyImGui.end_group()
             if PyImGui.is_item_hovered():
                 if PyImGui.begin_tooltip():
@@ -416,11 +416,11 @@ class SkillData:
     def draw_adrenaline(self):
         if self.is_adrenaline():
             PyImGui.begin_group()
-            ImGui_Legacy.push_font("Bold", 20)
+            ImGui.push_font("Bold", 20)
             PyImGui.text(f"{math.ceil(self.adrenaline_cost / 25)}")
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
             PyImGui.same_line(0,5)
-            ImGui_Legacy.DrawTexture(TEXTURE_FOLDER + "adrenaline.png", 22, 22)
+            ImGui.DrawTexture(TEXTURE_FOLDER + "adrenaline.png", 22, 22)
             PyImGui.end_group()
             if PyImGui.is_item_hovered():
                 if PyImGui.begin_tooltip():
@@ -431,11 +431,11 @@ class SkillData:
     def draw_energy(self):
         if self.is_energy():
             PyImGui.begin_group()
-            ImGui_Legacy.push_font("Bold", 20)
+            ImGui.push_font("Bold", 20)
             PyImGui.text(f"{self.energy_cost}")
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
             PyImGui.same_line(0,5)
-            ImGui_Legacy.DrawTexture(TEXTURE_FOLDER + "energy.png", 22, 22)
+            ImGui.DrawTexture(TEXTURE_FOLDER + "energy.png", 22, 22)
             PyImGui.end_group()
             if PyImGui.is_item_hovered():
                 if PyImGui.begin_tooltip():
@@ -457,11 +457,11 @@ class SkillData:
         if self.is_activation_time():
             PyImGui.begin_group()
             fraction = Fraction(self.activation_time).limit_denominator(10)  # limit to reasonable fractions like 1/4, 1/2
-            ImGui_Legacy.push_font("Bold", 20)
+            ImGui.push_font("Bold", 20)
             PyImGui.text(f"{fraction}")
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
             PyImGui.same_line(0,5)
-            ImGui_Legacy.DrawTexture(TEXTURE_FOLDER + "activation.png", 22, 22)
+            ImGui.DrawTexture(TEXTURE_FOLDER + "activation.png", 22, 22)
             PyImGui.end_group()
             if PyImGui.is_item_hovered():
                 if PyImGui.begin_tooltip():
@@ -472,11 +472,11 @@ class SkillData:
     def draw_recharge(self):
         if self.is_recharge():
             PyImGui.begin_group()
-            ImGui_Legacy.push_font("Bold", 20)
+            ImGui.push_font("Bold", 20)
             PyImGui.text(f"{self.recharge_time}")
-            ImGui_Legacy.pop_font()
+            ImGui.pop_font()
             PyImGui.same_line(0,5)
-            ImGui_Legacy.DrawTexture(TEXTURE_FOLDER + "recharge.png", 22, 22)
+            ImGui.DrawTexture(TEXTURE_FOLDER + "recharge.png", 22, 22)
             PyImGui.end_group()
             if PyImGui.is_item_hovered():
                 if PyImGui.begin_tooltip():
@@ -572,7 +572,7 @@ class FilterButton:
         self.height = height
 
     def draw(self):
-        self.active = ImGui_Legacy.image_toggle_button(
+        self.active = ImGui.image_toggle_button(
             f"##{self.profession_name}_button",
             self.texture_path,
             self.active,
@@ -595,7 +595,7 @@ ProfessionButtons = [
 ]
     
 def DrawMainWindow():
-    expanded, _ = ImGui_Legacy.begin_with_close(MODULE_NAME, None, PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize))
+    expanded, _ = ImGui.begin_with_close(MODULE_NAME, None, PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize))
     if expanded:
         
         window_size = PyImGui.get_window_size()
@@ -609,7 +609,7 @@ def DrawMainWindow():
                 PyImGui.same_line(0, 5)
 
 
-    ImGui_Legacy.end()
+    ImGui.end()
 
 
 
@@ -630,7 +630,7 @@ def main():
 
             selected_skill = PyImGui.input_int("Selected Skill ID", selected_skill)
 
-            compare_skills = ImGui_Legacy.toggle_button("Compare Skills", compare_skills)
+            compare_skills = ImGui.toggle_button("Compare Skills", compare_skills)
             if compare_skills:
                 DrawCompareSkills()
 
@@ -649,9 +649,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Skill Atlas & Inspector", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

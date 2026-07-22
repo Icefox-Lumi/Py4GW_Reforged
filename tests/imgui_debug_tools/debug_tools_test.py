@@ -1,13 +1,13 @@
 """
-In-client smoke test for Dear ImGui_Legacy debug tooling.
+In-client smoke test for Dear ImGui debug tooling.
 
 What this script is for:
-- Open the built-in Dear ImGui_Legacy debug windows from Python.
+- Open the built-in Dear ImGui debug windows from Python.
 - Keep them visible with simple checkboxes.
 - Provide quick one-shot buttons when you only want to poke them open.
 
 Notes:
-- The debug windows are owned by Dear ImGui_Legacy itself.
+- The debug windows are owned by Dear ImGui itself.
 - They generally need to be called every frame while you want them visible.
 - This script does not enable extra native diagnostics; it only exposes the
   windows you already have bound in PyImGui.
@@ -15,7 +15,7 @@ Notes:
 
 import PyImGui
 
-MODULE_NAME = 'ImGui_Legacy Debug Tools Test'
+MODULE_NAME = 'ImGui Debug Tools Test'
 
 _show_metrics = False
 _show_debug_log = False
@@ -50,8 +50,8 @@ def main() -> None:
         _draw_debug_windows()
         return
 
-    PyImGui.text('Use these toggles to keep Dear ImGui_Legacy debug windows open.')
-    PyImGui.text('The red "Message from Dear ImGui_Legacy" tooltip is separate from these windows.')
+    PyImGui.text('Use these toggles to keep Dear ImGui debug windows open.')
+    PyImGui.text('The red "Message from Dear ImGui" tooltip is separate from these windows.')
     PyImGui.separator()
 
     _show_metrics = PyImGui.checkbox('Keep Metrics/Debugger window open', _show_metrics)
@@ -83,7 +83,7 @@ def main() -> None:
 
     PyImGui.separator()
     PyImGui.text('Useful flow:')
-    PyImGui.bullet_text('Use Debug Log for general Dear ImGui_Legacy events and recoverable errors.')
+    PyImGui.bullet_text('Use Debug Log for general Dear ImGui events and recoverable errors.')
     PyImGui.bullet_text('Use ID Stack Tool when the tooltip mentions duplicate/conflicting IDs.')
     PyImGui.bullet_text('Use Metrics/Debugger to inspect windows, draw lists, docking, and tables.')
 

@@ -94,7 +94,7 @@ def _get_visible_icons() -> list[tuple[str, str]]:
 def DrawWindow(title: str = "FontAwesome Icon Explorer"):
     global filter_text, favorites_only, grid_columns, sort_mode
 
-    if ImGui_Legacy.Begin(INI_KEY, title):
+    if ImGui.Begin(INI_KEY, title):
         PyImGui.text("Filter:")
         PyImGui.same_line(0, -1)
         filter_text = PyImGui.input_text("##IconFilter", filter_text)
@@ -164,16 +164,16 @@ def DrawWindow(title: str = "FontAwesome Icon Explorer"):
 
             PyImGui.end_table()
 
-    ImGui_Legacy.End(INI_KEY)
+    ImGui.End(INI_KEY)
 
 
 def tooltip():
     PyImGui.begin_tooltip()
 
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Icon Explorer", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

@@ -213,7 +213,7 @@ class Config:
 
 
 widget_config = Config()
-config_module = ImGui_Legacy.WindowModule(f"Config {MODULE_NAME}", window_name="Hero Helper Configuration", window_size=(300, 175), window_flags=PyImGui.WindowFlags.NoFlag)
+config_module = ImGui.WindowModule(f"Config {MODULE_NAME}", window_name="Hero Helper Configuration", window_size=(300, 175), window_flags=PyImGui.WindowFlags.NoFlag)
 
 # Window geometry delegated to ImGui native persistence
 config_module.window_size = (620, 460)
@@ -1411,7 +1411,7 @@ def set_hero_behaviour(behaviour):
 
 def toggle_config_value(label: str, attr: str, width: int = 0, height: int = 25, tooltip: str = ""):
     curr = getattr(widget_config, attr)
-    toggled = ImGui_Legacy.toggle_button(label, curr, width, height)
+    toggled = ImGui.toggle_button(label, curr, width, height)
 
     if toggled != curr:
         setattr(widget_config, attr, toggled)
@@ -1472,14 +1472,14 @@ def draw_tab_smart_skills(config):
     for profession_name, skills in skill_groups:
         profession_icon = Helper.get_profession_icon_path(profession_name)
         if profession_icon and os.path.exists(profession_icon):
-            ImGui_Legacy.DrawTexture(profession_icon, icon_size, icon_size)
+            ImGui.DrawTexture(profession_icon, icon_size, icon_size)
             PyImGui.same_line(0, 8)
 
         if PyImGui.collapsing_header(f"{profession_name}##{profession_name}_group", PyImGui.TreeNodeFlags.DefaultOpen):
             for label, attr, tooltip, skill_name in skills:
                 skill_icon = Helper.get_skill_icon_path(skill_name)
                 if skill_icon and os.path.exists(skill_icon):
-                    ImGui_Legacy.DrawTexture(skill_icon, icon_size, icon_size)
+                    ImGui.DrawTexture(skill_icon, icon_size, icon_size)
                     PyImGui.same_line(0, 8)
 
                 previous = getattr(config, attr)
@@ -1633,7 +1633,7 @@ def draw_tab_interrupt(config):
         for skill in config.skills_to_rupt:
             skill_icon = Helper.get_skill_icon_path(skill)
             if skill_icon and os.path.exists(skill_icon):
-                ImGui_Legacy.DrawTexture(skill_icon, 24, 24)
+                ImGui.DrawTexture(skill_icon, 24, 24)
                 PyImGui.same_line(0, 8)
 
             PyImGui.text(f"{skill.replace('_', ' ')}")
@@ -1772,7 +1772,7 @@ def draw_options_window():
     available_width = PyImGui.get_content_region_avail()[0]
     button_width = int(available_width)
 
-    new_state = ImGui_Legacy.toggle_button("Follow", widget_config.smart_follow_toggled, button_width, 30)
+    new_state = ImGui.toggle_button("Follow", widget_config.smart_follow_toggled, button_width, 30)
     if new_state != widget_config.smart_follow_toggled:
         Helper.log_event(message=f"Hero Follow {'Enabled' if new_state else 'Disabled'}")
     widget_config.smart_follow_toggled = new_state
@@ -1820,9 +1820,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("HeroHelper", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

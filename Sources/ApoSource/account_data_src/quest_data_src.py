@@ -1,7 +1,7 @@
 import Py4GW
 import PyImGui
 from typing import Callable
-from Py4GWCoreLib import ImGui_Legacy, ColorPalette, GLOBAL_CACHE, Routines, Utils, Map
+from Py4GWCoreLib import ImGui, ColorPalette, GLOBAL_CACHE, Routines, Utils, Map
 from typing import Dict, Tuple, List
 #region QuestData
 class QuestNode:
@@ -160,12 +160,12 @@ class QuestData:
 
     def draw_content(self, window_width: float, window_height: float):
         if not self.initialized:
-            ImGui_Legacy.text("Initializing quest data...")
+            ImGui.text("Initializing quest data...")
             PyImGui.text(f"Active Quest ID: {self.active_quest_id}")
             return
         
         PyImGui.push_style_color(PyImGui.ImGuiCol.Text, self.COLOR_MAP["Header"])
-        ImGui_Legacy.text("Active Quests:", font_size=18) 
+        ImGui.text("Active Quests:", font_size=18) 
         PyImGui.same_line(0, -1)
         PyImGui.text(f"Active Quest ID: {self.active_quest_id}")
         PyImGui.pop_style_color(1)
@@ -207,11 +207,11 @@ class QuestData:
                     ).lower()
                 )
                 
-                ImGui_Legacy.push_font("Regular", 18)
+                ImGui.push_font("Regular", 18)
                 PyImGui.push_style_color(PyImGui.ImGuiCol.Text, self.COLOR_MAP["Header"])
                 opened = PyImGui.tree_node(f"{location} Quests ({len(sorted_qids)})")
                 PyImGui.pop_style_color(1)
-                ImGui_Legacy.pop_font()
+                ImGui.pop_font()
                 
                 if opened:
                     for qid in sorted_qids:
@@ -264,8 +264,8 @@ class QuestData:
                             )
 
                         # overlay invisible button covering both texts
-                        PyImGui.set_cursor_screen_pos(*text_pos)
-                        if PyImGui.invisible_button(f"quest_btn_{qid}", total_width, max_height):
+                        PyImGui.set_cursor_screen_pos(text_pos)
+                        if PyImGui.invisible_button(f"quest_btn_{qid}", (total_width, max_height)):
                             GLOBAL_CACHE.Quest.SetActiveQuest(qid)
                             GLOBAL_CACHE.Quest.RequestQuestInfo(self.active_quest_id, update_marker=True)
                             self.quest_log[qid].force_update = True
@@ -275,19 +275,19 @@ class QuestData:
         if PyImGui.begin_child("AccountInfoChild", (window_width - 20, 0), False, PyImGui.WindowFlags.NoFlag):
             child_width = PyImGui.get_content_region_avail()[0]
             PyImGui.push_style_color(PyImGui.ImGuiCol.Text, self.COLOR_MAP["Header"])
-            ImGui_Legacy.text(f"ID: {self.active_quest_id} - {self.quest_log[self.active_quest_id].name}", font_size=20)
-            ImGui_Legacy.text("Quest Summary:", font_size=18)
+            ImGui.text(f"ID: {self.active_quest_id} - {self.quest_log[self.active_quest_id].name}", font_size=20)
+            ImGui.text("Quest Summary:", font_size=18)
             PyImGui.pop_style_color(1)
             
             tokens = Utils.TokenizeMarkupText(self.quest_log[self.active_quest_id].objectives, max_width=child_width)
-            ImGui_Legacy.render_tokenized_markup(tokens, max_width=child_width, COLOR_MAP=self.COLOR_MAP)
+            ImGui.render_tokenized_markup(tokens, max_width=child_width, COLOR_MAP=self.COLOR_MAP)
 
             PyImGui.push_style_color(PyImGui.ImGuiCol.Text, self.COLOR_MAP["Header"])
             PyImGui.text_wrapped(f"{self.quest_log[self.active_quest_id].npc_quest_giver}")
             PyImGui.pop_style_color(1)
 
             tokens = Utils.TokenizeMarkupText(self.quest_log[self.active_quest_id].description, max_width=child_width)
-            ImGui_Legacy.render_tokenized_markup(tokens, max_width=child_width, COLOR_MAP=self.COLOR_MAP)
+            ImGui.render_tokenized_markup(tokens, max_width=child_width, COLOR_MAP=self.COLOR_MAP)
 
             PyImGui.separator()
             PyImGui.text(f"From: {Map.GetMapName(self.quest_log[self.active_quest_id].map_from)}")

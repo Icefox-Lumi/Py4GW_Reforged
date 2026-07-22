@@ -172,8 +172,8 @@ def click_dialog_button(choice: int, debug: bool = False) -> bool:
         ConsoleLog("DialogTester", f"Clicked & queued frame {target} (choice #{choice})", Console.MessageType.Info)
     return True
 
-# â€”â€” ImGui_Legacy window â€”â€”
-window = ImGui_Legacy.WindowModule(
+# â€”â€” ImGui window â€”â€”
+window = ImGui.WindowModule(
     "Dialog Tester",
     window_name="Dialog Tester",
     window_size=(360, 240),

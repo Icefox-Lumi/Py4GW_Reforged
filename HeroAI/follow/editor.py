@@ -6,7 +6,7 @@ import uuid
 import PyImGui
 import Py4GW
 
-from Py4GWCoreLib._legacy_facade import ImGui_Legacy
+from Py4GWCoreLib.ImGui import ImGui
 from Py4GWCoreLib.Agent import Agent
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.enums_src.GameData_enums import Range
@@ -185,10 +185,25 @@ def _ini_reload_now(key: str):
 
 
 def _ini_write_now(key: str, section: str, name: str, value):
-    # Synchronous write for explicit Save actions (avoids deferred flush races).
+    # In-memory set only. Native Settings.set() is debounced (~2s), NOT synchronous,
+    # so the whole batch is force-flushed via _ini_save_now() at the end of the
+    # write. This matters because this doc is a cross-process channel: the follow
+    # publisher reload()s it every ~1s and would otherwise read stale disk (on
+    # followers) or discard the leader's unflushed edit (same-process singleton).
     if not key:
         return
     Settings(key, "global").set(section, name, value)
+
+
+def _ini_save_now(key: str):
+    # Escape hatch: force the debounced autosave to flush NOW. Only called after a
+    # discrete write batch (explicit Save / selection change), never per-frame.
+    if not key:
+        return
+    try:
+        Settings(key, "global").save()
+    except Exception:
+        pass
 
 
 def _ini_delete_section_now(key: str, section: str):
@@ -714,13 +729,22 @@ def _save_to_ini():
             _ini_write_now(FORMATIONS_INI_KEY, sec, f"o{i}_c", _color_to_str(p.color))
 
     ui.formations_dirty = False
+    # Flush the explicit Save to disk immediately so followers pick it up on their
+    # next ~1s reload and the leader's own publisher reload() can't discard it.
+    _ini_save_now(FORMATIONS_INI_KEY)
+    _ini_save_now(SETTINGS_INI_KEY)
+
+
+_last_flushed_selected_id: str = ""
 
 
 def _save_ui_state_only():
+    global _last_flushed_selected_id
     if not SETTINGS_INI_KEY:
         return
     cfg_set = Settings(SETTINGS_INI_KEY, "global")
-    cfg_set.set(SEC_FORMATIONS, "selected_id", _current_formation().id)
+    sel_id = _current_formation().id
+    cfg_set.set(SEC_FORMATIONS, "selected_id", sel_id)
     cfg_set.set(SEC_FORMATIONS, "selected", _current_formation().name)
     cfg_set.set(SEC_WINDOWS, "show_control_window", int(ui.show_control_window))
     cfg_set.set(SEC_WINDOWS, "show_editor_window", int(ui.show_editor_window))
@@ -734,6 +758,12 @@ def _save_ui_state_only():
     cfg_set.set(SEC_EDITOR, "draw_area_rings", int(ui.draw_area_rings))
     cfg_set.set(SEC_EDITOR, "draw_3d_area_rings", int(ui.draw_3d_area_rings))
     cfg_set.set(SEC_EDITOR, "show_party_preview", int(ui.show_party_preview))
+    # This runs every frame, so only force a flush on an actual selection change
+    # (never per-frame): the follow publisher reads selected_id and would otherwise
+    # discard/miss it across the ~1s reload vs ~2s autosave-debounce window.
+    if sel_id != _last_flushed_selected_id:
+        _last_flushed_selected_id = sel_id
+        _ini_save_now(SETTINGS_INI_KEY)
 
 
 def _formation_to_export_dict(f: Formation) -> dict:
@@ -1197,7 +1227,7 @@ def _draw_control_window():
     if not ui.show_control_window:
         return
     PyImGui.set_next_window_size((390, 0), PyImGui.ImGuiCond.Once)
-    if ImGui_Legacy.Begin(SETTINGS_INI_KEY, "Formation Control", flags=PyImGui.WindowFlags.AlwaysAutoResize):
+    if ImGui.Begin(SETTINGS_INI_KEY, "Formation Control", flags=PyImGui.WindowFlags.AlwaysAutoResize):
         if PyImGui.button("Close Editor"):
             ui.close_requested = True
             ui.show_control_window = False
@@ -1304,7 +1334,7 @@ def _draw_control_window():
             PyImGui.separator()
             PyImGui.text_wrapped(ui.last_status)
 
-    ImGui_Legacy.End(SETTINGS_INI_KEY)
+    ImGui.End(SETTINGS_INI_KEY)
 
 
 def _draw_editor_window():
@@ -1313,7 +1343,7 @@ def _draw_editor_window():
     target_w = 560
     target_h = 620
     PyImGui.set_next_window_size((target_w, target_h), PyImGui.ImGuiCond.Once)
-    if ImGui_Legacy.Begin(SETTINGS_INI_KEY, "Formation Editor", flags=PyImGui.WindowFlags.NoFlag):
+    if ImGui.Begin(SETTINGS_INI_KEY, "Formation Editor", flags=PyImGui.WindowFlags.NoFlag):
         if PyImGui.begin_tab_bar("FormationEditorTabs"):
             if PyImGui.begin_tab_item("Generator"):
                 _draw_generator_tab()
@@ -1328,7 +1358,7 @@ def _draw_editor_window():
                 _draw_visual_tab()
                 PyImGui.end_tab_item()
             PyImGui.end_tab_bar()
-    ImGui_Legacy.End(SETTINGS_INI_KEY)
+    ImGui.End(SETTINGS_INI_KEY)
 
 
 def _draw_canvas_window():
@@ -1337,9 +1367,9 @@ def _draw_canvas_window():
     target_w = ui.canvas_size[0] + 32
     target_h = ui.canvas_size[1] + 72
     PyImGui.set_next_window_size((target_w, target_h), PyImGui.ImGuiCond.Once)
-    if ImGui_Legacy.Begin(SETTINGS_INI_KEY, "Formation Canvas", flags=PyImGui.WindowFlags.NoFlag):
+    if ImGui.Begin(SETTINGS_INI_KEY, "Formation Canvas", flags=PyImGui.WindowFlags.NoFlag):
         _draw_canvas_tab()
-    ImGui_Legacy.End(SETTINGS_INI_KEY)
+    ImGui.End(SETTINGS_INI_KEY)
 
 
 def _draw_3d_overlay():

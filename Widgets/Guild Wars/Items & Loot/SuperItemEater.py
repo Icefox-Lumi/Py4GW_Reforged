@@ -278,7 +278,7 @@ def _format_duration(seconds: int) -> str:
 
 
 def _pack_color(r: float, g: float, b: float, a: float) -> int:
-    """Pack RGBA floats (0.0-1.0) into an ImGui_Legacy color int."""
+    """Pack RGBA floats (0.0-1.0) into an ImGui color int."""
     return (int(a * 255) << 24) | (int(b * 255) << 16) | (int(g * 255) << 8) | int(r * 255)
 
 _PROGRESS_COLOR_T0 = _pack_color(0.40, 0.75, 1.00, 0.45)  # light blue  â€” tier 0 â†’ 1
@@ -605,13 +605,13 @@ def main():
 
 def tooltip():
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Color
+    from Py4GWCoreLib import ImGui, Color
     PyImGui.begin_tooltip()
 
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Item Eater", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     PyImGui.text("A utility for consuming and managing in-game items")

@@ -498,9 +498,9 @@ def draw_build_window():
         # --- Title ---
         dervish = os.path.join(PY4GW_ROOT, "Textures/Profession_Icons/[10] - Dervish.png")
         assasin = os.path.join(PY4GW_ROOT, "Textures/Profession_Icons/[7] - Assassin.png")
-        ImGui_Legacy.DrawTexture(dervish, 30, 30)
+        ImGui.DrawTexture(dervish, 30, 30)
         PyImGui.same_line(0, 6)
-        ImGui_Legacy.DrawTexture(assasin, 30, 30)
+        ImGui.DrawTexture(assasin, 30, 30)
         PyImGui.same_line(0, 6)
         PyImGui.text_colored("Dervish / Assassin", (1.0, 0.75, 0.0, 1.0))
         PyImGui.separator()
@@ -513,7 +513,7 @@ def draw_build_window():
             full_texture_path = get_full_texture_path(skill_id)
 
             if full_texture_path and os.path.exists(full_texture_path):
-                ImGui_Legacy.DrawTexture(full_texture_path, 48, 48)
+                ImGui.DrawTexture(full_texture_path, 48, 48)
             else:
                 PySystem.Console.Log("BuildViewer", f"Missing texture for skill {skill_id} -> {full_texture_path}", PySystem.Console.MessageType.Warning)
 

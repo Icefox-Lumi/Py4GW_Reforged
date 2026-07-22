@@ -5459,16 +5459,16 @@ class MerchantRulesWidget:
         return self.floating_ui_ini_key
 
     def _ensure_floating_ui(self):
-        """Create and synchronize the floating toggle through the public legacy ImGui helper.
+        """Create and synchronize the floating toggle through the public ImGui helper.
 
-        ``ImGui_Legacy.FloatingIcon`` is a temporary Reforged compatibility adapter; it owns
-        icon drawing and visibility callbacks while ``Settings`` owns persistence.
+        ``ImGui.FloatingIcon`` owns icon drawing and visibility callbacks while ``Settings``
+        owns persistence.
         """
 
         if self.floating_button is None:
-            from Py4GWCoreLib.ImGui_Legacy import ImGui_Legacy
+            from Py4GWCoreLib.ImGui import ImGui
 
-            self.floating_button = ImGui_Legacy.FloatingIcon(
+            self.floating_button = ImGui.FloatingIcon(
                 icon_path=self._get_floating_icon_path(),
                 window_id=FLOATING_ICON_WINDOW_ID,
                 window_name=FLOATING_ICON_WINDOW_NAME,

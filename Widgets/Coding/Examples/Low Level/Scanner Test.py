@@ -1,4 +1,4 @@
-from Py4GWCoreLib import GLOBAL_CACHE, Console, ConsoleLog, UIManager, UIMessage, Color, ImGui_Legacy
+from Py4GWCoreLib import GLOBAL_CACHE, Console, ConsoleLog, UIManager, UIMessage, Color, ImGui
 import PyImGui
 import struct
 from Py4GWCoreLib.native_src.internals.prototypes import Prototypes
@@ -310,9 +310,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Scanner Test Utility", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

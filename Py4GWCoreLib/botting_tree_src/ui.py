@@ -6,7 +6,7 @@ import PySystem
 import PyImGui
 
 from ..GlobalCache import GLOBAL_CACHE
-from .._legacy_facade import ImGui_Legacy
+from ..ImGui import ImGui
 from ..Overlay import Overlay
 from ..Player import Player
 from ..py4gwcorelib_src.Color import Color, ColorPalette
@@ -231,7 +231,7 @@ class _BottingTreeUI:
         self._debug_console_height = 200.0
         self._main_ini_name: str = ''
         self._floating_ini_name: str = ''
-        self._floating_button: ImGui_Legacy.FloatingIcon | None = None
+        self._floating_button: ImGui.FloatingIcon | None = None
         self._window_paths_ready = False
         self._window_args: dict[str, object] = {
             'main_child_dimensions': (350, 325),
@@ -262,14 +262,14 @@ class _BottingTreeUI:
         self._window_paths_ready = True
         return True
 
-    def _ensure_floating_button(self, icon_path: str = '') -> ImGui_Legacy.FloatingIcon | None:
+    def _ensure_floating_button(self, icon_path: str = '') -> ImGui.FloatingIcon | None:
         if not self._ensure_window_paths():
             return None
 
         resolved_icon_path = icon_path or self._default_icon_path()
         if self._floating_button is None:
             safe_name = self._sanitize_identifier(self.parent.bot_name)
-            self._floating_button = ImGui_Legacy.FloatingIcon(
+            self._floating_button = ImGui.FloatingIcon(
                 icon_path=resolved_icon_path,
                 window_id=f'##{safe_name}_floating_toggle_button',
                 window_name=f'{self.parent.bot_name} Toggle',
@@ -297,7 +297,7 @@ class _BottingTreeUI:
             if self._floating_button is not None
             else Settings(self._main_ini_name, "account").get_bool("Configuration", "show_main_window", True)
         )
-        expanded, open_ = ImGui_Legacy.begin_with_close(
+        expanded, open_ = ImGui.begin_with_close(
             self.parent.bot_name,
             p_open,
             PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize),
@@ -347,7 +347,7 @@ class _BottingTreeUI:
 
                 PyImGui.end_tab_bar()
 
-        ImGui_Legacy.end()
+        ImGui.end()
 
     def override_draw_texture(self, draw_fn: Callable[[], None] | None = None) -> None:
         self.draw_texture_fn = draw_fn
@@ -369,9 +369,9 @@ class _BottingTreeUI:
             return
 
         try:
-            from .._legacy_facade import ImGui_Legacy
+            from ..ImGui import ImGui
 
-            ImGui_Legacy.DrawTextureExtended(
+            ImGui.DrawTextureExtended(
                 texture_path=icon_path,
                 size=size,
                 uv0=(0.0, 0.0),

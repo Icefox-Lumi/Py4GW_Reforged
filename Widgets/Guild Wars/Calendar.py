@@ -10,7 +10,7 @@ import PySystem
 from Py4GWCoreLib import Color
 from Py4GWCoreLib import ColorPalette
 from Py4GWCoreLib import IconsFontAwesome5
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 from Py4GWCoreLib import ModelID
 from Py4GWCoreLib import Py4GW
 from Py4GWCoreLib import get_texture_for_model
@@ -310,13 +310,13 @@ def toggle_button(label: str, v: bool, width=0, height =0, button_color:Color=Co
     
     black = Color(0, 0, 0, 255)
     if button_color == black:
-        button_color = Color.from_tuple(ImGui_Legacy.style.get_color(PyImGui.ImGuiCol.Button))
+        button_color = Color.from_tuple(ImGui.style.get_color(PyImGui.ImGuiCol.Button))
         
     if hover_color == black:
-        hover_color = Color.from_tuple(ImGui_Legacy.style.get_color(PyImGui.ImGuiCol.ButtonHovered))
+        hover_color = Color.from_tuple(ImGui.style.get_color(PyImGui.ImGuiCol.ButtonHovered))
         
     if active_color == black:
-        active_color = Color.from_tuple(ImGui_Legacy.style.get_color(PyImGui.ImGuiCol.ButtonActive))
+        active_color = Color.from_tuple(ImGui.style.get_color(PyImGui.ImGuiCol.ButtonActive))
 
     if v:
         PyImGui.push_style_color(PyImGui.ImGuiCol.Button, active_color.to_tuple_normalized())  # On color
@@ -410,19 +410,19 @@ class ButtonLayout:
         if self.button_day.is_toggled():
             self.button_trimester.set_toggled(False)
             self.button_year.set_toggled(False)
-        ImGui_Legacy.show_tooltip("Month")
+        ImGui.show_tooltip("Month")
         PyImGui.same_line(0, -1)
 
         if self.button_trimester.is_toggled():
             self.button_day.set_toggled(False)
             self.button_year.set_toggled(False)
-        ImGui_Legacy.show_tooltip("Trimester")
+        ImGui.show_tooltip("Trimester")
         PyImGui.same_line(0, -1)
 
         if self.button_year.is_toggled():
             self.button_day.set_toggled(False)
             self.button_trimester.set_toggled(False)
-        ImGui_Legacy.show_tooltip("Year")
+        ImGui.show_tooltip("Year")
         PyImGui.same_line(0, -1)
 
         # Prev button
@@ -445,7 +445,7 @@ class ButtonLayout:
         if self.button_period.draw(width=min_width):
             PySystem.Console.Log("Calendar", "Period button clicked.", PySystem.Console.MessageType.Info)
         PyImGui.pop_item_width()
-        ImGui_Legacy.show_tooltip("Select period")
+        ImGui.show_tooltip("Select period")
 
         PyImGui.same_line(0, -1)
         
@@ -861,16 +861,16 @@ def DrawDayCard():
             PyImGui.table_setup_column("titles", PyImGui.TableColumnFlags.WidthFixed, child_width - iconwidth)
             PyImGui.table_next_row()
             PyImGui.table_set_column_index(0)
-            ImGui_Legacy.DrawTexture(get_texture_for_model(nicholas["model_id"]), iconwidth, iconwidth)
+            ImGui.DrawTexture(get_texture_for_model(nicholas["model_id"]), iconwidth, iconwidth)
             PyImGui.table_set_column_index(1)
             if PyImGui.begin_table("Nick Info", 1, PyImGui.TableFlags.NoFlag):
                 PyImGui.table_next_row()
                 PyImGui.table_set_column_index(0)
-                ImGui_Legacy.push_font("Regular", 20)
+                ImGui.push_font("Regular", 20)
                 PyImGui.push_style_color(PyImGui.ImGuiCol.Text, ColorPalette.GetColor("yellow").to_tuple_normalized())
                 PyImGui.text("Nicholas the Traveler")
                 PyImGui.pop_style_color(1)
-                ImGui_Legacy.pop_font()
+                ImGui.pop_font()
                 PyImGui.table_next_row()
                 PyImGui.table_set_column_index(0)
                 PyImGui.text(f"Item: {nicholas['item']}")
@@ -881,13 +881,13 @@ def DrawDayCard():
                     if PyImGui.button("View Map"):
                         import webbrowser
                         webbrowser.open(nicholas["map_url"])
-                    ImGui_Legacy.show_tooltip("Open map in browser")
+                    ImGui.show_tooltip("Open map in browser")
                     farm_script = get_script_path_for_model(nicholas["model_id"])
                     if farm_script:
                         PyImGui.same_line(0, -1)
                         if PyImGui.button("Load Farm"):
                             _request_farm_enable(farm_script, nicholas["item"])
-                        ImGui_Legacy.show_tooltip(f"Load farm script for {nicholas['item']}")
+                        ImGui.show_tooltip(f"Load farm script for {nicholas['item']}")
 
                     
                              
@@ -906,7 +906,7 @@ def DrawDayCard():
 
             #Prevents crashes of Imgui if the  table is to small
             item_amount = max(len(current_event["dropped_items"]), 1)
-            if PyImGui.is_rect_visible(0, 20):
+            if PyImGui.is_rect_visible((0, 20)):
                 if PyImGui.begin_table("event_drops_table", item_amount, PyImGui.TableFlags.NoFlag):
                     for _ in range(item_amount):
                         PyImGui.table_setup_column("Item", PyImGui.TableColumnFlags.WidthFixed, 48)
@@ -915,8 +915,8 @@ def DrawDayCard():
                     PyImGui.table_next_column()
 
                     for _, item in enumerate(current_event["dropped_items"]):
-                        ImGui_Legacy.DrawTexture(get_texture_for_model(item), 48, 48)                        
-                        ImGui_Legacy.show_tooltip(str(item.name))                        
+                        ImGui.DrawTexture(get_texture_for_model(item), 48, 48)                        
+                        ImGui.show_tooltip(str(item.name))                        
                         PyImGui.table_next_column()
                         
                     PyImGui.end_table()
@@ -969,11 +969,11 @@ def DrawDayWindow():
 
 
 def tooltip():
-    ImGui_Legacy.begin_tooltip()
+    ImGui.begin_tooltip()
     title_color = ColorPalette.GetColor("yellow")
-    ImGui_Legacy.push_font("Regular", 24)
+    ImGui.push_font("Regular", 24)
     PyImGui.text_colored("Calendar", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.separator()
 
     # Description
@@ -997,7 +997,7 @@ def tooltip():
     PyImGui.text_colored("Credits:", title_color.to_tuple_normalized())
     PyImGui.bullet_text("Developed by Apo")
 
-    ImGui_Legacy.end_tooltip()
+    ImGui.end_tooltip()
 
 def main():
     try:

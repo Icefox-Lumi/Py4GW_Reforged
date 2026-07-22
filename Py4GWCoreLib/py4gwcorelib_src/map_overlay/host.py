@@ -12,7 +12,7 @@ from typing import Optional
 
 import PyImGui
 
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 from Py4GWCoreLib import Map
 from Py4GWCoreLib import Routines
 from Py4GWCoreLib.enums import Range
@@ -70,8 +70,8 @@ class MapOverlay:
             | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.NoSavedSettings
             | PyImGui.WindowFlags.NoBackground | PyImGui.WindowFlags.NoInputs
         )
-        PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.WindowPadding, 0.0, 0.0)
-        PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.FramePadding, 0.0, 0.0)
+        PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (0.0, 0.0))
+        PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.FramePadding, (0.0, 0.0))
         return PyImGui.begin("##map_overlay_drawlist", flags)
 
     @staticmethod
@@ -189,9 +189,9 @@ class MapOverlay:
     def tooltip(self) -> None:
         PyImGui.begin_tooltip()
         title = Color(255, 200, 100, 255)
-        ImGui_Legacy.push_font("Regular", 20)
+        ImGui.push_font("Regular", 20)
         PyImGui.text_colored("Map Overlay", title.to_tuple_normalized())
-        ImGui_Legacy.pop_font()
+        ImGui.pop_font()
         PyImGui.spacing()
         PyImGui.separator()
         PyImGui.text("Enhanced agent + terrain overlay for the mission map or the compass.")
@@ -218,9 +218,9 @@ def _floating_move_toggle(x: float, y: float, enabled: bool, show_stop: bool, ma
         PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoScrollbar
         | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoBackground
     )
-    PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.WindowPadding, 2.0, 2.0)
-    PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.FramePadding, 1.0, 1.0)
-    PyImGui.push_style_var(ImGui_Legacy.ImGuiStyleVar.WindowRounding, 0.0)
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (2.0, 2.0))
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.FramePadding, (1.0, 1.0))
+    PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
     PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg, (0.0, 0.0, 0.0, 0.0))
     result = enabled
     stop = False
@@ -228,7 +228,7 @@ def _floating_move_toggle(x: float, y: float, enabled: bool, show_stop: bool, ma
         cb = PyImGui.checkbox("Move", bool(enabled))
         result = bool(cb[1]) if isinstance(cb, tuple) and len(cb) == 2 else bool(cb)
         if PyImGui.is_item_hovered():
-            ImGui_Legacy.show_tooltip("Right-click moves to nearest NavMesh point. Shift+Right-click queues waypoints.")
+            ImGui.show_tooltip("Right-click moves to nearest NavMesh point. Shift+Right-click queues waypoints.")
         if show_stop:
             PyImGui.same_line(0, 6)
             if PyImGui.button("Stop", 44, 16):
@@ -245,8 +245,8 @@ def _floating_map_id_strip(x: float, y: float, map_id: int, margin: int = 8) -> 
         PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoScrollbar
         | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoBackground
     )
-    PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.WindowPadding, 2.0, 2.0)
-    PyImGui.push_style_var(ImGui_Legacy.ImGuiStyleVar.WindowRounding, 0.0)
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (2.0, 2.0))
+    PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
     PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg, (0.0, 0.0, 0.0, 0.0))
     if PyImGui.begin("##mo_map_id_strip", flags):
         PyImGui.text(f"Map ID: {int(map_id)}")
@@ -262,9 +262,9 @@ def _floating_coords_strip(x: float, y: float, last_x: float, last_y: float, wid
         PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoScrollbar
         | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoBackground
     )
-    PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.WindowPadding, 4.0, 4.0)
-    PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.FramePadding, 2.0, 2.0)
-    PyImGui.push_style_var(ImGui_Legacy.ImGuiStyleVar.WindowRounding, 0.0)
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (4.0, 4.0))
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.FramePadding, (2.0, 2.0))
+    PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
     PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg, (0.0, 0.0, 0.0, 0.0))
     if PyImGui.begin("##mo_coords_strip", flags):
         if PyImGui.button("Copy"):
@@ -283,13 +283,50 @@ def _floating_slider(caption: str, value: float, x: float, y: float, min_v: floa
         PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar
         | PyImGui.WindowFlags.NoScrollbar | PyImGui.WindowFlags.AlwaysAutoResize
     )
-    PyImGui.push_style_var2(ImGui_Legacy.ImGuiStyleVar.WindowPadding, 0.0, 0.0)
-    PyImGui.push_style_var(ImGui_Legacy.ImGuiStyleVar.WindowRounding, 0.0)
+    PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (0.0, 0.0))
+    PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
     result = value
     if PyImGui.begin(f"##mo_slider_{caption}", flags):
         result = PyImGui.slider_float(f"##mo_sliderval_{caption}", value, min_v, max_v)
         if PyImGui.is_item_hovered():
-            ImGui_Legacy.show_tooltip("Enhance the zoom level of the map.")
+            ImGui.show_tooltip("Enhance the zoom level of the map.")
     PyImGui.end()
     PyImGui.pop_style_var(2)
     return result
+
+
+# ── shared singleton ─────────────────────────────────────────────────────────────────────
+# One MapOverlay per process, shared by the widget host (which renders it every frame) and any
+# external caller that wants to drive it — e.g. the launch-bar "toggle mode" command. Both reach
+# the SAME instance, so a toggle from the launchpad takes effect on the live overlay immediately
+# (rather than mutating a throwaway copy). The instance lives in this cached library module, so it
+# also survives a widget reload.
+_active: "Optional[MapOverlay]" = None
+
+
+def get_overlay() -> MapOverlay:
+    """Return the process-wide :class:`MapOverlay`, creating it on first use."""
+    global _active
+    if _active is None:
+        _active = MapOverlay()
+    return _active
+
+
+def toggle_mode() -> OverlayMode:
+    """Flip the shared overlay between Mission Map and Compass, persist, and return the new mode.
+
+    Mirrors the config window's Mode combo (set ``cfg.mode`` -> :meth:`MapOverlay.on_mode_changed`)
+    and additionally calls :meth:`MapOverlay.save`, since — unlike the config UI, which saves once
+    at the end of its frame — an external caller (e.g. a launch-bar command) has no such save pass.
+    """
+    ov = get_overlay()
+    ov.cfg.mode = OverlayMode.COMPASS if ov.cfg.mode is OverlayMode.MISSION else OverlayMode.MISSION
+    ov.on_mode_changed()
+    ov.save()
+    try:
+        import PySystem
+
+        PySystem.Console.Log(MODULE_NAME, "Mode -> %s" % ov.cfg.mode.value, PySystem.Console.MessageType.Info)
+    except Exception:
+        pass
+    return ov.cfg.mode

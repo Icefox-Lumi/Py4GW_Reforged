@@ -5,7 +5,7 @@ import time
 from Py4GW_widget_manager import get_widget_handler
 from Py4GWCoreLib.Builds.Any.KeiranThackerayEOTN import KeiranThackerayEOTN
 from Py4GWCoreLib import (GLOBAL_CACHE, Routines, Range, Py4GW, ConsoleLog, ModelID, Botting,
-                          Map, ImGui_Legacy, ActionQueueManager, Agent, Player, AgentArray, Pathing,
+                          Map, ImGui, ActionQueueManager, Agent, Player, AgentArray, Pathing,
                           TitleID, TITLE_TIERS)
 from Py4GWCoreLib import *
 
@@ -579,9 +579,9 @@ def main():
 
                     PyImGui.separator()
 
-                    ImGui_Legacy.push_font("Regular", 18)
+                    ImGui.push_font("Regular", 18)
                     PyImGui.text("Statistics")
-                    ImGui_Legacy.pop_font()
+                    ImGui.pop_font()
                     
                     if PyImGui.collapsing_header("Runs"):
                         # Total Runs

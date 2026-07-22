@@ -6,7 +6,7 @@ import time
 from Py4GW_widget_manager import get_widget_handler
 from Py4GWCoreLib.Builds.Any.KeiranThackerayEOTN import KeiranThackerayEOTN
 from Py4GWCoreLib import (GLOBAL_CACHE, Routines, Range, Py4GW, ConsoleLog, ModelID, Botting,
-                          Map, ImGui_Legacy, ActionQueueManager, Agent, Player, AgentArray,
+                          Map, ImGui, ActionQueueManager, Agent, Player, AgentArray,
                           Pathing, TitleID, TITLE_TIERS)
 from Py4GWCoreLib import *
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
@@ -1188,7 +1188,7 @@ bot.UI.override_draw_config(lambda: _draw_settings(bot))
 
 def _draw_hotn_help() -> None:
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Color, IconsFontAwesome5
+    from Py4GWCoreLib import ImGui, Color, IconsFontAwesome5
 
     header_color = Color(255, 200, 100, 255)
     green_color  = Color(100, 220, 100, 255)
@@ -1199,9 +1199,9 @@ def _draw_hotn_help() -> None:
 
     # â”€â”€ Title â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     PyImGui.spacing()
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Hearts of the North - Bot Help", header_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.separator()
     PyImGui.spacing()
     PyImGui.text_wrapped("Welcome to the complete Hearts of the North farming bot. This bot is still in development. As additional missions have been mapped they will be added. Expect issues with WIP missions, but feel free to test.")
@@ -1297,9 +1297,9 @@ def _draw_hotn_window(icon_path: str) -> None:
         Overall Progress  [â–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘]
         Step Progress     [â–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘]
     """
-    from Py4GWCoreLib import ImGui_Legacy, Color, Routines
+    from Py4GWCoreLib import ImGui, Color, Routines
     from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-    from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+    from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
     from Py4GWCoreLib.Py4GWcorelib import ConsoleLog, Console
     from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 
@@ -1320,7 +1320,7 @@ def _draw_hotn_window(icon_path: str) -> None:
     _write_settings()
 
     # â”€â”€ Outer window â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    if ImGui_Legacy.Begin(
+    if ImGui.Begin(
         ini_key=bot.config.ini_key,
         name=bot.config.bot_name,
         p_open=True,
@@ -1331,12 +1331,12 @@ def _draw_hotn_window(icon_path: str) -> None:
             # â”€â”€ Help tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if BotSettings.SHOW_HELP and PyImGui.begin_tab_item("Help"):
                 bot.UI._draw_help_child()
-                PyImGui.dummy(WINDOW_W, 0)
+                PyImGui.dummy((WINDOW_W, 0))
                 PyImGui.end_tab_item()
 
             # â”€â”€ Main tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if PyImGui.begin_tab_item("Main"):
-                PyImGui.dummy(WINDOW_W, 0)
+                PyImGui.dummy((WINDOW_W, 0))
                 _avail = PyImGui.get_content_region_avail()
                 inner_w = int(_avail[0]) if _avail[0] > 0 else (CHILD_W - 10)
 
@@ -1356,12 +1356,12 @@ def _draw_hotn_window(icon_path: str) -> None:
                     bot.UI._draw_texture(texture_path=icon_path, size=(ICON_W, ICON_W))
 
                     PyImGui.table_set_column_index(1)
-                    PyImGui.dummy(0, 3)
-                    ImGui_Legacy.push_font("Regular", 22)
+                    PyImGui.dummy((0, 3))
+                    ImGui.push_font("Regular", 22)
                     PyImGui.push_style_color(PyImGui.ImGuiCol.Text, Color(255, 255, 0, 255).to_tuple_normalized())
                     PyImGui.text(bot.config.bot_name)
                     PyImGui.pop_style_color(1)
-                    ImGui_Legacy.pop_font()
+                    ImGui.pop_font()
 
                     # â”€â”€ Active mission label â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                     _active_label = "All Missions (Sequence)" if BotSettings.SEQUENCE_MODE else BotSettings.SELECTED_MISSION
@@ -1369,9 +1369,9 @@ def _draw_hotn_window(icon_path: str) -> None:
                     PyImGui.text(_active_label)
                     PyImGui.pop_style_color(1)
 
-                    ImGui_Legacy.push_font("Bold", 18)
+                    ImGui.push_font("Bold", 18)
                     PyImGui.text(f"[{max(current_header_step, 0)}] {header_for_current or 'Not started'}")
-                    ImGui_Legacy.pop_font()
+                    ImGui.pop_font()
 
                     if total_steps <= 0:
                         PyImGui.text("Step: â€”/â€” - (No steps)")
@@ -1438,7 +1438,7 @@ def _draw_hotn_window(icon_path: str) -> None:
 
             # â”€â”€ Navigation tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if PyImGui.begin_tab_item("Navigation"):
-                PyImGui.dummy(WINDOW_W, 0)
+                PyImGui.dummy((WINDOW_W, 0))
                 PyImGui.text("Jump to step (filtered by step index):")
                 bot.UI._draw_fsm_jump_button()
                 PyImGui.separator()
@@ -1448,24 +1448,24 @@ def _draw_hotn_window(icon_path: str) -> None:
             # â”€â”€ Settings tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if PyImGui.begin_tab_item("Settings"):
                 bot.UI._draw_settings_child()
-                PyImGui.dummy(WINDOW_W, 0)
+                PyImGui.dummy((WINDOW_W, 0))
                 PyImGui.end_tab_item()
 
             # â”€â”€ Debug tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if PyImGui.begin_tab_item("Debug"):
                 bot.UI.draw_debug_window()
-                PyImGui.dummy(WINDOW_W, 0)
+                PyImGui.dummy((WINDOW_W, 0))
                 PyImGui.end_tab_item()
 
             # â”€â”€ Statistics tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if PyImGui.begin_tab_item("Statistics"):
                 _draw_stats_tab()                
-                PyImGui.dummy(WINDOW_W, 0)
+                PyImGui.dummy((WINDOW_W, 0))
                 PyImGui.end_tab_item()
 
             PyImGui.end_tab_bar()
 
-    ImGui_Legacy.End(bot.config.ini_key)
+    ImGui.End(bot.config.ini_key)
 
 
 def main():

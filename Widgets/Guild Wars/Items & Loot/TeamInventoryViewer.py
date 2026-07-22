@@ -11,7 +11,7 @@ from Py4GWCoreLib import GLOBAL_CACHE
 from Py4GWCoreLib import Color
 from Py4GWCoreLib import ConsoleLog
 from Py4GWCoreLib import DyeColor
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 import PyImGui
 from Py4GWCoreLib import Routines
@@ -1090,7 +1090,7 @@ def draw_widget():
                                     # === ICON ===
                                     PyImGui.table_next_column()
                                     if texture:
-                                        ImGui_Legacy.DrawTexture(texture, 20, 20)
+                                        ImGui.DrawTexture(texture, 20, 20)
                                     else:
                                         PyImGui.text("N/A")
 
@@ -1180,7 +1180,7 @@ def draw_widget():
                                                 # === ICON COLUMN ===
                                                 PyImGui.table_next_column()
                                                 if texture:
-                                                    ImGui_Legacy.DrawTexture(texture, 20, 20)
+                                                    ImGui.DrawTexture(texture, 20, 20)
                                                 else:
                                                     PyImGui.text("N/A")
 
@@ -1237,7 +1237,7 @@ def draw_widget():
                                             # === ICON COLUMN ===
                                             PyImGui.table_next_column()
                                             if texture:
-                                                ImGui_Legacy.DrawTexture(texture, 20, 20)
+                                                ImGui.DrawTexture(texture, 20, 20)
                                             else:
                                                 PyImGui.text("N/A")
 
@@ -1336,9 +1336,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Team Inventory Viewer", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

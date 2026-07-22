@@ -401,14 +401,14 @@ def configure():
 def tooltip():
     import PyImGui
     from Py4GWCoreLib.py4gwcorelib_src.Color import Color
-    from Py4GWCoreLib._legacy_facade import ImGui_Legacy
+    from Py4GWCoreLib.ImGui import ImGui
     PyImGui.begin_tooltip()
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("HeroAI: Multibox Combat Engine", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

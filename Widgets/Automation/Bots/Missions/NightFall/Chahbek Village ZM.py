@@ -5,7 +5,7 @@ import PySystem
 import PyImGui
 from Py4GWCoreLib import Key, Keystroke, Map, CHAR_MAP, Player
 from Py4GWCoreLib import (GLOBAL_CACHE, Agent, Routines, Range, Py4GW, ConsoleLog, ModelID, Botting,
-                          AutoPathing, ImGui_Legacy, ActionQueueManager,)
+                          AutoPathing, ImGui, ActionQueueManager,)
 from Py4GWCoreLib.Context import GWContext
 
 LAST_CHARACTER_NAME: str = ""
@@ -557,19 +557,19 @@ def _draw_texture():
     border_col = (0, 0, 0, 0)  # <- ints, not normalized floats
 
     if level <= 3:
-        ImGui_Legacy.DrawTextureExtended(texture_path=path, size=size,
+        ImGui.DrawTextureExtended(texture_path=path, size=size,
                                   uv0=(0.0, 0.0),   uv1=(0.25, 1.0),
                                   tint=tint, border_color=border_col)
     elif level <= 5:
-        ImGui_Legacy.DrawTextureExtended(texture_path=path, size=size,
+        ImGui.DrawTextureExtended(texture_path=path, size=size,
                                   uv0=(0.25, 0.0), uv1=(0.5, 1.0),
                                   tint=tint, border_color=border_col)
     elif level <= 9:
-        ImGui_Legacy.DrawTextureExtended(texture_path=path, size=size,
+        ImGui.DrawTextureExtended(texture_path=path, size=size,
                                   uv0=(0.5, 0.0),  uv1=(0.75, 1.0),
                                   tint=tint, border_color=border_col)
     else:
-        ImGui_Legacy.DrawTextureExtended(texture_path=path, size=size,
+        ImGui.DrawTextureExtended(texture_path=path, size=size,
                                   uv0=(0.75, 0.0), uv1=(1.0, 1.0),
                                   tint=tint, border_color=border_col)
         
@@ -640,14 +640,14 @@ def ScheduleNextRun():
     
 def tooltip():
     import PyImGui
-    from Py4GWCoreLib import ImGui_Legacy, Color
+    from Py4GWCoreLib import ImGui, Color
     PyImGui.begin_tooltip()
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Chahbek Village ZM Bot", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
     # Description

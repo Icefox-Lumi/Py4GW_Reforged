@@ -268,7 +268,7 @@ try:
         GLOBAL_CACHE,
         ModelID,
         Map,
-        ImGui_Legacy,          # NEW: needed for persisted windows
+        ImGui,          # NEW: needed for persisted windows
         SharedCommandType,
     )
     from Py4GWCoreLib import ItemArray, Bag, Item, Effects, Player, Party, Bags, Agent, AgentArray, Range, SpiritModelID
@@ -438,7 +438,7 @@ try:
     FLOATING_ICON_WINDOW_NAME = "Pycons Toggle"
 
     def _init_window_persistence_once() -> bool:
-        """Create/load separate ImGui_Legacy ini files for main, settings, and floating icon UI."""
+        """Create/load separate ImGui ini files for main, settings, and floating icon UI."""
         global _ini_ready, INI_KEY_MAIN, INI_KEY_SETTINGS, INI_KEY_FLOATING_UI
         if _ini_ready:
             return True
@@ -478,7 +478,7 @@ try:
 
     def _ensure_floating_ui():
         if _rt.floating_button is None:
-            _rt.floating_button = ImGui_Legacy.FloatingIcon(
+            _rt.floating_button = ImGui.FloatingIcon(
                 icon_path=_get_floating_icon_path(),
                 window_id=FLOATING_ICON_WINDOW_ID,
                 window_name=FLOATING_ICON_WINDOW_NAME,
@@ -659,7 +659,7 @@ try:
             if item_h > 0.0 and line_h > 0.0:
                 cursor_x, _cursor_y = PyImGui.get_cursor_screen_pos()
                 text_y = item_y + max((item_h - line_h) * 0.5, 0.0) + float(y_offset)
-                PyImGui.set_cursor_screen_pos(float(cursor_x), float(text_y))
+                PyImGui.set_cursor_screen_pos((float(cursor_x), float(text_y)))
                 return float(text_y)
         except Exception:
             pass
@@ -671,7 +671,7 @@ try:
             return
         try:
             cursor_x, _cursor_y = PyImGui.get_cursor_screen_pos()
-            PyImGui.set_cursor_screen_pos(float(cursor_x), float(screen_y))
+            PyImGui.set_cursor_screen_pos((float(cursor_x), float(screen_y)))
         except Exception:
             pass
 
@@ -4021,7 +4021,7 @@ try:
                     if alpha_var is not None and hasattr(PyImGui, "push_style_var"):
                         PyImGui.push_style_var(alpha_var, 0.45)
                         pushed_alpha = True
-                if ImGui_Legacy.ImageButton(f"##{id_prefix}_icon_{key}", icon_path, float(icon_size), float(icon_size)):
+                if ImGui.ImageButton(f"##{id_prefix}_icon_{key}", icon_path, float(icon_size), float(icon_size)):
                     current = not current
             finally:
                 if pushed_alpha:
@@ -4082,7 +4082,7 @@ try:
                 pushed_colors = 3
             except Exception:
                 pushed_colors = 0
-            ImGui_Legacy.ImageButton(f"##{id_prefix}_icon_{key}", icon_path, float(icon_size), float(icon_size))
+            ImGui.ImageButton(f"##{id_prefix}_icon_{key}", icon_path, float(icon_size), float(icon_size))
         except Exception:
             return False
         finally:
@@ -10695,7 +10695,7 @@ try:
                 0,
             )
 
-            PyImGui.set_cursor_screen_pos(x + 8.0, text_y)
+            PyImGui.set_cursor_screen_pos((x + 8.0, text_y))
             pushed_text_color = False
             try:
                 PyImGui.push_style_color(PyImGui.ImGuiCol.Text, text_color)
@@ -10707,7 +10707,7 @@ try:
 
             if has_actions:
                 if actions_below:
-                    PyImGui.set_cursor_screen_pos(x + 8.0, y + row_height + max((row_height - line_h) * 0.5, 0.0))
+                    PyImGui.set_cursor_screen_pos((x + 8.0, y + row_height + max((row_height - line_h) * 0.5, 0.0)))
                 else:
                     _same_line(10)
                 if PyImGui.small_button(f"{select_text}##pycons_main_{id_suffix}_section_select_all"):
@@ -10726,7 +10726,7 @@ try:
                     else "Turn every selected item in this category OFF for this session."
                 )
 
-            PyImGui.set_cursor_screen_pos(x, y + height)
+            PyImGui.set_cursor_screen_pos((x, y + height))
         except Exception:
             _section_text(text, section_key)
 
@@ -10750,12 +10750,12 @@ try:
                 if target_offset is not None
                 else _main_section_text_width(str(text)) + float(spacing)
             )
-            PyImGui.set_cursor_screen_pos(float(x), float(y) + float(y_offset))
+            PyImGui.set_cursor_screen_pos((float(x), float(y) + float(y_offset)))
             if color is None:
                 PyImGui.text(str(text))
             else:
                 _text_with_color(str(text), color)
-            PyImGui.set_cursor_screen_pos(float(next_x), float(y))
+            PyImGui.set_cursor_screen_pos((float(next_x), float(y)))
         except Exception:
             if color is None:
                 PyImGui.text(str(text))
@@ -10821,7 +10821,7 @@ try:
         _section_text("Target accounts:", "settings_other_accounts")
         _text_secondary("Select active multibox target accounts below. Both actions use the same target list.")
         _text_secondary("Window layout, presets, and filters stay local. Temporary ON/OFF changes copy only when selected below.")
-        PyImGui.dummy(0, 4)
+        PyImGui.dummy((0, 4))
 
         _text_secondary(f"{len(active_accounts)} active account(s) | {len(selected_accounts)} selected")
         if active_accounts:
@@ -10906,7 +10906,7 @@ try:
         _section_text("Settings copy:", "settings_other_accounts")
         _text_secondary("Copy only the checked settings groups to the selected accounts.")
         _text_secondary("Use this for small setting changes. Use profiles below for a full setup.")
-        PyImGui.dummy(0, 4)
+        PyImGui.dummy((0, 4))
 
         if PyImGui.small_button("Select All Categories##pycons_sync_categories_all"):
             for category_key, _label in PYCONS_SYNC_CATEGORY_DEFS:
@@ -11368,15 +11368,15 @@ try:
         flags: int = PyImGui.WindowFlags.NoFlag,
     ) -> tuple[bool, bool]:
         # Window persistence handled natively by ImGui; ini_key retained for compatibility.
-        begin_result = ImGui_Legacy.begin_with_close(name, True, flags)
+        begin_result = ImGui.begin_with_close(name, True, flags)
         if isinstance(begin_result, tuple) and len(begin_result) == 2:
             expanded, window_open = bool(begin_result[0]), bool(begin_result[1])
         else:
             expanded = bool(begin_result)
             window_open = bool(begin_result)
 
-        if ImGui_Legacy._is_textured_theme():
-            window = ImGui_Legacy.WindowModule._windows.get(name)
+        if ImGui._is_textured_theme():
+            window = ImGui.WindowModule._windows.get(name)
             if window is not None:
                 window_open = bool(window.open)
                 expanded = bool(window.open and not window.collapse)
@@ -11400,10 +11400,10 @@ try:
         window_expanded, window_open = _begin_persistent_window_with_close_state(INI_KEY_MAIN, BOT_NAME)
         _set_main_window_visible(bool(window_open), persist=True, expand_on_show=False)
         if not window_open:
-            ImGui_Legacy.End(INI_KEY_MAIN)
+            ImGui.End(INI_KEY_MAIN)
             return
         if not window_expanded:
-            ImGui_Legacy.End(INI_KEY_MAIN)
+            ImGui.End(INI_KEY_MAIN)
             return
 
         if PyImGui.button("Settings##pycons_settings"):
@@ -11826,7 +11826,7 @@ try:
                             _draw_main_regular_row(k, c["label"], "pycons_party", int(c.get("model_id", 0)))
                     PyImGui.end_child()
 
-        ImGui_Legacy.End(INI_KEY_MAIN)
+        ImGui.End(INI_KEY_MAIN)
 
     # -------------------------
     # Settings Window
@@ -12276,10 +12276,10 @@ try:
         )
         if not window_open:
             show_settings[0] = False
-            ImGui_Legacy.End(INI_KEY_SETTINGS)
+            ImGui.End(INI_KEY_SETTINGS)
             return
         if not window_expanded:
-            ImGui_Legacy.End(INI_KEY_SETTINGS)
+            ImGui.End(INI_KEY_SETTINGS)
             return
 
         _section_text("General behavior:", "settings_select")
@@ -12597,7 +12597,7 @@ try:
                 _text_secondary("Main-window ON/OFF also updates saved enabled defaults.")
             else:
                 _text_secondary("Main-window ON/OFF changes are temporary unless saving is enabled above.")
-            PyImGui.dummy(0, 4)
+            PyImGui.dummy((0, 4))
             _section_text("Filter items:", "settings_select")
             _control_label_for_next_item("Search:")
             changed, new_val = ui_input_text("##pycons_filter", filter_text[0], 64)
@@ -12611,7 +12611,7 @@ try:
             collapse_now = (last_search_active[0] and not search_active)
             last_search_active[0] = search_active
 
-            PyImGui.dummy(0, 6)
+            PyImGui.dummy((0, 6))
 
             explorable_consets = [c for c in CONSUMABLES if c.get("use_where") == "explorable" and c.get("key") in CONSET_KEYS]
             explorable_other = [c for c in CONSUMABLES if c.get("use_where") == "explorable" and c.get("key") not in CONSET_KEYS]
@@ -13770,7 +13770,7 @@ try:
             _show_setting_tooltip("tooltip_show_why")
             PyImGui.separator()
 
-        ImGui_Legacy.End(INI_KEY_SETTINGS)
+        ImGui.End(INI_KEY_SETTINGS)
 
     def configure():
         pass

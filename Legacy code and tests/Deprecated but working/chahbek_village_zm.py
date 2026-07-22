@@ -380,10 +380,10 @@ class BotVars:
         }
         self.character_name_logged = False
         self.request_name = False
-        self.window_module = ImGui_Legacy.WindowModule()
+        self.window_module = ImGui.WindowModule()
 
 bot_vars = BotVars()
-bot_vars.window_module = ImGui_Legacy.WindowModule(module_name, window_name=module_name, window_size=(300, 300), 
+bot_vars.window_module = ImGui.WindowModule(module_name, window_name=module_name, window_size=(300, 300), 
                                             window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 combat_handler:SkillManager.Autocombat = SkillManager.Autocombat()
 
@@ -2007,7 +2007,7 @@ def draw_window():
         else:
             PyImGui.text(label)
 
-        ImGui_Legacy.table(label, ["Value", "Data"], [
+        ImGui.table(label, ["Value", "Data"], [
             ("Previous Step:", fsm.get_previous_step_name()),
             ("Current Step:", fsm.get_current_step_name()),
             ("Next Step:", fsm.get_next_step_name()),
@@ -2036,7 +2036,7 @@ def draw_window():
                 ("37 Copper Deposited x", bot_vars.proofs_deposited),
                 ("Success Rate", f"{bot_vars.success_rate * 100:.1f}%" if bot_vars.runs_attempted > 0 else "N/A"),
             ]
-            ImGui_Legacy.table("Run Statistics", headers, data)
+            ImGui.table("Run Statistics", headers, data)
             PyImGui.end_tab_item()
         if PyImGui.begin_tab_item("Character List"):
             PyImGui.text("Manage Character Rotation List:")
@@ -2082,7 +2082,7 @@ def draw_window():
                             ConsoleLog("CharacterList", "Cannot remove the last character name.", Console.MessageType.Warning)
 
                     PyImGui.pop_style_color(3)
-                    ImGui_Legacy.show_tooltip(f"Remove '{name}'")
+                    ImGui.show_tooltip(f"Remove '{name}'")
             if name_to_remove_index != -1:
                 removed_name = bot_vars.character_names.pop(name_to_remove_index)
                 ConsoleLog("CharacterList", f"Removed '{removed_name}' from rotation.", Console.MessageType.Info)
@@ -2228,7 +2228,7 @@ def draw_window():
                             print(f"Target Name: {agent_name}")
                         PyImGui.end_tab_item()
                 if PyImGui.begin_tab_item("Debug: Variables"):
-                    ImGui_Legacy.table("Variable Info", ["Value", "Data"], [
+                    ImGui.table("Variable Info", ["Value", "Data"], [
                             ("pause_combat_fsm:", bot_vars.pause_combat_fsm),
                             ("movement_handler.is_paused", fsm_vars.movement_handler.is_paused()),
                             ("global_combat_fsm.is_paused", fsm_vars.global_combat_fsm.is_paused()),
@@ -2257,7 +2257,7 @@ def draw_window():
                     draw_fsm_info("Combat Handler FSM", fsm_vars.global_combat_handler, False)
                     PyImGui.end_tab_item()
                 if PyImGui.begin_tab_item("Debug: FollowXY"):
-                    ImGui_Legacy.table("follow info", ["Value", "Data"], [
+                    ImGui.table("follow info", ["Value", "Data"], [
                         ("Waypoint:", fsm_vars.movement_handler.waypoint),
                         ("Following:", fsm_vars.movement_handler.is_following()),
                         ("Has Arrived:", fsm_vars.movement_handler.has_arrived()),

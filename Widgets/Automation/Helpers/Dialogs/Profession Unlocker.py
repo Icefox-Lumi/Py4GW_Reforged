@@ -1,7 +1,7 @@
 from Py4GWCoreLib import *
 import time
 import json
-from Py4GWCoreLib import ImGui_Legacy
+from Py4GWCoreLib import ImGui
 
 MODULE_NAME = "Profession Unlocker"
 MODULE_ICON = "Textures\\Module_Icons\\Profession Unlocker.png"
@@ -135,7 +135,7 @@ class ProUnlockWindow(BasicWindow):
             content_pos = PyImGui.get_cursor_screen_pos()
             x = content_pos[0] + (window_width - icon_size) // 2
             y = content_pos[1] + (window_height - icon_size) // 2
-            ImGui_Legacy.DrawTextureInDrawList((x, y), (icon_size, icon_size), icon_path)
+            ImGui.DrawTextureInDrawList((x, y), (icon_size, icon_size), icon_path)
         char_name = self.get_player_name()
         PyImGui.text(f"Current Character: {char_name}")
         PyImGui.separator()
@@ -150,9 +150,9 @@ class ProUnlockWindow(BasicWindow):
         x_offset = max((window_width - badge_width) // 2, 0)
         remaining_height = PyImGui.get_window_height() - PyImGui.get_cursor_pos_y() - badge_height - 8
         if remaining_height > 0:
-            PyImGui.dummy(0, int(remaining_height))
+            PyImGui.dummy((0, int(remaining_height)))
         PyImGui.set_cursor_pos_x(x_offset)
-        ImGui_Legacy.DrawTexture(badge_path, badge_width, badge_height)
+        ImGui.DrawTexture(badge_path, badge_width, badge_height)
 
     def get_profession_color(self, profession):
         color = ColorPalette.GetColor("Gray")
@@ -196,9 +196,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Profession Unlocker", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

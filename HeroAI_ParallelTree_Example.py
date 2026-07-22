@@ -1,7 +1,7 @@
 import PyImGui
 
 import Py4GW
-from Py4GWCoreLib import ImGui_Legacy, Utils
+from Py4GWCoreLib import ImGui, Utils
 from Py4GWCoreLib.BottingTree import BottingTree
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
@@ -121,7 +121,7 @@ def draw_widget():
         return
     cfg = Settings(INI_KEY, "account")
 
-    if ImGui_Legacy.Begin(INI_KEY, MODULE_NAME, flags=PyImGui.WindowFlags.AlwaysAutoResize):
+    if ImGui.Begin(INI_KEY, MODULE_NAME, flags=PyImGui.WindowFlags.AlwaysAutoResize):
         bb = botting_tree.blackboard if botting_tree is not None else {}
 
         PyImGui.text("Parallel service pattern:")
@@ -179,7 +179,7 @@ def draw_widget():
             PyImGui.separator()
             botting_tree.tree.draw()
 
-    ImGui_Legacy.End(INI_KEY)
+    ImGui.End(INI_KEY)
 
 
 def tooltip():

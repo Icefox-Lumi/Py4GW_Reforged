@@ -183,21 +183,21 @@ def ShowWindow():
             if PyImGui.button(IconsFontAwesome5.ICON_SAVE + "##autosalvsave"):
                 widget_options.save_to_ini()
                 ConsoleLog(MODULE_NAME, "Settings saved to Auto Inv.ini", PySystem.Console.MessageType.Success)
-            ImGui_Legacy.show_tooltip("Save Settings")
+            ImGui.show_tooltip("Save Settings")
             PyImGui.same_line(0,-1)
             if PyImGui.button(IconsFontAwesome5.ICON_SYNC + "##autosalvreload"):
                 widget_options.load_from_ini(widget_options.ini)
                 widget_options.lookup_throttle.SetThrottleTime(widget_options._LOOKUP_TIME)
                 widget_options.lookup_throttle.Reset()
                 ConsoleLog(MODULE_NAME, "Settings reloaded from Auto Inv.ini", PySystem.Console.MessageType.Success)
-            ImGui_Legacy.show_tooltip("Reload Settings")
+            ImGui.show_tooltip("Reload Settings")
             
             PyImGui.separator()
 
             PyImGui.text("Lookup Time (ms):")
             PyImGui.same_line(0,-1)
             widget_options._LOOKUP_TIME = PyImGui.input_int("##lookup_time",  widget_options._LOOKUP_TIME)
-            ImGui_Legacy.show_tooltip("Changes will take effect after the next lookup.")
+            ImGui.show_tooltip("Changes will take effect after the next lookup.")
             
             if not Map.IsExplorable():
                 PyImGui.text("Auto Lookup only runs in explorable maps.")

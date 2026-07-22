@@ -13,13 +13,14 @@ from typing import Optional
 
 from .functions_catalog import FUNCTIONS
 from .functions_catalog import LaunchFunction
+from .functions_catalog import ensure_external_functions
 
 
 def _icons_module():
     """The IconsFontAwesome5 module, or None when unavailable (offline)."""
 
     try:
-        from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+        from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 
         return IconsFontAwesome5
     except Exception:
@@ -59,11 +60,13 @@ class FunctionRuntime:
     """Enumerate + invoke catalog functions. Fire-and-forget; no per-function state."""
 
     def list_functions(self) -> list[LaunchFunction]:
+        ensure_external_functions()  # lazy-load provider functions on first read (avoids import cycle)
         return list(FUNCTIONS)
 
     def get(self, function_id: Optional[str]) -> Optional[LaunchFunction]:
         if not function_id:
             return None
+        ensure_external_functions()
         return next((f for f in FUNCTIONS if f.id == function_id), None)
 
     def invoke(self, function_id: Optional[str]) -> None:

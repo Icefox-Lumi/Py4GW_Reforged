@@ -2,7 +2,7 @@ import os
 import traceback
 
 import Py4GW
-from Py4GWCoreLib import PyImGui, Routines, Timer, Color, ImGui_Legacy
+from Py4GWCoreLib import PyImGui, Routines, Timer, Color, ImGui
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from HeroAI.cache_data import CacheData
 
@@ -57,9 +57,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("TitleHelper", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 

@@ -4,10 +4,10 @@ import types
 import Py4GW
 import PyImGui
 from Py4GWCoreLib import *
-from Py4GWCoreLib import ImGui_Legacy,GLOBAL_CACHE
+from Py4GWCoreLib import ImGui,GLOBAL_CACHE
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from Py4GWCoreLib.Routines import Routines
-from Py4GWCoreLib._legacy_facade import ImGui_Legacy
+from Py4GWCoreLib.ImGui import ImGui
 
 BOT_NAME = "Skills Unlocker"
 MODULE_NAME = BOT_NAME
@@ -27,7 +27,7 @@ bot = Botting(
 class BotVars:
     def __init__(self, map_id=0):
         self.bot_started = False
-        self.window_module:ImGui_Legacy.WindowModule
+        self.window_module:ImGui.WindowModule
         self.variables = {}
 
         #HEROES SECTION
@@ -118,7 +118,7 @@ def draw_window_light(
     if not self._config.ini_key:
         return
 
-    if ImGui_Legacy.Begin(
+    if ImGui.Begin(
         ini_key=self._config.ini_key,
         name=self._config.bot_name,
         p_open=True,
@@ -132,7 +132,7 @@ def draw_window_light(
 
             
 
-    ImGui_Legacy.End(self._config.ini_key)
+    ImGui.End(self._config.ini_key)
 
     # Draw path like original
     if Routines.Checks.Map.MapValid():
@@ -1603,8 +1603,8 @@ try:
     import types
     import PyImGui
     from Py4GWCoreLib import Color
-    from Py4GWCoreLib._legacy_facade import ImGui_Legacy
-    from Py4GWCoreLib.ImGui_Legacy_src.IconsFontAwesome5 import IconsFontAwesome5
+    from Py4GWCoreLib.ImGui import ImGui
+    from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
     from Py4GWCoreLib.Py4GWcorelib import ConsoleLog, Console
     from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 
@@ -1626,7 +1626,7 @@ try:
                     GLOBAL_CACHE.Coroutines.clear()
 
 
-            PyImGui.dummy(0, 6)
+            PyImGui.dummy((0, 6))
 
         bot.UI._draw_main_child = types.MethodType(_draw_main_child_minimal, bot.UI)
 
@@ -1660,7 +1660,7 @@ def _draw_skill_grid(faction: str):
         has_icon = os.path.exists(icon_path)
 
         if has_icon:
-            clicked = ImGui_Legacy.ImageButton(f"##{key}", icon_path, icon_size, icon_size)
+            clicked = ImGui.ImageButton(f"##{key}", icon_path, icon_size, icon_size)
         else:
             clicked = PyImGui.button(label, 260, 40)
 

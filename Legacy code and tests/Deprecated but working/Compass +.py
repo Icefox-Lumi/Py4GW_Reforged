@@ -40,7 +40,7 @@ class Ring:
         self.custom = custom
 
 class Compass():
-    window_module = ImGui_Legacy.WindowModule('Compass+',window_name='Compass+', window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+    window_module = ImGui.WindowModule('Compass+',window_name='Compass+', window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
     window_pos = (1200,400)
     ini = Settings("Widgets/Config/Compass +.ini", "global")
     config_loaded = False
@@ -714,7 +714,7 @@ class Compass():
         self.imgui.end()
 
     def CheckClick(self):
-        if self.imgui.is_mouse_clicked(0) and ImGui_Legacy.is_mouse_in_rect(self.window_rect): 
+        if self.imgui.is_mouse_clicked(0) and ImGui.is_mouse_in_rect(self.window_rect): 
             if self.imgui.get_io().key_alt:
                 pos = self.overlay.GetMouseCoords()
                 mouse_pos = (pos.x, pos.y)
@@ -757,9 +757,9 @@ def tooltip():
 
     # Title
     title_color = Color(255, 200, 100, 255)
-    ImGui_Legacy.push_font("Regular", 20)
+    ImGui.push_font("Regular", 20)
     PyImGui.text_colored("Mission Map +", title_color.to_tuple_normalized())
-    ImGui_Legacy.pop_font()
+    ImGui.pop_font()
     PyImGui.spacing()
     PyImGui.separator()
 
