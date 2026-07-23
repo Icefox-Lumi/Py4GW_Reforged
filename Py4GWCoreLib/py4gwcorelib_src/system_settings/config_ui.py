@@ -104,6 +104,18 @@ def build_window(controller) -> "ImGui.SidebarWindow":
                 _err = str(exc)
                 win.add_section(group, "Name Obfuscation",
                                 (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.agent_recolor import config_ui as ar_ui
+
+                ar_ui.add_sections(win, group)
+            except Exception as exc:
+                import traceback
+
+                _log("Agents / Agent Recolor section failed to build: %r" % exc)
+                _log(traceback.format_exc())
+                _err = str(exc)
+                win.add_section(group, "Agent Recolor",
+                                (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
             continue
         for lsn in cat.listeners:
             # Bind each section to its own listener via default args (avoid late-binding capture).
