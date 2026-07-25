@@ -9408,21 +9408,39 @@ class MerchantRulesWidget:
             )
             return
 
+        live_doc = self._live_config_doc()
+        previous_live_payload = live_doc.get_json("", None)
         try:
             self._write_profile_payload_for_account(
                 self.account_key,
                 selected_profile.payload,
                 preserve_existing_window_geometry=True,
             )
+            if not live_doc.save():
+                if previous_live_payload is None:
+                    live_doc.delete("")
+                else:
+                    live_doc.set_json("", previous_live_payload)
+                raise OSError("JsonFactory could not flush the selected Merchant Rules profile.")
             self.reload_profile_from_disk(
-                status_message=(
-                    f"Loaded shared profile '{selected_profile.display_name}' "
-                    f"into the current Merchant Rules config."
-                ),
+                status_message="",
                 preserve_window_geometry=True,
                 preserve_workspace_state=True,
-                profile_display_name=selected_profile.display_name,
+                log_profile_load_summary=False,
             )
+            loaded_payload_serialized = self._serialize_shareable_profile_payload(
+                self._build_shareable_profile_payload()
+            )
+            if loaded_payload_serialized != selected_profile.serialized_payload:
+                raise RuntimeError(
+                    "The reloaded live config does not match the selected shared profile."
+                )
+            self.active_profile_display_name = selected_profile.display_name
+            self.status_message = (
+                f"Loaded shared profile '{selected_profile.display_name}' "
+                f"into the current Merchant Rules config."
+            )
+            self._log_profile_loaded_summary()
             self._refresh_shared_profile_entries()
             self._set_selected_shared_profile_path(selected_profile.path)
             self._clear_shared_profile_confirmation_state()
@@ -9433,9 +9451,9 @@ class MerchantRulesWidget:
                 )
             )
         except Exception as exc:
-            self._set_shared_profile_feedback(
-                warning=f"Failed to load shared profile: {exc}"
-            )
+            warning = f"Failed to load shared profile: {exc}"
+            self.status_message = warning
+            self._set_shared_profile_feedback(warning=warning)
 
     def _delete_selected_shared_profile(self):
         self._ensure_initialized()
@@ -9693,7 +9711,13 @@ class MerchantRulesWidget:
             ConsoleLog(MODULE_NAME, f"Failed to open config folder {folder_path}: {exc}", Console.MessageType.Error)
             return False
 
-    def _reset_runtime_after_profile_load(self, *, status_message: str = "", profile_display_name: str = ""):
+    def _reset_runtime_after_profile_load(
+        self,
+        *,
+        status_message: str = "",
+        profile_display_name: str = "",
+        log_profile_load_summary: bool = True,
+    ):
         """Clear previews, running automation, confirmations, and caches after profile replacement.
 
         Session-only destructive overrides are deliberately reset rather than inherited across
@@ -9754,7 +9778,8 @@ class MerchantRulesWidget:
         self._invalidate_supported_context_cache()
         if status_message:
             self.status_message = status_message
-        self._log_profile_loaded_summary()
+        if log_profile_load_summary:
+            self._log_profile_loaded_summary()
 
     def reload_profile_from_disk(
         self,
@@ -9763,6 +9788,7 @@ class MerchantRulesWidget:
         preserve_window_geometry: bool = False,
         preserve_workspace_state: bool = False,
         profile_display_name: str = "",
+        log_profile_load_summary: bool = True,
     ):
         """Reload the active profile and optionally preserve only UI geometry or workspace state."""
 
@@ -9784,6 +9810,7 @@ class MerchantRulesWidget:
         self._reset_runtime_after_profile_load(
             status_message=status_message,
             profile_display_name=profile_display_name,
+            log_profile_load_summary=log_profile_load_summary,
         )
         return True
 
