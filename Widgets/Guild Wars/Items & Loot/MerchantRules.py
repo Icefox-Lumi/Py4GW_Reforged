@@ -2,7 +2,7 @@
 
 Merchant Rules separates preview construction from live execution: rules first produce a
 ``PlanResult`` from an inventory snapshot, and execution then revalidates live state before
-performing queued or destructive actions. Profiles, shared profiles, recovery snapshots,
+performing queued or destructive actions. Profiles, shared profiles, recovery documents,
 multibox requests, and Reforged compatibility adapters are owned by ``MerchantRulesWidget``.
 
 Safety-sensitive operations fail closed when protections, required services, deterministic
@@ -12,7 +12,6 @@ salvage APIs, storage capacity, or preview consistency cannot be verified.
 import json
 import os
 import re
-import shutil
 import time
 import traceback
 from collections.abc import Callable
@@ -27,6 +26,7 @@ from Py4GWCoreLib import ActionQueueManager
 from Py4GWCoreLib import Console
 from Py4GWCoreLib import ConsoleLog
 from Py4GWCoreLib import GLOBAL_CACHE
+from Py4GWCoreLib import JsonFactory
 from Py4GWCoreLib import Map
 from Py4GWCoreLib import ModelID
 from Py4GWCoreLib import Player
@@ -72,9 +72,14 @@ INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
 PROFILE_VERSION = 35
-CONFIG_DIR = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Config", "MerchantRules")
-SHARED_PROFILES_DIR = os.path.join(CONFIG_DIR, "Profiles")
-RECOVERY_DIR = os.path.join(CONFIG_DIR, "Recovery")
+# Per-account rule profiles live in the sanctioned JsonFactory jail (json/<email>/...).
+# The live working config is one account-scoped document; every shared profile is one
+# key inside a single account-scoped Profiles document.
+LIVE_CONFIG_DOC_NAME = "Widgets/MerchantRules/LiveConfig.json"
+SHARED_PROFILES_DOC_NAME = "Widgets/MerchantRules/Profiles.json"
+BACKUP_DOC_NAME = "Widgets/MerchantRules/LiveConfigBackup.json"
+BACKUP_SCHEMA = "merchant_rules_live_config_backup_v1"
+BACKUP_SCHEMA_VERSION = 1
 DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Data")
 CATALOG_PATH = os.path.join(DATA_DIR, "merchant_rules_catalog.json")
 DROP_DATA_PATH = os.path.join(DATA_DIR, "modelid_drop_data.json")
@@ -167,7 +172,6 @@ PROFILE_WINDOW_GEOMETRY_KEYS: tuple[str, ...] = (
 )
 SHARED_PROFILE_SCHEMA = "merchant_rules_shared_profile_v1"
 SHARED_PROFILE_SCHEMA_VERSION = 1
-FAILED_PROFILE_SNAPSHOT_LIMIT = 3
 HELPER_TOOLTIPS_ENABLED_DEFAULT = True
 
 MERCHANT_TYPE_TRAVEL = "travel"
@@ -3242,24 +3246,6 @@ def _normalize_multibox_account_email(raw_value: object) -> str:
     return str(raw_value or "").strip().lower()
 
 
-def _hash_account_key(value: str) -> str:
-    safe_value = str(value or "").strip()
-    if not safe_value:
-        return ""
-    return md5(safe_value.encode()).hexdigest()[:8]
-
-
-def _get_config_filename_for_account_key(account_key: str) -> str:
-    hashed_key = _hash_account_key(account_key)
-    if hashed_key:
-        return f"MerchantRules_{hashed_key}.json"
-    return "MerchantRules_default.json"
-
-
-def _get_config_path_for_account_key(account_key: str) -> str:
-    return os.path.join(CONFIG_DIR, _get_config_filename_for_account_key(account_key))
-
-
 def _format_model_ids(model_ids: list[int]) -> str:
     return ", ".join(str(model_id) for model_id in model_ids)
 
@@ -5168,13 +5154,13 @@ class MerchantRulesWidget:
 
     def __init__(self):
         self.initialized = False
-        self.legacy_recovery_artifacts_migrated = False
         self.account_key = ""
         self.config_path = ""
         self.active_profile_display_name = ""
         self.new_profile_session = False
         self.profile_warning = ""
         self.profile_notice = ""
+        self.profile_write_blocked = False
         self.shared_profile_entries: list[SharedProfileSummary] = []
         self.shared_profile_selected_path = ""
         self.shared_profile_name_input = ""
@@ -5394,11 +5380,17 @@ class MerchantRulesWidget:
             return character_name
         return "default"
 
-    def _get_config_filename_for_account(self, account_key: str) -> str:
-        return _get_config_filename_for_account_key(account_key)
+    def _live_config_doc(self) -> JsonFactory:
+        """The current account's live working config (account-scoped, self-persisting)."""
+        return JsonFactory(LIVE_CONFIG_DOC_NAME)
 
-    def _get_config_path_for_account(self, account_key: str) -> str:
-        return _get_config_path_for_account_key(account_key)
+    def _profiles_doc(self) -> JsonFactory:
+        """Single account-scoped document holding every shared profile, keyed by profile name."""
+        return JsonFactory(SHARED_PROFILES_DOC_NAME)
+
+    def _backup_doc(self) -> JsonFactory:
+        """Account-scoped last-known-good live profile used by the Restore Backup action."""
+        return JsonFactory(BACKUP_DOC_NAME)
 
     def _get_live_profile_display_name(self) -> str:
         config_path = str(self.config_path or "").strip()
@@ -9006,7 +8998,8 @@ class MerchantRulesWidget:
         self._refresh_rule_ui_caches()
 
     def _get_shared_profiles_dir(self) -> str:
-        return SHARED_PROFILES_DIR
+        doc_path = self._profiles_doc().path()
+        return os.path.dirname(doc_path) if doc_path else SHARED_PROFILES_DOC_NAME
 
     def _build_shareable_profile_payload(self) -> dict[str, object]:
         normalized_payload = self._normalize_profile_payload(
@@ -9022,15 +9015,8 @@ class MerchantRulesWidget:
     def _format_shared_profile_timestamp(
         self,
         saved_at_unix_ms: int,
-        *,
-        fallback_path: str = "",
     ) -> str:
         safe_timestamp = max(0, _safe_int(saved_at_unix_ms, 0))
-        if safe_timestamp <= 0 and fallback_path and os.path.exists(fallback_path):
-            try:
-                safe_timestamp = int(os.path.getmtime(fallback_path) * 1000)
-            except Exception:
-                safe_timestamp = 0
         if safe_timestamp <= 0:
             return ""
         try:
@@ -9079,7 +9065,6 @@ class MerchantRulesWidget:
         raw_payload: object,
         *,
         fallback_name: str = "",
-        fallback_path: str = "",
     ) -> dict[str, object]:
         """Validate a shared-profile wrapper and normalize its embedded Merchant Rules payload."""
 
@@ -9123,10 +9108,7 @@ class MerchantRulesWidget:
         saved_at_unix_ms = max(0, _safe_int(raw_payload.get("saved_at_unix_ms", 0), 0))
         saved_at = str(raw_payload.get("saved_at", "") or "").strip()
         if not saved_at:
-            saved_at = self._format_shared_profile_timestamp(
-                saved_at_unix_ms,
-                fallback_path=fallback_path,
-            )
+            saved_at = self._format_shared_profile_timestamp(saved_at_unix_ms)
 
         return {
             "schema": SHARED_PROFILE_SCHEMA,
@@ -9137,40 +9119,30 @@ class MerchantRulesWidget:
             "payload": normalized_payload,
         }
 
-    def _load_shared_profile_summary_from_path(
+    def _load_shared_profile_summary_from_key(
         self,
-        profile_path: str,
+        profile_key: str,
     ) -> SharedProfileSummary:
-        with open(profile_path, "r", encoding="utf-8") as file:
-            raw_payload = json.load(file)
+        safe_key = str(profile_key)
+        raw_payload = self._profiles_doc().get_json(safe_key, {})
 
-        fallback_name = os.path.splitext(os.path.basename(profile_path))[0]
         normalized_wrapper = self._normalize_shared_profile_wrapper(
             raw_payload,
-            fallback_name=fallback_name,
-            fallback_path=profile_path,
+            fallback_name=safe_key,
         )
         payload = dict(normalized_wrapper.get("payload", {}))
         saved_at_unix_ms = max(
             0,
             _safe_int(normalized_wrapper.get("saved_at_unix_ms", 0), 0),
         )
-        if saved_at_unix_ms <= 0 and os.path.exists(profile_path):
-            try:
-                saved_at_unix_ms = int(os.path.getmtime(profile_path) * 1000)
-            except Exception:
-                saved_at_unix_ms = 0
         saved_at_label = str(normalized_wrapper.get("saved_at", "") or "").strip()
         if not saved_at_label:
-            saved_at_label = self._format_shared_profile_timestamp(
-                saved_at_unix_ms,
-                fallback_path=profile_path,
-            )
+            saved_at_label = self._format_shared_profile_timestamp(saved_at_unix_ms)
 
         return SharedProfileSummary(
-            path=profile_path,
-            display_name=str(normalized_wrapper.get("name", "") or fallback_name),
-            filename=os.path.basename(profile_path),
+            path=safe_key,
+            display_name=str(normalized_wrapper.get("name", "") or safe_key),
+            filename=safe_key,
             saved_at_label=saved_at_label,
             saved_at_unix_ms=saved_at_unix_ms,
             payload=payload,
@@ -9250,8 +9222,7 @@ class MerchantRulesWidget:
         safe_name = _normalize_shared_profile_display_name(display_name)
         if not safe_name:
             raise ValueError("Enter a profile name before saving.")
-        safe_filename = f"{_sanitize_filename(safe_name)}.json"
-        return os.path.join(self._get_shared_profiles_dir(), safe_filename)
+        return _sanitize_filename(safe_name)
 
     def _ensure_shared_profile_name_available(
         self,
@@ -9272,9 +9243,9 @@ class MerchantRulesWidget:
                 f"A shared profile named '{existing_by_name.display_name}' already exists."
             )
 
-        profile_path = self._get_shared_profile_path_for_name(normalized_name)
+        profile_key = self._get_shared_profile_path_for_name(normalized_name)
         existing_by_filename = self._find_shared_profile_by_filename(
-            os.path.basename(profile_path),
+            profile_key,
             exclude_path=exclude_path,
         )
         if existing_by_filename is not None:
@@ -9282,40 +9253,22 @@ class MerchantRulesWidget:
                 f"Profile name '{normalized_name}' conflicts with existing file "
                 f"'{existing_by_filename.display_name}'."
             )
-        normalized_profile_path = os.path.normcase(os.path.normpath(profile_path))
-        normalized_exclude_path = os.path.normcase(os.path.normpath(exclude_path))
-        if (
-            os.path.exists(profile_path)
-            and (
-                not normalized_exclude_path
-                or normalized_profile_path != normalized_exclude_path
-            )
-        ):
-            raise ValueError(
-                f"Profile name '{normalized_name}' conflicts with existing file "
-                f"'{os.path.basename(profile_path)}'."
-            )
-        return normalized_name, profile_path
+        return normalized_name, profile_key
 
     def _refresh_shared_profile_entries(self):
-        """Rescan shared profiles, retaining only readable entries and reporting partial failures."""
+        """Rescan JsonFactory-backed profiles, retaining readable entries and reporting failures."""
 
-        shared_profiles_dir = self._get_shared_profiles_dir()
-        os.makedirs(shared_profiles_dir, exist_ok=True)
+        doc = self._profiles_doc()
         previous_selected_path = self.shared_profile_selected_path
         entries: list[SharedProfileSummary] = []
         load_failures: list[str] = []
 
-        for filename in os.listdir(shared_profiles_dir):
-            if not str(filename).lower().endswith(".json"):
-                continue
-            profile_path = os.path.join(shared_profiles_dir, filename)
-            if not os.path.isfile(profile_path):
-                continue
+        for profile_key in doc.keys(""):
+            safe_key = str(profile_key)
             try:
-                entries.append(self._load_shared_profile_summary_from_path(profile_path))
+                entries.append(self._load_shared_profile_summary_from_key(safe_key))
             except Exception as exc:
-                load_failures.append(f"{filename}: {exc}")
+                load_failures.append(f"{safe_key}: {exc}")
 
         entries.sort(
             key=lambda entry: (
@@ -9367,13 +9320,13 @@ class MerchantRulesWidget:
     def _save_current_as_new_shared_profile(self):
         self._ensure_initialized()
         try:
-            profile_name, profile_path = self._ensure_shared_profile_name_available(
+            profile_name, profile_key = self._ensure_shared_profile_name_available(
                 self.shared_profile_name_input
             )
             wrapper = self._build_shared_profile_wrapper(profile_name)
-            self._write_profile_payload_to_path(profile_path, wrapper)
+            self._profiles_doc().set_json(profile_key, wrapper)
             self._refresh_shared_profile_entries()
-            self._set_selected_shared_profile_path(profile_path)
+            self._set_selected_shared_profile_path(profile_key)
             self._clear_shared_profile_confirmation_state()
             self._set_shared_profile_feedback(
                 notice=f"Saved shared profile '{profile_name}'."
@@ -9393,7 +9346,7 @@ class MerchantRulesWidget:
             return
 
         try:
-            new_name, new_path = self._ensure_shared_profile_name_available(
+            new_name, new_key = self._ensure_shared_profile_name_available(
                 self.shared_profile_name_input,
                 exclude_path=selected_profile.path,
             )
@@ -9402,17 +9355,12 @@ class MerchantRulesWidget:
                 payload=selected_profile.payload,
                 saved_at_unix_ms=selected_profile.saved_at_unix_ms,
             )
-            self._write_profile_payload_to_path(new_path, wrapper)
-            normalized_old_path = os.path.normcase(
-                os.path.normpath(selected_profile.path)
-            )
-            normalized_new_path = os.path.normcase(os.path.normpath(new_path))
-            if normalized_old_path != normalized_new_path and os.path.exists(
-                selected_profile.path
-            ):
-                os.remove(selected_profile.path)
+            doc = self._profiles_doc()
+            doc.set_json(new_key, wrapper)
+            if selected_profile.path and selected_profile.path != new_key:
+                doc.delete(selected_profile.path)
             self._refresh_shared_profile_entries()
-            self._set_selected_shared_profile_path(new_path)
+            self._set_selected_shared_profile_path(new_key)
             self._clear_shared_profile_confirmation_state()
             self._set_shared_profile_feedback(
                 notice=(
@@ -9436,7 +9384,7 @@ class MerchantRulesWidget:
 
         try:
             wrapper = self._build_shared_profile_wrapper(selected_profile.display_name)
-            self._write_profile_payload_to_path(selected_profile.path, wrapper)
+            self._profiles_doc().set_json(selected_profile.path, wrapper)
             self._refresh_shared_profile_entries()
             self._set_selected_shared_profile_path(selected_profile.path)
             self._clear_shared_profile_confirmation_state()
@@ -9499,16 +9447,12 @@ class MerchantRulesWidget:
             return
 
         try:
-            backup_path = self._refresh_adjacent_profile_backup(selected_profile.path)
-            if os.path.exists(selected_profile.path):
-                os.remove(selected_profile.path)
+            self._profiles_doc().delete(selected_profile.path)
             self._refresh_shared_profile_entries()
             self._clear_shared_profile_confirmation_state()
-            backup_label = os.path.basename(backup_path) if backup_path else ""
-            notice = f"Deleted shared profile '{selected_profile.display_name}'."
-            if backup_label:
-                notice = f"{notice} Backup: {backup_label}."
-            self._set_shared_profile_feedback(notice=notice)
+            self._set_shared_profile_feedback(
+                notice=f"Deleted shared profile '{selected_profile.display_name}'."
+            )
         except Exception as exc:
             self._set_shared_profile_feedback(
                 warning=f"Failed to delete shared profile: {exc}"
@@ -9517,7 +9461,6 @@ class MerchantRulesWidget:
     def _open_shared_profiles_folder(self) -> bool:
         folder_path = self._get_shared_profiles_dir()
         try:
-            os.makedirs(folder_path, exist_ok=True)
             startfile = getattr(os, "startfile", None)
             if startfile is None:
                 raise OSError("Opening folders is not supported on this platform.")
@@ -9535,171 +9478,81 @@ class MerchantRulesWidget:
             )
             return False
 
-    def _get_profile_recovery_dir(self, config_path: str) -> str:
-        safe_config_path = str(config_path or "").strip()
-        base_dir = os.path.dirname(safe_config_path) if safe_config_path else CONFIG_DIR
-        return os.path.join(base_dir, "Recovery")
-
-    def _get_adjacent_profile_backup_path(self, config_path: str) -> str:
-        return f"{config_path}.bak"
-
-    def _get_profile_backup_path(self, config_path: str) -> str:
-        safe_config_path = str(config_path or "").strip()
-        if not safe_config_path:
-            return ""
-        recovery_dir = self._get_profile_recovery_dir(safe_config_path)
-        return os.path.join(recovery_dir, f"{os.path.basename(safe_config_path)}.bak")
-
-    def _get_available_profile_backup_path(self, config_path: str) -> str:
-        backup_path = self._get_profile_backup_path(config_path)
-        if backup_path and os.path.exists(backup_path):
-            return backup_path
-        legacy_backup_path = self._get_adjacent_profile_backup_path(config_path)
-        if legacy_backup_path and os.path.exists(legacy_backup_path):
-            return legacy_backup_path
-        return ""
-
-    def _refresh_adjacent_profile_backup(self, config_path: str) -> str:
-        if not os.path.exists(config_path):
-            return ""
-        backup_path = self._get_adjacent_profile_backup_path(config_path)
-        shutil.copyfile(config_path, backup_path)
-        return backup_path
-
-    def _refresh_profile_backup(self, config_path: str) -> str:
-        if not os.path.exists(config_path):
-            return ""
-        backup_path = self._get_profile_backup_path(config_path)
-        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
-        shutil.copyfile(config_path, backup_path)
-        return backup_path
-
-    def _list_failed_profile_snapshots(self, config_path: str) -> list[str]:
-        safe_config_path = str(config_path or "").strip()
-        if not safe_config_path:
-            return []
-
-        filename_prefix = f"{os.path.basename(safe_config_path)}.load-failed-"
-        candidate_dirs = [
-            self._get_profile_recovery_dir(safe_config_path),
-            os.path.dirname(safe_config_path),
-        ]
-        snapshot_paths: list[str] = []
-        seen_dirs: set[str] = set()
-        for candidate_dir in candidate_dirs:
-            normalized_dir = os.path.normcase(os.path.normpath(str(candidate_dir or "").strip()))
-            if not normalized_dir or normalized_dir in seen_dirs or not os.path.isdir(candidate_dir):
-                continue
-            seen_dirs.add(normalized_dir)
-            try:
-                filenames = os.listdir(candidate_dir)
-            except OSError:
-                continue
-            for filename in filenames:
-                if not filename.startswith(filename_prefix) or not filename.endswith(".bak"):
-                    continue
-                snapshot_path = os.path.join(candidate_dir, filename)
-                if os.path.isfile(snapshot_path):
-                    snapshot_paths.append(snapshot_path)
-        snapshot_paths.sort(
-            key=lambda path: (os.path.getmtime(path), os.path.basename(path)),
-            reverse=True,
-        )
-        return snapshot_paths
-
-    def _prune_failed_profile_snapshots(self, config_path: str):
-        if FAILED_PROFILE_SNAPSHOT_LIMIT <= 0:
-            return
-        snapshot_paths = self._list_failed_profile_snapshots(config_path)
-        for stale_path in snapshot_paths[FAILED_PROFILE_SNAPSHOT_LIMIT:]:
-            try:
-                os.remove(stale_path)
-            except OSError as exc:
-                self._debug_log(
-                    f"Merchant Rules could not prune stale recovery snapshot {stale_path}: {exc}"
-                )
-
-    def _migrate_legacy_recovery_artifacts(self):
-        """Move old root-level recovery artifacts into the dedicated recovery directory.
-
-        Existing destination files are never overwritten, and failures are diagnostic only so
-        initialization cannot destroy or hide the original backup.
-        """
-
-        os.makedirs(RECOVERY_DIR, exist_ok=True)
-        try:
-            filenames = os.listdir(CONFIG_DIR)
-        except OSError as exc:
-            self._debug_log(
-                f"Merchant Rules could not scan legacy recovery artifacts in {CONFIG_DIR}: {exc}"
+    def _get_backup_payload(self) -> dict[str, object] | None:
+        raw_backup = self._backup_doc().get_json("", None)
+        if not isinstance(raw_backup, dict):
+            return None
+        if str(raw_backup.get("schema", "") or "") != BACKUP_SCHEMA:
+            return None
+        schema_version = _safe_int(raw_backup.get("schema_version", 0), 0)
+        if schema_version > BACKUP_SCHEMA_VERSION:
+            raise ValueError(
+                f"Backup schema v{schema_version} is newer than supported schema v{BACKUP_SCHEMA_VERSION}."
             )
-            return
+        last_known_good = raw_backup.get("last_known_good", {})
+        if not isinstance(last_known_good, dict):
+            return None
+        raw_payload = last_known_good.get("payload")
+        if not isinstance(raw_payload, dict):
+            return None
+        raw_version = _safe_int(raw_payload.get("version", 0), 0)
+        if raw_version > PROFILE_VERSION:
+            raise ValueError(
+                f"Backup profile version {raw_version} is newer than Merchant Rules version {PROFILE_VERSION}."
+            )
+        return self._normalize_profile_payload(raw_payload)
 
-        live_backup_pattern = re.compile(
-            r"^MerchantRules_(?:[0-9a-f]{8}|default)\.json(?:\.load-failed-\d{8}-\d{6}-\d{3})?\.bak$"
-        )
-        for filename in filenames:
-            if not live_backup_pattern.fullmatch(filename):
-                continue
-            legacy_path = os.path.join(CONFIG_DIR, filename)
-            if not os.path.isfile(legacy_path):
-                continue
-            target_path = os.path.join(RECOVERY_DIR, filename)
-            if os.path.exists(target_path):
-                continue
-            try:
-                os.replace(legacy_path, target_path)
-            except OSError as exc:
-                self._debug_log(
-                    f"Merchant Rules could not move legacy recovery artifact {legacy_path} -> {target_path}: {exc}"
-                )
-
-    def _snapshot_failed_profile(self, config_path: str) -> str:
-        """Copy an unreadable profile into retained recovery storage before falling back to defaults."""
-
-        if not os.path.exists(config_path):
-            return ""
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        millis_suffix = int(time.time() * 1000) % 1000
-        recovery_dir = self._get_profile_recovery_dir(config_path)
-        os.makedirs(recovery_dir, exist_ok=True)
-        snapshot_path = os.path.join(
-            recovery_dir,
-            f"{os.path.basename(config_path)}.load-failed-{timestamp}-{millis_suffix:03d}.bak",
-        )
-        shutil.copyfile(config_path, snapshot_path)
-        self._prune_failed_profile_snapshots(config_path)
-        return snapshot_path
-
-    def _write_profile_payload_to_path(
+    def _store_backup_payload(
         self,
-        config_path: str,
         payload: dict[str, object],
         *,
-        backup_mode: str = "adjacent",
+        slot: str = "last_known_good",
     ):
-        """Atomically write a profile after flushing it and rotating the requested backup.
+        raw_version = _safe_int(payload.get("version", 0), 0)
+        if raw_version > PROFILE_VERSION:
+            raise ValueError(
+                f"Cannot back up future Merchant Rules profile version {raw_version}."
+            )
+        normalized_payload = self._normalize_profile_payload(payload)
+        backup_doc = self._backup_doc()
+        root = backup_doc.get_json("", {})
+        backup_root = dict(root) if isinstance(root, dict) else {}
+        backup_root["schema"] = BACKUP_SCHEMA
+        backup_root["schema_version"] = BACKUP_SCHEMA_VERSION
+        backup_root[slot] = {
+            "saved_at_unix_ms": int(time.time() * 1000),
+            "payload": normalized_payload,
+        }
+        backup_doc.set_json("", backup_root)
 
-        The destination is replaced only after the temporary JSON file is fully written and
-        synchronized. Temporary files are removed on both success and failure.
-        """
-
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
-        temp_path = f"{config_path}.tmp-{int(time.time() * 1000)}"
-        try:
-            with open(temp_path, "w", encoding="utf-8") as file:
-                json.dump(payload, file, indent=4)
-                file.flush()
-                os.fsync(file.fileno())
-            if os.path.exists(config_path):
-                if backup_mode == "recovery":
-                    self._refresh_profile_backup(config_path)
-                else:
-                    self._refresh_adjacent_profile_backup(config_path)
-            os.replace(temp_path, config_path)
-        finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+    def _write_live_profile_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        create_backup: bool = True,
+        force_save: bool = False,
+    ):
+        raw_version = _safe_int(payload.get("version", 0), 0)
+        if raw_version > PROFILE_VERSION:
+            raise ValueError(
+                f"Cannot write future Merchant Rules profile version {raw_version}."
+            )
+        normalized_payload = self._normalize_profile_payload(payload)
+        doc = self._live_config_doc()
+        existing = doc.get_json("", None)
+        if create_backup and existing not in (None, {}):
+            if not isinstance(existing, dict):
+                raise ValueError("Stored Merchant Rules live config is malformed; refusing to overwrite it.")
+            existing_version = _safe_int(existing.get("version", 0), 0)
+            if existing_version > PROFILE_VERSION:
+                raise ValueError(
+                    f"Stored live config version {existing_version} is newer than Merchant Rules "
+                    f"version {PROFILE_VERSION}; refusing to overwrite it."
+                )
+            self._store_backup_payload(existing)
+        doc.set_json("", normalized_payload)
+        if force_save and not doc.save():
+            raise OSError("JsonFactory could not flush the Merchant Rules live config")
 
     def _write_profile_payload_for_account(
         self,
@@ -9708,29 +9561,39 @@ class MerchantRulesWidget:
         *,
         preserve_existing_window_geometry: bool = False,
     ) -> str:
-        config_path = self._get_config_path_for_account(account_key)
+        """Persist ``payload`` as an account's live config.
+
+        For the current account this writes the account-scoped live-config document. For a
+        different account (multibox follower sync) it merges the payload onto that account's
+        file via the sanctioned cross-account overlay; the follower picks it up on its next
+        reload. Both paths go through JsonFactory - no direct file writes.
+        """
+        target_email = _normalize_multibox_account_email(account_key)
+        own_email = _normalize_multibox_account_email(self.account_key)
+        doc = self._live_config_doc()
         payload_to_write = dict(payload)
-        if preserve_existing_window_geometry and os.path.exists(config_path):
-            try:
-                existing_payload = self._normalize_profile_payload(self._load_profile_from_path(config_path))
+
+        if not target_email or target_email == own_email:
+            if preserve_existing_window_geometry:
+                existing = doc.get_json("", {})
+                existing_map = existing if isinstance(existing, dict) else {}
                 for key in PROFILE_WINDOW_GEOMETRY_KEYS:
-                    payload_to_write[key] = existing_payload.get(key)
-            except Exception as exc:
-                self._debug_log(f"Merchant Rules sync could not preserve follower window geometry from {config_path}: {exc}")
-        for key, value in self._get_default_window_geometry_payload().items():
-            payload_to_write.setdefault(key, value)
-        self._write_profile_payload_to_path(
-            config_path,
-            payload_to_write,
-            backup_mode="recovery",
-        )
-        return config_path
+                    payload_to_write[key] = existing_map.get(key)
+            for key, value in self._get_default_window_geometry_payload().items():
+                payload_to_write.setdefault(key, value)
+            self._write_live_profile_payload(payload_to_write)
+            return own_email
 
-    def _load_profile_from_path(self, config_path: str) -> dict[str, object]:
-        """Decode one profile path without normalizing or mutating its contents."""
-
-        with open(config_path, "r", encoding="utf-8") as file:
-            return json.load(file)
+        # Cross-account overlay: a merge-patch leaves paths we do not send untouched, so
+        # dropping the window-geometry keys preserves the follower's own window placement.
+        if preserve_existing_window_geometry:
+            payload_to_write = _strip_window_geometry_from_profile_payload(payload_to_write)
+        else:
+            for key, value in self._get_default_window_geometry_payload().items():
+                payload_to_write.setdefault(key, value)
+        if not doc.apply_to_account("", payload_to_write, account_key):
+            raise OSError(f"JsonFactory rejected the cross-account update for {target_email}.")
+        return target_email
 
     def _clear_preview_inventory_diff(self):
         self.preview_inventory_diff_summary = ""
@@ -9774,39 +9637,51 @@ class MerchantRulesWidget:
         self.last_execution_phase_durations_ms = {}
 
     def _restore_profile_from_backup(self) -> bool:
-        """Validate, normalize, and atomically restore the newest available live-profile backup."""
+        """Restore the account-scoped last-known-good JsonFactory profile."""
 
-        backup_path = self._get_available_profile_backup_path(self.config_path)
-        if not backup_path or not os.path.exists(backup_path):
-            self.profile_warning = "No Merchant Rules live config backup file was found to restore."
-            return False
         try:
-            raw_payload = self._load_profile_from_path(backup_path)
-            raw_version = _safe_int(raw_payload.get("version", 0), 0) if isinstance(raw_payload, dict) else 0
-            if raw_version > PROFILE_VERSION:
-                raise ValueError(
-                    f"Backup live config version {raw_version} is newer than this Merchant Rules version {PROFILE_VERSION}."
-                )
-            normalized_payload = self._normalize_profile_payload(raw_payload)
-            self._write_profile_payload_to_path(
-                self.config_path,
+            normalized_payload = self._get_backup_payload()
+        except Exception as exc:
+            self.profile_warning = f"Failed to validate Merchant Rules backup: {exc}"
+            ConsoleLog(MODULE_NAME, self.profile_warning, Console.MessageType.Error)
+            return False
+        if normalized_payload is None:
+            self.profile_warning = "No valid Merchant Rules JsonFactory backup was found to restore."
+            return False
+
+        try:
+            current_payload = self._live_config_doc().get_json("", None)
+            if isinstance(current_payload, dict) and current_payload:
+                current_version = _safe_int(current_payload.get("version", 0), 0)
+                if current_version <= PROFILE_VERSION:
+                    try:
+                        self._store_backup_payload(current_payload, slot="pre_restore")
+                    except Exception:
+                        pass
+            if not self._backup_doc().save():
+                raise OSError("JsonFactory could not flush the Merchant Rules backup document")
+            self._write_live_profile_payload(
                 normalized_payload,
-                backup_mode="recovery",
+                create_backup=False,
+                force_save=True,
             )
-            self._load_profile()
-            self._reset_runtime_after_profile_load(status_message="Merchant Rules live config restored from the last backup.")
+            self.profile_write_blocked = False
+            self.reload_profile_from_disk(
+                status_message="Merchant Rules live config restored from the last backup.",
+                preserve_workspace_state=True,
+            )
             self.profile_warning = ""
-            self.profile_notice = f"Restored live config from {os.path.basename(backup_path)}."
+            self.profile_notice = "Restored live config from the account-scoped JsonFactory backup."
             return True
         except Exception as exc:
             self.profile_warning = f"Failed to restore Merchant Rules live config backup: {exc}"
-            ConsoleLog(MODULE_NAME, f"Failed to restore backup {backup_path}: {exc}", Console.MessageType.Error)
+            ConsoleLog(MODULE_NAME, self.profile_warning, Console.MessageType.Error)
             return False
 
     def _open_profile_config_folder(self) -> bool:
-        folder_path = os.path.dirname(self.config_path) if self.config_path else CONFIG_DIR
+        doc_path = self._live_config_doc().path()
+        folder_path = os.path.dirname(doc_path) if doc_path else LIVE_CONFIG_DOC_NAME
         try:
-            os.makedirs(folder_path, exist_ok=True)
             startfile = getattr(os, "startfile", None)
             if startfile is None:
                 raise OSError("Opening folders is not supported on this platform.")
@@ -9891,10 +9766,12 @@ class MerchantRulesWidget:
     ):
         """Reload the active profile and optionally preserve only UI geometry or workspace state."""
 
-        self._ensure_initialized()
         window_geometry_snapshot = self._snapshot_window_geometry_state() if preserve_window_geometry else None
         workspace_snapshot = self.active_workspace if preserve_workspace_state else ""
         rules_workspace_snapshot = self.active_rules_workspace if preserve_workspace_state else ""
+        self._ensure_initialized()
+        # Pick up any external write (e.g. a multibox leader's cross-account overlay) before reloading.
+        self._live_config_doc().reload()
         self._load_profile()
         if window_geometry_snapshot is not None:
             geometry_changed = self._restore_window_geometry_state(window_geometry_snapshot)
@@ -9911,22 +9788,22 @@ class MerchantRulesWidget:
         return True
 
     def _ensure_initialized(self):
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        os.makedirs(self._get_shared_profiles_dir(), exist_ok=True)
-        os.makedirs(RECOVERY_DIR, exist_ok=True)
-        if not self.legacy_recovery_artifacts_migrated:
-            self._migrate_legacy_recovery_artifacts()
-            self.legacy_recovery_artifacts_migrated = True
         if not self.catalog_loaded:
             self._load_catalog()
         if not self.outpost_entries:
             self._load_outpost_entries()
+
+        current_account = self._get_account_key()
+        account_changed = current_account != self.account_key
+        if account_changed:
+            self.account_key = current_account
+            self.shared_profile_entries_loaded = False
+
         if not self.shared_profile_entries_loaded:
             self._refresh_shared_profile_entries()
-        current_account = self._get_account_key()
-        if not self.initialized or current_account != self.account_key:
-            self.account_key = current_account
-            self.config_path = self._get_config_path_for_account(current_account)
+
+        if not self.initialized or account_changed:
+            self.config_path = self._live_config_doc().resolved_path()
             self._load_profile()
             self._reset_runtime_after_profile_load()
             self.initialized = True
@@ -13584,20 +13461,18 @@ class MerchantRulesWidget:
         return self._resolve_storage_access_coords() is not None
 
     def _load_profile(self):
-        """Load the account profile with preservation, normalization, and recovery safeguards.
+        """Load the account-scoped JsonFactory profile with fail-closed v35 safeguards."""
 
-        New accounts receive disabled in-memory defaults. Invalid files are left untouched and
-        snapshot when possible; valid older profiles are normalized and safely rewritten, while
-        profiles from a newer schema are loaded without overwriting their source.
-        """
-
-        profile_exists = os.path.exists(self.config_path)
+        doc = self._live_config_doc()
+        stored_payload = doc.get_json("", None)
+        profile_exists = stored_payload not in (None, {})
         self.new_profile_session = not profile_exists
         self.active_profile_display_name = self._get_live_profile_display_name()
         self.active_workspace = WORKSPACE_RULES if self.new_profile_session else WORKSPACE_OVERVIEW
         self.active_rules_workspace = RULES_WORKSPACE_BUY
         self.profile_warning = ""
         self.profile_notice = ""
+        self.profile_write_blocked = False
 
         default_payload = {
             "version": PROFILE_VERSION,
@@ -13641,10 +13516,11 @@ class MerchantRulesWidget:
         raw_version = 0
         normalized_payload: dict[str, object] | None = None
         try:
-            raw_payload = self._load_profile_from_path(self.config_path)
+            raw_payload = doc.get_json("", {})
             raw_version = _safe_int(raw_payload.get("version", 0), 0) if isinstance(raw_payload, dict) else 0
             if raw_version > PROFILE_VERSION:
                 allow_normalized_save = False
+                self.profile_write_blocked = True
                 self.profile_warning = (
                     f"Live config version {raw_version} is newer than Merchant Rules version {PROFILE_VERSION}. "
                     f"Loaded in compatibility mode without rewriting the file."
@@ -13653,15 +13529,13 @@ class MerchantRulesWidget:
             should_save_normalized = self._serialize_profile_payload(raw_payload) != self._serialize_profile_payload(normalized_payload)
             self._apply_profile_payload(normalized_payload)
         except Exception as exc:
-            backup_path = ""
-            try:
-                backup_path = self._snapshot_failed_profile(self.config_path)
-            except Exception as backup_exc:
-                ConsoleLog(MODULE_NAME, f"Failed to snapshot unreadable live config {self.config_path}: {backup_exc}", Console.MessageType.Warning)
-            backup_label = os.path.basename(backup_path) if backup_path else "no recovery backup was created"
+            # Native JSON writes are atomic, so the stored document cannot be half-written;
+            # a failure here is a normalization/shape problem. Keep the stored file and fall
+            # back to in-memory defaults - no recovery snapshot is needed.
             self.profile_warning = (
-                f"Live config load failed; using in-memory defaults and preserving the original file. Backup: {backup_label}."
+                "Live config load failed; using in-memory defaults and preserving the stored file."
             )
+            self.profile_write_blocked = True
             self.active_workspace = WORKSPACE_RULES
             ConsoleLog(MODULE_NAME, f"Failed to load live config {self.config_path}: {exc}", Console.MessageType.Error)
             return
@@ -13681,16 +13555,18 @@ class MerchantRulesWidget:
                     self.profile_notice = "Live config normalized and saved safely."
 
     def _save_profile(self) -> bool:
-        """Persist the current account profile atomically and report failures without truncation."""
+        """Persist through JsonFactory while retaining a last-known-good account backup."""
 
         saved_window_geometry = bool(self.window_geometry_dirty)
         payload = self._build_profile_payload()
-        try:
-            self._write_profile_payload_to_path(
-                self.config_path,
-                payload,
-                backup_mode="recovery",
+        if self.profile_write_blocked:
+            self.profile_warning = (
+                "Merchant Rules live-config writes are blocked because the stored profile "
+                "could not be handled safely."
             )
+            return False
+        try:
+            self._write_live_profile_payload(payload)
             if saved_window_geometry:
                 self.window_geometry_dirty = False
                 self.window_geometry_save_timer.Reset()
@@ -25954,28 +25830,35 @@ class MerchantRulesWidget:
         return "Stale", UI_COLOR_WARNING, "Run Preview to refresh the current map and inventory state."
 
     def _draw_live_config_recovery_section(self):
-        backup_path = self._get_available_profile_backup_path(self.config_path) if self.config_path else ""
-        backup_exists = bool(backup_path and os.path.exists(backup_path))
-        config_folder = os.path.dirname(self.config_path) if self.config_path else CONFIG_DIR
-        recovery_folder = self._get_profile_recovery_dir(self.config_path) if self.config_path else RECOVERY_DIR
+        doc_path = self._live_config_doc().path()
+        config_folder = os.path.dirname(doc_path) if doc_path else LIVE_CONFIG_DOC_NAME
         config_label = os.path.basename(self.config_path) if self.config_path else "Not initialized"
+        try:
+            backup_exists = self._get_backup_payload() is not None
+        except Exception:
+            backup_exists = False
         self._draw_secondary_text(
-            "These tools recover the current account's live working config and its last automatic backup. "
-            "They do not manage shared saved profiles."
+            "The current account's live config and last-known-good restore point are separate "
+            "self-persisting JsonFactory documents. This does not manage shared saved profiles."
         )
         self._draw_secondary_text(f"Live Config: {config_label}", wrapped=False)
-        if backup_exists:
-            self._draw_secondary_text(f"Last backup: {os.path.basename(backup_path)}", wrapped=False)
-        else:
-            self._draw_secondary_text("Last backup: none found yet.", wrapped=False)
+        self._draw_secondary_text(
+            "Last backup: JsonFactory restore point available."
+            if backup_exists
+            else "Last backup: none available yet.",
+            wrapped=False,
+        )
         self._draw_secondary_text(f"Config Folder: {config_folder}")
-        self._draw_secondary_text(f"Recovery Folder: {recovery_folder}")
 
         PyImGui.begin_disabled(not backup_exists)
-        restore_clicked = self._draw_confirm_destructive_button("Restore Last Backup##merchant_rules_restore_backup")
+        restore_clicked = self._draw_confirm_destructive_button(
+            "Restore Last Backup##merchant_rules_restore_backup"
+        )
         PyImGui.end_disabled()
         PyImGui.same_line(0, 8)
-        open_folder_clicked = PyImGui.button("Open Config Folder##merchant_rules_open_config_folder")
+        open_folder_clicked = PyImGui.button(
+            "Open Config Folder##merchant_rules_open_config_folder"
+        )
 
         if restore_clicked:
             self._restore_profile_from_backup()
@@ -35079,8 +34962,8 @@ class MerchantRulesWidget:
         PyImGui.separator()
         self._draw_section_heading("Live Config")
         self._draw_secondary_text(
-            "The current account keeps a separate live working config. Live Config Recovery restores that file "
-            "and its last automatic backup without changing the shared profiles library."
+            "The current account keeps a separate live working config, saved automatically as a self-persisting "
+            "JSON document that is written atomically. This does not change the shared profiles library."
         )
         if self.profile_warning:
             self._draw_warning_text(
@@ -35088,7 +34971,7 @@ class MerchantRulesWidget:
             )
         elif self.profile_notice:
             self._draw_secondary_text(f"Live Config: {self.profile_notice}")
-        if PyImGui.collapsing_header("Live Config Recovery##merchant_rules_live_config_recovery"):
+        if PyImGui.collapsing_header("Live Config Location##merchant_rules_live_config_recovery"):
             self._draw_live_config_recovery_section()
 
     def _draw_rules_workspace(self):
