@@ -2087,9 +2087,9 @@ class _MerchantRulesExactUpgradeSalvageBridge:
         self._loaded = False
         self._load_reason = ""
         self._Item = None
-        self._AnySalvageWindow = None
         self._SalvageMode = None
         self._SalvageOptionsWindow = None
+        self._UIManager = None
         self._WindowFrame = None
 
     def _load_dependencies(self) -> tuple[bool, str]:
@@ -2101,33 +2101,55 @@ class _MerchantRulesExactUpgradeSalvageBridge:
         self._load_attempted = True
         try:
             from Py4GWCoreLib.Item import Item
-            from Py4GWCoreLib.UIManager import AnySalvageWindow, SalvageOptionsWindow, WindowFrame
+            from Py4GWCoreLib.UIManager import UIManager, SalvageOptionsWindow, WindowFrame
             from Py4GWCoreLib.enums_src.Item_enums import SalvageMode
 
             get_upgrades = getattr(getattr(Item, "Mods", None), "GetUpgrades", None)
             missing = []
             if not callable(get_upgrades):
                 missing.append("Item.Mods.GetUpgrades")
-            for method_name in (
-                "IsActive",
-                "GetSalvageOptionFrame",
-                "IsOptionActive",
-                "SelectOption",
-                "Confirm",
-            ):
+            for method_name in ("GetFrameArray", "IsFrameCreated", "IsVisible", "GetParentID", "GetFrameCoords"):
+                if not callable(getattr(UIManager, method_name, None)):
+                    missing.append(f"UIManager.{method_name}")
+            for method_name in ("GetSalvageOptionFrame", "SelectOption", "Confirm"):
                 if not callable(getattr(SalvageOptionsWindow, method_name, None)):
                     missing.append(f"SalvageOptionsWindow.{method_name}")
-            for method_name in ("IsActive", "CancelActive"):
-                if not callable(getattr(AnySalvageWindow, method_name, None)):
-                    missing.append(f"AnySalvageWindow.{method_name}")
+            required_frame_names = (
+                "SalvageOptionsFrame",
+                "OptionsSalvageOptionsFrame",
+                "SalvageOptionCancelButton",
+                "SalvageOptionConfirmButton",
+                "SalvageOptionPrefixButton",
+                "SalvageOptionSuffixButton",
+                "SalvageOptionInscriptionButton",
+                "LesserSalvageFrame",
+                "LesserSalvageCancelButton",
+                "ExpertSalvageUnidentifiedFrame",
+                "ExpertSalvageUnidentifiedCancelButton",
+                "MaterialOptionConfirmationFrame",
+                "MaterialOptionConfirmationCancelButton",
+            )
+            for frame_name in required_frame_names:
+                frame = getattr(WindowFrame, frame_name, None)
+                if frame is None or not callable(getattr(frame, "GetFrameID", None)):
+                    missing.append(f"WindowFrame.{frame_name}")
+            for frame_name in (
+                "SalvageOptionCancelButton",
+                "LesserSalvageCancelButton",
+                "ExpertSalvageUnidentifiedCancelButton",
+                "MaterialOptionConfirmationCancelButton",
+            ):
+                frame = getattr(WindowFrame, frame_name, None)
+                if frame is None or not callable(getattr(frame, "FrameClick", None)):
+                    missing.append(f"WindowFrame.{frame_name}.FrameClick")
             if missing:
                 self._load_reason = f"{SALVAGE_UPGRADE_BACKEND_UNAVAILABLE_REASON}: missing {', '.join(missing)}"
                 return False, self._load_reason
 
             self._Item = Item
-            self._AnySalvageWindow = AnySalvageWindow
             self._SalvageMode = SalvageMode
             self._SalvageOptionsWindow = SalvageOptionsWindow
+            self._UIManager = UIManager
             self._WindowFrame = WindowFrame
             self._loaded = True
             self._load_reason = ""
@@ -2140,6 +2162,137 @@ class _MerchantRulesExactUpgradeSalvageBridge:
         """Return cached exact-upgrade UI capability and a user-facing fail-closed reason."""
 
         return self._load_dependencies()
+
+    @staticmethod
+    def _get_frame_id(frame: object) -> int:
+        try:
+            get_frame_id = getattr(frame, "GetFrameID", None)
+            return int(get_frame_id() or 0) if callable(get_frame_id) else 0
+        except Exception:
+            return 0
+
+    def _is_frame_id_effectively_visible(self, frame_id: int) -> bool:
+        try:
+            safe_frame_id = int(frame_id)
+            if safe_frame_id <= 0 or self._UIManager is None:
+                return False
+
+            frame_ids = {int(candidate_id) for candidate_id in self._UIManager.GetFrameArray()}
+            visited_frame_ids: set[int] = set()
+            current_frame_id = safe_frame_id
+            while current_frame_id > 0:
+                if current_frame_id in visited_frame_ids or current_frame_id not in frame_ids:
+                    return False
+                visited_frame_ids.add(current_frame_id)
+                if not self._UIManager.IsFrameCreated(current_frame_id) or not self._UIManager.IsVisible(
+                    current_frame_id
+                ):
+                    return False
+                current_frame_id = int(self._UIManager.GetParentID(current_frame_id) or 0)
+            return bool(visited_frame_ids)
+        except Exception:
+            return False
+
+    def _is_frame_effectively_visible(self, frame: object) -> bool:
+        """Return True only when the local frame and every parent are created and visible."""
+
+        return self._is_frame_id_effectively_visible(self._get_frame_id(frame))
+
+    def _is_frame_actionable(self, frame: object) -> bool:
+        """Return True only when the local frame hierarchy is visible and has positive dimensions."""
+
+        frame_id = self._get_frame_id(frame)
+        if not self._is_frame_id_effectively_visible(frame_id):
+            return False
+        try:
+            left, top, right, bottom = self._UIManager.GetFrameCoords(frame_id)
+            return int(right) > int(left) and int(bottom) > int(top)
+        except Exception:
+            return False
+
+    def _is_frame_hierarchy_active(
+        self,
+        root_frame: object,
+        *,
+        required_visible_frames: tuple[object, ...] = (),
+        required_actionable_frames: tuple[object, ...] = (),
+    ) -> bool:
+        """Validate one Merchant Rules salvage-popup hierarchy without extending shared CoreLib."""
+
+        return (
+            self._is_frame_effectively_visible(root_frame)
+            and all(self._is_frame_effectively_visible(frame) for frame in required_visible_frames)
+            and all(self._is_frame_actionable(frame) for frame in required_actionable_frames)
+        )
+
+    def _is_salvage_options_active(self) -> bool:
+        if self._WindowFrame is None:
+            return False
+        return self._is_frame_hierarchy_active(
+            self._WindowFrame.SalvageOptionsFrame,
+            required_visible_frames=(self._WindowFrame.OptionsSalvageOptionsFrame,),
+            required_actionable_frames=(self._WindowFrame.SalvageOptionCancelButton,),
+        )
+
+    def _get_active_exact_option_frame(self, mode: object) -> object | None:
+        if self._SalvageMode is None or self._SalvageOptionsWindow is None or self._WindowFrame is None:
+            return None
+        if mode not in (
+            self._SalvageMode.Prefix,
+            self._SalvageMode.Suffix,
+            self._SalvageMode.Inscription,
+        ):
+            return None
+        try:
+            option_frame = self._SalvageOptionsWindow.GetSalvageOptionFrame(mode)
+        except Exception:
+            return None
+        if option_frame is None:
+            return None
+        if not self._is_frame_hierarchy_active(
+            self._WindowFrame.SalvageOptionsFrame,
+            required_visible_frames=(self._WindowFrame.OptionsSalvageOptionsFrame,),
+            required_actionable_frames=(self._WindowFrame.SalvageOptionCancelButton, option_frame),
+        ):
+            return None
+        return option_frame
+
+    def _get_active_salvage_popup_cancel_frame(self) -> object | None:
+        if self._WindowFrame is None:
+            return None
+        popup_definitions = (
+            (
+                self._WindowFrame.SalvageOptionsFrame,
+                (self._WindowFrame.OptionsSalvageOptionsFrame,),
+                self._WindowFrame.SalvageOptionCancelButton,
+            ),
+            (
+                self._WindowFrame.LesserSalvageFrame,
+                (),
+                self._WindowFrame.LesserSalvageCancelButton,
+            ),
+            (
+                self._WindowFrame.ExpertSalvageUnidentifiedFrame,
+                (),
+                self._WindowFrame.ExpertSalvageUnidentifiedCancelButton,
+            ),
+            (
+                self._WindowFrame.MaterialOptionConfirmationFrame,
+                (),
+                self._WindowFrame.MaterialOptionConfirmationCancelButton,
+            ),
+        )
+        for root_frame, required_visible_frames, cancel_frame in popup_definitions:
+            if self._is_frame_hierarchy_active(
+                root_frame,
+                required_visible_frames=required_visible_frames,
+                required_actionable_frames=(cancel_frame,),
+            ):
+                return cancel_frame
+        return None
+
+    def _is_any_salvage_popup_active(self) -> bool:
+        return self._get_active_salvage_popup_cancel_frame() is not None
 
     def option_to_slot(self, option: object):
         if not self._load_dependencies()[0]:
@@ -2247,7 +2400,7 @@ class _MerchantRulesExactUpgradeSalvageBridge:
             if self.verify_slot_removed(int(item_id), option, expected_upgrade):
                 return True, ""
 
-            if self._AnySalvageWindow.IsActive() and not self._SalvageOptionsWindow.IsActive():
+            if self._is_any_salvage_popup_active() and not self._is_salvage_options_active():
                 self._cancel_active_salvage_choice_dialog()
                 return False, "unexpected salvage window appeared after exact-upgrade confirmation"
 
@@ -2262,19 +2415,17 @@ class _MerchantRulesExactUpgradeSalvageBridge:
             return False, "salvage completion changed the requested slot to an unexpected upgrade"
         return False, "salvage completed timeout: targeted upgrade removal could not be verified"
 
-    def _cancel_active_salvage_choice_dialog(self) -> None:
+    def _cancel_active_salvage_choice_dialog(self) -> bool:
+        """Cancel only a locally verified active salvage popup, in the established safety order."""
+
         try:
-            if self._AnySalvageWindow is not None and self._AnySalvageWindow.IsActive():
-                self._AnySalvageWindow.CancelActive()
-                return
+            cancel_frame = self._get_active_salvage_popup_cancel_frame()
+            if cancel_frame is None:
+                return False
+            cancel_frame.FrameClick()
+            return True
         except Exception:
-            pass
-        owner_cancel = getattr(self._owner, "_cancel_active_salvage_choice_dialog", None)
-        if callable(owner_cancel):
-            try:
-                owner_cancel()
-            except Exception:
-                pass
+            return False
 
     def salvage_exact_upgrade(
         self,
@@ -2308,7 +2459,7 @@ class _MerchantRulesExactUpgradeSalvageBridge:
         if mode is None:
             return _ExactUpgradeSalvageBridgeResult(False, "blocked", "unsupported exact-upgrade salvage option")
 
-        if self._AnySalvageWindow.IsActive():
+        if self._is_any_salvage_popup_active():
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(
                 False,
@@ -2337,9 +2488,9 @@ class _MerchantRulesExactUpgradeSalvageBridge:
             if not matches_expected:
                 self._cancel_active_salvage_choice_dialog()
                 return _ExactUpgradeSalvageBridgeResult(False, "blocked", reason)
-            if self._SalvageOptionsWindow.IsActive():
+            if self._is_salvage_options_active():
                 break
-            if self._AnySalvageWindow.IsActive():
+            if self._is_any_salvage_popup_active():
                 self._cancel_active_salvage_choice_dialog()
                 return _ExactUpgradeSalvageBridgeResult(
                     False,
@@ -2356,15 +2507,15 @@ class _MerchantRulesExactUpgradeSalvageBridge:
                 "salvage popup timeout: exact-upgrade options popup did not appear",
             )
 
-        option_frame = self._SalvageOptionsWindow.GetSalvageOptionFrame(mode)
-        if option_frame is None or not self._SalvageOptionsWindow.IsOptionActive(mode):
+        option_frame = self._get_active_exact_option_frame(mode)
+        if option_frame is None:
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(
                 False,
                 "blocked",
                 f"salvage option unavailable: {_get_salvage_option_label(safe_option)} control is not visible",
             )
-        expected_frame_id = int(option_frame.GetFrameID() or 0)
+        expected_frame_id = self._get_frame_id(option_frame)
         if expected_frame_id <= 0:
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(
@@ -2377,6 +2528,14 @@ class _MerchantRulesExactUpgradeSalvageBridge:
         if not matches_expected:
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(False, "blocked", reason)
+        option_frame = self._get_active_exact_option_frame(mode)
+        if option_frame is None or self._get_frame_id(option_frame) != expected_frame_id:
+            self._cancel_active_salvage_choice_dialog()
+            return _ExactUpgradeSalvageBridgeResult(
+                False,
+                "failed",
+                "selected fixed-slot salvage control changed before selection",
+            )
         if not self._SalvageOptionsWindow.SelectOption(mode):
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(False, "failed", "fixed-slot salvage selection failed")
@@ -2388,14 +2547,13 @@ class _MerchantRulesExactUpgradeSalvageBridge:
         if not matches_expected:
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(False, "blocked", reason)
-        if not self._SalvageOptionsWindow.IsActive():
+        if not self._is_salvage_options_active():
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(False, "failed", "salvage options popup closed before confirmation")
-        selected_frame = self._SalvageOptionsWindow.GetSalvageOptionFrame(mode)
+        selected_frame = self._get_active_exact_option_frame(mode)
         if (
             selected_frame is None
-            or not self._SalvageOptionsWindow.IsOptionActive(mode)
-            or int(selected_frame.GetFrameID() or 0) != expected_frame_id
+            or self._get_frame_id(selected_frame) != expected_frame_id
         ):
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(
@@ -2404,7 +2562,7 @@ class _MerchantRulesExactUpgradeSalvageBridge:
                 "selected fixed-slot salvage control changed before confirmation",
             )
         confirm_frame = self._WindowFrame.SalvageOptionConfirmButton
-        if confirm_frame is None or not confirm_frame.FrameExists():
+        if confirm_frame is None or not self._is_frame_actionable(confirm_frame):
             self._cancel_active_salvage_choice_dialog()
             return _ExactUpgradeSalvageBridgeResult(False, "failed", "salvage confirmation control is not visible")
         if not self._SalvageOptionsWindow.Confirm():
@@ -24404,9 +24562,9 @@ class MerchantRulesWidget:
 
     def _cancel_active_salvage_choice_dialog(self) -> bool:
         try:
-            from Py4GWCoreLib.UIManager import AnySalvageWindow
+            from Sources.frenkeyLib.ItemHandling.UIManagerExtensions import UIManagerExtensions
 
-            return bool(AnySalvageWindow.CancelActive())
+            return bool(UIManagerExtensions.CancelSalvageOption())
         except Exception:
             return False
 
