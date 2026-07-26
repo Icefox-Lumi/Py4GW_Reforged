@@ -2067,6 +2067,233 @@ class _ExactUpgradeSalvageBridgeResult:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class _MerchantRulesSalvagePopupSpec:
+    """Describe one fixed salvage-popup hierarchy owned privately by Merchant Rules."""
+
+    parent_hash: int
+    root_offsets: tuple[int, ...]
+    cancel_offsets: tuple[int, ...]
+    confirm_offsets: tuple[int, ...]
+
+
+_CURRENT_NORMAL_MATERIALS_WARNING = _MerchantRulesSalvagePopupSpec(
+    parent_hash=140452905,
+    root_offsets=(6, 113),
+    cancel_offsets=(6, 113, 4),
+    confirm_offsets=(6, 113, 6),
+)
+
+
+@dataclass(frozen=True)
+class _MerchantRulesResolvedFrame:
+    """Provide the small FrameInfo-compatible surface needed for a resolved private frame."""
+
+    ui_manager: object
+    frame_id: int
+
+    def GetFrameID(self) -> int:
+        return int(self.frame_id)
+
+    def FrameClick(self) -> None:
+        frame_click = getattr(self.ui_manager, "FrameClick", None)
+        if callable(frame_click) and _MerchantRulesSalvageFrameGuard.is_frame_id_actionable(
+            self.ui_manager,
+            int(self.frame_id),
+        ):
+            frame_click(int(self.frame_id))
+
+
+@dataclass(frozen=True)
+class _MerchantRulesActiveSalvagePopup:
+    """Record a fully validated popup and its safely actionable Cancel/No control."""
+
+    cancel_frame: object
+
+
+class _MerchantRulesSalvageFrameGuard:
+    """Centralize Merchant Rules-only frame hierarchy validation and salvage-popup discovery."""
+
+    @staticmethod
+    def get_frame_id(frame: object) -> int:
+        try:
+            get_frame_id = getattr(frame, "GetFrameID", None)
+            return int(get_frame_id() or 0) if callable(get_frame_id) else int(frame or 0)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def is_frame_id_effectively_visible(ui_manager: object, frame_id: int) -> bool:
+        try:
+            safe_frame_id = int(frame_id)
+            if safe_frame_id <= 0:
+                return False
+
+            frame_ids = {int(candidate_id) for candidate_id in ui_manager.GetFrameArray()}
+            visited_frame_ids: set[int] = set()
+            current_frame_id = safe_frame_id
+            while current_frame_id > 0:
+                if current_frame_id in visited_frame_ids or current_frame_id not in frame_ids:
+                    return False
+                visited_frame_ids.add(current_frame_id)
+                if not ui_manager.IsFrameCreated(current_frame_id) or not ui_manager.IsVisible(current_frame_id):
+                    return False
+                current_frame_id = int(ui_manager.GetParentID(current_frame_id) or 0)
+            return bool(visited_frame_ids)
+        except Exception:
+            return False
+
+    @classmethod
+    def is_frame_effectively_visible(cls, ui_manager: object, frame: object) -> bool:
+        return cls.is_frame_id_effectively_visible(ui_manager, cls.get_frame_id(frame))
+
+    @classmethod
+    def is_frame_id_actionable(cls, ui_manager: object, frame_id: int) -> bool:
+        safe_frame_id = int(frame_id or 0)
+        if not cls.is_frame_id_effectively_visible(ui_manager, safe_frame_id):
+            return False
+        try:
+            left, top, right, bottom = ui_manager.GetFrameCoords(safe_frame_id)
+            return int(right) > int(left) and int(bottom) > int(top)
+        except Exception:
+            return False
+
+    @classmethod
+    def is_frame_actionable(cls, ui_manager: object, frame: object) -> bool:
+        return cls.is_frame_id_actionable(ui_manager, cls.get_frame_id(frame))
+
+    @classmethod
+    def is_hierarchy_active(
+        cls,
+        ui_manager: object,
+        root_frame: object,
+        *,
+        required_visible_frames: tuple[object, ...] = (),
+        required_actionable_frames: tuple[object, ...] = (),
+    ) -> bool:
+        return (
+            cls.is_frame_effectively_visible(ui_manager, root_frame)
+            and all(cls.is_frame_effectively_visible(ui_manager, frame) for frame in required_visible_frames)
+            and all(cls.is_frame_actionable(ui_manager, frame) for frame in required_actionable_frames)
+        )
+
+    @staticmethod
+    def resolve_popup_spec(
+        ui_manager: object,
+        popup_spec: _MerchantRulesSalvagePopupSpec,
+    ) -> tuple[_MerchantRulesResolvedFrame, _MerchantRulesResolvedFrame, _MerchantRulesResolvedFrame] | None:
+        get_child_frame_id = getattr(ui_manager, "GetChildFrameID", None)
+        if not callable(get_child_frame_id):
+            return None
+        try:
+            root_frame_id = int(get_child_frame_id(popup_spec.parent_hash, list(popup_spec.root_offsets)) or 0)
+            cancel_frame_id = int(get_child_frame_id(popup_spec.parent_hash, list(popup_spec.cancel_offsets)) or 0)
+            confirm_frame_id = int(get_child_frame_id(popup_spec.parent_hash, list(popup_spec.confirm_offsets)) or 0)
+        except Exception:
+            return None
+        if min(root_frame_id, cancel_frame_id, confirm_frame_id) <= 0:
+            return None
+        return (
+            _MerchantRulesResolvedFrame(ui_manager, root_frame_id),
+            _MerchantRulesResolvedFrame(ui_manager, cancel_frame_id),
+            _MerchantRulesResolvedFrame(ui_manager, confirm_frame_id),
+        )
+
+    @classmethod
+    def get_active_current_normal_materials_warning(
+        cls,
+        ui_manager: object,
+    ) -> tuple[_MerchantRulesResolvedFrame, _MerchantRulesResolvedFrame, _MerchantRulesResolvedFrame] | None:
+        resolved_frames = cls.resolve_popup_spec(ui_manager, _CURRENT_NORMAL_MATERIALS_WARNING)
+        if resolved_frames is None:
+            return None
+        root_frame, cancel_frame, confirm_frame = resolved_frames
+        if not cls.is_hierarchy_active(
+            ui_manager,
+            root_frame,
+            required_actionable_frames=(cancel_frame, confirm_frame),
+        ):
+            return None
+        return resolved_frames
+
+    @classmethod
+    def is_current_normal_materials_warning_root_active(cls, ui_manager: object) -> bool:
+        resolved_frames = cls.resolve_popup_spec(ui_manager, _CURRENT_NORMAL_MATERIALS_WARNING)
+        return bool(
+            resolved_frames is not None
+            and cls.is_frame_effectively_visible(ui_manager, resolved_frames[0])
+        )
+
+    @classmethod
+    def get_active_salvage_popup(
+        cls,
+        ui_manager: object,
+        window_frame: object,
+    ) -> _MerchantRulesActiveSalvagePopup | None:
+        popup_definitions: list[tuple[object, tuple[object, ...], object]] = [
+            (
+                window_frame.SalvageOptionsFrame,
+                (window_frame.OptionsSalvageOptionsFrame,),
+                window_frame.SalvageOptionCancelButton,
+            ),
+        ]
+
+        current_warning_frames = cls.resolve_popup_spec(ui_manager, _CURRENT_NORMAL_MATERIALS_WARNING)
+        if current_warning_frames is not None:
+            current_root, current_cancel, _current_confirm = current_warning_frames
+            popup_definitions.append(
+                (
+                    current_root,
+                    (),
+                    current_cancel,
+                )
+            )
+
+        popup_definitions.extend(
+            (
+                (
+                    window_frame.ExpertSalvageUnidentifiedFrame,
+                    (),
+                    window_frame.ExpertSalvageUnidentifiedCancelButton,
+                ),
+                (
+                    window_frame.MaterialOptionConfirmationFrame,
+                    (),
+                    window_frame.MaterialOptionConfirmationCancelButton,
+                ),
+            )
+        )
+
+        for root_frame, required_visible_frames, cancel_frame in popup_definitions:
+            if not cls.is_hierarchy_active(
+                ui_manager,
+                root_frame,
+                required_visible_frames=required_visible_frames,
+                required_actionable_frames=(cancel_frame,),
+            ):
+                continue
+            return _MerchantRulesActiveSalvagePopup(cancel_frame)
+        return None
+
+
+@dataclass(frozen=True)
+class _MerchantRulesMaterialsSalvageTransaction:
+    """Authorize one normal-kit Materials confirmation against a captured live transaction."""
+
+    item_id: int
+    model_id: int
+    starting_quantity: int
+    kit_id: int
+    kit_model_id: int
+    selected_option: str
+    rule_index: int
+    rule: SalvageRule
+    mode: str
+    original_protection_rules: tuple[tuple[int, SellRule], ...]
+    started: bool = False
+    materials_authorized: bool = False
+
+
 class _MerchantRulesExactUpgradeSalvageBridge:
     """Extract one weapon upgrade through Reforged's fixed-slot salvage UI.
 
@@ -2108,7 +2335,13 @@ class _MerchantRulesExactUpgradeSalvageBridge:
             missing = []
             if not callable(get_upgrades):
                 missing.append("Item.Mods.GetUpgrades")
-            for method_name in ("GetFrameArray", "IsFrameCreated", "IsVisible", "GetParentID", "GetFrameCoords"):
+            for method_name in (
+                "GetFrameArray",
+                "IsFrameCreated",
+                "IsVisible",
+                "GetParentID",
+                "GetFrameCoords",
+            ):
                 if not callable(getattr(UIManager, method_name, None)):
                     missing.append(f"UIManager.{method_name}")
             for method_name in ("GetSalvageOptionFrame", "SelectOption", "Confirm"):
@@ -2122,8 +2355,6 @@ class _MerchantRulesExactUpgradeSalvageBridge:
                 "SalvageOptionPrefixButton",
                 "SalvageOptionSuffixButton",
                 "SalvageOptionInscriptionButton",
-                "LesserSalvageFrame",
-                "LesserSalvageCancelButton",
                 "ExpertSalvageUnidentifiedFrame",
                 "ExpertSalvageUnidentifiedCancelButton",
                 "MaterialOptionConfirmationFrame",
@@ -2135,7 +2366,6 @@ class _MerchantRulesExactUpgradeSalvageBridge:
                     missing.append(f"WindowFrame.{frame_name}")
             for frame_name in (
                 "SalvageOptionCancelButton",
-                "LesserSalvageCancelButton",
                 "ExpertSalvageUnidentifiedCancelButton",
                 "MaterialOptionConfirmationCancelButton",
             ):
@@ -2165,50 +2395,14 @@ class _MerchantRulesExactUpgradeSalvageBridge:
 
     @staticmethod
     def _get_frame_id(frame: object) -> int:
-        try:
-            get_frame_id = getattr(frame, "GetFrameID", None)
-            return int(get_frame_id() or 0) if callable(get_frame_id) else 0
-        except Exception:
-            return 0
-
-    def _is_frame_id_effectively_visible(self, frame_id: int) -> bool:
-        try:
-            safe_frame_id = int(frame_id)
-            if safe_frame_id <= 0 or self._UIManager is None:
-                return False
-
-            frame_ids = {int(candidate_id) for candidate_id in self._UIManager.GetFrameArray()}
-            visited_frame_ids: set[int] = set()
-            current_frame_id = safe_frame_id
-            while current_frame_id > 0:
-                if current_frame_id in visited_frame_ids or current_frame_id not in frame_ids:
-                    return False
-                visited_frame_ids.add(current_frame_id)
-                if not self._UIManager.IsFrameCreated(current_frame_id) or not self._UIManager.IsVisible(
-                    current_frame_id
-                ):
-                    return False
-                current_frame_id = int(self._UIManager.GetParentID(current_frame_id) or 0)
-            return bool(visited_frame_ids)
-        except Exception:
-            return False
-
-    def _is_frame_effectively_visible(self, frame: object) -> bool:
-        """Return True only when the local frame and every parent are created and visible."""
-
-        return self._is_frame_id_effectively_visible(self._get_frame_id(frame))
+        return _MerchantRulesSalvageFrameGuard.get_frame_id(frame)
 
     def _is_frame_actionable(self, frame: object) -> bool:
         """Return True only when the local frame hierarchy is visible and has positive dimensions."""
 
-        frame_id = self._get_frame_id(frame)
-        if not self._is_frame_id_effectively_visible(frame_id):
+        if self._UIManager is None:
             return False
-        try:
-            left, top, right, bottom = self._UIManager.GetFrameCoords(frame_id)
-            return int(right) > int(left) and int(bottom) > int(top)
-        except Exception:
-            return False
+        return _MerchantRulesSalvageFrameGuard.is_frame_actionable(self._UIManager, frame)
 
     def _is_frame_hierarchy_active(
         self,
@@ -2219,10 +2413,14 @@ class _MerchantRulesExactUpgradeSalvageBridge:
     ) -> bool:
         """Validate one Merchant Rules salvage-popup hierarchy without extending shared CoreLib."""
 
-        return (
-            self._is_frame_effectively_visible(root_frame)
-            and all(self._is_frame_effectively_visible(frame) for frame in required_visible_frames)
-            and all(self._is_frame_actionable(frame) for frame in required_actionable_frames)
+        return bool(
+            self._UIManager is not None
+            and _MerchantRulesSalvageFrameGuard.is_hierarchy_active(
+                self._UIManager,
+                root_frame,
+                required_visible_frames=required_visible_frames,
+                required_actionable_frames=required_actionable_frames,
+            )
         )
 
     def _is_salvage_options_active(self) -> bool:
@@ -2257,42 +2455,13 @@ class _MerchantRulesExactUpgradeSalvageBridge:
             return None
         return option_frame
 
-    def _get_active_salvage_popup_cancel_frame(self) -> object | None:
-        if self._WindowFrame is None:
+    def _get_active_salvage_popup(self) -> _MerchantRulesActiveSalvagePopup | None:
+        if self._UIManager is None or self._WindowFrame is None:
             return None
-        popup_definitions = (
-            (
-                self._WindowFrame.SalvageOptionsFrame,
-                (self._WindowFrame.OptionsSalvageOptionsFrame,),
-                self._WindowFrame.SalvageOptionCancelButton,
-            ),
-            (
-                self._WindowFrame.LesserSalvageFrame,
-                (),
-                self._WindowFrame.LesserSalvageCancelButton,
-            ),
-            (
-                self._WindowFrame.ExpertSalvageUnidentifiedFrame,
-                (),
-                self._WindowFrame.ExpertSalvageUnidentifiedCancelButton,
-            ),
-            (
-                self._WindowFrame.MaterialOptionConfirmationFrame,
-                (),
-                self._WindowFrame.MaterialOptionConfirmationCancelButton,
-            ),
+        return _MerchantRulesSalvageFrameGuard.get_active_salvage_popup(
+            self._UIManager,
+            self._WindowFrame,
         )
-        for root_frame, required_visible_frames, cancel_frame in popup_definitions:
-            if self._is_frame_hierarchy_active(
-                root_frame,
-                required_visible_frames=required_visible_frames,
-                required_actionable_frames=(cancel_frame,),
-            ):
-                return cancel_frame
-        return None
-
-    def _is_any_salvage_popup_active(self) -> bool:
-        return self._get_active_salvage_popup_cancel_frame() is not None
 
     def option_to_slot(self, option: object):
         if not self._load_dependencies()[0]:
@@ -2400,8 +2569,9 @@ class _MerchantRulesExactUpgradeSalvageBridge:
             if self.verify_slot_removed(int(item_id), option, expected_upgrade):
                 return True, ""
 
-            if self._is_any_salvage_popup_active() and not self._is_salvage_options_active():
-                self._cancel_active_salvage_choice_dialog()
+            active_popup = self._get_active_salvage_popup()
+            if active_popup is not None and not self._is_salvage_options_active():
+                self._cancel_active_salvage_choice_dialog(active_popup)
                 return False, "unexpected salvage window appeared after exact-upgrade confirmation"
 
             yield from Routines.Yield.wait(max(1, int(poll_ms)))
@@ -2415,14 +2585,17 @@ class _MerchantRulesExactUpgradeSalvageBridge:
             return False, "salvage completion changed the requested slot to an unexpected upgrade"
         return False, "salvage completed timeout: targeted upgrade removal could not be verified"
 
-    def _cancel_active_salvage_choice_dialog(self) -> bool:
+    def _cancel_active_salvage_choice_dialog(
+        self,
+        active_popup: _MerchantRulesActiveSalvagePopup | None = None,
+    ) -> bool:
         """Cancel only a locally verified active salvage popup, in the established safety order."""
 
         try:
-            cancel_frame = self._get_active_salvage_popup_cancel_frame()
-            if cancel_frame is None:
+            validated_popup = active_popup or self._get_active_salvage_popup()
+            if validated_popup is None or validated_popup.cancel_frame is None:
                 return False
-            cancel_frame.FrameClick()
+            validated_popup.cancel_frame.FrameClick()
             return True
         except Exception:
             return False
@@ -2459,8 +2632,9 @@ class _MerchantRulesExactUpgradeSalvageBridge:
         if mode is None:
             return _ExactUpgradeSalvageBridgeResult(False, "blocked", "unsupported exact-upgrade salvage option")
 
-        if self._is_any_salvage_popup_active():
-            self._cancel_active_salvage_choice_dialog()
+        active_popup = self._get_active_salvage_popup()
+        if active_popup is not None:
+            self._cancel_active_salvage_choice_dialog(active_popup)
             return _ExactUpgradeSalvageBridgeResult(
                 False,
                 "blocked",
@@ -2490,8 +2664,9 @@ class _MerchantRulesExactUpgradeSalvageBridge:
                 return _ExactUpgradeSalvageBridgeResult(False, "blocked", reason)
             if self._is_salvage_options_active():
                 break
-            if self._is_any_salvage_popup_active():
-                self._cancel_active_salvage_choice_dialog()
+            active_popup = self._get_active_salvage_popup()
+            if active_popup is not None:
+                self._cancel_active_salvage_choice_dialog(active_popup)
                 return _ExactUpgradeSalvageBridgeResult(
                     False,
                     "failed",
@@ -24560,64 +24735,163 @@ class MerchantRulesWidget:
         yield from Routines.Yield.wait(150)
         return True
 
-    def _cancel_active_salvage_choice_dialog(self) -> bool:
+    def _get_active_salvage_popup(self) -> _MerchantRulesActiveSalvagePopup | None:
         try:
-            from Sources.frenkeyLib.ItemHandling.UIManagerExtensions import UIManagerExtensions
+            from Py4GWCoreLib.UIManager import UIManager, WindowFrame
 
-            return bool(UIManagerExtensions.CancelSalvageOption())
+            return _MerchantRulesSalvageFrameGuard.get_active_salvage_popup(UIManager, WindowFrame)
+        except Exception:
+            return None
+
+    def _cancel_active_salvage_choice_dialog(
+        self,
+        active_popup: _MerchantRulesActiveSalvagePopup | None = None,
+    ) -> bool:
+        try:
+            validated_popup = active_popup or self._get_active_salvage_popup()
+            if validated_popup is None or validated_popup.cancel_frame is None:
+                return False
+            validated_popup.cancel_frame.FrameClick()
+            return True
         except Exception:
             return False
 
-    def _get_materials_confirm_yes_frame_id(self) -> int:
-        try:
-            from Py4GWCoreLib.Inventory import Inventory
-
-            yes_frame_id = int(Inventory._get_salvage_choice_material_confirm_yes_frame_id() or 0)
-            if yes_frame_id > 0:
-                return yes_frame_id
-        except Exception:
-            pass
-
+    def _get_active_current_normal_materials_warning_frame_ids(self) -> tuple[int, int, int] | None:
         try:
             from Py4GWCoreLib.UIManager import UIManager
+
+            resolved_frames = _MerchantRulesSalvageFrameGuard.get_active_current_normal_materials_warning(
+                UIManager
+            )
+            if resolved_frames is None:
+                return None
+            return tuple(
+                _MerchantRulesSalvageFrameGuard.get_frame_id(frame)
+                for frame in resolved_frames
+            )
         except Exception:
-            return 0
+            return None
 
-        candidate_frame_ids = [
-            UIManager.GetChildFrameID(140452905, [6, 98, 6]),
-            UIManager.GetChildFrameID(140452905, [6, 100, 6]),
-            UIManager.GetChildFrameID(140452905, [6, 110, 6]),
-            UIManager.GetChildFrameID(140452905, [6, 111, 6]),
-            UIManager.GetChildFrameID(684387150, [0, 6]),
-        ]
-        for frame_id in candidate_frame_ids:
-            try:
-                safe_frame_id = int(frame_id or 0)
-            except Exception:
-                safe_frame_id = 0
-            if safe_frame_id > 0 and UIManager.FrameExists(safe_frame_id):
-                return safe_frame_id
-        return 0
+    def _revalidate_materials_salvage_confirmation(
+        self,
+        transaction: _MerchantRulesMaterialsSalvageTransaction,
+    ) -> tuple[bool, str]:
+        if not bool(transaction.started):
+            return False, "Materials salvage transaction did not start"
+        if not bool(transaction.materials_authorized):
+            return False, "Materials confirmation is not authorized for this transaction"
+        if _resolve_salvage_operation(transaction.selected_option) != SALVAGE_OPTION_MATERIALS:
+            return False, "current salvage operation is not Materials"
+        if int(transaction.kit_id) <= 0 or int(transaction.kit_model_id) not in NORMAL_SALVAGE_KIT_MODEL_IDS:
+            return False, "current Materials confirmation is not from a normal salvage kit"
 
-    def _wait_and_confirm_materials_popup(self, item_id: int, kit_id: int, *, timeout_ms: int = 2000):
+        live_item = self._build_inventory_item_info(int(transaction.item_id))
+        if live_item is None:
+            return False, "target item left inventory before Materials confirmation"
+        if int(live_item.model_id) != int(transaction.model_id):
+            return False, "target item model changed before Materials confirmation"
+        if max(0, int(live_item.quantity)) != max(0, int(transaction.starting_quantity)):
+            return False, "target item quantity changed before Materials confirmation"
+
+        expected_rule = _normalize_salvage_rule(transaction.rule)
+        if expected_rule is None or _resolve_salvage_operation(expected_rule.salvage_option) != SALVAGE_OPTION_MATERIALS:
+            return False, "Materials salvage rule changed before confirmation"
+        if int(transaction.rule_index) >= 0:
+            current_rule_match = self._get_matching_salvage_rule(live_item)
+            if current_rule_match is None:
+                return False, "Materials salvage rule no longer matches the target item"
+            current_rule_index, current_rule, _current_reason = current_rule_match
+            if int(current_rule_index) != int(transaction.rule_index):
+                return False, "first matching salvage rule changed before Materials confirmation"
+            if _normalize_salvage_rule(current_rule) != expected_rule:
+                return False, "Materials salvage rule changed before confirmation"
+
+        fresh_protection_rules = (
+            self._collect_enabled_manual_salvage_protection_rules()
+            if int(transaction.rule_index) < 0
+            else self._collect_enabled_sell_rules()
+        )
+        protection_rule_sets = (
+            list(transaction.original_protection_rules),
+            fresh_protection_rules,
+        )
+        for protection_rules in protection_rule_sets:
+            block_reason = self._get_salvage_candidate_block_reason(
+                live_item,
+                protection_rules,
+                salvage_rule=expected_rule,
+                require_salvage_kit=False,
+                mode=transaction.mode,
+            )
+            if block_reason:
+                return False, block_reason
+        return True, ""
+
+    def _wait_and_confirm_materials_popup(
+        self,
+        transaction: _MerchantRulesMaterialsSalvageTransaction,
+        *,
+        timeout_ms: int = 2000,
+        close_timeout_ms: int = 1500,
+    ):
         from Py4GWCoreLib.UIManager import UIManager
 
         waited_ms = 0
         yield from Routines.Yield.wait(100)
         while waited_ms <= max(0, int(timeout_ms)):
-            yes_frame_id = self._get_materials_confirm_yes_frame_id()
-            if yes_frame_id > 0:
+            active_frame_ids = self._get_active_current_normal_materials_warning_frame_ids()
+            if active_frame_ids is not None:
+                validation_succeeded, validation_reason = self._revalidate_materials_salvage_confirmation(
+                    transaction
+                )
+                if not validation_succeeded:
+                    self._cancel_active_salvage_choice_dialog()
+                    return f"revalidation_failed: {validation_reason}"
+
+                expected_frame_ids = tuple(int(frame_id) for frame_id in active_frame_ids)
+                yield from Routines.Yield.wait(50)
+
+                validation_succeeded, validation_reason = self._revalidate_materials_salvage_confirmation(
+                    transaction
+                )
+                if not validation_succeeded:
+                    self._cancel_active_salvage_choice_dialog()
+                    return f"revalidation_failed: {validation_reason}"
+                current_frame_ids = self._get_active_current_normal_materials_warning_frame_ids()
+                if current_frame_ids is None or tuple(int(frame_id) for frame_id in current_frame_ids) != expected_frame_ids:
+                    self._cancel_active_salvage_choice_dialog()
+                    return "frame_changed"
+
+                yes_frame_id = int(expected_frame_ids[2])
                 self._salvage_flow_log(
-                    f"MR Salvage materials confirmation visible for item {int(item_id)} "
-                    f"with {self._get_salvage_kit_label(int(kit_id))}; accepting materials confirmation."
+                    f"MR Salvage materials confirmation visible for item {int(transaction.item_id)} "
+                    f"with {self._get_salvage_kit_label(int(transaction.kit_id))}; accepting materials confirmation."
                 )
                 ActionQueueManager().AddAction("SALVAGE", UIManager.FrameClick, yes_frame_id)
-                ActionQueueManager().AddAction("SALVAGE", UIManager.TestMouseClickAction, yes_frame_id, 0, 0)
                 queue_drained = yield from self._wait_for_action_queue_empty("SALVAGE", timeout_ms=5000, step_ms=50)
                 if not queue_drained:
+                    self._cancel_active_salvage_choice_dialog()
                     return "queue_timeout"
-                yield from Routines.Yield.wait(150)
-                return "handled"
+
+                close_waited_ms = 0
+                while close_waited_ms <= max(0, int(close_timeout_ms)):
+                    if not _MerchantRulesSalvageFrameGuard.is_current_normal_materials_warning_root_active(
+                        UIManager
+                    ):
+                        unexpected_popup = self._get_active_salvage_popup()
+                        if unexpected_popup is not None:
+                            self._cancel_active_salvage_choice_dialog(unexpected_popup)
+                            return "unexpected_popup_after_confirm"
+                        return "handled"
+                    yield from Routines.Yield.wait(50)
+                    close_waited_ms += 50
+                self._cancel_active_salvage_choice_dialog()
+                return "close_timeout"
+
+            unexpected_popup = self._get_active_salvage_popup()
+            if unexpected_popup is not None:
+                self._cancel_active_salvage_choice_dialog(unexpected_popup)
+                return "unexpected_popup"
             yield from Routines.Yield.wait(50)
             waited_ms += 50
         return "not_visible"
@@ -24783,12 +25057,38 @@ class MerchantRulesWidget:
             return bridge_status if bridge_status in {"processed", "salvaged"} else "processed"
 
         else:
+            salvage_kit_model_id = self._get_salvage_kit_model_id(int(salvage_kit_id))
+            uses_upgrade_kit_choice = int(salvage_kit_model_id) in UPGRADE_SALVAGE_KIT_MODEL_IDS
+            active_popup = self._get_active_salvage_popup()
+            if active_popup is not None:
+                cancelled = self._cancel_active_salvage_choice_dialog(active_popup)
+                stale_popup_message = (
+                    f"MR Salvage found a stale salvage popup before starting item {item_id}; "
+                    f"it was {'cancelled' if cancelled else 'not safely cancellable'}. "
+                    "Run Preview again before Execute."
+                )
+                self._mark_preview_dirty(stale_popup_message)
+                ConsoleLog(MODULE_NAME, stale_popup_message, Console.MessageType.Warning)
+                return "failed"
+
             started = yield from self._queue_salvage_start(item_id, int(salvage_kit_id), 1)
             if not started:
                 return "failed"
+            materials_transaction = _MerchantRulesMaterialsSalvageTransaction(
+                item_id=int(item_id),
+                model_id=int(live_item.model_id),
+                starting_quantity=int(starting_quantity),
+                kit_id=int(salvage_kit_id),
+                kit_model_id=int(salvage_kit_model_id),
+                selected_option=str(selected_option),
+                rule_index=int(candidate.rule_index),
+                rule=rule,
+                mode=mode,
+                original_protection_rules=tuple(enabled_sell_rules),
+                started=True,
+                materials_authorized=selected_option == SALVAGE_OPTION_MATERIALS,
+            )
             choice_dialog_status = "not_visible"
-            salvage_kit_model_id = self._get_salvage_kit_model_id(int(salvage_kit_id))
-            uses_upgrade_kit_choice = int(salvage_kit_model_id) in UPGRADE_SALVAGE_KIT_MODEL_IDS
             if uses_upgrade_kit_choice:
                 choice_dialog_status = yield from self._handle_material_salvage_choice_dialog(item_id)
                 if choice_dialog_status not in {"handled", "not_visible"}:
@@ -24801,11 +25101,16 @@ class MerchantRulesWidget:
             if choice_dialog_status == "handled":
                 materials_confirm_status = "handled"
             elif rarity_key in {"purple", "gold"}:
-                materials_confirm_status = yield from self._wait_and_confirm_materials_popup(
-                    item_id,
-                    int(salvage_kit_id),
-                    timeout_ms=2500,
-                )
+                if uses_upgrade_kit_choice:
+                    materials_confirm_status = yield from self._handle_material_salvage_choice_dialog(
+                        item_id,
+                        timeout_ms=2500,
+                    )
+                else:
+                    materials_confirm_status = yield from self._wait_and_confirm_materials_popup(
+                        materials_transaction,
+                        timeout_ms=2500,
+                    )
                 if materials_confirm_status != "handled":
                     ConsoleLog(MODULE_NAME, f"MR Salvage did not find the materials confirmation for item {item_id}.", Console.MessageType.Warning)
                     return "failed"
@@ -24818,11 +25123,16 @@ class MerchantRulesWidget:
                     and not uses_upgrade_kit_choice
                 ):
                     popup_timeout_ms = 50
-                materials_confirm_status = yield from self._wait_and_confirm_materials_popup(
-                    item_id,
-                    int(salvage_kit_id),
-                    timeout_ms=popup_timeout_ms,
-                )
+                if uses_upgrade_kit_choice:
+                    materials_confirm_status = yield from self._handle_material_salvage_choice_dialog(
+                        item_id,
+                        timeout_ms=popup_timeout_ms,
+                    )
+                else:
+                    materials_confirm_status = yield from self._wait_and_confirm_materials_popup(
+                        materials_transaction,
+                        timeout_ms=popup_timeout_ms,
+                    )
                 if materials_confirm_status not in {"handled", "not_visible"}:
                     ConsoleLog(
                         MODULE_NAME,
