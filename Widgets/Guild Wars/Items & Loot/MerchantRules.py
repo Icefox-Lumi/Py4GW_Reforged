@@ -15,6 +15,7 @@ import re
 import time
 import traceback
 from collections.abc import Callable
+from collections.abc import Iterable
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
 from urllib.parse import unquote
@@ -467,6 +468,15 @@ MODIFIER_IDENTIFIER_ENERGY = 0x27C
 MODIFIER_IDENTIFIER_ENERGY2 = 0x22C
 MODIFIER_IDENTIFIER_RUNE_ATTRIBUTE = 8680
 MODIFIER_IDENTIFIER_RUNE_HEALTH_LOSS = 8408
+ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE = (9224, 0, 0x00C2)
+ARMOR_UPGRADE_SIGNATURE_IDENTIFIERS = frozenset({8408, 8680, 9224})
+ARMOR_UPGRADE_HOLDING_NAMES = frozenset({
+    "rune of holding",
+    "superior rune of holding",
+    "rune of belt holding",
+})
+ARMOR_UPGRADE_SOURCE_KIND = "armor"
+WEAPON_UPGRADE_SOURCE_KIND = "weapon"
 ATTRIBUTE_NONE_REAL_VALUE = 45
 
 
@@ -1383,7 +1393,10 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     },
     "salvage_specific_upgrade_targets": {
         "short": "Specific upgrades this salvage rule can target.",
-        "long": "These entries can match exact upgrade names or minimum roll values during salvage planning.",
+        "long": (
+            "Weapon entries can match exact names or minimum rolls. Armor entries store exact "
+            "runes.json Rune and Insignia identifiers."
+        ),
     },
     "cleanup_auto_entry": {
         "short": "Runs Xunlai Deposits once after entering an outpost or Guild Hall.",
@@ -1854,6 +1867,7 @@ class SalvageRule:
     target_weapon_mod_variant_thresholds: list[WeaponModVariantThresholdRule] = field(default_factory=list)
     salvage_option: str = SALVAGE_OPTION_MATERIALS
     name: str = ""
+    target_armor_upgrade_identifiers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -2016,6 +2030,10 @@ class InventoryItemInfo:
     rune_identifiers: list[str] = field(default_factory=list)
     weapon_mod_identifiers: list[str] = field(default_factory=list)
     weapon_mod_matches: list["ParsedUpgradeMatch"] = field(default_factory=list)
+    raw_modifiers: tuple[tuple[int, int, int], ...] = field(default_factory=tuple)
+    armor_upgrade_identifiers: list[str] = field(default_factory=list)
+    armor_upgrade_matches: list["ArmorUpgradeIdentity"] = field(default_factory=list)
+    armor_upgrade_parse_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -2047,6 +2065,8 @@ class SalvageCandidate:
 class SalvageUpgradeTargetMatch:
     label: str = ""
     required_option: str = ""
+    identifier: str = field(default="", compare=False)
+    source_kind: str = field(default=WEAPON_UPGRADE_SOURCE_KIND, compare=False)
 
 
 @dataclass(frozen=True)
@@ -2065,6 +2085,38 @@ class _ExactUpgradeSalvageBridgeResult:
     success: bool
     status: str = "failed"
     reason: str = ""
+    reserved_item_ids: tuple[int, ...] = field(default=(), compare=False)
+
+
+@dataclass(frozen=True)
+class ArmorUpgradeIdentity:
+    """Bind one exact runes.json armor identity to its fixed salvage-popup control."""
+
+    identifier: str
+    name: str
+    semantic_kind: str
+    option: str
+    signature: tuple[tuple[int, int, int], ...]
+
+
+@dataclass(frozen=True)
+class ArmorUpgradeParseState:
+    """Cache strict semantic armor identities together with a fail-closed parse reason."""
+
+    upgrades: tuple[ArmorUpgradeIdentity, ...] = ()
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class ArmorUpgradeSnapshot:
+    """Hold one revalidatable carried-armor identity for a permanent extraction transaction."""
+
+    item_id: int
+    model_id: int
+    item_type_id: int
+    name: str
+    raw_modifiers: tuple[tuple[int, int, int], ...]
+    upgrades: tuple[ArmorUpgradeIdentity, ...]
 
 
 @dataclass(frozen=True)
@@ -2759,6 +2811,588 @@ class _MerchantRulesExactUpgradeSalvageBridge:
         return _ExactUpgradeSalvageBridgeResult(True, "processed", "")
 
 
+class _MerchantRulesArmorUpgradeSalvageBridge:
+    """Extract one exact runes.json armor identity through the proven fixed popup mapping."""
+
+    def __init__(self, owner: object | None = None):
+        self._owner = owner
+        self._load_attempted = False
+        self._loaded = False
+        self._load_reason = ""
+        self._SalvageMode = None
+        self._SalvageOptionsWindow = None
+        self._UIManager = None
+        self._WindowFrame = None
+
+    def _load_dependencies(self) -> tuple[bool, str]:
+        if self._load_attempted:
+            return self._loaded, self._load_reason
+        self._load_attempted = True
+        try:
+            from Py4GWCoreLib.UIManager import UIManager, SalvageOptionsWindow, WindowFrame
+            from Py4GWCoreLib.enums_src.Item_enums import SalvageMode
+
+            missing: list[str] = []
+            for method_name in (
+                "GetFrameArray",
+                "IsFrameCreated",
+                "IsVisible",
+                "GetParentID",
+                "GetFrameCoords",
+            ):
+                if not callable(getattr(UIManager, method_name, None)):
+                    missing.append(f"UIManager.{method_name}")
+            for method_name in ("GetSalvageOptionFrame", "SelectOption", "Confirm"):
+                if not callable(getattr(SalvageOptionsWindow, method_name, None)):
+                    missing.append(f"SalvageOptionsWindow.{method_name}")
+            required_frame_names = (
+                "SalvageOptionsFrame",
+                "OptionsSalvageOptionsFrame",
+                "SalvageOptionCancelButton",
+                "SalvageOptionConfirmButton",
+                "SalvageOptionPrefixButton",
+                "SalvageOptionSuffixButton",
+                "ExpertSalvageUnidentifiedFrame",
+                "ExpertSalvageUnidentifiedCancelButton",
+                "MaterialOptionConfirmationFrame",
+                "MaterialOptionConfirmationCancelButton",
+            )
+            for frame_name in required_frame_names:
+                frame = getattr(WindowFrame, frame_name, None)
+                if frame is None or not callable(getattr(frame, "GetFrameID", None)):
+                    missing.append(f"WindowFrame.{frame_name}")
+            for frame_name in (
+                "SalvageOptionCancelButton",
+                "ExpertSalvageUnidentifiedCancelButton",
+                "MaterialOptionConfirmationCancelButton",
+            ):
+                frame = getattr(WindowFrame, frame_name, None)
+                if frame is None or not callable(getattr(frame, "FrameClick", None)):
+                    missing.append(f"WindowFrame.{frame_name}.FrameClick")
+            if missing:
+                self._load_reason = (
+                    f"{SALVAGE_UPGRADE_BACKEND_UNAVAILABLE_REASON}: missing {', '.join(missing)}"
+                )
+                return False, self._load_reason
+
+            self._SalvageMode = SalvageMode
+            self._SalvageOptionsWindow = SalvageOptionsWindow
+            self._UIManager = UIManager
+            self._WindowFrame = WindowFrame
+            self._loaded = True
+            self._load_reason = ""
+            return True, ""
+        except Exception as exc:
+            self._load_reason = (
+                f"{SALVAGE_UPGRADE_BACKEND_UNAVAILABLE_REASON}: import failed: {exc}"
+            )
+            return False, self._load_reason
+
+    def is_available(self) -> tuple[bool, str]:
+        return self._load_dependencies()
+
+    def _option_to_mode(self, option: object):
+        if not self._load_dependencies()[0]:
+            return None
+        return {
+            SALVAGE_OPTION_PREFIX: self._SalvageMode.Prefix,
+            SALVAGE_OPTION_SUFFIX: self._SalvageMode.Suffix,
+        }.get(_resolve_salvage_operation(option))
+
+    def _is_salvage_options_active(self) -> bool:
+        if self._UIManager is None or self._WindowFrame is None:
+            return False
+        return _MerchantRulesSalvageFrameGuard.is_hierarchy_active(
+            self._UIManager,
+            self._WindowFrame.SalvageOptionsFrame,
+            required_visible_frames=(self._WindowFrame.OptionsSalvageOptionsFrame,),
+            required_actionable_frames=(self._WindowFrame.SalvageOptionCancelButton,),
+        )
+
+    def _get_active_option_frame(self, option: object) -> object | None:
+        mode = self._option_to_mode(option)
+        if (
+            mode is None
+            or self._UIManager is None
+            or self._WindowFrame is None
+            or self._SalvageOptionsWindow is None
+        ):
+            return None
+        try:
+            option_frame = self._SalvageOptionsWindow.GetSalvageOptionFrame(mode)
+        except Exception:
+            return None
+        if option_frame is None:
+            return None
+        if not _MerchantRulesSalvageFrameGuard.is_hierarchy_active(
+            self._UIManager,
+            self._WindowFrame.SalvageOptionsFrame,
+            required_visible_frames=(self._WindowFrame.OptionsSalvageOptionsFrame,),
+            required_actionable_frames=(
+                self._WindowFrame.SalvageOptionCancelButton,
+                option_frame,
+            ),
+        ):
+            return None
+        return option_frame
+
+    def _get_active_salvage_popup(self) -> _MerchantRulesActiveSalvagePopup | None:
+        if self._UIManager is None or self._WindowFrame is None:
+            return None
+        return _MerchantRulesSalvageFrameGuard.get_active_salvage_popup(
+            self._UIManager,
+            self._WindowFrame,
+        )
+
+    def _cancel_active_salvage_choice_dialog(
+        self,
+        active_popup: _MerchantRulesActiveSalvagePopup | None = None,
+    ) -> bool:
+        try:
+            validated_popup = active_popup or self._get_active_salvage_popup()
+            if validated_popup is None or validated_popup.cancel_frame is None:
+                return False
+            validated_popup.cancel_frame.FrameClick()
+            return True
+        except Exception:
+            return False
+
+    def _capture_snapshot(
+        self,
+        item_id: int,
+        *,
+        allow_no_upgrades: bool = False,
+    ) -> tuple[ArmorUpgradeSnapshot | None, str]:
+        capture = getattr(self._owner, "_capture_armor_upgrade_snapshot", None)
+        if not callable(capture):
+            return None, "Merchant Rules armor snapshot helper unavailable"
+        return capture(int(item_id), allow_no_upgrades=allow_no_upgrades)
+
+    @staticmethod
+    def _snapshots_match(
+        expected: ArmorUpgradeSnapshot,
+        current: ArmorUpgradeSnapshot,
+    ) -> bool:
+        return bool(
+            int(current.item_id) == int(expected.item_id)
+            and int(current.model_id) == int(expected.model_id)
+            and int(current.item_type_id) == int(expected.item_type_id)
+            and current.raw_modifiers == expected.raw_modifiers
+            and current.upgrades == expected.upgrades
+        )
+
+    def _verify_expected_snapshot(
+        self,
+        expected: ArmorUpgradeSnapshot,
+    ) -> tuple[bool, str]:
+        current, reason = self._capture_snapshot(expected.item_id)
+        if current is None:
+            return False, reason or "requested armor snapshot is unavailable"
+        if not self._snapshots_match(expected, current):
+            return False, "requested armor raw identity changed before exact-upgrade confirmation"
+        return True, ""
+
+    def _capture_component_quantities(
+        self,
+        identity: ArmorUpgradeIdentity,
+    ) -> dict[int, int]:
+        capture = getattr(
+            self._owner,
+            "_capture_standalone_armor_upgrade_component_quantities",
+            None,
+        )
+        if not callable(capture):
+            return {}
+        try:
+            return dict(capture(identity))
+        except Exception:
+            return {}
+
+    def _get_component_delta_item_ids(
+        self,
+        identity: ArmorUpgradeIdentity,
+        before_quantities: dict[int, int],
+    ) -> tuple[int, ...]:
+        current_quantities = self._capture_component_quantities(identity)
+        return tuple(sorted(
+            item_id
+            for item_id, quantity in current_quantities.items()
+            if max(0, int(quantity)) > max(0, int(before_quantities.get(item_id, 0)))
+        ))
+
+    def _build_result(
+        self,
+        success: bool,
+        status: str,
+        reason: str,
+        *,
+        source_item_id: int,
+        target: ArmorUpgradeIdentity,
+        before_target_components: dict[int, int],
+        extra_reserved_item_ids: tuple[int, ...] = (),
+    ) -> _ExactUpgradeSalvageBridgeResult:
+        reserved_item_ids = {
+            max(0, int(source_item_id)),
+            *(
+                max(0, int(item_id))
+                for item_id in self._get_component_delta_item_ids(
+                    target,
+                    before_target_components,
+                )
+            ),
+            *(max(0, int(item_id)) for item_id in extra_reserved_item_ids),
+        }
+        reserved_item_ids.discard(0)
+        reserve = getattr(self._owner, "_reserve_execute_item_ids", None)
+        if callable(reserve):
+            reserve(reserved_item_ids)
+        return _ExactUpgradeSalvageBridgeResult(
+            bool(success),
+            str(status or "failed"),
+            str(reason or ""),
+            tuple(sorted(reserved_item_ids)),
+        )
+
+    def salvage_exact_armor_upgrade(
+        self,
+        expected: ArmorUpgradeSnapshot,
+        target: ArmorUpgradeIdentity,
+        *,
+        preferred_kit_id: int = 0,
+        timeout_ms: int = 5000,
+    ):
+        """Extract one exact armor target with raw revalidation and semantic completion checks."""
+
+        available, reason = self._load_dependencies()
+        before_target_components = self._capture_component_quantities(target)
+
+        def result(
+            success: bool,
+            status: str,
+            result_reason: str,
+            *,
+            extra_reserved_item_ids: tuple[int, ...] = (),
+        ) -> _ExactUpgradeSalvageBridgeResult:
+            return self._build_result(
+                success,
+                status,
+                result_reason,
+                source_item_id=expected.item_id,
+                target=target,
+                before_target_components=before_target_components,
+                extra_reserved_item_ids=extra_reserved_item_ids,
+            )
+
+        if not available:
+            return result(False, "blocked", reason)
+        if self._owner is None:
+            return result(False, "blocked", "Merchant Rules salvage owner unavailable")
+        if target.option not in (SALVAGE_OPTION_PREFIX, SALVAGE_OPTION_SUFFIX):
+            return result(False, "blocked", "unsupported armor exact-upgrade salvage option")
+        if int(preferred_kit_id) <= 0:
+            return result(False, "blocked", "no upgrade salvage kit")
+        if target not in expected.upgrades:
+            return result(False, "blocked", "selected armor target is not in the captured snapshot")
+        opposite_option = (
+            SALVAGE_OPTION_SUFFIX
+            if target.option == SALVAGE_OPTION_PREFIX
+            else SALVAGE_OPTION_PREFIX
+        )
+        opposite_identities = tuple(
+            upgrade
+            for upgrade in expected.upgrades
+            if upgrade.option == opposite_option
+        )
+        before_opposite_components = {
+            upgrade.identifier: self._capture_component_quantities(upgrade)
+            for upgrade in opposite_identities
+        }
+
+        validate_kit = getattr(self._owner, "_validate_inventory_shortcut_salvage_kit", None)
+        if not callable(validate_kit):
+            return result(False, "blocked", "Merchant Rules salvage-kit validator unavailable")
+        valid_kit_id, kit_reason = validate_kit(
+            int(preferred_kit_id),
+            option=target.option,
+        )
+        if int(valid_kit_id) <= 0:
+            return result(False, "blocked", kit_reason or "upgrade salvage kit is unavailable")
+        get_kit_model_id = getattr(self._owner, "_get_salvage_kit_model_id", None)
+        kit_model_id = (
+            max(0, int(get_kit_model_id(int(valid_kit_id))))
+            if callable(get_kit_model_id)
+            else 0
+        )
+        if kit_model_id not in UPGRADE_SALVAGE_KIT_MODEL_IDS:
+            return result(False, "blocked", "selected salvage kit cannot extract upgrades")
+
+        active_popup = self._get_active_salvage_popup()
+        if active_popup is not None:
+            self._cancel_active_salvage_choice_dialog(active_popup)
+            return result(
+                False,
+                "blocked",
+                "stale salvage popup was already open; it was cancelled before starting",
+            )
+
+        matches_expected, reason = self._verify_expected_snapshot(expected)
+        if not matches_expected:
+            return result(False, "blocked", reason)
+
+        start_salvage = getattr(self._owner, "_queue_salvage_start", None)
+        if not callable(start_salvage):
+            return result(False, "blocked", "Merchant Rules salvage start helper unavailable")
+        try:
+            started = yield from start_salvage(
+                int(expected.item_id),
+                int(valid_kit_id),
+                1,
+            )
+        except Exception as exc:
+            return result(False, "failed", f"salvage start failed: {exc}")
+        if not started:
+            return result(False, "failed", "salvage start failed")
+
+        waited_ms = 0
+        popup_timeout_ms = min(max(1, int(timeout_ms)), 3500)
+        while waited_ms <= popup_timeout_ms:
+            matches_expected, reason = self._verify_expected_snapshot(expected)
+            if not matches_expected:
+                self._cancel_active_salvage_choice_dialog()
+                return result(False, "blocked", reason)
+            if self._is_salvage_options_active():
+                break
+            active_popup = self._get_active_salvage_popup()
+            if active_popup is not None:
+                self._cancel_active_salvage_choice_dialog(active_popup)
+                return result(
+                    False,
+                    "failed",
+                    "unexpected salvage window appeared instead of the exact-upgrade options popup",
+                )
+            yield from Routines.Yield.wait(50)
+            waited_ms += 50
+        else:
+            self._cancel_active_salvage_choice_dialog()
+            return result(
+                False,
+                "failed",
+                "salvage popup timeout: exact-upgrade options popup did not appear",
+            )
+
+        target_frame = self._get_active_option_frame(target.option)
+        if target_frame is None:
+            self._cancel_active_salvage_choice_dialog()
+            return result(
+                False,
+                "blocked",
+                f"salvage option unavailable: {_get_salvage_option_label(target.option)} control is not visible",
+            )
+        target_frame_id = _MerchantRulesSalvageFrameGuard.get_frame_id(target_frame)
+        if target_frame_id <= 0:
+            self._cancel_active_salvage_choice_dialog()
+            return result(False, "blocked", "salvage option unavailable: invalid fixed slot frame")
+
+        opposite_expected = any(
+            upgrade.option == opposite_option for upgrade in expected.upgrades
+        )
+        opposite_actionable = self._get_active_option_frame(opposite_option) is not None
+        if bool(opposite_actionable) != bool(opposite_expected):
+            self._cancel_active_salvage_choice_dialog()
+            return result(
+                False,
+                "blocked",
+                "opposite armor-upgrade control conflicts with the captured exact identities",
+            )
+
+        matches_expected, reason = self._verify_expected_snapshot(expected)
+        if not matches_expected:
+            self._cancel_active_salvage_choice_dialog()
+            return result(False, "blocked", reason)
+        current_target_frame = self._get_active_option_frame(target.option)
+        if (
+            current_target_frame is None
+            or _MerchantRulesSalvageFrameGuard.get_frame_id(current_target_frame)
+            != target_frame_id
+        ):
+            self._cancel_active_salvage_choice_dialog()
+            return result(
+                False,
+                "failed",
+                "selected armor salvage control changed before selection",
+            )
+
+        mode = self._option_to_mode(target.option)
+        if mode is None or not self._SalvageOptionsWindow.SelectOption(mode):
+            self._cancel_active_salvage_choice_dialog()
+            return result(False, "failed", "fixed armor-upgrade salvage selection failed")
+        yield from Routines.Yield.wait(50)
+
+        matches_expected, reason = self._verify_expected_snapshot(expected)
+        if not matches_expected:
+            self._cancel_active_salvage_choice_dialog()
+            return result(False, "blocked", reason)
+        selected_frame = self._get_active_option_frame(target.option)
+        if (
+            selected_frame is None
+            or _MerchantRulesSalvageFrameGuard.get_frame_id(selected_frame)
+            != target_frame_id
+        ):
+            self._cancel_active_salvage_choice_dialog()
+            return result(
+                False,
+                "failed",
+                "selected armor salvage control changed before confirmation",
+            )
+        valid_kit_id, kit_reason = validate_kit(
+            int(preferred_kit_id),
+            option=target.option,
+        )
+        if int(valid_kit_id) <= 0:
+            self._cancel_active_salvage_choice_dialog()
+            return result(False, "blocked", kit_reason or "upgrade salvage kit changed")
+
+        confirm_frame = self._WindowFrame.SalvageOptionConfirmButton
+        if not _MerchantRulesSalvageFrameGuard.is_hierarchy_active(
+            self._UIManager,
+            self._WindowFrame.SalvageOptionsFrame,
+            required_visible_frames=(self._WindowFrame.OptionsSalvageOptionsFrame,),
+            required_actionable_frames=(
+                self._WindowFrame.SalvageOptionCancelButton,
+                confirm_frame,
+                selected_frame,
+            ),
+        ):
+            self._cancel_active_salvage_choice_dialog()
+            return result(
+                False,
+                "failed",
+                "armor salvage confirmation hierarchy is not safely actionable",
+            )
+        if not self._SalvageOptionsWindow.Confirm():
+            self._cancel_active_salvage_choice_dialog()
+            return result(False, "failed", "armor salvage confirmation failed")
+
+        expected_remaining = tuple(
+            upgrade for upgrade in expected.upgrades if upgrade != target
+        )
+        waited_ms = 0
+        while waited_ms <= max(1, int(timeout_ms)):
+            target_component_ids = self._get_component_delta_item_ids(
+                target,
+                before_target_components,
+            )
+            if target_component_ids:
+                reserve = getattr(self._owner, "_reserve_execute_item_ids", None)
+                if callable(reserve):
+                    reserve(target_component_ids)
+
+            current, current_reason = self._capture_snapshot(
+                expected.item_id,
+                allow_no_upgrades=True,
+            )
+            if current is None:
+                inventory_ids_provider = getattr(self._owner, "_get_inventory_item_ids", None)
+                try:
+                    item_present = bool(
+                        callable(inventory_ids_provider)
+                        and int(expected.item_id)
+                        in {int(item_id) for item_id in inventory_ids_provider()}
+                    )
+                except Exception:
+                    item_present = False
+                if item_present:
+                    return result(
+                        False,
+                        "failed",
+                        f"post-extraction armor identity is invalid: {current_reason}",
+                        extra_reserved_item_ids=target_component_ids,
+                    )
+                if kit_model_id == int(ModelID.Perfect_Salvage_Kit.value):
+                    return result(
+                        False,
+                        "failed",
+                        "armor was destroyed despite using a Perfect Salvage Kit",
+                        extra_reserved_item_ids=target_component_ids,
+                    )
+                if target_component_ids:
+                    opposite_extracted = any(
+                        self._get_component_delta_item_ids(
+                            upgrade,
+                            before_opposite_components.get(upgrade.identifier, {}),
+                        )
+                        for upgrade in opposite_identities
+                    )
+                    if opposite_extracted:
+                        return result(
+                            False,
+                            "failed",
+                            "an unselected armor upgrade was also extracted",
+                            extra_reserved_item_ids=target_component_ids,
+                        )
+                    return result(
+                        True,
+                        "processed",
+                        "source armor was destroyed by the selected non-perfect salvage kit",
+                        extra_reserved_item_ids=target_component_ids,
+                    )
+            else:
+                if (
+                    int(current.model_id) != int(expected.model_id)
+                    or int(current.item_type_id) != int(expected.item_type_id)
+                ):
+                    return result(
+                        False,
+                        "failed",
+                        "armor model or item type changed after extraction",
+                        extra_reserved_item_ids=target_component_ids,
+                    )
+                if current.upgrades == expected.upgrades:
+                    yield from Routines.Yield.wait(50)
+                    waited_ms += 50
+                    continue
+                target_identity_present = any(
+                    upgrade.identifier == target.identifier
+                    and upgrade.option == target.option
+                    and upgrade.signature == target.signature
+                    for upgrade in current.upgrades
+                )
+                target_signature_present = all(
+                    triple in current.raw_modifiers for triple in target.signature
+                )
+                if target_identity_present or target_signature_present:
+                    return result(
+                        False,
+                        "failed",
+                        "selected armor upgrade is still installed after confirmation",
+                        extra_reserved_item_ids=target_component_ids,
+                    )
+                if current.upgrades != expected_remaining:
+                    return result(
+                        False,
+                        "failed",
+                        "unselected armor upgrade identity changed after extraction",
+                        extra_reserved_item_ids=target_component_ids,
+                    )
+                if target_component_ids:
+                    return result(
+                        True,
+                        "processed",
+                        "",
+                        extra_reserved_item_ids=target_component_ids,
+                    )
+
+            yield from Routines.Yield.wait(50)
+            waited_ms += 50
+
+        self._cancel_active_salvage_choice_dialog()
+        return result(
+            False,
+            "failed",
+            "armor salvage completed timeout: semantic target removal could not be verified",
+        )
+
+
 @dataclass
 class PurchaseTargetCleanup:
     """Describe post-purchase routing and whether completing a target requires storage access."""
@@ -3025,6 +3659,10 @@ class ParsedInventoryModifiers:
     rune_identifiers: tuple[str, ...] = field(default_factory=tuple)
     weapon_mod_identifiers: tuple[str, ...] = field(default_factory=tuple)
     weapon_mod_matches: tuple[ParsedUpgradeMatch, ...] = field(default_factory=tuple)
+    raw_modifiers: tuple[tuple[int, int, int], ...] = field(default_factory=tuple)
+    armor_upgrade_identifiers: tuple[str, ...] = field(default_factory=tuple)
+    armor_upgrade_matches: tuple[ArmorUpgradeIdentity, ...] = field(default_factory=tuple)
+    armor_upgrade_parse_error: str = ""
 
 
 @dataclass
@@ -4300,6 +4938,183 @@ def _is_armor_rune_catalog_name(name: object) -> bool:
     return any(token in ARMOR_RUNE_CATALOG_NAME_TOKENS for token in tokens)
 
 
+def _get_armor_upgrade_catalog_identity(identifier: object) -> tuple[ArmorUpgradeIdentity | None, str]:
+    """Return one validated fixed runes.json identity without consulting Item.Mods UIDs."""
+
+    safe_identifier = str(identifier or "").strip()
+    if not safe_identifier:
+        return None, "empty armor-upgrade catalog identifier"
+    if safe_identifier.casefold() in ARMOR_UPGRADE_HOLDING_NAMES:
+        return None, f"{safe_identifier} is a container upgrade"
+
+    rune = getattr(MOD_DB, "runes", {}).get(safe_identifier)
+    if rune is None:
+        return None, f"unknown runes.json identifier {safe_identifier}"
+    name = str(getattr(rune, "name", "") or safe_identifier).strip()
+    if not name:
+        return None, f"{safe_identifier} has an empty catalog name"
+    if name.casefold() in ARMOR_UPGRADE_HOLDING_NAMES:
+        return None, f"{name} is a container upgrade"
+
+    mod_type = getattr(rune, "mod_type", None)
+    mod_type_name = str(getattr(mod_type, "name", mod_type) or "")
+    if mod_type_name == "Prefix":
+        semantic_kind = "Insignia"
+        option = SALVAGE_OPTION_PREFIX
+    elif mod_type_name == "Suffix":
+        semantic_kind = "Rune"
+        option = SALVAGE_OPTION_SUFFIX
+    else:
+        return None, f"{name} has unsupported catalog type {mod_type_name or 'unknown'}"
+    if semantic_kind.casefold() not in name.casefold():
+        return None, f"{name} conflicts with its catalog semantic type {semantic_kind}"
+
+    signature: list[tuple[int, int, int]] = []
+    for modifier in list(getattr(rune, "modifiers", []) or []):
+        value_arg = getattr(modifier, "modifier_value_arg", None)
+        value_arg_name = str(getattr(value_arg, "name", value_arg) or "")
+        if value_arg_name != "Fixed":
+            return None, f"{name} has a non-fixed or malformed catalog signature"
+        triple = (
+            int(getattr(modifier, "identifier", 0)),
+            int(getattr(modifier, "arg1", 0)),
+            int(getattr(modifier, "arg2", 0)),
+        )
+        if triple in signature:
+            return None, f"{name} has a duplicate catalog signature triple"
+        signature.append(triple)
+    if not signature:
+        return None, f"{name} has an empty catalog signature"
+
+    return (
+        ArmorUpgradeIdentity(
+            identifier=safe_identifier,
+            name=name,
+            semantic_kind=semantic_kind,
+            option=option,
+            signature=tuple(signature),
+        ),
+        "",
+    )
+
+
+def _parse_exact_armor_upgrade_state(
+    raw_modifiers: tuple[tuple[int, int, int], ...],
+    parse_item_type: ItemType,
+    model_id: int,
+    *,
+    parsed_modifiers: object | None = None,
+) -> ArmorUpgradeParseState:
+    """Parse installed armor upgrades by exact full runes.json signatures and fail closed."""
+
+    try:
+        safe_raw_modifiers = tuple(
+            (int(identifier), int(arg1), int(arg2))
+            for identifier, arg1, arg2 in raw_modifiers
+        )
+    except (TypeError, ValueError):
+        return ArmorUpgradeParseState(error="malformed raw modifier tuple is unsupported")
+    if MOD_DB_LOAD_ERROR or not getattr(MOD_DB, "runes", None):
+        return ArmorUpgradeParseState(error=MOD_DB_LOAD_ERROR or "runes.json catalog is unavailable")
+    if len(safe_raw_modifiers) != len(set(safe_raw_modifiers)):
+        return ArmorUpgradeParseState(error="duplicate raw modifier triples are unsupported")
+    if ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE in safe_raw_modifiers:
+        return ArmorUpgradeParseState(
+            error="alternate Minor Vigor carrier 0x00C2 is intentionally unsupported"
+        )
+
+    if parsed_modifiers is None:
+        try:
+            parsed_modifiers = parse_modifiers(
+                list(safe_raw_modifiers),
+                parse_item_type,
+                int(model_id),
+                MOD_DB,
+            )
+        except Exception as exc:
+            return ArmorUpgradeParseState(error=f"runes.json modifier parsing failed: {exc}")
+
+    upgrades: list[ArmorUpgradeIdentity] = []
+    consumed_signature_triples: set[tuple[int, int, int]] = set()
+    seen_identifiers: set[str] = set()
+    seen_options: set[str] = set()
+    for match in list(getattr(parsed_modifiers, "runes", []) or []):
+        rune = getattr(match, "rune", None)
+        identifier = str(getattr(rune, "identifier", "") or "").strip()
+        identity, identity_error = _get_armor_upgrade_catalog_identity(identifier)
+        if identity is None:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=identity_error or "runes.json returned an invalid armor-upgrade identity",
+            )
+
+        match_mod_type = getattr(match, "mod_type", getattr(rune, "mod_type", None))
+        match_mod_type_name = str(getattr(match_mod_type, "name", match_mod_type) or "")
+        expected_mod_type_name = "Prefix" if identity.option == SALVAGE_OPTION_PREFIX else "Suffix"
+        if match_mod_type_name != expected_mod_type_name:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=f"{identity.name} parser type conflicts with its catalog identity",
+            )
+        for triple in identity.signature:
+            if safe_raw_modifiers.count(triple) != 1:
+                return ArmorUpgradeParseState(
+                    upgrades=tuple(upgrades),
+                    error=f"{identity.name} does not have one exact full signature on the armor",
+                )
+        if identity.identifier in seen_identifiers:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=f"duplicate catalog identity {identity.identifier} is unsupported",
+            )
+        if identity.option in seen_options:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=f"multiple conflicting {identity.semantic_kind} identities are unsupported",
+            )
+
+        seen_identifiers.add(identity.identifier)
+        seen_options.add(identity.option)
+        consumed_signature_triples.update(identity.signature)
+        upgrades.append(identity)
+
+    unknown_rune_triples = [
+        triple
+        for triple in safe_raw_modifiers
+        if int(triple[0]) in ARMOR_UPGRADE_SIGNATURE_IDENTIFIERS
+        and triple not in consumed_signature_triples
+    ]
+    if unknown_rune_triples:
+        formatted = ", ".join(
+            f"({identifier},{arg1},{arg2})"
+            for identifier, arg1, arg2 in unknown_rune_triples
+        )
+        return ArmorUpgradeParseState(
+            upgrades=tuple(upgrades),
+            error=f"unknown or malformed Rune/Insignia carrier signature: {formatted}",
+        )
+    if len(upgrades) > 2:
+        return ArmorUpgradeParseState(
+            upgrades=tuple(upgrades),
+            error="more than two armor-upgrade identities were parsed",
+        )
+
+    upgrades.sort(key=lambda upgrade: (upgrade.option, upgrade.identifier.casefold()))
+    return ArmorUpgradeParseState(upgrades=tuple(upgrades))
+
+
+def _armor_upgrade_signature_is_exactly_present(
+    raw_modifiers: tuple[tuple[int, int, int], ...],
+    identity: ArmorUpgradeIdentity,
+) -> bool:
+    """Recognize an exact selected target even when another armor identity forces a safe block."""
+
+    return bool(
+        identity.signature
+        and all(raw_modifiers.count(triple) == 1 for triple in identity.signature)
+    )
+
+
 def _is_armor_salvage_catalog_name(name: object) -> bool:
     normalized_name = _normalize_catalog_search_text(name)
     if not normalized_name:
@@ -5193,6 +6008,9 @@ def _is_auto_exact_upgrade_salvage_option(raw_option: object) -> bool:
 
 
 def _get_salvage_rule_upgrade_target_count(rule: object) -> int:
+    target_armor_identifiers = _dedupe_identifiers(
+        _coerce_list(getattr(rule, "target_armor_upgrade_identifiers", []))
+    )
     target_identifiers = _dedupe_identifiers(_coerce_list(getattr(rule, "target_weapon_mod_identifiers", [])))
     target_thresholds = _normalize_weapon_mod_threshold_rules(
         _coerce_list(getattr(rule, "target_weapon_mod_thresholds", []))
@@ -5204,10 +6022,36 @@ def _get_salvage_rule_upgrade_target_count(rule: object) -> int:
         _coerce_list(getattr(rule, "target_weapon_mod_variant_thresholds", []))
     )
     return (
-        len(target_identifiers)
+        len(target_armor_identifiers)
+        + len(target_identifiers)
         + len(target_thresholds)
         + len(target_variants)
         + len(target_variant_thresholds)
+    )
+
+
+def _salvage_rule_has_armor_upgrade_targets(rule: object) -> bool:
+    return bool(
+        _dedupe_identifiers(
+            _coerce_list(getattr(rule, "target_armor_upgrade_identifiers", []))
+        )
+    )
+
+
+def _salvage_rule_has_weapon_upgrade_targets(rule: object) -> bool:
+    return bool(
+        _dedupe_identifiers(
+            _coerce_list(getattr(rule, "target_weapon_mod_identifiers", []))
+        )
+        or _normalize_weapon_mod_threshold_rules(
+            _coerce_list(getattr(rule, "target_weapon_mod_thresholds", []))
+        )
+        or _normalize_weapon_mod_variant_rules(
+            _coerce_list(getattr(rule, "target_weapon_mod_variants", []))
+        )
+        or _normalize_weapon_mod_variant_threshold_rules(
+            _coerce_list(getattr(rule, "target_weapon_mod_variant_thresholds", []))
+        )
     )
 
 
@@ -5233,6 +6077,9 @@ def _normalize_salvage_rule(raw_rule: object) -> SalvageRule | None:
             model_ids=_dedupe_model_ids(raw_rule.model_ids),
             rarities=_normalize_salvage_rarity_flags(raw_rule.rarities),
             categories=_normalize_salvage_category_flags(raw_rule.categories),
+            target_armor_upgrade_identifiers=_dedupe_identifiers(
+                _coerce_list(getattr(raw_rule, "target_armor_upgrade_identifiers", []))
+            ),
             target_weapon_mod_identifiers=_dedupe_identifiers(
                 _coerce_list(getattr(raw_rule, "target_weapon_mod_identifiers", []))
             ),
@@ -5257,6 +6104,9 @@ def _normalize_salvage_rule(raw_rule: object) -> SalvageRule | None:
             ]),
             rarities=_normalize_salvage_rarity_flags(raw_rule.get("rarities", {})),
             categories=_normalize_salvage_category_flags(raw_rule.get("categories", {})),
+            target_armor_upgrade_identifiers=_dedupe_identifiers(
+                _coerce_list(raw_rule.get("target_armor_upgrade_identifiers", []))
+            ),
             target_weapon_mod_identifiers=_dedupe_identifiers(
                 _coerce_list(raw_rule.get("target_weapon_mod_identifiers", []))
             ),
@@ -5394,6 +6244,8 @@ def _serialize_salvage_rule(rule: SalvageRule) -> dict[str, object]:
         "salvage_option": _normalize_salvage_option(normalized_rule.salvage_option),
         "name": _normalize_rule_name(normalized_rule.name),
     }
+    if normalized_rule.target_armor_upgrade_identifiers:
+        payload["target_armor_upgrade_identifiers"] = list(normalized_rule.target_armor_upgrade_identifiers)
     if normalized_rule.target_weapon_mod_identifiers:
         payload["target_weapon_mod_identifiers"] = list(normalized_rule.target_weapon_mod_identifiers)
     if normalized_rule.target_weapon_mod_thresholds:
@@ -5543,6 +6395,8 @@ class MerchantRulesWidget:
         self.salvage_running = False
         self.auto_cleanup_running = False
         self.manual_vendor_running = False
+        self.execute_reservation_scope_active = False
+        self.execute_reserved_item_ids: set[int] = set()
         self.destroy_auto_enabled = False
         self.destroy_instant_enabled = False
         self.destroy_include_protected_items = False
@@ -5575,6 +6429,7 @@ class MerchantRulesWidget:
         self.salvage_model_search_cache: dict[int, str] = {}
         self.salvage_model_list_search_cache: dict[int, str] = {}
         self.salvage_weapon_mod_search_cache: dict[int, str] = {}
+        self.salvage_armor_upgrade_search_cache: dict[int, str] = {}
         self.sell_model_text_cache: dict[int, str] = {}
         self.buy_model_search_cache: dict[int, str] = {}
         self.buy_manual_model_id_cache: dict[int, int] = {}
@@ -5620,6 +6475,7 @@ class MerchantRulesWidget:
         self.catalog_stats: dict[str, int | bool] = {}
         self.weapon_mod_entries: list[dict[str, str]] = []
         self.rune_entries: list[dict[str, str]] = []
+        self.armor_upgrade_entries: list[dict[str, str]] = []
         self.weapon_mod_names: dict[str, str] = {}
         self.weapon_mod_generic_names: dict[str, str] = {}
         self.weapon_mod_variant_names: dict[str, str] = {}
@@ -10231,6 +11087,7 @@ class MerchantRulesWidget:
         self.salvage_model_search_cache.clear()
         self.salvage_model_list_search_cache.clear()
         self.salvage_weapon_mod_search_cache.clear()
+        self.salvage_armor_upgrade_search_cache.clear()
         self.sell_model_search_cache.clear()
         self.sell_model_list_search_cache.clear()
         self.sell_exact_rune_search_cache.clear()
@@ -10245,6 +11102,7 @@ class MerchantRulesWidget:
     def _load_modifier_catalogs(self):
         self.weapon_mod_entries = []
         self.rune_entries = []
+        self.armor_upgrade_entries = []
         self.weapon_mod_names = {}
         self.weapon_mod_generic_names = {}
         self.weapon_mod_variant_names = {}
@@ -10297,6 +11155,9 @@ class MerchantRulesWidget:
             entry = {"identifier": str(identifier), "name": display_name}
             self.rune_entries.append(entry)
             self.rune_names[str(identifier)] = display_name
+            armor_identity, _identity_error = _get_armor_upgrade_catalog_identity(identifier)
+            if armor_identity is not None:
+                self.armor_upgrade_entries.append(entry)
 
     def _load_rune_buy_catalog(self):
         self.rune_buy_entries = []
@@ -12516,6 +13377,19 @@ class MerchantRulesWidget:
         rule.model_ids = next_model_ids
         return True
 
+    def _set_salvage_rule_armor_upgrade_identifiers(
+        self,
+        rule: SalvageRule,
+        identifiers: list[str],
+    ) -> bool:
+        normalized_ids = _dedupe_identifiers(identifiers)
+        if normalized_ids == _dedupe_identifiers(
+            getattr(rule, "target_armor_upgrade_identifiers", [])
+        ):
+            return False
+        rule.target_armor_upgrade_identifiers = normalized_ids
+        return True
+
     def _set_salvage_rule_weapon_mod_identifiers(self, rule: SalvageRule, identifiers: list[str]) -> bool:
         normalized_ids = _dedupe_identifiers(identifiers)
         if normalized_ids == _dedupe_identifiers(getattr(rule, "target_weapon_mod_identifiers", [])):
@@ -14377,7 +15251,42 @@ class MerchantRulesWidget:
             raw_armor,
         ) = _extract_base_stats_from_raw_modifiers(raw_modifiers)
         if raw_modifiers:
-            parsed_modifiers = parse_modifiers(list(raw_modifiers), parse_item_type, model_id, MOD_DB)
+            try:
+                parsed_modifiers = parse_modifiers(
+                    list(raw_modifiers),
+                    parse_item_type,
+                    model_id,
+                    MOD_DB,
+                )
+            except Exception as exc:
+                if not is_armor_piece:
+                    raise
+                parsed_state = ParsedInventoryModifiers(
+                    requirement=raw_requirement,
+                    requirement_attribute_id=raw_requirement_attribute_id,
+                    requirement_attribute_name=raw_requirement_attribute_name,
+                    damage_min=raw_damage_min,
+                    damage_max=raw_damage_max,
+                    energy=raw_energy,
+                    armor=raw_armor,
+                    raw_modifiers=raw_modifiers,
+                    armor_upgrade_parse_error=f"runes.json modifier parsing failed: {exc}",
+                )
+                self.inventory_modifier_cache[item_id] = InventoryModifierCacheEntry(
+                    signature=signature,
+                    parsed=parsed_state,
+                )
+                return parsed_state
+            armor_upgrade_state = (
+                _parse_exact_armor_upgrade_state(
+                    raw_modifiers,
+                    parse_item_type,
+                    model_id,
+                    parsed_modifiers=parsed_modifiers,
+                )
+                if is_armor_piece
+                else ArmorUpgradeParseState()
+            )
             rune_identifiers = tuple(_dedupe_identifiers([match.rune.identifier for match in parsed_modifiers.runes]))
             weapon_mod_identifier_values = [match.weapon_mod.identifier for match in parsed_modifiers.weapon_mods]
             if getattr(parsed_modifiers, "has_increased_value", False):
@@ -14432,6 +15341,12 @@ class MerchantRulesWidget:
                 rune_identifiers=rune_identifiers,
                 weapon_mod_identifiers=weapon_mod_identifiers,
                 weapon_mod_matches=weapon_mod_matches,
+                raw_modifiers=raw_modifiers,
+                armor_upgrade_identifiers=tuple(
+                    upgrade.identifier for upgrade in armor_upgrade_state.upgrades
+                ),
+                armor_upgrade_matches=armor_upgrade_state.upgrades,
+                armor_upgrade_parse_error=str(armor_upgrade_state.error or ""),
             )
         elif any((raw_requirement, raw_damage_min, raw_damage_max, raw_energy, raw_armor)):
             parsed_state = ParsedInventoryModifiers(
@@ -14442,6 +15357,7 @@ class MerchantRulesWidget:
                 damage_max=raw_damage_max,
                 energy=raw_energy,
                 armor=raw_armor,
+                raw_modifiers=raw_modifiers,
             )
 
         self.inventory_modifier_cache[item_id] = InventoryModifierCacheEntry(
@@ -14533,6 +15449,10 @@ class MerchantRulesWidget:
                 rune_identifiers=list(parsed_modifiers.rune_identifiers),
                 weapon_mod_identifiers=list(parsed_modifiers.weapon_mod_identifiers),
                 weapon_mod_matches=list(parsed_modifiers.weapon_mod_matches),
+                raw_modifiers=tuple(parsed_modifiers.raw_modifiers),
+                armor_upgrade_identifiers=list(parsed_modifiers.armor_upgrade_identifiers),
+                armor_upgrade_matches=list(parsed_modifiers.armor_upgrade_matches),
+                armor_upgrade_parse_error=str(parsed_modifiers.armor_upgrade_parse_error or ""),
             )
         except Exception:
             return None
@@ -15481,11 +16401,21 @@ class MerchantRulesWidget:
         label: object,
         identifier: object,
         match: object | None,
+        *,
+        source_kind: str = WEAPON_UPGRADE_SOURCE_KIND,
+        required_option: str = "",
     ) -> SalvageUpgradeTargetMatch:
-        safe_label = str(label or "").strip() or self._get_weapon_mod_generic_label(str(identifier or "").strip())
+        safe_identifier = str(identifier or "").strip()
+        safe_label = str(label or "").strip() or self._get_weapon_mod_generic_label(safe_identifier)
         return SalvageUpgradeTargetMatch(
             label=safe_label,
-            required_option=self._get_weapon_mod_required_salvage_option(identifier, match),
+            required_option=(
+                str(required_option or "").strip()
+                if str(required_option or "").strip()
+                else self._get_weapon_mod_required_salvage_option(safe_identifier, match)
+            ),
+            identifier=safe_identifier,
+            source_kind=str(source_kind or WEAPON_UPGRADE_SOURCE_KIND),
         )
 
     def _get_salvage_rule_upgrade_target_matches(
@@ -15498,72 +16428,132 @@ class MerchantRulesWidget:
             return []
 
         target_matches: list[SalvageUpgradeTargetMatch] = []
-        seen_matches: set[tuple[str, str]] = set()
+        seen_matches: set[tuple[str, str, str, str]] = set()
         item_weapon_mod_identifiers = set(_dedupe_identifiers(getattr(item, "weapon_mod_identifiers", [])))
         item_weapon_mod_matches = tuple(getattr(item, "weapon_mod_matches", []) or ())
 
-        def append_match(label: object, identifier: object, match: object | None) -> None:
-            target_match = self._build_salvage_upgrade_target_match(label, identifier, match)
-            match_key = (target_match.label, target_match.required_option)
+        def append_match(
+            label: object,
+            identifier: object,
+            match: object | None,
+            *,
+            source_kind: str = WEAPON_UPGRADE_SOURCE_KIND,
+            required_option: str = "",
+        ) -> None:
+            target_match = self._build_salvage_upgrade_target_match(
+                label,
+                identifier,
+                match,
+                source_kind=source_kind,
+                required_option=required_option,
+            )
+            match_key = (
+                target_match.source_kind,
+                target_match.identifier,
+                target_match.label,
+                target_match.required_option,
+            )
             if match_key in seen_matches:
                 return
             seen_matches.add(match_key)
             target_matches.append(target_match)
 
-        for identifier in normalized_rule.target_weapon_mod_identifiers:
-            if identifier not in item_weapon_mod_identifiers:
-                continue
-            parsed_matches = [
-                match
-                for match in item_weapon_mod_matches
-                if str(getattr(match, "identifier", "") or "").strip() == identifier
-            ]
-            if parsed_matches:
-                for match in parsed_matches:
-                    append_match(self._get_weapon_mod_generic_label(identifier), identifier, match)
-            else:
-                append_match(self._get_weapon_mod_generic_label(identifier), identifier, None)
+        if not bool(getattr(item, "is_armor_piece", False)):
+            for identifier in normalized_rule.target_weapon_mod_identifiers:
+                if identifier not in item_weapon_mod_identifiers:
+                    continue
+                parsed_matches = [
+                    match
+                    for match in item_weapon_mod_matches
+                    if str(getattr(match, "identifier", "") or "").strip() == identifier
+                ]
+                if parsed_matches:
+                    for match in parsed_matches:
+                        append_match(self._get_weapon_mod_generic_label(identifier), identifier, match)
+                else:
+                    append_match(self._get_weapon_mod_generic_label(identifier), identifier, None)
 
-        for threshold_rule in normalized_rule.target_weapon_mod_thresholds:
-            threshold_identifier = str(threshold_rule.identifier or "").strip()
-            if not threshold_identifier:
-                continue
-            for match in item_weapon_mod_matches:
-                if str(getattr(match, "identifier", "") or "").strip() != threshold_identifier:
+            for threshold_rule in normalized_rule.target_weapon_mod_thresholds:
+                threshold_identifier = str(threshold_rule.identifier or "").strip()
+                if not threshold_identifier:
                     continue
-                matched_value = getattr(match, "value", None)
-                if matched_value is None:
-                    continue
-                if _safe_int(matched_value, 0) >= int(threshold_rule.min_value):
-                    append_match(self._format_weapon_mod_threshold_rule(threshold_rule), threshold_identifier, match)
-                    break
+                for match in item_weapon_mod_matches:
+                    if str(getattr(match, "identifier", "") or "").strip() != threshold_identifier:
+                        continue
+                    matched_value = getattr(match, "value", None)
+                    if matched_value is None:
+                        continue
+                    if _safe_int(matched_value, 0) >= int(threshold_rule.min_value):
+                        append_match(
+                            self._format_weapon_mod_threshold_rule(threshold_rule),
+                            threshold_identifier,
+                            match,
+                        )
+                        break
 
-        for variant_rule in normalized_rule.target_weapon_mod_variants:
-            for match in item_weapon_mod_matches:
-                if _weapon_mod_variant_matches_parsed_match(variant_rule, match):
-                    append_match(
-                        self._format_weapon_mod_variant_rule(variant_rule),
-                        getattr(variant_rule, "identifier", ""),
-                        match,
-                    )
-                    break
+            for variant_rule in normalized_rule.target_weapon_mod_variants:
+                for match in item_weapon_mod_matches:
+                    if _weapon_mod_variant_matches_parsed_match(variant_rule, match):
+                        append_match(
+                            self._format_weapon_mod_variant_rule(variant_rule),
+                            getattr(variant_rule, "identifier", ""),
+                            match,
+                        )
+                        break
 
-        for threshold_rule in normalized_rule.target_weapon_mod_variant_thresholds:
-            for match in item_weapon_mod_matches:
-                if not _weapon_mod_variant_matches_parsed_match(threshold_rule, match):
+            for threshold_rule in normalized_rule.target_weapon_mod_variant_thresholds:
+                for match in item_weapon_mod_matches:
+                    if not _weapon_mod_variant_matches_parsed_match(threshold_rule, match):
+                        continue
+                    matched_value = getattr(match, "value", None)
+                    if matched_value is None:
+                        continue
+                    if _safe_int(matched_value, 0) >= int(threshold_rule.min_value):
+                        append_match(
+                            self._format_weapon_mod_variant_threshold_rule(threshold_rule),
+                            getattr(threshold_rule, "identifier", ""),
+                            match,
+                        )
+                        break
+
+        if bool(getattr(item, "is_armor_piece", False)) and int(
+            getattr(item, "item_type_id", 0)
+        ) != int(ItemType.Rune_Mod):
+            raw_modifiers = tuple(getattr(item, "raw_modifiers", ()) or ())
+            for identifier in normalized_rule.target_armor_upgrade_identifiers:
+                identity, _identity_error = _get_armor_upgrade_catalog_identity(identifier)
+                if identity is None:
                     continue
-                matched_value = getattr(match, "value", None)
-                if matched_value is None:
+                target_signature_present = bool(
+                    identity.signature
+                    and all(triple in raw_modifiers for triple in identity.signature)
+                )
+                alternate_minor_vigor_present = bool(
+                    identity.signature == ((9224, 0, 0x00FF),)
+                    and ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE in raw_modifiers
+                )
+                if not target_signature_present and not alternate_minor_vigor_present:
                     continue
-                if _safe_int(matched_value, 0) >= int(threshold_rule.min_value):
-                    append_match(
-                        self._format_weapon_mod_variant_threshold_rule(threshold_rule),
-                        getattr(threshold_rule, "identifier", ""),
-                        match,
-                    )
-                    break
+                append_match(
+                    identity.name,
+                    identity.identifier,
+                    identity,
+                    source_kind=ARMOR_UPGRADE_SOURCE_KIND,
+                    required_option=identity.option,
+                )
 
         return target_matches
+
+    def _get_salvage_rule_armor_upgrade_target_matches(
+        self,
+        rule: SalvageRule,
+        item: InventoryItemInfo,
+    ) -> list[SalvageUpgradeTargetMatch]:
+        return [
+            target_match
+            for target_match in self._get_salvage_rule_upgrade_target_matches(rule, item)
+            if target_match.source_kind == ARMOR_UPGRADE_SOURCE_KIND
+        ]
 
     def _get_salvage_rule_upgrade_target_reason(self, rule: SalvageRule, item: InventoryItemInfo) -> str:
         target_matches = self._get_salvage_rule_upgrade_target_matches(rule, item)
@@ -15634,6 +16624,12 @@ class MerchantRulesWidget:
         item: InventoryItemInfo,
         selected_option: object,
     ) -> str:
+        armor_target_matches = self._get_salvage_rule_armor_upgrade_target_matches(rule, item)
+        if len(armor_target_matches) > 1:
+            return (
+                "specific upgrade salvage ambiguous: one rule matched both installed armor upgrades "
+                f"({self._format_compact_list([match.label for match in armor_target_matches], limit=3)})"
+            )
         if _is_auto_exact_upgrade_salvage_option(selected_option):
             return self._get_auto_salvage_upgrade_slot_resolution(rule, item).block_reason
 
@@ -15873,6 +16869,17 @@ class MerchantRulesWidget:
         if not selection_reason:
             return "not selected by salvage settings"
         raw_selected_option = getattr(selected_rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
+        armor_target_matches = (
+            self._get_salvage_rule_armor_upgrade_target_matches(selected_rule, item)
+            if selected_rule is not None
+            else []
+        )
+        if armor_target_matches:
+            armor_parse_error = str(
+                getattr(item, "armor_upgrade_parse_error", "") or ""
+            ).strip()
+            if armor_parse_error:
+                return f"armor specific upgrade identity invalid: {armor_parse_error}"
         if (
             selected_rule is not None
             and _is_auto_exact_upgrade_salvage_option(raw_selected_option)
@@ -15897,7 +16904,12 @@ class MerchantRulesWidget:
                         item,
                     ).selected_option
             if selected_option in SALVAGE_UPGRADE_OPTIONS:
-                upgrade_supported, support_reason = self._get_salvage_upgrade_support_status()
+                if armor_target_matches:
+                    upgrade_supported, support_reason = (
+                        self._get_armor_salvage_upgrade_support_status()
+                    )
+                else:
+                    upgrade_supported, support_reason = self._get_salvage_upgrade_support_status()
                 if not upgrade_supported:
                     return support_reason or SALVAGE_UPGRADE_BACKEND_UNAVAILABLE_REASON
             if int(salvage_kit_id) <= 0:
@@ -15941,6 +16953,7 @@ class MerchantRulesWidget:
             ("specific upgrade salvage requires", "specific upgrade salvage not executable"),
             ("specific upgrade salvage cannot infer", "specific upgrade salvage not executable"),
             ("specific upgrade salvage ambiguous", "specific upgrade salvage not executable"),
+            ("armor specific upgrade identity invalid:", "armor specific upgrade identity invalid"),
             ("specific upgrade target option unknown:", "specific upgrade target option unknown"),
             ("specific upgrade target requires", "specific upgrade target not executable"),
             ("no normal salvage kit", "no normal salvage kit"),
@@ -19327,6 +20340,16 @@ class MerchantRulesWidget:
             return plan
 
         items = self._collect_inventory_items()
+        if bool(getattr(self, "execute_reservation_scope_active", False)):
+            reserved_item_ids = set(
+                getattr(self, "execute_reserved_item_ids", set()) or set()
+            )
+            if reserved_item_ids:
+                items = [
+                    item
+                    for item in items
+                    if int(item.item_id) not in reserved_item_ids
+                ]
         model_counts = self._get_inventory_model_counts(items)
         plan.inventory_snapshot_captured = True
         plan.inventory_model_counts = dict(model_counts)
@@ -23686,13 +24709,17 @@ class MerchantRulesWidget:
         storage, sale, buy, and craft work remains bounded by the approved plan.
         """
 
+        owned_reservation_scope = self._begin_execute_reservation_scope()
         if (
             allow_multi_stop
             and not local_only
             and not exclude_consumable_crafter
             and self._should_use_consumable_crafter_multi_stop_route()
         ):
-            yield from self._execute_consumable_crafter_multi_stop_route()
+            try:
+                yield from self._execute_consumable_crafter_multi_stop_route()
+            finally:
+                self._end_execute_reservation_scope(owned_reservation_scope)
             return
 
         self.execution_running = True
@@ -24262,6 +25289,7 @@ class MerchantRulesWidget:
             ConsoleLog(MODULE_NAME, traceback.format_exc(), Console.MessageType.Error)
         finally:
             self.execution_running = False
+            self._end_execute_reservation_scope(owned_reservation_scope)
             if paused_inventory_plus is not None:
                 paused_inventory_plus.resume()
                 self._debug_log("Execution: resumed Inventory Plus.")
@@ -24700,6 +25728,29 @@ class MerchantRulesWidget:
             self._exact_upgrade_salvage_bridge = bridge
         return bridge
 
+    def _get_armor_upgrade_salvage_bridge(self) -> _MerchantRulesArmorUpgradeSalvageBridge:
+        bridge = getattr(self, "_armor_upgrade_salvage_bridge", None)
+        if bridge is None:
+            bridge = _MerchantRulesArmorUpgradeSalvageBridge(owner=self)
+            self._armor_upgrade_salvage_bridge = bridge
+        return bridge
+
+    def _get_armor_salvage_upgrade_support_status(self) -> tuple[bool, str]:
+        cached_value = getattr(self, "_armor_salvage_upgrade_support_cache", None)
+        if isinstance(cached_value, bool):
+            cached_reason = str(
+                getattr(self, "_armor_salvage_upgrade_support_reason", "") or ""
+            ).strip()
+            return cached_value, cached_reason
+        try:
+            supported, reason = self._get_armor_upgrade_salvage_bridge().is_available()
+        except Exception as exc:
+            supported = False
+            reason = f"{SALVAGE_UPGRADE_BACKEND_UNAVAILABLE_REASON}: armor check failed: {exc}"
+        self._armor_salvage_upgrade_support_cache = bool(supported)
+        self._armor_salvage_upgrade_support_reason = str(reason or "").strip()
+        return bool(supported), self._armor_salvage_upgrade_support_reason
+
     def _get_salvage_upgrade_support_status(self) -> tuple[bool, str]:
         cached_value = getattr(self, "_salvage_upgrade_support_cache", None)
         if isinstance(cached_value, bool):
@@ -24720,6 +25771,17 @@ class MerchantRulesWidget:
         supported, _reason = self._get_salvage_upgrade_support_status()
         return bool(supported)
 
+    def _has_salvage_upgrade_support_for_rule(self, rule: SalvageRule) -> bool:
+        weapon_supported = bool(
+            not _salvage_rule_has_weapon_upgrade_targets(rule)
+            or self._has_salvage_upgrade_support()
+        )
+        armor_supported = bool(
+            not _salvage_rule_has_armor_upgrade_targets(rule)
+            or self._get_armor_salvage_upgrade_support_status()[0]
+        )
+        return bool(weapon_supported and armor_supported)
+
     def _queue_salvage_start(self, item_id: int, salvage_kit_id: int, attempt: int):
         from Py4GWCoreLib.Inventory import Inventory
 
@@ -24734,6 +25796,135 @@ class MerchantRulesWidget:
             return False
         yield from Routines.Yield.wait(150)
         return True
+
+    def _capture_armor_upgrade_snapshot(
+        self,
+        item_id: int,
+        *,
+        allow_no_upgrades: bool = False,
+    ) -> tuple[ArmorUpgradeSnapshot | None, str]:
+        """Capture a strict carried-armor identity for repeated transaction revalidation."""
+
+        safe_item_id = max(0, _safe_int(item_id, 0))
+        if safe_item_id <= 0:
+            return None, "invalid item id"
+        try:
+            if safe_item_id not in {
+                int(candidate_id) for candidate_id in self._get_inventory_item_ids()
+            }:
+                return None, "item is no longer in carried inventory"
+        except Exception as exc:
+            return None, f"inventory membership check failed: {exc}"
+
+        item = self._build_inventory_item_info(safe_item_id)
+        if item is None:
+            return None, "live item snapshot is unavailable"
+        if not bool(item.is_armor_piece):
+            return None, "item is not armor"
+        if int(item.item_type_id) == int(ItemType.Rune_Mod):
+            return None, "standalone Rune/Insignia components cannot be source armor"
+        if str(item.standalone_kind or "").strip():
+            return None, "standalone upgrade components cannot be source armor"
+        if not bool(item.identified):
+            return None, "armor is not identified"
+        if not bool(item.salvageable):
+            return None, "armor is not salvageable"
+        if bool(item.is_stackable) or max(0, int(item.quantity)) != 1:
+            return None, "stacked or malformed armor quantity is unsupported"
+
+        raw_modifiers = tuple(getattr(item, "raw_modifiers", ()) or ())
+        if not raw_modifiers:
+            try:
+                raw_modifiers = self._get_item_modifier_values(safe_item_id)
+            except Exception as exc:
+                return None, f"raw modifier read failed: {exc}"
+        try:
+            item_type_enum = ItemType(int(item.item_type_id))
+        except Exception:
+            item_type_enum = ItemType.Unknown
+        try:
+            _is_weapon_like, is_armor_piece, parse_item_type = self._classify_inventory_item_type(
+                safe_item_id,
+                item_type_enum,
+            )
+        except Exception as exc:
+            return None, f"armor type classification failed: {exc}"
+        if not is_armor_piece or parse_item_type not in ARMOR_PIECE_TYPES:
+            return None, "armor type cannot be parsed deterministically"
+
+        parse_state = _parse_exact_armor_upgrade_state(
+            raw_modifiers,
+            parse_item_type,
+            int(item.model_id),
+        )
+        if parse_state.error:
+            return None, parse_state.error
+        if not parse_state.upgrades and not allow_no_upgrades:
+            return None, "no exact runes.json Rune or Insignia identity is installed"
+        return (
+            ArmorUpgradeSnapshot(
+                item_id=safe_item_id,
+                model_id=int(item.model_id),
+                item_type_id=int(item.item_type_id),
+                name=str(item.name or f"Model {int(item.model_id)}"),
+                raw_modifiers=tuple(raw_modifiers),
+                upgrades=parse_state.upgrades,
+            ),
+            "",
+        )
+
+    def _capture_standalone_armor_upgrade_component_quantities(
+        self,
+        identity: ArmorUpgradeIdentity,
+    ) -> dict[int, int]:
+        """Find carried loose components with the exact extracted runes.json signature."""
+
+        quantities: dict[int, int] = {}
+        for item_id in self._get_inventory_item_ids():
+            item = self._build_inventory_item_info(int(item_id))
+            if item is None:
+                continue
+            if int(item.item_type_id) != int(ItemType.Rune_Mod):
+                continue
+            if str(item.standalone_kind or "") != RUNE_STANDALONE_KIND:
+                continue
+            raw_modifiers = tuple(getattr(item, "raw_modifiers", ()) or ())
+            if not _armor_upgrade_signature_is_exactly_present(raw_modifiers, identity):
+                continue
+            exact_identifiers = _dedupe_identifiers(getattr(item, "rune_identifiers", []))
+            if exact_identifiers != [identity.identifier]:
+                continue
+            quantities[int(item.item_id)] = max(1, int(item.quantity))
+        return quantities
+
+    def _reserve_execute_item_ids(self, item_ids: Iterable[int]) -> None:
+        """Reserve live item IDs only until the current top-level Execute finishes."""
+
+        if not bool(getattr(self, "execute_reservation_scope_active", False)):
+            return
+        reserved = getattr(self, "execute_reserved_item_ids", None)
+        if not isinstance(reserved, set):
+            reserved = set()
+            self.execute_reserved_item_ids = reserved
+        reserved.update(
+            max(0, _safe_int(item_id, 0))
+            for item_id in item_ids
+            if max(0, _safe_int(item_id, 0)) > 0
+        )
+
+    def _begin_execute_reservation_scope(self) -> bool:
+        if bool(getattr(self, "execute_reservation_scope_active", False)):
+            return False
+        self.execute_reservation_scope_active = True
+        self.execute_reserved_item_ids = set()
+        return True
+
+    def _end_execute_reservation_scope(self, owned_scope: bool) -> None:
+        if not bool(owned_scope):
+            return
+        self.execute_reserved_item_ids.clear()
+        self.execute_reservation_scope_active = False
+
 
     def _get_active_salvage_popup(self) -> _MerchantRulesActiveSalvagePopup | None:
         try:
@@ -24940,6 +26131,8 @@ class MerchantRulesWidget:
         mode = "auto" if auto_triggered else "manual"
         item = candidate.item
         rule = _normalize_salvage_rule(candidate.rule) or SalvageRule()
+        if self._get_salvage_rule_armor_upgrade_target_matches(rule, item):
+            self._reserve_execute_item_ids((int(item.item_id),))
         live_item = self._build_inventory_item_info(int(item.item_id))
         if live_item is None:
             return "missing_item"
@@ -25023,6 +26216,90 @@ class MerchantRulesWidget:
         )
 
         if selected_option in SALVAGE_UPGRADE_OPTIONS:
+            armor_target_matches = self._get_salvage_rule_armor_upgrade_target_matches(
+                rule,
+                live_item,
+            )
+            if armor_target_matches:
+                if len(armor_target_matches) != 1:
+                    ConsoleLog(
+                        MODULE_NAME,
+                        f"MR Salvage skipped {live_item_label} ({item_id}): "
+                        "specific upgrade salvage ambiguous: one rule matched both installed armor upgrades.",
+                        Console.MessageType.Warning,
+                    )
+                    return "blocked"
+                target_match = armor_target_matches[0]
+                expected_armor, capture_reason = self._capture_armor_upgrade_snapshot(item_id)
+                if expected_armor is None:
+                    ConsoleLog(
+                        MODULE_NAME,
+                        f"MR Salvage skipped {live_item_label} ({item_id}): "
+                        f"{capture_reason or 'exact armor-upgrade snapshot is unavailable'}.",
+                        Console.MessageType.Warning,
+                    )
+                    return "blocked"
+                expected_target = next(
+                    (
+                        upgrade
+                        for upgrade in expected_armor.upgrades
+                        if upgrade.identifier == target_match.identifier
+                        and upgrade.option == selected_option
+                    ),
+                    None,
+                )
+                if expected_target is None:
+                    ConsoleLog(
+                        MODULE_NAME,
+                        f"MR Salvage skipped {live_item_label} ({item_id}): "
+                        "selected exact armor target changed before extraction.",
+                        Console.MessageType.Warning,
+                    )
+                    return "blocked"
+                armor_bridge_result = yield from (
+                    self._get_armor_upgrade_salvage_bridge().salvage_exact_armor_upgrade(
+                        expected_armor,
+                        expected_target,
+                        preferred_kit_id=int(salvage_kit_id),
+                        timeout_ms=5000,
+                    )
+                )
+                self._reserve_execute_item_ids(
+                    tuple(
+                        getattr(armor_bridge_result, "reserved_item_ids", ()) or ()
+                    )
+                )
+                armor_bridge_status = str(
+                    getattr(armor_bridge_result, "status", "") or "failed"
+                )
+                armor_bridge_reason = str(
+                    getattr(armor_bridge_result, "reason", "") or ""
+                ).strip()
+                if not bool(getattr(armor_bridge_result, "success", False)):
+                    ConsoleLog(
+                        MODULE_NAME,
+                        f"MR Salvage skipped {live_item_label} ({item_id}): "
+                        f"{armor_bridge_reason or 'exact armor-upgrade salvage failed'}.",
+                        Console.MessageType.Warning,
+                    )
+                    return (
+                        armor_bridge_status
+                        if armor_bridge_status in {"blocked", "failed"}
+                        else "failed"
+                    )
+                completion_detail = (
+                    f" ({armor_bridge_reason})" if armor_bridge_reason else ""
+                )
+                self._salvage_flow_log(
+                    f"MR Salvage verified exact {expected_target.semantic_kind} removal "
+                    f"for item {item_id}{completion_detail}."
+                )
+                return (
+                    armor_bridge_status
+                    if armor_bridge_status in {"processed", "salvaged"}
+                    else "processed"
+                )
+
             exact_bridge = self._get_exact_upgrade_salvage_bridge()
             expected_upgrade, capture_reason = exact_bridge.get_upgrade_for_option(item_id, selected_option)
             if capture_reason or not expected_upgrade:
@@ -26359,6 +27636,7 @@ class MerchantRulesWidget:
             self._restore_profile_from_backup()
         if open_folder_clicked:
             self._open_profile_config_folder()
+
 
     def _draw_runtime_diagnostics_section(self):
         total_lookups = max(0, int(self.inventory_modifier_cache_hits) + int(self.inventory_modifier_cache_misses))
@@ -32756,7 +34034,7 @@ class MerchantRulesWidget:
                 option_label = f"{option_label} (specific-upgrade targets require prefix/suffix/inscription)"
         if (
             (selected_option in SALVAGE_UPGRADE_OPTIONS or is_auto_upgrade_option)
-            and not self._has_salvage_upgrade_support()
+            and not self._has_salvage_upgrade_support_for_rule(normalized_rule)
         ):
             option_label = f"{option_label} (extraction unavailable)"
         if not selector_parts:
@@ -32827,6 +34105,9 @@ class MerchantRulesWidget:
 
     def _draw_salvage_upgrade_target_editor(self, index: int, rule: SalvageRule) -> bool:
         changed = False
+        selected_armor_identifiers = _dedupe_identifiers(
+            getattr(rule, "target_armor_upgrade_identifiers", [])
+        )
         selected_identifiers = _dedupe_identifiers(getattr(rule, "target_weapon_mod_identifiers", []))
         selected_threshold_rules = _normalize_weapon_mod_threshold_rules(
             getattr(rule, "target_weapon_mod_thresholds", [])
@@ -32852,16 +34133,28 @@ class MerchantRulesWidget:
             return [choice_key for choice_key in choice_keys if choice_key]
 
         target_choice_keys = build_target_choice_keys()
+        target_entry_count = len(target_choice_keys) + len(selected_armor_identifiers)
         selected_option = _resolve_salvage_operation(rule.salvage_option)
         is_auto_upgrade_option = _is_auto_exact_upgrade_salvage_option(rule.salvage_option)
+        target_support_available = bool(
+            (not target_choice_keys or self._has_salvage_upgrade_support())
+            and (
+                not selected_armor_identifiers
+                or self._get_armor_salvage_upgrade_support_status()[0]
+            )
+        )
 
         self._draw_secondary_text(
             "Targets matching items for Merchant Rules salvage planning/protection. "
             "Run Salvage extracts only when this upgrade choice can be selected safely."
         )
-        if is_auto_upgrade_option and not target_choice_keys:
+        if is_auto_upgrade_option and target_entry_count <= 0:
             self._draw_secondary_text("Specific upgrade needs at least one specific upgrade target.")
-        elif selected_option not in SALVAGE_UPGRADE_OPTIONS and not is_auto_upgrade_option and target_choice_keys:
+        elif (
+            selected_option not in SALVAGE_UPGRADE_OPTIONS
+            and not is_auto_upgrade_option
+            and target_entry_count > 0
+        ):
             self._draw_colored_text(
                 "Specific-upgrade targets require prefix, suffix, or inscription salvage. "
                 "Run Salvage skips these targets while this rule uses default/material salvage.",
@@ -32869,17 +34162,20 @@ class MerchantRulesWidget:
             )
         elif (
             (selected_option in SALVAGE_UPGRADE_OPTIONS or is_auto_upgrade_option)
-            and not self._has_salvage_upgrade_support()
+            and not target_support_available
         ):
             self._draw_secondary_text(
                 "This extraction mode is not available right now. "
                 "Matching items stay protected and Run Salvage skips extraction."
             )
 
-        self._draw_subsection_label(f"Target Entries: {len(target_choice_keys)}")
+        self._draw_subsection_label(f"Target Entries: {target_entry_count}")
         self._draw_helper_tooltip("salvage_specific_upgrade_targets")
 
         if self._draw_confirm_destructive_button(f"Clear Specific Upgrade Targets##merchant_rules_salvage_upgrade_clear_{index}"):
+            if self._set_salvage_rule_armor_upgrade_identifiers(rule, []):
+                changed = True
+                selected_armor_identifiers = []
             if self._set_salvage_rule_weapon_mod_identifiers(rule, []):
                 changed = True
                 selected_identifiers = []
@@ -32894,6 +34190,7 @@ class MerchantRulesWidget:
                 selected_variant_threshold_rules = []
             target_choice_keys = build_target_choice_keys()
 
+        self._draw_subsection_label("Weapon Prefixes / Suffixes / Inscriptions")
         if self._draw_selected_weapon_mod_protections(
             "salvage_upgrade_targets",
             index,
@@ -32906,7 +34203,7 @@ class MerchantRulesWidget:
             variant_threshold_rules=selected_variant_threshold_rules,
             variant_setter=self._set_salvage_rule_weapon_mod_variants,
             variant_threshold_setter=self._set_salvage_rule_weapon_mod_variant_thresholds,
-            empty_text="No specific upgrade targets selected yet.",
+            empty_text="No weapon upgrade targets selected.",
             value_column_label="Target If",
         ):
             changed = True
@@ -32918,7 +34215,7 @@ class MerchantRulesWidget:
 
         search_text = self.salvage_weapon_mod_search_cache.get(index, "")
         updated_search_text = PyImGui.input_text(
-            f"Search Specific Upgrades##merchant_rules_salvage_upgrade_search_{index}",
+            f"Search Weapon Upgrades##merchant_rules_salvage_upgrade_search_{index}",
             search_text,
         )
         self._draw_hover_tooltip("Search by upgrade name or identifier.")
@@ -32979,6 +34276,77 @@ class MerchantRulesWidget:
                         selected_identifiers = list(rule.target_weapon_mod_identifiers)
             self.salvage_weapon_mod_search_cache[index] = self._get_weapon_mod_choice_label(picked_identifier)
 
+        PyImGui.spacing()
+        self._draw_subsection_label("Armor Runes / Insignias")
+        removed_armor_identifier = self._draw_selected_identifiers(
+            "salvage_armor_upgrade_targets",
+            index,
+            selected_armor_identifiers,
+            self._get_rune_label,
+            text_color_for_identifier=self._get_rune_text_color_for_identifier,
+            tooltip_for_identifier=self._get_rune_tooltip_text,
+        )
+        if removed_armor_identifier:
+            if self._set_salvage_rule_armor_upgrade_identifiers(
+                rule,
+                [
+                    identifier
+                    for identifier in selected_armor_identifiers
+                    if identifier != removed_armor_identifier
+                ],
+            ):
+                changed = True
+                selected_armor_identifiers = list(
+                    rule.target_armor_upgrade_identifiers
+                )
+
+        armor_search_text = self.salvage_armor_upgrade_search_cache.get(index, "")
+        updated_armor_search_text = PyImGui.input_text(
+            f"Search Armor Runes / Insignias##merchant_rules_salvage_armor_upgrade_search_{index}",
+            armor_search_text,
+        )
+        self._draw_hover_tooltip("Search exact runes.json Rune or Insignia names and identifiers.")
+        if updated_armor_search_text != armor_search_text:
+            self.salvage_armor_upgrade_search_cache[index] = updated_armor_search_text
+
+        picked_armor_identifier, visible_armor_identifiers = self._draw_identifier_search_results(
+            f"merchant_rules_salvage_armor_upgrade_results_{index}",
+            self.salvage_armor_upgrade_search_cache.get(index, ""),
+            self.armor_upgrade_entries,
+            text_color_for_identifier=self._get_rune_text_color_for_identifier,
+            tooltip_for_identifier=self._get_rune_tooltip_text,
+        )
+        addable_armor_identifiers = [
+            identifier
+            for identifier in visible_armor_identifiers
+            if identifier not in selected_armor_identifiers
+        ]
+        if self._draw_add_all_matches_button(
+            f"merchant_rules_salvage_armor_upgrade_results_add_all_{index}",
+            len(visible_armor_identifiers),
+            len(addable_armor_identifiers),
+        ):
+            if self._set_salvage_rule_armor_upgrade_identifiers(
+                rule,
+                selected_armor_identifiers + addable_armor_identifiers,
+            ):
+                changed = True
+                selected_armor_identifiers = list(
+                    rule.target_armor_upgrade_identifiers
+                )
+        if picked_armor_identifier:
+            if (
+                picked_armor_identifier not in selected_armor_identifiers
+                and self._set_salvage_rule_armor_upgrade_identifiers(
+                    rule,
+                    selected_armor_identifiers + [picked_armor_identifier],
+                )
+            ):
+                changed = True
+            self.salvage_armor_upgrade_search_cache[index] = self._get_rune_label(
+                picked_armor_identifier
+            )
+
         return changed
 
     def _draw_salvage_rule_editor(self, index: int, rule: SalvageRule, settings: SalvageSettings) -> bool:
@@ -33016,7 +34384,7 @@ class MerchantRulesWidget:
         selected_option = _resolve_salvage_operation(rule.salvage_option)
         is_auto_upgrade_option = _is_auto_exact_upgrade_salvage_option(rule.salvage_option)
         if selected_option in SALVAGE_UPGRADE_OPTIONS or is_auto_upgrade_option:
-            if self._has_salvage_upgrade_support():
+            if self._has_salvage_upgrade_support_for_rule(rule):
                 if is_auto_upgrade_option:
                     self._draw_secondary_text(
                         "Infers prefix, suffix, or inscription from the matched specific upgrade target."
