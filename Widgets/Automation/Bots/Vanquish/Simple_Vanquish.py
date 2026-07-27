@@ -26,8 +26,9 @@ class BotSettings:
 bot = Botting(BotSettings.BOT_NAME,
               upkeep_honeycomb_restock=25,
               upkeep_auto_loot_active=True,
+              upkeep_hero_ai_active=True,
               upkeep_honeycomb_active=True,
-              config_draw_path=True)
+              config_draw_path=False)
 
 _RANDOM_DISTRICTS = [
     District.EuropeItalian.value,
@@ -124,16 +125,25 @@ def _register_path(bot, path, header_name=None):
         bot.Move.FollowAutoPath(path)
 
 
+def _take_blessing(bot: Botting, x: float, y: float):
+    campaign_id = Map.GetCampaign()[0]
+    dialog_id = {
+        2: 0x86,  # Factions
+        3: 0x85,  # Nightfall
+        4: 0x84,  # Eye of the North
+    }.get(campaign_id, 0x84)
+    yield from bot.Move._coro_xy_and_dialog(x, y, dialog_id)
+    yield from Routines.Yield.wait(500)
+
+
 def _handle_keyword(bot, key, value):
     """Process a single keyword action from a complex path segment."""
     if key == "bless":
         bot.UI.PrintMessageToConsole(BotSettings.BOT_NAME, f"Interacting with Blessing.")
-        bot.Move.XY(*value)
-        bot.Wait.ForTime(1500)
-        bot.Move.XYAndInteractNPC(*value)
-        bot.Multibox.SendDialogToTarget(0x84) # EOTN Blessing
-        bot.Multibox.SendDialogToTarget(0x85) # NF Blessing
-        bot.Multibox.SendDialogToTarget(0x86) # Factions Blessing
+        bot.States.AddCustomState(
+            lambda x=value[0], y=value[1]: _take_blessing(bot, x, y),
+            f"Take Blessing ({value[0]}, {value[1]})",
+        )
     elif key == "gadget":
         bot.UI.PrintMessageToConsole(BotSettings.BOT_NAME, f"Interacting with Gadget.")
         bot.Move.XY(*value)
@@ -312,7 +322,7 @@ def bot_routine(bot: Botting) -> None:
 
     # Main header
     bot.States.AddHeader(BotSettings.BOT_NAME)  # header counter = 1
-    bot.Templates.Multibox_Aggressive()
+    bot.Templates.Aggressive()
     bot.Multibox.ApplyWidgetPolicy(enable_widgets=BotSettings.WIDGETS_TO_ENABLE)
 
     # -------------------------------------------------------------------------
