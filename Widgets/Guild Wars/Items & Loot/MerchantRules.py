@@ -19,6 +19,7 @@ from collections.abc import Iterable
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
 from urllib.parse import unquote
+from uuid import uuid4
 
 import PyImGui
 import PySystem
@@ -73,11 +74,11 @@ INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
 PROFILE_VERSION = 35
-# Per-account rule profiles live in the sanctioned JsonFactory jail (json/<email>/...).
-# The live working config is one account-scoped document; every shared profile is one
-# key inside a single account-scoped Profiles document.
+# Live and private rule profiles remain account-scoped. Shared profiles use one
+# global document whose per-key journal writes merge safely across multibox clients.
 LIVE_CONFIG_DOC_NAME = "Widgets/MerchantRules/LiveConfig.json"
-SHARED_PROFILES_DOC_NAME = "Widgets/MerchantRules/Profiles.json"
+ACCOUNT_PROFILES_DOC_NAME = "Widgets/MerchantRules/Profiles.json"
+SHARED_PROFILES_DOC_NAME = "Widgets/MerchantRules/SharedProfiles.json"
 BACKUP_DOC_NAME = "Widgets/MerchantRules/LiveConfigBackup.json"
 BACKUP_SCHEMA = "merchant_rules_live_config_backup_v1"
 BACKUP_SCHEMA_VERSION = 1
@@ -97,6 +98,7 @@ RUNES_CATALOG_PATH = os.path.join(MODS_DATA_DIR, "runes.json")
 SEARCH_RESULT_LIMIT = 12
 TRAVEL_TIMEOUT_MS = 20000
 WINDOW_GEOMETRY_SAVE_THROTTLE_MS = 750
+SHARED_PROFILE_REFRESH_INTERVAL_MS = 4000
 DESTRUCTIVE_BUTTON_CONFIRM_TIMEOUT_MS = 5000
 DEFAULT_WINDOW_WIDTH = 760
 DEFAULT_WINDOW_HEIGHT = 860
@@ -173,6 +175,12 @@ PROFILE_WINDOW_GEOMETRY_KEYS: tuple[str, ...] = (
 )
 SHARED_PROFILE_SCHEMA = "merchant_rules_shared_profile_v1"
 SHARED_PROFILE_SCHEMA_VERSION = 1
+PROFILE_SCOPE_SHARED = "shared"
+PROFILE_SCOPE_ACCOUNT = "account"
+PROFILE_SCOPES: tuple[str, ...] = (
+    PROFILE_SCOPE_SHARED,
+    PROFILE_SCOPE_ACCOUNT,
+)
 HELPER_TOOLTIPS_ENABLED_DEFAULT = True
 
 MERCHANT_TYPE_TRAVEL = "travel"
@@ -3619,17 +3627,33 @@ class MultiboxAccountStatus:
     success: bool = False
 
 
-@dataclass
-class SharedProfileSummary:
-    """Hold validated shared-profile metadata and its normalized serialized payload."""
+@dataclass(frozen=True)
+class ProfileIdentity:
+    """Identify one saved profile by semantic scope and exact JsonFactory key."""
 
-    path: str
+    scope: str
+    key: str
+
+
+@dataclass
+class ProfileSummary:
+    """Hold validated saved-profile metadata and its normalized serialized payload."""
+
+    identity: ProfileIdentity
     display_name: str
-    filename: str
     saved_at_label: str = ""
     saved_at_unix_ms: int = 0
     payload: dict[str, object] = field(default_factory=dict)
     serialized_payload: str = ""
+    fingerprint: str = ""
+
+    @property
+    def scope(self) -> str:
+        return self.identity.scope
+
+    @property
+    def key(self) -> str:
+        return self.identity.key
 
 
 @dataclass(frozen=True)
@@ -6346,15 +6370,41 @@ class MerchantRulesWidget:
         self.profile_warning = ""
         self.profile_notice = ""
         self.profile_write_blocked = False
-        self.shared_profile_entries: list[SharedProfileSummary] = []
-        self.shared_profile_selected_path = ""
-        self.shared_profile_name_input = ""
-        self.shared_profile_warning = ""
-        self.shared_profile_notice = ""
-        self.shared_profile_scan_warning = ""
-        self.shared_profile_entries_loaded = False
-        self.shared_profile_pending_overwrite_path = ""
-        self.shared_profile_pending_delete_path = ""
+        self.profile_entries: dict[str, list[ProfileSummary]] = {
+            scope: []
+            for scope in PROFILE_SCOPES
+        }
+        self.profile_selected_identities: dict[str, ProfileIdentity | None] = {
+            scope: None
+            for scope in PROFILE_SCOPES
+        }
+        self.profile_name_inputs: dict[str, str] = {
+            scope: ""
+            for scope in PROFILE_SCOPES
+        }
+        self.profile_name_input_dirty: dict[str, bool] = {
+            scope: False
+            for scope in PROFILE_SCOPES
+        }
+        self.saved_profile_warnings: dict[str, str] = {
+            scope: ""
+            for scope in PROFILE_SCOPES
+        }
+        self.saved_profile_notices: dict[str, str] = {
+            scope: ""
+            for scope in PROFILE_SCOPES
+        }
+        self.saved_profile_scan_warnings: dict[str, str] = {
+            scope: ""
+            for scope in PROFILE_SCOPES
+        }
+        self.profile_entries_loaded: dict[str, bool] = {
+            scope: False
+            for scope in PROFILE_SCOPES
+        }
+        self.pending_profile_confirmation_identity: ProfileIdentity | None = None
+        self.pending_profile_confirmation_fingerprint = ""
+        self.pending_profile_confirmation_action = ""
         self.pending_destructive_button_key = ""
         self.pending_destructive_button_expires_at_ms = 0
         self.rule_name_edit_key = ""
@@ -6493,6 +6543,7 @@ class MerchantRulesWidget:
         self.window_geometry_needs_apply = True
         self.window_geometry_dirty = False
         self.window_geometry_save_timer = ThrottledTimer(WINDOW_GEOMETRY_SAVE_THROTTLE_MS)
+        self.shared_profile_refresh_timer = ThrottledTimer(SHARED_PROFILE_REFRESH_INTERVAL_MS)
         self.instant_destroy_poll_timer = ThrottledTimer(INSTANT_DESTROY_POLL_MS)
         self.instant_destroy_rescan_requested = False
         self.instant_destroy_last_signature: tuple[tuple[int, int], ...] = ()
@@ -6573,9 +6624,14 @@ class MerchantRulesWidget:
         """The current account's live working config (account-scoped, self-persisting)."""
         return JsonFactory(LIVE_CONFIG_DOC_NAME)
 
-    def _profiles_doc(self) -> JsonFactory:
-        """Single account-scoped document holding every shared profile, keyed by profile name."""
-        return JsonFactory(SHARED_PROFILES_DOC_NAME)
+    def _profile_doc(self, scope: str) -> JsonFactory:
+        """Return the saved-profile document for one explicit semantic scope."""
+
+        if scope == PROFILE_SCOPE_SHARED:
+            return JsonFactory(SHARED_PROFILES_DOC_NAME, "global")
+        if scope == PROFILE_SCOPE_ACCOUNT:
+            return JsonFactory(ACCOUNT_PROFILES_DOC_NAME)
+        raise ValueError(f"Unsupported Merchant Rules profile scope: {scope!r}")
 
     def _backup_doc(self) -> JsonFactory:
         """Account-scoped last-known-good live profile used by the Restore Backup action."""
@@ -10186,9 +10242,20 @@ class MerchantRulesWidget:
         self.cleanup_item_type_filter_subcategory = DEPOSIT_FILTER_ALL
         self._refresh_rule_ui_caches()
 
-    def _get_shared_profiles_dir(self) -> str:
-        doc_path = self._profiles_doc().path()
-        return os.path.dirname(doc_path) if doc_path else SHARED_PROFILES_DOC_NAME
+    def _profile_scope_label(self, scope: str) -> str:
+        if scope == PROFILE_SCOPE_SHARED:
+            return "Shared Profiles — All Accounts"
+        if scope == PROFILE_SCOPE_ACCOUNT:
+            return "Account Profiles — This Account Only"
+        return "Profiles"
+
+    def _profile_scope_badge(self, scope: str) -> str:
+        return "SHARED" if scope == PROFILE_SCOPE_SHARED else "ACCOUNT"
+
+    def _get_profiles_dir(self, scope: str) -> str:
+        doc = self._profile_doc(scope)
+        doc_path = doc.path()
+        return os.path.dirname(doc_path) if doc_path else doc.name
 
     def _build_shareable_profile_payload(self) -> dict[str, object]:
         normalized_payload = self._normalize_profile_payload(
@@ -10200,6 +10267,14 @@ class MerchantRulesWidget:
         return self._serialize_profile_payload(
             _strip_window_geometry_from_profile_payload(payload)
         )
+
+    def _serialize_saved_profile_wrapper(self, wrapper: object) -> str:
+        normalized_wrapper = dict(wrapper) if isinstance(wrapper, dict) else {}
+        return json.dumps(normalized_wrapper, sort_keys=True, separators=(",", ":"))
+
+    def _saved_profile_wrapper_fingerprint(self, wrapper: object) -> str:
+        serialized_wrapper = self._serialize_saved_profile_wrapper(wrapper)
+        return md5(serialized_wrapper.encode("utf-8")).hexdigest()
 
     def _format_shared_profile_timestamp(
         self,
@@ -10222,6 +10297,7 @@ class MerchantRulesWidget:
         *,
         payload: dict[str, object] | None = None,
         saved_at_unix_ms: int | None = None,
+        saved_at_label: str | None = None,
     ) -> dict[str, object]:
         normalized_name = _normalize_shared_profile_display_name(display_name)
         if not normalized_name:
@@ -10243,8 +10319,10 @@ class MerchantRulesWidget:
             "schema_version": SHARED_PROFILE_SCHEMA_VERSION,
             "name": normalized_name,
             "saved_at_unix_ms": effective_saved_at_unix_ms,
-            "saved_at": self._format_shared_profile_timestamp(
-                effective_saved_at_unix_ms
+            "saved_at": (
+                str(saved_at_label or "").strip()
+                if saved_at_label is not None
+                else self._format_shared_profile_timestamp(effective_saved_at_unix_ms)
             ),
             "payload": shareable_payload,
         }
@@ -10255,10 +10333,10 @@ class MerchantRulesWidget:
         *,
         fallback_name: str = "",
     ) -> dict[str, object]:
-        """Validate a shared-profile wrapper and normalize its embedded Merchant Rules payload."""
+        """Validate a saved-profile wrapper and normalize its embedded Merchant Rules payload."""
 
         if not isinstance(raw_payload, dict):
-            raise ValueError("Shared Merchant Rules profile must be a JSON object.")
+            raise ValueError("Saved Merchant Rules profile must be a JSON object.")
 
         schema = str(raw_payload.get("schema", "") or "").strip()
         if schema == SHARED_PROFILE_SCHEMA:
@@ -10274,11 +10352,11 @@ class MerchantRulesWidget:
             payload_source = raw_payload
             display_name_source = fallback_name
         else:
-            raise ValueError("Shared Merchant Rules profile schema is not supported.")
+            raise ValueError("Saved Merchant Rules profile schema is not supported.")
 
         display_name = _normalize_shared_profile_display_name(display_name_source)
         if not display_name:
-            raise ValueError("Shared Merchant Rules profile name is missing.")
+            raise ValueError("Saved Merchant Rules profile name is missing.")
 
         payload_version = (
             _safe_int(payload_source.get("version", 0), 0)
@@ -10308,18 +10386,29 @@ class MerchantRulesWidget:
             "payload": normalized_payload,
         }
 
-    def _load_shared_profile_summary_from_key(
+    def _load_profile_summary_from_key(
         self,
+        scope: str,
         profile_key: str,
-    ) -> SharedProfileSummary:
+        *,
+        doc: JsonFactory | None = None,
+    ) -> ProfileSummary:
         safe_key = str(profile_key)
-        raw_payload = self._profiles_doc().get_json(safe_key, {})
+        source_doc = doc or self._profile_doc(scope)
+        raw_payload = source_doc.get_json(safe_key, {})
 
         normalized_wrapper = self._normalize_shared_profile_wrapper(
             raw_payload,
             fallback_name=safe_key,
         )
-        payload = dict(normalized_wrapper.get("payload", {}))
+        normalized_payload = normalized_wrapper.get("payload", {})
+        if not isinstance(normalized_payload, dict):
+            raise ValueError("Saved Merchant Rules profile payload is missing.")
+        payload: dict[str, object] = {}
+        for raw_key, value in normalized_payload.items():
+            if not isinstance(raw_key, str):
+                raise ValueError("Saved Merchant Rules profile payload keys must be strings.")
+            payload[raw_key] = value
         saved_at_unix_ms = max(
             0,
             _safe_int(normalized_wrapper.get("saved_at_unix_ms", 0), 0),
@@ -10328,289 +10417,444 @@ class MerchantRulesWidget:
         if not saved_at_label:
             saved_at_label = self._format_shared_profile_timestamp(saved_at_unix_ms)
 
-        return SharedProfileSummary(
-            path=safe_key,
+        return ProfileSummary(
+            identity=ProfileIdentity(scope=scope, key=safe_key),
             display_name=str(normalized_wrapper.get("name", "") or safe_key),
-            filename=safe_key,
             saved_at_label=saved_at_label,
             saved_at_unix_ms=saved_at_unix_ms,
             payload=payload,
             serialized_payload=self._serialize_shareable_profile_payload(payload),
+            fingerprint=self._saved_profile_wrapper_fingerprint(normalized_wrapper),
         )
 
-    def _get_selected_shared_profile(self) -> SharedProfileSummary | None:
-        selected_path = os.path.normcase(
-            os.path.normpath(self.shared_profile_selected_path)
-        )
-        if not selected_path:
+    def _get_profile_by_identity(
+        self,
+        identity: ProfileIdentity | None,
+    ) -> ProfileSummary | None:
+        if identity is None or identity.scope not in PROFILE_SCOPES:
             return None
-        for entry in self.shared_profile_entries:
-            entry_path = os.path.normcase(os.path.normpath(entry.path))
-            if entry_path == selected_path:
+        for entry in self.profile_entries[identity.scope]:
+            if entry.identity == identity:
                 return entry
         return None
 
-    def _clear_shared_profile_confirmation_state(self):
-        self.shared_profile_pending_overwrite_path = ""
-        self.shared_profile_pending_delete_path = ""
+    def _get_selected_profile(self, scope: str) -> ProfileSummary | None:
+        return self._get_profile_by_identity(self.profile_selected_identities.get(scope))
+
+    def _clear_profile_confirmation_state(self):
+        self.pending_profile_confirmation_identity = None
+        self.pending_profile_confirmation_fingerprint = ""
+        self.pending_profile_confirmation_action = ""
         self._clear_pending_destructive_button()
 
-    def _set_selected_shared_profile_path(self, profile_path: str):
-        safe_path = str(profile_path or "").strip()
-        normalized_current_path = os.path.normcase(
-            os.path.normpath(self.shared_profile_selected_path)
-        )
-        normalized_next_path = os.path.normcase(os.path.normpath(safe_path))
-        if normalized_current_path != normalized_next_path:
-            self._clear_shared_profile_confirmation_state()
-            self._clear_pending_destructive_button()
-        self.shared_profile_selected_path = safe_path
-        selected_profile = self._get_selected_shared_profile()
-        if selected_profile is not None:
-            self.shared_profile_name_input = str(selected_profile.display_name)
-        elif not safe_path:
-            self.shared_profile_name_input = ""
+    def _set_selected_profile_key(self, scope: str, profile_key: str):
+        safe_key = str(profile_key or "")
+        next_identity = ProfileIdentity(scope=scope, key=safe_key) if safe_key else None
+        selection_changed = self.profile_selected_identities.get(scope) != next_identity
+        if selection_changed:
+            self._clear_profile_confirmation_state()
+        self.profile_selected_identities[scope] = next_identity
+        selected_profile = self._get_selected_profile(scope)
+        if selected_profile is not None and (
+            selection_changed or not self.profile_name_input_dirty[scope]
+        ):
+            self.profile_name_inputs[scope] = str(selected_profile.display_name)
+            self.profile_name_input_dirty[scope] = False
+        elif not safe_key and selection_changed:
+            self.profile_name_inputs[scope] = ""
+            self.profile_name_input_dirty[scope] = False
 
-    def _find_shared_profile_by_name(
+    def _find_profile_by_name(
         self,
+        scope: str,
         display_name: str,
         *,
-        exclude_path: str = "",
-    ) -> SharedProfileSummary | None:
+        exclude_key: str = "",
+    ) -> ProfileSummary | None:
         normalized_name = _normalize_shared_profile_display_name(display_name).casefold()
         if not normalized_name:
             return None
-        normalized_exclude_path = os.path.normcase(os.path.normpath(exclude_path))
-        for entry in self.shared_profile_entries:
-            entry_path = os.path.normcase(os.path.normpath(entry.path))
-            if normalized_exclude_path and entry_path == normalized_exclude_path:
+        for entry in self.profile_entries[scope]:
+            if exclude_key and entry.key == exclude_key:
                 continue
             if str(entry.display_name).casefold() == normalized_name:
                 return entry
         return None
 
-    def _find_shared_profile_by_filename(
+    def _ensure_profile_name_available(
         self,
-        filename: str,
-        *,
-        exclude_path: str = "",
-    ) -> SharedProfileSummary | None:
-        safe_filename = str(filename or "").strip().casefold()
-        if not safe_filename:
-            return None
-        normalized_exclude_path = os.path.normcase(os.path.normpath(exclude_path))
-        for entry in self.shared_profile_entries:
-            entry_path = os.path.normcase(os.path.normpath(entry.path))
-            if normalized_exclude_path and entry_path == normalized_exclude_path:
-                continue
-            if str(entry.filename).casefold() == safe_filename:
-                return entry
-        return None
-
-    def _get_shared_profile_path_for_name(self, display_name: str) -> str:
-        safe_name = _normalize_shared_profile_display_name(display_name)
-        if not safe_name:
-            raise ValueError("Enter a profile name before saving.")
-        return _sanitize_filename(safe_name)
-
-    def _ensure_shared_profile_name_available(
-        self,
+        scope: str,
         display_name: str,
         *,
-        exclude_path: str = "",
-    ) -> tuple[str, str]:
+        exclude_key: str = "",
+    ) -> str:
         normalized_name = _normalize_shared_profile_display_name(display_name)
         if not normalized_name:
             raise ValueError("Enter a profile name before saving.")
 
-        existing_by_name = self._find_shared_profile_by_name(
+        existing_by_name = self._find_profile_by_name(
+            scope,
             normalized_name,
-            exclude_path=exclude_path,
+            exclude_key=exclude_key,
         )
         if existing_by_name is not None:
             raise ValueError(
-                f"A shared profile named '{existing_by_name.display_name}' already exists."
+                f"A {self._profile_scope_badge(scope).lower()} profile named "
+                f"'{existing_by_name.display_name}' already exists."
             )
+        return normalized_name
 
-        profile_key = self._get_shared_profile_path_for_name(normalized_name)
-        existing_by_filename = self._find_shared_profile_by_filename(
-            profile_key,
-            exclude_path=exclude_path,
-        )
-        if existing_by_filename is not None:
-            raise ValueError(
-                f"Profile name '{normalized_name}' conflicts with existing file "
-                f"'{existing_by_filename.display_name}'."
-            )
-        return normalized_name, profile_key
+    def _new_profile_key(self, doc: JsonFactory) -> str:
+        """Allocate an opaque, display-name-independent root key."""
 
-    def _refresh_shared_profile_entries(self):
-        """Rescan JsonFactory-backed profiles, retaining readable entries and reporting failures."""
+        for _attempt in range(8):
+            profile_key = f"profile_{uuid4().hex}"
+            if not doc.has(profile_key):
+                return profile_key
+        raise RuntimeError("Could not allocate a unique saved-profile key.")
 
-        doc = self._profiles_doc()
-        previous_selected_path = self.shared_profile_selected_path
-        entries: list[SharedProfileSummary] = []
+    def _refresh_profile_entries(
+        self,
+        scope: str,
+        *,
+        reload_document: bool = False,
+        report_reload_failure: bool = True,
+    ) -> bool:
+        """Refresh one scope while retaining readable entries and exact-key selection."""
+
+        doc = self._profile_doc(scope)
+        previous_entries = list(self.profile_entries[scope])
+        previous_identity = self.profile_selected_identities.get(scope)
+        previous_selected = self._get_profile_by_identity(previous_identity)
+        previous_fingerprint = previous_selected.fingerprint if previous_selected is not None else ""
+
+        if reload_document and not doc.reload():
+            self.profile_entries_loaded[scope] = True
+            if report_reload_failure:
+                if scope == PROFILE_SCOPE_SHARED and not previous_entries:
+                    self.saved_profile_scan_warnings[scope] = (
+                        "The shared profile document does not exist yet or could not be reloaded. "
+                        "Saving the first shared profile will create it."
+                    )
+                else:
+                    self.saved_profile_scan_warnings[scope] = (
+                        f"Could not reload {self._profile_scope_label(scope)}; retaining the last readable list."
+                    )
+            return False
+
+        entries: list[ProfileSummary] = []
         load_failures: list[str] = []
 
         for profile_key in doc.keys(""):
             safe_key = str(profile_key)
             try:
-                entries.append(self._load_shared_profile_summary_from_key(safe_key))
+                entries.append(
+                    self._load_profile_summary_from_key(
+                        scope,
+                        safe_key,
+                        doc=doc,
+                    )
+                )
             except Exception as exc:
                 load_failures.append(f"{safe_key}: {exc}")
 
         entries.sort(
             key=lambda entry: (
                 str(entry.display_name).casefold(),
-                str(entry.filename).casefold(),
+                str(entry.key).casefold(),
             )
         )
-        self.shared_profile_entries = entries
-        self.shared_profile_entries_loaded = True
+        self.profile_entries[scope] = entries
+        self.profile_entries_loaded[scope] = True
 
         if load_failures:
             preview = " | ".join(load_failures[:3])
             if len(load_failures) > 3:
                 preview = f"{preview} | ...and {len(load_failures) - 3} more."
-            self.shared_profile_scan_warning = (
-                f"Some shared profiles could not be loaded: {preview}"
+            self.saved_profile_scan_warnings[scope] = (
+                f"Some {self._profile_scope_badge(scope).lower()} profiles could not be loaded: {preview}"
             )
         else:
-            self.shared_profile_scan_warning = ""
+            self.saved_profile_scan_warnings[scope] = ""
 
-        normalized_previous_path = os.path.normcase(
-            os.path.normpath(previous_selected_path)
-        )
         matching_entry = next(
             (
                 entry
                 for entry in entries
-                if os.path.normcase(os.path.normpath(entry.path))
-                == normalized_previous_path
+                if entry.identity == previous_identity
             ),
             None,
         )
         if matching_entry is not None:
-            self._set_selected_shared_profile_path(matching_entry.path)
+            if previous_fingerprint and matching_entry.fingerprint != previous_fingerprint:
+                self._clear_profile_confirmation_state()
+            self._set_selected_profile_key(scope, matching_entry.key)
         elif entries:
-            self._set_selected_shared_profile_path(entries[0].path)
+            self._set_selected_profile_key(scope, entries[0].key)
         else:
-            self._set_selected_shared_profile_path("")
+            self._set_selected_profile_key(scope, "")
+        return True
 
-    def _set_shared_profile_feedback(
+    def _set_saved_profile_feedback(
         self,
+        scope: str,
         *,
         warning: str = "",
         notice: str = "",
     ):
-        self.shared_profile_warning = str(warning or "").strip()
-        self.shared_profile_notice = str(notice or "").strip()
+        self.saved_profile_warnings[scope] = str(warning or "").strip()
+        self.saved_profile_notices[scope] = str(notice or "").strip()
 
-    def _save_current_as_new_shared_profile(self):
-        self._ensure_initialized()
-        try:
-            profile_name, profile_key = self._ensure_shared_profile_name_available(
-                self.shared_profile_name_input
+    def _persist_profile_wrapper(
+        self,
+        scope: str,
+        profile_key: str,
+        wrapper: dict[str, object],
+    ) -> ProfileSummary:
+        """Save one exact key immediately, reload it, and verify its normalized wrapper."""
+
+        doc = self._profile_doc(scope)
+        expected_wrapper = self._normalize_shared_profile_wrapper(
+            wrapper,
+            fallback_name=profile_key,
+        )
+        expected_fingerprint = self._saved_profile_wrapper_fingerprint(expected_wrapper)
+        doc.set_json(profile_key, expected_wrapper)
+        if not doc.save():
+            doc.reload()
+            raise OSError(
+                f"JsonFactory could not flush {self._profile_scope_label(scope)}."
             )
+        if not doc.reload():
+            raise OSError(
+                f"JsonFactory saved but could not reload {self._profile_scope_label(scope)}."
+            )
+        verified = self._load_profile_summary_from_key(
+            scope,
+            profile_key,
+            doc=doc,
+        )
+        if verified.fingerprint != expected_fingerprint:
+            raise RuntimeError(
+                f"The saved {self._profile_scope_badge(scope).lower()} profile failed post-save verification."
+            )
+        self._refresh_profile_entries(scope)
+        return verified
+
+    def _persist_profile_delete(self, identity: ProfileIdentity):
+        """Delete one exact key immediately, reload, and verify absence."""
+
+        doc = self._profile_doc(identity.scope)
+        if not doc.delete(identity.key):
+            raise RuntimeError("The selected profile disappeared before it could be deleted.")
+        if not doc.save():
+            doc.reload()
+            raise OSError(
+                f"JsonFactory could not flush {self._profile_scope_label(identity.scope)}."
+            )
+        if not doc.reload():
+            raise OSError(
+                f"JsonFactory saved but could not reload {self._profile_scope_label(identity.scope)}."
+            )
+        if doc.has(identity.key):
+            raise RuntimeError("The deleted profile is still present after reloading the document.")
+        self._refresh_profile_entries(identity.scope)
+
+    def _resolve_profile_for_action(
+        self,
+        identity: ProfileIdentity,
+        *,
+        expected_fingerprint: str = "",
+        reload_shared: bool = True,
+    ) -> ProfileSummary:
+        """Re-resolve an exact key and reject stale confirmed shared actions."""
+
+        if identity.scope == PROFILE_SCOPE_SHARED and reload_shared:
+            if not self._refresh_profile_entries(
+                PROFILE_SCOPE_SHARED,
+                reload_document=True,
+            ):
+                raise OSError("The shared profile document could not be reloaded.")
+        else:
+            self._refresh_profile_entries(identity.scope)
+
+        current = self._get_profile_by_identity(identity)
+        if current is None:
+            raise RuntimeError("The selected profile changed or disappeared; review the refreshed list.")
+        if expected_fingerprint and current.fingerprint != expected_fingerprint:
+            self._clear_profile_confirmation_state()
+            raise RuntimeError(
+                "The selected profile changed in another client; review it and confirm the action again."
+            )
+        if identity.scope == PROFILE_SCOPE_SHARED and not expected_fingerprint:
+            raise RuntimeError("Shared profile actions require confirmation against the selected version.")
+        return current
+
+    def _prepare_scope_for_new_profile(self, scope: str):
+        if scope == PROFILE_SCOPE_SHARED:
+            refreshed = self._refresh_profile_entries(
+                scope,
+                reload_document=True,
+            )
+            if not refreshed and self.profile_entries[scope]:
+                raise OSError("The shared profile document could not be refreshed safely.")
+        else:
+            self._refresh_profile_entries(scope)
+
+    def _save_current_as_new_profile(self, scope: str):
+        self._ensure_initialized()
+        requested_profile_name = self.profile_name_inputs[scope]
+        try:
+            self._prepare_scope_for_new_profile(scope)
+            profile_name = self._ensure_profile_name_available(
+                scope,
+                requested_profile_name,
+            )
+            doc = self._profile_doc(scope)
+            profile_key = self._new_profile_key(doc)
             wrapper = self._build_shared_profile_wrapper(profile_name)
-            self._profiles_doc().set_json(profile_key, wrapper)
-            self._refresh_shared_profile_entries()
-            self._set_selected_shared_profile_path(profile_key)
-            self._clear_shared_profile_confirmation_state()
-            self._set_shared_profile_feedback(
-                notice=f"Saved shared profile '{profile_name}'."
+            self._persist_profile_wrapper(scope, profile_key, wrapper)
+            self._set_selected_profile_key(scope, profile_key)
+            self._clear_profile_confirmation_state()
+            self._set_saved_profile_feedback(
+                scope,
+                notice=(
+                    f"Saved [{self._profile_scope_badge(scope)}] profile "
+                    f"'{profile_name}'."
+                ),
             )
         except Exception as exc:
-            self._set_shared_profile_feedback(
-                warning=f"Failed to save shared profile: {exc}"
+            self._set_saved_profile_feedback(
+                scope,
+                warning=(
+                    f"Failed to save [{self._profile_scope_badge(scope)}] profile: {exc}"
+                ),
             )
 
-    def _rename_selected_shared_profile(self):
+    def _rename_selected_profile(
+        self,
+        scope: str,
+        expected_fingerprint: str = "",
+    ):
         self._ensure_initialized()
-        selected_profile = self._get_selected_shared_profile()
+        selected_profile = self._get_selected_profile(scope)
         if selected_profile is None:
-            self._set_shared_profile_feedback(
-                warning="Select a shared profile to rename."
+            self._set_saved_profile_feedback(
+                scope,
+                warning=f"Select a [{self._profile_scope_badge(scope)}] profile to rename.",
             )
             return
 
+        requested_profile_name = self.profile_name_inputs[scope]
         try:
-            new_name, new_key = self._ensure_shared_profile_name_available(
-                self.shared_profile_name_input,
-                exclude_path=selected_profile.path,
+            current = self._resolve_profile_for_action(
+                selected_profile.identity,
+                expected_fingerprint=expected_fingerprint,
+                reload_shared=True,
+            )
+            new_name = self._ensure_profile_name_available(
+                scope,
+                requested_profile_name,
+                exclude_key=current.key,
             )
             wrapper = self._build_shared_profile_wrapper(
                 new_name,
-                payload=selected_profile.payload,
-                saved_at_unix_ms=selected_profile.saved_at_unix_ms,
+                payload=current.payload,
+                saved_at_unix_ms=current.saved_at_unix_ms,
+                saved_at_label=current.saved_at_label,
             )
-            doc = self._profiles_doc()
-            doc.set_json(new_key, wrapper)
-            if selected_profile.path and selected_profile.path != new_key:
-                doc.delete(selected_profile.path)
-            self._refresh_shared_profile_entries()
-            self._set_selected_shared_profile_path(new_key)
-            self._clear_shared_profile_confirmation_state()
-            self._set_shared_profile_feedback(
+            self._persist_profile_wrapper(scope, current.key, wrapper)
+            self._set_selected_profile_key(scope, current.key)
+            self.profile_name_inputs[scope] = new_name
+            self.profile_name_input_dirty[scope] = False
+            self._clear_profile_confirmation_state()
+            self._set_saved_profile_feedback(
+                scope,
                 notice=(
-                    f"Renamed shared profile '{selected_profile.display_name}' "
-                    f"to '{new_name}'."
-                )
+                    f"Renamed [{self._profile_scope_badge(scope)}] profile "
+                    f"'{current.display_name}' to '{new_name}'."
+                ),
             )
         except Exception as exc:
-            self._set_shared_profile_feedback(
-                warning=f"Failed to rename shared profile: {exc}"
+            self._set_saved_profile_feedback(
+                scope,
+                warning=(
+                    f"Failed to rename [{self._profile_scope_badge(scope)}] profile: {exc}"
+                ),
             )
 
-    def _save_current_over_selected_shared_profile(self):
+    def _save_current_over_selected_profile(
+        self,
+        scope: str,
+        expected_fingerprint: str = "",
+    ):
         self._ensure_initialized()
-        selected_profile = self._get_selected_shared_profile()
+        selected_profile = self._get_selected_profile(scope)
         if selected_profile is None:
-            self._set_shared_profile_feedback(
-                warning="Select a shared profile to overwrite."
+            self._set_saved_profile_feedback(
+                scope,
+                warning=f"Select a [{self._profile_scope_badge(scope)}] profile to overwrite.",
             )
             return
 
         try:
-            wrapper = self._build_shared_profile_wrapper(selected_profile.display_name)
-            self._profiles_doc().set_json(selected_profile.path, wrapper)
-            self._refresh_shared_profile_entries()
-            self._set_selected_shared_profile_path(selected_profile.path)
-            self._clear_shared_profile_confirmation_state()
-            self._set_shared_profile_feedback(
+            current = self._resolve_profile_for_action(
+                selected_profile.identity,
+                expected_fingerprint=expected_fingerprint,
+                reload_shared=True,
+            )
+            wrapper = self._build_shared_profile_wrapper(current.display_name)
+            self._persist_profile_wrapper(scope, current.key, wrapper)
+            self._set_selected_profile_key(scope, current.key)
+            self._clear_profile_confirmation_state()
+            self._set_saved_profile_feedback(
+                scope,
                 notice=(
                     f"Saved current Merchant Rules settings over "
-                    f"'{selected_profile.display_name}'."
-                )
+                    f"[{self._profile_scope_badge(scope)}] '{current.display_name}'."
+                ),
             )
         except Exception as exc:
-            self._set_shared_profile_feedback(
-                warning=f"Failed to overwrite shared profile: {exc}"
+            self._set_saved_profile_feedback(
+                scope,
+                warning=(
+                    f"Failed to overwrite [{self._profile_scope_badge(scope)}] profile: {exc}"
+                ),
             )
 
-    def _load_selected_shared_profile(self):
+    def _load_selected_profile(
+        self,
+        scope: str,
+        expected_fingerprint: str = "",
+    ):
         self._ensure_initialized()
-        selected_profile = self._get_selected_shared_profile()
+        selected_profile = self._get_selected_profile(scope)
         if selected_profile is None:
-            self._set_shared_profile_feedback(
-                warning="Select a shared profile to load."
+            self._set_saved_profile_feedback(
+                scope,
+                warning=f"Select a [{self._profile_scope_badge(scope)}] profile to load.",
             )
             return
 
         live_doc = self._live_config_doc()
-        previous_live_payload = live_doc.get_json("", None)
         try:
+            current = self._resolve_profile_for_action(
+                selected_profile.identity,
+                expected_fingerprint=expected_fingerprint,
+                reload_shared=True,
+            )
             self._write_profile_payload_for_account(
                 self.account_key,
-                selected_profile.payload,
+                current.payload,
                 preserve_existing_window_geometry=True,
             )
             if not live_doc.save():
-                if previous_live_payload is None:
-                    live_doc.delete("")
-                else:
-                    live_doc.set_json("", previous_live_payload)
-                raise OSError("JsonFactory could not flush the selected Merchant Rules profile.")
+                rollback_loaded = live_doc.reload()
+                rollback_detail = "" if rollback_loaded else " Persisted rollback reload also failed."
+                raise OSError(
+                    "JsonFactory could not flush the selected Merchant Rules profile."
+                    f"{rollback_detail}"
+                )
             self.reload_profile_from_disk(
                 status_message="",
                 preserve_window_geometry=True,
@@ -10620,67 +10864,159 @@ class MerchantRulesWidget:
             loaded_payload_serialized = self._serialize_shareable_profile_payload(
                 self._build_shareable_profile_payload()
             )
-            if loaded_payload_serialized != selected_profile.serialized_payload:
+            if loaded_payload_serialized != current.serialized_payload:
                 raise RuntimeError(
-                    "The reloaded live config does not match the selected shared profile."
+                    "The reloaded live config does not match the selected saved profile."
                 )
-            self.active_profile_display_name = selected_profile.display_name
+            badge = self._profile_scope_badge(scope)
+            self.active_profile_display_name = f"[{badge}] {current.display_name}"
             self.status_message = (
-                f"Loaded shared profile '{selected_profile.display_name}' "
+                f"Loaded [{badge}] profile '{current.display_name}' "
                 f"into the current Merchant Rules config."
             )
             self._log_profile_loaded_summary()
-            self._refresh_shared_profile_entries()
-            self._set_selected_shared_profile_path(selected_profile.path)
-            self._clear_shared_profile_confirmation_state()
-            self._set_shared_profile_feedback(
+            self._refresh_profile_entries(scope)
+            self._set_selected_profile_key(scope, current.key)
+            self._clear_profile_confirmation_state()
+            self._set_saved_profile_feedback(
+                scope,
                 notice=(
-                    f"Loaded shared profile '{selected_profile.display_name}'. "
+                    f"Loaded [{badge}] profile '{current.display_name}'. "
                     "Use Sync Rules to Selected when you want followers updated."
-                )
+                ),
             )
         except Exception as exc:
-            warning = f"Failed to load shared profile: {exc}"
+            warning = (
+                f"Failed to load [{self._profile_scope_badge(scope)}] profile: {exc}"
+            )
             self.status_message = warning
-            self._set_shared_profile_feedback(warning=warning)
+            self._set_saved_profile_feedback(scope, warning=warning)
 
-    def _delete_selected_shared_profile(self):
+    def _delete_selected_profile(
+        self,
+        scope: str,
+        expected_fingerprint: str = "",
+    ):
         self._ensure_initialized()
-        selected_profile = self._get_selected_shared_profile()
+        selected_profile = self._get_selected_profile(scope)
         if selected_profile is None:
-            self._set_shared_profile_feedback(
-                warning="Select a shared profile to delete."
+            self._set_saved_profile_feedback(
+                scope,
+                warning=f"Select a [{self._profile_scope_badge(scope)}] profile to delete.",
             )
             return
 
         try:
-            self._profiles_doc().delete(selected_profile.path)
-            self._refresh_shared_profile_entries()
-            self._clear_shared_profile_confirmation_state()
-            self._set_shared_profile_feedback(
-                notice=f"Deleted shared profile '{selected_profile.display_name}'."
+            current = self._resolve_profile_for_action(
+                selected_profile.identity,
+                expected_fingerprint=expected_fingerprint,
+                reload_shared=True,
+            )
+            self._persist_profile_delete(current.identity)
+            self._clear_profile_confirmation_state()
+            self._set_saved_profile_feedback(
+                scope,
+                notice=(
+                    f"Deleted [{self._profile_scope_badge(scope)}] profile "
+                    f"'{current.display_name}'."
+                ),
             )
         except Exception as exc:
-            self._set_shared_profile_feedback(
-                warning=f"Failed to delete shared profile: {exc}"
+            self._set_saved_profile_feedback(
+                scope,
+                warning=(
+                    f"Failed to delete [{self._profile_scope_badge(scope)}] profile: {exc}"
+                ),
             )
 
-    def _open_shared_profiles_folder(self) -> bool:
-        folder_path = self._get_shared_profiles_dir()
+    def _copy_selected_profile_to_other_scope(
+        self,
+        source_scope: str,
+        expected_fingerprint: str = "",
+    ):
+        self._ensure_initialized()
+        source = self._get_selected_profile(source_scope)
+        destination_scope = (
+            PROFILE_SCOPE_ACCOUNT
+            if source_scope == PROFILE_SCOPE_SHARED
+            else PROFILE_SCOPE_SHARED
+        )
+        if source is None:
+            self._set_saved_profile_feedback(
+                source_scope,
+                warning=f"Select a [{self._profile_scope_badge(source_scope)}] profile to copy.",
+            )
+            return
+
+        try:
+            current = self._resolve_profile_for_action(
+                source.identity,
+                expected_fingerprint=expected_fingerprint,
+                reload_shared=True,
+            )
+            self._prepare_scope_for_new_profile(destination_scope)
+            destination_name = self._ensure_profile_name_available(
+                destination_scope,
+                current.display_name,
+            )
+            destination_doc = self._profile_doc(destination_scope)
+            destination_key = self._new_profile_key(destination_doc)
+            destination_wrapper = self._build_shared_profile_wrapper(
+                destination_name,
+                payload=current.payload,
+                saved_at_unix_ms=current.saved_at_unix_ms,
+                saved_at_label=current.saved_at_label,
+            )
+            copied = self._persist_profile_wrapper(
+                destination_scope,
+                destination_key,
+                destination_wrapper,
+            )
+            self._set_selected_profile_key(destination_scope, copied.key)
+            self._clear_profile_confirmation_state()
+            self._set_saved_profile_feedback(
+                destination_scope,
+                notice=(
+                    f"Copied '{current.display_name}' to "
+                    f"[{self._profile_scope_badge(destination_scope)}] profiles."
+                ),
+            )
+            self._set_saved_profile_feedback(
+                source_scope,
+                notice=(
+                    f"Copied [{self._profile_scope_badge(source_scope)}] "
+                    f"'{current.display_name}' without changing the source."
+                ),
+            )
+        except Exception as exc:
+            self._set_saved_profile_feedback(
+                source_scope,
+                warning=(
+                    f"Failed to copy [{self._profile_scope_badge(source_scope)}] profile: {exc}"
+                ),
+            )
+
+    def _open_profiles_folder(self, scope: str) -> bool:
+        folder_path = self._get_profiles_dir(scope)
         try:
             startfile = getattr(os, "startfile", None)
             if startfile is None:
                 raise OSError("Opening folders is not supported on this platform.")
             startfile(folder_path)
-            self.status_message = "Opened the shared Merchant Rules profiles folder."
+            self.status_message = (
+                f"Opened the {self._profile_scope_badge(scope).lower()} Merchant Rules profiles folder."
+            )
             return True
         except Exception as exc:
-            self._set_shared_profile_feedback(
-                warning=f"Failed to open the shared profiles folder: {exc}"
+            self._set_saved_profile_feedback(
+                scope,
+                warning=(
+                    f"Failed to open [{self._profile_scope_badge(scope)}] profiles folder: {exc}"
+                ),
             )
             ConsoleLog(
                 MODULE_NAME,
-                f"Failed to open shared profiles folder {folder_path}: {exc}",
+                f"Failed to open {scope} profiles folder {folder_path}: {exc}",
                 Console.MessageType.Error,
             )
             return False
@@ -11013,10 +11349,11 @@ class MerchantRulesWidget:
         account_changed = current_account != self.account_key
         if account_changed:
             self.account_key = current_account
-            self.shared_profile_entries_loaded = False
+            self.profile_entries_loaded[PROFILE_SCOPE_ACCOUNT] = False
 
-        if not self.shared_profile_entries_loaded:
-            self._refresh_shared_profile_entries()
+        for scope in PROFILE_SCOPES:
+            if not self.profile_entries_loaded[scope]:
+                self._refresh_profile_entries(scope)
 
         if not self.initialized or account_changed:
             self.config_path = self._live_config_doc().resolved_path()
@@ -26980,6 +27317,9 @@ class MerchantRulesWidget:
     def _clear_pending_destructive_button(self):
         self.pending_destructive_button_key = ""
         self.pending_destructive_button_expires_at_ms = 0
+        self.pending_profile_confirmation_identity = None
+        self.pending_profile_confirmation_fingerprint = ""
+        self.pending_profile_confirmation_action = ""
 
     def _get_destructive_button_key(self, label: str) -> str:
         safe_label = str(label or "")
@@ -27022,11 +27362,66 @@ class MerchantRulesWidget:
             self._clear_pending_destructive_button()
             return True
 
-        self.shared_profile_pending_overwrite_path = ""
-        self.shared_profile_pending_delete_path = ""
         self.pending_destructive_button_key = key
         self.pending_destructive_button_expires_at_ms = now_ms + DESTRUCTIVE_BUTTON_CONFIRM_TIMEOUT_MS
         return False
+
+    def _draw_confirm_profile_action_button(
+        self,
+        label: str,
+        action: str,
+        profile: ProfileSummary,
+        *,
+        small: bool = False,
+        shared_affects_all_accounts: bool = True,
+    ) -> tuple[bool, str]:
+        """Two-step confirmation bound to the exact selected profile version."""
+
+        now_ms = int(time.time() * 1000)
+        if self.pending_destructive_button_expires_at_ms <= now_ms:
+            self._clear_pending_destructive_button()
+
+        base_key = self._get_destructive_button_key(label)
+        identity = profile.identity
+        action_key = (
+            f"profile_{action}_{identity.scope}_"
+            f"{md5(identity.key.encode('utf-8')).hexdigest()}_{profile.fingerprint}"
+        )
+        is_armed = bool(
+            base_key
+            and action_key == self.pending_destructive_button_key
+            and identity == self.pending_profile_confirmation_identity
+            and action == self.pending_profile_confirmation_action
+            and profile.fingerprint == self.pending_profile_confirmation_fingerprint
+        )
+        if is_armed:
+            visible_label = (
+                "Confirm — Affects All Accounts"
+                if identity.scope == PROFILE_SCOPE_SHARED and shared_affects_all_accounts
+                else "Are you sure?"
+            )
+            draw_label = f"{visible_label}##{base_key}"
+            self._push_destructive_confirm_button_style()
+        else:
+            draw_label = label
+
+        clicked = PyImGui.small_button(draw_label) if small else PyImGui.button(draw_label)
+        if is_armed:
+            PyImGui.pop_style_color(4)
+
+        if not clicked:
+            return False, ""
+        if is_armed:
+            confirmed_fingerprint = self.pending_profile_confirmation_fingerprint
+            self._clear_pending_destructive_button()
+            return True, confirmed_fingerprint
+
+        self.pending_destructive_button_key = action_key
+        self.pending_destructive_button_expires_at_ms = now_ms + DESTRUCTIVE_BUTTON_CONFIRM_TIMEOUT_MS
+        self.pending_profile_confirmation_identity = identity
+        self.pending_profile_confirmation_fingerprint = profile.fingerprint
+        self.pending_profile_confirmation_action = action
+        return False, ""
 
     def _draw_inline_badge(self, label: str, color: tuple[float, float, float, float]):
         PyImGui.text_colored(f"[{label}]", color)
@@ -29553,8 +29948,15 @@ class MerchantRulesWidget:
             attention_items.append((f"Last error: {self.last_error}", UI_COLOR_DANGER))
         if self.profile_warning:
             attention_items.append((f"Live config needs attention: {self.profile_warning}", UI_COLOR_WARNING))
-        if self.shared_profile_warning:
-            attention_items.append((f"Shared profiles need attention: {self.shared_profile_warning}", UI_COLOR_WARNING))
+        for scope in PROFILE_SCOPES:
+            saved_profile_warning = self.saved_profile_warnings[scope] or self.saved_profile_scan_warnings[scope]
+            if saved_profile_warning:
+                attention_items.append(
+                    (
+                        f"{self._profile_scope_label(scope)} need attention: {saved_profile_warning}",
+                        UI_COLOR_WARNING,
+                    )
+                )
         if self.execute_drift_requires_confirmation:
             attention_items.append(
                 (
@@ -30053,6 +30455,12 @@ class MerchantRulesWidget:
             return
         self.active_workspace = next_workspace
         self._clear_pending_destructive_button()
+        if next_workspace == WORKSPACE_PROFILES:
+            self._refresh_profile_entries(
+                PROFILE_SCOPE_SHARED,
+                reload_document=True,
+            )
+            self.shared_profile_refresh_timer.Reset()
         if not preserve_sell_protection_jump:
             self._clear_sell_protection_jump(f"workspace changed to {next_workspace}")
 
@@ -36603,25 +37011,29 @@ class MerchantRulesWidget:
         PyImGui.separator()
         self._draw_inventory_shortcut_settings_section()
 
-    def _get_shared_profile_match_presentation(
+    def _get_profile_match_presentation(
         self,
-        profile: SharedProfileSummary,
+        profile: ProfileSummary,
         current_payload_serialized: str,
     ) -> tuple[str, tuple[float, float, float, float]]:
         if profile.serialized_payload == current_payload_serialized:
             return "Matches Current", UI_COLOR_SUCCESS
         return "Different From Current", UI_COLOR_WARNING
 
-    def _draw_shared_profile_metadata_line(
+    def _draw_profile_metadata_line(
         self,
-        profile: SharedProfileSummary,
+        profile: ProfileSummary,
         current_payload_serialized: str,
     ):
-        state_label, state_color = self._get_shared_profile_match_presentation(
+        state_label, state_color = self._get_profile_match_presentation(
             profile,
             current_payload_serialized,
         )
         saved_label = profile.saved_at_label or "Unknown"
+        badge = self._profile_scope_badge(profile.scope)
+        badge_color = UI_COLOR_INFO if profile.scope == PROFILE_SCOPE_SHARED else UI_COLOR_TEAL
+        self._draw_colored_text(f"[{badge}]", badge_color, wrapped=False)
+        PyImGui.same_line(0, 6)
         self._draw_colored_text("Saved:", UI_COLOR_WARNING_SOFT, wrapped=False)
         PyImGui.same_line(0, 4)
         self._draw_colored_text(saved_label, UI_COLOR_INFO, wrapped=False)
@@ -36630,9 +37042,9 @@ class MerchantRulesWidget:
         PyImGui.same_line(0, 8)
         self._draw_colored_text(state_label, state_color, wrapped=False)
         PyImGui.same_line(0, 8)
-        self._draw_colored_text("| File:", UI_COLOR_MUTED, wrapped=False)
+        self._draw_colored_text("| Key:", UI_COLOR_MUTED, wrapped=False)
         PyImGui.same_line(0, 4)
-        self._draw_colored_text(profile.filename or "Unknown", UI_COLOR_SECONDARY_TEXT, wrapped=False)
+        self._draw_colored_text(profile.key or "Unknown", UI_COLOR_SECONDARY_TEXT, wrapped=False)
 
     def _draw_selected_profile_detail_line(self, label: str, value: str, color: tuple[float, float, float, float]):
         self._draw_colored_text(label, UI_COLOR_WARNING_SOFT, wrapped=False)
@@ -36652,95 +37064,119 @@ class MerchantRulesWidget:
             if PyImGui.collapsing_header("Multibox##merchant_rules_multibox"):
                 self._draw_multibox_section()
 
-    def _draw_profiles_workspace(self):
-        current_payload_serialized = self._serialize_shareable_profile_payload(
-            self._build_shareable_profile_payload()
-        )
-        selected_profile = self._get_selected_shared_profile()
+    def _draw_saved_profile_section(
+        self,
+        scope: str,
+        current_payload_serialized: str,
+    ):
+        scope_badge = self._profile_scope_badge(scope)
+        scope_id = scope.lower()
+        entries = self.profile_entries[scope]
+        selected_profile = self._get_selected_profile(scope)
 
-        self._draw_section_heading("Shared Profiles")
-        self._draw_secondary_text(
-            "Shared profiles are named snapshots. Loading one applies it to this account's live Merchant Rules config, "
-            "and cross-account updates stay explicit through Sync Rules to Selected."
-        )
-        live_config_label = (
-            os.path.basename(self.config_path) if self.config_path else "Not initialized"
-        )
-        self._draw_selected_profile_detail_line("Live Config:", live_config_label, UI_COLOR_INFO)
-        self._draw_selected_profile_detail_line("Library:", self._get_shared_profiles_dir(), UI_COLOR_SECONDARY_TEXT)
-
-        if self.shared_profile_warning:
+        self._draw_section_heading(self._profile_scope_label(scope))
+        if scope == PROFILE_SCOPE_SHARED:
             self._draw_warning_text(
-                f"Shared Profiles: {self.shared_profile_warning}",
+                "Shared profile saves, overwrites, renames, deletes, and copies into this section affect every account."
             )
-        elif self.shared_profile_notice:
             self._draw_secondary_text(
-                f"Shared Profiles: {self.shared_profile_notice}"
+                "Loading a shared profile changes only this account's live config. "
+                "Shared mutations are refreshed, version-checked, saved, and verified immediately."
             )
-        if self.shared_profile_scan_warning:
-            self._draw_warning_text(self.shared_profile_scan_warning)
+        else:
+            self._draw_secondary_text(
+                "Account profiles are visible only to this account. Restore Backup and the live config also remain "
+                "account-scoped."
+            )
 
-        if PyImGui.small_button("Refresh Library##merchant_rules_shared_profiles_refresh"):
-            self._refresh_shared_profile_entries()
-            self._clear_shared_profile_confirmation_state()
-            self._set_shared_profile_feedback(notice="Refreshed shared profile library.")
-            selected_profile = self._get_selected_shared_profile()
+        self._draw_selected_profile_detail_line(
+            "Document:",
+            self._profile_doc(scope).resolved_path(),
+            UI_COLOR_SECONDARY_TEXT,
+        )
+
+        warning = self.saved_profile_warnings[scope]
+        notice = self.saved_profile_notices[scope]
+        scan_warning = self.saved_profile_scan_warnings[scope]
+        if warning:
+            self._draw_warning_text(f"[{scope_badge}] {warning}")
+        elif notice:
+            self._draw_secondary_text(f"[{scope_badge}] {notice}")
+        if scan_warning:
+            self._draw_warning_text(scan_warning)
+
+        refresh_label = (
+            "Refresh Shared Profiles"
+            if scope == PROFILE_SCOPE_SHARED
+            else "Refresh Account Profiles"
+        )
+        if PyImGui.small_button(f"{refresh_label}##merchant_rules_{scope_id}_profiles_refresh"):
+            refreshed = self._refresh_profile_entries(scope, reload_document=True)
+            self._clear_profile_confirmation_state()
+            if refreshed:
+                self._set_saved_profile_feedback(
+                    scope,
+                    notice=f"Refreshed [{scope_badge}] profiles.",
+                )
+            if scope == PROFILE_SCOPE_SHARED:
+                self.shared_profile_refresh_timer.Reset()
+            selected_profile = self._get_selected_profile(scope)
         PyImGui.same_line(0, 8)
-        if PyImGui.small_button("Open Profiles Folder##merchant_rules_shared_profiles_open_folder"):
-            self._clear_shared_profile_confirmation_state()
-            self._open_shared_profiles_folder()
-            selected_profile = self._get_selected_shared_profile()
+        if PyImGui.small_button(
+            f"Open Profiles Folder##merchant_rules_{scope_id}_profiles_open_folder"
+        ):
+            self._clear_profile_confirmation_state()
+            self._open_profiles_folder(scope)
+            selected_profile = self._get_selected_profile(scope)
 
         self._draw_colored_text(
-            f"{len(self.shared_profile_entries)} shared profile(s)",
-            UI_COLOR_INFO if self.shared_profile_entries else UI_COLOR_MUTED,
+            f"{len(entries)} [{scope_badge}] profile(s)",
+            UI_COLOR_INFO if entries else UI_COLOR_MUTED,
             wrapped=False,
         )
         PyImGui.same_line(0, 6)
-        self._draw_secondary_text("sorted alphabetically by display name.", wrapped=False)
+        self._draw_secondary_text("sorted by display name; identity uses the exact scope and key.", wrapped=False)
         PyImGui.separator()
 
-        child_height = 220 if self.shared_profile_entries else 120
+        child_height = 220 if entries else 120
         if PyImGui.begin_child(
-            "merchant_rules_shared_profiles_list",
+            f"merchant_rules_{scope_id}_profiles_list",
             (0, child_height),
             True,
             PyImGui.WindowFlags.NoFlag,
         ):
-            if not self.shared_profile_entries:
+            if not entries:
                 self._draw_secondary_text(
-                    "No shared profiles saved yet. Use Profile Name plus Save Current As New to create the first one."
+                    f"No [{scope_badge}] profiles saved yet. Enter a name below to create one."
                 )
             else:
-                for index, entry in enumerate(self.shared_profile_entries):
-                    is_selected = (
-                        os.path.normcase(os.path.normpath(entry.path))
-                        == os.path.normcase(
-                            os.path.normpath(self.shared_profile_selected_path)
-                        )
-                    )
+                for index, entry in enumerate(entries):
+                    row_hash = md5(
+                        f"{entry.scope}\0{entry.key}".encode("utf-8")
+                    ).hexdigest()
+                    is_selected = entry.identity == self.profile_selected_identities.get(scope)
                     if PyImGui.selectable(
-                        f"{entry.display_name}##merchant_rules_shared_profile_{index}",
+                        f"[{scope_badge}] {entry.display_name}##merchant_rules_profile_{row_hash}",
                         is_selected,
                         PyImGui.SelectableFlags.NoFlag,
                         (0, 0),
                     ):
-                        self._set_selected_shared_profile_path(entry.path)
-                        selected_profile = self._get_selected_shared_profile()
-                    self._draw_shared_profile_metadata_line(entry, current_payload_serialized)
-                    if index + 1 < len(self.shared_profile_entries):
+                        self._set_selected_profile_key(scope, entry.key)
+                        selected_profile = self._get_selected_profile(scope)
+                    self._draw_profile_metadata_line(entry, current_payload_serialized)
+                    if index + 1 < len(entries):
                         PyImGui.separator()
         PyImGui.end_child()
 
-        selected_profile = self._get_selected_shared_profile()
+        selected_profile = self._get_selected_profile(scope)
         PyImGui.separator()
-        self._draw_section_heading("Selected Profile")
+        self._draw_subsection_heading(f"Selected [{scope_badge}] Profile")
         if selected_profile is None:
             self._draw_secondary_text(
-                "Select a shared profile to load, rename, overwrite, or delete."
+                f"Select a [{scope_badge}] profile to load, rename, overwrite, copy, or delete."
             )
         else:
-            match_label, match_color = self._get_shared_profile_match_presentation(
+            match_label, match_color = self._get_profile_match_presentation(
                 selected_profile,
                 current_payload_serialized,
             )
@@ -36751,82 +37187,163 @@ class MerchantRulesWidget:
             )
             self._draw_selected_profile_detail_line("Name:", selected_profile.display_name, UI_COLOR_INFO)
             if selected_profile.saved_at_label:
-                self._draw_selected_profile_detail_line("Saved:", selected_profile.saved_at_label, UI_COLOR_INFO)
-            self._draw_selected_profile_detail_line("File:", selected_profile.filename, UI_COLOR_SECONDARY_TEXT)
-            self._draw_selected_profile_detail_line(f"{match_label}:", match_selected_label, match_color)
-            self._draw_secondary_text(
-                "Load applies this snapshot locally. Use Sync Rules to Selected afterward "
-                "if you want followers updated."
+                self._draw_selected_profile_detail_line(
+                    "Saved:",
+                    selected_profile.saved_at_label,
+                    UI_COLOR_INFO,
+                )
+            self._draw_selected_profile_detail_line(
+                "Stable Key:",
+                selected_profile.key,
+                UI_COLOR_SECONDARY_TEXT,
+            )
+            self._draw_selected_profile_detail_line(
+                f"{match_label}:",
+                match_selected_label,
+                match_color,
             )
 
         updated_profile_name = PyImGui.input_text(
-            "Profile Name##merchant_rules_shared_profile_name",
-            self.shared_profile_name_input,
+            f"Profile Name##merchant_rules_{scope_id}_profile_name",
+            self.profile_name_inputs[scope],
         )
-        if updated_profile_name != self.shared_profile_name_input:
-            self.shared_profile_name_input = updated_profile_name
+        if updated_profile_name != self.profile_name_inputs[scope]:
+            self.profile_name_inputs[scope] = updated_profile_name
+            self.profile_name_input_dirty[scope] = True
 
         self._draw_secondary_text(
-            "Save Current As New creates a new shared snapshot. Rename changes only the saved profile's display name. "
-            "Save Current Over Selected updates the chosen snapshot with your current local Merchant Rules config."
+            "New profiles receive a stable key independent of this display name. "
+            "Rename changes only the display name."
         )
 
-        rename_disabled = selected_profile is None
-        load_disabled = selected_profile is None
-        overwrite_disabled = selected_profile is None
-        delete_disabled = selected_profile is None
-
+        save_new_label = (
+            "Save as Shared — All Accounts"
+            if scope == PROFILE_SCOPE_SHARED
+            else "Save for This Account"
+        )
         save_new_clicked = PyImGui.button(
-            "Save Current As New##merchant_rules_shared_profile_save_new"
+            f"{save_new_label}##merchant_rules_{scope_id}_profile_save_new"
         )
+
+        rename_clicked = False
+        rename_fingerprint = ""
+        load_clicked = False
+        load_fingerprint = ""
+        overwrite_clicked = False
+        overwrite_fingerprint = ""
+        delete_clicked = False
+        delete_fingerprint = ""
+        copy_clicked = False
+
+        PyImGui.begin_disabled(selected_profile is None)
         PyImGui.same_line(0, 8)
-        PyImGui.begin_disabled(rename_disabled)
-        rename_clicked = PyImGui.button(
-            "Rename Selected##merchant_rules_shared_profile_rename"
+        if selected_profile is not None and scope == PROFILE_SCOPE_SHARED:
+            rename_clicked, rename_fingerprint = self._draw_confirm_profile_action_button(
+                f"Rename Selected##merchant_rules_{scope_id}_profile_rename",
+                "rename",
+                selected_profile,
+            )
+        else:
+            rename_clicked = PyImGui.button(
+                f"Rename Selected##merchant_rules_{scope_id}_profile_rename"
+            )
+        PyImGui.same_line(0, 8)
+        destination_label = (
+            "Copy to This Account"
+            if scope == PROFILE_SCOPE_SHARED
+            else "Copy to Shared — All Accounts"
         )
-        PyImGui.end_disabled()
-        PyImGui.same_line(0, 8)
-        PyImGui.begin_disabled(load_disabled)
-        load_clicked = self._draw_confirm_destructive_button(
-            "Load Selected##merchant_rules_shared_profile_load"
+        copy_clicked = PyImGui.button(
+            f"{destination_label}##merchant_rules_{scope_id}_profile_copy"
         )
         PyImGui.end_disabled()
 
-        PyImGui.begin_disabled(overwrite_disabled)
-        overwrite_clicked = self._draw_confirm_destructive_button(
-            "Save Current Over Selected##merchant_rules_shared_profile_overwrite"
-        )
-        PyImGui.end_disabled()
+        PyImGui.begin_disabled(selected_profile is None)
+        if selected_profile is not None:
+            load_clicked, load_fingerprint = self._draw_confirm_profile_action_button(
+                f"Load Selected##merchant_rules_{scope_id}_profile_load",
+                "load",
+                selected_profile,
+                shared_affects_all_accounts=False,
+            )
+        else:
+            PyImGui.button(f"Load Selected##merchant_rules_{scope_id}_profile_load")
         PyImGui.same_line(0, 8)
-        PyImGui.begin_disabled(delete_disabled)
-        delete_clicked = self._draw_confirm_destructive_button(
-            "Delete Selected##merchant_rules_shared_profile_delete"
-        )
+        if selected_profile is not None:
+            overwrite_clicked, overwrite_fingerprint = self._draw_confirm_profile_action_button(
+                f"Save Current Over Selected##merchant_rules_{scope_id}_profile_overwrite",
+                "overwrite",
+                selected_profile,
+            )
+        else:
+            PyImGui.button(
+                f"Save Current Over Selected##merchant_rules_{scope_id}_profile_overwrite"
+            )
+        PyImGui.same_line(0, 8)
+        if selected_profile is not None:
+            delete_clicked, delete_fingerprint = self._draw_confirm_profile_action_button(
+                f"Delete Selected##merchant_rules_{scope_id}_profile_delete",
+                "delete",
+                selected_profile,
+            )
+        else:
+            PyImGui.button(f"Delete Selected##merchant_rules_{scope_id}_profile_delete")
         PyImGui.end_disabled()
 
         if save_new_clicked:
-            self._clear_shared_profile_confirmation_state()
-            self._save_current_as_new_shared_profile()
-            selected_profile = self._get_selected_shared_profile()
+            self._clear_profile_confirmation_state()
+            self._save_current_as_new_profile(scope)
         if rename_clicked:
-            self._clear_shared_profile_confirmation_state()
-            self._rename_selected_shared_profile()
-            selected_profile = self._get_selected_shared_profile()
+            self._rename_selected_profile(scope, rename_fingerprint)
+        if copy_clicked and selected_profile is not None:
+            self._clear_profile_confirmation_state()
+            self._copy_selected_profile_to_other_scope(
+                scope,
+                selected_profile.fingerprint if scope == PROFILE_SCOPE_SHARED else "",
+            )
         if load_clicked:
-            self._clear_shared_profile_confirmation_state()
-            self._load_selected_shared_profile()
-            selected_profile = self._get_selected_shared_profile()
-        if overwrite_clicked and selected_profile is not None:
-            self._save_current_over_selected_shared_profile()
-            selected_profile = self._get_selected_shared_profile()
-        if delete_clicked and selected_profile is not None:
-            self._delete_selected_shared_profile()
+            self._load_selected_profile(scope, load_fingerprint)
+        if overwrite_clicked:
+            self._save_current_over_selected_profile(scope, overwrite_fingerprint)
+        if delete_clicked:
+            self._delete_selected_profile(scope, delete_fingerprint)
+
+    def _draw_profiles_workspace(self):
+        if self.shared_profile_refresh_timer.IsExpired():
+            self._refresh_profile_entries(
+                PROFILE_SCOPE_SHARED,
+                reload_document=True,
+            )
+            self.shared_profile_refresh_timer.Reset()
+
+        current_payload_serialized = self._serialize_shareable_profile_payload(
+            self._build_shareable_profile_payload()
+        )
+        live_config_label = (
+            os.path.basename(self.config_path) if self.config_path else "Not initialized"
+        )
+        self._draw_selected_profile_detail_line("Live Config:", live_config_label, UI_COLOR_INFO)
+        self._draw_secondary_text(
+            "Saved profiles never include Merchant Rules window geometry. "
+            "Loading preserves this workspace and geometry."
+        )
+        PyImGui.separator()
+        self._draw_saved_profile_section(
+            PROFILE_SCOPE_SHARED,
+            current_payload_serialized,
+        )
+        PyImGui.separator()
+        self._draw_saved_profile_section(
+            PROFILE_SCOPE_ACCOUNT,
+            current_payload_serialized,
+        )
 
         PyImGui.separator()
         self._draw_section_heading("Live Config")
         self._draw_secondary_text(
             "The current account keeps a separate live working config, saved automatically as a self-persisting "
-            "JSON document that is written atomically. This does not change the shared profiles library."
+            "JSON document. Restore Backup remains account-scoped and profile operations do not change backup "
+            "documents."
         )
         if self.profile_warning:
             self._draw_warning_text(
@@ -37000,7 +37517,9 @@ def tooltip():
     PyImGui.bullet_text("Identify can target exact rarities and optionally run before Execute rebuilds the live merchant plan.")
     PyImGui.bullet_text("Destroy supports Destroy Safety, Preview -> Execute, saved Auto Destroy, and session Auto Destroy.")
     PyImGui.bullet_text("Leader-driven multibox sync, preview, and execute for selected active accounts.")
-    PyImGui.bullet_text("Shared named profiles load locally first, then propagate only through explicit Sync Rules to Selected.")
+    PyImGui.bullet_text(
+        "Shared and account-only profiles load locally first, then propagate only through explicit Sync Rules to Selected."
+    )
     PyImGui.bullet_text("Standalone weapon mods, runes, and insignias can route through Rune Trader when found.")
     PyImGui.bullet_text("Exact rune and insignia sell rules can target selected loose rune names.")
     PyImGui.bullet_text("Uses main-branch merchant routines.")
