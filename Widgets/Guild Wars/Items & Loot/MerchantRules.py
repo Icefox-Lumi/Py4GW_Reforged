@@ -80,6 +80,7 @@ LIVE_CONFIG_DOC_NAME = "Widgets/MerchantRules/LiveConfig.json"
 ACCOUNT_PROFILES_DOC_NAME = "Widgets/MerchantRules/Profiles.json"
 SHARED_PROFILES_DOC_NAME = "Widgets/MerchantRules/SharedProfiles.json"
 BACKUP_DOC_NAME = "Widgets/MerchantRules/LiveConfigBackup.json"
+LOADED_PROFILE_STATE_DOC_NAME = "Widgets/MerchantRules/LoadedProfileState.json"
 BACKUP_SCHEMA = "merchant_rules_live_config_backup_v1"
 BACKUP_SCHEMA_VERSION = 1
 DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Data")
@@ -175,6 +176,8 @@ PROFILE_WINDOW_GEOMETRY_KEYS: tuple[str, ...] = (
 )
 SHARED_PROFILE_SCHEMA = "merchant_rules_shared_profile_v1"
 SHARED_PROFILE_SCHEMA_VERSION = 1
+LOADED_PROFILE_STATE_SCHEMA = "merchant_rules_loaded_profile_state_v1"
+LOADED_PROFILE_STATE_SCHEMA_VERSION = 1
 PROFILE_SCOPE_SHARED = "shared"
 PROFILE_SCOPE_ACCOUNT = "account"
 PROFILE_SCOPES: tuple[str, ...] = (
@@ -1111,8 +1114,11 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     },
     "workspace_profiles": {
         "short": "Save, load, and share named Merchant Rules setups.",
-        "long": "Profiles are snapshots of this account's live Merchant Rules configuration.",
-        "why": "Use profiles before larger edits so you can return to a known setup.",
+        "long": (
+            "Account and Shared profiles are saved snapshots. The live summary separately identifies the exact "
+            "loaded source and every saved profile whose normalized contents match."
+        ),
+        "why": "Use scope tabs to manage one profile collection at a time without confusing selection with loading.",
     },
     "workspace_rules_buy": {
         "short": "Maintain stock by buying from merchants, traders, or crafters.",
@@ -3633,6 +3639,16 @@ class ProfileIdentity:
 
     scope: str
     key: str
+
+
+@dataclass(frozen=True)
+class LoadedProfileProvenance:
+    """Remember the exact saved profile explicitly loaded into one account's live config."""
+
+    source_identity: ProfileIdentity
+    display_name_snapshot: str
+    normalized_content_fingerprint: str
+    associated_at_unix_ms: int
 
 
 @dataclass
@@ -6366,6 +6382,8 @@ class MerchantRulesWidget:
         self.account_key = ""
         self.config_path = ""
         self.active_profile_display_name = ""
+        self.loaded_profile_provenance: LoadedProfileProvenance | None = None
+        self.loaded_profile_provenance_warning = ""
         self.new_profile_session = False
         self.profile_warning = ""
         self.profile_notice = ""
@@ -6402,6 +6420,12 @@ class MerchantRulesWidget:
             scope: False
             for scope in PROFILE_SCOPES
         }
+        self.profile_document_reload_failed: dict[str, bool] = {
+            scope: False
+            for scope in PROFILE_SCOPES
+        }
+        self.active_profiles_scope = PROFILE_SCOPE_ACCOUNT
+        self.profile_scroll_to_identity: ProfileIdentity | None = None
         self.pending_profile_confirmation_identity: ProfileIdentity | None = None
         self.pending_profile_confirmation_fingerprint = ""
         self.pending_profile_confirmation_action = ""
@@ -6637,6 +6661,10 @@ class MerchantRulesWidget:
         """Account-scoped last-known-good live profile used by the Restore Backup action."""
         return JsonFactory(BACKUP_DOC_NAME)
 
+    def _loaded_profile_state_doc(self) -> JsonFactory:
+        """Account-scoped provenance for the exact saved profile last loaded explicitly."""
+        return JsonFactory(LOADED_PROFILE_STATE_DOC_NAME)
+
     def _get_live_profile_display_name(self) -> str:
         config_path = str(self.config_path or "").strip()
         if config_path:
@@ -6647,6 +6675,15 @@ class MerchantRulesWidget:
         return account_key or "default"
 
     def _get_active_profile_display_name(self) -> str:
+        provenance = self.loaded_profile_provenance
+        if provenance is not None:
+            source = self._get_profile_by_identity(provenance.source_identity)
+            display_name = (
+                source.display_name
+                if source is not None
+                else provenance.display_name_snapshot
+            )
+            return f"[{self._profile_scope_badge(provenance.source_identity.scope)}] {display_name}"
         profile_name = str(self.active_profile_display_name or "").strip()
         return profile_name or self._get_live_profile_display_name()
 
@@ -10268,6 +10305,163 @@ class MerchantRulesWidget:
             _strip_window_geometry_from_profile_payload(payload)
         )
 
+    def _shareable_profile_content_fingerprint(self, serialized_payload: str) -> str:
+        return md5(str(serialized_payload or "").encode("utf-8")).hexdigest()
+
+    def _loaded_profile_provenance_to_json(
+        self,
+        provenance: LoadedProfileProvenance,
+    ) -> dict[str, object]:
+        return {
+            "schema": LOADED_PROFILE_STATE_SCHEMA,
+            "schema_version": LOADED_PROFILE_STATE_SCHEMA_VERSION,
+            "source_scope": provenance.source_identity.scope,
+            "source_key": provenance.source_identity.key,
+            "display_name_snapshot": provenance.display_name_snapshot,
+            "normalized_content_fingerprint": provenance.normalized_content_fingerprint,
+            "associated_at_unix_ms": max(0, int(provenance.associated_at_unix_ms)),
+        }
+
+    def _normalize_loaded_profile_provenance(
+        self,
+        raw_state: object,
+    ) -> LoadedProfileProvenance:
+        if not isinstance(raw_state, dict):
+            raise ValueError("Loaded-profile provenance must be a JSON object.")
+        if str(raw_state.get("schema", "") or "").strip() != LOADED_PROFILE_STATE_SCHEMA:
+            raise ValueError("Loaded-profile provenance schema is not supported.")
+
+        schema_version = _safe_int(raw_state.get("schema_version", 0), 0)
+        if schema_version <= 0:
+            raise ValueError("Loaded-profile provenance schema version is missing.")
+        if schema_version > LOADED_PROFILE_STATE_SCHEMA_VERSION:
+            raise ValueError(
+                f"Loaded-profile provenance schema v{schema_version} is newer than supported schema "
+                f"v{LOADED_PROFILE_STATE_SCHEMA_VERSION}."
+            )
+
+        source_scope = str(raw_state.get("source_scope", "") or "").strip()
+        if source_scope not in PROFILE_SCOPES:
+            raise ValueError("Loaded-profile provenance source scope is invalid.")
+        source_key = str(raw_state.get("source_key", "") or "").strip()
+        if not source_key:
+            raise ValueError("Loaded-profile provenance source key is missing.")
+
+        display_name_snapshot = _normalize_shared_profile_display_name(
+            raw_state.get("display_name_snapshot", "")
+        )
+        if not display_name_snapshot:
+            display_name_snapshot = source_key
+
+        content_fingerprint = str(
+            raw_state.get("normalized_content_fingerprint", "") or ""
+        ).strip().lower()
+        if re.fullmatch(r"[0-9a-f]{32}", content_fingerprint) is None:
+            raise ValueError("Loaded-profile provenance content fingerprint is invalid.")
+
+        return LoadedProfileProvenance(
+            source_identity=ProfileIdentity(source_scope, source_key),
+            display_name_snapshot=display_name_snapshot,
+            normalized_content_fingerprint=content_fingerprint,
+            associated_at_unix_ms=max(
+                0,
+                _safe_int(raw_state.get("associated_at_unix_ms", 0), 0),
+            ),
+        )
+
+    def _load_loaded_profile_provenance(self):
+        self.loaded_profile_provenance = None
+        self.loaded_profile_provenance_warning = ""
+        try:
+            raw_state = self._loaded_profile_state_doc().get_json("", None)
+            if raw_state in (None, {}):
+                return
+            provenance = self._normalize_loaded_profile_provenance(raw_state)
+            self.loaded_profile_provenance = provenance
+            self.active_profile_display_name = (
+                f"[{self._profile_scope_badge(provenance.source_identity.scope)}] "
+                f"{provenance.display_name_snapshot}"
+            )
+        except Exception as exc:
+            self.loaded_profile_provenance_warning = (
+                f"Loaded-profile provenance is unavailable and was preserved without rewriting it: {exc}"
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                self.loaded_profile_provenance_warning,
+                Console.MessageType.Warning,
+            )
+
+    def _require_loaded_profile_state_writable(self, doc: JsonFactory):
+        raw_state = doc.get_json("", None)
+        if raw_state in (None, {}):
+            return
+        try:
+            self._normalize_loaded_profile_provenance(raw_state)
+        except Exception as exc:
+            raise ValueError(
+                "Existing loaded-profile provenance is unreadable or newer than this Merchant Rules version; "
+                "refusing to rewrite it."
+            ) from exc
+
+    def _record_loaded_profile_provenance(self, profile: ProfileSummary):
+        provenance = LoadedProfileProvenance(
+            source_identity=profile.identity,
+            display_name_snapshot=profile.display_name,
+            normalized_content_fingerprint=self._shareable_profile_content_fingerprint(
+                profile.serialized_payload
+            ),
+            associated_at_unix_ms=int(time.time() * 1000),
+        )
+        expected_state = self._loaded_profile_provenance_to_json(provenance)
+        doc = self._loaded_profile_state_doc()
+        self._require_loaded_profile_state_writable(doc)
+        doc.set_json("", expected_state)
+        if not doc.save():
+            doc.reload()
+            raise OSError("JsonFactory could not flush loaded-profile provenance.")
+        if not doc.reload():
+            raise OSError("Loaded-profile provenance was saved but could not be reloaded.")
+        verified = self._normalize_loaded_profile_provenance(doc.get_json("", None))
+        if self._loaded_profile_provenance_to_json(verified) != expected_state:
+            raise RuntimeError("Loaded-profile provenance failed post-save verification.")
+        self.loaded_profile_provenance = verified
+        self.loaded_profile_provenance_warning = ""
+        self.active_profile_display_name = (
+            f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}"
+        )
+
+    def _clear_loaded_profile_provenance(self, reason: str = "") -> bool:
+        self.loaded_profile_provenance = None
+        self.active_profile_display_name = self._get_live_profile_display_name()
+        doc = self._loaded_profile_state_doc()
+        try:
+            if doc.get_json("", None) in (None, {}):
+                self.loaded_profile_provenance_warning = ""
+                return True
+            self._require_loaded_profile_state_writable(doc)
+            doc.set_json("", {})
+            if not doc.save():
+                doc.reload()
+                raise OSError("JsonFactory could not clear loaded-profile provenance.")
+            if not doc.reload():
+                raise OSError("Loaded-profile provenance was cleared but could not be reloaded.")
+            if doc.get_json("", None) not in (None, {}):
+                raise RuntimeError("Loaded-profile provenance is still present after clearing it.")
+            self.loaded_profile_provenance_warning = ""
+            return True
+        except Exception as exc:
+            reason_suffix = f" after {reason}" if reason else ""
+            self.loaded_profile_provenance_warning = (
+                f"Could not clear loaded-profile provenance{reason_suffix}: {exc}"
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                self.loaded_profile_provenance_warning,
+                Console.MessageType.Warning,
+            )
+            return False
+
     def _serialize_saved_profile_wrapper(self, wrapper: object) -> str:
         normalized_wrapper = dict(wrapper) if isinstance(wrapper, dict) else {}
         return json.dumps(normalized_wrapper, sort_keys=True, separators=(",", ":"))
@@ -10464,6 +10658,37 @@ class MerchantRulesWidget:
             self.profile_name_inputs[scope] = ""
             self.profile_name_input_dirty[scope] = False
 
+    def _set_active_profiles_scope(self, scope: str):
+        next_scope = scope if scope in PROFILE_SCOPES else PROFILE_SCOPE_ACCOUNT
+        if next_scope == self.active_profiles_scope:
+            return
+        self.active_profiles_scope = next_scope
+        self._clear_profile_confirmation_state()
+
+    def _initialize_profiles_scope_from_loaded_provenance(self):
+        """Choose the entry scope once from readable account provenance, defaulting safely."""
+
+        provenance = self.loaded_profile_provenance
+        next_scope = (
+            provenance.source_identity.scope
+            if provenance is not None and provenance.source_identity.scope in PROFILE_SCOPES
+            else PROFILE_SCOPE_ACCOUNT
+        )
+        self._set_active_profiles_scope(next_scope)
+
+    def _select_profile_after_action(
+        self,
+        scope: str,
+        profile_key: str,
+        *,
+        activate_scope: bool = False,
+    ):
+        self._set_selected_profile_key(scope, profile_key)
+        identity = self.profile_selected_identities.get(scope)
+        self.profile_scroll_to_identity = identity
+        if activate_scope:
+            self._set_active_profiles_scope(scope)
+
     def _find_profile_by_name(
         self,
         scope: str,
@@ -10529,6 +10754,7 @@ class MerchantRulesWidget:
         previous_fingerprint = previous_selected.fingerprint if previous_selected is not None else ""
 
         if reload_document and not doc.reload():
+            self.profile_document_reload_failed[scope] = True
             self.profile_entries_loaded[scope] = True
             if report_reload_failure:
                 if scope == PROFILE_SCOPE_SHARED and not previous_entries:
@@ -10541,6 +10767,8 @@ class MerchantRulesWidget:
                         f"Could not reload {self._profile_scope_label(scope)}; retaining the last readable list."
                     )
             return False
+        if reload_document:
+            self.profile_document_reload_failed[scope] = False
 
         entries: list[ProfileSummary] = []
         load_failures: list[str] = []
@@ -10629,6 +10857,7 @@ class MerchantRulesWidget:
             raise OSError(
                 f"JsonFactory saved but could not reload {self._profile_scope_label(scope)}."
             )
+        self.profile_document_reload_failed[scope] = False
         verified = self._load_profile_summary_from_key(
             scope,
             profile_key,
@@ -10656,6 +10885,7 @@ class MerchantRulesWidget:
             raise OSError(
                 f"JsonFactory saved but could not reload {self._profile_scope_label(identity.scope)}."
             )
+        self.profile_document_reload_failed[identity.scope] = False
         if doc.has(identity.key):
             raise RuntimeError("The deleted profile is still present after reloading the document.")
         self._refresh_profile_entries(identity.scope)
@@ -10714,7 +10944,7 @@ class MerchantRulesWidget:
             profile_key = self._new_profile_key(doc)
             wrapper = self._build_shared_profile_wrapper(profile_name)
             self._persist_profile_wrapper(scope, profile_key, wrapper)
-            self._set_selected_profile_key(scope, profile_key)
+            self._select_profile_after_action(scope, profile_key)
             self._clear_profile_confirmation_state()
             self._set_saved_profile_feedback(
                 scope,
@@ -10764,7 +10994,7 @@ class MerchantRulesWidget:
                 saved_at_label=current.saved_at_label,
             )
             self._persist_profile_wrapper(scope, current.key, wrapper)
-            self._set_selected_profile_key(scope, current.key)
+            self._select_profile_after_action(scope, current.key)
             self.profile_name_inputs[scope] = new_name
             self.profile_name_input_dirty[scope] = False
             self._clear_profile_confirmation_state()
@@ -10805,7 +11035,7 @@ class MerchantRulesWidget:
             )
             wrapper = self._build_shared_profile_wrapper(current.display_name)
             self._persist_profile_wrapper(scope, current.key, wrapper)
-            self._set_selected_profile_key(scope, current.key)
+            self._select_profile_after_action(scope, current.key)
             self._clear_profile_confirmation_state()
             self._set_saved_profile_feedback(
                 scope,
@@ -10869,20 +11099,44 @@ class MerchantRulesWidget:
                     "The reloaded live config does not match the selected saved profile."
                 )
             badge = self._profile_scope_badge(scope)
-            self.active_profile_display_name = f"[{badge}] {current.display_name}"
+            provenance_warning = ""
+            self.loaded_profile_provenance = None
+            self.active_profile_display_name = self._get_live_profile_display_name()
+            try:
+                self._record_loaded_profile_provenance(current)
+            except Exception as provenance_exc:
+                clear_succeeded = self._clear_loaded_profile_provenance(
+                    "a loaded-profile provenance write failure"
+                )
+                clear_detail = "" if clear_succeeded else f" {self.loaded_profile_provenance_warning}"
+                provenance_warning = (
+                    f"Profile loaded, but its loaded-source provenance could not be recorded: "
+                    f"{provenance_exc}.{clear_detail}"
+                )
+                self.loaded_profile_provenance_warning = provenance_warning
+                ConsoleLog(
+                    MODULE_NAME,
+                    provenance_warning,
+                    Console.MessageType.Warning,
+                )
             self.status_message = (
                 f"Loaded [{badge}] profile '{current.display_name}' "
                 f"into the current Merchant Rules config."
             )
             self._log_profile_loaded_summary()
             self._refresh_profile_entries(scope)
-            self._set_selected_profile_key(scope, current.key)
+            self._select_profile_after_action(scope, current.key)
             self._clear_profile_confirmation_state()
             self._set_saved_profile_feedback(
                 scope,
                 notice=(
                     f"Loaded [{badge}] profile '{current.display_name}'. "
                     "Use Sync Rules to Selected when you want followers updated."
+                    + (
+                        " Loaded-source tracking needs attention."
+                        if provenance_warning
+                        else ""
+                    )
                 ),
             )
         except Exception as exc:
@@ -10972,7 +11226,11 @@ class MerchantRulesWidget:
                 destination_key,
                 destination_wrapper,
             )
-            self._set_selected_profile_key(destination_scope, copied.key)
+            self._select_profile_after_action(
+                destination_scope,
+                copied.key,
+                activate_scope=True,
+            )
             self._clear_profile_confirmation_state()
             self._set_saved_profile_feedback(
                 destination_scope,
@@ -11208,6 +11466,7 @@ class MerchantRulesWidget:
                 create_backup=False,
                 force_save=True,
             )
+            self._clear_loaded_profile_provenance("Restore Backup")
             self.profile_write_blocked = False
             self.reload_profile_from_disk(
                 status_message="Merchant Rules live config restored from the last backup.",
@@ -11358,6 +11617,7 @@ class MerchantRulesWidget:
         if not self.initialized or account_changed:
             self.config_path = self._live_config_doc().resolved_path()
             self._load_profile()
+            self._load_loaded_profile_provenance()
             self._reset_runtime_after_profile_load()
             self.initialized = True
 
@@ -28005,8 +28265,8 @@ class MerchantRulesWidget:
         except Exception:
             backup_exists = False
         self._draw_secondary_text(
-            "The current account's live config and last-known-good restore point are separate "
-            "self-persisting JsonFactory documents. This does not manage shared saved profiles."
+            "The live configuration, last-known-good restore point, and loaded-source provenance are separate "
+            "account-scoped JsonFactory documents. Shared saved profiles remain global."
         )
         self._draw_secondary_text(f"Live Config: {config_label}", wrapped=False)
         self._draw_secondary_text(
@@ -28016,6 +28276,47 @@ class MerchantRulesWidget:
             wrapped=False,
         )
         self._draw_secondary_text(f"Config Folder: {config_folder}")
+        self._draw_secondary_text(
+            f"Live Config Document: {self._live_config_doc().resolved_path()}"
+        )
+        self._draw_secondary_text(
+            f"Backup Document: {self._backup_doc().resolved_path()}"
+        )
+        self._draw_secondary_text(
+            f"Loaded Source Document: {self._loaded_profile_state_doc().resolved_path()}"
+        )
+        provenance = self.loaded_profile_provenance
+        if provenance is None:
+            self._draw_secondary_text("Loaded Source Stable Key: no recorded loaded profile.")
+        else:
+            self._draw_selected_profile_detail_line(
+                "Loaded Source Scope:",
+                self._profile_scope_badge(provenance.source_identity.scope),
+                UI_COLOR_SECONDARY_TEXT,
+            )
+            self._draw_selected_profile_detail_line(
+                "Loaded Source Stable Key:",
+                provenance.source_identity.key,
+                UI_COLOR_SECONDARY_TEXT,
+            )
+            self._draw_selected_profile_detail_line(
+                "Loaded Content Fingerprint:",
+                provenance.normalized_content_fingerprint,
+                UI_COLOR_SECONDARY_TEXT,
+            )
+            associated_label = self._format_shared_profile_timestamp(
+                provenance.associated_at_unix_ms
+            )
+            self._draw_selected_profile_detail_line(
+                "Associated:",
+                associated_label or "Unknown",
+                UI_COLOR_SECONDARY_TEXT,
+            )
+            self._draw_selected_profile_detail_line(
+                "Provenance Schema:",
+                f"{LOADED_PROFILE_STATE_SCHEMA} v{LOADED_PROFILE_STATE_SCHEMA_VERSION}",
+                UI_COLOR_SECONDARY_TEXT,
+            )
 
         PyImGui.begin_disabled(not backup_exists)
         restore_clicked = self._draw_confirm_destructive_button(
@@ -29436,6 +29737,7 @@ class MerchantRulesWidget:
             return
 
         if opcode == MERCHANT_RULES_OPCODE_RELOAD_PROFILE:
+            self._clear_loaded_profile_provenance("multibox synchronization")
             self.reload_profile_from_disk(
                 status_message="Merchant Rules live config reloaded by multibox sync.",
                 preserve_window_geometry=True,
@@ -30456,6 +30758,7 @@ class MerchantRulesWidget:
         self.active_workspace = next_workspace
         self._clear_pending_destructive_button()
         if next_workspace == WORKSPACE_PROFILES:
+            self._initialize_profiles_scope_from_loaded_provenance()
             self._refresh_profile_entries(
                 PROFILE_SCOPE_SHARED,
                 reload_document=True,
@@ -37011,45 +37314,283 @@ class MerchantRulesWidget:
         PyImGui.separator()
         self._draw_inventory_shortcut_settings_section()
 
-    def _get_profile_match_presentation(
+    def _get_profiles_matching_live_config(
+        self,
+        current_payload_serialized: str,
+    ) -> list[ProfileSummary]:
+        return [
+            profile
+            for scope in PROFILE_SCOPES
+            for profile in self.profile_entries[scope]
+            if profile.serialized_payload == current_payload_serialized
+        ]
+
+    def _format_profile_reference(self, profile: ProfileSummary) -> str:
+        return f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}"
+
+    def _format_profile_reference_list(self, profiles: list[ProfileSummary]) -> str:
+        references = [
+            self._format_profile_reference(profile)
+            for profile in profiles[:3]
+        ]
+        if len(profiles) > 3:
+            references.append(f"+{len(profiles) - 3} more")
+        return ", ".join(references)
+
+    def _draw_profile_status_badge(
+        self,
+        label: str,
+        color: tuple[float, float, float, float],
+        tooltip: str,
+    ):
+        self._draw_inline_badge(label, color)
+        self._draw_hover_tooltip(tooltip)
+
+    def _draw_profile_relationship_badges(
         self,
         profile: ProfileSummary,
         current_payload_serialized: str,
-    ) -> tuple[str, tuple[float, float, float, float]]:
-        if profile.serialized_payload == current_payload_serialized:
-            return "Matches Current", UI_COLOR_SUCCESS
-        return "Different From Current", UI_COLOR_WARNING
+        *,
+        include_loaded_source: bool = True,
+    ):
+        provenance = self.loaded_profile_provenance
+        is_loaded_source = bool(
+            provenance is not None
+            and provenance.source_identity == profile.identity
+        )
+        badges: list[tuple[str, tuple[float, float, float, float], str]] = []
+        if is_loaded_source and include_loaded_source:
+            badges.append(
+                (
+                    "Loaded Source",
+                    UI_COLOR_INFO,
+                    "This exact scope and stable key were last loaded explicitly into the active account.",
+                )
+            )
+
+        matches_live = profile.serialized_payload == current_payload_serialized
+        badges.append(
+            (
+                "Matches Live" if matches_live else "Different",
+                UI_COLOR_SUCCESS if matches_live else UI_COLOR_WARNING,
+                (
+                    "This saved profile's normalized settings match the current live configuration."
+                    if matches_live
+                    else "This saved profile's normalized settings differ from the current live configuration."
+                ),
+            )
+        )
+
+        if is_loaded_source and provenance is not None:
+            current_fingerprint = self._shareable_profile_content_fingerprint(
+                current_payload_serialized
+            )
+            if current_fingerprint != provenance.normalized_content_fingerprint:
+                badges.append(
+                    (
+                        "Modified from Loaded Source",
+                        UI_COLOR_WARNING,
+                        "The live configuration differs from the normalized settings recorded "
+                        "when this profile was loaded.",
+                    )
+                )
+            if self.profile_document_reload_failed[profile.scope]:
+                badges.append(
+                    (
+                        "Source Unavailable",
+                        UI_COLOR_DANGER,
+                        "The source document could not be refreshed; the last readable profile metadata is shown.",
+                    )
+                )
+
+        for index, (label, color, tooltip) in enumerate(badges):
+            if index:
+                PyImGui.same_line(0, 6)
+            self._draw_profile_status_badge(label, color, tooltip)
 
     def _draw_profile_metadata_line(
         self,
         profile: ProfileSummary,
         current_payload_serialized: str,
     ):
-        state_label, state_color = self._get_profile_match_presentation(
-            profile,
-            current_payload_serialized,
-        )
         saved_label = profile.saved_at_label or "Unknown"
-        badge = self._profile_scope_badge(profile.scope)
-        badge_color = UI_COLOR_INFO if profile.scope == PROFILE_SCOPE_SHARED else UI_COLOR_TEAL
-        self._draw_colored_text(f"[{badge}]", badge_color, wrapped=False)
-        PyImGui.same_line(0, 6)
         self._draw_colored_text("Saved:", UI_COLOR_WARNING_SOFT, wrapped=False)
         PyImGui.same_line(0, 4)
         self._draw_colored_text(saved_label, UI_COLOR_INFO, wrapped=False)
-        PyImGui.same_line(0, 8)
-        self._draw_colored_text("|", UI_COLOR_MUTED, wrapped=False)
-        PyImGui.same_line(0, 8)
-        self._draw_colored_text(state_label, state_color, wrapped=False)
-        PyImGui.same_line(0, 8)
-        self._draw_colored_text("| Key:", UI_COLOR_MUTED, wrapped=False)
-        PyImGui.same_line(0, 4)
-        self._draw_colored_text(profile.key or "Unknown", UI_COLOR_SECONDARY_TEXT, wrapped=False)
+        self._draw_profile_relationship_badges(profile, current_payload_serialized)
 
     def _draw_selected_profile_detail_line(self, label: str, value: str, color: tuple[float, float, float, float]):
         self._draw_colored_text(label, UI_COLOR_WARNING_SOFT, wrapped=False)
         PyImGui.same_line(0, 6)
         self._draw_colored_text(value or "Unknown", color, wrapped=False)
+
+    def _draw_live_configuration_profile_summary(
+        self,
+        current_payload_serialized: str,
+    ):
+        self._draw_section_heading("Live Configuration")
+        self._draw_hover_tooltip(
+            "The live configuration is the active account's auto-saved working copy. "
+            "A loaded source is exact provenance; matching profiles are content-equivalent snapshots."
+        )
+        self._draw_selected_profile_detail_line(
+            "Active Account:",
+            str(self.account_key or "Unknown"),
+            UI_COLOR_INFO,
+        )
+
+        provenance = self.loaded_profile_provenance
+        matching_profiles = self._get_profiles_matching_live_config(
+            current_payload_serialized
+        )
+        if provenance is None:
+            self._draw_selected_profile_detail_line(
+                "Loaded Source:",
+                "No recorded loaded profile",
+                UI_COLOR_MUTED,
+            )
+            self._draw_hover_tooltip(
+                "No exact saved-profile scope and stable key are associated with this live configuration."
+            )
+            if matching_profiles:
+                self._draw_selected_profile_detail_line(
+                    "Live State:",
+                    "Matches saved profile contents, but no exact loaded source is recorded",
+                    UI_COLOR_SUCCESS,
+                )
+            else:
+                self._draw_selected_profile_detail_line(
+                    "Live State:",
+                    "Custom live configuration",
+                    UI_COLOR_WARNING,
+                )
+        else:
+            source = self._get_profile_by_identity(provenance.source_identity)
+            source_name = (
+                source.display_name
+                if source is not None
+                else provenance.display_name_snapshot
+            )
+            self._draw_colored_text("Loaded Source:", UI_COLOR_WARNING_SOFT, wrapped=False)
+            PyImGui.same_line(0, 6)
+            self._draw_profile_status_badge(
+                "Loaded Source",
+                UI_COLOR_INFO,
+                "This exact scope and stable key were last loaded explicitly into the active account.",
+            )
+            PyImGui.same_line(0, 6)
+            self._draw_colored_text(
+                f"[{self._profile_scope_badge(provenance.source_identity.scope)}] {source_name}",
+                UI_COLOR_INFO,
+                wrapped=False,
+            )
+
+            source_document_unavailable = self.profile_document_reload_failed[
+                provenance.source_identity.scope
+            ]
+            if source is None:
+                self._draw_profile_status_badge(
+                    "Source Unavailable",
+                    UI_COLOR_DANGER,
+                    "The saved source is missing, unreadable, or future-versioned.",
+                )
+                PyImGui.same_line(0, 6)
+                self._draw_colored_text(
+                    "Source profile unavailable",
+                    UI_COLOR_DANGER,
+                    wrapped=False,
+                )
+                live_fingerprint = self._shareable_profile_content_fingerprint(
+                    current_payload_serialized
+                )
+                if live_fingerprint != provenance.normalized_content_fingerprint:
+                    self._draw_profile_status_badge(
+                        "Modified from Loaded Source",
+                        UI_COLOR_WARNING,
+                        "The live configuration differs from the normalized settings recorded "
+                        "when the unavailable profile was loaded.",
+                    )
+            elif source_document_unavailable:
+                self._draw_profile_relationship_badges(
+                    source,
+                    current_payload_serialized,
+                    include_loaded_source=False,
+                )
+                self._draw_secondary_text(
+                    "The source document could not be refreshed; relationship badges use the last readable copy."
+                )
+            else:
+                self._draw_profile_relationship_badges(
+                    source,
+                    current_payload_serialized,
+                    include_loaded_source=False,
+                )
+                source_fingerprint = self._shareable_profile_content_fingerprint(
+                    source.serialized_payload
+                )
+                live_fingerprint = self._shareable_profile_content_fingerprint(
+                    current_payload_serialized
+                )
+                if (
+                    source_fingerprint != provenance.normalized_content_fingerprint
+                    and live_fingerprint == provenance.normalized_content_fingerprint
+                ):
+                    self._draw_secondary_text(
+                        "The saved source changed after it was loaded; the live configuration still matches "
+                        "the recorded loaded contents."
+                    )
+                elif (
+                    source_fingerprint != provenance.normalized_content_fingerprint
+                    and live_fingerprint != provenance.normalized_content_fingerprint
+                ):
+                    self._draw_secondary_text(
+                        "Both the live configuration and the saved source differ from the recorded loaded contents."
+                    )
+
+        if not matching_profiles:
+            self._draw_selected_profile_detail_line(
+                "Saved Matches:",
+                "No saved profile matches",
+                UI_COLOR_MUTED,
+            )
+        elif len(matching_profiles) == 1:
+            self._draw_selected_profile_detail_line(
+                "Saved Match:",
+                self._format_profile_reference(matching_profiles[0]),
+                UI_COLOR_SUCCESS,
+            )
+        else:
+            self._draw_selected_profile_detail_line(
+                "Saved Matches:",
+                (
+                    f"Matches multiple saved profiles ({len(matching_profiles)}): "
+                    f"{self._format_profile_reference_list(matching_profiles)}"
+                ),
+                UI_COLOR_SUCCESS,
+            )
+
+        if provenance is not None:
+            other_matches = [
+                profile
+                for profile in matching_profiles
+                if profile.identity != provenance.source_identity
+            ]
+            if other_matches:
+                self._draw_selected_profile_detail_line(
+                    "Other Matches:",
+                    self._format_profile_reference_list(other_matches),
+                    UI_COLOR_TEAL,
+                )
+
+        if self.loaded_profile_provenance_warning:
+            self._draw_warning_text(self.loaded_profile_provenance_warning)
+        if self.profile_warning:
+            self._draw_warning_text(f"Live Config: {self.profile_warning}")
+        elif self.profile_notice:
+            self._draw_secondary_text(f"Live Config: {self.profile_notice}")
+        self._draw_secondary_text(
+            "Saved profiles exclude Merchant Rules window geometry. Loading preserves this workspace and geometry."
+        )
 
     def _draw_overview_section(self):
         self._draw_overview_attention_section()
@@ -37080,20 +37621,14 @@ class MerchantRulesWidget:
                 "Shared profile saves, overwrites, renames, deletes, and copies into this section affect every account."
             )
             self._draw_secondary_text(
-                "Loading a shared profile changes only this account's live config. "
-                "Shared mutations are refreshed, version-checked, saved, and verified immediately."
+                "Loading a Shared profile changes only the active account's live configuration. "
+                "Shared mutations remain version-checked, saved, and verified immediately."
             )
         else:
             self._draw_secondary_text(
-                "Account profiles are visible only to this account. Restore Backup and the live config also remain "
-                "account-scoped."
+                "Account profiles, the live configuration, loaded-source provenance, and Restore Backup are visible "
+                "only to the active account."
             )
-
-        self._draw_selected_profile_detail_line(
-            "Document:",
-            self._profile_doc(scope).resolved_path(),
-            UI_COLOR_SECONDARY_TEXT,
-        )
 
         warning = self.saved_profile_warnings[scope]
         notice = self.saved_profile_notices[scope]
@@ -37129,13 +37664,12 @@ class MerchantRulesWidget:
             self._open_profiles_folder(scope)
             selected_profile = self._get_selected_profile(scope)
 
+        PyImGui.same_line(0, 8)
         self._draw_colored_text(
             f"{len(entries)} [{scope_badge}] profile(s)",
             UI_COLOR_INFO if entries else UI_COLOR_MUTED,
             wrapped=False,
         )
-        PyImGui.same_line(0, 6)
-        self._draw_secondary_text("sorted by display name; identity uses the exact scope and key.", wrapped=False)
         PyImGui.separator()
 
         child_height = 220 if entries else 120
@@ -37156,7 +37690,7 @@ class MerchantRulesWidget:
                     ).hexdigest()
                     is_selected = entry.identity == self.profile_selected_identities.get(scope)
                     if PyImGui.selectable(
-                        f"[{scope_badge}] {entry.display_name}##merchant_rules_profile_{row_hash}",
+                        f"{entry.display_name}##merchant_rules_profile_{row_hash}",
                         is_selected,
                         PyImGui.SelectableFlags.NoFlag,
                         (0, 0),
@@ -37164,43 +37698,45 @@ class MerchantRulesWidget:
                         self._set_selected_profile_key(scope, entry.key)
                         selected_profile = self._get_selected_profile(scope)
                     self._draw_profile_metadata_line(entry, current_payload_serialized)
+                    if self.profile_scroll_to_identity == entry.identity:
+                        PyImGui.set_scroll_here_y(0.45)
+                        self.profile_scroll_to_identity = None
                     if index + 1 < len(entries):
                         PyImGui.separator()
         PyImGui.end_child()
 
         selected_profile = self._get_selected_profile(scope)
         PyImGui.separator()
-        self._draw_subsection_heading(f"Selected [{scope_badge}] Profile")
+        self._draw_subsection_heading("Selected Profile")
+        self._draw_hover_tooltip(
+            "Selection controls which saved profile the actions below target. "
+            "It does not change the loaded source until Load Selected succeeds."
+        )
         if selected_profile is None:
             self._draw_secondary_text(
                 f"Select a [{scope_badge}] profile to load, rename, overwrite, copy, or delete."
             )
         else:
-            match_label, match_color = self._get_profile_match_presentation(
-                selected_profile,
-                current_payload_serialized,
+            self._draw_selected_profile_detail_line(
+                "Name:",
+                selected_profile.display_name,
+                UI_COLOR_INFO,
             )
-            match_selected_label = (
-                "Matches the current live config"
-                if selected_profile.serialized_payload == current_payload_serialized
-                else "Differs from the current live config"
-            )
-            self._draw_selected_profile_detail_line("Name:", selected_profile.display_name, UI_COLOR_INFO)
             if selected_profile.saved_at_label:
                 self._draw_selected_profile_detail_line(
                     "Saved:",
                     selected_profile.saved_at_label,
                     UI_COLOR_INFO,
                 )
-            self._draw_selected_profile_detail_line(
-                "Stable Key:",
-                selected_profile.key,
-                UI_COLOR_SECONDARY_TEXT,
+            self._draw_colored_text(
+                "Relationship:",
+                UI_COLOR_WARNING_SOFT,
+                wrapped=False,
             )
-            self._draw_selected_profile_detail_line(
-                f"{match_label}:",
-                match_selected_label,
-                match_color,
+            PyImGui.same_line(0, 6)
+            self._draw_profile_relationship_badges(
+                selected_profile,
+                current_payload_serialized,
             )
 
         updated_profile_name = PyImGui.input_text(
@@ -37212,10 +37748,13 @@ class MerchantRulesWidget:
             self.profile_name_input_dirty[scope] = True
 
         self._draw_secondary_text(
-            "New profiles receive a stable key independent of this display name. "
-            "Rename changes only the display name."
+            "This field names a new profile or renames the selected profile. Stable identity does not change on rename."
         )
 
+        self._draw_subsection_heading("Live Configuration to Saved Profile")
+        self._draw_hover_tooltip(
+            "Create a new saved snapshot or replace the selected saved profile with the current live settings."
+        )
         save_new_label = (
             "Save as Shared — All Accounts"
             if scope == PROFILE_SCOPE_SHARED
@@ -37237,6 +37776,39 @@ class MerchantRulesWidget:
 
         PyImGui.begin_disabled(selected_profile is None)
         PyImGui.same_line(0, 8)
+        if selected_profile is not None:
+            overwrite_clicked, overwrite_fingerprint = self._draw_confirm_profile_action_button(
+                f"Save Current Over Selected##merchant_rules_{scope_id}_profile_overwrite",
+                "overwrite",
+                selected_profile,
+            )
+        else:
+            PyImGui.button(
+                f"Save Current Over Selected##merchant_rules_{scope_id}_profile_overwrite"
+            )
+        PyImGui.end_disabled()
+
+        self._draw_subsection_heading("Saved Profile to Live Configuration")
+        self._draw_hover_tooltip(
+            "Load the selected saved profile into only the active account's auto-saved live configuration."
+        )
+        PyImGui.begin_disabled(selected_profile is None)
+        if selected_profile is not None:
+            load_clicked, load_fingerprint = self._draw_confirm_profile_action_button(
+                f"Load Selected##merchant_rules_{scope_id}_profile_load",
+                "load",
+                selected_profile,
+                shared_affects_all_accounts=False,
+            )
+        else:
+            PyImGui.button(f"Load Selected##merchant_rules_{scope_id}_profile_load")
+        PyImGui.end_disabled()
+
+        self._draw_subsection_heading("Profile Management")
+        self._draw_hover_tooltip(
+            "Rename, copy, or delete the selected saved profile without changing loaded-source provenance."
+        )
+        PyImGui.begin_disabled(selected_profile is None)
         if selected_profile is not None and scope == PROFILE_SCOPE_SHARED:
             rename_clicked, rename_fingerprint = self._draw_confirm_profile_action_button(
                 f"Rename Selected##merchant_rules_{scope_id}_profile_rename",
@@ -37256,29 +37828,6 @@ class MerchantRulesWidget:
         copy_clicked = PyImGui.button(
             f"{destination_label}##merchant_rules_{scope_id}_profile_copy"
         )
-        PyImGui.end_disabled()
-
-        PyImGui.begin_disabled(selected_profile is None)
-        if selected_profile is not None:
-            load_clicked, load_fingerprint = self._draw_confirm_profile_action_button(
-                f"Load Selected##merchant_rules_{scope_id}_profile_load",
-                "load",
-                selected_profile,
-                shared_affects_all_accounts=False,
-            )
-        else:
-            PyImGui.button(f"Load Selected##merchant_rules_{scope_id}_profile_load")
-        PyImGui.same_line(0, 8)
-        if selected_profile is not None:
-            overwrite_clicked, overwrite_fingerprint = self._draw_confirm_profile_action_button(
-                f"Save Current Over Selected##merchant_rules_{scope_id}_profile_overwrite",
-                "overwrite",
-                selected_profile,
-            )
-        else:
-            PyImGui.button(
-                f"Save Current Over Selected##merchant_rules_{scope_id}_profile_overwrite"
-            )
         PyImGui.same_line(0, 8)
         if selected_profile is not None:
             delete_clicked, delete_fingerprint = self._draw_confirm_profile_action_button(
@@ -37289,6 +37838,29 @@ class MerchantRulesWidget:
         else:
             PyImGui.button(f"Delete Selected##merchant_rules_{scope_id}_profile_delete")
         PyImGui.end_disabled()
+
+        if PyImGui.collapsing_header(
+            f"Technical & Storage Details##merchant_rules_{scope_id}_profile_details"
+        ):
+            self._draw_selected_profile_detail_line(
+                "Scope:",
+                self._profile_scope_label(scope),
+                UI_COLOR_SECONDARY_TEXT,
+            )
+            if selected_profile is not None:
+                self._draw_selected_profile_detail_line(
+                    "Selected Stable Key:",
+                    selected_profile.key,
+                    UI_COLOR_SECONDARY_TEXT,
+                )
+            else:
+                self._draw_secondary_text("Selected Stable Key: no selected profile.")
+            self._draw_secondary_text(
+                f"Profiles Document: {self._profile_doc(scope).resolved_path()}"
+            )
+            self._draw_secondary_text(
+                "Profiles remain sorted by display name; every operation resolves the exact scope and stable key."
+            )
 
         if save_new_clicked:
             self._clear_profile_confirmation_state()
@@ -37319,39 +37891,54 @@ class MerchantRulesWidget:
         current_payload_serialized = self._serialize_shareable_profile_payload(
             self._build_shareable_profile_payload()
         )
-        live_config_label = (
-            os.path.basename(self.config_path) if self.config_path else "Not initialized"
-        )
-        self._draw_selected_profile_detail_line("Live Config:", live_config_label, UI_COLOR_INFO)
-        self._draw_secondary_text(
-            "Saved profiles never include Merchant Rules window geometry. "
-            "Loading preserves this workspace and geometry."
+        self._draw_live_configuration_profile_summary(
+            current_payload_serialized
         )
         PyImGui.separator()
-        self._draw_saved_profile_section(
-            PROFILE_SCOPE_SHARED,
-            current_payload_serialized,
+
+        if self._draw_workspace_button(
+            (
+                f"ACCOUNT — This Account "
+                f"({len(self.profile_entries[PROFILE_SCOPE_ACCOUNT])})"
+                "##merchant_rules_profiles_scope_account"
+            ),
+            active=self.active_profiles_scope == PROFILE_SCOPE_ACCOUNT,
+            color=UI_COLOR_TEAL,
+        ):
+            self._set_active_profiles_scope(PROFILE_SCOPE_ACCOUNT)
+        self._draw_hover_tooltip(
+            "Account profiles, live configuration, backup, and loaded-source provenance belong only to this account."
         )
+        PyImGui.same_line(0, 8)
+        if self._draw_workspace_button(
+            (
+                f"SHARED — All Accounts "
+                f"({len(self.profile_entries[PROFILE_SCOPE_SHARED])})"
+                "##merchant_rules_profiles_scope_shared"
+            ),
+            active=self.active_profiles_scope == PROFILE_SCOPE_SHARED,
+            color=UI_COLOR_INFO,
+        ):
+            self._set_active_profiles_scope(PROFILE_SCOPE_SHARED)
+        self._draw_hover_tooltip(
+            "Shared saved-profile mutations affect all accounts, while loading changes only the active account."
+        )
+
         PyImGui.separator()
+        active_scope = (
+            self.active_profiles_scope
+            if self.active_profiles_scope in PROFILE_SCOPES
+            else PROFILE_SCOPE_ACCOUNT
+        )
         self._draw_saved_profile_section(
-            PROFILE_SCOPE_ACCOUNT,
+            active_scope,
             current_payload_serialized,
         )
 
         PyImGui.separator()
-        self._draw_section_heading("Live Config")
-        self._draw_secondary_text(
-            "The current account keeps a separate live working config, saved automatically as a self-persisting "
-            "JSON document. Restore Backup remains account-scoped and profile operations do not change backup "
-            "documents."
-        )
-        if self.profile_warning:
-            self._draw_warning_text(
-                f"Live Config: {self.profile_warning}",
-            )
-        elif self.profile_notice:
-            self._draw_secondary_text(f"Live Config: {self.profile_notice}")
-        if PyImGui.collapsing_header("Live Config Location##merchant_rules_live_config_recovery"):
+        if PyImGui.collapsing_header(
+            "Live Config & Recovery Details##merchant_rules_live_config_recovery"
+        ):
             self._draw_live_config_recovery_section()
 
     def _draw_rules_workspace(self):
@@ -37432,13 +38019,21 @@ class MerchantRulesWidget:
 
     def draw(self):
         self._tick_runtime()
+        main_window_was_visible = bool(self.show_main_window)
         floating_button = self._ensure_floating_ui()
         floating_button.draw(self.floating_ui_ini_key)
         self._handle_floating_icon_right_click(floating_button)
         self._draw_floating_icon_quick_actions_menu()
         self._handle_inventory_shortcut_right_click()
         self._draw_inventory_shortcuts_menu()
-        self.show_main_window = bool(floating_button.visible)
+        main_window_is_visible = bool(floating_button.visible)
+        self.show_main_window = main_window_is_visible
+        if (
+            main_window_is_visible
+            and not main_window_was_visible
+            and self.active_workspace == WORKSPACE_PROFILES
+        ):
+            self._initialize_profiles_scope_from_loaded_provenance()
         if not self.show_main_window:
             return
 
