@@ -22,6 +22,7 @@ from Py4GWCoreLib.Camera import Camera
 from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.UIManager import UIManager
+from Py4GWCoreLib.FrameTree import Frame
 from Py4GWCoreLib.enums import Range
 from Py4GWCoreLib.enums import WindowID
 
@@ -178,11 +179,11 @@ class RotatingProjection(Projection):
         snapped = (
             self.position.snap_to_game
             and not self.position.detached
-            and UIManager.FrameExists(frame_id)
+            and Frame.from_id(frame_id).is_usable
             and UIManager.IsWindowVisible(WindowID.WindowID_Compass)
         )
         if snapped:
-            coords = UIManager.GetFrameCoords(frame_id)
+            coords = Frame.from_id(frame_id).coords()
             cx, cy = Map.MiniMap.GetMapScreenCenter(coords)
             cx, cy = round(cx), round(cy)
             if cx > 100000 or cy > 100000:

@@ -2,13 +2,16 @@
 import PyImGui
 import PyUIManager
 import PyImGui
-import json
 import PyOverlay
 from typing import Dict, List, Tuple
+from Py4GWCoreLib.FrameTree import Frame
+# aliased: this module defines its own `FrameTree` class below
+from Py4GWCoreLib.FrameTree import FrameTree as LiveTree
 
 MODULE_NAME = "Frame Tester (Basic)"
 MODULE_ICON = "Textures/Module_Icons/Frame Tester.png"
-json_file_name = ".\\Py4GWCoreLib\\frame_aliases.json"
+# Frame identity comes from the FrameTree name / registry / alias tables
+# (Py4GWCoreLib/FrameTree/*.py dict literals), not from a file.
 
 def RGBToNormal(r, g, b, a):
         """return a normalized RGBA tuple from 0-255 values"""
@@ -93,81 +96,14 @@ def table(title:str, headers, data):
 
 
 def ConstructFramePath(frame_id: int) -> str:
-    """
-    Constructs the full path for an offset-based frame by traversing up the parent chain.
+    """Frame path, from the owning handle."""
+    return Frame.from_id(frame_id).path() if frame_id else ""
 
-    :param frame_id: The frame ID to construct the path for.
-    :return: A string path in the format "hashed_parent,offset1,offset2,...", or None if no valid hashed parent is found.
-    """
-    if frame_id == 0:
-        return ""
-    try:
-        current_frame = PyUIManager.UIFrame(frame_id)
-    except Exception as e:
-        print(f"[ERROR] Failed to create UIFrame with frame_id={frame_id}: {e}")
-        return ""  # Return empty string on error
-    
-    # If the frame itself has a hash, return it immediately
-    if current_frame.frame_hash != 0:
-        return str(current_frame.frame_hash)
 
-    path = []
-    parent_hash = None
+def DescribeFrame(frame_id: int) -> str:
+    """Best-known identity: engine name, registry key, then prose alias."""
+    return Frame.from_id(frame_id).describe()
 
-    # Traverse up the parent hierarchy until we find a hashed parent
-    while current_frame.frame_id != 0:
-        parent_frame = PyUIManager.UIFrame(current_frame.parent_id)
-
-        # Store child offset
-        path.append(str(current_frame.child_offset_id))
-
-        # If we found a parent with a hash, stop and use it as the root
-        if parent_frame.frame_hash:
-            parent_hash = parent_frame.frame_hash
-            break
-
-        current_frame = parent_frame  # Move up to the parent
-
-    # If no hashed parent was found, return None (invalid case)
-    if parent_hash == 0:
-        return ""
-
-    # Construct and return the full path
-    return str(parent_hash) + "," + ",".join(reversed(path))
-    
-def SaveEntryToJSON(filename: str, frame_id: int, alias: str):
-    """Writes or updates an entry in a JSON file."""
-    try:
-        with open(filename, "r", encoding="utf-8") as file:
-            data: Dict[str, str] = json.load(file)  # Load existing data
-    except (FileNotFoundError, json.JSONDecodeError):
-        data = {}  # Start fresh if file doesn't exist or is invalid
-
-    frame_path = ConstructFramePath(frame_id)
-
-    if frame_path:  # Ensure the path is valid before saving
-        data[frame_path] = alias
-
-    with open(filename, "w", encoding="utf-8") as file:
-        json.dump(data, file, indent=4)  # Save back to file
-
-def GetEntryFromJSON(filename: str, frame_id: int) -> str:
-        """
-        Reads an entry from a JSON file by constructing the frame's path.
-
-        :param filename: The JSON file to read from.
-        :param frame_id: The frame ID to locate.
-        :return: The alias if found, otherwise None.
-        """
-        try:
-            with open(filename, "r", encoding="utf-8") as file:
-                data = json.load(file)  # Load JSON data
-        except (FileNotFoundError, json.JSONDecodeError):
-            return "" # Return empty string if file doesn't exist or is invalid
-
-        frame_path = ConstructFramePath(frame_id)
-        
-        return data.get(frame_path) or ""  # Return the alias if found, otherwise an empty string
 
 #region config options
 
@@ -194,11 +130,11 @@ class FrameNode:
     def __init__(self, frame_id: int, parent_id: int):
         self.frame_id = frame_id
         self.parent_id = parent_id
-        self.frame_obj = PyUIManager.UIFrame(self.frame_id)
+        self.frame_obj = Frame.from_id(self.frame_id).raw
         self.info_window = InfoWindow(self.frame_obj)
         self.frame_hash = self.frame_obj.frame_hash
         self.child_offset_id = self.frame_obj.child_offset_id
-        self.label = GetEntryFromJSON(json_file_name, self.frame_id) or ""
+        self.label = DescribeFrame(self.frame_id)
         self.parent = None  # Will be set when building the tree
         self.children = []  # Stores child nodes
         self.show_frame_data = False
@@ -206,7 +142,7 @@ class FrameNode:
     def update(self):
         self.frame_obj.get_context()
         self.frame_hash = self.frame_obj.frame_hash
-        self.label = GetEntryFromJSON(json_file_name, self.frame_id) or ""
+        self.label = DescribeFrame(self.frame_id)
 
     def get_parent(self):
         """Returns the parent node of this frame."""
@@ -289,7 +225,7 @@ class FrameTree:
         """
         # Step 1: Create nodes
         for frame_id in frame_list:
-            frame_obj = PyUIManager.UIFrame(frame_id)  # Create UIFrame instance
+            frame_obj = Frame.from_id(frame_id).raw
             parent_id = frame_obj.parent_id  # Extract parent ID
             self.nodes[frame_id] = FrameNode(frame_id, parent_id)
 
@@ -322,7 +258,7 @@ def GetFrameArray():
 
     :return: list: The frame array.
     """
-    return PyUIManager.UIManager.get_frame_array()
+    return LiveTree.all_ids()
 
 def IsFrameCreated(frame_id):
     """
@@ -331,7 +267,7 @@ def IsFrameCreated(frame_id):
     :param frame_id: The ID of the frame.
     :return: bool: True if the frame is created, False otherwise.
     """
-    return PyUIManager.UIFrame(frame_id).is_created
+    return Frame.from_id(frame_id).is_created
 
 def IsVisible(frame_id):
     """
@@ -340,7 +276,7 @@ def IsVisible(frame_id):
     :param frame_id: The ID of the frame.
     :return: bool: True if the frame is visible, False otherwise.
     """
-    return PyUIManager.UIFrame(frame_id).is_visible
+    return Frame.from_id(frame_id).is_visible
 
 def FrameExists(frame_id):
     """
@@ -361,7 +297,7 @@ def GetFrameCoords(frame_id):
     :param frame_id: The ID of the frame.
     :return: top, left, bottom, right coordinates of the frame.
     """
-    frame = PyUIManager.UIFrame(frame_id)
+    frame = Frame.from_id(frame_id).raw
     top = frame.position.top_on_screen
     left = frame.position.left_on_screen
     bottom = frame.position.bottom_on_screen
@@ -395,7 +331,7 @@ def FrameClick(frame_id):
     """
     if not FrameExists(frame_id):
         return
-    PyUIManager.UIManager.button_click(frame_id)
+    (lambda fid: Frame.from_id(fid).click())(frame_id)
     
 def TestMouseAction(frame_id, current_state, wparam_value, lparam_value=0):
     """
@@ -407,7 +343,7 @@ def TestMouseAction(frame_id, current_state, wparam_value, lparam_value=0):
     """
     if not FrameExists(frame_id):
         return
-    PyUIManager.UIManager.test_mouse_action(frame_id, current_state, wparam_value, lparam_value)
+    (lambda fid, s, w=0, l=0: Frame.from_id(fid).mouse_action(s, w, l))(frame_id, current_state, wparam_value, lparam_value)
     
 def TestMouseClickAction(frame_id, current_state, wparam_value, lparam_value=0):
     """
@@ -419,7 +355,7 @@ def TestMouseClickAction(frame_id, current_state, wparam_value, lparam_value=0):
     """
     if not FrameExists(frame_id):
         return
-    PyUIManager.UIManager.test_mouse_click_action(frame_id, current_state, wparam_value, lparam_value)
+    (lambda fid, s, w=0, l=0: Frame.from_id(fid).mouse_click_action(s, w, l))(frame_id, current_state, wparam_value, lparam_value)
 
 #region InfoWindow
 double_action = False
@@ -432,8 +368,7 @@ class InfoWindow:
         self.draw_frame = True
         self.draw_color :int = RGBToColor(0, 255, 0, 125)
         self.monitor_callbacks = False
-        self.frame_alias = GetEntryFromJSON(json_file_name, self.frame.frame_id)  
-        self.submit_value = self.frame_alias or "" 
+        self.frame_alias = DescribeFrame(self.frame.frame_id)
         self.window_name = ""
         self.setWindowName()
         self.current_state = 0
@@ -493,14 +428,13 @@ class InfoWindow:
                     if PyImGui.begin_tab_item(f"Frame Tree##{self.frame.frame_id}"):
                         PyImGui.text(f"Frame ID: {self.frame.frame_id}")
                         PyImGui.text(f"Frame Hash: {self.frame.frame_hash}")
-                        PyImGui.text(f"Alias: {self.frame_alias}")
-                        
-                        self.submit_value = PyImGui.input_text(f"Alias##Edit{self.frame.frame_id}", self.submit_value)
-                        PyImGui.same_line(0,-1)
-                        if PyImGui.button(f"Save Alias##{self.frame.frame_id}"):
-                            SaveEntryToJSON(json_file_name, self.frame.frame_id, self.submit_value)
-                            self.frame_alias = GetEntryFromJSON(json_file_name, self.frame.frame_id)  
-                            self.setWindowName()          
+                        _handle = Frame.from_id(self.frame.frame_id)
+                        PyImGui.text(f"Engine Name: {_handle.name or '(unnamed)'}")
+                        PyImGui.text(f"Registry Key: {_handle.registry_key or '(unregistered)'}")
+                        PyImGui.text(f"Alias: {_handle.alias or '(none)'}")
+                        PyImGui.text(f"Path: {_handle.path() or '(unresolved)'}")
+                        if PyImGui.button(f"Copy Registry Key##{self.frame.frame_id}"):
+                            PyImGui.set_clipboard_text(_handle.registry_key or _handle.path())
 
                         if PyImGui.button(f"Click on frame{self.frame.frame_id}##click{self.frame.frame_id}"):
                             FrameClick(self.frame.frame_id)
@@ -758,9 +692,11 @@ def DrawMainWindow():
                 if PyImGui.begin_child("FrameTreeChild",size=(900,800),border=True,flags=PyImGui.WindowFlags.HorizontalScrollbar):                                        
                     if frame_array:
                         full_tree.draw()
-                        
+
                     PyImGui.end_child()
 
+                PyImGui.end_tab_item()
+            PyImGui.end_tab_bar()
 
     PyImGui.end()
     

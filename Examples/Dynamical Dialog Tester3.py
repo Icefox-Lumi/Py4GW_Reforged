@@ -1,5 +1,7 @@
 from Py4GWCoreLib import *
 from collections import deque, defaultdict
+from Py4GWCoreLib.FrameTree import Frame, FrameId
+from Py4GWCoreLib.FrameTree import FrameTree
 
 # â€”â€” Constants â€”â€”
 NPC_DIALOG_HASH    = 3856160816
@@ -10,8 +12,8 @@ DIALOG_CHILD_OFFSET = list(DEFAULT_OFFSET)
 # â€”â€” Helpers â€”â€”
 def is_npc_dialog_visible() -> bool:
     """Return True if the NPC-dialog frame exists and is visible."""
-    fid = UIManager.GetFrameIDByHash(NPC_DIALOG_HASH)
-    return fid != 0 and UIManager.IsVisible(fid)
+    fid = Frame(FrameId.NpcDialog)
+    return fid.exists and fid.is_visible
 
 
 def find_dialog_offset(debug: bool = False) -> None:
@@ -21,24 +23,24 @@ def find_dialog_offset(debug: bool = False) -> None:
     (identified by template_type == 1). Updates DIALOG_CHILD_OFFSET.
     """
     global DIALOG_CHILD_OFFSET
-    root = UIManager.GetFrameIDByHash(NPC_DIALOG_HASH)
-    if root == 0 or not UIManager.IsVisible(root):
+    root = Frame(FrameId.NpcDialog)
+    if not root.exists or not root.is_visible:
         if debug:
             ConsoleLog("DialogTester", "Dialog not visible; cannot detect offset.", Console.MessageType.Warning)
         return
 
     # build parent->children map
-    frame_array = UIManager.GetFrameArray()
+    frame_array = FrameTree.all_ids()
     children_map: dict[int, list[int]] = defaultdict(list)
     for fid in frame_array:
         try:
-            pid = PyUIManager.UIFrame(fid).parent_id
+            pid = Frame.from_id(fid).parent_id
             children_map[pid].append(fid)
         except Exception:
             continue
 
     # BFS to find best container: most template_type==1 children
-    queue = deque([root])
+    queue = deque([root.frame_id])
     best_container = None
     best_count = 0
     while queue:
@@ -47,10 +49,10 @@ def find_dialog_offset(debug: bool = False) -> None:
         # count visible children with template_type == 1
         count = 0
         for c in kids:
-            if not UIManager.IsVisible(c):
+            if not Frame.from_id(c).is_visible:
                 continue
             try:
-                if PyUIManager.UIFrame(c).template_type == 1:
+                if Frame.from_id(c).template_type == 1:
                     count += 1
             except Exception:
                 continue
@@ -70,8 +72,8 @@ def find_dialog_offset(debug: bool = False) -> None:
     # build path from root to best_container
     path: list[int] = []
     curr = best_container
-    while curr != root:
-        pid = PyUIManager.UIFrame(curr).parent_id
+    while curr != root.frame_id:
+        pid = Frame.from_id(curr).parent_id
         siblings = children_map.get(pid, [])
         idx = siblings.index(curr)
         path.insert(0, idx)
@@ -89,19 +91,20 @@ def get_dialog_button_ids(debug: bool = False) -> list[int]:
     In both cases, filter to visible frames with template_type==1 and sort top-to-bottom.
     """
     # primary: use built-in offset chain
-    primary = UIManager.GetAllChildFrameIDs(NPC_DIALOG_HASH, DIALOG_CHILD_OFFSET)
+    primary = [f.frame_id for f in FrameTree.frames_at_path(NPC_DIALOG_HASH, DIALOG_CHILD_OFFSET)]
     if primary:
         if debug:
             ConsoleLog("DialogTester", f"Primary offset IDs â†’ {primary}", Console.MessageType.Info)
         visible_primary = []
         for fid in primary:
-            if UIManager.IsVisible(fid):
+            if Frame.from_id(fid).is_visible:
                 try:
-                    if PyUIManager.UIFrame(fid).template_type == 1:
+                    if Frame.from_id(fid).template_type == 1:
                         visible_primary.append(fid)
                 except Exception:
                     continue
-        sorted_primary = [fid for fid, _ in UIManager.SortFramesByVerticalPosition(visible_primary)]
+        sorted_primary = [f.frame_id for f in
+                          FrameTree.sort_by_vertical([Frame.from_id(i) for i in visible_primary])]
         if sorted_primary:
             if debug:
                 ConsoleLog("DialogTester", f"Using offset-filtered choices â†’ {sorted_primary}", Console.MessageType.Info)
@@ -110,19 +113,19 @@ def get_dialog_button_ids(debug: bool = False) -> list[int]:
     # fallback: BFS over entire frame array
     if debug:
         ConsoleLog("DialogTester", "Primary offset returned no choices; falling back to BFS.", Console.MessageType.Info)
-    root = UIManager.GetFrameIDByHash(NPC_DIALOG_HASH)
-    if root == 0:
+    root = Frame(FrameId.NpcDialog)
+    if not root.exists:
         return []
-    frame_array = UIManager.GetFrameArray()
+    frame_array = FrameTree.all_ids()
     children_map = defaultdict(list)
     for fid in frame_array:
         try:
-            pid = PyUIManager.UIFrame(fid).parent_id
+            pid = Frame.from_id(fid).parent_id
         except Exception:
             continue
         children_map[pid].append(fid)
     descendants = []
-    queue = deque([root])
+    queue = deque([root.frame_id])
     while queue:
         cur = queue.popleft()
         for child in children_map.get(cur, []):
@@ -131,15 +134,15 @@ def get_dialog_button_ids(debug: bool = False) -> list[int]:
     # filter BFS candidates
     visible = []
     for fid in descendants:
-        if not UIManager.IsVisible(fid):
+        if not Frame.from_id(fid).is_visible:
             continue
         try:
-            if PyUIManager.UIFrame(fid).template_type == 1:
+            if Frame.from_id(fid).template_type == 1:
                 visible.append(fid)
         except Exception:
             continue
-    sorted_pairs = UIManager.SortFramesByVerticalPosition(visible)
-    sorted_ids = [fid for fid, _ in sorted_pairs]
+    sorted_ids = [f.frame_id for f in
+                  FrameTree.sort_by_vertical([Frame.from_id(i) for i in visible])]
     if debug:
         ConsoleLog("DialogTester", f"BFS-based filtered choices â†’ {sorted_ids}", Console.MessageType.Info)
     return sorted_ids
@@ -165,8 +168,8 @@ def click_dialog_button(choice: int, debug: bool = False) -> bool:
 
     target = ids[idx]
     # immediate plus queued click
-    UIManager.FrameClick(target)
-    ActionQueueManager().AddAction("ACTION", UIManager.FrameClick, target)
+    Frame.from_id(target).click()
+    ActionQueueManager().AddAction("ACTION", Frame.from_id(target).click)
 
     if debug:
         ConsoleLog("DialogTester", f"Clicked & queued frame {target} (choice #{choice})", Console.MessageType.Info)
@@ -192,7 +195,7 @@ def on_ui():
     types = []
     for fid in ids:
         try:
-            types.append(PyUIManager.UIFrame(fid).template_type)
+            types.append(Frame.from_id(fid).template_type)
         except Exception:
             types.append(None)
 

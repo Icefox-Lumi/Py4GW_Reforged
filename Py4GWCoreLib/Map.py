@@ -18,7 +18,8 @@ import PyOverlay
 
 from .enums import FlagPreference
 from typing import List, Optional
-from .UIManager import UIManager,WindowFrames, FrameInfo
+from .UIManager import UIManager
+from .FrameTree import Frame, FrameId
 from .Overlay import *
 import math
 
@@ -704,11 +705,8 @@ class Map:
     @staticmethod
     def IsEnteringChallenge() -> bool:
         """Check if the character is entering a challenge."""
-        from .UIManager import WindowFrames
-        CancelEnterMissionButton = WindowFrames.get("CancelEnterMissionButton", None)
-        if CancelEnterMissionButton is None:
-            return False
-        if not CancelEnterMissionButton.FrameExists():
+        CancelEnterMissionButton = Frame(FrameId.MissionStatusAndScoreDisplay.C0.C1.CancelEnterMissionButton)
+        if not CancelEnterMissionButton.exists:
             return False
         return True
     
@@ -869,12 +867,10 @@ class Map:
     def CancelEnterChallenge() -> None:
         """Cancel entering the challenge."""
         def _cancel_enter_challenge() -> bool:
-            CancelEnterMissionButton = WindowFrames.get("CancelEnterMissionButton", None)
-            if CancelEnterMissionButton is None:
+            CancelEnterMissionButton = Frame(FrameId.MissionStatusAndScoreDisplay.C0.C1.CancelEnterMissionButton)
+            if not CancelEnterMissionButton.exists:
                 return False
-            if not CancelEnterMissionButton.FrameExists():
-                return False
-            CancelEnterMissionButton.FrameClick()
+            CancelEnterMissionButton.click()
             return True
         ActionQueueManager().AddAction("ACTION", _cancel_enter_challenge)
 
@@ -882,12 +878,10 @@ class Map:
     def ConfirmEnterChallenge() -> None:
         """Click the extra confirm button that some missions show (e.g. Ruins of Surmia)."""
         def _confirm_enter_challenge() -> bool:
-            ConfirmEnterMissionButton = WindowFrames.get("ConfirmEnterMissionButton", None)
-            if ConfirmEnterMissionButton is None:
+            ConfirmEnterMissionButton = Frame(FrameId.Root.C2.C6.C100.C2.ConfirmEnterMissionButton)
+            if not ConfirmEnterMissionButton.exists:
                 return False
-            if not ConfirmEnterMissionButton.FrameExists():
-                return False
-            ConfirmEnterMissionButton.FrameClick()
+            ConfirmEnterMissionButton.click()
             return True
         ActionQueueManager().AddAction("ACTION", _confirm_enter_challenge)
 
@@ -908,18 +902,18 @@ class Map:
             return misison_map_ctx.frame_id
         
         @staticmethod
-        def GetFrameInfo() -> FrameInfo | None:
+        def GetFrame() -> Frame | None:
             """Get the frame info of the mission map."""
             if not (frame_id := Map.MissionMap.GetFrameID()):
                 return None
-            return FrameInfo(FrameID_source=frame_id)
+            return Frame.from_id(frame_id)
         
         @staticmethod
         def IsWindowOpen() -> bool:
             """Check if the mission map window is open."""
-            if not (frame_info := Map.MissionMap.GetFrameInfo()):
+            if not (frame_info := Map.MissionMap.GetFrame()):
                 return False
-            return frame_info.FrameExists()
+            return frame_info.exists
         
         @staticmethod
         def OpenWindow() -> None:
@@ -933,25 +927,25 @@ class Map:
         def CloseWindow() -> None:
             """Close the mission map window."""
             from Py4GWCoreLib import GLOBAL_CACHE, Routines
-            if not (frame_info := Map.MissionMap.GetFrameInfo()):
+            if not (frame_info := Map.MissionMap.GetFrame()):
                 return
             GLOBAL_CACHE.Coroutines.append(Routines.Yield.Keybinds.OpenMissionMap())
         
         @staticmethod
         def IsMouseOver() -> bool:
             """Check if the mouse is hovering over the mission map."""
-            if not (frame_info := Map.MissionMap.GetFrameInfo()):
+            if not (frame_info := Map.MissionMap.GetFrame()):
                 return False
 
-            return frame_info.IsMouseOver()
+            return frame_info.is_mouse_over()
         
         @staticmethod
         def GetLastClickCoords() -> tuple[float, float]:
             """Get the last left click coordinates on the mission map."""
-            if not (frame_info := Map.MissionMap.GetFrameInfo()):
+            if not (frame_info := Map.MissionMap.GetFrame()):
                 return 0.0, 0.0
             
-            io_events: list[UIManager.IOEvent] = frame_info.GetIOEvents()
+            io_events: list[UIManager.IOEvent] = frame_info.io_events()
             if len(io_events) == 0:
                 return Map.MissionMap.last_left_clicked_coords
             
@@ -976,10 +970,10 @@ class Map:
         @staticmethod
         def GetLastRightClickCoords() -> tuple[float, float]:
             """Get the last right click coordinates on the mission map."""
-            if not (frame_info := Map.MissionMap.GetFrameInfo()):
+            if not (frame_info := Map.MissionMap.GetFrame()):
                 return 0.0, 0.0
             
-            io_events: list[UIManager.IOEvent] = frame_info.GetIOEvents()
+            io_events: list[UIManager.IOEvent] = frame_info.io_events()
             if len(io_events) == 0:
                 return Map.MissionMap.last_right_clicked_coords
             
@@ -1005,23 +999,23 @@ class Map:
         @staticmethod
         def GetMissionMapWindowCoords() -> tuple[float, float, float, float]:
             """Get the window coordinates of the mission map."""
-            if not (frame_info := Map.MissionMap.GetFrameInfo()):
+            if not (frame_info := Map.MissionMap.GetFrame()):
                 return 0.0, 0.0, 0.0, 0.0
-            return frame_info.GetCoords()
+            return frame_info.coords()
         
         @staticmethod
         def GetMissionMapContentsCoords() -> tuple[float, float, float, float]:
             """Get the contents coordinates of the mission map."""
-            if not (frame_info := Map.MissionMap.GetFrameInfo()):
+            if not (frame_info := Map.MissionMap.GetFrame()):
                 return 0.0, 0.0, 0.0, 0.0
-            return frame_info.GetContentCoords()
+            return frame_info.content_coords()
         
         @staticmethod
         def GetScale() -> tuple[float, float]:
             """Get the scale of the mission map."""
-            if not (frame_info := Map.MissionMap.GetFrameInfo()):
+            if not (frame_info := Map.MissionMap.GetFrame()):
                 return 0.0, 0.0
-            return frame_info.GetViewPortScale()
+            return frame_info.viewport_scale()
         
         @staticmethod
         def GetZoom() -> float:
@@ -1393,24 +1387,24 @@ class Map:
         last_left_clicked_coords: tuple[float, float] = (0.0, 0.0)
         last_left_clicked_timestamp: int = 0
         @staticmethod
-        def GetFrameInfo() -> FrameInfo | None:
+        def GetFrame() -> Frame | None:
             """Get the frame info of the mission map."""
-            return WindowFrames["MiniMap"]
+            return Frame(FrameId.Compass)
         
         @staticmethod
         def GetFrameID() -> int:
             """Get the frame ID of the mini map."""
-            if not (mini_map_frame := Map.MiniMap.GetFrameInfo()):
+            if not (mini_map_frame := Map.MiniMap.GetFrame()):
                 return 0
             
-            return mini_map_frame.GetFrameID()
+            return mini_map_frame.frame_id
 
         @staticmethod
         def IsWindowOpen() -> bool:
             """Check if the mini map window is open."""
-            if not (mini_map_frame := Map.MiniMap.GetFrameInfo()):
+            if not (mini_map_frame := Map.MiniMap.GetFrame()):
                 return False
-            return mini_map_frame.FrameExists()
+            return mini_map_frame.exists
         
         @staticmethod
         def OpenWindow() -> None:
@@ -1431,17 +1425,17 @@ class Map:
         @staticmethod
         def IsMouseOver() -> bool:
             """Check if the mouse is hovering over the mini map."""
-            if not (mini_map_frame := Map.MiniMap.GetFrameInfo()):
+            if not (mini_map_frame := Map.MiniMap.GetFrame()):
                 return False
-            return mini_map_frame.IsMouseOver()
+            return mini_map_frame.is_mouse_over()
         
         @staticmethod
         def GetLastClickCoords() -> tuple[float, float]:
             """Get the last left click coordinates on the mission map."""
-            if not (frame_info := Map.MiniMap.GetFrameInfo()):
+            if not (frame_info := Map.MiniMap.GetFrame()):
                 return 0.0, 0.0
             
-            io_events: list[UIManager.IOEvent] = frame_info.GetIOEvents()
+            io_events: list[UIManager.IOEvent] = frame_info.io_events()
             if len(io_events) == 0:
                 return Map.MiniMap.last_left_clicked_coords
             
@@ -1463,10 +1457,10 @@ class Map:
         @staticmethod
         def GetLastRightClickCoords() -> tuple[float, float]:
             """Get the last right click coordinates on the mission map."""
-            if not (frame_info := Map.MiniMap.GetFrameInfo()):
+            if not (frame_info := Map.MiniMap.GetFrame()):
                 return 0.0, 0.0
             
-            io_events: list[UIManager.IOEvent] = frame_info.GetIOEvents()
+            io_events: list[UIManager.IOEvent] = frame_info.io_events()
             if len(io_events) == 0:
                 return Map.MiniMap.last_right_clicked_coords
             
@@ -1488,9 +1482,9 @@ class Map:
         @staticmethod
         def GetWindowCoords() -> tuple[float, float, float, float]:
             """Get the coordinates of the mini map."""
-            if not (mini_map_frame := Map.MiniMap.GetFrameInfo()):
+            if not (mini_map_frame := Map.MiniMap.GetFrame()):
                 return 0.0, 0.0, 0.0, 0.0
-            return mini_map_frame.GetCoords()
+            return mini_map_frame.coords()
         
         @staticmethod
         def IsLocked() -> bool:
@@ -1847,18 +1841,18 @@ class Map:
             return world_map_ctx.frame_id
         
         @staticmethod
-        def GetFrameInfo() -> FrameInfo | None:
+        def GetFrame() -> Frame | None:
             """Get the frame info of the mission map."""
             if not (frame_id := Map.WorldMap.GetFrameID()):
                 return None
-            return FrameInfo(FrameID_source=frame_id)
+            return Frame.from_id(frame_id)
         
         @staticmethod
         def IsWindowOpen() -> bool:
             """Check if the mission map window is open."""
-            if not (frame_info := Map.WorldMap.GetFrameInfo()):
+            if not (frame_info := Map.WorldMap.GetFrame()):
                 return False
-            return frame_info.FrameExists()
+            return frame_info.exists
         
         @staticmethod
         def OpenWindow() -> None:
@@ -1872,24 +1866,24 @@ class Map:
         def CloseWindow() -> None:
             """Close the mission map window."""
             from Py4GWCoreLib import GLOBAL_CACHE, Routines
-            if not (frame_info := Map.WorldMap.GetFrameInfo()):
+            if not (frame_info := Map.WorldMap.GetFrame()):
                 return
             GLOBAL_CACHE.Coroutines.append(Routines.Yield.Keybinds.OpenWorldMap())
             
         @staticmethod
         def IsMouseOver() -> bool:
             """Check if the mouse is hovering over the mission map."""
-            if not (frame_info := Map.WorldMap.GetFrameInfo()):
+            if not (frame_info := Map.WorldMap.GetFrame()):
                 return False
-            return frame_info.IsMouseOver()
+            return frame_info.is_mouse_over()
         
         @staticmethod
         def GetLastClickCoords() -> tuple[float, float]:
             """Get the last left click coordinates on the mission map."""
-            if not (frame_info := Map.WorldMap.GetFrameInfo()):
+            if not (frame_info := Map.WorldMap.GetFrame()):
                 return 0.0, 0.0
             
-            io_events: list[UIManager.IOEvent] = frame_info.GetIOEvents()
+            io_events: list[UIManager.IOEvent] = frame_info.io_events()
             if len(io_events) == 0:
                 return Map.WorldMap.last_left_clicked_coords
             
@@ -1910,10 +1904,10 @@ class Map:
         @staticmethod
         def GetLastRightClickCoords() -> tuple[float, float]:
             """Get the last right click coordinates on the mission map."""
-            if not (frame_info := Map.WorldMap.GetFrameInfo()):
+            if not (frame_info := Map.WorldMap.GetFrame()):
                 return 0.0, 0.0
             
-            io_events: list[UIManager.IOEvent] = frame_info.GetIOEvents()
+            io_events: list[UIManager.IOEvent] = frame_info.io_events()
             if len(io_events) == 0:
                 return Map.WorldMap.last_right_clicked_coords
             
@@ -2022,18 +2016,18 @@ class Map:
             return world_map_ctx.frame_id
         
         @staticmethod
-        def GetFrameInfo() -> FrameInfo | None:
+        def GetFrame() -> Frame | None:
             """Get the frame info of the mission map."""
             if not (frame_id := Map.Pregame.GetFrameID()):
                 return None
-            return FrameInfo(FrameID_source=frame_id)
+            return Frame.from_id(frame_id)
         
         @staticmethod
         def IsWindowOpen() -> bool:
             """Check if the mission map window is open."""
-            if not (frame_info := Map.Pregame.GetFrameInfo()):
+            if not (frame_info := Map.Pregame.GetFrame()):
                 return False
-            return frame_info.FrameExists()
+            return frame_info.exists
 
         @staticmethod
         def GetChosenCharacterIndex() -> int:

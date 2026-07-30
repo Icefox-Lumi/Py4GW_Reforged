@@ -6,6 +6,8 @@ from Py4GWCoreLib import ColorPalette
 from Py4GWCoreLib import UIManager
 from Py4GWCoreLib import ImGui
 import math
+# aliased: this module defines its own `Frame` wrapper class below
+from Py4GWCoreLib.FrameTree import Frame as GWFrame
 
 INVENTORY_FRAME_HASH = 291586130   
 XUNLAI_VAULT_FRAME_HASH = 2315448754
@@ -65,19 +67,19 @@ class Frame:
             self.update_coords()
             
     def update_coords(self):
-        self.left, self.top, self.right, self.bottom = UIManager.GetFrameCoords(self.frame_id) 
+        self.left, self.top, self.right, self.bottom = GWFrame.from_id(self.frame_id).coords() 
         self.height = self.bottom - self.top
         self.width = self.right - self.left   
         
     def draw_frame(self, color=Color(255, 255, 255, 255)):
         if self.frame_id == 0:
             return
-        UIManager().DrawFrame(self.frame_id, color.to_color())
+        GWFrame.from_id(self.frame_id).draw(color.to_color())
         
     def draw_frame_outline(self, color=Color(255, 255, 255, 255)):
         if self.frame_id == 0:
             return
-        UIManager().DrawFrameOutline(self.frame_id, color.to_color())
+        GWFrame.from_id(self.frame_id).draw_outline(color.to_color())
 
 #endregion
 
