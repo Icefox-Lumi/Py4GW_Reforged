@@ -73,7 +73,7 @@ INVENTORY_SHORTCUT_LIVE_ACTION_REFRESH_MATERIAL_STORAGE_COUNT = "refresh_materia
 INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
-PROFILE_VERSION = 35
+PROFILE_VERSION = 36
 # Live and private rule profiles remain account-scoped. Shared profiles use one
 # global document whose per-key journal writes merge safely across multibox clients.
 LIVE_CONFIG_DOC_NAME = "Widgets/MerchantRules/LiveConfig.json"
@@ -281,6 +281,15 @@ SELL_RULE_WORKSPACE_ORDER: tuple[str, ...] = (
     SELL_KIND_COMMON_MATERIALS,
 )
 
+MANUAL_VENDOR_BUY_CATEGORY_KINDS: tuple[str, ...] = (
+    BUY_KIND_MERCHANT_STOCK,
+    BUY_KIND_MATERIAL_TARGET,
+    BUY_KIND_RUNE_TRADER_TARGET,
+    BUY_KIND_SCROLL_TRADER_TARGET,
+)
+
+MANUAL_VENDOR_SELL_CATEGORY_KINDS: tuple[str, ...] = SELL_RULE_WORKSPACE_ORDER
+
 DESTROY_RULE_WORKSPACE_ORDER: tuple[str, ...] = (
     DESTROY_KIND_WEAPONS,
     DESTROY_KIND_ARMOR,
@@ -303,6 +312,36 @@ BUY_RULE_WORKSPACE_LABELS = {
     BUY_KIND_RUNE_TRADER_TARGET: "Runes & Insignias",
     BUY_KIND_SCROLL_TRADER_TARGET: "Scroll Trader Stock",
 }
+
+
+def _default_manual_vendor_category_flags(category_kinds: tuple[str, ...]) -> dict[str, bool]:
+    return {
+        kind: True
+        for kind in category_kinds
+    }
+
+
+def _normalize_manual_vendor_category_flags(
+    raw_flags: object,
+    category_kinds: tuple[str, ...],
+    *,
+    field_name: str,
+) -> dict[str, bool]:
+    if raw_flags is None:
+        return _default_manual_vendor_category_flags(category_kinds)
+    if not isinstance(raw_flags, dict):
+        raise ValueError(f"Merchant Rules {field_name} must be an object.")
+
+    normalized = _default_manual_vendor_category_flags(category_kinds)
+    for kind in category_kinds:
+        if kind not in raw_flags:
+            continue
+        value = raw_flags[kind]
+        if not isinstance(value, bool):
+            raise ValueError(f"Merchant Rules {field_name}.{kind} must be true or false.")
+        normalized[kind] = value
+    return normalized
+
 
 SELL_KIND_LABELS = {
     SELL_KIND_COMMON_MATERIALS: "Sell Materials",
@@ -1042,6 +1081,29 @@ UI_COLOR_SUBSECTION_HEADING = UI_COLOR_WARNING_SOFT
 UI_COLOR_TEAL = (0.14, 0.79, 0.76, 1.0)
 UI_COLOR_INDIGO = (0.48, 0.62, 1.00, 1.0)
 UI_COLOR_PURPLE_ACCENT = (0.79, 0.57, 0.96, 1.0)
+UI_COLOR_ITEM_WEAPON = (0.58, 0.78, 0.90, 1.0)
+UI_COLOR_ITEM_ARMOR = (0.79, 0.57, 0.96, 1.0)
+UI_COLOR_ITEM_MATERIAL = (0.14, 0.79, 0.76, 1.0)
+UI_COLOR_ITEM_KNOWLEDGE = (0.48, 0.62, 1.00, 1.0)
+UI_COLOR_ITEM_CONSUMABLE = (0.96, 0.66, 0.84, 1.0)
+UI_COLOR_ITEM_NEUTRAL = (0.84, 0.86, 0.90, 1.0)
+UI_COLOR_ITEM_MUTED = (0.68, 0.71, 0.76, 1.0)
+ITEM_NAME_CATEGORY_WEAPON = "weapon"
+ITEM_NAME_CATEGORY_ARMOR = "armor"
+ITEM_NAME_CATEGORY_ARMOR_UPGRADE = "armor_upgrade"
+ITEM_NAME_CATEGORY_MATERIAL = "material"
+ITEM_NAME_CATEGORY_KNOWLEDGE = "knowledge"
+ITEM_NAME_CATEGORY_CONSUMABLE = "consumable"
+ITEM_NAME_CATEGORY_NEUTRAL = "neutral"
+ITEM_NAME_CATEGORY_COLORS: dict[str, tuple[float, float, float, float]] = {
+    ITEM_NAME_CATEGORY_WEAPON: UI_COLOR_ITEM_WEAPON,
+    ITEM_NAME_CATEGORY_ARMOR: UI_COLOR_ITEM_ARMOR,
+    ITEM_NAME_CATEGORY_ARMOR_UPGRADE: UI_COLOR_ITEM_ARMOR,
+    ITEM_NAME_CATEGORY_MATERIAL: UI_COLOR_ITEM_MATERIAL,
+    ITEM_NAME_CATEGORY_KNOWLEDGE: UI_COLOR_ITEM_KNOWLEDGE,
+    ITEM_NAME_CATEGORY_CONSUMABLE: UI_COLOR_ITEM_CONSUMABLE,
+    ITEM_NAME_CATEGORY_NEUTRAL: UI_COLOR_ITEM_NEUTRAL,
+}
 PREVIEW_STATUS_LABELS: dict[str, str] = {
     PREVIEW_STATUS_NO_MATCH: "No match",
     PREVIEW_STATUS_ALREADY_DONE: "Already done",
@@ -1115,10 +1177,13 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     "workspace_profiles": {
         "short": "Save, load, and share named Merchant Rules setups.",
         "long": (
-            "Account and Shared profiles are saved snapshots. The live summary separately identifies the exact "
-            "loaded source and every saved profile whose normalized contents match."
+            "Account and Shared profiles save copies of your Merchant Rules settings. The summary shows which "
+            "profile you last loaded and which saved profiles currently have the same settings."
         ),
-        "why": "Use scope tabs to manage one profile collection at a time without confusing selection with loading.",
+        "why": (
+            "Use the Account and Shared tabs to work with one profile list at a time. "
+            "Selecting a profile does not load it."
+        ),
     },
     "workspace_rules_buy": {
         "short": "Maintain stock by buying from merchants, traders, or crafters.",
@@ -1287,30 +1352,38 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
         "long": "Favorites are quick picks for outposts you use often with Merchant Rules.",
     },
     "manual_vendor_auto_sell": {
-        "short": "Runs matching sell rules when you open the right merchant.",
-        "long": "Merchant Rules waits for a merchant or trader that fits the configured sell rules.",
+        "short": "Runs matching sell rules when you open the matching merchant or trader.",
+        "long": "The main switch, the rule's Sell category, and the individual rule must all be enabled.",
         "why": "Leave this off if you prefer to press Execute manually after reviewing Preview Plan.",
     },
     "manual_vendor_auto_buy": {
-        "short": "Runs matching buy rules when you open the right merchant.",
-        "long": "Merchant Rules uses the current merchant or trader offers and your configured stock targets.",
+        "short": "Runs matching buy rules when you open the matching merchant or trader.",
+        "long": "The main switch, the rule's Buy category, and the individual rule must all be enabled.",
+    },
+    "manual_vendor_buy_categories": {
+        "short": "Chooses which Buy sections may run automatically when you open a merchant.",
+        "long": "Preview Plan and normal execution continue using every enabled Buy rule.",
+    },
+    "manual_vendor_sell_categories": {
+        "short": "Chooses which Sell sections may run automatically when you open a merchant.",
+        "long": "Preview Plan and normal execution continue using every enabled Sell rule. Item protections always remain active.",
     },
     "manual_vendor_any_merchant": {
-        "short": "Allows selected sell groups to sell to any regular merchant.",
-        "long": "This can sell trader-value items at regular merchant value when the matching trader is not open.",
+        "short": "Allows the selected sell groups to use any regular merchant.",
+        "long": "This works independently of automatic selling at the matching trader.",
         "why": "Use it only for items where convenience matters more than the best possible price.",
     },
     "manual_vendor_any_normal": {
-        "short": "Includes normal merchant sell rules in any-merchant selling.",
-        "long": "These are regular item sell rules that already route to a normal merchant.",
+        "short": "Includes items that are normally sold to a regular merchant.",
+        "long": "The Sell category and the individual rule must also be enabled for merchant-window automation.",
     },
     "manual_vendor_any_materials": {
-        "short": "Allows material-trader sell rules to fall back to any merchant.",
-        "long": "Matching materials may sell for less than material trader value.",
+        "short": "Allows material sales to use a regular merchant.",
+        "long": "Matching materials may sell for less than they would at a material trader.",
     },
     "manual_vendor_any_runes": {
-        "short": "Allows rune-trader sell rules to fall back to any merchant.",
-        "long": "Matching runes and insignias may sell for less than rune trader value.",
+        "short": "Allows rune and insignia sales to use a regular merchant.",
+        "long": "Matching runes and insignias may sell for less than they would at a Rune Trader.",
     },
     "debug_logging": {
         "short": "Writes detailed Merchant Rules decisions to the console.",
@@ -6447,6 +6520,12 @@ class MerchantRulesWidget:
         self.auto_cleanup_on_outpost_entry = False
         self.auto_sell_on_manual_vendor_interaction = False
         self.auto_buy_on_manual_vendor_interaction = False
+        self.manual_vendor_auto_buy_categories = _default_manual_vendor_category_flags(
+            MANUAL_VENDOR_BUY_CATEGORY_KINDS
+        )
+        self.manual_vendor_auto_sell_categories = _default_manual_vendor_category_flags(
+            MANUAL_VENDOR_SELL_CATEGORY_KINDS
+        )
         self.auto_sell_to_any_merchant = False
         self.auto_sell_any_merchant_normal_items = False
         self.auto_sell_any_merchant_materials = False
@@ -6556,6 +6635,7 @@ class MerchantRulesWidget:
         self.rune_names: dict[str, str] = {}
         self.rune_buy_entries: list[dict[str, object]] = []
         self.rune_buy_entries_by_identifier: dict[str, dict[str, object]] = {}
+        self.rune_buy_identifier_by_exact_label: dict[str, str] = {}
         self.rune_buy_entries_by_profession: dict[str, list[dict[str, object]]] = {}
         self.rune_buy_professions: list[str] = []
         self.outpost_entries: list[dict[str, object]] = []
@@ -7741,6 +7821,26 @@ class MerchantRulesWidget:
     def _format_inventory_shortcut_menu_header(self, item: InventoryItemInfo | None) -> str:
         header_base = self._format_inventory_shortcut_menu_header_base(item)
         return self._format_inventory_shortcut_menu_header_from_cached_display_state(item, header_base)
+
+    def _draw_inventory_shortcut_menu_header(
+        self,
+        item: InventoryItemInfo | None,
+        header_text: str,
+    ) -> None:
+        item_name = self._format_inventory_shortcut_item_name(item)
+        safe_header_text = str(header_text or "")
+        if item is None or not item_name or not safe_header_text.startswith(item_name):
+            PyImGui.text_colored(safe_header_text, UI_COLOR_ITEM_NEUTRAL)
+            return
+
+        PyImGui.text_colored(
+            item_name,
+            self._get_item_name_text_color(item=item),
+        )
+        count_text = safe_header_text[len(item_name):]
+        if count_text:
+            PyImGui.same_line(0, 0)
+            PyImGui.text_colored(count_text, UI_COLOR_ITEM_NEUTRAL)
 
     def _get_hovered_inventory_shortcut_item(self) -> InventoryItemInfo | None:
         inventory_api = getattr(GLOBAL_CACHE, "Inventory", None)
@@ -9731,7 +9831,7 @@ class MerchantRulesWidget:
                         selected_item,
                         self.inventory_shortcuts_selected_header,
                     )
-                    PyImGui.text(header_text)
+                    self._draw_inventory_shortcut_menu_header(selected_item, header_text)
                     PyImGui.separator()
                     if self._draw_inventory_shortcut_kit_live_actions(selected_item):
                         PyImGui.separator()
@@ -9865,13 +9965,23 @@ class MerchantRulesWidget:
         return normalized_payload != current_payload
 
     def _build_profile_payload(self, *, include_window_geometry: bool = True) -> dict[str, object]:
-        """Serialize current settings into a normalized profile-v35 payload."""
+        """Serialize current settings into a normalized profile-v36 payload."""
 
         payload = {
             "version": PROFILE_VERSION,
             "auto_cleanup_on_outpost_entry": bool(self.auto_cleanup_on_outpost_entry),
             "auto_sell_on_manual_vendor_interaction": bool(self.auto_sell_on_manual_vendor_interaction),
             "auto_buy_on_manual_vendor_interaction": bool(self.auto_buy_on_manual_vendor_interaction),
+            "manual_vendor_auto_buy_categories": _normalize_manual_vendor_category_flags(
+                self.manual_vendor_auto_buy_categories,
+                MANUAL_VENDOR_BUY_CATEGORY_KINDS,
+                field_name="manual_vendor_auto_buy_categories",
+            ),
+            "manual_vendor_auto_sell_categories": _normalize_manual_vendor_category_flags(
+                self.manual_vendor_auto_sell_categories,
+                MANUAL_VENDOR_SELL_CATEGORY_KINDS,
+                field_name="manual_vendor_auto_sell_categories",
+            ),
             "auto_sell_to_any_merchant": bool(self.auto_sell_to_any_merchant),
             "auto_sell_any_merchant_normal_items": bool(self.auto_sell_any_merchant_normal_items),
             "auto_sell_any_merchant_materials": bool(self.auto_sell_any_merchant_materials),
@@ -9967,6 +10077,17 @@ class MerchantRulesWidget:
             protected_item_model_ids_raw = []
         if not isinstance(protected_item_model_ids_raw, list):
             raise ValueError("Merchant Rules protected_item_model_ids must be a list.")
+
+        manual_vendor_auto_buy_categories = _normalize_manual_vendor_category_flags(
+            raw_payload.get("manual_vendor_auto_buy_categories"),
+            MANUAL_VENDOR_BUY_CATEGORY_KINDS,
+            field_name="manual_vendor_auto_buy_categories",
+        )
+        manual_vendor_auto_sell_categories = _normalize_manual_vendor_category_flags(
+            raw_payload.get("manual_vendor_auto_sell_categories"),
+            MANUAL_VENDOR_SELL_CATEGORY_KINDS,
+            field_name="manual_vendor_auto_sell_categories",
+        )
 
         favorite_outpost_ids_raw = raw_payload.get("favorite_outpost_ids", [])
         if favorite_outpost_ids_raw is None:
@@ -10117,6 +10238,8 @@ class MerchantRulesWidget:
             "auto_cleanup_on_outpost_entry": bool(raw_payload.get("auto_cleanup_on_outpost_entry", False)),
             "auto_sell_on_manual_vendor_interaction": bool(raw_payload.get("auto_sell_on_manual_vendor_interaction", False)),
             "auto_buy_on_manual_vendor_interaction": bool(raw_payload.get("auto_buy_on_manual_vendor_interaction", False)),
+            "manual_vendor_auto_buy_categories": manual_vendor_auto_buy_categories,
+            "manual_vendor_auto_sell_categories": manual_vendor_auto_sell_categories,
             "auto_sell_to_any_merchant": bool(raw_payload.get("auto_sell_to_any_merchant", False)),
             "auto_sell_any_merchant_normal_items": bool(raw_payload.get("auto_sell_any_merchant_normal_items", False)),
             "auto_sell_any_merchant_materials": bool(raw_payload.get("auto_sell_any_merchant_materials", False)),
@@ -10231,6 +10354,16 @@ class MerchantRulesWidget:
         self.auto_cleanup_on_outpost_entry = bool(payload.get("auto_cleanup_on_outpost_entry", False))
         self.auto_sell_on_manual_vendor_interaction = bool(payload.get("auto_sell_on_manual_vendor_interaction", False))
         self.auto_buy_on_manual_vendor_interaction = bool(payload.get("auto_buy_on_manual_vendor_interaction", False))
+        self.manual_vendor_auto_buy_categories = _normalize_manual_vendor_category_flags(
+            payload.get("manual_vendor_auto_buy_categories"),
+            MANUAL_VENDOR_BUY_CATEGORY_KINDS,
+            field_name="manual_vendor_auto_buy_categories",
+        )
+        self.manual_vendor_auto_sell_categories = _normalize_manual_vendor_category_flags(
+            payload.get("manual_vendor_auto_sell_categories"),
+            MANUAL_VENDOR_SELL_CATEGORY_KINDS,
+            field_name="manual_vendor_auto_sell_categories",
+        )
         self.auto_sell_to_any_merchant = bool(payload.get("auto_sell_to_any_merchant", False))
         self.auto_sell_any_merchant_normal_items = bool(payload.get("auto_sell_any_merchant_normal_items", False))
         self.auto_sell_any_merchant_materials = bool(payload.get("auto_sell_any_merchant_materials", False))
@@ -10384,11 +10517,12 @@ class MerchantRulesWidget:
             )
         except Exception as exc:
             self.loaded_profile_provenance_warning = (
-                f"Loaded-profile provenance is unavailable and was preserved without rewriting it: {exc}"
+                "Merchant Rules could not read which profile was last loaded for this account. "
+                "The existing record was left unchanged."
             )
             ConsoleLog(
                 MODULE_NAME,
-                self.loaded_profile_provenance_warning,
+                f"{self.loaded_profile_provenance_warning} Technical detail: {exc}",
                 Console.MessageType.Warning,
             )
 
@@ -10400,8 +10534,8 @@ class MerchantRulesWidget:
             self._normalize_loaded_profile_provenance(raw_state)
         except Exception as exc:
             raise ValueError(
-                "Existing loaded-profile provenance is unreadable or newer than this Merchant Rules version; "
-                "refusing to rewrite it."
+                "The existing last-loaded profile record is unreadable or was created by a newer "
+                "Merchant Rules version, so it was left unchanged."
             ) from exc
 
     def _record_loaded_profile_provenance(self, profile: ProfileSummary):
@@ -10453,11 +10587,12 @@ class MerchantRulesWidget:
         except Exception as exc:
             reason_suffix = f" after {reason}" if reason else ""
             self.loaded_profile_provenance_warning = (
-                f"Could not clear loaded-profile provenance{reason_suffix}: {exc}"
+                f"Merchant Rules could not clear the last-loaded profile record{reason_suffix}. "
+                "The existing record was left unchanged."
             )
             ConsoleLog(
                 MODULE_NAME,
-                self.loaded_profile_provenance_warning,
+                f"{self.loaded_profile_provenance_warning} Technical detail: {exc}",
                 Console.MessageType.Warning,
             )
             return False
@@ -10530,14 +10665,16 @@ class MerchantRulesWidget:
         """Validate a saved-profile wrapper and normalize its embedded Merchant Rules payload."""
 
         if not isinstance(raw_payload, dict):
-            raise ValueError("Saved Merchant Rules profile must be a JSON object.")
+            raise ValueError("This saved profile is incomplete or damaged.") from ValueError(
+                f"Saved Merchant Rules profile must be a JSON object, got {type(raw_payload).__name__}."
+            )
 
         schema = str(raw_payload.get("schema", "") or "").strip()
         if schema == SHARED_PROFILE_SCHEMA:
             raw_schema_version = _safe_int(raw_payload.get("schema_version", 0), 0)
             if raw_schema_version > SHARED_PROFILE_SCHEMA_VERSION:
-                raise ValueError(
-                    f"Shared profile schema v{raw_schema_version} is newer than supported schema "
+                raise ValueError("This profile was created by a newer Merchant Rules version.") from ValueError(
+                    f"Saved profile schema v{raw_schema_version} is newer than supported schema "
                     f"v{SHARED_PROFILE_SCHEMA_VERSION}."
                 )
             payload_source = raw_payload.get("payload", {})
@@ -10546,11 +10683,15 @@ class MerchantRulesWidget:
             payload_source = raw_payload
             display_name_source = fallback_name
         else:
-            raise ValueError("Saved Merchant Rules profile schema is not supported.")
+            raise ValueError("This saved profile uses an unsupported format.") from ValueError(
+                f"Saved Merchant Rules profile schema {schema!r} is not supported."
+            )
 
         display_name = _normalize_shared_profile_display_name(display_name_source)
         if not display_name:
-            raise ValueError("Saved Merchant Rules profile name is missing.")
+            raise ValueError(
+                "This saved profile is incomplete or damaged because its name is missing."
+            ) from ValueError("Saved Merchant Rules profile name is missing.")
 
         payload_version = (
             _safe_int(payload_source.get("version", 0), 0)
@@ -10558,14 +10699,17 @@ class MerchantRulesWidget:
             else 0
         )
         if payload_version > PROFILE_VERSION:
-            raise ValueError(
-                f"Shared profile payload version {payload_version} is newer than Merchant Rules version "
+            raise ValueError("This profile was created by a newer Merchant Rules version.") from ValueError(
+                f"Saved profile settings version {payload_version} is newer than Merchant Rules version "
                 f"{PROFILE_VERSION}."
             )
 
-        normalized_payload = _strip_window_geometry_from_profile_payload(
-            self._normalize_profile_payload(payload_source)
-        )
+        try:
+            normalized_payload = _strip_window_geometry_from_profile_payload(
+                self._normalize_profile_payload(payload_source)
+            )
+        except Exception as exc:
+            raise ValueError("This saved profile is incomplete or damaged.") from exc
         saved_at_unix_ms = max(0, _safe_int(raw_payload.get("saved_at_unix_ms", 0), 0))
         saved_at = str(raw_payload.get("saved_at", "") or "").strip()
         if not saved_at:
@@ -10597,11 +10741,15 @@ class MerchantRulesWidget:
         )
         normalized_payload = normalized_wrapper.get("payload", {})
         if not isinstance(normalized_payload, dict):
-            raise ValueError("Saved Merchant Rules profile payload is missing.")
+            raise ValueError("This saved profile is incomplete or damaged.") from ValueError(
+                "Saved Merchant Rules profile settings are missing."
+            )
         payload: dict[str, object] = {}
         for raw_key, value in normalized_payload.items():
             if not isinstance(raw_key, str):
-                raise ValueError("Saved Merchant Rules profile payload keys must be strings.")
+                raise ValueError("This saved profile is incomplete or damaged.") from ValueError(
+                    "Saved Merchant Rules profile settings contain a non-string key."
+                )
             payload[raw_key] = value
         saved_at_unix_ms = max(
             0,
@@ -10620,6 +10768,25 @@ class MerchantRulesWidget:
             serialized_payload=self._serialize_shareable_profile_payload(payload),
             fingerprint=self._saved_profile_wrapper_fingerprint(normalized_wrapper),
         )
+
+    def _get_saved_profile_read_error_text(self, exc: Exception) -> str:
+        message = str(exc or "").strip()
+        recognized_messages = (
+            "This profile was created by a newer Merchant Rules version.",
+            "This saved profile uses an unsupported format.",
+            "This saved profile is incomplete or damaged",
+        )
+        if any(message.startswith(prefix) for prefix in recognized_messages):
+            return message
+        return "A saved profile could not be read."
+
+    def _format_exception_chain_for_log(self, exc: Exception) -> str:
+        details: list[str] = []
+        current: BaseException | None = exc
+        while current is not None and len(details) < 4:
+            details.append(f"{type(current).__name__}: {current}")
+            current = current.__cause__
+        return " <- ".join(details)
 
     def _get_profile_by_identity(
         self,
@@ -10736,7 +10903,7 @@ class MerchantRulesWidget:
             profile_key = f"profile_{uuid4().hex}"
             if not doc.has(profile_key):
                 return profile_key
-        raise RuntimeError("Could not allocate a unique saved-profile key.")
+        raise RuntimeError("Merchant Rules could not create a new profile entry.")
 
     def _refresh_profile_entries(
         self,
@@ -10759,12 +10926,13 @@ class MerchantRulesWidget:
             if report_reload_failure:
                 if scope == PROFILE_SCOPE_SHARED and not previous_entries:
                     self.saved_profile_scan_warnings[scope] = (
-                        "The shared profile document does not exist yet or could not be reloaded. "
-                        "Saving the first shared profile will create it."
+                        "Shared profiles are not available yet or could not be refreshed. "
+                        "Saving the first Shared profile will create the list."
                     )
                 else:
                     self.saved_profile_scan_warnings[scope] = (
-                        f"Could not reload {self._profile_scope_label(scope)}; retaining the last readable list."
+                        f"Could not refresh {self._profile_scope_label(scope)}. "
+                        "Showing the last profile list Merchant Rules could read."
                     )
             return False
         if reload_document:
@@ -10784,7 +10952,15 @@ class MerchantRulesWidget:
                     )
                 )
             except Exception as exc:
-                load_failures.append(f"{safe_key}: {exc}")
+                load_failures.append(self._get_saved_profile_read_error_text(exc))
+                ConsoleLog(
+                    MODULE_NAME,
+                    (
+                        f"Could not read [{self._profile_scope_badge(scope)}] saved profile "
+                        f"key {safe_key!r}: {self._format_exception_chain_for_log(exc)}"
+                    ),
+                    Console.MessageType.Warning,
+                )
 
         entries.sort(
             key=lambda entry: (
@@ -10800,7 +10976,7 @@ class MerchantRulesWidget:
             if len(load_failures) > 3:
                 preview = f"{preview} | ...and {len(load_failures) - 3} more."
             self.saved_profile_scan_warnings[scope] = (
-                f"Some {self._profile_scope_badge(scope).lower()} profiles could not be loaded: {preview}"
+                f"Some {self._profile_scope_badge(scope).title()} profiles could not be read: {preview}"
             )
         else:
             self.saved_profile_scan_warnings[scope] = ""
@@ -10851,11 +11027,11 @@ class MerchantRulesWidget:
         if not doc.save():
             doc.reload()
             raise OSError(
-                f"JsonFactory could not flush {self._profile_scope_label(scope)}."
+                f"Merchant Rules could not save {self._profile_scope_label(scope)}."
             )
         if not doc.reload():
             raise OSError(
-                f"JsonFactory saved but could not reload {self._profile_scope_label(scope)}."
+                f"The change was saved, but Merchant Rules could not verify {self._profile_scope_label(scope)}."
             )
         self.profile_document_reload_failed[scope] = False
         verified = self._load_profile_summary_from_key(
@@ -10865,7 +11041,7 @@ class MerchantRulesWidget:
         )
         if verified.fingerprint != expected_fingerprint:
             raise RuntimeError(
-                f"The saved {self._profile_scope_badge(scope).lower()} profile failed post-save verification."
+                f"Merchant Rules could not verify the saved {self._profile_scope_badge(scope).title()} profile."
             )
         self._refresh_profile_entries(scope)
         return verified
@@ -10879,15 +11055,16 @@ class MerchantRulesWidget:
         if not doc.save():
             doc.reload()
             raise OSError(
-                f"JsonFactory could not flush {self._profile_scope_label(identity.scope)}."
+                f"Merchant Rules could not save {self._profile_scope_label(identity.scope)}."
             )
         if not doc.reload():
             raise OSError(
-                f"JsonFactory saved but could not reload {self._profile_scope_label(identity.scope)}."
+                f"The profile was deleted, but Merchant Rules could not verify "
+                f"{self._profile_scope_label(identity.scope)} afterward."
             )
         self.profile_document_reload_failed[identity.scope] = False
         if doc.has(identity.key):
-            raise RuntimeError("The deleted profile is still present after reloading the document.")
+            raise RuntimeError("Merchant Rules could not verify that the profile was deleted.")
         self._refresh_profile_entries(identity.scope)
 
     def _resolve_profile_for_action(
@@ -10904,7 +11081,7 @@ class MerchantRulesWidget:
                 PROFILE_SCOPE_SHARED,
                 reload_document=True,
             ):
-                raise OSError("The shared profile document could not be reloaded.")
+                raise OSError("Shared profiles could not be refreshed, so no changes were made.")
         else:
             self._refresh_profile_entries(identity.scope)
 
@@ -10914,10 +11091,10 @@ class MerchantRulesWidget:
         if expected_fingerprint and current.fingerprint != expected_fingerprint:
             self._clear_profile_confirmation_state()
             raise RuntimeError(
-                "The selected profile changed in another client; review it and confirm the action again."
+                "The selected profile changed elsewhere. Review it and confirm the action again."
             )
         if identity.scope == PROFILE_SCOPE_SHARED and not expected_fingerprint:
-            raise RuntimeError("Shared profile actions require confirmation against the selected version.")
+            raise RuntimeError("Select the Shared profile again, then confirm the action.")
         return current
 
     def _prepare_scope_for_new_profile(self, scope: str):
@@ -10927,7 +11104,7 @@ class MerchantRulesWidget:
                 reload_document=True,
             )
             if not refreshed and self.profile_entries[scope]:
-                raise OSError("The shared profile document could not be refreshed safely.")
+                raise OSError("Shared profiles could not be refreshed, so no changes were made.")
         else:
             self._refresh_profile_entries(scope)
 
@@ -10949,7 +11126,7 @@ class MerchantRulesWidget:
             self._set_saved_profile_feedback(
                 scope,
                 notice=(
-                    f"Saved [{self._profile_scope_badge(scope)}] profile "
+                    f"Saved {self._profile_scope_badge(scope).title()} profile "
                     f"'{profile_name}'."
                 ),
             )
@@ -10957,7 +11134,7 @@ class MerchantRulesWidget:
             self._set_saved_profile_feedback(
                 scope,
                 warning=(
-                    f"Failed to save [{self._profile_scope_badge(scope)}] profile: {exc}"
+                    f"Failed to save {self._profile_scope_badge(scope).title()} profile: {exc}"
                 ),
             )
 
@@ -10971,7 +11148,7 @@ class MerchantRulesWidget:
         if selected_profile is None:
             self._set_saved_profile_feedback(
                 scope,
-                warning=f"Select a [{self._profile_scope_badge(scope)}] profile to rename.",
+                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to rename.",
             )
             return
 
@@ -11001,7 +11178,7 @@ class MerchantRulesWidget:
             self._set_saved_profile_feedback(
                 scope,
                 notice=(
-                    f"Renamed [{self._profile_scope_badge(scope)}] profile "
+                    f"Renamed {self._profile_scope_badge(scope).title()} profile "
                     f"'{current.display_name}' to '{new_name}'."
                 ),
             )
@@ -11009,7 +11186,7 @@ class MerchantRulesWidget:
             self._set_saved_profile_feedback(
                 scope,
                 warning=(
-                    f"Failed to rename [{self._profile_scope_badge(scope)}] profile: {exc}"
+                    f"Failed to rename {self._profile_scope_badge(scope).title()} profile: {exc}"
                 ),
             )
 
@@ -11023,7 +11200,7 @@ class MerchantRulesWidget:
         if selected_profile is None:
             self._set_saved_profile_feedback(
                 scope,
-                warning=f"Select a [{self._profile_scope_badge(scope)}] profile to overwrite.",
+                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to replace.",
             )
             return
 
@@ -11040,15 +11217,15 @@ class MerchantRulesWidget:
             self._set_saved_profile_feedback(
                 scope,
                 notice=(
-                    f"Saved current Merchant Rules settings over "
-                    f"[{self._profile_scope_badge(scope)}] '{current.display_name}'."
+                    f"Replaced {self._profile_scope_badge(scope).title()} profile "
+                    f"'{current.display_name}' with the current settings."
                 ),
             )
         except Exception as exc:
             self._set_saved_profile_feedback(
                 scope,
                 warning=(
-                    f"Failed to overwrite [{self._profile_scope_badge(scope)}] profile: {exc}"
+                    f"Failed to replace {self._profile_scope_badge(scope).title()} profile: {exc}"
                 ),
             )
 
@@ -11062,7 +11239,7 @@ class MerchantRulesWidget:
         if selected_profile is None:
             self._set_saved_profile_feedback(
                 scope,
-                warning=f"Select a [{self._profile_scope_badge(scope)}] profile to load.",
+                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to load.",
             )
             return
 
@@ -11080,9 +11257,13 @@ class MerchantRulesWidget:
             )
             if not live_doc.save():
                 rollback_loaded = live_doc.reload()
-                rollback_detail = "" if rollback_loaded else " Persisted rollback reload also failed."
+                rollback_detail = (
+                    ""
+                    if rollback_loaded
+                    else " Merchant Rules also could not restore the previous current settings."
+                )
                 raise OSError(
-                    "JsonFactory could not flush the selected Merchant Rules profile."
+                    "Merchant Rules could not save the selected profile as the current settings."
                     f"{rollback_detail}"
                 )
             self.reload_profile_from_disk(
@@ -11096,7 +11277,7 @@ class MerchantRulesWidget:
             )
             if loaded_payload_serialized != current.serialized_payload:
                 raise RuntimeError(
-                    "The reloaded live config does not match the selected saved profile."
+                    "The current settings do not match the selected profile after loading."
                 )
             badge = self._profile_scope_badge(scope)
             provenance_warning = ""
@@ -11108,20 +11289,20 @@ class MerchantRulesWidget:
                 clear_succeeded = self._clear_loaded_profile_provenance(
                     "a loaded-profile provenance write failure"
                 )
-                clear_detail = "" if clear_succeeded else f" {self.loaded_profile_provenance_warning}"
                 provenance_warning = (
-                    f"Profile loaded, but its loaded-source provenance could not be recorded: "
-                    f"{provenance_exc}.{clear_detail}"
+                    "The profile loaded successfully, but Merchant Rules could not update this account's "
+                    "record of the last profile loaded."
                 )
+                if not clear_succeeded:
+                    provenance_warning += " The previous last-loaded profile record also could not be cleared."
                 self.loaded_profile_provenance_warning = provenance_warning
                 ConsoleLog(
                     MODULE_NAME,
-                    provenance_warning,
+                    f"{provenance_warning} Technical detail: {provenance_exc}",
                     Console.MessageType.Warning,
                 )
             self.status_message = (
-                f"Loaded [{badge}] profile '{current.display_name}' "
-                f"into the current Merchant Rules config."
+                f"Loaded {badge.title()} profile '{current.display_name}' for this account."
             )
             self._log_profile_loaded_summary()
             self._refresh_profile_entries(scope)
@@ -11130,10 +11311,10 @@ class MerchantRulesWidget:
             self._set_saved_profile_feedback(
                 scope,
                 notice=(
-                    f"Loaded [{badge}] profile '{current.display_name}'. "
+                    f"Loaded {badge.title()} profile '{current.display_name}'. "
                     "Use Sync Rules to Selected when you want followers updated."
                     + (
-                        " Loaded-source tracking needs attention."
+                        " The account's record of the last profile loaded could not be updated."
                         if provenance_warning
                         else ""
                     )
@@ -11141,7 +11322,7 @@ class MerchantRulesWidget:
             )
         except Exception as exc:
             warning = (
-                f"Failed to load [{self._profile_scope_badge(scope)}] profile: {exc}"
+                f"Failed to load {self._profile_scope_badge(scope).title()} profile: {exc}"
             )
             self.status_message = warning
             self._set_saved_profile_feedback(scope, warning=warning)
@@ -11156,7 +11337,7 @@ class MerchantRulesWidget:
         if selected_profile is None:
             self._set_saved_profile_feedback(
                 scope,
-                warning=f"Select a [{self._profile_scope_badge(scope)}] profile to delete.",
+                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to delete.",
             )
             return
 
@@ -11171,7 +11352,7 @@ class MerchantRulesWidget:
             self._set_saved_profile_feedback(
                 scope,
                 notice=(
-                    f"Deleted [{self._profile_scope_badge(scope)}] profile "
+                    f"Deleted {self._profile_scope_badge(scope).title()} profile "
                     f"'{current.display_name}'."
                 ),
             )
@@ -11179,7 +11360,7 @@ class MerchantRulesWidget:
             self._set_saved_profile_feedback(
                 scope,
                 warning=(
-                    f"Failed to delete [{self._profile_scope_badge(scope)}] profile: {exc}"
+                    f"Failed to delete {self._profile_scope_badge(scope).title()} profile: {exc}"
                 ),
             )
 
@@ -11198,7 +11379,7 @@ class MerchantRulesWidget:
         if source is None:
             self._set_saved_profile_feedback(
                 source_scope,
-                warning=f"Select a [{self._profile_scope_badge(source_scope)}] profile to copy.",
+                warning=f"Select a {self._profile_scope_badge(source_scope).title()} profile to copy.",
             )
             return
 
@@ -11236,21 +11417,21 @@ class MerchantRulesWidget:
                 destination_scope,
                 notice=(
                     f"Copied '{current.display_name}' to "
-                    f"[{self._profile_scope_badge(destination_scope)}] profiles."
+                    f"{self._profile_scope_badge(destination_scope).title()} profiles."
                 ),
             )
             self._set_saved_profile_feedback(
                 source_scope,
                 notice=(
-                    f"Copied [{self._profile_scope_badge(source_scope)}] "
-                    f"'{current.display_name}' without changing the source."
+                    f"The original {self._profile_scope_badge(source_scope).title()} profile "
+                    f"'{current.display_name}' was not changed."
                 ),
             )
         except Exception as exc:
             self._set_saved_profile_feedback(
                 source_scope,
                 warning=(
-                    f"Failed to copy [{self._profile_scope_badge(source_scope)}] profile: {exc}"
+                    f"Failed to copy {self._profile_scope_badge(source_scope).title()} profile: {exc}"
                 ),
             )
 
@@ -11262,14 +11443,14 @@ class MerchantRulesWidget:
                 raise OSError("Opening folders is not supported on this platform.")
             startfile(folder_path)
             self.status_message = (
-                f"Opened the {self._profile_scope_badge(scope).lower()} Merchant Rules profiles folder."
+                f"Opened the {self._profile_scope_badge(scope).title()} profiles folder."
             )
             return True
         except Exception as exc:
             self._set_saved_profile_feedback(
                 scope,
                 warning=(
-                    f"Failed to open [{self._profile_scope_badge(scope)}] profiles folder: {exc}"
+                    f"Failed to open the {self._profile_scope_badge(scope).title()} profiles folder: {exc}"
                 ),
             )
             ConsoleLog(
@@ -11759,6 +11940,7 @@ class MerchantRulesWidget:
     def _load_rune_buy_catalog(self):
         self.rune_buy_entries = []
         self.rune_buy_entries_by_identifier = {}
+        self.rune_buy_identifier_by_exact_label = {}
         self.rune_buy_entries_by_profession = {}
         self.rune_buy_professions = []
 
@@ -11834,6 +12016,7 @@ class MerchantRulesWidget:
             for entry in entries
             if str(entry.get("identifier", "")).strip()
         }
+        self._rebuild_rune_exact_display_lookup()
         self.rune_buy_entries_by_profession = grouped_entries
         self.rune_buy_professions = profession_order
 
@@ -12811,9 +12994,12 @@ class MerchantRulesWidget:
 
         model_match = re.fullmatch(r"Model\s+(\d+)", safe_label)
         if model_match is not None:
-            return max(0, _safe_int(model_match.group(1), 0))
+            model_id = max(0, _safe_int(model_match.group(1), 0))
+            if model_id <= 0 or self._get_model_entry(model_id) is None:
+                return 0
+            return model_id
 
-        named_match = re.fullmatch(r".+\s\((\d+)\)", safe_label)
+        named_match = re.fullmatch(r".+\s\((\d+)\)(?:\s+\[[^\[\]\r\n]+\])?", safe_label)
         if named_match is None:
             return 0
 
@@ -12942,6 +13128,26 @@ class MerchantRulesWidget:
             return None
         return self.rune_buy_entries_by_identifier.get(safe_identifier)
 
+    def _rebuild_rune_exact_display_lookup(self) -> None:
+        identifiers_by_label: dict[str, set[str]] = {}
+        for entry in self.rune_buy_entries:
+            identifier = str(entry.get("identifier", "") or "").strip()
+            if not identifier:
+                continue
+            for label in (
+                str(entry.get("name", "") or "").strip(),
+                identifier,
+            ):
+                normalized_label = _normalize_catalog_search_text(label)
+                if normalized_label:
+                    identifiers_by_label.setdefault(normalized_label, set()).add(identifier)
+
+        self.rune_buy_identifier_by_exact_label = {
+            label: next(iter(identifiers))
+            for label, identifiers in identifiers_by_label.items()
+            if len(identifiers) == 1
+        }
+
     def _get_rune_tooltip_text(self, identifier: str) -> str:
         entry = self._get_rune_buy_entry(identifier)
         if entry is None:
@@ -12955,20 +13161,41 @@ class MerchantRulesWidget:
             return ""
         return _normalize_rarity_key(str(entry.get("rarity", "") or ""))
 
-    def _get_rune_text_color_for_identifier(self, identifier: str) -> tuple[float, float, float, float] | None:
-        rarity_key = self._get_rune_rarity_key_for_identifier(identifier)
-        if not rarity_key:
+    def _get_exact_rune_item_name_text_color(
+        self,
+        identifier: str,
+    ) -> tuple[float, float, float, float] | None:
+        entry = self._get_rune_buy_entry(identifier)
+        if entry is None:
             return None
-        return RARITY_TEXT_COLORS.get(rarity_key)
 
-    def _get_rune_text_color_for_protection_entry(self, entry: ProtectionHubEntry) -> tuple[float, float, float, float] | None:
-        if entry.filter_key != PROTECTION_FILTER_RUNES:
-            return None
-        target_key = str(entry.target_key or "")
-        identifier_prefix = "identifier:"
-        if not target_key.startswith(identifier_prefix):
-            return None
-        return self._get_rune_text_color_for_identifier(target_key[len(identifier_prefix):])
+        mod_type = str(entry.get("mod_type", "") or "").strip().casefold()
+        display_name = str(entry.get("name", identifier) or identifier).strip().casefold()
+        if mod_type == "prefix" or "insignia" in display_name:
+            return UI_COLOR_ITEM_ARMOR
+
+        if mod_type == "suffix" or "rune" in display_name:
+            rarity_key = self._get_rune_rarity_key_for_identifier(identifier)
+            rarity_color = RARITY_TEXT_COLORS.get(rarity_key)
+            if rarity_color is not None:
+                return rarity_color
+            return UI_COLOR_ITEM_ARMOR
+        return None
+
+    def _get_exact_rune_identifier_for_display_label(self, display_label: object) -> str:
+        plain_label = _strip_item_display_markup(display_label)
+        plain_label = re.sub(r"^\[(?:rune|insignia)\]\s*", "", plain_label, flags=re.IGNORECASE)
+        plain_label = re.sub(r"\s+\(\d+\)(?:\s+\[[^\]]+\])?$", "", plain_label).strip()
+        normalized_label = _normalize_catalog_search_text(plain_label)
+        if not normalized_label:
+            return ""
+        return str(self.rune_buy_identifier_by_exact_label.get(normalized_label, "") or "")
+
+    def _get_rune_text_color_for_identifier(self, identifier: str) -> tuple[float, float, float, float] | None:
+        return self._get_item_name_text_color(
+            exact_upgrade_identifier=identifier,
+            category_hint=ITEM_NAME_CATEGORY_ARMOR_UPGRADE,
+        )
 
     def _get_common_material_preset(self) -> list[int]:
         return list(self.catalog_common_material_ids)
@@ -14417,13 +14644,13 @@ class MerchantRulesWidget:
                     target_key = _cleanup_target_key(target)
                     label = self._format_cleanup_target_label_short(target)
                     if target_key in configured_target_keys:
-                        PyImGui.text_colored(label, self._get_model_text_color(target.model_id))
+                        PyImGui.text_colored(label, self._get_cleanup_target_item_name_text_color(target))
                         PyImGui.same_line(0, 8)
                         self._draw_inline_badge("Already configured", UI_COLOR_MUTED)
                         continue
                     if self._draw_colored_selectable(
                         label,
-                        self._get_model_text_color(target.model_id),
+                        self._get_cleanup_target_item_name_text_color(target),
                         f"{child_id}_{target.model_id}_{target.scope}",
                     ):
                         picked_target = target
@@ -14486,13 +14713,22 @@ class MerchantRulesWidget:
                         label = f"{label} [{material_type}]"
                     label = self._format_model_label_with_exact_protection_status(label, model_id)
                     if badge_label and model_id in existing_ids:
-                        PyImGui.text_colored(label, UI_COLOR_TEAL)
+                        PyImGui.text_colored(
+                            label,
+                            self._get_item_name_text_color(
+                                model_id,
+                                category_hint=ITEM_NAME_CATEGORY_MATERIAL,
+                            ),
+                        )
                         PyImGui.same_line(0, 8)
                         self._draw_inline_badge(badge_label, UI_COLOR_MUTED)
                         continue
                     if self._draw_colored_selectable(
                         label,
-                        UI_COLOR_TEAL,
+                        self._get_item_name_text_color(
+                            model_id,
+                            category_hint=ITEM_NAME_CATEGORY_MATERIAL,
+                        ),
                         f"{child_id}_{model_id}",
                     ):
                         picked_model_id = model_id
@@ -14562,7 +14798,14 @@ class MerchantRulesWidget:
                 for entry in results:
                     model_id = int(entry.get("model_id", 0))
                     label = self._format_model_label_long(model_id)
-                    if self._draw_colored_selectable(label, UI_COLOR_WARNING, f"{child_id}_{model_id}"):
+                    if self._draw_colored_selectable(
+                        label,
+                        self._get_item_name_text_color(
+                            model_id,
+                            category_hint=ITEM_NAME_CATEGORY_KNOWLEDGE,
+                        ),
+                        f"{child_id}_{model_id}",
+                    ):
                         picked_model_id = model_id
                         break
         PyImGui.end_child()
@@ -14587,7 +14830,14 @@ class MerchantRulesWidget:
                     label = self._format_model_label(model_id)
                     if material_type:
                         label = f"{label} [{material_type}]"
-                    if self._draw_colored_selectable(label, UI_COLOR_TEAL, f"{child_id}_{model_id}"):
+                    if self._draw_colored_selectable(
+                        label,
+                        self._get_item_name_text_color(
+                            model_id,
+                            category_hint=ITEM_NAME_CATEGORY_MATERIAL,
+                        ),
+                        f"{child_id}_{model_id}",
+                    ):
                         picked_model_id = model_id
                         break
         PyImGui.end_child()
@@ -14609,7 +14859,14 @@ class MerchantRulesWidget:
                 for entry in results:
                     model_id = int(entry.get("model_id", 0))
                     label = self._format_model_label_long(model_id)
-                    if self._draw_colored_selectable(label, UI_COLOR_SUCCESS, f"{child_id}_{model_id}"):
+                    if self._draw_colored_selectable(
+                        label,
+                        self._get_item_name_text_color(
+                            model_id,
+                            category_hint=ITEM_NAME_CATEGORY_WEAPON,
+                        ),
+                        f"{child_id}_{model_id}",
+                    ):
                         picked_model_id = model_id
                         break
         PyImGui.end_child()
@@ -14845,7 +15102,10 @@ class MerchantRulesWidget:
 
                     PyImGui.table_next_row()
                     PyImGui.table_set_column_index(0)
-                    PyImGui.text(self._get_weapon_mod_choice_label(choice_key))
+                    PyImGui.text_colored(
+                        self._get_weapon_mod_choice_label(choice_key),
+                        self._get_weapon_mod_item_name_text_color(identifier),
+                    )
 
                     PyImGui.table_set_column_index(1)
                     if show_roll_selector:
@@ -15292,7 +15552,7 @@ class MerchantRulesWidget:
         return self._resolve_storage_access_coords() is not None
 
     def _load_profile(self):
-        """Load the account-scoped JsonFactory profile with fail-closed v35 safeguards."""
+        """Load the account-scoped JsonFactory profile with fail-closed v36 safeguards."""
 
         doc = self._live_config_doc()
         stored_payload = doc.get_json("", None)
@@ -15310,6 +15570,12 @@ class MerchantRulesWidget:
             "auto_cleanup_on_outpost_entry": False,
             "auto_sell_on_manual_vendor_interaction": False,
             "auto_buy_on_manual_vendor_interaction": False,
+            "manual_vendor_auto_buy_categories": _default_manual_vendor_category_flags(
+                MANUAL_VENDOR_BUY_CATEGORY_KINDS
+            ),
+            "manual_vendor_auto_sell_categories": _default_manual_vendor_category_flags(
+                MANUAL_VENDOR_SELL_CATEGORY_KINDS
+            ),
             "auto_sell_to_any_merchant": False,
             "auto_sell_any_merchant_normal_items": False,
             "auto_sell_any_merchant_materials": False,
@@ -19191,18 +19457,29 @@ class MerchantRulesWidget:
                 protection_rules.append((rule_index, sell_rule))
         return protection_rules
 
-    def _collect_enabled_xunlai_sell_rules(self) -> list[tuple[int, SellRule]]:
+    def _collect_enabled_xunlai_sell_rules(
+        self,
+        enabled_sell_rules: list[tuple[int, SellRule]] | None = None,
+    ) -> list[tuple[int, SellRule]]:
+        source_rules = (
+            self._collect_enabled_sell_rules()
+            if enabled_sell_rules is None
+            else enabled_sell_rules
+        )
         return [
             (rule_index, sell_rule)
-            for rule_index, sell_rule in self._collect_enabled_sell_rules()
+            for rule_index, sell_rule in source_rules
             if bool(getattr(sell_rule, "sell_from_xunlai", False))
         ]
 
     def _has_enabled_xunlai_sell_rules(self) -> bool:
         return bool(self._collect_enabled_xunlai_sell_rules())
 
-    def _has_ready_xunlai_sell_rules(self) -> bool:
-        for _rule_index, rule in self._collect_enabled_xunlai_sell_rules():
+    def _has_ready_xunlai_sell_rules(
+        self,
+        enabled_sell_rules: list[tuple[int, SellRule]] | None = None,
+    ) -> bool:
+        for _rule_index, rule in self._collect_enabled_xunlai_sell_rules(enabled_sell_rules):
             if rule.kind in (SELL_KIND_COMMON_MATERIALS, SELL_KIND_EXPLICIT_MODELS):
                 if _normalize_whitelist_targets(getattr(rule, "whitelist_targets", [])):
                     return True
@@ -19819,6 +20096,7 @@ class MerchantRulesWidget:
         storage_items: list[InventoryItemInfo] | None = None,
         consumable_crafter_only: bool = False,
         exclude_consumable_crafter: bool = False,
+        allowed_rule_kinds: set[str] | None = None,
     ) -> None:
         """Plan purchases against simulated inventory, storage, currency, and target reservations.
 
@@ -19903,6 +20181,8 @@ class MerchantRulesWidget:
                 continue
             buy_rule = normalized_buy_rule
             if not buy_rule.enabled:
+                continue
+            if allowed_rule_kinds is not None and buy_rule.kind not in allowed_rule_kinds:
                 continue
             if consumable_crafter_only and buy_rule.kind != BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
                 continue
@@ -20866,6 +21146,8 @@ class MerchantRulesWidget:
         allow_consumable_multi_stop: bool = True,
         consumable_crafter_only: bool = False,
         exclude_consumable_crafter: bool = False,
+        buy_action_rule_kinds: set[str] | None = None,
+        sell_action_rule_kinds: set[str] | None = None,
         supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None,
     ) -> PlanResult:
         """Build the complete preview plan without performing live merchant actions.
@@ -20956,12 +21238,23 @@ class MerchantRulesWidget:
         storage_open = bool(storage_api is not None and bool(getattr(storage_api, "IsStorageOpen", lambda: False)()))
         storage_items: list[InventoryItemInfo] = []
         xunlai_sell_material_storage_items: list[InventoryItemInfo] = []
+        enabled_sell_rules = [] if consumable_crafter_only else self._collect_enabled_sell_rules()
+        sell_action_rules = (
+            enabled_sell_rules
+            if sell_action_rule_kinds is None
+            else [
+                (rule_index, rule)
+                for rule_index, rule in enabled_sell_rules
+                if rule.kind in sell_action_rule_kinds
+            ]
+        )
+        enabled_xunlai_sell_action_rules = self._collect_enabled_xunlai_sell_rules(sell_action_rules)
         needs_rune_storage_context = bool(not consumable_crafter_only and self._has_enabled_rune_buy_rules())
         needs_consumable_storage_context = bool(not exclude_consumable_crafter and self._has_enabled_consumable_crafter_buy_rules())
         needs_xunlai_sell_storage_context = bool(
             not cleanup_only
             and not consumable_crafter_only
-            and self._has_ready_xunlai_sell_rules()
+            and self._has_ready_xunlai_sell_rules(sell_action_rules)
         )
         if needs_rune_storage_context or needs_consumable_storage_context or needs_xunlai_sell_storage_context:
             if storage_open:
@@ -20970,7 +21263,7 @@ class MerchantRulesWidget:
                     include_xunlai_material_storage = any(
                         bool(getattr(rule, "include_material_storage", False))
                         and _sell_rule_can_include_material_storage(rule)
-                        for _rule_index, rule in self._collect_enabled_xunlai_sell_rules()
+                        for _rule_index, rule in enabled_xunlai_sell_action_rules
                     )
                     if include_xunlai_material_storage:
                         xunlai_sell_material_storage_items = self._collect_material_storage_items()
@@ -20980,7 +21273,6 @@ class MerchantRulesWidget:
                 plan.storage_plan_state = STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN
                 plan.storage_exact = False
 
-        enabled_sell_rules = [] if consumable_crafter_only else self._collect_enabled_sell_rules()
         enabled_destroy_rules = [] if consumable_crafter_only else self._collect_enabled_destroy_rules()
         claimed_item_ids: set[int] = set()
         if not cleanup_only and not consumable_crafter_only:
@@ -21018,12 +21310,12 @@ class MerchantRulesWidget:
 
         reserved_rune_sell_identifiers = {
             target.identifier
-            for _exact_rule_index, exact_rule in enabled_sell_rules
+            for _exact_rule_index, exact_rule in sell_action_rules
             if exact_rule.kind == SELL_KIND_RUNE_TRADER_TARGET
             for target in _normalize_rune_sell_targets(getattr(exact_rule, "rune_sell_targets", []))
             if target.identifier
         }
-        for rule_index, sell_rule in enabled_sell_rules:
+        for rule_index, sell_rule in sell_action_rules:
             merchant_coords = coords.get(sell_rule.merchant_type)
             if not supported_map and not storage_context_ready:
                 plan.entries.append(
@@ -21470,8 +21762,7 @@ class MerchantRulesWidget:
             include_material_storage = any(
                 bool(getattr(rule, "include_material_storage", False))
                 and _sell_rule_can_include_material_storage(rule)
-                for _rule_index, rule in enabled_sell_rules
-                if bool(getattr(rule, "sell_from_xunlai", False))
+                for _rule_index, rule in enabled_xunlai_sell_action_rules
             )
             source_detail = (
                 "regular Xunlai item panes and Material Storage"
@@ -21480,7 +21771,7 @@ class MerchantRulesWidget:
             )
             if storage_open:
                 xunlai_sell_transfers, _adjusted_rules = self._plan_xunlai_sell_withdrawals(
-                    self._collect_enabled_xunlai_sell_rules(),
+                    enabled_xunlai_sell_action_rules,
                     items,
                     storage_items,
                     xunlai_sell_material_storage_items,
@@ -21488,7 +21779,7 @@ class MerchantRulesWidget:
                     protected_preview_entries=xunlai_sell_protected_preview_entries,
                 )
                 self._debug_log(
-                    f"Xunlai sell preview: enabled_rules={len(self._collect_enabled_xunlai_sell_rules())} "
+                    f"Xunlai sell preview: enabled_rules={len(enabled_xunlai_sell_action_rules)} "
                     f"inventory_items={len(items)} regular_storage_items={len(storage_items)} "
                     f"material_storage_items={len(xunlai_sell_material_storage_items)} "
                     f"include_material_storage={include_material_storage} transfers={len(xunlai_sell_transfers)} "
@@ -21537,6 +21828,7 @@ class MerchantRulesWidget:
             storage_items=storage_items,
             consumable_crafter_only=consumable_crafter_only,
             exclude_consumable_crafter=exclude_consumable_crafter,
+            allowed_rule_kinds=buy_action_rule_kinds,
         )
         self._plan_consumable_crafter_bag_space_warning(
             plan,
@@ -24498,6 +24790,48 @@ class MerchantRulesWidget:
         )
         return outcome
 
+    def _get_manual_vendor_enabled_buy_kinds(self) -> set[str]:
+        flags = _normalize_manual_vendor_category_flags(
+            self.manual_vendor_auto_buy_categories,
+            MANUAL_VENDOR_BUY_CATEGORY_KINDS,
+            field_name="manual_vendor_auto_buy_categories",
+        )
+        return {
+            kind
+            for kind, enabled in flags.items()
+            if enabled
+        }
+
+    def _get_manual_vendor_enabled_sell_kinds(self) -> set[str]:
+        flags = _normalize_manual_vendor_category_flags(
+            self.manual_vendor_auto_sell_categories,
+            MANUAL_VENDOR_SELL_CATEGORY_KINDS,
+            field_name="manual_vendor_auto_sell_categories",
+        )
+        return {
+            kind
+            for kind, enabled in flags.items()
+            if enabled
+        }
+
+    def _get_enabled_buy_rule_count_for_kind(self, kind: str) -> int:
+        return sum(
+            1
+            for raw_rule in self.buy_rules
+            if (rule := _normalize_buy_rule(raw_rule)) is not None
+            and rule.kind == kind
+            and bool(rule.enabled)
+        )
+
+    def _get_enabled_sell_rule_count_for_kind(self, kind: str) -> int:
+        return sum(
+            1
+            for raw_rule in self.sell_rules
+            if (rule := _normalize_sell_rule(raw_rule)) is not None
+            and rule.kind == kind
+            and bool(rule.enabled)
+        )
+
     def _manual_vendor_any_merchant_groups_enabled(self) -> bool:
         return bool(
             self.auto_sell_any_merchant_normal_items
@@ -24505,13 +24839,22 @@ class MerchantRulesWidget:
             or self.auto_sell_any_merchant_runes
         )
 
-    def _manual_vendor_settings_enabled(self) -> bool:
+    def _manual_vendor_any_merchant_lower_price_groups_enabled(self) -> bool:
         return bool(
-            self.auto_sell_on_manual_vendor_interaction
-            or self.auto_buy_on_manual_vendor_interaction
+            self.auto_sell_any_merchant_materials
+            or self.auto_sell_any_merchant_runes
+        )
+
+    def _manual_vendor_settings_enabled(self) -> bool:
+        buy_categories_enabled = bool(self._get_manual_vendor_enabled_buy_kinds())
+        sell_categories_enabled = bool(self._get_manual_vendor_enabled_sell_kinds())
+        return bool(
+            (self.auto_sell_on_manual_vendor_interaction and sell_categories_enabled)
+            or (self.auto_buy_on_manual_vendor_interaction and buy_categories_enabled)
             or (
                 self.auto_sell_to_any_merchant
                 and self._manual_vendor_any_merchant_groups_enabled()
+                and sell_categories_enabled
             )
         )
 
@@ -24539,10 +24882,18 @@ class MerchantRulesWidget:
 
     def _format_manual_vendor_modes_for_debug(self) -> str:
         modes: list[str] = []
+        enabled_buy_category_count = len(self._get_manual_vendor_enabled_buy_kinds())
+        enabled_sell_category_count = len(self._get_manual_vendor_enabled_sell_kinds())
         if self.auto_sell_on_manual_vendor_interaction:
-            modes.append("auto-sell matching merchant")
+            modes.append(
+                f"auto-sell matching merchant ({enabled_sell_category_count}/"
+                f"{len(MANUAL_VENDOR_SELL_CATEGORY_KINDS)} categories)"
+            )
         if self.auto_buy_on_manual_vendor_interaction:
-            modes.append("auto-buy matching merchant")
+            modes.append(
+                f"auto-buy matching merchant ({enabled_buy_category_count}/"
+                f"{len(MANUAL_VENDOR_BUY_CATEGORY_KINDS)} categories)"
+            )
         if self.auto_sell_to_any_merchant:
             groups: list[str] = []
             if self.auto_sell_any_merchant_normal_items:
@@ -24795,7 +25146,7 @@ class MerchantRulesWidget:
         if not self.auto_sell_to_any_merchant:
             self._debug_log(
                 "Manual vendor skipped trader-targeted merchant fallback item(s) because "
-                "'Also sell selected items to any merchant' is off."
+                "'Allow selected sell groups at any regular merchant' is off."
             )
             return
         if material_fallback_item_ids and not self.auto_sell_any_merchant_materials:
@@ -24924,10 +25275,29 @@ class MerchantRulesWidget:
                 f"{self._format_manual_vendor_context_for_debug(context)} "
                 f"modes={self._format_manual_vendor_modes_for_debug()}"
             )
+            buy_action_rule_kinds = (
+                self._get_manual_vendor_enabled_buy_kinds()
+                if self.auto_buy_on_manual_vendor_interaction
+                else set()
+            )
+            sell_automation_enabled = bool(
+                self.auto_sell_on_manual_vendor_interaction
+                or (
+                    self.auto_sell_to_any_merchant
+                    and self._manual_vendor_any_merchant_groups_enabled()
+                )
+            )
+            sell_action_rule_kinds = (
+                self._get_manual_vendor_enabled_sell_kinds()
+                if sell_automation_enabled
+                else set()
+            )
             plan = self._build_plan(
                 ignore_travel_target=True,
                 allow_consumable_multi_stop=False,
                 exclude_consumable_crafter=True,
+                buy_action_rule_kinds=buy_action_rule_kinds,
+                sell_action_rule_kinds=sell_action_rule_kinds,
                 supported_context_override=self._build_manual_vendor_supported_context(context),
             )
 
@@ -27798,30 +28168,171 @@ class MerchantRulesWidget:
         finally:
             PyImGui.pop_style_color(1)
 
+    def _get_item_name_category_from_catalog_entry(self, entry: dict[str, object]) -> str:
+        item_type = str(entry.get("item_type", "") or "").strip()
+        normalized_item_type = _normalize_catalog_search_text(item_type)
+        normalized_category = _normalize_catalog_search_text(entry.get("category", ""))
+        normalized_subcategory = _normalize_catalog_search_text(entry.get("sub_category", ""))
+        if _is_weapon_catalog_item_type(item_type):
+            return ITEM_NAME_CATEGORY_WEAPON
+        if _is_armor_catalog_item_type(item_type):
+            return ITEM_NAME_CATEGORY_ARMOR
+        if (
+            normalized_item_type in {"scroll", "tome", "storybook"}
+            or normalized_category in {"scroll", "tome", "storybook"}
+            or "tome" in normalized_subcategory
+        ):
+            return ITEM_NAME_CATEGORY_KNOWLEDGE
+
+        match_keys = self._get_cleanup_deposit_filter_match_keys(entry)
+        if match_keys & {
+            DEPOSIT_FILTER_EQUIPMENT_WEAPONS,
+            DEPOSIT_FILTER_EQUIPMENT_OFFHANDS,
+            DEPOSIT_FILTER_UPGRADES_INSCRIPTIONS,
+            DEPOSIT_FILTER_UPGRADES_WEAPON_PREFIX,
+            DEPOSIT_FILTER_UPGRADES_WEAPON_SUFFIX,
+        }:
+            return ITEM_NAME_CATEGORY_WEAPON
+        if DEPOSIT_FILTER_EQUIPMENT_ARMOR in match_keys:
+            return ITEM_NAME_CATEGORY_ARMOR
+        if match_keys & {
+            DEPOSIT_FILTER_UPGRADES_RUNES,
+            DEPOSIT_FILTER_UPGRADES_INSIGNIAS,
+        }:
+            return ITEM_NAME_CATEGORY_ARMOR_UPGRADE
+        if match_keys & {
+            DEPOSIT_FILTER_MATERIALS_COMMON,
+            DEPOSIT_FILTER_MATERIALS_RARE,
+        }:
+            return ITEM_NAME_CATEGORY_MATERIAL
+        if DEPOSIT_FILTER_CONSUMABLES_SCROLLS in match_keys:
+            return ITEM_NAME_CATEGORY_KNOWLEDGE
+        if match_keys & {
+            DEPOSIT_FILTER_CONSUMABLES_COMBAT,
+            DEPOSIT_FILTER_CONSUMABLES_PARTY,
+            DEPOSIT_FILTER_CONSUMABLES_SUMMONING,
+            DEPOSIT_FILTER_CONSUMABLES_OTHER,
+        }:
+            return ITEM_NAME_CATEGORY_CONSUMABLE
+        return ITEM_NAME_CATEGORY_NEUTRAL
+
+    def _get_item_name_category_from_inventory_item(self, item: InventoryItemInfo) -> str:
+        if str(item.standalone_kind or "") == WEAPON_MOD_STANDALONE_KIND:
+            return ITEM_NAME_CATEGORY_WEAPON
+        if str(item.standalone_kind or "") == RUNE_STANDALONE_KIND:
+            return ITEM_NAME_CATEGORY_ARMOR_UPGRADE
+        if bool(item.is_weapon_like):
+            return ITEM_NAME_CATEGORY_WEAPON
+        if bool(item.is_armor_piece):
+            return ITEM_NAME_CATEGORY_ARMOR
+        if bool(item.is_material):
+            return ITEM_NAME_CATEGORY_MATERIAL
+        if bool(item.is_tome):
+            return ITEM_NAME_CATEGORY_KNOWLEDGE
+
+        live_entry: dict[str, object] = {
+            "model_id": max(0, _safe_int(item.model_id, 0)),
+            "name": str(item.name or ""),
+            "item_type": str(item.item_type_name or ""),
+        }
+        live_category = self._get_item_name_category_from_catalog_entry(live_entry)
+        if live_category != ITEM_NAME_CATEGORY_NEUTRAL:
+            return live_category
+        return ITEM_NAME_CATEGORY_NEUTRAL
+
+    def _get_item_name_text_color(
+        self,
+        model_id: int = 0,
+        *,
+        item: InventoryItemInfo | None = None,
+        exact_upgrade_identifier: str = "",
+        display_label: object = "",
+        category_hint: str = "",
+        muted: bool = False,
+        unavailable: bool = False,
+        default: tuple[float, float, float, float] = UI_COLOR_ITEM_NEUTRAL,
+    ) -> tuple[float, float, float, float]:
+        if muted or unavailable:
+            return UI_COLOR_ITEM_MUTED
+
+        safe_identifier = _normalize_rune_identifier(exact_upgrade_identifier)
+        if not safe_identifier and item is not None and str(item.standalone_kind or "") == RUNE_STANDALONE_KIND:
+            runtime_identifiers = _dedupe_identifiers(item.rune_identifiers)
+            if len(runtime_identifiers) == 1:
+                safe_identifier = _normalize_rune_identifier(runtime_identifiers[0])
+        if safe_identifier:
+            exact_upgrade_color = self._get_exact_rune_item_name_text_color(safe_identifier)
+            if exact_upgrade_color is not None:
+                return exact_upgrade_color
+
+        category = ""
+        if item is not None:
+            category = self._get_item_name_category_from_inventory_item(item)
+        safe_category_hint = str(category_hint or "").strip()
+        if not category or category == ITEM_NAME_CATEGORY_NEUTRAL:
+            if safe_category_hint in ITEM_NAME_CATEGORY_COLORS:
+                category = safe_category_hint
+
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        if safe_model_id <= 0 and item is not None:
+            safe_model_id = max(0, _safe_int(item.model_id, 0))
+        if not category or category == ITEM_NAME_CATEGORY_NEUTRAL:
+            entry = self._get_model_entry(safe_model_id) if safe_model_id > 0 else None
+            if entry is not None:
+                category = self._get_item_name_category_from_catalog_entry(entry)
+
+        if category == ITEM_NAME_CATEGORY_ARMOR_UPGRADE and not safe_identifier:
+            label_identifier = self._get_exact_rune_identifier_for_display_label(display_label)
+            if label_identifier:
+                exact_upgrade_color = self._get_exact_rune_item_name_text_color(label_identifier)
+                if exact_upgrade_color is not None:
+                    return exact_upgrade_color
+
+        return ITEM_NAME_CATEGORY_COLORS.get(category, default)
+
     def _get_model_text_color(
         self,
         model_id: int,
         *,
-        default: tuple[float, float, float, float] = UI_COLOR_SECONDARY_TEXT,
+        default: tuple[float, float, float, float] = UI_COLOR_ITEM_NEUTRAL,
     ) -> tuple[float, float, float, float]:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        if safe_model_id <= 0:
-            return default
-        descriptor = str(self._get_model_descriptor(safe_model_id) or "").strip().lower()
-        item_type = str(self._get_model_item_type(safe_model_id) or "").strip().lower()
-        name = str(self._get_model_name(safe_model_id) or "").strip().lower()
-        combined = f"{name} {descriptor} {item_type}"
-        if safe_model_id in ALL_CRAFTING_MATERIAL_MODEL_IDS or "material" in combined:
-            return UI_COLOR_TEAL
-        if _is_scroll_trader_stock_model(safe_model_id) or "scroll" in combined:
-            return UI_COLOR_WARNING
-        if "rune" in combined or "insignia" in combined:
-            return UI_COLOR_PURPLE_ACCENT
-        if _is_weapon_catalog_item_type(item_type) or "weapon" in combined:
-            return UI_COLOR_SUCCESS
-        if "armor" in combined:
-            return UI_COLOR_PURPLE_ACCENT
-        return default
+        return self._get_item_name_text_color(model_id, default=default)
+
+    def _get_cleanup_target_item_name_text_color(
+        self,
+        target: CleanupTarget,
+    ) -> tuple[float, float, float, float]:
+        target_scope = _normalize_cleanup_target_scope(getattr(target, "scope", ""), target.model_id)
+        category_hint = (
+            ITEM_NAME_CATEGORY_MATERIAL
+            if target_scope in {
+                CLEANUP_TARGET_SCOPE_COMMON_MATERIAL,
+                CLEANUP_TARGET_SCOPE_RARE_MATERIAL,
+            }
+            else ""
+        )
+        return self._get_item_name_text_color(target.model_id, category_hint=category_hint)
+
+    def _get_weapon_mod_item_name_text_color(self, _identifier: str = "") -> tuple[float, float, float, float]:
+        return self._get_item_name_text_color(category_hint=ITEM_NAME_CATEGORY_WEAPON)
+
+    def _get_protection_entry_item_name_text_color(
+        self,
+        entry: ProtectionHubEntry,
+    ) -> tuple[float, float, float, float] | None:
+        target_key = str(entry.target_key or "")
+        if entry.filter_key == PROTECTION_FILTER_RUNES and target_key.startswith("identifier:"):
+            return self._get_item_name_text_color(
+                exact_upgrade_identifier=target_key[len("identifier:"):],
+                category_hint=ITEM_NAME_CATEGORY_ARMOR_UPGRADE,
+            )
+        if entry.filter_key == PROTECTION_FILTER_WEAPON_MODS:
+            return self._get_item_name_text_color(category_hint=ITEM_NAME_CATEGORY_WEAPON)
+        if entry.filter_key == PROTECTION_FILTER_MODELS and target_key.startswith("model:"):
+            return self._get_item_name_text_color(_safe_int(target_key[len("model:"):], 0))
+        if entry.filter_key == PROTECTION_FILTER_REQUIREMENTS and target_key.startswith("requirement_model:"):
+            return self._get_item_name_text_color(_safe_int(target_key[len("requirement_model:"):], 0))
+        return None
 
     def _draw_subsection_label(self, text: str, *, wrapped: bool = False):
         self._draw_colored_text(text, UI_COLOR_SUBSECTION_HEADING, wrapped=wrapped)
@@ -27943,9 +28454,8 @@ class MerchantRulesWidget:
         next_active_kind = active_kind if active_kind in kind_order else kind_order[0]
         for tab_index, kind in enumerate(kind_order):
             tab_label = str(tab_labels.get(kind, kind)).strip() or str(kind)
-            _, tab_color = self._get_rule_type_presentation(kind)
             button_label = f"{tab_label} ({max(0, int(rule_counts.get(kind, 0)))})##{workspace_id}_{kind}"
-            if self._draw_workspace_button(button_label, active=next_active_kind == kind, color=tab_color):
+            if self._draw_workspace_button(button_label, active=next_active_kind == kind, color=UI_COLOR_INFO):
                 next_active_kind = kind
             self._draw_helper_tooltip(kind)
             if tab_index + 1 < len(kind_order):
@@ -30283,7 +30793,10 @@ class MerchantRulesWidget:
         salvage_settings = _normalize_salvage_settings(self.salvage_settings)
         if salvage_settings.on_inventory_change:
             attention_items.append(("Salvage on pickup is active.", UI_COLOR_WARNING))
-        if self.auto_sell_to_any_merchant and self._manual_vendor_any_merchant_groups_enabled():
+        if (
+            self.auto_sell_to_any_merchant
+            and self._manual_vendor_any_merchant_lower_price_groups_enabled()
+        ):
             attention_items.append(("Any-merchant selling is active; some items may sell for less than trader value.", UI_COLOR_WARNING))
         if not self._has_any_rules():
             attention_items.append(("No merchant rules are configured yet.", UI_COLOR_INFO))
@@ -30367,10 +30880,16 @@ class MerchantRulesWidget:
             PyImGui.text_colored("Xunlai Deposits is running.", UI_COLOR_INFO)
 
         manual_vendor_modes: list[str] = []
+        enabled_buy_category_count = len(self._get_manual_vendor_enabled_buy_kinds())
+        enabled_sell_category_count = len(self._get_manual_vendor_enabled_sell_kinds())
         if self.auto_sell_on_manual_vendor_interaction:
-            manual_vendor_modes.append("auto-sell")
+            manual_vendor_modes.append(
+                f"auto-sell {enabled_sell_category_count}/{len(MANUAL_VENDOR_SELL_CATEGORY_KINDS)}"
+            )
         if self.auto_buy_on_manual_vendor_interaction:
-            manual_vendor_modes.append("auto-buy")
+            manual_vendor_modes.append(
+                f"auto-buy {enabled_buy_category_count}/{len(MANUAL_VENDOR_BUY_CATEGORY_KINDS)}"
+            )
         if self.auto_sell_to_any_merchant and self._manual_vendor_any_merchant_groups_enabled():
             manual_vendor_modes.append("any merchant sells")
         manual_vendor_enabled = self._manual_vendor_settings_enabled()
@@ -31271,7 +31790,7 @@ class MerchantRulesWidget:
                 self._draw_hover_tooltip(entry.protection_type_label)
 
                 PyImGui.table_set_column_index(2)
-                value_color = self._get_rune_text_color_for_protection_entry(entry)
+                value_color = self._get_protection_entry_item_name_text_color(entry)
                 if value_color is not None:
                     PyImGui.text_colored(entry.value_label, value_color)
                 else:
@@ -31312,17 +31831,6 @@ class MerchantRulesWidget:
 
             PyImGui.end_table()
 
-    def _get_protections_workspace_color(self, workspace_id: str) -> tuple[float, float, float, float]:
-        if workspace_id == PROTECTIONS_WORKSPACE_PROTECTED_ITEMS:
-            return UI_COLOR_PURPLE_ACCENT
-        if workspace_id == PROTECTIONS_WORKSPACE_SELL:
-            return UI_COLOR_SUCCESS
-        if workspace_id == PROTECTIONS_WORKSPACE_CLEANUP:
-            return UI_COLOR_INFO
-        if workspace_id == PROTECTIONS_WORKSPACE_DESTROY:
-            return UI_COLOR_DANGER
-        return UI_COLOR_INFO
-
     def _draw_protections_workspace_tabs(self):
         if self.active_protections_workspace == PROTECTIONS_WORKSPACE_SELL:
             self.active_protected_items_workspace = PROTECTED_ITEMS_WORKSPACE_EQUIPMENT
@@ -31336,16 +31844,11 @@ class MerchantRulesWidget:
             if self._draw_workspace_button(
                 button_label,
                 active=self.active_protections_workspace == workspace_id,
-                color=self._get_protections_workspace_color(workspace_id),
+                color=UI_COLOR_INFO,
             ):
                 self._set_active_protections_workspace(workspace_id)
             if tab_index + 1 < len(PROTECTIONS_WORKSPACE_ORDER):
                 PyImGui.same_line(0, 6)
-
-    def _get_protected_items_workspace_color(self, workspace_id: str) -> tuple[float, float, float, float]:
-        if workspace_id == PROTECTED_ITEMS_WORKSPACE_EQUIPMENT:
-            return UI_COLOR_SUCCESS
-        return UI_COLOR_PURPLE_ACCENT
 
     def _draw_protected_items_workspace_tabs(self):
         if self._get_sell_protection_jump_target() is not None:
@@ -31362,7 +31865,7 @@ class MerchantRulesWidget:
             if self._draw_workspace_button(
                 button_label,
                 active=self.active_protected_items_workspace == workspace_id,
-                color=self._get_protected_items_workspace_color(workspace_id),
+                color=UI_COLOR_INFO,
             ):
                 self._set_active_protected_items_workspace(workspace_id)
             if tab_index + 1 < len(PROTECTED_ITEMS_WORKSPACE_ORDER):
@@ -31844,15 +32347,10 @@ class MerchantRulesWidget:
                 label = owner_filter_labels.get(owner_filter, owner_filter)
                 count = max(0, int(owner_filter_counts.get(owner_filter, 0)))
                 button_label = f"{label} ({count})##merchant_rules_sell_protections_owner_filter_{owner_filter}"
-                button_color = (
-                    UI_COLOR_INFO
-                    if owner_filter == PROTECTION_FILTER_ALL
-                    else self._get_rule_type_presentation(owner_filter)[1]
-                )
                 if self._draw_workspace_button(
                     button_label,
                     active=self.sell_protections_owner_filter == owner_filter,
-                    color=button_color,
+                    color=UI_COLOR_INFO,
                 ):
                     self.sell_protections_owner_filter = owner_filter
                 if filter_index + 1 < len(available_owner_filters):
@@ -32158,7 +32656,10 @@ class MerchantRulesWidget:
                     PyImGui.table_set_column_index(0)
                     PyImGui.text_colored(
                         self._format_model_label_short(target_row.model_id),
-                        UI_COLOR_WARNING,
+                        self._get_item_name_text_color(
+                            target_row.model_id,
+                            category_hint=ITEM_NAME_CATEGORY_KNOWLEDGE,
+                        ),
                     )
 
                     PyImGui.table_set_column_index(1)
@@ -32303,7 +32804,10 @@ class MerchantRulesWidget:
                     PyImGui.table_set_column_index(0)
                     PyImGui.text_colored(
                         self._format_model_label_short(target_row.model_id),
-                        UI_COLOR_SUCCESS,
+                        self._get_item_name_text_color(
+                            target_row.model_id,
+                            category_hint=ITEM_NAME_CATEGORY_CONSUMABLE,
+                        ),
                     )
 
                     PyImGui.table_set_column_index(1)
@@ -32422,7 +32926,10 @@ class MerchantRulesWidget:
                     PyImGui.table_set_column_index(0)
                     PyImGui.text_colored(
                         self._format_model_label_short(target_row.model_id),
-                        UI_COLOR_TEAL,
+                        self._get_item_name_text_color(
+                            target_row.model_id,
+                            category_hint=ITEM_NAME_CATEGORY_MATERIAL,
+                        ),
                     )
 
                     PyImGui.table_set_column_index(1)
@@ -32598,7 +33105,7 @@ class MerchantRulesWidget:
             if self._draw_workspace_button(
                 button_label,
                 active=active_profession == profession,
-                color=UI_COLOR_PURPLE_ACCENT,
+                color=UI_COLOR_INFO,
             ):
                 active_profession = profession
             if tab_index + 1 < len(self.rune_buy_professions):
@@ -32796,7 +33303,7 @@ class MerchantRulesWidget:
             if self._draw_workspace_button(
                 button_label,
                 active=active_profession == profession,
-                color=UI_COLOR_PURPLE_ACCENT,
+                color=UI_COLOR_INFO,
             ):
                 active_profession = profession
             if tab_index + 1 < len(self.rune_buy_professions):
@@ -33732,7 +34239,11 @@ class MerchantRulesWidget:
         else:
             self._draw_subsection_label(f"Kept Entries: {len(selected_identifiers)}")
             self._draw_hover_tooltip("Entries here keep matching rune or insignia names.")
-            text_color_for_identifier = self._get_rune_text_color_for_identifier if cache_suffix == "runes" else None
+            text_color_for_identifier = (
+                self._get_rune_text_color_for_identifier
+                if cache_suffix == "runes"
+                else self._get_weapon_mod_item_name_text_color
+            )
             removed_identifier = self._draw_selected_identifiers(
                 f"sell_protected_{cache_suffix}",
                 index,
@@ -33758,7 +34269,11 @@ class MerchantRulesWidget:
             f"sell_protected_results_{cache_suffix}_{index}",
             search_cache.get(index, ""),
             entries,
-            text_color_for_identifier=self._get_rune_text_color_for_identifier if cache_suffix == "runes" else None,
+            text_color_for_identifier=(
+                self._get_rune_text_color_for_identifier
+                if cache_suffix == "runes"
+                else self._get_weapon_mod_item_name_text_color
+            ),
             tooltip_for_identifier=self._get_rune_tooltip_text if cache_suffix == "runes" else None,
         )
         if threshold_setter is not None:
@@ -34937,6 +35452,7 @@ class MerchantRulesWidget:
             f"merchant_rules_salvage_upgrade_results_{index}",
             self.salvage_weapon_mod_search_cache.get(index, ""),
             self.weapon_mod_entries,
+            text_color_for_identifier=self._get_weapon_mod_item_name_text_color,
         )
         addable_identifiers = [identifier for identifier in visible_identifiers if identifier not in target_choice_keys]
         if self._draw_add_all_matches_button(
@@ -35796,7 +36312,7 @@ class MerchantRulesWidget:
                         PyImGui.table_set_column_index(0)
                         PyImGui.text_colored(
                             self._format_cleanup_target_label_short(target),
-                            self._get_model_text_color(target.model_id),
+                            self._get_cleanup_target_item_name_text_color(target),
                         )
 
                         PyImGui.table_set_column_index(1)
@@ -35985,6 +36501,8 @@ class MerchantRulesWidget:
     def _draw_buy_rules_section(self):
         section_changed = False
         self.rule_ui_structure_changed = False
+        self._draw_manual_vendor_buy_automation_section()
+        PyImGui.separator()
         rule_counts = {
             kind: len(self._get_buy_rule_indices_for_kind(kind))
             for kind in BUY_RULE_WORKSPACE_ORDER
@@ -36033,6 +36551,8 @@ class MerchantRulesWidget:
     def _draw_sell_rules_section(self):
         section_changed = False
         self.rule_ui_structure_changed = False
+        self._draw_manual_vendor_sell_automation_section()
+        PyImGui.separator()
         rule_counts = {
             kind: len(self._get_sell_rule_indices_for_kind(kind))
             for kind in SELL_RULE_WORKSPACE_ORDER
@@ -36209,49 +36729,57 @@ class MerchantRulesWidget:
         self,
         entry: ExecutionPlanEntry,
         item_label: str,
-        *,
-        muted: bool,
     ) -> tuple[float, float, float, float]:
-        action_type = str(entry.action_type)
         merchant_type = str(entry.merchant_type)
         label_text = str(item_label or getattr(entry, "label", "") or "").lower()
         model_id = max(0, _safe_int(getattr(entry, "model_id", 0), 0))
         if model_id <= 0:
             model_id = self._extract_preview_label_model_id(str(getattr(entry, "label", "") or ""))
-        descriptor = str(self._get_model_descriptor(model_id) or "").lower() if model_id > 0 else ""
-        label_and_descriptor = f"{label_text} {descriptor}"
 
-        if merchant_type == MERCHANT_TYPE_TRAVEL or action_type == "travel":
+        if merchant_type == MERCHANT_TYPE_TRAVEL or str(entry.action_type) == "travel":
             return UI_COLOR_INFO
-        if "[scroll]" in label_text or "scroll" in descriptor or merchant_type == MERCHANT_TYPE_SCROLL_TRADER:
-            return UI_COLOR_WARNING
-        if (
-            "[rune]" in label_text
-            or "[insignia]" in label_text
-            or "rune" in descriptor
-            or "insignia" in descriptor
-            or merchant_type == MERCHANT_TYPE_RUNE_TRADER
-        ):
-            return UI_COLOR_PURPLE_ACCENT
-        if (
-            "[material]" in label_text
-            or "material" in descriptor
-            or merchant_type in (MERCHANT_TYPE_MATERIALS, MERCHANT_TYPE_RARE_MATERIALS)
-        ):
-            return UI_COLOR_TEAL
-        if "[weapon]" in label_and_descriptor or "weapon" in descriptor:
-            return UI_COLOR_SUCCESS
-        if "[armor]" in label_and_descriptor or "armor" in descriptor:
-            return UI_COLOR_PURPLE_ACCENT
-        if merchant_type == MERCHANT_TYPE_STORAGE or action_type in ("deposit", "withdraw"):
-            return UI_COLOR_TEAL
-        if action_type == "destroy":
-            return UI_COLOR_DANGER
-        if action_type == "buy":
-            return UI_COLOR_INFO
-        if action_type == "sell":
-            return UI_COLOR_SUCCESS
-        return UI_COLOR_SUBTLE if muted else UI_COLOR_SECONDARY_TEXT
+
+        category_hint = ""
+        has_explicit_item_marker = any(
+            marker in label_text
+            for marker in (
+                "[scroll]",
+                "[rune]",
+                "[insignia]",
+                "[material]",
+                "[weapon]",
+                "[armor]",
+                "[common material]",
+                "[rare material]",
+            )
+        )
+        exact_upgrade_identifier = self._get_exact_rune_identifier_for_display_label(item_label)
+        has_item_identity = model_id > 0 or bool(exact_upgrade_identifier) or has_explicit_item_marker
+        if has_item_identity:
+            if merchant_type == MERCHANT_TYPE_SCROLL_TRADER or "[scroll]" in label_text:
+                category_hint = ITEM_NAME_CATEGORY_KNOWLEDGE
+            elif merchant_type == MERCHANT_TYPE_RUNE_TRADER or "[rune]" in label_text or "[insignia]" in label_text:
+                category_hint = ITEM_NAME_CATEGORY_ARMOR_UPGRADE
+            elif (
+                merchant_type in (MERCHANT_TYPE_MATERIALS, MERCHANT_TYPE_RARE_MATERIALS)
+                or "[material]" in label_text
+                or "[common material]" in label_text
+                or "[rare material]" in label_text
+            ):
+                category_hint = ITEM_NAME_CATEGORY_MATERIAL
+            elif merchant_type == MERCHANT_TYPE_CONSUMABLE_CRAFTER:
+                category_hint = ITEM_NAME_CATEGORY_CONSUMABLE
+            elif "[weapon]" in label_text:
+                category_hint = ITEM_NAME_CATEGORY_WEAPON
+            elif "[armor]" in label_text:
+                category_hint = ITEM_NAME_CATEGORY_ARMOR
+
+        return self._get_item_name_text_color(
+            model_id,
+            exact_upgrade_identifier=exact_upgrade_identifier,
+            display_label=item_label,
+            category_hint=category_hint,
+        )
 
     def _get_preview_note_color(
         self,
@@ -36377,7 +36905,7 @@ class MerchantRulesWidget:
 
                 PyImGui.table_set_column_index(3)
                 item_label = self._format_preview_item_label(entry)
-                item_color = self._get_preview_item_text_color(entry, item_label, muted=muted)
+                item_color = self._get_preview_item_text_color(entry, item_label)
                 PyImGui.text_colored(item_label, item_color)
                 if unavailable_here_reason:
                     self._draw_colored_text(
@@ -36931,17 +37459,13 @@ class MerchantRulesWidget:
             PREVIEW_PLAN_WORKSPACE_PLANNED: max(0, int(planned_count)),
             PREVIEW_PLAN_WORKSPACE_SKIPPED: max(0, int(skipped_count)),
         }
-        colors = {
-            PREVIEW_PLAN_WORKSPACE_PLANNED: UI_COLOR_TAB_ACTIVE,
-            PREVIEW_PLAN_WORKSPACE_SKIPPED: UI_COLOR_WARNING,
-        }
         for tab_index, workspace_id in enumerate(PREVIEW_PLAN_WORKSPACE_ORDER):
             label = PREVIEW_PLAN_WORKSPACE_LABELS.get(workspace_id, workspace_id)
             button_label = f"{label} ({counts[workspace_id]})##merchant_rules_preview_workspace_{workspace_id}"
             if self._draw_workspace_button(
                 button_label,
                 active=self.active_preview_plan_workspace == workspace_id,
-                color=colors.get(workspace_id, UI_COLOR_INFO),
+                color=UI_COLOR_INFO,
             ):
                 self._set_active_preview_plan_workspace(workspace_id)
             if tab_index + 1 < len(PREVIEW_PLAN_WORKSPACE_ORDER):
@@ -37199,21 +37723,51 @@ class MerchantRulesWidget:
                 availability_here=availability_here,
             )
 
-    def _draw_manual_vendor_automation_section(self):
-        self._draw_section_heading("Manual Merchant Automation")
-        changed = False
+    def _format_enabled_rule_count(self, count: int) -> str:
+        safe_count = max(0, int(count))
+        if safe_count <= 0:
+            return "No enabled rules"
+        return f"{safe_count} enabled {'rule' if safe_count == 1 else 'rules'}"
 
-        auto_sell = PyImGui.checkbox(
-            "Auto-sell when I open the right merchant##merchant_rules_manual_vendor_auto_sell",
-            bool(self.auto_sell_on_manual_vendor_interaction),
+    def _draw_manual_vendor_category_checkbox(
+        self,
+        *,
+        action: str,
+        kind: str,
+        label: str,
+        enabled: bool,
+        enabled_rule_count: int,
+    ) -> bool:
+        next_enabled = PyImGui.checkbox(
+            (
+                f"{label} — {self._format_enabled_rule_count(enabled_rule_count)}"
+                f"##merchant_rules_manual_vendor_{action}_{kind}"
+            ),
+            bool(enabled),
         )
-        self._draw_helper_tooltip("manual_vendor_auto_sell")
-        if auto_sell != bool(self.auto_sell_on_manual_vendor_interaction):
-            self.auto_sell_on_manual_vendor_interaction = bool(auto_sell)
-            changed = True
+        self._draw_helper_tooltip(f"manual_vendor_{action}_categories")
+        return bool(next_enabled)
 
+    def _draw_manual_vendor_buy_automation_section(self):
+        flags = _normalize_manual_vendor_category_flags(
+            self.manual_vendor_auto_buy_categories,
+            MANUAL_VENDOR_BUY_CATEGORY_KINDS,
+            field_name="manual_vendor_auto_buy_categories",
+        )
+        enabled_category_count = sum(1 for enabled in flags.values() if enabled)
+        header_label = (
+            "Merchant Window Automation — "
+            f"Auto-buy {'On' if self.auto_buy_on_manual_vendor_interaction else 'Off'} · "
+            f"{enabled_category_count}/{len(MANUAL_VENDOR_BUY_CATEGORY_KINDS)} categories"
+            "###merchant_rules_manual_vendor_buy_section"
+        )
+        if not PyImGui.collapsing_header(header_label):
+            return
+
+        changed = False
         auto_buy = PyImGui.checkbox(
-            "Auto-buy when I open the right merchant##merchant_rules_manual_vendor_auto_buy",
+            "Automatically buy when I open the matching merchant or trader"
+            "##merchant_rules_manual_vendor_auto_buy",
             bool(self.auto_buy_on_manual_vendor_interaction),
         )
         self._draw_helper_tooltip("manual_vendor_auto_buy")
@@ -37221,8 +37775,93 @@ class MerchantRulesWidget:
             self.auto_buy_on_manual_vendor_interaction = bool(auto_buy)
             changed = True
 
+        self._draw_subsection_label("Categories used for automatic buying")
+        for kind in MANUAL_VENDOR_BUY_CATEGORY_KINDS:
+            label = BUY_RULE_WORKSPACE_LABELS.get(kind, BUY_KIND_LABELS.get(kind, kind))
+            next_enabled = self._draw_manual_vendor_category_checkbox(
+                action="buy",
+                kind=kind,
+                label=label,
+                enabled=bool(flags.get(kind, True)),
+                enabled_rule_count=self._get_enabled_buy_rule_count_for_kind(kind),
+            )
+            if next_enabled != bool(flags.get(kind, True)):
+                flags[kind] = next_enabled
+                changed = True
+
+        self.manual_vendor_auto_buy_categories = flags
+        self._draw_subsection_label("Consumable Crafters:")
+        PyImGui.same_line(0, 8)
+        self._draw_inline_badge("Not available here", UI_COLOR_MUTED)
+        self._draw_secondary_text(
+            "Use Preview Plan or Travel + Execute to craft consumables. "
+            "Opening a Consumable Crafter does not start merchant-window automation."
+        )
+        self._draw_secondary_text(
+            "These category switches affect only automatic actions when you open a merchant. "
+            "Preview Plan and normal execution continue using every enabled Buy rule."
+        )
+        self._draw_secondary_text(
+            "Automatic selling is configured under Sell. Buying and selling can run from the same "
+            "merchant window; selling runs first."
+        )
+
+        if changed:
+            self._save_profile()
+
+    def _draw_manual_vendor_sell_automation_section(self):
+        flags = _normalize_manual_vendor_category_flags(
+            self.manual_vendor_auto_sell_categories,
+            MANUAL_VENDOR_SELL_CATEGORY_KINDS,
+            field_name="manual_vendor_auto_sell_categories",
+        )
+        enabled_category_count = sum(1 for enabled in flags.values() if enabled)
+        header_label = (
+            "Merchant Window Automation — "
+            f"Auto-sell {'On' if self.auto_sell_on_manual_vendor_interaction else 'Off'} · "
+            f"{enabled_category_count}/{len(MANUAL_VENDOR_SELL_CATEGORY_KINDS)} categories · "
+            f"Any merchant {'On' if self.auto_sell_to_any_merchant else 'Off'}"
+            "###merchant_rules_manual_vendor_sell_section"
+        )
+        if not PyImGui.collapsing_header(header_label):
+            return
+
+        changed = False
+        auto_sell = PyImGui.checkbox(
+            "Automatically sell when I open the matching merchant or trader"
+            "##merchant_rules_manual_vendor_auto_sell",
+            bool(self.auto_sell_on_manual_vendor_interaction),
+        )
+        self._draw_helper_tooltip("manual_vendor_auto_sell")
+        if auto_sell != bool(self.auto_sell_on_manual_vendor_interaction):
+            self.auto_sell_on_manual_vendor_interaction = bool(auto_sell)
+            changed = True
+
+        self._draw_subsection_label("Categories used for automatic selling")
+        for kind in MANUAL_VENDOR_SELL_CATEGORY_KINDS:
+            label = SELL_RULE_WORKSPACE_LABELS.get(kind, SELL_KIND_LABELS.get(kind, kind))
+            next_enabled = self._draw_manual_vendor_category_checkbox(
+                action="sell",
+                kind=kind,
+                label=label,
+                enabled=bool(flags.get(kind, True)),
+                enabled_rule_count=self._get_enabled_sell_rule_count_for_kind(kind),
+            )
+            if next_enabled != bool(flags.get(kind, True)):
+                flags[kind] = next_enabled
+                changed = True
+
+        self.manual_vendor_auto_sell_categories = flags
+        self._draw_secondary_text(
+            "These category switches affect only automatic actions when you open a merchant. "
+            "Preview Plan and normal execution continue using every enabled Sell rule. "
+            "Protected items always remain protected."
+        )
+
+        self._draw_light_separator()
         any_merchant = PyImGui.checkbox(
-            "Also sell selected items to any merchant##merchant_rules_manual_vendor_any_merchant",
+            "Allow selected sell groups at any regular merchant"
+            "##merchant_rules_manual_vendor_any_merchant",
             bool(self.auto_sell_to_any_merchant),
         )
         self._draw_helper_tooltip("manual_vendor_any_merchant")
@@ -37230,43 +37869,52 @@ class MerchantRulesWidget:
             self.auto_sell_to_any_merchant = bool(any_merchant)
             changed = True
 
-        if self.auto_sell_to_any_merchant:
-            self._draw_warning_text("These items may sell for less than they would at a trader.")
-            normal_items = PyImGui.checkbox(
-                "Normal merchant sell items##merchant_rules_manual_vendor_any_normal",
-                bool(self.auto_sell_any_merchant_normal_items),
-            )
-            self._draw_helper_tooltip("manual_vendor_any_normal")
-            if normal_items != bool(self.auto_sell_any_merchant_normal_items):
-                self.auto_sell_any_merchant_normal_items = bool(normal_items)
-                changed = True
+        self._draw_subsection_label("Groups allowed at a regular merchant")
+        normal_items = PyImGui.checkbox(
+            "Items normally sold to a regular merchant##merchant_rules_manual_vendor_any_normal",
+            bool(self.auto_sell_any_merchant_normal_items),
+        )
+        self._draw_helper_tooltip("manual_vendor_any_normal")
+        if normal_items != bool(self.auto_sell_any_merchant_normal_items):
+            self.auto_sell_any_merchant_normal_items = bool(normal_items)
+            changed = True
 
-            materials = PyImGui.checkbox(
-                "Materials from material trader sell rules##merchant_rules_manual_vendor_any_materials",
-                bool(self.auto_sell_any_merchant_materials),
-            )
-            self._draw_helper_tooltip("manual_vendor_any_materials")
-            if materials != bool(self.auto_sell_any_merchant_materials):
-                self.auto_sell_any_merchant_materials = bool(materials)
-                changed = True
+        materials = PyImGui.checkbox(
+            "Materials normally sold to a material trader##merchant_rules_manual_vendor_any_materials",
+            bool(self.auto_sell_any_merchant_materials),
+        )
+        self._draw_helper_tooltip("manual_vendor_any_materials")
+        if materials != bool(self.auto_sell_any_merchant_materials):
+            self.auto_sell_any_merchant_materials = bool(materials)
+            changed = True
 
-            runes = PyImGui.checkbox(
-                "Runes and insignias from rune trader sell rules##merchant_rules_manual_vendor_any_runes",
-                bool(self.auto_sell_any_merchant_runes),
-            )
-            self._draw_helper_tooltip("manual_vendor_any_runes")
-            if runes != bool(self.auto_sell_any_merchant_runes):
-                self.auto_sell_any_merchant_runes = bool(runes)
-                changed = True
+        runes = PyImGui.checkbox(
+            "Runes and insignias normally sold to a Rune Trader"
+            "##merchant_rules_manual_vendor_any_runes",
+            bool(self.auto_sell_any_merchant_runes),
+        )
+        self._draw_helper_tooltip("manual_vendor_any_runes")
+        if runes != bool(self.auto_sell_any_merchant_runes):
+            self.auto_sell_any_merchant_runes = bool(runes)
+            changed = True
 
+        if (
+            self.auto_sell_to_any_merchant
+            and self._manual_vendor_any_merchant_lower_price_groups_enabled()
+        ):
             self._draw_warning_text(
-                "Scrolls and other trader items are skipped because Merchant Rules does not currently have sell rules for them.",
+                "Materials, runes, and insignias may sell for less at a regular merchant "
+                "than at their matching trader."
+            )
+        if self.auto_sell_to_any_merchant:
+            self._draw_secondary_text(
+                "Merchant Rules has no Sell section for scrolls or other trader items, so they are not included."
             )
 
-        if self.manual_vendor_running:
-            PyImGui.text_colored("Manual merchant automation is running.", UI_COLOR_INFO)
-        elif self.last_manual_vendor_summary:
-            self._draw_secondary_text(self.last_manual_vendor_summary)
+        self._draw_secondary_text(
+            "Automatic buying is configured under Buy. Buying and selling can run from the same "
+            "merchant window; selling runs first."
+        )
 
         if changed:
             self._save_profile()
@@ -37310,8 +37958,6 @@ class MerchantRulesWidget:
         )
 
     def _draw_overview_automation_section(self):
-        self._draw_manual_vendor_automation_section()
-        PyImGui.separator()
         self._draw_inventory_shortcut_settings_section()
 
     def _get_profiles_matching_live_config(
@@ -37362,21 +38008,21 @@ class MerchantRulesWidget:
         if is_loaded_source and include_loaded_source:
             badges.append(
                 (
-                    "Loaded Source",
+                    "Last Loaded",
                     UI_COLOR_INFO,
-                    "This exact scope and stable key were last loaded explicitly into the active account.",
+                    "This is the saved profile you most recently loaded for this account.",
                 )
             )
 
         matches_live = profile.serialized_payload == current_payload_serialized
         badges.append(
             (
-                "Matches Live" if matches_live else "Different",
+                "Matches Current" if matches_live else "Different from Current",
                 UI_COLOR_SUCCESS if matches_live else UI_COLOR_WARNING,
                 (
-                    "This saved profile's normalized settings match the current live configuration."
+                    "This profile has the same Merchant Rules settings you are using now."
                     if matches_live
-                    else "This saved profile's normalized settings differ from the current live configuration."
+                    else "This profile does not match your current Merchant Rules settings."
                 ),
             )
         )
@@ -37388,18 +38034,18 @@ class MerchantRulesWidget:
             if current_fingerprint != provenance.normalized_content_fingerprint:
                 badges.append(
                     (
-                        "Modified from Loaded Source",
+                        "Changed Since Loading",
                         UI_COLOR_WARNING,
-                        "The live configuration differs from the normalized settings recorded "
-                        "when this profile was loaded.",
+                        "Your current settings no longer match the settings this profile had when you loaded it.",
                     )
                 )
             if self.profile_document_reload_failed[profile.scope]:
                 badges.append(
                     (
-                        "Source Unavailable",
+                        "Could Not Verify",
                         UI_COLOR_DANGER,
-                        "The source document could not be refreshed; the last readable profile metadata is shown.",
+                        "Merchant Rules could not refresh this profile. "
+                        "The last version it could read is shown.",
                     )
                 )
 
@@ -37428,13 +38074,14 @@ class MerchantRulesWidget:
         self,
         current_payload_serialized: str,
     ):
-        self._draw_section_heading("Live Configuration")
+        self._draw_section_heading("Current Settings")
         self._draw_hover_tooltip(
-            "The live configuration is the active account's auto-saved working copy. "
-            "A loaded source is exact provenance; matching profiles are content-equivalent snapshots."
+            "These are the Merchant Rules settings currently used by this account. "
+            "The last loaded profile is the saved profile you loaded most recently. "
+            "Other profiles may have the same settings without having been loaded."
         )
         self._draw_selected_profile_detail_line(
-            "Active Account:",
+            "Current Account:",
             str(self.account_key or "Unknown"),
             UI_COLOR_INFO,
         )
@@ -37445,23 +38092,23 @@ class MerchantRulesWidget:
         )
         if provenance is None:
             self._draw_selected_profile_detail_line(
-                "Loaded Source:",
-                "No recorded loaded profile",
+                "Last Loaded Profile:",
+                "Unknown",
                 UI_COLOR_MUTED,
             )
             self._draw_hover_tooltip(
-                "No exact saved-profile scope and stable key are associated with this live configuration."
+                "Merchant Rules does not have a record of which profile was last loaded for this account."
             )
             if matching_profiles:
                 self._draw_selected_profile_detail_line(
-                    "Live State:",
-                    "Matches saved profile contents, but no exact loaded source is recorded",
+                    "Status:",
+                    "Current settings match one or more saved profiles, but the last loaded profile is unknown",
                     UI_COLOR_SUCCESS,
                 )
             else:
                 self._draw_selected_profile_detail_line(
-                    "Live State:",
-                    "Custom live configuration",
+                    "Status:",
+                    "Current settings do not match any saved profile",
                     UI_COLOR_WARNING,
                 )
         else:
@@ -37471,18 +38118,15 @@ class MerchantRulesWidget:
                 if source is not None
                 else provenance.display_name_snapshot
             )
-            self._draw_colored_text("Loaded Source:", UI_COLOR_WARNING_SOFT, wrapped=False)
-            PyImGui.same_line(0, 6)
-            self._draw_profile_status_badge(
-                "Loaded Source",
-                UI_COLOR_INFO,
-                "This exact scope and stable key were last loaded explicitly into the active account.",
-            )
+            self._draw_colored_text("Last Loaded Profile:", UI_COLOR_WARNING_SOFT, wrapped=False)
             PyImGui.same_line(0, 6)
             self._draw_colored_text(
                 f"[{self._profile_scope_badge(provenance.source_identity.scope)}] {source_name}",
                 UI_COLOR_INFO,
                 wrapped=False,
+            )
+            self._draw_hover_tooltip(
+                "This is the saved profile you most recently loaded for this account."
             )
 
             source_document_unavailable = self.profile_document_reload_failed[
@@ -37490,13 +38134,14 @@ class MerchantRulesWidget:
             ]
             if source is None:
                 self._draw_profile_status_badge(
-                    "Source Unavailable",
+                    "Profile Unavailable",
                     UI_COLOR_DANGER,
-                    "The saved source is missing, unreadable, or future-versioned.",
+                    "Merchant Rules can no longer find or read this profile. "
+                    "It may have been deleted or saved by a newer version.",
                 )
                 PyImGui.same_line(0, 6)
                 self._draw_colored_text(
-                    "Source profile unavailable",
+                    "Last loaded profile is currently unavailable",
                     UI_COLOR_DANGER,
                     wrapped=False,
                 )
@@ -37505,10 +38150,9 @@ class MerchantRulesWidget:
                 )
                 if live_fingerprint != provenance.normalized_content_fingerprint:
                     self._draw_profile_status_badge(
-                        "Modified from Loaded Source",
+                        "Changed Since Loading",
                         UI_COLOR_WARNING,
-                        "The live configuration differs from the normalized settings recorded "
-                        "when the unavailable profile was loaded.",
+                        "Your current settings no longer match the settings that were loaded from this profile.",
                     )
             elif source_document_unavailable:
                 self._draw_profile_relationship_badges(
@@ -37517,7 +38161,8 @@ class MerchantRulesWidget:
                     include_loaded_source=False,
                 )
                 self._draw_secondary_text(
-                    "The source document could not be refreshed; relationship badges use the last readable copy."
+                    "Merchant Rules could not refresh this profile. "
+                    "Its status is based on the last version Merchant Rules could read."
                 )
             else:
                 self._draw_profile_relationship_badges(
@@ -37536,34 +38181,34 @@ class MerchantRulesWidget:
                     and live_fingerprint == provenance.normalized_content_fingerprint
                 ):
                     self._draw_secondary_text(
-                        "The saved source changed after it was loaded; the live configuration still matches "
-                        "the recorded loaded contents."
+                        "This saved profile has changed since you loaded it. "
+                        "Your current settings still match the version you loaded."
                     )
                 elif (
                     source_fingerprint != provenance.normalized_content_fingerprint
                     and live_fingerprint != provenance.normalized_content_fingerprint
                 ):
                     self._draw_secondary_text(
-                        "Both the live configuration and the saved source differ from the recorded loaded contents."
+                        "This saved profile and your current settings have both changed since the profile was loaded."
                     )
 
         if not matching_profiles:
             self._draw_selected_profile_detail_line(
-                "Saved Matches:",
-                "No saved profile matches",
+                "Matching Saved Profiles:",
+                "No saved profile matches your current settings",
                 UI_COLOR_MUTED,
             )
         elif len(matching_profiles) == 1:
             self._draw_selected_profile_detail_line(
-                "Saved Match:",
+                "Matching Saved Profile:",
                 self._format_profile_reference(matching_profiles[0]),
                 UI_COLOR_SUCCESS,
             )
         else:
             self._draw_selected_profile_detail_line(
-                "Saved Matches:",
+                "Matching Saved Profiles:",
                 (
-                    f"Matches multiple saved profiles ({len(matching_profiles)}): "
+                    f"{len(matching_profiles)} saved profiles match your current settings: "
                     f"{self._format_profile_reference_list(matching_profiles)}"
                 ),
                 UI_COLOR_SUCCESS,
@@ -37577,7 +38222,7 @@ class MerchantRulesWidget:
             ]
             if other_matches:
                 self._draw_selected_profile_detail_line(
-                    "Other Matches:",
+                    "Other Profiles with the Same Settings:",
                     self._format_profile_reference_list(other_matches),
                     UI_COLOR_TEAL,
                 )
@@ -37585,11 +38230,12 @@ class MerchantRulesWidget:
         if self.loaded_profile_provenance_warning:
             self._draw_warning_text(self.loaded_profile_provenance_warning)
         if self.profile_warning:
-            self._draw_warning_text(f"Live Config: {self.profile_warning}")
+            self._draw_warning_text(f"Current Settings: {self.profile_warning}")
         elif self.profile_notice:
-            self._draw_secondary_text(f"Live Config: {self.profile_notice}")
+            self._draw_secondary_text(f"Current Settings: {self.profile_notice}")
         self._draw_secondary_text(
-            "Saved profiles exclude Merchant Rules window geometry. Loading preserves this workspace and geometry."
+            "Profiles do not save this window's position or size. "
+            "Loading a profile keeps this window and the Profiles tab as they are."
         )
 
     def _draw_overview_section(self):
@@ -37618,25 +38264,26 @@ class MerchantRulesWidget:
         self._draw_section_heading(self._profile_scope_label(scope))
         if scope == PROFILE_SCOPE_SHARED:
             self._draw_warning_text(
-                "Shared profile saves, overwrites, renames, deletes, and copies into this section affect every account."
+                "Shared profiles are available to every account. Saving, replacing, renaming, deleting, "
+                "or copying a profile into Shared affects every account."
             )
             self._draw_secondary_text(
-                "Loading a Shared profile changes only the active account's live configuration. "
-                "Shared mutations remain version-checked, saved, and verified immediately."
+                "Loading a Shared profile changes only this account's current settings. "
+                "It does not load that profile for other accounts."
             )
         else:
             self._draw_secondary_text(
-                "Account profiles, the live configuration, loaded-source provenance, and Restore Backup are visible "
-                "only to the active account."
+                "Account profiles, current settings, and Restore Backup are available only to this account. "
+                "This account also keeps its own record of the last profile loaded."
             )
 
         warning = self.saved_profile_warnings[scope]
         notice = self.saved_profile_notices[scope]
         scan_warning = self.saved_profile_scan_warnings[scope]
         if warning:
-            self._draw_warning_text(f"[{scope_badge}] {warning}")
+            self._draw_warning_text(warning)
         elif notice:
-            self._draw_secondary_text(f"[{scope_badge}] {notice}")
+            self._draw_secondary_text(notice)
         if scan_warning:
             self._draw_warning_text(scan_warning)
 
@@ -37651,7 +38298,7 @@ class MerchantRulesWidget:
             if refreshed:
                 self._set_saved_profile_feedback(
                     scope,
-                    notice=f"Refreshed [{scope_badge}] profiles.",
+                    notice=f"{scope_badge.title()} profiles refreshed.",
                 )
             if scope == PROFILE_SCOPE_SHARED:
                 self.shared_profile_refresh_timer.Reset()
@@ -37666,7 +38313,7 @@ class MerchantRulesWidget:
 
         PyImGui.same_line(0, 8)
         self._draw_colored_text(
-            f"{len(entries)} [{scope_badge}] profile(s)",
+            f"{len(entries)} {scope_badge.title()} profile{'s' if len(entries) != 1 else ''}",
             UI_COLOR_INFO if entries else UI_COLOR_MUTED,
             wrapped=False,
         )
@@ -37680,9 +38327,12 @@ class MerchantRulesWidget:
             PyImGui.WindowFlags.NoFlag,
         ):
             if not entries:
-                self._draw_secondary_text(
-                    f"No [{scope_badge}] profiles saved yet. Enter a name below to create one."
+                empty_text = (
+                    "No Shared profiles saved yet. Enter a name below to create one."
+                    if scope == PROFILE_SCOPE_SHARED
+                    else "No profiles have been saved for this account yet. Enter a name below to create one."
                 )
+                self._draw_secondary_text(empty_text)
             else:
                 for index, entry in enumerate(entries):
                     row_hash = md5(
@@ -37709,12 +38359,11 @@ class MerchantRulesWidget:
         PyImGui.separator()
         self._draw_subsection_heading("Selected Profile")
         self._draw_hover_tooltip(
-            "Selection controls which saved profile the actions below target. "
-            "It does not change the loaded source until Load Selected succeeds."
+            "The selected profile is the one the buttons below will use. Selecting a profile does not load it."
         )
         if selected_profile is None:
             self._draw_secondary_text(
-                f"Select a [{scope_badge}] profile to load, rename, overwrite, copy, or delete."
+                "Select a profile to load, rename, replace, copy, or delete."
             )
         else:
             self._draw_selected_profile_detail_line(
@@ -37729,7 +38378,7 @@ class MerchantRulesWidget:
                     UI_COLOR_INFO,
                 )
             self._draw_colored_text(
-                "Relationship:",
+                "Status:",
                 UI_COLOR_WARNING_SOFT,
                 wrapped=False,
             )
@@ -37748,12 +38397,13 @@ class MerchantRulesWidget:
             self.profile_name_input_dirty[scope] = True
 
         self._draw_secondary_text(
-            "This field names a new profile or renames the selected profile. Stable identity does not change on rename."
+            "Use this name when creating a profile or renaming the selected profile. "
+            "Renaming does not create a new profile."
         )
 
-        self._draw_subsection_heading("Live Configuration to Saved Profile")
+        self._draw_subsection_heading("Save Current Settings")
         self._draw_hover_tooltip(
-            "Create a new saved snapshot or replace the selected saved profile with the current live settings."
+            "Create a new profile from your current settings, or replace the selected profile with them."
         )
         save_new_label = (
             "Save as Shared — All Accounts"
@@ -37778,19 +38428,22 @@ class MerchantRulesWidget:
         PyImGui.same_line(0, 8)
         if selected_profile is not None:
             overwrite_clicked, overwrite_fingerprint = self._draw_confirm_profile_action_button(
-                f"Save Current Over Selected##merchant_rules_{scope_id}_profile_overwrite",
+                f"Replace Selected Profile##merchant_rules_{scope_id}_profile_overwrite",
                 "overwrite",
                 selected_profile,
             )
         else:
             PyImGui.button(
-                f"Save Current Over Selected##merchant_rules_{scope_id}_profile_overwrite"
+                f"Replace Selected Profile##merchant_rules_{scope_id}_profile_overwrite"
             )
         PyImGui.end_disabled()
-
-        self._draw_subsection_heading("Saved Profile to Live Configuration")
         self._draw_hover_tooltip(
-            "Load the selected saved profile into only the active account's auto-saved live configuration."
+            "Replace the selected profile with your current Merchant Rules settings."
+        )
+
+        self._draw_subsection_heading("Load a Saved Profile")
+        self._draw_hover_tooltip(
+            "Use the selected profile as this account's current Merchant Rules settings."
         )
         PyImGui.begin_disabled(selected_profile is None)
         if selected_profile is not None:
@@ -37806,7 +38459,8 @@ class MerchantRulesWidget:
 
         self._draw_subsection_heading("Profile Management")
         self._draw_hover_tooltip(
-            "Rename, copy, or delete the selected saved profile without changing loaded-source provenance."
+            "Rename, copy, or delete the selected profile. "
+            "These actions do not change which profile was last loaded."
         )
         PyImGui.begin_disabled(selected_profile is None)
         if selected_profile is not None and scope == PROFILE_SCOPE_SHARED:
@@ -37903,11 +38557,12 @@ class MerchantRulesWidget:
                 "##merchant_rules_profiles_scope_account"
             ),
             active=self.active_profiles_scope == PROFILE_SCOPE_ACCOUNT,
-            color=UI_COLOR_TEAL,
+            color=UI_COLOR_INFO,
         ):
             self._set_active_profiles_scope(PROFILE_SCOPE_ACCOUNT)
         self._draw_hover_tooltip(
-            "Account profiles, live configuration, backup, and loaded-source provenance belong only to this account."
+            "Profiles in this tab are available only to this account. This account also keeps its own "
+            "current settings, backup, and record of the last profile loaded."
         )
         PyImGui.same_line(0, 8)
         if self._draw_workspace_button(
@@ -37921,7 +38576,8 @@ class MerchantRulesWidget:
         ):
             self._set_active_profiles_scope(PROFILE_SCOPE_SHARED)
         self._draw_hover_tooltip(
-            "Shared saved-profile mutations affect all accounts, while loading changes only the active account."
+            "Changes to Shared profiles are seen by every account. "
+            "Loading one changes only this account's current settings."
         )
 
         PyImGui.separator()
@@ -37937,7 +38593,7 @@ class MerchantRulesWidget:
 
         PyImGui.separator()
         if PyImGui.collapsing_header(
-            "Live Config & Recovery Details##merchant_rules_live_config_recovery"
+            "Storage & Recovery Details##merchant_rules_live_config_recovery"
         ):
             self._draw_live_config_recovery_section()
 
@@ -37957,11 +38613,11 @@ class MerchantRulesWidget:
         ):
             self.active_rules_workspace = RULES_WORKSPACE_CLEANUP
 
-        if self._draw_workspace_button("Buy", active=self.active_rules_workspace == RULES_WORKSPACE_BUY, color=UI_COLOR_TAB_ACTIVE):
+        if self._draw_workspace_button("Buy", active=self.active_rules_workspace == RULES_WORKSPACE_BUY, color=UI_COLOR_INFO):
             self._set_active_rules_workspace(RULES_WORKSPACE_BUY)
         self._draw_helper_tooltip("workspace_rules_buy")
         PyImGui.same_line(0, 8)
-        if self._draw_workspace_button("Sell", active=self.active_rules_workspace == RULES_WORKSPACE_SELL, color=UI_COLOR_TAB_ACTIVE):
+        if self._draw_workspace_button("Sell", active=self.active_rules_workspace == RULES_WORKSPACE_SELL, color=UI_COLOR_INFO):
             self._set_active_rules_workspace(RULES_WORKSPACE_SELL)
         self._draw_helper_tooltip("workspace_rules_sell")
         PyImGui.same_line(0, 8)
@@ -37969,17 +38625,17 @@ class MerchantRulesWidget:
             self._set_active_rules_workspace(RULES_WORKSPACE_IDENTIFY)
         self._draw_helper_tooltip("workspace_rules_identify")
         PyImGui.same_line(0, 8)
-        if self._draw_workspace_button("Salvage", active=self.active_rules_workspace == RULES_WORKSPACE_SALVAGE, color=UI_COLOR_TEAL):
-            self._set_active_rules_workspace(RULES_WORKSPACE_SALVAGE)
-        self._draw_helper_tooltip("workspace_rules_salvage")
-        PyImGui.same_line(0, 8)
         if self._draw_workspace_button(CLEANUP_WORKSPACE_LABEL, active=self.active_rules_workspace == RULES_WORKSPACE_CLEANUP, color=UI_COLOR_INFO):
             self._set_active_rules_workspace(RULES_WORKSPACE_CLEANUP)
         self._draw_helper_tooltip("workspace_rules_cleanup")
         PyImGui.same_line(0, 8)
-        if self._draw_workspace_button("Protections", active=self.active_rules_workspace == RULES_WORKSPACE_PROTECTIONS, color=UI_COLOR_INFO):
+        if self._draw_workspace_button("Protections", active=self.active_rules_workspace == RULES_WORKSPACE_PROTECTIONS, color=UI_COLOR_SUCCESS):
             self._set_active_rules_workspace(RULES_WORKSPACE_PROTECTIONS)
         self._draw_helper_tooltip("workspace_rules_protections")
+        PyImGui.same_line(0, 8)
+        if self._draw_workspace_button("Salvage", active=self.active_rules_workspace == RULES_WORKSPACE_SALVAGE, color=UI_COLOR_WARNING):
+            self._set_active_rules_workspace(RULES_WORKSPACE_SALVAGE)
+        self._draw_helper_tooltip("workspace_rules_salvage")
         PyImGui.same_line(0, 8)
         if self._draw_workspace_button("Destroy", active=self.active_rules_workspace == RULES_WORKSPACE_DESTROY, color=UI_COLOR_DANGER):
             self._set_active_rules_workspace(RULES_WORKSPACE_DESTROY)
@@ -38043,7 +38699,7 @@ class MerchantRulesWidget:
         if self._draw_workspace_button(
             "Overview##merchant_rules_workspace_overview",
             active=self.active_workspace == WORKSPACE_OVERVIEW,
-            color=UI_COLOR_TAB_ACTIVE,
+            color=UI_COLOR_INFO,
         ):
             self._set_active_workspace(WORKSPACE_OVERVIEW)
         self._draw_helper_tooltip("workspace_overview")
@@ -38051,7 +38707,7 @@ class MerchantRulesWidget:
         if self._draw_workspace_button(
             "Preview Plan##merchant_rules_workspace_preview_plan",
             active=self.active_workspace == WORKSPACE_PREVIEW_PLAN,
-            color=UI_COLOR_TAB_ACTIVE,
+            color=UI_COLOR_INFO,
         ):
             self._set_active_workspace(WORKSPACE_PREVIEW_PLAN)
         self._draw_helper_tooltip("workspace_preview_plan")
@@ -38059,7 +38715,7 @@ class MerchantRulesWidget:
         if self._draw_workspace_button(
             "Rules##merchant_rules_workspace_rules",
             active=self.active_workspace == WORKSPACE_RULES,
-            color=UI_COLOR_TAB_ACTIVE,
+            color=UI_COLOR_INFO,
         ):
             self._set_active_workspace(WORKSPACE_RULES)
         self._draw_helper_tooltip("workspace_rules")
