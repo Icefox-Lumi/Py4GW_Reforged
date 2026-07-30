@@ -245,7 +245,151 @@ The frame inspectors lose their "type an alias and save it" box. Hand-naming fra
 workaround for not knowing what the game calls them; the name tables answer that now, so the
 inspectors show engine name / registry key / alias and offer *Copy Registry Key* instead.
 
-## 12. Open items
+## 12. Redesign - the class handles, scripts ask
+
+The first two attempts produced a **locator that hands out ids**, not a handler.
+Measured across live code, outside the package:
+
+| scripts doing the class's job | sites | files |
+| --- | --- | --- |
+| `frame_id` leaves the class | 335 | 42 |
+| `from_hash` / `from_id` raw addressing | 333 | 45 |
+| `parent()` / `parent_id` tree walking | 51 | 14 |
+| bind a handle only to test it once | 26 | 15 |
+| `.raw` snapshot pulled out | 11 | 6 |
+| guard-then-act (`if exists: click`) | 8 | 4 |
+| `try/except FrameKeyError` in a script | 4 | 4 |
+
+The escape hatches *were* the failure. `from_hash` was documented as "use only
+where the path is not knowable statically", which legitimised every indexed loop
+building its own offset list. `frame_id` being public meant 335 places could step
+around the class entirely.
+
+### What the 335 id reads are actually for
+
+Categorised, none of them needs an integer:
+
+| real need | today | redesign |
+| --- | --- | --- |
+| unique ImGui widget suffix (~50) | `f"...##{f.frame_id}"` | `f.widget_id` - opaque stable token |
+| key a dict / list (162) | `d[f.frame_id]` | `d[f]` - Frame is hashable |
+| hold a reference (35) | `self.x = f.frame_id` | `self.x = f` |
+| re-wrap into a handle (32) | `Frame.from_id(f.frame_id)` | `f` |
+| return across an API (30) | `-> int` | `-> Frame` |
+| identify in a log (108) | `f"{f.frame_id}"` | `str(f)` -> `describe()` |
+| existence test (8) | `id != 0` | `f.exists` |
+
+### Rules
+
+1. **No ids escape.** `frame_id`, `from_id`, `from_hash`, `raw`, `parent_id`
+   become package-internal. A script cannot obtain one, so it cannot route
+   around the class.
+2. **Every operation is total.** No read raises and no action needs a guard:
+   `click()` already no-ops when unusable, `coords()` returns zeros, `text()`
+   returns `""`. `if x.exists: x.click()` collapses to `x.click()`.
+3. **One readiness question.** `is_usable`. Callers never compose
+   `exists and is_visible` themselves.
+4. **Lookup never throws at a script.** An unknown key yields an inert handle,
+   not `FrameKeyError`. The 4 `try/except` sites disappear.
+5. **Indexed access is named.** `Frame.skill(i)`, `Frame.bag_slot(bag, slot)`,
+   `Frame.storage_slot(tab, slot)`, `Frame.party_member(i)`. The offset
+   arithmetic - including the outpost/explorable party split - lives inside the
+   package. Loops never build a code list.
+6. **Frame is a value type.** `__eq__`, `__hash__`, `__str__`, `__bool__` so it
+   can be stored, compared, keyed and printed without unwrapping.
+
+### Consequence
+
+`Frame` stops being a name resolver with a proxy layer and becomes the only
+thing that can *do* anything to a frame. The measure of success is that
+`grep -r '\.frame_id' --include=*.py` outside the package returns nothing.
+
+## 13. Migration progress
+
+**Stage 1 - the class handles (done).**
+
+- 11 named accessors take domain arguments only, so no caller builds a code
+  list: `skill`, `hero_skill`, `bag_slot`, `inventory_bag`, `inventory_bag_slot`,
+  `storage_tab`, `storage_slot`, `material_slot`, `party_member`, `effect`,
+  `dialog_option`. Verified offline to reproduce the paths the scripts built by
+  hand, including the outpost/explorable party split.
+- `raw` deleted. `fields()` replaces it: every scalar the engine exposes, as
+  data, with `relation.*` and `position.*` flattened in. Testers inspect
+  everything without ever holding the object.
+- `relation` deleted. `siblings()` returns handles, not the engine's id list.
+- `parameters` surfaces the `0x84` slot as a plain list.
+- Reads are total - a stale id yields empty/zero rather than raising, so a frame
+  inspector can never abort an ImGui frame mid-render.
+
+Verified across the tree, excluding the package and `UI_RE/`:
+
+| check | result |
+| --- | --- |
+| `Frame(...).raw` | 0 |
+| raw `relation.` traversal | 0 |
+| `PyUIManager.UIFrame(` constructed | 0 |
+| repo parses | 1442 files, 1 pre-existing failure (`LootEx/gui.py`) |
+| `frame.py` under pyright | clean |
+
+**Stage 2 - `Py4GWCoreLib` (done).** All 12 raw-addressing sites removed: the
+NPC dialog hash, the inventory / storage / material builders, three bag-slot
+helpers and one backpack path. Inventory's five `_get_*_frame_id() -> int`
+helpers now return `Frame`, so callers stopped re-wrapping ids.
+
+**Stage 3 - `Widgets` / `Sources` / `HeroAI` / `Examples` (raw addressing done).**
+40 sites migrated onto named accessors. Two more accessors were added from real
+call sites - `trainer_skill(skill_id)` and `capture_skill(attribute, skill_id)` -
+plus `party_list()`.
+
+Raw hash addressing across the tree:
+
+| area | `from_hash` |
+| --- | --- |
+| `Py4GWCoreLib` | 0 |
+| `Widgets` | 0 |
+| `HeroAI` | 0 |
+| `Examples` | 0 |
+| `Sources` | 3 (blocked, below) |
+
+Two sites are genuine *discovery* code - the InventoryPlus layout probe and the
+LootEx salvage scan - and cannot name a path they are searching for. They now
+anchor on a registered window and walk relative codes via `find_child`, so no
+hash appears, but they remain the one legitimate exception to "address by name".
+
+**Stage 4 - ids (done).** 320 -> 10, and all 10 are deliberate.
+
+Classification, because the raw count conflated three different things:
+
+| | count | a bypass? |
+| --- | --- | --- |
+| internal bookkeeping | 31 | no - dict/sort keys inside the module that built them |
+| tester tier | ~150 | no - those tools take a frame id as user input |
+| genuine escapes | **10** | see below |
+
+The 10 that remain:
+
+| what | count | why it stays |
+| --- | --- | --- |
+| salvage yes/no paths | 3 | **blocked** - needs a live dump |
+| `Map.GetFrame()` conversions | 4 | the id arrives from a **native context struct**; this is the boundary and the right place to convert |
+| `Inventory` entry graph | 2 | ids used as keys inside the module that built them from handles |
+| `CHEST_FRAME_ID` fallback | 1 | a hardcoded last-resort frame id constant |
+
+Nothing outside the package obtains a frame id in order to act on a frame.
+
+Converted this stage: all three copies of the dialog pipeline; `FramePosition`,
+`FrameCoords`, `GUI_Helpers.Frame` and the io-event registry now hold handles;
+`DrawFramedContent`, `_click_frame`, `_frame_exists`, `IsElementVisible`,
+`iter_frame_click`, `RegisterFrameIOEventCallback`, `GetIOEventsForFrame` take
+handles; `Frame.widget_id` replaced ids in ImGui suffixes and `__str__` replaced
+them in log text.
+
+Bugs found and fixed while doing it: a hash passed to `from_id` (the Xunlai
+overlay never resolved), infinite recursion in `GUI_Helpers.Frame._handle`, two
+stale call sites left by earlier renames in `MerchantRules`, `mouse_action()`
+called on an int, and several orphaned fields after signature changes.
+
+## 14. Open items
 
 1. **Verification deferred.** Named frames could self-verify for free (frame carries its
    hash; `StrHashI(name)` must match). Anonymous frames would need declared expected child

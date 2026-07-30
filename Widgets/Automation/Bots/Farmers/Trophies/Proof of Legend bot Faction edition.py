@@ -251,7 +251,7 @@ def QuestDialog(
 
     def _cancel_skill_reward_window() -> BehaviorTree.NodeState:
         cancel_button_frame_id = Frame(FrameId.CancelButton)
-        if cancel_button_frame_id.frame_id and cancel_button_frame_id.exists:
+        if cancel_button_frame_id.exists:
             cancel_button_frame_id.click()
         return BehaviorTree.NodeState.SUCCESS
 

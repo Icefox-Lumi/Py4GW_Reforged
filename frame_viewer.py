@@ -60,19 +60,9 @@ class ViewerState:
 
         try:
             self.frame_ids = list(FrameTree.all_ids())
-            new_frames = {}
-            for fid in self.frame_ids:
-                try:
-                    frame = self.frames.get(fid)
-                    if frame is None:
-                        frame = Frame.from_id(fid).raw
-                    else:
-                        frame.get_context()
-                    new_frames[fid] = frame
-                except Exception:
-                    continue
-
-            self.frames = new_frames
+            # handles refresh themselves on the tick boundary, so there is no
+            # cache to maintain and no get_context() to call
+            self.frames = {fid: Frame.from_id(fid) for fid in self.frame_ids}
             self._rebuild_tree()
             self._rebuild_runtime_paths()
             try:
@@ -120,7 +110,7 @@ class ViewerState:
                 cache[fid] = ""
                 return ""
 
-            frame_hash = int(getattr(frame, "frame_hash", 0) or 0)
+            frame_hash = int(getattr(frame, "hash", 0) or 0)
             if frame_hash:
                 cache[fid] = str(frame_hash)
                 return cache[fid]
@@ -144,7 +134,7 @@ class ViewerState:
                 if parent is None:
                     cache[fid] = ""
                     return ""
-                parent_hash = int(getattr(parent, "frame_hash", 0) or 0)
+                parent_hash = int(getattr(parent, "hash", 0) or 0)
                 if parent_hash:
                     cache[fid] = f"{parent_hash}," + ",".join(reversed(offsets))
                     return cache[fid]
@@ -158,7 +148,7 @@ class ViewerState:
         self.runtime_paths = cache
 
     def count_hashed(self):
-        return sum(1 for f in self.frames.values() if int(getattr(f, "frame_hash", 0) or 0) != 0)
+        return sum(1 for f in self.frames.values() if int(getattr(f, "hash", 0) or 0) != 0)
 
     def count_visible(self):
         return sum(1 for f in self.frames.values() if bool(getattr(f, "is_visible", False)))
@@ -185,14 +175,14 @@ class ViewerState:
     def repeated_hashes(self):
         counts = {}
         for f in self.frames.values():
-            h = int(getattr(f, "frame_hash", 0) or 0)
+            h = int(getattr(f, "hash", 0) or 0)
             if h:
                 counts[h] = counts.get(h, 0) + 1
         return {h: c for h, c in counts.items() if c > 1}
 
     def identified_alias(self, frame):
         frame_id = int(getattr(frame, "frame_id", 0) or 0)
-        h = int(getattr(frame, "frame_hash", 0) or 0)
+        h = int(getattr(frame, "hash", 0) or 0)
         if h and h in self.hash_aliases:
             alias = str(self.hash_aliases[h]).strip()
             if alias:
@@ -211,7 +201,7 @@ class ViewerState:
     def node_color(self, frame) -> Color:
         created = bool(getattr(frame, "is_created", False))
         visible = bool(getattr(frame, "is_visible", False))
-        hashed = int(getattr(frame, "frame_hash", 0) or 0) != 0
+        hashed = int(getattr(frame, "hash", 0) or 0) != 0
         alias, source = self.identified_alias(frame)
         identified = bool(alias)
 
@@ -286,7 +276,7 @@ def _toggle_card(fid: int):
 
 
 def _compact_node_label(fid: int, frame):
-    frame_hash = int(getattr(frame, "frame_hash", 0) or 0)
+    frame_hash = int(getattr(frame, "hash", 0) or 0)
     alias, alias_kind = state.identified_alias(frame)
     if alias:
         base = f"{alias}"
@@ -350,7 +340,7 @@ def _draw_frame_card(fid: int):
     f = state.frames[fid]
     alias, alias_kind = state.identified_alias(f)
     runtime_path = state.runtime_paths.get(fid, "")
-    frame_hash = int(getattr(f, "frame_hash", 0) or 0)
+    frame_hash = int(getattr(f, "hash", 0) or 0)
     title = alias if alias else f"Frame {fid}"
     title = f"{title}##frame_card_{fid}"
 
@@ -388,12 +378,8 @@ def _draw_frame_card(fid: int):
     PyImGui.text(f"Type: {int(getattr(f, 'type', 0) or 0)}")
     PyImGui.text(f"Template Type: {int(getattr(f, 'template_type', 0) or 0)}")
     PyImGui.text(f"Visibility Flags: {int(getattr(f, 'visibility_flags', 0) or 0)}")
-    try:
-        rel = f.relation
-        PyImGui.text(f"Relation Parent ID: {int(getattr(rel, 'parent_id', 0) or 0)}")
-        PyImGui.text(f"Relation Hash ID: {int(getattr(rel, 'frame_hash_id', 0) or 0)}")
-    except Exception:
-        pass
+    PyImGui.text(f"Relation Parent: {f.parent_id}")
+    PyImGui.text(f"Relation Hash ID: {f.hash}")
     try:
         pos = f.position
         PyImGui.text(

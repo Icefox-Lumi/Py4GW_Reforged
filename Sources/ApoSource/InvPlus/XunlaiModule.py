@@ -82,7 +82,7 @@ class XunlaiModule:
                 _,rarity = Item.Rarity.GetRarity(item_id)
                 slot = Item.GetSlot(item_id)
 
-                frame_id = GWFrame.from_hash(_get_parent_hash(), _get_offsets(bag_id, slot))
+                frame_id = GWFrame.bag_slot(bag_id, slot)
                 is_visible = frame_id.exists
                 if not is_visible:
                     continue
@@ -114,7 +114,7 @@ class XunlaiModule:
                 _,rarity = Item.Rarity.GetRarity(item_id)
                 slot = Item.GetSlot(item_id)
 
-                frame_id = GWFrame.from_hash(_get_parent_hash(), _get_offsets(bag_id, slot))
+                frame_id = GWFrame.bag_slot(bag_id, slot)
                 is_visible = frame_id.exists
                 if not is_visible:
                     continue

@@ -36,30 +36,30 @@ class UIManager:
         mouse_pos: tuple[float, float]
         details: Dict[str, Any]
      
-    frame_id_callbacks: list[int] = []
-    frame_id_io_events: Dict[int, List[IOEvent]] = defaultdict(list)
+    frame_callbacks: list[int] = []
+    frame_io_events: Dict[int, List[IOEvent]] = defaultdict(list)
     
     @staticmethod
-    def RegisterFrameIOEventCallback(frame_id: int):
+    def RegisterFrameIOEventCallback(frame):
         """
         Register a frame ID to track IO events.
 
-        :param frame_id: The frame ID to register.
+        :param frame: The frame handle to register.
         """
-        if frame_id not in UIManager.frame_id_callbacks:
-            UIManager.frame_id_callbacks.append(frame_id)
+        if frame not in UIManager.frame_callbacks:
+            UIManager.frame_callbacks.append(frame)
             
     @staticmethod
-    def UnregisterFrameIOEventCallback(frame_id: int):
+    def UnregisterFrameIOEventCallback(frame):
         """
         Unregister a frame ID from tracking IO events.
 
-        :param frame_id: The frame ID to unregister.
+        :param frame: The frame handle to unregister.
         """
-        if frame_id in UIManager.frame_id_callbacks:
-            UIManager.frame_id_callbacks.remove(frame_id)
-            if frame_id in UIManager.frame_id_io_events:
-                del UIManager.frame_id_io_events[frame_id]
+        if frame in UIManager.frame_callbacks:
+            UIManager.frame_callbacks.remove(frame)
+            if frame in UIManager.frame_io_events:
+                del UIManager.frame_io_events[frame]
                 
     
     @staticmethod
@@ -75,8 +75,7 @@ class UIManager:
         mouse_pos = (io.mouse_pos_x, io.mouse_pos_y)
         timestamp = PySystem.get_tick_count64()
         
-        for frame_id in UIManager.frame_id_callbacks:
-            frame = Frame.from_id(frame_id)
+        for frame in UIManager.frame_callbacks:
             if not frame.is_usable:
                 continue
 
@@ -99,17 +98,17 @@ class UIManager:
                 }
 
                 # ensure list exists for this frame
-                if frame_id not in UIManager.frame_id_io_events:
-                    UIManager.frame_id_io_events[frame_id] = []
+                if frame not in UIManager.frame_io_events:
+                    UIManager.frame_io_events[frame] = []
 
                 # search for existing event and update instead of adding a duplicate
-                for i, existing in enumerate(UIManager.frame_id_io_events[frame_id]):
+                for i, existing in enumerate(UIManager.frame_io_events[frame]):
                     if existing.get("event_type") == event_type:
-                        UIManager.frame_id_io_events[frame_id][i] = event
+                        UIManager.frame_io_events[frame][i] = event
                         break
                 else:
                     # not found -> append new
-                    UIManager.frame_id_io_events[frame_id].append(event)
+                    UIManager.frame_io_events[frame].append(event)
                 
             if is_left_mouse_clicked:
                 _add_event("left_mouse_clicked")
@@ -130,18 +129,18 @@ class UIManager:
                 _add_event("mouse_wheel_scrolled_horizontal", {"scroll_x_delta": scroll_x_delta})
                 
     @staticmethod
-    def GetIOEventsForFrame(frame_id: int) -> List[IOEvent]:
+    def GetIOEventsForFrame(frame) -> List[IOEvent]:
         """
         Get the list of IO events for a specific frame ID.
 
-        :param frame_id: The frame ID to retrieve events for.
+        :param frame: The frame handle to retrieve events for.
         :return: List[IOEvent]: List of IO events for the frame.
         """
         #lazy load the list if it doesn't exist
-        if frame_id not in UIManager.frame_id_callbacks:
-            UIManager.frame_id_callbacks.append(frame_id)
+        if frame not in UIManager.frame_callbacks:
+            UIManager.frame_callbacks.append(frame)
         
-        return UIManager.frame_id_io_events.get(frame_id, [])
+        return UIManager.frame_io_events.get(frame, [])
     
     @staticmethod
     def RegisterFrameIOCallbacks():
@@ -411,57 +410,53 @@ class UIManager:
 
         :return: True if the NPC dialog is visible, False otherwise.
         """
-        return Frame.from_hash(NPC_DIALOG_HASH).is_usable
+        return Frame(FrameId.NpcDialog).is_usable
 
     @staticmethod
     def FindDialogOffset() -> None:
         """Auto-detects DIALOG_CHILD_OFFSET for the option-container."""
         global DIALOG_CHILD_OFFSET
-        root = Frame.from_hash(NPC_DIALOG_HASH)
+        root = Frame(FrameId.NpcDialog)
         if not root.exists or not root.is_visible:
             return
 
         children_map = FrameTree.children_map()
 
         # BFS: pick the container with the most template_type==1 children
-        queue = deque([root.frame_id])
+        queue = deque([root])
         best = None
         best_count = 0
         while queue:
             cur = queue.popleft()
-            kids = children_map.get(cur, [])
-            count = sum(
-                1 for c in kids
-                if Frame.from_id(c).is_visible and Frame.from_id(c).template_type == 1
-            )
+            kids = [Frame.from_id(c) for c in children_map.get(cur.frame_id, [])]
+            count = sum(1 for c in kids if c.is_visible and c.template_type == 1)
             if count > best_count and count >= 2:
                 best_count, best = count, cur
-            for c in kids:
-                queue.append(c)
+            queue.extend(kids)
 
-        if not best:
+        if best is None:
             return
 
         # Build the path from root -> best.  NOTE: this records sibling *indices*,
         # while the matcher below compares child key codes, so the offset fast
-        # path can never hit and GetDialogButtonIDs always falls back to BFS.
+        # path can never hit and GetDialogButtons always falls back to BFS.
         # Pre-existing behaviour, preserved deliberately - see FrameTree notes.
         path = []
         cur = best
-        while cur != root.frame_id:
-            parent = FrameTree.parent_of(cur)
-            siblings = children_map.get(parent, [])
-            if cur not in siblings:
+        while cur != root:
+            parent = cur.parent()
+            siblings = children_map.get(parent.frame_id, [])
+            if cur.frame_id not in siblings:
                 return
-            path.insert(0, siblings.index(cur))
+            path.insert(0, siblings.index(cur.frame_id))
             cur = parent
 
         DIALOG_CHILD_OFFSET = path
     
     @staticmethod
-    def GetDialogButtonIDs(debug: bool = False) -> list[int]:
+    def GetDialogButtons(debug: bool = False) -> list:
         """
-        Returns the list of visible, template_type==1 button frame-IDs,
+        Returns the visible, template_type==1 option buttons as handles,
         sorted top→bottom. Pass debug=True to log offset detection.
         """
         # detect offset once
@@ -475,46 +470,46 @@ class UIManager:
         valid = [f for f in FrameTree.frames_at_path(NPC_DIALOG_HASH, DIALOG_CHILD_OFFSET)
                  if _is_button(f)]
         if valid:
-            sorted_ids = [f.frame_id for f in FrameTree.sort_by_vertical(valid)]
+            ordered = FrameTree.sort_by_vertical(valid)
             if debug:
-                ConsoleLog("DialogHelper", f"Offset IDs -> {sorted_ids}", Console.MessageType.Info)
-            return sorted_ids
+                ConsoleLog("DialogHelper", f"Offset IDs -> {ordered}", Console.MessageType.Info)
+            return ordered
 
         # fallback BFS over the whole dialog subtree
         if debug:
             ConsoleLog("DialogHelper", "Falling back to BFS for dialog buttons", Console.MessageType.Info)
 
-        root = Frame.from_hash(NPC_DIALOG_HASH)
+        root = Frame(FrameId.NpcDialog)
         if not root.exists:
             return []
 
-        valid = [f for f in (Frame.from_id(c) for c in FrameTree.descendants_of(root.frame_id))
+        valid = [f for f in FrameTree.descendants(root)
                  if _is_button(f)]
-        sorted_ids = [f.frame_id for f in FrameTree.sort_by_vertical(valid)]
+        ordered = FrameTree.sort_by_vertical(valid)
         if debug:
-            ConsoleLog("DialogHelper", f"BFS IDs -> {sorted_ids}", Console.MessageType.Info)
-        return sorted_ids
+            ConsoleLog("DialogHelper", f"BFS IDs -> {ordered}", Console.MessageType.Info)
+        return ordered
     
     @staticmethod
     def ClickDialogButton(choice: int, debug: bool = False) -> bool:
         """
         Click the Nth dialog option (1-based). Returns True if dispatched.
         """
-        ids = UIManager.GetDialogButtonIDs(debug)
+        buttons = UIManager.GetDialogButtons(debug)
         idx = choice - 1
-        if idx < 0 or idx >= len(ids):
+        if idx < 0 or idx >= len(buttons):
             if debug:
                 ConsoleLog("DialogHelper", f"Choice #{choice} out of range", Console.MessageType.Warning)
             return False
 
-        target = ids[idx]
+        target = buttons[idx]
         if debug:
             ConsoleLog(
                 "DialogHelper",
                 f"Clicking dialog choice #{choice} -> frame {target}",
                 Console.MessageType.Info
             )
-        Frame.from_id(target).click()
+        target.click()
         return True
     
     @staticmethod
@@ -524,8 +519,8 @@ class UIManager:
         and log the count if debug=True.
         Log Example: [DialogHelper|Info] Dialog button count 3
         """
-        ids = UIManager.GetDialogButtonIDs(debug)
-        count = len(ids)
+        buttons = UIManager.GetDialogButtons(debug)
+        count = len(buttons)
 
         if debug:
             # Log the count to the console as an info message
@@ -550,9 +545,9 @@ class UIManager:
 
         # --- Attempt offset lookup first ---
         valid_frames = [
-            (f.frame_id, f.rect)
+            (f, f.rect)
             for f in FrameTree.frames_at_path(NPC_DIALOG_HASH, DIALOG_CHILD_OFFSET)
-            if f.frame_id >= 0 and f.is_visible and f.template_type == 1
+            if f.is_visible and f.template_type == 1
         ]
 
         if debug:
@@ -582,14 +577,14 @@ class UIManager:
         if debug:
             ConsoleLog("DialogHelper", "Falling back to BFS for dialog buttons", Console.MessageType.Info)
 
-        root = Frame.from_hash(NPC_DIALOG_HASH)
+        root = Frame(FrameId.NpcDialog)
         if not root.exists:
             return []
 
         result = [
-            (f.frame_id, f.rect)
-            for f in (Frame.from_id(c) for c in FrameTree.descendants_of(root.frame_id))
-            if f.frame_id >= 0 and f.is_visible and f.template_type == 1
+            (f, f.rect)
+            for f in FrameTree.descendants(root)
+            if f.is_visible and f.template_type == 1
         ]
 
         # NOTE: sorts by `left`, not `top`, despite the docstring.  Pre-existing
@@ -638,11 +633,10 @@ class InventoryBagWindow:
         if not bag in INVENTORY_WITH_EQUIPMENT_BAGS:
             return None
         
-        offset = InventoryBagWindow._get_bag_offset(bag)
-        if offset < 0:
+        if InventoryBagWindow._get_bag_offset(bag) < 0:
             return None
-        
-        return Frame.from_hash(Frame(FrameId.InventoryWindow).hash, [offset])
+
+        return Frame.inventory_bag(bag)
         
     @staticmethod
     @frame_cache(category="InventoryBagWindow", source_lib="GetBagSlotFrames")
@@ -661,7 +655,7 @@ class InventoryBagWindow:
             
         frames = []
         for slot in range(bag_size):
-            frames.append(Frame.from_hash(Frame(FrameId.InventoryWindow).hash, [offset, 2 + slot]))
+            frames.append(Frame.inventory_bag_slot(bag, slot))
         
         return frames
     
@@ -688,7 +682,7 @@ class InventoryBagsWindow:
             
         frames = []
         for slot in range(bag_size):
-            frames.append(Frame.from_hash(Frame(FrameId.InventoryBagsWindow).hash, [0, 0, 0, InventoryBagsWindow._get_bag_offset(bag), 2 + slot]))
+            frames.append(Frame.bag_slot(bag, slot))
                 
         return frames
     
@@ -773,11 +767,7 @@ class XunlaiStorageWindow:
         if not bag in STORAGE_BAGS and bag != Bags.MaterialStorage:
             return None
         
-        def get_offset_for_bag(bag: Bags) -> int:
-            base_offset = 4294967295
-            return base_offset - XunlaiStorageWindow._get_bag_offset(bag)             
-        
-        return Frame.from_hash(Frame(FrameId.XunlaiWindow).hash, [0, get_offset_for_bag(bag)])
+        return Frame.storage_tab(bag, reversed_order=True)
         
     @staticmethod
     @frame_cache(category="XunlaiStorageWindow", source_lib="GetTabContentFrame")
@@ -785,11 +775,7 @@ class XunlaiStorageWindow:
         if not bag in STORAGE_BAGS and bag != Bags.MaterialStorage:
             return None
         
-        def get_offset_for_bag(bag: Bags) -> int:
-            base_offset = 0            
-            return base_offset + XunlaiStorageWindow._get_bag_offset(bag)             
-        
-        return Frame.from_hash(Frame(FrameId.XunlaiWindow).hash, [0, get_offset_for_bag(bag)])
+        return Frame.storage_tab(bag)
     
     @staticmethod
     @frame_cache(category="XunlaiStorageWindow", source_lib="GetActiveTabFrame")
@@ -840,7 +826,7 @@ class XunlaiStorageWindow:
         
         frames = []
         for slot in range(bag_size):
-            frames.append(Frame.from_hash(Frame(FrameId.XunlaiWindow).hash, [0, XunlaiStorageWindow._get_bag_offset(bag), 2 + slot]))
+            frames.append(Frame.storage_slot(bag, slot))
                 
         return frames
     
@@ -850,7 +836,7 @@ class XunlaiStorageWindow:
         if slot is None:
             return None
         
-        return Frame.from_hash(Frame(FrameId.XunlaiWindow).hash, [0, XunlaiStorageWindow.MAX_TABS, 2 + slot])
+        return Frame.material_slot(slot, max_tabs=XunlaiStorageWindow.MAX_TABS)
 
     @staticmethod
     @frame_cache(category="XunlaiStorageWindow", source_lib="GetMaterialSlotFrames")
@@ -858,7 +844,8 @@ class XunlaiStorageWindow:
         
         frames = []
         for material, slot in XunlaiStorageWindow.MATERIAL_FRAME_OFFSETS.items():
-            frames.append(Frame.from_hash(Frame(FrameId.XunlaiWindow).hash, [0, XunlaiStorageWindow.MAX_TABS, slot]))
+            frames.append(Frame.material_slot(slot, max_tabs=XunlaiStorageWindow.MAX_TABS,
+                                             raw_slot=True))
                 
         return frames
     

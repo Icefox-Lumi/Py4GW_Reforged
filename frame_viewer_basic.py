@@ -28,7 +28,7 @@ def get_selected_frame():
     if not selected_frame_id:
         return None
     try:
-        return Frame.from_id(selected_frame_id).raw
+        return Frame.from_id(selected_frame_id)
     except Exception:
         return None
 
@@ -57,12 +57,10 @@ def draw_selected_frame_info():
         PyImGui.text("No valid frame selected")
         return
 
-    PyImGui.text(f"frame_id: {int(getattr(frame, 'frame_id', 0) or 0)}")
-    PyImGui.text(f"parent_id: {int(getattr(frame, 'parent_id', 0) or 0)}")
-    PyImGui.text(f"child_offset_id: {int(getattr(frame, 'child_offset_id', 0) or 0)}")
-    PyImGui.text(f"frame_hash: {int(getattr(frame, 'frame_hash', 0) or 0)}")
-    PyImGui.text(f"is_created: {bool(getattr(frame, 'is_created', False))}")
-    PyImGui.text(f"is_visible: {bool(getattr(frame, 'is_visible', False))}")
+    PyImGui.text(frame.describe() or "(unnamed)")
+    PyImGui.separator()
+    for name, value in frame.fields().items():
+        PyImGui.text(f"{name}: {value}")
 
 
 # Minimal starting point: refresh + select + inspect one frame.

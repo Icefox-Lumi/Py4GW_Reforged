@@ -18347,8 +18347,7 @@ class MerchantRulesWidget:
         try:
             from Py4GWCoreLib.UIManager import UIManager
 
-            frame_id = Frame.from_hash(MERCHANT_FRAME_HASH).frame_id
-            return frame_id > 0 and bool(Frame.from_id(frame_id).is_usable)
+            return Frame(FrameId.Merchant).is_usable
         except Exception:
             return False
 
@@ -20293,11 +20292,11 @@ class MerchantRulesWidget:
         from Py4GWCoreLib.Inventory import Inventory
         from Py4GWCoreLib.UIManager import UIManager
 
-        confirm_frame_id = Inventory._get_salvage_choice_confirm_frame_id()
-        if confirm_frame_id == 0:
+        confirm_frame = Inventory._salvage_confirm()
+        if not confirm_frame.exists:
             return "confirm_missing"
 
-        ActionQueueManager().AddAction("SALVAGE", Frame.from_id(confirm_frame_id).click)
+        ActionQueueManager().AddAction("SALVAGE", confirm_frame.click)
         queue_drained = yield from self._wait_for_action_queue_empty("SALVAGE", timeout_ms=5000, step_ms=50)
         if not queue_drained:
             return "queue_timeout"
@@ -20343,8 +20342,8 @@ class MerchantRulesWidget:
             Frame(FrameId.SalvageWindow.OptionsWindowConfirmMaterialsWindow.Confirm),
         ):
             if candidate.exists:
-                return candidate.frame_id
-        return 0
+                return candidate
+        return None
 
     def _wait_and_confirm_materials_popup(self, item_id: int, kit_id: int, *, timeout_ms: int = 2000):
         from Py4GWCoreLib.UIManager import UIManager
@@ -20352,13 +20351,12 @@ class MerchantRulesWidget:
         waited_ms = 0
         yield from Routines.Yield.wait(100)
         while waited_ms <= max(0, int(timeout_ms)):
-            yes_frame_id = self._get_materials_confirm_yes_frame_id()
-            if yes_frame_id > 0:
+            yes_frame = self._get_materials_confirm_yes_frame_id()
+            if yes_frame is not None and yes_frame.exists:
                 self._salvage_flow_log(
                     f"MR Salvage materials confirmation visible for item {int(item_id)} "
                     f"with {self._get_salvage_kit_label(int(kit_id))}; accepting materials confirmation."
                 )
-                yes_frame = Frame.from_id(yes_frame_id)
                 ActionQueueManager().AddAction("SALVAGE", yes_frame.click)
                 ActionQueueManager().AddAction("SALVAGE", yes_frame.mouse_click_action, 0, 0)
                 queue_drained = yield from self._wait_for_action_queue_empty("SALVAGE", timeout_ms=5000, step_ms=50)

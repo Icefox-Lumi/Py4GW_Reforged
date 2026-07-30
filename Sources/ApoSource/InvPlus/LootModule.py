@@ -23,7 +23,7 @@ class LootModule:
     def DrawLootConfig(self):
         global global_vars
         
-        content_frame = GWFrame.from_hash(_get_parent_hash(), [0])
+        content_frame = GWFrame(FrameId.InventoryBagsWindow.Content)
         left, top, right, bottom = content_frame.coords()
         y_offset = 2
         x_offset = 0

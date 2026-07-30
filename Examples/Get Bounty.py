@@ -9,7 +9,7 @@ class config:
         self.is_party_loaded = False
         self.is_explorable = False
         self.bounty_window_exists = False
-        self.frame_id = 0
+        self.frame = None
         self.frame_hash = 3856160816
         self.bounty_taken = False
         self.bounty_taken_timer = Timer()
@@ -48,7 +48,7 @@ def main():
         if widget_config.map_valid:
             dialog = Frame(FrameId.NpcDialog)
             if dialog.exists:
-                widget_config.frame_id = dialog.frame_id
+                widget_config.frame = dialog
                 widget_config.bounty_window_exists = True
             else:
                 widget_config.bounty_window_exists = False

@@ -55,9 +55,9 @@ class FrameNode:
         self.frame_id = frame_id
         self.parent_id = parent_id
         self.tree = tree
-        self._frame_obj = Frame.from_id(frame_id).raw
-        self.frame_hash = self._frame_obj.frame_hash
-        self.child_offset_id = self._frame_obj.child_offset_id
+        self._frame_obj = Frame.from_id(frame_id)
+        self.frame_hash = self._frame_obj.hash
+        self.child_offset_id = self._frame_obj.code
         self.label = Frame.from_id(frame_id).describe()
         self.type = self._frame_obj.type
         self.template_type = self._frame_obj.template_type
@@ -106,7 +106,7 @@ class FrameNode:
         col = self.choose_frame_color()
         badge = self._get_badge_str()
         label_text = self.label or "(no label)"
-        tree_label = f"Frame:[{self.frame_id}] <{self.frame_hash}> {label_text} {badge}##ftsn_{self.frame_id}"
+        tree_label = f"Frame:[{self}] <{self.frame_hash}> {label_text} {badge}##ftsn_{self}"
 
         has_children = len(self.children) > 0
         expanded = False
@@ -119,10 +119,10 @@ class FrameNode:
             if expanded:
                 PyImGui.same_line(0, -1)
                 self._show_inline_data = ImGui.toggle_button(
-                    f"Data##ftsn_{self.frame_id}", self._show_inline_data, width=60, height=17
+                    f"Data##ftsn_{self}", self._show_inline_data, width=60, height=17
                 )
                 if _config.keep_data_updated:
-                    if PyImGui.collapsing_header(f"Frame#{self.frame_id}Inline##ftsn_{self.frame_id}"):
+                    if PyImGui.collapsing_header(f"Frame#{self}Inline##ftsn_{self}"):
                         headers = ["Property", "Value"]
                         data = [
                             ("Parent:", str(self.parent_id)),
@@ -131,7 +131,7 @@ class FrameNode:
                             ("Type:", str(self.type)),
                             ("Template:", str(self.template_type)),
                         ]
-                        ImGui.table(f"ftsn_inline_{self.frame_id}", headers, data)
+                        ImGui.table(f"ftsn_inline_{self}", headers, data)
                 PyImGui.separator()
                 for child in self.children:
                     if not self.tree._active_filter or child._matches_search():
@@ -141,10 +141,10 @@ class FrameNode:
             PyImGui.text_colored(tree_label, col)
             PyImGui.same_line(0, -1)
             self._show_inline_data = ImGui.toggle_button(
-                f"Data##ftsn_{self.frame_id}", self._show_inline_data, width=60, height=17
+                f"Data##ftsn_{self}", self._show_inline_data, width=60, height=17
             )
             if _config.keep_data_updated:
-                if PyImGui.collapsing_header(f"Frame#{self.frame_id}Inline##ftsn_{self.frame_id}"):
+                if PyImGui.collapsing_header(f"Frame#{self}Inline##ftsn_{self}"):
                     headers = ["Property", "Value"]
                     data = [
                         ("Parent:", str(self.parent_id)),
@@ -153,7 +153,7 @@ class FrameNode:
                         ("Type:", str(self.type)),
                         ("Template:", str(self.template_type)),
                     ]
-                    ImGui.table(f"ftsn_inline_{self.frame_id}", headers, data)
+                    ImGui.table(f"ftsn_inline_{self}", headers, data)
             PyImGui.separator()
 
         # Right-click detection on the label just rendered (works for both tree_node and text_colored)
@@ -161,31 +161,31 @@ class FrameNode:
         item_hovered = PyImGui.is_item_hovered()
 
         # Context menu (rendered after node, regardless of expand/collapse state)
-        popup_id = f"ftsn_ctx_{self.frame_id}"
+        popup_id = f"ftsn_ctx_{self}"
         if right_clicked:
             PyImGui.open_popup(popup_id)
 
         if PyImGui.begin_popup(popup_id):
-            if PyImGui.menu_item(f"Inspect Frame {self.frame_id}"):
+            if PyImGui.menu_item(f"Inspect Frame {self}"):
                 self.tree._inspector_open_requests.append(self.frame_id)
-            if PyImGui.menu_item(f"Copy Frame ID: {self.frame_id}"):
+            if PyImGui.menu_item(f"Copy Frame ID: {self}"):
                 PyImGui.set_clipboard_text(str(self.frame_id))
             if PyImGui.menu_item(f"Copy Frame Hash: {self.frame_hash}"):
                 PyImGui.set_clipboard_text(str(self.frame_hash))
             if PyImGui.menu_item("Draw Outline (Green)"):
-                Frame.from_id(self.frame_id).draw_outline(Utils.RGBToColor(0, 255, 0, 200))
+                self._frame_obj.draw_outline(Utils.RGBToColor(0, 255, 0, 200))
             PyImGui.separator()
             if PyImGui.menu_item("Copy Label"):
                 PyImGui.set_clipboard_text(self.label)
             if PyImGui.menu_item("Copy Tree Path"):
-                path = Frame.from_id(self.frame_id).path()
+                path = self._frame_obj.path()
                 PyImGui.set_clipboard_text(path if path else str(self.frame_id))
             PyImGui.end_popup()
 
         # Hover tooltip (uses item_hovered from the label above)
         if item_hovered:
             PyImGui.begin_tooltip()
-            PyImGui.text(f"Frame ID: {self.frame_id}")
+            PyImGui.text(f"Frame ID: {self}")
             PyImGui.text(f"Hash: {self.frame_hash}")
             PyImGui.text(f"Parent ID: {self.parent_id}")
             PyImGui.text(f"Created: {self._frame_obj.is_created}")
@@ -885,7 +885,7 @@ class FrameInspector:
 
     def __init__(self, frame_id: int):
         self.frame_id = frame_id
-        self._frame_obj = Frame.from_id(frame_id).raw
+        self._frame_obj = Frame.from_id(frame_id)
         self.auto_update: bool = True
         self.draw_frame: bool = False
         self.draw_color: int = Utils.RGBToColor(0, 255, 0, 125)
@@ -906,69 +906,69 @@ class FrameInspector:
 
     def _is_frame_valid(self) -> bool:
         try:
-            return Frame.from_id(self.frame_id).is_usable
+            return self._frame_obj.is_usable
         except Exception:
             return False
 
     def _refresh_context(self):
         """Lazy get_context() — only called when needed."""
         try:
-            self._frame_obj.get_context()
+            self._frame_obj.refresh()
         except Exception:
             pass
 
     def render(self, ini_key: str, title: str):
         """Render the inspector window content."""
         if not self._is_frame_valid():
-            PyImGui.text_colored(f"WARNING: Frame {self.frame_id} no longer exists or is not visible.", (1.0, 0.3, 0.3, 1.0))
+            PyImGui.text_colored(f"WARNING: Frame {self} no longer exists or is not visible.", (1.0, 0.3, 0.3, 1.0))
             return
 
         # Top controls
-        self.auto_update = PyImGui.checkbox(f"Auto Update##finsp_au_{self.frame_id}", self.auto_update)
-        self.draw_frame = PyImGui.checkbox(f"Draw Frame##finsp_df_{self.frame_id}", self.draw_frame)
+        self.auto_update = PyImGui.checkbox(f"Auto Update##finsp_au_{self}", self.auto_update)
+        self.draw_frame = PyImGui.checkbox(f"Draw Frame##finsp_df_{self}", self.draw_frame)
 
         if self.draw_frame:
             PyImGui.same_line(0, -1)
             color_tuple = Utils.ColorToTuple(self.draw_color)
             color_list = list(color_tuple)
-            PyImGui.color_edit4(f"Color##finsp_dfc_{self.frame_id}", color_list)
+            PyImGui.color_edit4(f"Color##finsp_dfc_{self}", color_list)
             self.draw_color = Utils.TupleToColor(tuple(color_list))
-            Frame.from_id(self.frame_id).draw(self.draw_color)
+            self._frame_obj.draw(self.draw_color)
 
         if self.auto_update:
             self._refresh_context()
 
         PyImGui.separator()
 
-        if PyImGui.begin_child(f"finsp_child_{self.frame_id}", size=(0, 0), border=True, flags=PyImGui.WindowFlags.HorizontalScrollbar):
-            if PyImGui.begin_tab_bar(f"finsp_tabbar_{self.frame_id}"):
+        if PyImGui.begin_child(f"finsp_child_{self}", size=(0, 0), border=True, flags=PyImGui.WindowFlags.HorizontalScrollbar):
+            if PyImGui.begin_tab_bar(f"finsp_tabbar_{self}"):
                 # --- Tab: Overview ---
-                if PyImGui.begin_tab_item(f"Overview##finsp_ov_{self.frame_id}"):
+                if PyImGui.begin_tab_item(f"Overview##finsp_ov_{self}"):
                     self._render_overview()
                     PyImGui.end_tab_item()
 
                 # --- Tab: Position ---
-                if PyImGui.begin_tab_item(f"Position##finsp_pos_{self.frame_id}"):
+                if PyImGui.begin_tab_item(f"Position##finsp_pos_{self}"):
                     self._render_position()
                     PyImGui.end_tab_item()
 
                 # --- Tab: Relations ---
-                if PyImGui.begin_tab_item(f"Relations##finsp_rel_{self.frame_id}"):
+                if PyImGui.begin_tab_item(f"Relations##finsp_rel_{self}"):
                     self._render_relations()
                     PyImGui.end_tab_item()
 
                 # --- Tab: Callbacks ---
-                if PyImGui.begin_tab_item(f"Callbacks##finsp_cb_{self.frame_id}"):
+                if PyImGui.begin_tab_item(f"Callbacks##finsp_cb_{self}"):
                     self._render_callbacks()
                     PyImGui.end_tab_item()
 
                 # --- Tab: Raw Fields ---
-                if PyImGui.begin_tab_item(f"Raw Fields##finsp_rf_{self.frame_id}"):
+                if PyImGui.begin_tab_item(f"Raw Fields##finsp_rf_{self}"):
                     self._render_raw_fields()
                     PyImGui.end_tab_item()
 
                 # --- Tab: Alias ---
-                if PyImGui.begin_tab_item(f"Alias##finsp_al_{self.frame_id}"):
+                if PyImGui.begin_tab_item(f"Alias##finsp_al_{self}"):
                     self._render_alias()
                     PyImGui.end_tab_item()
 
@@ -976,8 +976,8 @@ class FrameInspector:
         PyImGui.end_child()
 
     def _render_overview(self):
-        f = self._frame_obj
-        PyImGui.text(f"Frame ID: {self.frame_id}")
+        frame = self._handle()
+        PyImGui.text(f"Frame ID: {self}")
         PyImGui.text(f"Frame Hash: {f.frame_hash}")
         PyImGui.text(f"Parent ID: {f.parent_id}")
         PyImGui.text(f"Visibility Flags: {f.visibility_flags}")
@@ -990,11 +990,11 @@ class FrameInspector:
         PyImGui.text(f"Alias: {self.frame_alias or '(none)'}")
         PyImGui.separator()
         PyImGui.text("Actions:")
-        if PyImGui.button(f"Click Frame##finsp_clk_{self.frame_id}"):
-            Frame.from_id(self.frame_id).click()
+        if PyImGui.button(f"Click Frame##finsp_clk_{self}"):
+            self._frame_obj.click()
         PyImGui.same_line(0, -1)
-        if PyImGui.button(f"Draw Outline##finsp_do_{self.frame_id}"):
-            Frame.from_id(self.frame_id).draw_outline(Utils.RGBToColor(0, 255, 0, 200))
+        if PyImGui.button(f"Draw Outline##finsp_do_{self}"):
+            self._frame_obj.draw_outline(Utils.RGBToColor(0, 255, 0, 200))
 
     def _render_position(self):
         p = self._frame_obj.position
@@ -1013,17 +1013,18 @@ class FrameInspector:
         ]
         headers = ["Field", "Value"]
         data = [(name, str(val)) for name, val in fields]
-        ImGui.table(f"finsp_pos_tbl_{self.frame_id}", headers, data)
+        ImGui.table(f"finsp_pos_tbl_{self}", headers, data)
 
     def _render_relations(self):
-        r = self._frame_obj.relation
-        PyImGui.text(f"Parent ID: {r.parent_id}")
-        PyImGui.text(f"Field67_0x124: {r.field67_0x124}")
-        PyImGui.text(f"Field68_0x128: {r.field68_0x128}")
-        PyImGui.text(f"Frame Hash ID: {r.frame_hash_id}")
+        frame = self._frame_obj
+        slots = frame.fields()
+        PyImGui.text(f"Parent ID: {frame.parent_id}")
+        PyImGui.text("Field67_0x124: " + str(slots.get("relation.field67_0x124", 0)))
+        PyImGui.text("Field68_0x128: " + str(slots.get("relation.field68_0x128", 0)))
+        PyImGui.text(f"Frame Hash ID: {frame.hash}")
         if PyImGui.collapsing_header("Siblings"):
-            for i, sibling in enumerate(r.siblings):
-                PyImGui.text(f"Siblings[{i}]: {sibling}")
+            for i, sibling in enumerate(frame.siblings()):
+                PyImGui.text(f"Siblings[{i}]: {sibling.describe() or sibling}")
 
     def _render_callbacks(self):
         for i, callback in enumerate(self._frame_obj.frame_callbacks):
@@ -1032,15 +1033,15 @@ class FrameInspector:
 
     def _render_alias(self):
         """Identity, derived from the FrameTree tables - nothing to hand-name."""
-        handle = Frame.from_id(self.frame_id)
+        handle = self._frame_obj
         PyImGui.text(f"Engine Name:  {handle.name or '(unnamed)'}")
         PyImGui.text(f"Registry Key: {handle.registry_key or '(unregistered)'}")
         PyImGui.text(f"Alias:        {handle.alias or '(none)'}")
-        if PyImGui.button(f"Copy Registry Key##finsp_ck_{self.frame_id}"):
+        if PyImGui.button(f"Copy Registry Key##finsp_ck_{self}"):
             PyImGui.set_clipboard_text(handle.registry_key or handle.path())
 
         PyImGui.separator()
-        PyImGui.text(f"Resolved Path: {Frame.from_id(self.frame_id).path()}")
+        PyImGui.text(f"Resolved Path: {self._frame_obj.path()}")
 
     def _raw_field_row(self, name: str, value: int):
         return (name, str(value), self._to_hex(value), self._to_bin(value), self._to_char(value))
@@ -1048,97 +1049,23 @@ class FrameInspector:
     def _render_raw_fields(self):
         # Performance note: this table renders ~80+ raw fields every frame when auto-update is enabled.
         # Consider throttling if frame times degrade.
-        f = self._frame_obj
+        frame = self._frame_obj
         headers = ["Field", "Dec", "Hex", "Bin", "Char"]
         data = [
-            self._raw_field_row("Field1_0x0", f.field1_0x0),
-            self._raw_field_row("Field2_0x4", f.field2_0x4),
-            self._raw_field_row("Field3_0xC", f.field3_0xc),
-            self._raw_field_row("Field4_0x10", f.field4_0x10),
-            self._raw_field_row("Field5_0x14", f.field5_0x14),
-            self._raw_field_row("Field7_0x1C", f.field7_0x1c),
-            self._raw_field_row("Field10_0x28", f.field10_0x28),
-            self._raw_field_row("Field11_0x2C", f.field11_0x2c),
-            self._raw_field_row("Field12_0x30", f.field12_0x30),
-            self._raw_field_row("Field13_0x34", f.field13_0x34),
-            self._raw_field_row("Field14_0x38", f.field14_0x38),
-            self._raw_field_row("Field15_0x3C", f.field15_0x3c),
-            self._raw_field_row("Field16_0x40", f.field16_0x40),
-            self._raw_field_row("Field17_0x44", f.field17_0x44),
-            self._raw_field_row("Field18_0x48", f.field18_0x48),
-            self._raw_field_row("Field19_0x4C", f.field19_0x4c),
-            self._raw_field_row("Field20_0x50", f.field20_0x50),
-            self._raw_field_row("Field21_0x54", f.field21_0x54),
-            self._raw_field_row("Field22_0x58", f.field22_0x58),
-            self._raw_field_row("Field23_0x5C", f.field23_0x5c),
-            self._raw_field_row("Field24_0x60", f.field24_0x60),
-            self._raw_field_row("Field24a_0x64", f.field24a_0x64),
-            self._raw_field_row("Field24b_0x68", f.field24b_0x68),
-            self._raw_field_row("Field25_0x6C", f.field25_0x6c),
-            self._raw_field_row("Field26_0x70", f.field26_0x70),
-            self._raw_field_row("Field27_0x74", f.field27_0x74),
-            self._raw_field_row("Field28_0x78", f.field28_0x78),
-            self._raw_field_row("Field29_0x7C", f.field29_0x7c),
-            self._raw_field_row("Field30_0x80", f.field30_0x80),
+            self._raw_field_row(name, value)
+            for name, value in frame.fields().items()
         ]
 
         # Field31 parameter list
         try:
-            param_list = f.field31_0x84
+            param_list = frame.parameters
             for i, param in enumerate(param_list):
                 data.append(self._raw_field_row(f"Field31_0x84[{i}]", param))
         except Exception:
             pass
 
-        data.extend([
-            self._raw_field_row("Field32_0x94", f.field32_0x94),
-            self._raw_field_row("Field33_0x98", f.field33_0x98),
-            self._raw_field_row("Field34_0x9C", f.field34_0x9c),
-            self._raw_field_row("Field35_0xA0", f.field35_0xa0),
-            self._raw_field_row("Field36_0xA4", f.field36_0xa4),
-            self._raw_field_row("Field40_0xC0", f.field40_0xc0),
-            self._raw_field_row("Field41_0xC4", f.field41_0xc4),
-            self._raw_field_row("Field42_0xC8", f.field42_0xc8),
-            self._raw_field_row("Field43_0xCC", f.field43_0xcc),
-            self._raw_field_row("Field44_0xD0", f.field44_0xd0),
-            self._raw_field_row("Field45_0xD4", f.field45_0xd4),
-            self._raw_field_row("Field63_0x11C", f.field63_0x11c),
-            self._raw_field_row("Field64_0x120", f.field64_0x120),
-            self._raw_field_row("Field65_0x124", f.field65_0x124),
-            self._raw_field_row("Field73_0x144", f.field73_0x144),
-            self._raw_field_row("Field74_0x148", f.field74_0x148),
-            self._raw_field_row("Field75_0x14C", f.field75_0x14c),
-            self._raw_field_row("Field76_0x150", f.field76_0x150),
-            self._raw_field_row("Field77_0x154", f.field77_0x154),
-            self._raw_field_row("Field78_0x158", f.field78_0x158),
-            self._raw_field_row("Field79_0x15C", f.field79_0x15c),
-            self._raw_field_row("Field80_0x160", f.field80_0x160),
-            self._raw_field_row("Field81_0x164", f.field81_0x164),
-            self._raw_field_row("Field82_0x168", f.field82_0x168),
-            self._raw_field_row("Field83_0x16C", f.field83_0x16c),
-            self._raw_field_row("Field84_0x170", f.field84_0x170),
-            self._raw_field_row("Field85_0x174", f.field85_0x174),
-            self._raw_field_row("Field86_0x178", f.field86_0x178),
-            self._raw_field_row("Field87_0x17C", f.field87_0x17c),
-            self._raw_field_row("Field88_0x180", f.field88_0x180),
-            self._raw_field_row("Field89_0x184", f.field89_0x184),
-            self._raw_field_row("Field90_0x188", f.field90_0x188),
-            self._raw_field_row("Field92_0x190", f.field92_0x190),
-            self._raw_field_row("Field93_0x194", f.field93_0x194),
-            self._raw_field_row("Field94_0x198", f.field94_0x198),
-            self._raw_field_row("Field95_0x19C", f.field95_0x19c),
-            self._raw_field_row("Field96_0x1A0", f.field96_0x1a0),
-            self._raw_field_row("Field97_0x1A4", f.field97_0x1a4),
-            self._raw_field_row("Field98_0x1A8", f.field98_0x1a8),
-            self._raw_field_row("Field100_0x1B0", f.field100_0x1b0),
-            self._raw_field_row("Field101_0x1B4", f.field101_0x1b4),
-            self._raw_field_row("Field102_0x1B8", f.field102_0x1b8),
-            self._raw_field_row("Field103_0x1BC", f.field103_0x1bc),
-            self._raw_field_row("Field104_0x1C0", f.field104_0x1c0),
-            self._raw_field_row("Field105_0x1C4", f.field105_0x1c4),
-        ])
 
-        ImGui.table(f"finsp_rf_tbl_{self.frame_id}", headers, data)
+        ImGui.table(f"finsp_rf_tbl_{self}", headers, data)
 
 
 # ========================================================================

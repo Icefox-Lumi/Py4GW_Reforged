@@ -181,7 +181,7 @@ def SalvageCheckedItems(salvage_checkboxes: Dict[int, bool], keep_salvage_kits: 
 
             if keep_salvage_kits > 0:
                 MERCHANT_FRAME = 3613855137
-                merchant_frame_id = Frame.from_hash(MERCHANT_FRAME)
+                merchant_frame_id = Frame(FrameId.Merchant)
                 merchant_frame_exists = merchant_frame_id.exists
                 if not merchant_frame_exists:
                     break

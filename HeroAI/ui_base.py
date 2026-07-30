@@ -2138,17 +2138,17 @@ class HeroAI_BaseUI:
             ImGui.End(ini_key=cached_data.flagging_window_ini_key)
             
     @staticmethod
-    def DrawFramedContent(cached_data: CacheData, content_frame_id):
+    def DrawFramedContent(cached_data: CacheData, content_frame):
         from Py4GWCoreLib import Utils
         
         if  HeroAI_FloatingWindows.selected_tab == HeroAI_FloatingWindows.TabType.party:
             return
 
-        child_left, child_top, child_right, child_bottom = Frame.from_id(content_frame_id).coords()
+        child_left, child_top, child_right, child_bottom = content_frame.coords()
         width = child_right - child_left
         height = child_bottom - child_top
 
-        Frame.from_id(content_frame_id).draw(Utils.RGBToColor(0, 0, 0, 255))
+        content_frame.draw(Utils.RGBToColor(0, 0, 0, 255))
 
         flags = PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize
         PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
@@ -2210,9 +2210,9 @@ class HeroAI_BaseUI:
         explorable_content_frame_id = Frame(FrameId.PartyFormation.Explorable)
 
         if Map.IsMapReady() and Map.IsExplorable():
-            content_frame_id = explorable_content_frame_id.frame_id
+            content_frame = explorable_content_frame_id
         else:
-            content_frame_id = outpost_content_frame_id.frame_id
+            content_frame = outpost_content_frame_id
 
         left, top, right, _bottom = parent_frame_id.coords()
         frame_offset = 5
@@ -2255,7 +2255,7 @@ class HeroAI_BaseUI:
 
         ImGui.PopTransparentWindow()
             
-        HeroAI_BaseUI.DrawFramedContent(cached_data, content_frame_id)
+        HeroAI_BaseUI.DrawFramedContent(cached_data, content_frame)
 
     @staticmethod
     def DrawFollowerUI(cached_data: CacheData):
@@ -2290,7 +2290,7 @@ class HeroAI_BaseUI:
         PyImGui.end()
         ImGui.PopTransparentWindow()
 
-        HeroAI_BaseUI.DrawFramedContent(cached_data, party_window_frame.frame_id)
+        HeroAI_BaseUI.DrawFramedContent(cached_data, party_window_frame)
 
     @staticmethod
     def DrawControlPanelWindow(cached_data: CacheData):

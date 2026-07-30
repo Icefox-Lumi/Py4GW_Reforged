@@ -34,7 +34,7 @@ class SkillBarPlus:
 
         def GetSkillFrames(self):
             for i in range(8):
-                frame_id = Frame.from_hash(641635682, [i])
+                frame_id = Frame.skill(i + 1)
                 if not frame_id.exists: 
                     continue
                 coords = frame_id.coords()
@@ -207,10 +207,9 @@ class SkillBarPlus:
             active = []
 
             for effect in GLOBAL_CACHE.Effects.GetEffects(Player.GetAgentID()):
-                effect_frame = Frame.from_hash(1726357791, [effect.skill_id + 4])
+                effect_frame = Frame.effect(effect.skill_id)
                 if not effect_frame.exists:
                     continue
-                frame_id = effect_frame.frame_id
 
                 time_remaining = effect.time_remaining/1000
                 if time_remaining > 30*60:
@@ -226,7 +225,7 @@ class SkillBarPlus:
                 newest = max(filtered, key=lambda act: act[2])
                 effect, frame_id, time_remaining = newest
 
-                _, _, right, bottom = Frame.from_id(frame_id).coords()
+                _, _, right, bottom = effect_frame.coords()
 
                 ImGui.push_font("Regular", self.font_size)
                 time_remaining = str(time_remaining)

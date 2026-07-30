@@ -803,7 +803,7 @@ class UI:
         
         inventory_frame = Frame(FrameId.InventoryBagsWindow)
         self.inventory_coords = (
-            settings.FrameCoords(inventory_frame.frame_id) if inventory_frame.exists else None
+            settings.FrameCoords(inventory_frame) if inventory_frame.exists else None
         )
 
         if self.inventory_coords is None:
@@ -1022,7 +1022,7 @@ class UI:
         if not storage_id.exists:
             return
         
-        coords = settings.FrameCoords(storage_id.frame_id)  # "Xunlai Window" frame hash
+        coords = settings.FrameCoords(storage_id)
 
         if coords is None:
             return
@@ -1070,7 +1070,7 @@ class UI:
         
         inventory_frame = Frame(FrameId.InventoryBagsWindow)
         self.inventory_coords = (
-            settings.FrameCoords(inventory_frame.frame_id) if inventory_frame.exists else None
+            settings.FrameCoords(inventory_frame) if inventory_frame.exists else None
         )
 
         if self.inventory_coords is None:

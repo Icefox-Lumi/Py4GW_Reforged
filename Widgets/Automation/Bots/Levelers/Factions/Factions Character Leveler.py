@@ -2470,15 +2470,14 @@ def TrainSkills():
     secondary_skills_grandparent = 1746895597
     secondary_skills_offset = [0, 0, 0, 5, 1]
     skills_to_train_frames = [
-        Frame.from_hash(secondary_skills_grandparent, secondary_skills_offset + [57, 0]),   # Cry of Pain
-        Frame.from_hash(secondary_skills_grandparent, secondary_skills_offset + [25, 0]),   # Power Drain
-        Frame.from_hash(secondary_skills_grandparent, secondary_skills_offset + [860, 0]),  # Signet of Disruption
+        Frame.trainer_skill(57),   # Cry of Pain
+        Frame.trainer_skill(25),   # Power Drain
+        Frame.trainer_skill(860),  # Signet of Disruption
     ]
     for skill_frame in skills_to_train_frames:
         if not skill_frame.exists:
             continue
-        skill_frame_id = skill_frame.frame_id
-        PyGameThread.enqueue(lambda fid=skill_frame_id: Frame.from_id(fid).mouse_click_action(0, 0))
+        PyGameThread.enqueue(lambda f=skill_frame: f.mouse_click_action(0, 0))
         yield from Routines.Yield.wait(200)
         PyGameThread.enqueue(lambda: Frame(FrameId.AcceptButton).click())
         yield from Routines.Yield.wait(200)

@@ -193,7 +193,7 @@ def render() -> None:
                 PyImGui.text(f'  Is parent ancestor: {is_ancestor}')
 
         if PyImGui.collapsing_header('Raw Frame Info'):
-            PyImGui.text(f'  frame_id:       {frame.frame_id}')
+            PyImGui.text(f'  frame_id:       {frame}')
             PyImGui.text(f'  parent_id:      {frame.parent_id}')
             PyImGui.text(f'  frame_hash:     {frame.frame_hash}')
             PyImGui.text(f'  child_offset:   {frame.child_offset_id}')

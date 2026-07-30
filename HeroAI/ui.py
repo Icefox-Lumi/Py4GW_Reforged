@@ -2307,23 +2307,16 @@ def draw_party_overlay(cached_data: CacheData, hero_windows : dict[str, WindowMo
     
     if party_throttle.IsExpired():
         party_throttle.Reset()
-        # 3332025202,1,8,0,0,0,0,12,0
-        party_members_hash = 3332025202 if Map.IsOutpost() else 3332025202
-        offsets = [1,8,0,0,0,0] if Map.IsOutpost() else [0,0,0,0]
-        
-        party_member_frames = []    
-        if not Frame.from_hash(party_members_hash, offsets).exists:
+        party_member_frames = []
+        if not Frame.party_list().exists:
             return
-                
+
         for i in range(1, MAX_CHILD_FRAMES):
-            member = Frame.from_hash(
-                party_members_hash,
-                [1, 8, 0, 0, 0, 0, i, 0] if Map.IsOutpost() else [0, 0, 0, 0, i, 0],
-            )
+            member = Frame.party_member(i + 1)
             if not member.exists:
                 continue
 
-            party_member_frames.append(FramePosition(member.frame_id))
+            party_member_frames.append(FramePosition(member))
             
         ## sort frames by Y
         party_member_frames.sort(key=lambda x: (x.position.top_on_screen, x.position.left_on_screen))  # Sort by Y, then X
@@ -2427,7 +2420,7 @@ def draw_panel_toggle(i, account : AccountStruct, button_rect : tuple[float, flo
             settings.save_settings()
 
 show_accounts_in_party_search : bool = False
-last_active_tab : int = -1
+last_active_tab = None   # the tab handle last seen active
 selected_account : str = ""
 
 party_search : Optional[FramePosition] = None
@@ -2505,16 +2498,16 @@ def draw_party_search_overlay(cached_data: CacheData):
             party_search_throttle.SetThrottleTime(500)
             return
         
-        party_search = FramePosition(party_search_id.frame_id)
+        party_search = FramePosition(party_search_id)
         
         players_tab_id = Frame(FrameId.PartySearchWindow.Panel.SlotLast)    
-        player_tab = FramePosition(players_tab_id.frame_id)
+        player_tab = FramePosition(players_tab_id)
             
         heroes_tab_id = Frame(FrameId.PartySearchWindow.Panel.SlotPrev)
-        hero_tab = FramePosition(heroes_tab_id.frame_id)
+        hero_tab = FramePosition(heroes_tab_id)
         
         henchmen_tab_id = Frame(FrameId.PartySearchWindow.Panel.SlotPrev2)
-        henchmen_tab = FramePosition(henchmen_tab_id.frame_id)
+        henchmen_tab = FramePosition(henchmen_tab_id)
             
         active_tab = next((tab for tab in [player_tab, hero_tab, henchmen_tab] if tab.position.content_top == max(
             player_tab.position.content_top,
@@ -2556,7 +2549,7 @@ def draw_party_search_overlay(cached_data: CacheData):
     )
     
     if active_tab:
-        if last_active_tab != active_tab.frame_id:
+        if last_active_tab != active_tab.frame:
             show_accounts_in_party_search = False
             
         elif not ImGui.is_mouse_in_rect(tab_rect):
@@ -2572,7 +2565,7 @@ def draw_party_search_overlay(cached_data: CacheData):
                         show_accounts_in_party_search = False
                         break
             
-        last_active_tab = active_tab.frame_id
+        last_active_tab = active_tab.frame
     
     tab_open = draw_tab_control(tab_rect)
     

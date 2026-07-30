@@ -9,11 +9,11 @@ from Py4GWCoreLib.FrameTree import Frame, FrameId
 
 class UIManagerExtensions:
     @staticmethod
-    def _frame_exists(frame_id: int) -> bool:
-        return isinstance(frame_id, int) and frame_id > 0 and Frame.from_id(frame_id).is_usable
+    def _frame_exists(frame) -> bool:
+        return frame is not None and frame.is_usable
 
     @staticmethod
-    def IsElementVisible(frame_id: int) -> bool:
+    def IsElementVisible(frame) -> bool:
         """
         Check if a specific frame is open in the UI.
 
@@ -23,7 +23,7 @@ class UIManagerExtensions:
         Returns:
             bool: True if the frame is open, False otherwise.
         """
-        return UIManagerExtensions._frame_exists(frame_id)
+        return UIManagerExtensions._frame_exists(frame)
 
     @staticmethod
     def _find_first_visible_frame(frame_ids: list[int]) -> int:
@@ -33,12 +33,12 @@ class UIManagerExtensions:
         return 0
 
     @staticmethod
-    def _click_frame(frame_id: int) -> bool:
-        if not UIManagerExtensions._frame_exists(frame_id):
+    def _click_frame(frame) -> bool:
+        if not UIManagerExtensions._frame_exists(frame):
             return False
 
-        Frame.from_id(frame_id).click()
-        (lambda fid, s, w=0, l=0: Frame.from_id(fid).mouse_action(s, w, l))(frame_id, 8, 0, 0)
+        frame.click()
+        frame.mouse_action(8, 0, 0)
         return True
 
     @staticmethod
@@ -49,7 +49,7 @@ class UIManagerExtensions:
             Frame(FrameId.SalvageWindow.OptionsWindowConfirmMaterialsWindow.Confirm),
         ):
             if candidate.exists:
-                return candidate.frame_id
+                return candidate
         return 0
 
     @staticmethod
@@ -99,30 +99,30 @@ class UIManagerExtensions:
         salvage_window_materials_id = Frame(FrameId.SalvageWindow.Options.Option4)
 
         if salvage_window_mod_one_id.exists:
-            options[SalvageMode.Prefix] = salvage_window_mod_one_id.frame_id
+            options[SalvageMode.Prefix] = salvage_window_mod_one_id
 
         if salvage_window_mod_two_id.exists:
-            options[SalvageMode.Suffix] = salvage_window_mod_two_id.frame_id
+            options[SalvageMode.Suffix] = salvage_window_mod_two_id
 
         if salvage_window_mod_three_id.exists:
-            options[SalvageMode.Inscription] = salvage_window_mod_three_id.frame_id
+            options[SalvageMode.Inscription] = salvage_window_mod_three_id
 
         if salvage_window_materials_id.exists:
-            options[SalvageMode.LesserCraftingMaterials] = salvage_window_materials_id.frame_id
-            options[SalvageMode.RareCraftingMaterials] = salvage_window_materials_id.frame_id
+            options[SalvageMode.LesserCraftingMaterials] = salvage_window_materials_id
+            options[SalvageMode.RareCraftingMaterials] = salvage_window_materials_id
 
         return options
     
     @staticmethod
     def ConfirmSalvageOption() -> bool:
         button = Frame(FrameId.SalvageWindow.Button)
-        frame_id = Inventory._get_salvage_choice_confirm_frame_id()
-        if frame_id == 0:
+        frame = Inventory._salvage_confirm()
+        if not frame.exists:
             if not button.exists:
                 return False
-            frame_id = button.frame_id
+            frame = button
 
-        return UIManagerExtensions._click_frame(frame_id)
+        return UIManagerExtensions._click_frame(frame)
     
     @staticmethod
     def CancelSalvageOption() -> bool:
@@ -130,7 +130,7 @@ class UIManagerExtensions:
         if not salvage_window_cancel_button_id.exists:
             return False
 
-        return UIManagerExtensions._click_frame(salvage_window_cancel_button_id.frame_id)
+        return UIManagerExtensions._click_frame(salvage_window_cancel_button_id)
     
     @staticmethod
     def SelectSalvageOptionAndSalvage(option: SalvageMode) -> bool:
@@ -257,7 +257,7 @@ class UIManagerExtensions:
         except Exception:
             pass
         return UIManagerExtensions._click_frame(
-            Frame(FrameId.ScreenFrame.C6.LesserSalvageWindow.SalvageWithLesserKitConfirm).frame_id
+            Frame(FrameId.ScreenFrame.C6.LesserSalvageWindow.SalvageWithLesserKitConfirm)
         )
             
     

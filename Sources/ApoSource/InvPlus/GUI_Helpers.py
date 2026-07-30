@@ -42,44 +42,36 @@ class TabIcon:
     
 #region Frame
 class Frame:
-    def __init__(self, frame_id):
-        self.frame_id = frame_id
-        if self.frame_id == 0:
-            self.left = 0
-            self.top = 0
-            self.right = 0
-            self.bottom = 0
-            self.height = 0
-            self.width = 0
+    """Cached screen rectangle for one frame.
+
+    Holds a FrameTree handle - the id never appears here.
+    """
+
+    def __init__(self, frame=None):
+        self.set_frame(frame)
+
+    def set_frame(self, frame):
+        self.frame = frame
+        if frame is None or not frame.exists:
+            self.left = self.top = self.right = self.bottom = 0
+            self.height = self.width = 0
         else:
             self.update_coords()
-            
-    def set_frame_id(self, frame_id):
-        self.frame_id = frame_id
-        if self.frame_id == 0:
-            self.left = 0
-            self.top = 0
-            self.right = 0
-            self.bottom = 0
-            self.height = 0
-            self.width = 0
-        else:
-            self.update_coords()
-            
+
     def update_coords(self):
-        self.left, self.top, self.right, self.bottom = GWFrame.from_id(self.frame_id).coords() 
+        self.left, self.top, self.right, self.bottom = self.frame.coords()
         self.height = self.bottom - self.top
-        self.width = self.right - self.left   
-        
+        self.width = self.right - self.left
+
     def draw_frame(self, color=Color(255, 255, 255, 255)):
-        if self.frame_id == 0:
+        if self.frame is None:
             return
-        GWFrame.from_id(self.frame_id).draw(color.to_color())
-        
+        self.frame.draw(color.to_color())
+
     def draw_frame_outline(self, color=Color(255, 255, 255, 255)):
-        if self.frame_id == 0:
+        if self.frame is None:
             return
-        GWFrame.from_id(self.frame_id).draw_outline(color.to_color())
+        self.frame.draw_outline(color.to_color())
 
 #endregion
 

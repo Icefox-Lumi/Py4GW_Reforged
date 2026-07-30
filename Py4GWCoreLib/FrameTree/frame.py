@@ -41,12 +41,14 @@ Writes and interactions gate on `is_usable`, so they no-op on a dead frame
 rather than firing input at nothing.
 """
 
+import re
 from typing import Any, Iterator, Optional
 
 import PyOverlay  # type: ignore
 import PyUIManager  # type: ignore
 
 from .frame_aliases import FRAME_ALIASES
+from .frame_ids import FrameId
 from .frame_names import FRAME_NAMES, NAME_TO_HASH
 from .frame_registry import DYNAMIC_KEYS, REGISTRY
 
@@ -173,6 +175,30 @@ def key_by_path() -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------
+def _position_unusable(p: Any) -> bool:
+    """True for the zeroed position struct the engine leaves on a missed lookup.
+
+    A real frame always has a positive viewport scale; a zero scale, or a
+    rectangle collapsed onto the origin, means the read did not land.
+    """
+    if p is None:
+        return True
+    try:
+        if float(getattr(p, "viewport_scale_x", 0.0)) <= 0.0:
+            return True
+        if float(getattr(p, "viewport_scale_y", 0.0)) <= 0.0:
+            return True
+        return not any((
+            float(getattr(p, "left_on_screen", 0.0)),
+            float(getattr(p, "top_on_screen", 0.0)),
+            float(getattr(p, "right_on_screen", 0.0)),
+            float(getattr(p, "bottom_on_screen", 0.0)),
+        ))
+    except Exception:
+        return True
+
+
+# --------------------------------------------------------------------------
 class FrameState:
     """One live read of a frame, valid only for the tick that produced it.
 
@@ -181,10 +207,15 @@ class FrameState:
     position object is fetched on first use because most frames never need it.
     """
 
-    __slots__ = ("frame_id", "frame", "is_created", "is_visible", "_position")
+    __slots__ = ("frame_id", "frame", "is_created", "is_visible", "tick",
+                 "_position", "_previous", "_landed", "served")
 
-    def __init__(self, frame_id: int) -> None:
+    def __init__(self, frame_id: int, tick: int = 0, previous: Any = None) -> None:
+        self._previous = previous
+        self._landed: Optional[bool] = None
+        self.served = 0        # ticks this copy has stood in for a failed read
         self.frame_id = frame_id
+        self.tick = tick
         try:
             self.frame = PyUIManager.UIFrame(frame_id)
         except Exception:
@@ -195,9 +226,46 @@ class FrameState:
         self._position: Any = None
 
     @property
+    def landed(self) -> bool:
+        """Did this read produce usable data?
+
+        The engine fills the whole frame struct in one pass, so when its lookup
+        misses, everything zeroes together - state, geometry, viewport.  There is
+        therefore one verdict for the whole snapshot rather than a test per
+        field: either the read landed, or the copy is worthless and the previous
+        one should be served instead.
+        """
+        if self._landed is None:
+            if self.frame is None or not (self.is_created or self.is_visible):
+                self._landed = False
+            else:
+                self._landed = not _position_unusable(
+                    getattr(self.frame, "position", None))
+        return self._landed
+
+    @property
+    def blank(self) -> bool:
+        return not self.landed
+
+    @property
     def position(self) -> Any:
-        if self._position is None and self.frame is not None:
-            self._position = self.frame.position
+        """Geometry for this frame, holding the last good read.
+
+        Frame geometry barely changes tick to tick, so an unusable read is far
+        more likely to be a missed lookup than a real move.  Rather than hand
+        back zeros - which collapse every projection onto the origin - reuse the
+        previous copy until a usable one arrives.
+        """
+        if self._position is None:
+            fresh = self.frame.position if self.frame is not None else None
+            if _position_unusable(fresh) and self._previous is not None:
+                inherited = self._previous.position
+                if not _position_unusable(inherited):
+                    self._position = inherited
+                    self._previous = None      # value carried; drop the chain
+                    return inherited
+            self._position = fresh
+            self._previous = None
         return self._position
 
 
@@ -212,6 +280,10 @@ class _FrameTree:
     """
 
     _CALLBACK = "FrameTree.Tick"
+    BUFFER_TICKS = 5      # passes a good copy may stand in for a failed read.
+                          # Counted in polls, not time: the system reads every
+                          # frame, so this is at most 5 frames behind, whatever
+                          # the framerate.
 
     def __init__(self) -> None:
         self.version = 0          # bumps on every structure rebuild
@@ -224,8 +296,10 @@ class _FrameTree:
         self._order: list[int] = []
         self._by_hash: dict[int, list[int]] = {}
         self._state: dict[int, FrameState] = {}
-        self._state_tick = -1
         self._registered = False
+        self.stale = False   # last rebuild came back empty; showing the previous tree
+        self._root_id = 0    # last good UI root id
+        self._viewport_height = 0.0
         self._overlay: Any = None
 
     # -- lifecycle --------------------------------------------------------
@@ -279,10 +353,21 @@ class _FrameTree:
             if h:
                 by_hash.setdefault(h, []).append(fid)
 
+        # The engine returns an EMPTY array whenever its frame array pointer is
+        # null - during map load, UI teardown, or before the UI context exists.
+        # That is not "the UI is gone", it is "we cannot see it this tick".
+        # Swapping an empty snapshot in makes every handle stop resolving for a
+        # frame or two, which is what made overlays flicker.  Keep the last good
+        # tree instead and try again next tick.
+        self._built_tick = self.tick
+        if not order and self._order:
+            self.stale = True
+            return
+
+        self.stale = False
         self._parent, self._code, self._hash = parent, code, fhash
         self._children, self._order, self._by_hash = children, order, by_hash
         self.version += 1
-        self._built_tick = self.tick
 
     def ensure(self) -> None:
         self.enable()
@@ -291,15 +376,40 @@ class _FrameTree:
 
     # -- per-frame live copy ----------------------------------------------
     def state(self, frame_id: int) -> FrameState:
-        """The live copy of one frame for this tick, read at most once."""
-        if self._state_tick != self.tick:
-            self._state.clear()
-            self._state_tick = self.tick
-        st = self._state.get(frame_id)
-        if st is None:
-            st = FrameState(frame_id)
-            self._state[frame_id] = st
-        return st
+        """The live copy of one frame for this tick, read at most once.
+
+        Entries are overwritten in place rather than cleared each tick.  A frame
+        that is still in the tree but reads back blank - GetContext bailing on a
+        transient null - keeps its previous copy, so a caller reading geometry
+        never sees a one-frame hole.  A frame that has genuinely left the tree
+        gets the blank read, because then it really is gone.
+        """
+        previous = self._state.get(frame_id)
+        if previous is not None and previous.tick == self.tick:
+            return previous
+
+        fresh = FrameState(frame_id, self.tick, previous)
+        if (not fresh.landed and previous is not None and previous.landed
+                and previous.served < self.BUFFER_TICKS):
+            # The read did not land but we have a good copy from a moment ago.
+            # Geometry barely moves between ticks, so redrawing from the buffer
+            # is far closer to the truth than a zeroed struct - and one bad tick
+            # is enough to blank an overlay or flip it into a fallback mode.
+            # Bounded, so a frame that stops reporting eventually tells the truth.
+            previous.served += 1
+            previous.tick = self.tick
+            return previous
+
+        self._state[frame_id] = fresh
+        if len(self._state) > 4096:
+            self._prune()
+        return fresh
+
+    def _prune(self) -> None:
+        """Drop copies nothing has touched for a while."""
+        cutoff = self.tick - 240
+        for fid in [f for f, st in self._state.items() if st.tick < cutoff]:
+            del self._state[fid]
 
     def invalidate(self, frame_id: Optional[int] = None) -> None:
         """Drop cached live copies so the next read hits the game again.
@@ -315,11 +425,24 @@ class _FrameTree:
     # -- structure queries ------------------------------------------------
     def anchor_ids(self, anchor) -> list[int]:
         if isinstance(anchor, int):
-            return self._by_hash.get(anchor, [])
-        h = NAME_TO_HASH.get(anchor)
-        if h is None:
-            raise FrameKeyError("no known frame named %r" % anchor)
-        return self._by_hash.get(h, [])
+            h = anchor
+        else:
+            h = NAME_TO_HASH.get(anchor)
+            if h is None:
+                raise FrameKeyError("no known frame named %r" % anchor)
+
+        found = self._by_hash.get(h)
+        if found:
+            return found
+
+        # The snapshot has not seen this hash - it may be a tick behind, or the
+        # sweep may have missed it.  Ask the engine directly, the way the legacy
+        # code always did, rather than reporting the frame as gone.
+        try:
+            fid = int(PyUIManager.UIManager.get_frame_id_by_hash(h) or 0)
+        except Exception:
+            fid = 0
+        return [fid] if fid else []
 
     def child_of(self, frame_id: int, code: int) -> Optional[int]:
         got = self._children.get(frame_id, {}).get(code)
@@ -350,6 +473,26 @@ class _FrameTree:
     def known(self, frame_id: int) -> bool:
         return frame_id in self._parent
 
+    def live(self, frame_id: int) -> bool:
+        """Ask the engine directly whether this frame is real.
+
+        The structure snapshot is at best a tick old, and an id handed to us by
+        another subsystem - a native context, say - can be valid before we have
+        ever seen it in a frame-array sweep.  Treating "not in my snapshot" as
+        "does not exist" is what made geometry collapse to the origin for a
+        frame at a time; the legacy code asked the engine every call and never
+        had that failure.  This is that check, served from the per-tick copy.
+        """
+        if not frame_id:
+            return False
+        # a RAW read - never the retained copy, or existence would feed on the
+        # very cache it is meant to validate and a removed frame would never die
+        try:
+            f = PyUIManager.UIFrame(int(frame_id))
+        except Exception:
+            return False
+        return bool(getattr(f, "is_created", False) or getattr(f, "is_visible", False))
+
     # -- tree-wide bindings (tier 2) --------------------------------------
     def all_ids(self) -> list[int]:
         """Every live frame id, in native frame-array order."""
@@ -367,10 +510,22 @@ class _FrameTree:
             out.setdefault(self._parent.get(fid, 0), []).append(fid)
         return out
 
-    def descendants_of(self, frame_id: int) -> list[int]:
+    @staticmethod
+    def _as_id(frame_or_id: Any) -> int:
+        """Accept a Frame or a raw id, so callers never have to unwrap."""
+        if isinstance(frame_or_id, Frame):
+            return frame_or_id._target_id()
+        return int(frame_or_id or 0)
+
+    def descendants(self, frame: Any) -> list["Frame"]:
+        """Breadth-first descendant handles."""
+        return [Frame.from_id(i) for i in self.descendants_of(frame)]
+
+    def descendants_of(self, frame_id: Any) -> list[int]:
         """Breadth-first descendants, native order within each level."""
         from collections import deque
 
+        frame_id = self._as_id(frame_id)
         kids = self.children_map()
         out: list[int] = []
         queue = deque([frame_id])
@@ -382,7 +537,19 @@ class _FrameTree:
         return out
 
     def root(self) -> "Frame":
-        return Frame.from_id(int(PyUIManager.UIManager.get_root_frame_id() or 0))
+        """The UI root.  Cached: it never changes, and a transient 0 from the
+        engine would otherwise zero out every viewport-relative calculation."""
+        fid = int(PyUIManager.UIManager.get_root_frame_id() or 0)
+        if fid:
+            self._root_id = fid
+        return Frame.from_id(fid or self._root_id)
+
+    def viewport_height(self) -> float:
+        """Screen height of the UI root, held across transient misses."""
+        _, height = self.root().viewport_dimensions()
+        if height:
+            self._viewport_height = height
+        return self._viewport_height
 
     def hierarchy(self) -> list[tuple[int, int, int, int]]:
         """Native flat hierarchy dump: (frame_id, parent_id, code, hash) rows."""
@@ -423,9 +590,10 @@ class _FrameTree:
         self.ensure()
         return self._frames_at(set(self.anchor_ids(anchor)), codes)
 
-    def frames_under(self, anchor_frame_id: int, codes: list[int]) -> list["Frame"]:
-        """`frames_at_path` anchored on one known frame id instead of a hash."""
+    def frames_under(self, anchor_frame_id: Any, codes: list[int]) -> list["Frame"]:
+        """`frames_at_path` anchored on one known frame instead of a hash."""
         self.ensure()
+        anchor_frame_id = self._as_id(anchor_frame_id)
         if not anchor_frame_id:
             return []
         return self._frames_at({int(anchor_frame_id)}, codes)
@@ -560,6 +728,142 @@ class Frame:
                 return cls.from_hash(h, [int(c) for c in parts[1:]])
         raise FrameKeyError("no frame alias labelled %r" % label)
 
+    # -- named indexed addressing -----------------------------------------
+    # The engine addresses a child by (parent, key_code).  Where those codes are
+    # computed from game data - a bag number, a slot, a skill id - the
+    # arithmetic belongs here, not in a script.  Each accessor takes DOMAIN
+    # arguments and resolves a registered parent, so no caller ever names a code.
+    @classmethod
+    def _under(cls, parent_key: Any, *codes: int) -> "Frame":
+        """A registered parent plus computed child codes.  Package-internal."""
+        parent = cls(parent_key)
+        anchor, tail = parent._anchor, parent._tail
+        f = cls.__new__(cls)
+        f._key = ""
+        f._anchor = anchor
+        f._tail = tuple(tail) + tuple(int(c) for c in codes)
+        f._fid = None
+        f._version = -1
+        f._blackboard = {}
+        return f
+
+    @classmethod
+    def skill(cls, index: int) -> "Frame":
+        """Player skillbar slot, 1-based."""
+        return cls("Skillbar.Skill%d" % int(index))
+
+    @classmethod
+    def hero_skill(cls, hero: int, index: int) -> "Frame":
+        """Hero skillbar slot; hero and index both 1-based."""
+        return cls("Hero%dWindow.SkillBar.Skill%d" % (int(hero), int(index)))
+
+    @classmethod
+    def bag_slot(cls, bag: Any, slot: int) -> "Frame":
+        """Slot in the aggregate inventory bags panel.
+
+        `bag` is a Bags enum (or its value) and `slot` is 0-based, matching how
+        the game numbers them - the engine's own codes are `bag - Backpack` and
+        `slot + 2`, and that arithmetic stays here.
+        """
+        return cls._under(FrameId.InventoryBagsWindow.Content.C0.C0,
+                          cls._bag_offset(bag), 2 + int(slot))
+
+    @staticmethod
+    def _bag_offset(bag: Any) -> int:
+        """Bag -> its child code.  Accepts a Bags enum or a raw bag value."""
+        from ..enums_src.Item_enums import Bags
+
+        value = getattr(bag, "value", bag)
+        return int(value) - int(Bags.Backpack.value)
+
+    @classmethod
+    def inventory_bag(cls, bag: Any) -> "Frame":
+        """The standalone window for one bag (not the aggregate bags panel)."""
+        return cls._under(FrameId.InventoryWindow, cls._bag_offset(bag))
+
+    @classmethod
+    def inventory_bag_slot(cls, bag: Any, slot: int) -> "Frame":
+        """Slot inside a standalone bag window; `slot` is 0-based."""
+        return cls._under(FrameId.InventoryWindow,
+                          cls._bag_offset(bag), 2 + int(slot))
+
+    @classmethod
+    def storage_tab(cls, bag: Any, reversed_order: bool = False) -> "Frame":
+        """Xunlai storage tab for `bag`.
+
+        `reversed_order` selects the engine's descending tab codes, which the
+        tab strip uses while the content panes count up.
+        """
+        offset = cls._bag_offset(bag)
+        code = (0xFFFFFFFF - offset) if reversed_order else offset
+        return cls._under(FrameId.XunlaiWindow.StorageFrame, code)
+
+    @classmethod
+    def storage_slot(cls, bag: Any, slot: int) -> "Frame":
+        """Xunlai storage slot; `slot` is 0-based."""
+        return cls._under(FrameId.XunlaiWindow.StorageFrame,
+                          cls._bag_offset(bag), 2 + int(slot))
+
+    @classmethod
+    def material_slot(cls, slot: int, max_tabs: int = 5, raw_slot: bool = False) -> "Frame":
+        """Material storage slot; it sits one tab past the last storage tab."""
+        code = int(slot) if raw_slot else 2 + int(slot)
+        return cls._under(FrameId.XunlaiWindow.StorageFrame, int(max_tabs), code)
+
+    @classmethod
+    def party_list(cls) -> "Frame":
+        """The container holding party entries, for whichever map type we are in."""
+        from ..Map import Map
+
+        return cls(
+            FrameId.PartyFormation.Outpost.Members.Frame.C0.C0.Parent
+            if Map.IsOutpost() else
+            FrameId.PartyFormation.Explorable.C0.C0.MembersParentExplorable
+        )
+
+    @classmethod
+    def party_member(cls, index: int) -> "Frame":
+        """Party list entry, 1-based.
+
+        The party window is laid out differently in an outpost than in an
+        explorable area.  Deciding which is the class's job - a caller asking
+        for "party member 3" should not have to know the map type.
+        """
+        from ..Map import Map
+
+        parent = (
+            FrameId.PartyFormation.Outpost.Members.Frame.C0.C0.Parent  # codes [1,8,0,0,0,0]
+            if Map.IsOutpost() else
+            FrameId.PartyFormation.Explorable.C0.C0.MembersParentExplorable  # codes [0,0,0,0]
+        )
+        # each entry sits at <parent>,<slot>,0
+        return cls._under(parent, int(index) - 1, 0)
+
+    @classmethod
+    def effect(cls, skill_id: int) -> "Frame":
+        """Effect icon in the effects monitor, addressed by skill id.
+
+        Effect children are keyed by skill id at runtime, so they can never be
+        enumerated in the registry - the mapping lives here instead.
+        """
+        return cls._under(FrameId.EffectsMonitor, int(skill_id) + 4)
+
+    @classmethod
+    def trainer_skill(cls, skill_id: int) -> "Frame":
+        """Skill entry in the skill-trainer list, keyed by skill id."""
+        return cls._under(FrameId.SkillTrainerWindow, 0, 0, 0, 5, 1, int(skill_id), 0)
+
+    @classmethod
+    def capture_skill(cls, attribute: int, skill_id: int) -> "Frame":
+        """Skill entry in the elite-capture dialog, keyed by attribute + skill id."""
+        return cls._under(FrameId.SkillCaptureDialog, 3, 0, 0, 0,
+                          int(attribute), 1, int(skill_id), 0)
+
+    @classmethod
+    def dialog_option(cls, index: int) -> "Frame":
+        """NPC dialog option, 1-based."""
+        return cls("Option%d" % int(index))
+
     # -- resolution -------------------------------------------------------
     def _resolve(self) -> Optional[int]:
         FrameTree.ensure()
@@ -568,7 +872,10 @@ class Frame:
         self._version = FrameTree.version
 
         if not self._key and not self._anchor:             # wrapped id
-            self._fid = self._fid if FrameTree.known(self._fid or 0) else None
+            fid = self._fid or 0
+            # snapshot first (cheap), then the engine, so an id we have not
+            # swept yet is not mistaken for a dead one
+            self._fid = fid if fid and (FrameTree.known(fid) or FrameTree.live(fid)) else None
             return self._fid
 
         fid = None
@@ -700,6 +1007,16 @@ class Frame:
             parts.append("(%s)" % alias)
         return "  ".join(parts)
 
+    @property
+    def widget_id(self) -> str:
+        """A stable, unique token for this frame, for ImGui widget suffixes.
+
+        Scripts used the raw frame id to keep `##` suffixes unique.  This is a
+        string label instead: unique per frame and stable within a session, but
+        not something that can be passed back in to address a frame.
+        """
+        return "fr%x" % (self._target_id() & 0xFFFFFFFF)
+
     def matches(self, *names: str) -> bool:
         """The frame resolved and its engine name is one of `names`.
 
@@ -783,11 +1100,21 @@ class Frame:
         f = self._state().frame
         return int(getattr(f, "frame_layout", 0) or 0) if f is not None else 0
 
-    @property
-    def relation(self) -> Any:
-        """Raw IFrame::CRelation block (parent link, key code, name hash)."""
+    def siblings(self) -> list["Frame"]:
+        """Frames sharing this frame's parent, per the engine's relation block.
+
+        Returns handles, never ids - `relation.siblings` is a raw id list and
+        must not leave the class.  Its scalars are still visible via `fields()`
+        under the `relation.` prefix.
+        """
         f = self._state().frame
-        return getattr(f, "relation", None) if f is not None else None
+        rel = getattr(f, "relation", None) if f is not None else None
+        if rel is None:
+            return []
+        try:
+            return [Frame.from_id(int(i)) for i in (getattr(rel, "siblings", ()) or ())]
+        except Exception:
+            return []
 
     @property
     def frame_callbacks(self) -> Any:
@@ -799,16 +1126,60 @@ class Frame:
         f = self._state().frame
         return int(getattr(f, "frame_state", 0) or 0) if f is not None else 0
 
-    @property
-    def raw(self) -> Any:
-        """The live copy's underlying snapshot object.
+    def fields(self) -> dict:
+        """Every scalar the engine exposes for this frame, as plain data.
 
-        For reverse-engineering tools that read the undocumented `field*_0x..`
-        offsets directly.  Everything with a name has a property above - reach
-        for this only when inspecting raw structure.  The object is owned and
-        cached by FrameTree (one per frame per tick); do not construct your own.
+        This is the inspection surface for frame testers: they get the values,
+        never the underlying object, so there is still no way to address or
+        act on a frame except through this class.  Named fields come first,
+        then the undocumented `field*_0x..` slots ordered by struct offset.
         """
-        return self._state().frame
+        f = self._state().frame
+        if f is None:
+            return {}
+
+        def scalars(obj, prefix=""):
+            named: dict = {}
+            offsets: list = []
+            for name in dir(obj):
+                if name.startswith("_"):
+                    continue
+                try:
+                    value = getattr(obj, name)
+                except Exception:
+                    continue
+                if callable(value):
+                    continue
+                key = prefix + name
+                if isinstance(value, (int, float, bool)):
+                    m = re.match(r"field\w*?_0x([0-9a-fA-F]+)$", name)
+                    if m:
+                        offsets.append((int(m.group(1), 16), key, value))
+                    else:
+                        named[key] = value
+                elif prefix == "" and name in ("relation", "position"):
+                    # one level of nesting, so testers never need the object
+                    sub_named, sub_offsets = scalars(value, name + ".")
+                    named.update(sub_named)
+                    offsets.extend(sub_offsets)
+            return named, offsets
+
+        named, offsets = scalars(f)
+        out = dict(sorted(named.items()))
+        for _, name, value in sorted(offsets):
+            out[name] = value
+        return out
+
+    @property
+    def parameters(self) -> list:
+        """The frame's parameter list (struct slot 0x84), as plain data."""
+        f = self._state().frame
+        if f is None:
+            return []
+        try:
+            return list(getattr(f, "field31_0x84", ()) or ())
+        except Exception:
+            return []
 
     @property
     def parent_id(self) -> int:
@@ -964,7 +1335,17 @@ class Frame:
         if p is None:
             return (0, 0, 0, 0)
         scale_x, scale_y = self.viewport_scale()
-        _, height = FrameTree.root().viewport_dimensions()
+        # The Y flip must use the ROOT's viewport height - that is the screen
+        # height the content rectangle is measured against.  A frame's own
+        # viewport_height is not the same value, and using it anchors every Y
+        # coordinate at zero while leaving X correct.  The root's height is
+        # cached, so a tick where the root cannot be read reuses the last good
+        # one rather than collapsing the rectangle.
+        height = FrameTree.viewport_height()
+        if not height:
+            # without a viewport height the Y flip below would invert the frame
+            # onto negative screen space; better to report nothing this tick
+            return (0, 0, 0, 0)
         return (
             int(p.content_left * scale_x),
             int((height - p.content_top) * scale_y),
@@ -973,17 +1354,35 @@ class Frame:
         )
 
     def viewport_scale(self) -> tuple[float, float]:
+        """Viewport scale, never zero.
+
+        A zeroed position struct - what the engine leaves behind when its frame
+        lookup misses - would otherwise report a scale of 0, and any caller
+        multiplying by it collapses every coordinate onto the origin.  There is
+        no meaningful zero scale, so an unreadable one falls back to identity.
+        """
         if not self.exists:
             return (1.0, 1.0)
         p = self.position
         if p is None:
             return (1.0, 1.0)
-        return float(p.viewport_scale_x), float(p.viewport_scale_y)
+        sx = float(p.viewport_scale_x)
+        sy = float(p.viewport_scale_y)
+        if sx <= 0.0 or sy <= 0.0:
+            return (1.0, 1.0)
+        return sx, sy
 
     def viewport_dimensions(self) -> tuple[float, float]:
-        if not self.exists:
-            return (0.0, 0.0)
-        p = self.position
+        """Viewport size for this frame.
+
+        Deliberately NOT gated on `exists`.  This is normally asked of the UI
+        root, which does not reliably appear in a frame-array sweep - gating it
+        made the whole viewport read zero whenever the sweep missed it, which
+        zeroed every content rectangle derived from it.  The legacy code read
+        this straight off the frame with no checks at all, and never had that
+        failure.
+        """
+        p = self._state().position
         if p is None:
             return (0.0, 0.0)
         return float(p.viewport_width), float(p.viewport_height)
@@ -1169,7 +1568,7 @@ class Frame:
             return []
         from ..UIManager import UIManager
 
-        return UIManager.GetIOEventsForFrame(self.frame_id)
+        return UIManager.GetIOEventsForFrame(self)
 
     def __iter__(self) -> Iterator["Frame"]:
         return iter(self.children())
@@ -1184,6 +1583,10 @@ class Frame:
 
     def __bool__(self) -> bool:
         return self.exists
+
+    def __str__(self) -> str:
+        """Human-readable identity, for logs and labels."""
+        return self.describe() or self.widget_id
 
     def __repr__(self) -> str:
         fid = self._resolve()

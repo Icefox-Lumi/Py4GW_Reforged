@@ -81,7 +81,7 @@ class InventoryInteractionContext:
     storage_visible: bool = False
     item_data_by_bag_slot: dict[tuple[int, int], ItemSlotData] = field(default_factory=dict)
     bag_sizes: dict[int, int] = field(default_factory=dict)
-    i_inventory_frame_id: int = 0
+    i_inventory_frame: object = None   # FrameTree handle
     i_bags_bar_bottom: int = 0
     i_slot_frame_ids: dict[tuple[int, int], int] = field(default_factory=dict)
     storage_slot_frame_ids: dict[tuple[int, int], int] = field(default_factory=dict)
@@ -1038,7 +1038,7 @@ class InventoryPlusWidget:
             self._xunlai_sort_anchor_side = None
             return
 
-        left, top, right, bottom = GWFrame.from_id(self.XUNLAI_WINDOW_FRAME_HASH).coords()
+        left, top, right, bottom = GWFrame(FrameId.XunlaiWindow).coords()
         if right <= left or bottom <= top:
             return
         if (right - left) < 100 or (bottom - top) < 100:
@@ -1738,7 +1738,7 @@ class InventoryPlusWidget:
         context = InventoryInteractionContext(
             f9_visible=UIManager.IsWindowVisible(WindowID.WindowID_InventoryBags),
             i_visible=self.inventory_window_settings.enable_i_window and UIManager.IsWindowVisible(WindowID.WindowID_Inventory),
-            storage_visible=GWFrame.from_id(self.XUNLAI_WINDOW_FRAME_HASH).is_usable,
+            storage_visible=GWFrame(FrameId.XunlaiWindow).is_usable,
         )
         if not context.f9_visible and not context.i_visible and not context.storage_visible:
             return context
@@ -1780,13 +1780,9 @@ class InventoryPlusWidget:
                 if not bags_window.exists:
                     continue
 
-                self.InventorySlots.append(
-                    GWFrame.from_hash(
-                        bags_window.hash,
-                        [0, 0, 0, bag_id - 1, item.Slot + 2],
-                        blackboard={"ItemData": item},
-                    )
-                )
+                slot_frame = GWFrame.bag_slot(bag_id, item.Slot)
+                slot_frame.blackboard["ItemData"] = item
+                self.InventorySlots.append(slot_frame)
 
         if context.storage_visible:
             for bag_id in range(Bags.Storage1, Bags.Storage14 + 1):
@@ -1831,10 +1827,10 @@ class InventoryPlusWidget:
             return 0
 
         tab_index = bag_id - Bags.Storage1
-        slot_frame_id = GWFrame.from_hash(self.XUNLAI_WINDOW_FRAME_HASH, [0, tab_index, slot + 2])
+        slot_frame_id = GWFrame.storage_slot(tab_index + 1, slot)
         if not slot_frame_id.exists:
             return 0
-        return slot_frame_id.frame_id
+        return slot_frame_id
 
     def _populate_i_inventory_context(self, context: InventoryInteractionContext) -> None:
         from Py4GWCoreLib.enums_src.Item_enums import Bags
@@ -1843,14 +1839,12 @@ class InventoryPlusWidget:
             return
 
         # Wrap the fixed I-layout containers so later logic can query them consistently.
-        i_inventory_frame = GWFrame.from_hash(self.I_INVENTORY_FRAME_HASH)
+        i_inventory_frame = GWFrame(FrameId.InventoryWindow)
         if not i_inventory_frame.exists:
             return
 
-        context.i_inventory_frame_id = i_inventory_frame.frame_id
-        i_bags_bar_frame = GWFrame.from_hash(
-            self.I_INVENTORY_FRAME_HASH, list(self.I_BAGS_BAR_OFFSETS)
-        )
+        context.i_inventory_frame = i_inventory_frame
+        i_bags_bar_frame = GWFrame(FrameId.InventoryWindow.BagsBar)
         if i_bags_bar_frame.exists:
             _, _, _, context.i_bags_bar_bottom = i_bags_bar_frame.coords()
 
@@ -1948,7 +1942,7 @@ class InventoryPlusWidget:
     def _resolve_i_regular_bag_prefix(self, context: InventoryInteractionContext) -> tuple[int, ...] | None:
         from Py4GWCoreLib.enums_src.Item_enums import Bags
 
-        if context.i_inventory_frame_id == 0:
+        if context.i_inventory_frame is None:
             return None
 
         probe_slots: list[tuple[int, int]] = []
@@ -1979,7 +1973,7 @@ class InventoryPlusWidget:
     ) -> int:
         from Py4GWCoreLib.UIManager import UIManager
 
-        if context.i_inventory_frame_id == 0:
+        if context.i_inventory_frame is None:
             return 0
 
         if prefix is None:
@@ -1988,7 +1982,12 @@ class InventoryPlusWidget:
             prefixes = [list(prefix)]
 
         for candidate_prefix in prefixes:
-            slot_frame_id = GWFrame.from_hash(self.I_INVENTORY_FRAME_HASH, [*candidate_prefix, bag_id - 1, slot + 2])
+            # layout discovery: the prefix is what this loop is searching for,
+            # so it walks relative codes under the registered window
+            slot_frame_id = GWFrame(FrameId.InventoryWindow).find_child(
+                *candidate_prefix, bag_id - 1, slot + 2)
+            if slot_frame_id is None:
+                continue
             if not slot_frame_id.exists:
                 continue
 
@@ -1998,7 +1997,7 @@ class InventoryPlusWidget:
 
             if prefix is None:
                 self._remember_i_inventory_slot_prefix(candidate_prefix)
-            return slot_frame_id.frame_id
+            return slot_frame_id
 
         return 0
 
@@ -2018,7 +2017,7 @@ class InventoryPlusWidget:
             slot_frame.draw(color=fill_color.to_color())
             slot_frame.draw_outline(outline_color.to_color())
 
-        if context.i_inventory_frame_id == 0:
+        if context.i_inventory_frame is None:
             return
 
         ui_manager = UIManager()
@@ -2057,14 +2056,14 @@ class InventoryPlusWidget:
     ) -> tuple[ItemSlotData | None, bool, str]:
         from Py4GWCoreLib.UIManager import UIManager
 
-        if context.i_inventory_frame_id == 0:
+        if context.i_inventory_frame is None:
             return None, False, ""
 
-        if not GWFrame.from_id(context.i_inventory_frame_id).is_mouse_over():
+        if not context.i_inventory_frame.is_mouse_over():
             return None, False, ""
 
         for bag_slot, slot_frame_id in context.i_slot_frame_ids.items():
-            left, top, right, bottom = GWFrame.from_id(slot_frame_id).coords()
+            left, top, right, bottom = slot_frame_id.coords()
             if mouse_x < left or mouse_x > right or mouse_y < top or mouse_y > bottom:
                 continue
 
@@ -2098,7 +2097,7 @@ class InventoryPlusWidget:
         if not context.storage_visible:
             return None, False, ""
 
-        if not GWFrame.from_id(self.XUNLAI_WINDOW_FRAME_HASH).is_mouse_over():
+        if not GWFrame(FrameId.XunlaiWindow).is_mouse_over():
             return None, False, ""
 
         hovered_item_id = GLOBAL_CACHE.Inventory.GetHoveredItemID()
@@ -2108,7 +2107,7 @@ class InventoryPlusWidget:
                     return item_data, True, "storage"
 
         for bag_slot, slot_frame_id in context.storage_slot_frame_ids.items():
-            left, top, right, bottom = GWFrame.from_id(slot_frame_id).coords()
+            left, top, right, bottom = slot_frame_id.coords()
             if mouse_x < left or mouse_x > right or mouse_y < top or mouse_y > bottom:
                 continue
 
@@ -2296,7 +2295,7 @@ class InventoryPlusWidget:
         LegacyMerchantModule.Trading = GLOBAL_CACHE.Trading
         LegacyMerchantCoroutines.Trading = GLOBAL_CACHE.Trading
 
-        self._legacy_inventory_frame = Frame(0)
+        self._legacy_inventory_frame = Frame(None)
         self._legacy_merchant_module = MerchantModule(self._legacy_inventory_frame)
 
     def _get_merchant_batch_size(self) -> int:
@@ -2629,12 +2628,12 @@ class InventoryPlusWidget:
             self.merchant_frame_exists = False
             return
 
-        merchant_frame_id = GWFrame.from_hash(MERCHANT_FRAME)
+        merchant_frame_id = GWFrame(FrameId.Merchant)
         if not merchant_frame_id.exists:
             self.merchant_frame_exists = False
             return
 
-        self._legacy_inventory_frame.set_frame_id(inventory_frame_id.frame_id)
+        self._legacy_inventory_frame.set_frame(inventory_frame_id)
         is_material_trader = False
         try:
             is_material_trader = bool(self._legacy_merchant_module._is_material_trader())

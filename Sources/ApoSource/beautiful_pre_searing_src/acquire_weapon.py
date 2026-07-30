@@ -716,7 +716,7 @@ def WarriorMerchantPrepAndCleanup(
     def _is_merchant_window_open() -> bool:
         from Py4GWCoreLib.UIManager import UIManager
 
-        merchant_frame_id = Frame.from_hash(merchant_frame_hash)
+        merchant_frame_id = Frame(FrameId.Merchant)
         return merchant_frame_id.is_usable
 
     return BehaviorTree(
@@ -880,7 +880,7 @@ def TryAcquireBonusShield() -> BehaviorTree:
         def _is_merchant_window_open() -> bool:
             from Py4GWCoreLib.UIManager import UIManager
 
-            merchant_frame_id = Frame.from_hash(merchant_frame_hash)
+            merchant_frame_id = Frame(FrameId.Merchant)
             return merchant_frame_id.is_usable
 
         return BehaviorTree(

@@ -27,7 +27,7 @@ class Global_Vars:
     def __init__(self):
         self.title_frame_parent_hash = 3332025202
         self.title_frame_offsets = [0,0,0,8,1]
-        self.title_frame_id = 0
+        self.title_frame = None
         self.title_frame_coords = frame_coords(0,0,0,0)
         self.title_frame_visible = False
         
@@ -69,15 +69,15 @@ class Global_Vars:
         if not Agent.IsValid(self.pet_id):
             return
 
-        title_frame = Frame.from_hash(self.title_frame_parent_hash, self.title_frame_offsets)
+        title_frame = Frame(FrameId.PartyFormation.Explorable.C0.C0.PetsHeader.Title)
         if not title_frame.exists:
-            self.title_frame_id = 0
+            self.title_frame = None
             self.title_frame_visible = False
             return
-        self.title_frame_id = title_frame.frame_id
+        self.title_frame = title_frame
         
-        self.title_frame_coords.left, self.title_frame_coords.top, self.title_frame_coords.right, self.title_frame_coords.bottom = Frame.from_id(self.title_frame_id).coords()
-        self.title_frame_visible = Frame.from_id(self.title_frame_id).is_usable
+        self.title_frame_coords.left, self.title_frame_coords.top, self.title_frame_coords.right, self.title_frame_coords.bottom = self.title_frame.coords()
+        self.title_frame_visible = self.title_frame.is_usable
         
         if self.pet_id != 0:
             pet_info = GLOBAL_CACHE.Party.Pets.GetPetInfo(self.player_agent_id)
