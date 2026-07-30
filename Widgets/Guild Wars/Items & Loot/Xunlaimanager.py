@@ -7,13 +7,13 @@ import copy
 
 from Py4GWCoreLib import *
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
+from Py4GWCoreLib.FrameTree import Frame, FrameId
 
 
 MODULE_NAME = "Xunlai Manager"        # Display name shown in the overlay window
 MODULE_ICON = "Textures/Module_Icons/TeamInventoryViewer.png"  # Relative path to the toggle-button icon
 CHEST_FRAME_ID = 752                  # Fallback frame ID for the Xunlai chest window
 XUNLAI_WINDOW_HASH = 2315448754       # UIManager hash for the Xunlai vault window
-FRAME_ALIAS_FILE = ".\\Py4GWCoreLib\\frame_aliases.json"  # JSON file mapping human-readable frame labels
 INVENTORY_FRAME_HASH = 291586130      # Fallback: player inventory panel frame hash
 ANCHOR_OFFSET_X = 6                   # Horizontal gap (px) between the vault window and our overlay
 ANCHOR_OFFSET_Y = 0                   # Vertical offset from the top of the vault window
@@ -2846,10 +2846,10 @@ def _frame_matches_xunlai(frame_id):
 	GW recycles numeric frame IDs, so this identity check guards against anchoring
 	onto an unrelated frame that has merely inherited the same numeric ID.
 	"""
-	if not frame_id or frame_id <= 0 or not UIManager.FrameExists(frame_id):
+	if not frame_id or frame_id <= 0 or not Frame.from_id(frame_id).is_usable:
 		return False
 	try:
-		return UIManager.GetFrameNameHash(frame_id) == XUNLAI_WINDOW_HASH
+		return Frame.from_id(frame_id).hash == XUNLAI_WINDOW_HASH
 	except Exception:
 		return False
 
@@ -2865,12 +2865,9 @@ def _resolve_xunlai_frame_id():
 	"""
 	global _anchor_label_frame_id
 
-	try:
-		frame_id = UIManager.GetFrameIDByHash(XUNLAI_WINDOW_HASH)
-	except Exception:
-		frame_id = 0
-	if frame_id and frame_id > 0:
-		return frame_id
+	xunlai_frame = Frame.from_hash(XUNLAI_WINDOW_HASH)
+	if xunlai_frame.exists:
+		return xunlai_frame.frame_id
 
 	# Hash miss: fall back to the human-readable JSON alias.  Reuse the last
 	# resolved ID while it still points at the vault; only re-read the file
@@ -2879,12 +2876,9 @@ def _resolve_xunlai_frame_id():
 		return _anchor_label_frame_id
 	if _anchor_label_lookup_timer.IsExpired():
 		_anchor_label_lookup_timer.Reset()
-		try:
-			_anchor_label_frame_id = UIManager.GetFrameIDByCustomLabel(FRAME_ALIAS_FILE, "Xunlai Window") or 0
-		except Exception:
-			_anchor_label_frame_id = 0
-		if _frame_matches_xunlai(_anchor_label_frame_id):
-			return _anchor_label_frame_id
+		anchor_frame = Frame(FrameId.XunlaiWindow)
+		if anchor_frame.exists and _frame_matches_xunlai(anchor_frame.frame_id):
+			return anchor_frame.frame_id
 	return 0
 
 
@@ -2904,9 +2898,9 @@ def _get_storage_anchor_position(anchor_window_width=None):
 
 	# Primary: the live Xunlai vault frame, re-resolved by hash each frame.
 	frame_id = _resolve_xunlai_frame_id()
-	if frame_id and frame_id > 0 and UIManager.FrameExists(frame_id):
+	if frame_id and frame_id > 0 and Frame.from_id(frame_id).is_usable:
 		try:
-			left, top, right, bottom = UIManager.GetFrameCoords(frame_id)
+			left, top, right, bottom = Frame.from_id(frame_id).coords()
 			x1 = min(left, right)
 			y1 = min(top, bottom)
 			y2 = max(top, bottom)
@@ -2917,13 +2911,11 @@ def _get_storage_anchor_position(anchor_window_width=None):
 			pass
 
 	# Fallback: anchor next to the player inventory panel, also re-resolved by hash.
-	try:
-		fallback_id = UIManager.GetFrameIDByHash(INVENTORY_FRAME_HASH)
-	except Exception:
-		fallback_id = 0
-	if fallback_id and fallback_id > 0 and UIManager.FrameExists(fallback_id):
+	inventory_frame = Frame.from_hash(INVENTORY_FRAME_HASH)
+	fallback_id = inventory_frame.frame_id if inventory_frame.exists else 0
+	if inventory_frame.exists:
 		try:
-			left, top, right, _ = UIManager.GetFrameCoords(fallback_id)
+			left, top, right, _ = Frame.from_id(fallback_id).coords()
 			if right > left:
 				return float(left - ANCHOR_OFFSET_X - anchor_window_width), float(top + ANCHOR_OFFSET_Y)
 		except Exception:
@@ -2933,7 +2925,7 @@ def _get_storage_anchor_position(anchor_window_width=None):
 	# window â€” the hash guard prevents anchoring onto an unrelated recycled frame.
 	if _frame_matches_xunlai(CHEST_FRAME_ID):
 		try:
-			left, top, right, bottom = UIManager.GetFrameCoords(CHEST_FRAME_ID)
+			left, top, right, bottom = Frame.from_id(CHEST_FRAME_ID).coords()
 			x1 = min(left, right)
 			y1 = min(top, bottom)
 			y2 = max(top, bottom)

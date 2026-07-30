@@ -1,5 +1,7 @@
 import PyImGui
 import PyUIManager
+from Py4GWCoreLib.FrameTree import Frame
+from Py4GWCoreLib.FrameTree import FrameTree
 
 MODULE_NAME = "Frame Viewer (Basic)"
 
@@ -13,7 +15,7 @@ status_text = "Ready"
 def refresh_frames():
     global frame_ids, selected_frame_id, status_text
     try:
-        frame_ids = list(PyUIManager.UIManager.get_frame_array())
+        frame_ids = list(FrameTree.all_ids())
         frame_ids.sort()
         if selected_frame_id not in frame_ids:
             selected_frame_id = frame_ids[0] if frame_ids else 0
@@ -26,7 +28,7 @@ def get_selected_frame():
     if not selected_frame_id:
         return None
     try:
-        return PyUIManager.UIFrame(selected_frame_id)
+        return Frame.from_id(selected_frame_id).raw
     except Exception:
         return None
 

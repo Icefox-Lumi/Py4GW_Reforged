@@ -34,6 +34,7 @@ from Sources.ApoSource.InvPlus.GUI_Helpers import (TabIcon,
                                             XUNLAI_VAULT_FRAME_HASH
                             )         
 from Sources.ApoSource.InvPlus.Coroutines import IdentifyCheckedItems
+from Py4GWCoreLib.FrameTree import Frame as GWFrame, FrameId
 
 class AutoHandlderModule:
     def __init__(self, inventory_frame: Frame):
@@ -192,8 +193,8 @@ class AutoHandlderModule:
     def DrawAutoHandler(self):
         global global_vars
         
-        content_frame = UIManager.GetChildFrameID(_get_parent_hash(), [0])
-        left, top, right, bottom = UIManager.GetFrameCoords(content_frame)
+        content_frame = GWFrame.from_hash(_get_parent_hash(), [0])
+        left, top, right, bottom = content_frame.coords()
         y_offset = 2
         x_offset = 0
         height = bottom - top + y_offset
@@ -203,7 +204,7 @@ class AutoHandlderModule:
         if height < 100:
             height = 100
             
-        UIManager().DrawFrame(content_frame, Utils.RGBToColor(0, 0, 0, 255))
+        GWFrame.from_id(content_frame.frame_id).draw(Utils.RGBToColor(0, 0, 0, 255))
         
         #flags= ImGui.PushTransparentWindow()
         
@@ -412,8 +413,9 @@ class AutoHandlderModule:
         if not self.inventory_check_throttle_timer.IsExpired():
             return True
         
-        self.inventory_frame_id = UIManager.GetFrameIDByHash(INVENTORY_FRAME_HASH)
-        self.inventory_frame_exists = UIManager.FrameExists(self.inventory_frame_id)
+        inventory_frame = GWFrame.from_hash(INVENTORY_FRAME_HASH)
+        self.inventory_frame_exists = inventory_frame.exists
+        self.inventory_frame_id = inventory_frame.frame_id if self.inventory_frame_exists else 0
         
         return self.inventory_frame_exists  
     

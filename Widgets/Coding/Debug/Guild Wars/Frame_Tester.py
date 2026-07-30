@@ -1,14 +1,16 @@
 from Py4GWCoreLib import *
 from collections import defaultdict
 from typing import Dict, List, Tuple, Any, Optional
-import json
 import ctypes
+from Py4GWCoreLib.FrameTree import Frame
+# aliased: this module defines its own `FrameTree` class below
+from Py4GWCoreLib.FrameTree import FrameTree as LiveTree
 
 MODULE_NAME = "Frame Tester"
 MODULE_ICON = "Textures/Module_Icons/Frame Tester.png"
 
-projects_root = PySystem.Console.get_projects_path()
-json_file_name = f"{projects_root}\\Py4GWCoreLib\\frame_aliases.json"
+# Frame identity comes from the FrameTree name / registry / alias tables
+# (Py4GWCoreLib/FrameTree/*.py dict literals), not from a file.
 
 overlay = Overlay()
 
@@ -38,11 +40,11 @@ class FrameNode:
     def __init__(self, frame_id: int, parent_id: int):
         self.frame_id = frame_id
         self.parent_id = parent_id
-        self.frame_obj = PyUIManager.UIFrame(self.frame_id)
+        self.frame_obj = Frame.from_id(self.frame_id).raw
         self.info_window = InfoWindow(self.frame_obj)
         self.frame_hash = self.frame_obj.frame_hash
         self.child_offset_id = self.frame_obj.child_offset_id
-        self.label = UIManager.GetEntryFromJSON(json_file_name, self.frame_id) or ""
+        self.label = Frame.from_id(self.frame_id).describe()
         self.parent = None  # Will be set when building the tree
         self.children = []  # Stores child nodes
         self.show_frame_data = False
@@ -50,7 +52,7 @@ class FrameNode:
     def update(self):
         self.frame_obj.get_context()
         self.frame_hash = self.frame_obj.frame_hash
-        self.label = UIManager.GetEntryFromJSON(json_file_name, self.frame_id) or ""
+        self.label = Frame.from_id(self.frame_id).describe()
 
     def get_parent(self):
         """Returns the parent node of this frame."""
@@ -133,7 +135,7 @@ class FrameTree:
         """
         # Step 1: Create nodes
         for frame_id in frame_list:
-            frame_obj = PyUIManager.UIFrame(frame_id)  # Create UIFrame instance
+            frame_obj = Frame.from_id(frame_id).raw
             parent_id = frame_obj.parent_id  # Extract parent ID
             self.nodes[frame_id] = FrameNode(frame_id, parent_id)
 
@@ -170,8 +172,7 @@ class InfoWindow:
         self.draw_frame = True
         self.draw_color :int = Utils.RGBToColor(0, 255, 0, 125)
         self.monitor_callbacks = False
-        self.frame_alias = UIManager.GetEntryFromJSON(json_file_name, self.frame.frame_id)  
-        self.submit_value = self.frame_alias or "" 
+        self.frame_alias = Frame.from_id(self.frame.frame_id).describe()
         self.window_name = ""
         self.setWindowName()
         self.current_state = 0
@@ -187,7 +188,7 @@ class InfoWindow:
           
       
     def DrawFrame(self):
-        UIManager().DrawFrame(self.frame.frame_id, self.draw_color)
+        Frame.from_id(self.frame.frame_id).draw(self.draw_color)
         
     def MonitorCallbacks(self):
         pass
@@ -231,17 +232,16 @@ class InfoWindow:
                     if PyImGui.begin_tab_item(f"Frame Tree##{self.frame.frame_id}"):
                         PyImGui.text(f"Frame ID: {self.frame.frame_id}")
                         PyImGui.text(f"Frame Hash: {self.frame.frame_hash}")
-                        PyImGui.text(f"Alias: {self.frame_alias}")
-                        
-                        self.submit_value = PyImGui.input_text(f"Alias##Edit{self.frame.frame_id}", self.submit_value)
-                        PyImGui.same_line(0,-1)
-                        if PyImGui.button(f"Save Alias##{self.frame.frame_id}"):
-                            UIManager.SaveEntryToJSON(json_file_name, self.frame.frame_id, self.submit_value)
-                            self.frame_alias = UIManager.GetEntryFromJSON(json_file_name, self.frame.frame_id)  
-                            self.setWindowName()          
+                        _handle = Frame.from_id(self.frame.frame_id)
+                        PyImGui.text(f"Engine Name: {_handle.name or '(unnamed)'}")
+                        PyImGui.text(f"Registry Key: {_handle.registry_key or '(unregistered)'}")
+                        PyImGui.text(f"Alias: {_handle.alias or '(none)'}")
+                        PyImGui.text(f"Path: {_handle.path() or '(unresolved)'}")
+                        if PyImGui.button(f"Copy Registry Key##{self.frame.frame_id}"):
+                            PyImGui.set_clipboard_text(_handle.registry_key or _handle.path())
 
                         if PyImGui.button(f"Click on frame{self.frame.frame_id}##click{self.frame.frame_id}"):
-                            UIManager.FrameClick(self.frame.frame_id)
+                            Frame.from_id(self.frame.frame_id).click()
                             print (f"Clicked on frame {self.frame.frame_id}")
                             
                         PyImGui.separator()
@@ -249,7 +249,7 @@ class InfoWindow:
                         self.wparam = PyImGui.input_int(f"wParam##{self.frame.frame_id}", self.wparam)
                         self.lparam = PyImGui.input_int(f"lParam##{self.frame.frame_id}", self.lparam)
                         if PyImGui.button((f"test mouse action##{self.frame.frame_id}")):
-                            UIManager.TestMouseAction(self.frame.frame_id, self.current_state, self.wparam, self.lparam)
+                            Frame.from_id(self.frame.frame_id).mouse_action(self.current_state, self.wparam, self.lparam)
                             self.current_state += 1
                             if self.current_state in (6, 10, 8):
                                 self.current_state += 1
@@ -263,7 +263,7 @@ class InfoWindow:
                             print (f"Tested on frame {self.frame.frame_id}")
                             
                         if PyImGui.button((f"test mouse click action##{self.frame.frame_id}")):
-                            UIManager.TestMouseClickAction(self.frame.frame_id, self.current_state, self.wparam, self.lparam)
+                            Frame.from_id(self.frame.frame_id).mouse_click_action(self.current_state, self.wparam, self.lparam)
                             self.current_state += 1
                             #if self.current_state in (6, 10, 8):
                             #    self.current_state += 1
@@ -413,7 +413,7 @@ def DrawMainWindow():
                     build_button_text = "Rebuild Frame Tree"
                     
                 if PyImGui.button(build_button_text):
-                    frame_array = UIManager.GetFrameArray()
+                    frame_array = LiveTree.all_ids()
                     full_tree.build_tree(frame_array)    
                     
                 PyImGui.text_colored("Not Created", config_options.not_created_color)
@@ -431,9 +431,11 @@ def DrawMainWindow():
                 if PyImGui.begin_child("FrameTreeChild",size=(500,600),border=True,flags=PyImGui.WindowFlags.HorizontalScrollbar):                                        
                     if frame_array:
                         full_tree.draw()
-                        
+
                     PyImGui.end_child()
 
+                PyImGui.end_tab_item()
+            PyImGui.end_tab_bar()
 
     PyImGui.end()
     
