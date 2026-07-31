@@ -53,6 +53,13 @@ def draw() -> None:
             except Exception as skillbar_error:
                 PySystem.Console.Log(MODULE_NAME, "Skillbar+ boot failed: %s" % skillbar_error,
                                      PySystem.Console.MessageType.Error)
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.camera_smoothing import get_controller as _camera_get
+
+                _camera_get().register()
+            except Exception as camera_error:
+                PySystem.Console.Log(MODULE_NAME, "Camera smoothing boot failed: %s" % camera_error,
+                                     PySystem.Console.MessageType.Error)
             # Also register the persisted name-obfuscation alias set (global/multi-account) at boot.
             try:
                 from Py4GWCoreLib.py4gwcorelib_src.name_obfuscation import get_controller as _no_get
