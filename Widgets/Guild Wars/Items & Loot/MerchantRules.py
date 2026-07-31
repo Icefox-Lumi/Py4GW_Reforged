@@ -14,6 +14,7 @@ import os
 import re
 import time
 import traceback
+from collections import Counter
 from collections.abc import Callable
 from collections.abc import Iterable
 from hashlib import md5
@@ -40,6 +41,9 @@ from Py4GWCoreLib.FrameTree import FrameId
 from Py4GWCoreLib.enums_src.Item_enums import ItemType
 from Py4GWCoreLib.enums_src.Title_enums import TITLE_TIERS
 from Py4GWCoreLib.enums_src.Title_enums import TitleID
+from Py4GWCoreLib.mods_types import ItemUpgrade
+from Py4GWCoreLib.mods_types import ItemUpgradeId
+from Py4GWCoreLib.mods_types import ModifierIdentifier
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
 from Sources.marks_sources.mods_parser import ModDatabase
 from Sources.marks_sources.mods_parser import MatchedRuneInfo
@@ -519,8 +523,16 @@ MODIFIER_IDENTIFIER_ENERGY = 0x27C
 MODIFIER_IDENTIFIER_ENERGY2 = 0x22C
 MODIFIER_IDENTIFIER_RUNE_ATTRIBUTE = 8680
 MODIFIER_IDENTIFIER_RUNE_HEALTH_LOSS = 8408
+MODIFIER_IDENTIFIER_TOOLTIP_DESCRIPTION = int(ModifierIdentifier.TooltipDescription)
+MODIFIER_IDENTIFIER_UPGRADE = int(ModifierIdentifier.Upgrade)
+MODIFIER_IDENTIFIER_ATTRIBUTE_RUNE = int(ModifierIdentifier.AttributeRune)
 ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE = (9224, 0, 0x00C2)
-ARMOR_UPGRADE_SIGNATURE_IDENTIFIERS = frozenset({8408, 8680, 9224})
+SUPERIOR_SPAWNING_RUNE_CATALOG_IDENTIFIER = "Ritualist Rune of Superior Spawning Power"
+ARMOR_UPGRADE_RUNE_CARRIER_IDS = frozenset(
+    int(upgrade_id)
+    for upgrade_id in ItemUpgrade.UpgradeRune.upgrade_ids
+)
+SUPERIOR_RITUALIST_RUNE_CARRIER_ID = int(ItemUpgradeId.SuperiorRitualistRune)
 ARMOR_UPGRADE_HOLDING_NAMES = frozenset({
     "rune of holding",
     "superior rune of holding",
@@ -2188,10 +2200,21 @@ class ArmorUpgradeIdentity:
 
 
 @dataclass(frozen=True)
+class ArmorUpgradeLinkage:
+    """Bind one ordered auxiliary UpgradeRune carrier to its exact Rune identity."""
+
+    upgrade_identifier: str
+    option: str
+    carrier: tuple[int, int, int]
+    attribute_property: tuple[int, int, int]
+
+
+@dataclass(frozen=True)
 class ArmorUpgradeParseState:
     """Cache strict semantic armor identities together with a fail-closed parse reason."""
 
     upgrades: tuple[ArmorUpgradeIdentity, ...] = ()
+    linkages: tuple[ArmorUpgradeLinkage, ...] = ()
     error: str = ""
 
 
@@ -2205,6 +2228,7 @@ class ArmorUpgradeSnapshot:
     name: str
     raw_modifiers: tuple[tuple[int, int, int], ...]
     upgrades: tuple[ArmorUpgradeIdentity, ...]
+    linkages: tuple[ArmorUpgradeLinkage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2919,6 +2943,7 @@ class _MerchantRulesArmorUpgradeSalvageBridge:
             and int(current.item_type_id) == int(expected.item_type_id)
             and current.raw_modifiers == expected.raw_modifiers
             and current.upgrades == expected.upgrades
+            and current.linkages == expected.linkages
         )
 
     def _verify_expected_snapshot(
@@ -3212,9 +3237,6 @@ class _MerchantRulesArmorUpgradeSalvageBridge:
             self._cancel_active_salvage_choice_dialog()
             return result(False, "failed", "armor salvage confirmation failed")
 
-        expected_remaining = tuple(
-            upgrade for upgrade in expected.upgrades if upgrade != target
-        )
         waited_ms = 0
         while waited_ms <= max(1, int(timeout_ms)):
             target_component_ids = self._get_component_delta_item_ids(
@@ -3290,27 +3312,30 @@ class _MerchantRulesArmorUpgradeSalvageBridge:
                     yield from Routines.Yield.wait(50)
                     waited_ms += 50
                     continue
-                target_identity_present = any(
-                    upgrade.identifier == target.identifier
-                    and upgrade.option == target.option
-                    and upgrade.signature == target.signature
-                    for upgrade in current.upgrades
+                post_extraction_error = _get_armor_upgrade_post_extraction_error(
+                    expected,
+                    current,
+                    target,
                 )
-                target_signature_present = all(
-                    triple in current.raw_modifiers for triple in target.signature
-                )
-                if target_identity_present or target_signature_present:
+                if post_extraction_error:
                     return result(
                         False,
                         "failed",
-                        "selected armor upgrade is still installed after confirmation",
+                        post_extraction_error,
                         extra_reserved_item_ids=target_component_ids,
                     )
-                if current.upgrades != expected_remaining:
+                opposite_extracted = any(
+                    self._get_component_delta_item_ids(
+                        upgrade,
+                        before_opposite_components.get(upgrade.identifier, {}),
+                    )
+                    for upgrade in opposite_identities
+                )
+                if opposite_extracted:
                     return result(
                         False,
                         "failed",
-                        "unselected armor upgrade identity changed after extraction",
+                        "an unselected armor upgrade was also extracted",
                         extra_reserved_item_ids=target_component_ids,
                     )
                 if target_component_ids:
@@ -4963,12 +4988,92 @@ def _get_armor_upgrade_catalog_identity(identifier: object) -> tuple[ArmorUpgrad
     )
 
 
+def _is_tooltip_description_modifier(triple: tuple[int, int, int]) -> bool:
+    return _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_TOOLTIP_DESCRIPTION
+
+
+def _get_modifier_upgrade_id(triple: tuple[int, int, int]) -> int:
+    return (int(triple[1]) << 8) | int(triple[2])
+
+
+def _is_armor_upgrade_carrier_triple(triple: tuple[int, int, int]) -> bool:
+    stripped_identifier = _get_stripped_modifier_identifier(triple[0])
+    return bool(
+        stripped_identifier in {
+            MODIFIER_IDENTIFIER_UPGRADE,
+            MODIFIER_IDENTIFIER_ATTRIBUTE_RUNE,
+        }
+        or int(triple[0]) == MODIFIER_IDENTIFIER_RUNE_HEALTH_LOSS
+    )
+
+
+def _has_superior_ritualist_rune_carrier(
+    raw_modifiers: tuple[tuple[int, int, int], ...],
+) -> bool:
+    if SUPERIOR_RITUALIST_RUNE_CARRIER_ID not in ARMOR_UPGRADE_RUNE_CARRIER_IDS:
+        return False
+    return any(
+        _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_UPGRADE
+        and _get_modifier_upgrade_id(triple) == SUPERIOR_RITUALIST_RUNE_CARRIER_ID
+        for triple in raw_modifiers
+    )
+
+
+def _normalize_shared_upgrade_name(value: object) -> str:
+    without_profession_suffix = re.sub(r"\[[^\]]+\]", "", str(value or ""))
+    return re.sub(r"[^a-z0-9]+", "", without_profession_suffix.casefold())
+
+
+def _shared_upgrades_corroborate_named_suffix(
+    shared_upgrades: object | None,
+    identity: ArmorUpgradeIdentity,
+    *,
+    read_error: str = "",
+) -> tuple[bool, str]:
+    if shared_upgrades is None:
+        return False, f"Item.Mods.GetUpgrades corroboration unavailable: {read_error or 'no result'}"
+
+    suffix_names: list[str] = []
+    try:
+        rows = list(shared_upgrades)
+    except Exception as exc:
+        return False, f"Item.Mods.GetUpgrades corroboration is malformed: {exc}"
+    for row in rows:
+        try:
+            name, slot = row
+        except Exception:
+            return False, "Item.Mods.GetUpgrades returned a malformed upgrade entry"
+        slot_name = str(getattr(slot, "name", slot) or "").strip().casefold()
+        if slot_name == "suffix":
+            suffix_names.append(_normalize_shared_upgrade_name(name))
+
+    expected_name = _normalize_shared_upgrade_name(identity.name)
+    if suffix_names != [expected_name]:
+        return (
+            False,
+            "Item.Mods.GetUpgrades did not corroborate exactly one expected named Suffix "
+            f"({identity.name}); observed={suffix_names!r}",
+        )
+    return True, ""
+
+
+def _read_item_mods_upgrades(item_id: int) -> tuple[tuple[object, ...] | None, str]:
+    try:
+        from Py4GWCoreLib.Item import Item
+
+        return tuple(Item.Mods.GetUpgrades(int(item_id)) or ()), ""
+    except Exception as exc:
+        return None, str(exc)
+
+
 def _parse_exact_armor_upgrade_state(
     raw_modifiers: tuple[tuple[int, int, int], ...],
     parse_item_type: ItemType,
     model_id: int,
     *,
     parsed_modifiers: object | None = None,
+    corroborating_upgrades: object | None = None,
+    corroborating_upgrades_error: str = "",
 ) -> ArmorUpgradeParseState:
     """Parse installed armor upgrades by exact full runes.json signatures and fail closed."""
 
@@ -4981,8 +5086,20 @@ def _parse_exact_armor_upgrade_state(
         return ArmorUpgradeParseState(error="malformed raw modifier tuple is unsupported")
     if MOD_DB_LOAD_ERROR or not getattr(MOD_DB, "runes", None):
         return ArmorUpgradeParseState(error=MOD_DB_LOAD_ERROR or "runes.json catalog is unavailable")
-    if len(safe_raw_modifiers) != len(set(safe_raw_modifiers)):
-        return ArmorUpgradeParseState(error="duplicate raw modifier triples are unsupported")
+    raw_modifier_counts = Counter(safe_raw_modifiers)
+    unsupported_duplicates = [
+        (triple, count)
+        for triple, count in raw_modifier_counts.items()
+        if count > 1 and not _is_tooltip_description_modifier(triple)
+    ]
+    if unsupported_duplicates:
+        formatted = ", ".join(
+            f"({identifier},{arg1},{arg2}) x{count}"
+            for (identifier, arg1, arg2), count in unsupported_duplicates
+        )
+        return ArmorUpgradeParseState(
+            error=f"duplicate non-Tooltip raw modifier triples are unsupported: {formatted}"
+        )
     if ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE in safe_raw_modifiers:
         return ArmorUpgradeParseState(
             error="alternate Minor Vigor carrier 0x00C2 is intentionally unsupported"
@@ -5000,7 +5117,8 @@ def _parse_exact_armor_upgrade_state(
             return ArmorUpgradeParseState(error=f"runes.json modifier parsing failed: {exc}")
 
     upgrades: list[ArmorUpgradeIdentity] = []
-    consumed_signature_triples: set[tuple[int, int, int]] = set()
+    linkages: list[ArmorUpgradeLinkage] = []
+    consumed_carriers: Counter[tuple[int, int, int]] = Counter()
     seen_identifiers: set[str] = set()
     seen_options: set[str] = set()
     for match in list(getattr(parsed_modifiers, "runes", []) or []):
@@ -5022,10 +5140,15 @@ def _parse_exact_armor_upgrade_state(
                 error=f"{identity.name} parser type conflicts with its catalog identity",
             )
         for triple in identity.signature:
-            if safe_raw_modifiers.count(triple) != 1:
+            if raw_modifier_counts[triple] != 1:
                 return ArmorUpgradeParseState(
                     upgrades=tuple(upgrades),
                     error=f"{identity.name} does not have one exact full signature on the armor",
+                )
+            if consumed_carriers[triple] > 0:
+                return ArmorUpgradeParseState(
+                    upgrades=tuple(upgrades),
+                    error=f"{identity.name} shares a signature carrier with another armor upgrade",
                 )
         if identity.identifier in seen_identifiers:
             return ArmorUpgradeParseState(
@@ -5040,15 +5163,102 @@ def _parse_exact_armor_upgrade_state(
 
         seen_identifiers.add(identity.identifier)
         seen_options.add(identity.option)
-        consumed_signature_triples.update(identity.signature)
+        consumed_carriers.update(identity.signature)
         upgrades.append(identity)
 
-    unknown_rune_triples = [
-        triple
-        for triple in safe_raw_modifiers
-        if int(triple[0]) in ARMOR_UPGRADE_SIGNATURE_IDENTIFIERS
-        and triple not in consumed_signature_triples
+    superior_ritualist_carrier_positions = [
+        index
+        for index, triple in enumerate(safe_raw_modifiers)
+        if _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_UPGRADE
+        and _get_modifier_upgrade_id(triple) == SUPERIOR_RITUALIST_RUNE_CARRIER_ID
     ]
+    if superior_ritualist_carrier_positions:
+        if SUPERIOR_RITUALIST_RUNE_CARRIER_ID not in ARMOR_UPGRADE_RUNE_CARRIER_IDS:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="Superior Ritualist Rune carrier is unavailable in ItemUpgrade.UpgradeRune",
+            )
+        if len(superior_ritualist_carrier_positions) != 1:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="multiple Superior Ritualist Rune linkage carriers are unsupported",
+            )
+
+        spawning_identities = [
+            identity
+            for identity in upgrades
+            if identity.identifier == SUPERIOR_SPAWNING_RUNE_CATALOG_IDENTIFIER
+            and identity.option == SALVAGE_OPTION_SUFFIX
+        ]
+        if len(spawning_identities) != 1:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="Superior Ritualist Rune carrier is orphaned or mismatched",
+            )
+        spawning_identity = spawning_identities[0]
+        attribute_properties = [
+            triple
+            for triple in spawning_identity.signature
+            if _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_ATTRIBUTE_RUNE
+        ]
+        if len(attribute_properties) != 1:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="Superior Spawning Rune catalog identity has an invalid AttributeRune property",
+            )
+
+        carrier_index = superior_ritualist_carrier_positions[0]
+        carrier = safe_raw_modifiers[carrier_index]
+        if raw_modifier_counts[carrier] != 1:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="Superior Ritualist Rune linkage carrier is not singular",
+            )
+        linked_property: tuple[int, int, int] | None = None
+        for following in safe_raw_modifiers[carrier_index + 1:]:
+            if _is_tooltip_description_modifier(following):
+                continue
+            linked_property = following
+            break
+        expected_property = attribute_properties[0]
+        if linked_property != expected_property:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=(
+                    "Superior Ritualist Rune linkage carrier is reordered, interrupted, "
+                    "or does not precede Superior Spawning"
+                ),
+            )
+        corroborated, corroboration_error = _shared_upgrades_corroborate_named_suffix(
+            corroborating_upgrades,
+            spawning_identity,
+            read_error=corroborating_upgrades_error,
+        )
+        if not corroborated:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=corroboration_error,
+            )
+
+        consumed_carriers[carrier] += 1
+        linkages.append(
+            ArmorUpgradeLinkage(
+                upgrade_identifier=spawning_identity.identifier,
+                option=spawning_identity.option,
+                carrier=carrier,
+                attribute_property=expected_property,
+            )
+        )
+
+    remaining_carriers = consumed_carriers.copy()
+    unknown_rune_triples: list[tuple[int, int, int]] = []
+    for triple in safe_raw_modifiers:
+        if not _is_armor_upgrade_carrier_triple(triple):
+            continue
+        if remaining_carriers[triple] > 0:
+            remaining_carriers[triple] -= 1
+            continue
+        unknown_rune_triples.append(triple)
     if unknown_rune_triples:
         formatted = ", ".join(
             f"({identifier},{arg1},{arg2})"
@@ -5065,7 +5275,8 @@ def _parse_exact_armor_upgrade_state(
         )
 
     upgrades.sort(key=lambda upgrade: (upgrade.option, upgrade.identifier.casefold()))
-    return ArmorUpgradeParseState(upgrades=tuple(upgrades))
+    linkages.sort(key=lambda linkage: (linkage.option, linkage.upgrade_identifier.casefold()))
+    return ArmorUpgradeParseState(upgrades=tuple(upgrades), linkages=tuple(linkages))
 
 
 def _armor_upgrade_signature_is_exactly_present(
@@ -5078,6 +5289,64 @@ def _armor_upgrade_signature_is_exactly_present(
         identity.signature
         and all(raw_modifiers.count(triple) == 1 for triple in identity.signature)
     )
+
+
+def _get_armor_upgrade_post_extraction_error(
+    expected: ArmorUpgradeSnapshot,
+    current: ArmorUpgradeSnapshot,
+    target: ArmorUpgradeIdentity,
+) -> str:
+    """Require exact target/linkage removal while preserving every unselected identity carrier."""
+
+    expected_counts = Counter(expected.raw_modifiers)
+    current_counts = Counter(current.raw_modifiers)
+    expected_remaining = tuple(upgrade for upgrade in expected.upgrades if upgrade != target)
+    expected_remaining_linkages = tuple(
+        linkage
+        for linkage in expected.linkages
+        if not (
+            linkage.upgrade_identifier == target.identifier
+            and linkage.option == target.option
+        )
+    )
+
+    if any(
+        upgrade.identifier == target.identifier
+        and upgrade.option == target.option
+        and upgrade.signature == target.signature
+        for upgrade in current.upgrades
+    ):
+        return "selected armor upgrade is still installed after confirmation"
+    for triple in target.signature:
+        if expected_counts[triple] != 1:
+            return "captured selected armor signature is not singular"
+        if current_counts[triple] != 0:
+            return "selected armor upgrade signature remains after confirmation"
+
+    for upgrade in expected_remaining:
+        for triple in upgrade.signature:
+            if expected_counts[triple] != 1 or current_counts[triple] != 1:
+                return "unselected armor upgrade signature count changed after extraction"
+
+    for linkage in expected.linkages:
+        expected_carrier_count = expected_counts[linkage.carrier]
+        if expected_carrier_count != 1:
+            return "captured armor UpgradeRune linkage carrier is not singular"
+        linkage_targets_selected_upgrade = bool(
+            linkage.upgrade_identifier == target.identifier
+            and linkage.option == target.option
+        )
+        required_current_count = 0 if linkage_targets_selected_upgrade else 1
+        if current_counts[linkage.carrier] != required_current_count:
+            if linkage_targets_selected_upgrade:
+                return "selected Rune linkage carrier remains after extraction"
+            return "unselected Rune linkage carrier count changed after extraction"
+
+    if current.upgrades != expected_remaining:
+        return "unselected armor upgrade identity changed after extraction"
+    if current.linkages != expected_remaining_linkages:
+        return "armor UpgradeRune linkage identity changed after extraction"
+    return ""
 
 
 def _is_armor_salvage_catalog_name(name: object) -> bool:
@@ -15992,12 +16261,18 @@ class MerchantRulesWidget:
                     parsed=parsed_state,
                 )
                 return parsed_state
+            corroborating_upgrades: tuple[object, ...] | None = None
+            corroborating_upgrades_error = ""
+            if is_armor_piece and _has_superior_ritualist_rune_carrier(raw_modifiers):
+                corroborating_upgrades, corroborating_upgrades_error = _read_item_mods_upgrades(item_id)
             armor_upgrade_state = (
                 _parse_exact_armor_upgrade_state(
                     raw_modifiers,
                     parse_item_type,
                     model_id,
                     parsed_modifiers=parsed_modifiers,
+                    corroborating_upgrades=corroborating_upgrades,
+                    corroborating_upgrades_error=corroborating_upgrades_error,
                 )
                 if is_armor_piece
                 else ArmorUpgradeParseState()
@@ -26670,10 +26945,16 @@ class MerchantRulesWidget:
         if not is_armor_piece or parse_item_type not in ARMOR_PIECE_TYPES:
             return None, "armor type cannot be parsed deterministically"
 
+        corroborating_upgrades: tuple[object, ...] | None = None
+        corroborating_upgrades_error = ""
+        if _has_superior_ritualist_rune_carrier(raw_modifiers):
+            corroborating_upgrades, corroborating_upgrades_error = _read_item_mods_upgrades(safe_item_id)
         parse_state = _parse_exact_armor_upgrade_state(
             raw_modifiers,
             parse_item_type,
             int(item.model_id),
+            corroborating_upgrades=corroborating_upgrades,
+            corroborating_upgrades_error=corroborating_upgrades_error,
         )
         if parse_state.error:
             return None, parse_state.error
@@ -26687,6 +26968,7 @@ class MerchantRulesWidget:
                 name=str(item.name or f"Model {int(item.model_id)}"),
                 raw_modifiers=tuple(raw_modifiers),
                 upgrades=parse_state.upgrades,
+                linkages=parse_state.linkages,
             ),
             "",
         )
