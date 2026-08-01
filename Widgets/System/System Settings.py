@@ -25,6 +25,7 @@ for _name in [
     or m.startswith("Py4GWCoreLib.py4gwcorelib_src.name_obfuscation")
     or m.startswith("Py4GWCoreLib.py4gwcorelib_src.agent_recolor")
     or m.startswith("Py4GWCoreLib.py4gwcorelib_src.window_renamer")
+    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.map_utilities")
 ]:
     del sys.modules[_name]
 
@@ -67,6 +68,13 @@ def draw() -> None:
                 _renamer_get().register()
             except Exception as renamer_error:
                 PySystem.Console.Log(MODULE_NAME, "Window Renamer boot failed: %s" % renamer_error,
+                                     PySystem.Console.MessageType.Error)
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.map_utilities import get_controller as _map_utils_get
+
+                _map_utils_get().register()
+            except Exception as map_utils_error:
+                PySystem.Console.Log(MODULE_NAME, "Map Utilities boot failed: %s" % map_utils_error,
                                      PySystem.Console.MessageType.Error)
             # Also register the persisted name-obfuscation alias set (global/multi-account) at boot.
             try:

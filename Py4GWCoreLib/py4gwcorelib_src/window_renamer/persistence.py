@@ -22,6 +22,16 @@ def _settings():
         return None
 
 
+def is_ready() -> bool:
+    settings = _settings()
+    if settings is None:
+        return False
+    try:
+        return settings.is_ready()
+    except Exception:
+        return False
+
+
 def load() -> WindowRenamerConfig:
     settings = _settings()
     if settings is None:
@@ -31,7 +41,7 @@ def load() -> WindowRenamerConfig:
     if display_mode not in DISPLAY_MODES:
         display_mode = "character"
     return WindowRenamerConfig(
-        enabled=settings.get_bool("window_renamer", "enabled", True),
+        enabled=settings.get_bool("window_renamer", "enabled", False),
         display_mode=display_mode,
         fallback_to_character=settings.get_bool("window_renamer", "fallback_to_character", True),
         append_game_name=settings.get_bool("window_renamer", "append_game_name", False),

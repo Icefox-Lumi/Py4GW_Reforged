@@ -9,9 +9,9 @@ DISPLAY_MODE_LABELS: tuple[str, ...] = ("Character name", "Obfuscated name", "Co
 
 @dataclass
 class WindowRenamerConfig:
-    # The legacy widget renamed windows whenever it was loaded. Keep that
-    # behavior for accounts without a saved local preference.
-    enabled: bool = True
+    # Account-scoped settings must fail closed while the account document is
+    # still waiting for its email anchor.
+    enabled: bool = False
     display_mode: str = "character"
     fallback_to_character: bool = True
     append_game_name: bool = False

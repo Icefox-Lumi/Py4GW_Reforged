@@ -27,6 +27,7 @@ class WindowRenamerController:
         self._registered = False
         self._known_emails: list[str] = []
         self._account_emails_loaded = False
+        self._settings_account_email = ""
 
     def set_option(self, key: str, value: object) -> None:
         if not hasattr(self.config, key):
@@ -167,19 +168,31 @@ class WindowRenamerController:
             title = "%s - Guild Wars" % title
         return title
 
-    def _apply(self) -> None:
-        if not self.config.enabled:
+    def _reload_settings_after_account_bind(self, account_email: str) -> None:
+        """Reload once after account-scoped Settings acquires its email anchor."""
+
+        if not account_email or account_email == self._settings_account_email:
             return
+        self.config = persistence.load()
+        self._settings_account_email = account_email
+        self._last_title = ""
+
+    def _apply(self) -> None:
         try:
             from Py4GWCoreLib.Map import Map
             from Py4GWCoreLib.Player import Player
 
+            account_email = self.current_account_email()
+            if not account_email or not persistence.is_ready():
+                return
+            self._reload_settings_after_account_bind(account_email)
+            if not self.config.enabled:
+                return
             if not Map.IsMapReady():
                 return
             real_name = str(Player.GetName() or "").strip()
             if not real_name:
                 return
-            account_email = self.current_account_email()
             title = self._build_title(real_name, account_email)
             if not title or title == self._last_title:
                 return

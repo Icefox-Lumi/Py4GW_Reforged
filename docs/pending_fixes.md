@@ -96,7 +96,7 @@ Overlapping owners of the same behaviour:
 |---|---|---|
 | salvage decisions + salvage-option choice | `_run_salvage_pass` `:20555`, `_MerchantRulesExactUpgradeSalvageBridge` `:1787` | `Sources/frenkeyLib/LootEx/inventory_handling.py:99` + `LootEx/salvaging.py`; `Routines.Yield.Items.SalvageItems` |
 | identify pass | `_run_identify_pass` `:19818` | `Routines.Yield.Items.IdentifyItems` |
-| destroy | `_run_destroy_pass` `:20683`, `_run_instant_destroy_pass` `:20785` | `Routines.Yield.Items.DestroyItem`; `SuperItemEater.py` / `item_eater.py` |
+| destroy | `_run_destroy_pass` `:20683`, `_run_instant_destroy_pass` `:20785` | `Routines.Yield.Items.DestroyItem`; `item_eater.py` |
 | storage deposit / withdraw | `_execute_storage_transfers` `:16910`, `_plan_cleanup_actions` `:12801` | `Xunlaimanager.py` (3,349 lines); `Routines.Yield.Items.DepositItems` |
 | buy / sell / restock | `_plan_buy_actions` `:13861`, `_execute_merchant_sell_phase` `:18237` | `Routines.Yield.Merchant.RestockKitsToTarget` / `SellItems` / `BuyMaterial` / `SellMaterialsAtTrader` |
 | item rules & mod matching | ~90 module-level normalizers, `Sources/marks_sources/mods_parser` | `Sources/frenkeyLib/ItemHandling/{Rules,Mods,Handlers}`; `LootEx/filter.py`, `item_configuration.py` |
