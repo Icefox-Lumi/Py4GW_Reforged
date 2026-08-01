@@ -104,7 +104,12 @@ class UI():
         active_quest_id = Quest.GetActiveQuest()
         has_mission = quest_data.mission_map_quest is not None
 
-        UI.ActiveQuest = quest_data.quest_log.get(active_quest_id, quest_data.mission_map_quest if quest_data.mission_map_quest is not None and quest_data.mission_map_quest_loaded else None)
+        UI.ActiveQuest = quest_data.quest_log.get(
+            active_quest_id,
+            quest_data.mission_map_quest
+            if quest_data.mission_map_quest is not None and quest_data.mission_map_quest_initialized
+            else None,
+        )
         
         UI.QuestLogWindow.window_name = "Party Quest Log"
         open = UI.QuestLogWindow.begin()
