@@ -24,6 +24,7 @@ for _name in [
     if m.startswith("Py4GWCoreLib.py4gwcorelib_src.system_settings")
     or m.startswith("Py4GWCoreLib.py4gwcorelib_src.name_obfuscation")
     or m.startswith("Py4GWCoreLib.py4gwcorelib_src.agent_recolor")
+    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.window_renamer")
 ]:
     del sys.modules[_name]
 
@@ -59,6 +60,13 @@ def draw() -> None:
                 _camera_get().register()
             except Exception as camera_error:
                 PySystem.Console.Log(MODULE_NAME, "Camera smoothing boot failed: %s" % camera_error,
+                                     PySystem.Console.MessageType.Error)
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.window_renamer import get_controller as _renamer_get
+
+                _renamer_get().register()
+            except Exception as renamer_error:
+                PySystem.Console.Log(MODULE_NAME, "Window Renamer boot failed: %s" % renamer_error,
                                      PySystem.Console.MessageType.Error)
             # Also register the persisted name-obfuscation alias set (global/multi-account) at boot.
             try:
