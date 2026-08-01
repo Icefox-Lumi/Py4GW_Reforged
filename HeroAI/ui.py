@@ -2500,13 +2500,16 @@ def draw_party_search_overlay(cached_data: CacheData):
         
         party_search = FramePosition(party_search_id)
         
-        players_tab_id = Frame(FrameId.PartySearchWindow.Panel.SlotLast)    
+        # The three tab children use runtime-only offsets.  They are deliberately
+        # excluded from FrameId registry resolution, so walk them from the live
+        # panel frame just as the legacy GetChildFrameID call did.
+        players_tab_id = party_search_id.child_native(0xFFFFFFFF)
         player_tab = FramePosition(players_tab_id)
             
-        heroes_tab_id = Frame(FrameId.PartySearchWindow.Panel.SlotPrev)
+        heroes_tab_id = party_search_id.child_native(0xFFFFFFFE)
         hero_tab = FramePosition(heroes_tab_id)
         
-        henchmen_tab_id = Frame(FrameId.PartySearchWindow.Panel.SlotPrev2)
+        henchmen_tab_id = party_search_id.child_native(0xFFFFFFFD)
         henchmen_tab = FramePosition(henchmen_tab_id)
             
         active_tab = next((tab for tab in [player_tab, hero_tab, henchmen_tab] if tab.position.content_top == max(

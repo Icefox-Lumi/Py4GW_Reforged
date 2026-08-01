@@ -1,4 +1,5 @@
 from __future__ import annotations
+from functools import lru_cache
 from typing import Optional, Protocol, Tuple, cast
 from datetime import date, timedelta
 import ast
@@ -33,6 +34,25 @@ ROTATION_START = REFERENCE_WEEK  # baseline for modulo rotation
 MODULE_NAME = "Calendar"
 MODULE_ICON = "Textures\\Module_Icons\\Calendar.png"
 
+# Palette lookup normalizes every enum member on each call. These values are static for the
+# lifetime of the client, so resolve them once instead of once per calendar cell.
+_YELLOW_COLOR = ColorPalette.GetColor("yellow")
+_YELLOW = _YELLOW_COLOR.to_tuple_normalized()
+_GW_GOLD = ColorPalette.GetColor("gw_gold").to_tuple_normalized()
+
+
+@lru_cache(maxsize=64)
+def _normalise_event_color(color: tuple[int, int, int, int]) -> tuple[float, float, float, float]:
+    return tuple(channel / 255 for channel in color)  # type: ignore[return-value]
+
+
+@lru_cache(maxsize=256)
+def _get_texture_for_model(model_id: int | ModelID) -> str:
+    """Resolve an item texture path once; the calendar's model data is static."""
+
+    return get_texture_for_model(model_id)
+
+
 class WidgetLike(Protocol):
     name: str
     plain_name: str
@@ -49,6 +69,7 @@ class WidgetHandlerLike(Protocol):
 
     def get_widget_info(self, name: str) -> WidgetLike | None: ...
 
+@lru_cache(maxsize=512)
 def get_weekly_bonuses(day: date) -> tuple[dict, dict]:
     """Return (PvE_bonus, PvP_bonus) active for the given date."""
     # Normalize to Monday of this week
@@ -97,6 +118,7 @@ def expand_cycle_if_needed(day: date) -> None:
         last_week = NICHOLAS_CYCLE[-1]["week"]
 
 
+@lru_cache(maxsize=512)
 def get_nicholas_for_day(day: date) -> dict | None:
     """Return Nicholas dict for any given date, expanding cycle on demand."""
     if not NICHOLAS_CYCLE:
@@ -116,6 +138,7 @@ def get_nicholas_for_day(day: date) -> dict | None:
     return None
 
 
+@lru_cache(maxsize=512)
 def get_zaishen_quests_for_day(day: date) -> dict:
     """Return all four Zaishen daily quests active on the given date."""
     delta = (day - ZAISHEN_REFERENCE_DATE).days
@@ -129,6 +152,7 @@ def get_zaishen_quests_for_day(day: date) -> dict:
 
 
 
+@lru_cache(maxsize=512)
 def get_event_for_day(day: date) -> dict | None:
     """Return event dict if 'day' falls within an event's range."""
     for name, info in EVENTS.items():
@@ -138,6 +162,31 @@ def get_event_for_day(day: date) -> dict | None:
         if start <= day < end:
             return {"name": name, **info}
     return None
+
+
+@lru_cache(maxsize=512)
+def get_day_data(day: date) -> tuple[dict | None, tuple[dict, dict], dict | None, dict]:
+    """Return all static calendar data for one day from one bounded cache."""
+
+    return (
+        get_event_for_day(day),
+        get_weekly_bonuses(day),
+        get_nicholas_for_day(day),
+        get_zaishen_quests_for_day(day),
+    )
+
+
+@lru_cache(maxsize=48)
+def _month_grid(year: int, month: int) -> tuple[tuple[date | None, ...], ...]:
+    """Cache month layout; the calendar grid changes only when year/month changes."""
+
+    import calendar as python_calendar
+
+    cal = python_calendar.Calendar(firstweekday=0)
+    return tuple(
+        tuple(day if day.month == month else None for day in week)
+        for week in cal.monthdatescalendar(year, month)
+    )
 
 
 
@@ -226,13 +275,7 @@ class Calendar:
     # -------------------------
     def month_grid(self):
         """Return a 2D list representing the current month (weeks Ã— days)."""
-        import calendar
-        cal = calendar.Calendar(firstweekday=0)  # Sunday=6
-        return [
-            [d if d.month == self.current.month else None
-             for d in week]
-            for week in cal.monthdatescalendar(self.current.year, self.current.month)
-        ]
+        return [list(week) for week in _month_grid(self.current.year, self.current.month)]
         
     # -------------------------
     # Conversions
@@ -474,7 +517,7 @@ def draw_month(cal: Calendar, width: int = 300, height: int = 265):
     child_id = f"month_{cal.current.month}_{cal.current.year}"
     if PyImGui.begin_child(child_id, (width, height), True, PyImGui.WindowFlags.NoFlag):
         # Caption
-        PyImGui.text_colored(cal.get_month_year(), ColorPalette.GetColor("yellow").to_tuple_normalized())
+        PyImGui.text_colored(cal.get_month_year(), _YELLOW)
 
         headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         if PyImGui.begin_table(f"calendar_table_{child_id}", 7, PyImGui.TableFlags.Borders):
@@ -490,16 +533,23 @@ def draw_month(cal: Calendar, width: int = 300, height: int = 265):
                     if day is None or day.month != cal.current.month:
                         PyImGui.text("")
                     else:
-                        # Event check
-                        event = get_event_for_day(day)
-                        pve_bonus, pvp_bonus = get_weekly_bonuses(day)
-                        nicholas = get_nicholas_for_day(day)
+                        # Static day data is cached; only ImGui drawing remains on each frame.
+                        event, (pve_bonus, pvp_bonus), nicholas, zaishen = get_day_data(day)
                         colors = event["colors"] if event else None
 
                         if event and colors:
-                            PyImGui.push_style_color(PyImGui.ImGuiCol.Button, tuple(c/255 for c in colors["button"]))
-                            PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, tuple(c/255 for c in colors["button_hover"]))
-                            PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, tuple(c/255 for c in colors["button_active"]))
+                            PyImGui.push_style_color(
+                                PyImGui.ImGuiCol.Button,
+                                _normalise_event_color(tuple(colors["button"])),
+                            )
+                            PyImGui.push_style_color(
+                                PyImGui.ImGuiCol.ButtonHovered,
+                                _normalise_event_color(tuple(colors["button_hover"])),
+                            )
+                            PyImGui.push_style_color(
+                                PyImGui.ImGuiCol.ButtonActive,
+                                _normalise_event_color(tuple(colors["button_active"])),
+                            )
 
                         if PyImGui.button(str(day.day), 30, 30):
                             calendar.set_date(day.year, day.month, day.day)   # ðŸ‘ˆ this makes clicked date active
@@ -516,18 +566,22 @@ def draw_month(cal: Calendar, width: int = 300, height: int = 265):
                             if PyImGui.begin_tooltip():
                                 PyImGui.text(f"{day.strftime('%A, %B %d, %Y')}")
                                 if event and colors:
-                                    PyImGui.text_colored(f"Event: {event['name']}", tuple(c/255 for c in colors["button_active"]))
+                                    PyImGui.text_colored(
+                                        f"Event: {event['name']}",
+                                        _normalise_event_color(tuple(colors["button_active"])),
+                                    )
                                 if pve_bonus:
                                     PyImGui.text(f"PvE Weekly Bonus: {pve_bonus['name']}")
                                 if pvp_bonus:
                                     PyImGui.text(f"PvP Weekly Bonus: {pvp_bonus['name']}")
-                                zq = get_zaishen_quests_for_day(day)
                                 PyImGui.separator()
                                 PyImGui.text_colored("Zaishen Quests", (200/255, 155/255, 0, 1))
-                                PyImGui.text(f"Mission:  {zq['mission']['name']} [{zq['mission']['campaign']}]")
-                                PyImGui.text(f"Bounty:   {zq['bounty']}")
-                                PyImGui.text(f"Combat:   {zq['combat']}")
-                                PyImGui.text(f"Vanquish: {zq['vanquish']}")
+                                PyImGui.text(
+                                    f"Mission:  {zaishen['mission']['name']} [{zaishen['mission']['campaign']}]"
+                                )
+                                PyImGui.text(f"Bounty:   {zaishen['bounty']}")
+                                PyImGui.text(f"Combat:   {zaishen['combat']}")
+                                PyImGui.text(f"Vanquish: {zaishen['vanquish']}")
                                 if nicholas:
                                     PyImGui.separator()
                                     PyImGui.text_colored("Nicholas the Traveler", (200/255, 155/255, 0, 1))
@@ -554,6 +608,7 @@ def _normalize_model_id(model: object) -> Optional[int]:
         return None
 
 
+@lru_cache(maxsize=256)
 def _extract_model_id_from_script(script_path: str) -> Optional[int]:
     """
     Read MODEL_ID_TO_FARM from a script without importing/executing it.
@@ -599,11 +654,12 @@ def _extract_model_id_from_script(script_path: str) -> Optional[int]:
     return None
 
 
-def get_script_path_for_model(model: int) -> Optional[str]:
-    """
-    Resolve the script filename for a given model ID.
-    Returns the full path if found, otherwise None.
-    """
+_nicholas_farm_script_index: dict[int, str] | None = None
+
+
+def _build_nicholas_farm_script_index() -> dict[int, str]:
+    """Scan Nicholas farm metadata once and retain the model-to-script index."""
+
     widgets_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     bots_path = os.path.join(
         widgets_path,
@@ -613,34 +669,41 @@ def get_script_path_for_model(model: int) -> Optional[str]:
         "Trophies",
         "Nicholas the Traveler",
     )
-
-    model_id = _normalize_model_id(model)
-    if model_id is None:
-        return None
-
+    index: dict[int, str] = {}
     try:
         for file in os.listdir(bots_path):
             if not file.endswith(".py"):
                 continue
-
             full_path = os.path.join(bots_path, file)
-
-            # Backward-compatible: legacy "<model>-Name.py" naming.
-            if file.startswith(f"{model_id}-"):
-                return full_path
-
-            # Preferred: read MODEL_ID_TO_FARM from script content.
+            prefix, separator, _ = file.partition("-")
+            if separator and prefix.isdigit():
+                index[int(prefix)] = full_path
+                continue
             file_model_id = _extract_model_id_from_script(full_path)
-            if file_model_id == model_id:
-                return full_path
+            if file_model_id is not None:
+                index[file_model_id] = full_path
     except Exception as e:
         PySystem.Console.Log(
             "script loader",
-            f"Error scanning for model {model_id}: {str(e)}",
+            f"Error indexing Nicholas farm scripts: {str(e)}",
             PySystem.Console.MessageType.Error,
         )
+    return index
 
-    return None
+
+def get_script_path_for_model(model: int) -> Optional[str]:
+    """
+    Resolve the script filename for a given model ID.
+    Returns the full path if found, otherwise None.
+    """
+    model_id = _normalize_model_id(model)
+    if model_id is None:
+        return None
+
+    global _nicholas_farm_script_index
+    if _nicholas_farm_script_index is None:
+        _nicholas_farm_script_index = _build_nicholas_farm_script_index()
+    return _nicholas_farm_script_index.get(model_id)
 
 
 def _normalize_script_path(path: str) -> str:
@@ -821,33 +884,30 @@ def on_disable():
 
 def DrawDayCard():
     selected_day = calendar.current   # ðŸ‘ˆ use current calendar date, not today
-    current_event = get_event_for_day(selected_day)
-    pve_bonus, pvp_bonus = get_weekly_bonuses(selected_day)
-    nicholas = get_nicholas_for_day(selected_day)
-    zaishen = get_zaishen_quests_for_day(selected_day)
+    current_event, (pve_bonus, pvp_bonus), nicholas, zaishen = get_day_data(selected_day)
 
     # Show the selected date (defaults to today)
-    PyImGui.text_colored(f"{calendar.get_day_of_week()}, {selected_day.strftime('%B %d, %Y')}", ColorPalette.GetColor("yellow").to_tuple_normalized())
-    PyImGui.text_colored("PvE Bonus:", ColorPalette.GetColor("gw_gold").to_tuple_normalized())
+    PyImGui.text_colored(f"{calendar.get_day_of_week()}, {selected_day.strftime('%B %d, %Y')}", _YELLOW)
+    PyImGui.text_colored("PvE Bonus:", _GW_GOLD)
     PyImGui.same_line(0, -1)
     PyImGui.text(f"{pve_bonus['name']}")
-    PyImGui.text_colored("PvP Bonus:", ColorPalette.GetColor("gw_gold").to_tuple_normalized())
+    PyImGui.text_colored("PvP Bonus:", _GW_GOLD)
     PyImGui.same_line(0, -1)
     PyImGui.text(f"{pvp_bonus['name']}")
 
     # Zaishen daily quests
     PyImGui.separator()
-    PyImGui.text_colored("Zaishen Quests", ColorPalette.GetColor("gw_gold").to_tuple_normalized())
-    PyImGui.text_colored("Mission:",  ColorPalette.GetColor("gw_gold").to_tuple_normalized())
+    PyImGui.text_colored("Zaishen Quests", _GW_GOLD)
+    PyImGui.text_colored("Mission:",  _GW_GOLD)
     PyImGui.same_line(0, -1)
     PyImGui.text(f"{zaishen['mission']['name']}  [{zaishen['mission']['campaign']}]")
-    PyImGui.text_colored("Bounty:",   ColorPalette.GetColor("gw_gold").to_tuple_normalized())
+    PyImGui.text_colored("Bounty:",   _GW_GOLD)
     PyImGui.same_line(0, -1)
     PyImGui.text(f"{zaishen['bounty']}")
-    PyImGui.text_colored("Combat:",   ColorPalette.GetColor("gw_gold").to_tuple_normalized())
+    PyImGui.text_colored("Combat:",   _GW_GOLD)
     PyImGui.same_line(0, -1)
     PyImGui.text(f"{zaishen['combat']}")
-    PyImGui.text_colored("Vanquish:", ColorPalette.GetColor("gw_gold").to_tuple_normalized())
+    PyImGui.text_colored("Vanquish:", _GW_GOLD)
     PyImGui.same_line(0, -1)
     PyImGui.text(f"{zaishen['vanquish']}")
     PyImGui.separator()
@@ -861,13 +921,13 @@ def DrawDayCard():
             PyImGui.table_setup_column("titles", PyImGui.TableColumnFlags.WidthFixed, child_width - iconwidth)
             PyImGui.table_next_row()
             PyImGui.table_set_column_index(0)
-            ImGui.DrawTexture(get_texture_for_model(nicholas["model_id"]), iconwidth, iconwidth)
+            ImGui.DrawTexture(_get_texture_for_model(nicholas["model_id"]), iconwidth, iconwidth)
             PyImGui.table_set_column_index(1)
             if PyImGui.begin_table("Nick Info", 1, PyImGui.TableFlags.NoFlag):
                 PyImGui.table_next_row()
                 PyImGui.table_set_column_index(0)
                 ImGui.push_font("Regular", 20)
-                PyImGui.push_style_color(PyImGui.ImGuiCol.Text, ColorPalette.GetColor("yellow").to_tuple_normalized())
+                PyImGui.push_style_color(PyImGui.ImGuiCol.Text, _YELLOW)
                 PyImGui.text("Nicholas the Traveler")
                 PyImGui.pop_style_color(1)
                 ImGui.pop_font()
@@ -915,7 +975,7 @@ def DrawDayCard():
                     PyImGui.table_next_column()
 
                     for _, item in enumerate(current_event["dropped_items"]):
-                        ImGui.DrawTexture(get_texture_for_model(item), 48, 48)                        
+                        ImGui.DrawTexture(_get_texture_for_model(item), 48, 48)
                         ImGui.show_tooltip(str(item.name))                        
                         PyImGui.table_next_column()
                         
@@ -970,7 +1030,7 @@ def DrawDayWindow():
 
 def tooltip():
     ImGui.begin_tooltip()
-    title_color = ColorPalette.GetColor("yellow")
+    title_color = _YELLOW_COLOR
     ImGui.push_font("Regular", 24)
     PyImGui.text_colored("Calendar", title_color.to_tuple_normalized())
     ImGui.pop_font()

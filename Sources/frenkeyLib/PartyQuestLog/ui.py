@@ -106,7 +106,7 @@ class UI():
 
         UI.ActiveQuest = quest_data.quest_log.get(active_quest_id, quest_data.mission_map_quest if quest_data.mission_map_quest is not None and quest_data.mission_map_quest_loaded else None)
         
-        UI.QuestLogWindow.window_name = f"Party Quest Log [{UI.Settings.hotkey.format_hotkey() if UI.Settings.hotkey else 'No Hotkey'}]"
+        UI.QuestLogWindow.window_name = "Party Quest Log"
         open = UI.QuestLogWindow.begin()
         
         if open:
@@ -163,7 +163,6 @@ class UI():
                             
                         tokenized_lines =  UI.TITLE_MARKUP_TOKENS[quest.quest_id][2]     
                                 
-                        posY = PyImGui.get_cursor_pos_y()               
                         cursor = PyImGui.get_cursor_screen_pos()
                         computed_rect = (cursor[0], cursor[1], width, height_selectable)
                         color = Color(200, 200, 200, 40) if quest == UI.ActiveQuest else \
@@ -252,22 +251,10 @@ class UI():
                                 ImGui.end_tooltip()
                                 style.ItemSpacing.pop_style_var_direct() 
                         
-                        after_y = PyImGui.get_cursor_pos_y()
-                        for i, acc in enumerate(accounts.values()):
-                            PyImGui.set_cursor_pos((width - (i * 10) - 20, posY + 2))
-                            ## chek if quest.quest_id is in active quests (.QuestID) 
-                            acc_quest = next((q for q in acc.QuestLog.Quests if q.QuestID == quest.quest_id), None)
-                            
-                            active = acc_quest is not None
-                            completed = acc_quest and acc_quest.IsCompleted
-                            
-                            color = UI.QUEST_STATE_COLOR_MAP["Completed"] if completed else (UI.QUEST_STATE_COLOR_MAP["Active"] if active else UI.QUEST_STATE_COLOR_MAP["Inactive"])
-
-                            style.Text.push_color_direct(color.rgb_tuple)                              
-                            PyImGui.bullet_text("")
-                            style.Text.pop_color_direct()
-                        
-                        PyImGui.set_cursor_pos_y(after_y + 4)
+                        # Keep the parent child bounds advancing through a normal item.
+                        # Do not reposition the cursor to paint account markers over this row:
+                        # ImGui treats that as extending the parent bounds from inside a child.
+                        PyImGui.dummy((0.0, 4.0))
                             
                         # ImGui.show_tooltip(f"{acc.AccountEmail} | {acc.CharacterName} | {("Completed" if completed else "Active" if active else "Not Active")} " )
                         # ImGui.show_tooltip(f"{name.lower().replace(" ", "_")}@gmail.com | {name} | {("Completed" if completed else "Active" if active else "Not Active")} " )
@@ -553,16 +540,12 @@ class UI():
                     avail = PyImGui.get_content_region_avail()
                     _, height = avail[0], avail[1]
                     
-                    ImGui.text_aligned("Quest Log Hotkey", height=22, alignment=Alignment.MidLeft)
-                    PyImGui.same_line(0, 5)
-                    width_avail = PyImGui.get_content_region_avail()[0]
-                    PyImGui.push_item_width(width_avail - 5)
-                    key, modifiers, changed = ImGui.keybinding("##HotkeyInfo", key=UI.Settings.HotKeyKey, modifiers=UI.Settings.Modifiers)
-                    PyImGui.pop_item_width()
+                    show_quest_log = ImGui.checkbox("Show Quest Log", UI.Settings.LogOpen)
+                    if show_quest_log != UI.Settings.LogOpen:
+                        UI.Settings.LogOpen = show_quest_log
+                        UI.Settings.save_settings()
                     
-                    if changed:
-                        ConsoleLog("Party Quest Log", f"Setting new hotkey: {modifiers.name}+{key.name.replace('VK_','')}")
-                        UI.Settings.set_questlog_hotkey_keys(key, modifiers)
+                    PyImGui.spacing()
                     
                     show_only_in_party = ImGui.checkbox("Show Quest Log only when in a Party", UI.Settings.ShowOnlyInParty)
                     if show_only_in_party != UI.Settings.ShowOnlyInParty:
