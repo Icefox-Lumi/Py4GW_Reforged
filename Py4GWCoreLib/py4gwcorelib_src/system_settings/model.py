@@ -98,6 +98,16 @@ CATALOG: "tuple[Category, ...]" = (
         ),
     ),
     Category(
+        key="system", title="System", icon="ICON_COGS",
+        # Custom category: rendered by system feature modules.
+        listeners=(),
+    ),
+    Category(
+        key="camera", title="Camera", icon="ICON_CAMERA",
+        # Custom category: rendered by camera_smoothing.config_ui.
+        listeners=(),
+    ),
+    Category(
         key="faction", title="Faction", icon="ICON_HAND_HOLDING",
         listeners=(
             Listener(

@@ -207,7 +207,7 @@ def MoveInteractAndSellItems(
     def _is_merchant_window_open() -> bool:
         from Py4GWCoreLib.UIManager import UIManager
 
-        merchant_frame_id = Frame.from_hash(merchant_frame_hash)
+        merchant_frame_id = Frame(FrameId.Merchant)
         return merchant_frame_id.is_usable
 
     def _debug_cleanup_state(node: BehaviorTree.Node) -> BehaviorTree.NodeState:

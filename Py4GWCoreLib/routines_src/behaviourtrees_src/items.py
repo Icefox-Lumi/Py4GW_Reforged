@@ -203,8 +203,8 @@ class BTItems:
             target_bag_size = GLOBAL_CACHE.Inventory.GetBagSize(target_bag)
             return target_container_item != 0 or target_bag_size > 0
 
-        def _get_backpack_slot_frame_id() -> int:
-            return Frame.from_hash(inventory_frame_hash, [0, 0, 0, Bags.Backpack - 1, 2]).frame_id
+        def _get_backpack_slot_frame():
+            return Frame.bag_slot(Bags.Backpack, 0)
 
         def _equip_inventory_bag(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
             now = int(Utils.GetBaseTimestamp())
@@ -288,13 +288,13 @@ class BTItems:
                 if now < int(state["next_check_ms"]):
                     return BehaviorTree.NodeState.RUNNING
 
-                frame_id = _get_backpack_slot_frame_id()
-                if not Frame.from_id(frame_id).is_usable:
+                slot = _get_backpack_slot_frame()
+                if not slot.is_usable:
                     _fail_log("EquipInventoryBag", "Frame does not exist for backpack slot 0.", Console.MessageType.Error)
                     _reset_state()
                     return BehaviorTree.NodeState.FAILURE
 
-                Frame.from_id(frame_id).mouse_action(9)
+                slot.mouse_action(9)
                 state["stage"] = "fallback_double_click_confirm"
                 state["next_check_ms"] = now + 60
                 return BehaviorTree.NodeState.RUNNING
@@ -303,13 +303,13 @@ class BTItems:
                 if now < int(state["next_check_ms"]):
                     return BehaviorTree.NodeState.RUNNING
 
-                frame_id = _get_backpack_slot_frame_id()
-                if not Frame.from_id(frame_id).is_usable:
+                slot = _get_backpack_slot_frame()
+                if not slot.is_usable:
                     _fail_log("EquipInventoryBag", "Frame does not exist for backpack slot 0.", Console.MessageType.Error)
                     _reset_state()
                     return BehaviorTree.NodeState.FAILURE
 
-                Frame.from_id(frame_id).mouse_click_action(9)
+                slot.mouse_click_action(9)
                 state["stage"] = "final_wait"
                 state["next_check_ms"] = now + 60
                 return BehaviorTree.NodeState.RUNNING

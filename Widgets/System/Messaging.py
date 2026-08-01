@@ -1,4 +1,6 @@
 import time
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 
@@ -54,6 +56,44 @@ PYCONS_WIDGET_NAME = "Pycons"
 _pcon_last_exec_ms_by_signature: dict[tuple[str, tuple[int, int, int, int]], int] = {}
 PCON_EXEC_DEDUP_MS = 500
 _pending_widget_enables: list[str] = []
+
+_MESSAGE_TYPE_OPTIONS = tuple(
+    command for command in SharedCommandType if command is not SharedCommandType.NoCommand
+)
+_message_recipient_index = 0
+_message_type_index = next(
+    (index for index, command in enumerate(_MESSAGE_TYPE_OPTIONS) if command is SharedCommandType.BroadcastChatCommand),
+    0,
+)
+_message_params = [0.0, 0.0, 0.0, 0.0]
+_message_extra_data = ["", "", "", ""]
+_message_filter_text = ""
+_message_status_filter_index = 0
+_message_account_filter_index = 0
+_selected_message_index: int | None = None
+_message_status_text = ""
+_MESSAGING_WINDOW_MIN_SIZE = (720.0, 500.0)
+_MESSAGING_WINDOW_MAX_SIZE = (float("inf"), float("inf"))
+_MESSAGE_HISTORY_LIMIT = 1000
+_message_history_direction_index = 0
+_message_history_filter_text = ""
+
+
+@dataclass(frozen=True)
+class MessageHistoryEntry:
+    sequence: int
+    timestamp: int
+    sender: str
+    receiver: str
+    command: str
+    params: tuple[float, float, float, float]
+    extra_data: tuple[str, str, str, str]
+    direction: str
+    status: str
+
+
+_message_history: deque[MessageHistoryEntry] = deque(maxlen=_MESSAGE_HISTORY_LIMIT)
+_message_history_sequence = 0
 
 
 def _extra_data(message: SharedMessageStruct) -> tuple[str, str, str, str]:
@@ -160,6 +200,427 @@ def _get_pycons_widget_module():
         return None
     return getattr(widget_info, "module", None)
 
+
+def _message_type_name(command: SharedCommandType | None) -> str:
+    if command is None:
+        return "Unknown"
+    return command.name.replace("_", " ")
+
+
+def _message_command(message: SharedMessageStruct) -> SharedCommandType | None:
+    try:
+        return SharedCommandType(int(message.Command))
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_message_history(
+    sender: str,
+    receiver: str,
+    command: SharedCommandType | None,
+    params: tuple[float, float, float, float],
+    extra_data: tuple[str, str, str, str],
+    direction: str,
+    status: str,
+) -> None:
+    global _message_history_sequence
+
+    _message_history_sequence += 1
+    _message_history.append(
+        MessageHistoryEntry(
+            sequence=_message_history_sequence,
+            timestamp=int(PySystem.get_tick_count64()),
+            sender=str(sender or ""),
+            receiver=str(receiver or ""),
+            command=_message_type_name(command),
+            params=params,
+            extra_data=extra_data,
+            direction=direction,
+            status=status,
+        )
+    )
+
+
+def _record_received_message(message: SharedMessageStruct) -> None:
+    params = (
+        float(message.Params[0]),
+        float(message.Params[1]),
+        float(message.Params[2]),
+        float(message.Params[3]),
+    )
+    _record_message_history(
+        str(message.SenderEmail or ""),
+        str(message.ReceiverEmail or ""),
+        _message_command(message),
+        params,
+        _message_extra_values(message),
+        "Received",
+        "Dispatched",
+    )
+
+
+def _history_payload_summary(entry: MessageHistoryEntry) -> str:
+    params = ", ".join(f"{value:g}" for value in entry.params if value != 0.0)
+    extras = ", ".join(value for value in entry.extra_data if value)
+    parts = []
+    if params:
+        parts.append(f"params: {params}")
+    if extras:
+        parts.append(f"extra: {extras}")
+    return " | ".join(parts) if parts else "-"
+
+
+def _message_recipients(messages: list[tuple[int, SharedMessageStruct]]) -> list[str]:
+    current_email = str(Player.GetAccountEmail() or "").strip()
+    recipients = {current_email} if current_email else set()
+    for _, message in messages:
+        sender = str(message.SenderEmail or "").strip()
+        receiver = str(message.ReceiverEmail or "").strip()
+        if sender:
+            recipients.add(sender)
+        if receiver:
+            recipients.add(receiver)
+    recipients.discard("")
+    recipients.discard(current_email)
+    return ["All other accounts", "Current account", *sorted(recipients)]
+
+
+def _message_extra_values(message: SharedMessageStruct) -> tuple[str, str, str, str]:
+    return _extra_data(message)
+
+
+def _message_payload_summary(message: SharedMessageStruct) -> str:
+    params = ", ".join(f"{float(value):g}" for value in message.Params if float(value) != 0.0)
+    extras = ", ".join(value for value in _message_extra_values(message) if value)
+    parts = []
+    if params:
+        parts.append(f"params: {params}")
+    if extras:
+        parts.append(f"extra: {extras}")
+    return " | ".join(parts) if parts else "—"
+
+
+def _message_age_text(message: SharedMessageStruct) -> str:
+    try:
+        timestamp = int(message.Timestamp)
+        if timestamp <= 0:
+            return "—"
+        age_ms = max(0, int(PySystem.get_tick_count64()) - timestamp)
+        if age_ms < 1000:
+            return f"{age_ms}ms"
+        if age_ms < 60_000:
+            return f"{age_ms // 1000}s"
+        return f"{age_ms // 60_000}m"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _send_message_to_recipients(
+    command: SharedCommandType,
+    recipient: str,
+    params: tuple[float, float, float, float],
+    extra_data: tuple[str, str, str, str],
+) -> int:
+    sender_email = str(Player.GetAccountEmail() or "").strip()
+    if not sender_email:
+        return 0
+
+    if command is SharedCommandType.BroadcastChatCommand and recipient == "All other accounts":
+        chat_command = extra_data[0].strip().lstrip("/").strip()
+        if not chat_command:
+            return 0
+        Player.SendChatCommand(chat_command)
+
+    if recipient == "All other accounts":
+        account_emails = [
+            str(account.AccountEmail or "").strip()
+            for account in GLOBAL_CACHE.ShMem.GetAllAccountData()
+        ]
+        recipients = [email for email in account_emails if email and email != sender_email]
+    elif recipient == "Current account":
+        recipients = [sender_email]
+    else:
+        recipients = [recipient] if recipient else []
+
+    sent = 0
+    for receiver_email in dict.fromkeys(recipients):
+        if GLOBAL_CACHE.ShMem.SendMessage(sender_email, receiver_email, command, params, extra_data) >= 0:
+            sent += 1
+            _record_message_history(
+                sender_email,
+                receiver_email,
+                command,
+                params,
+                extra_data,
+                "Sent",
+                "Queued",
+            )
+    return sent
+
+
+def _draw_send_message_section(messages: list[tuple[int, SharedMessageStruct]]) -> None:
+    global _message_recipient_index, _message_type_index, _message_status_text
+
+    PyImGui.set_next_item_open(True, PyImGui.ImGuiCond.Once)
+    if not PyImGui.collapsing_header("Send Message##messaging_send_section"):
+        return
+
+    recipients = _message_recipients(messages)
+    _message_recipient_index = min(_message_recipient_index, len(recipients) - 1)
+    _message_recipient_index = PyImGui.combo(
+        "Recipient##messaging_sender_recipient", _message_recipient_index, recipients
+    )
+
+    command_names = [_message_type_name(command) for command in _MESSAGE_TYPE_OPTIONS]
+    _message_type_index = min(_message_type_index, len(command_names) - 1)
+    _message_type_index = PyImGui.combo("Message Type##messaging_sender_type", _message_type_index, command_names)
+    selected_command = _MESSAGE_TYPE_OPTIONS[_message_type_index]
+
+    if selected_command is SharedCommandType.BroadcastChatCommand:
+        _message_extra_data[0] = PyImGui.input_text(
+            "Chat Command##messaging_sender_command",
+            _message_extra_data[0],
+        )
+        PyImGui.text("A leading slash is optional. Broadcast sends locally and to other accounts.")
+    else:
+        if PyImGui.collapsing_header("Numeric Parameters##messaging_sender_params"):
+            for index in range(4):
+                _message_params[index] = PyImGui.input_float(
+                    f"Param {index + 1}##messaging_sender_param_{index}",
+                    _message_params[index],
+                )
+
+        if PyImGui.collapsing_header("Extra Data##messaging_sender_extra"):
+            for index in range(4):
+                _message_extra_data[index] = PyImGui.input_text(
+                    f"Extra {index + 1}##messaging_sender_extra_{index}",
+                    _message_extra_data[index],
+                )
+
+    if PyImGui.button("Send Message##messaging_sender_submit"):
+        recipient = recipients[_message_recipient_index]
+        params = (
+            float(_message_params[0]),
+            float(_message_params[1]),
+            float(_message_params[2]),
+            float(_message_params[3]),
+        )
+        extra_data = (
+            str(_message_extra_data[0]),
+            str(_message_extra_data[1]),
+            str(_message_extra_data[2]),
+            str(_message_extra_data[3]),
+        )
+        if selected_command is SharedCommandType.BroadcastChatCommand and not extra_data[0].strip():
+            _message_status_text = "Enter a chat command before sending."
+        else:
+            sent = _send_message_to_recipients(selected_command, recipient, params, extra_data)
+            _message_status_text = f"Message queued for {sent} account(s)."
+
+    if _message_status_text:
+        PyImGui.text(_message_status_text)
+
+
+def _draw_message_queue(messages: list[tuple[int, SharedMessageStruct]]) -> None:
+    global _message_filter_text, _message_status_filter_index, _message_account_filter_index, _selected_message_index
+
+    PyImGui.set_next_item_open(True, PyImGui.ImGuiCond.Once)
+    if not PyImGui.collapsing_header("Message Queue##messaging_queue_section"):
+        return
+
+    _message_filter_text = PyImGui.input_text("Search##messaging_queue_search", _message_filter_text)
+    PyImGui.same_line()
+    status_options = ["All", "Pending", "Running"]
+    _message_status_filter_index = PyImGui.combo(
+        "Status##messaging_queue_status",
+        min(_message_status_filter_index, len(status_options) - 1),
+        status_options,
+    )
+
+    account_options = ["All accounts", "Current account", *_message_recipients(messages)[2:]]
+    _message_account_filter_index = PyImGui.combo(
+        "Account##messaging_queue_account",
+        min(_message_account_filter_index, len(account_options) - 1),
+        account_options,
+    )
+
+    query = _message_filter_text.strip().lower()
+    selected_account = account_options[_message_account_filter_index]
+    filtered_messages: list[tuple[int, SharedMessageStruct]] = []
+    for index, message in messages:
+        command = _message_command(message)
+        state = "Running" if message.Running else "Pending"
+        sender = str(message.SenderEmail or "")
+        receiver = str(message.ReceiverEmail or "")
+        searchable = f"{sender} {receiver} {_message_type_name(command)} {_message_payload_summary(message)}".lower()
+        account_matches = selected_account == "All accounts" or (
+            selected_account == "Current account" and receiver == Player.GetAccountEmail()
+        ) or selected_account in (sender, receiver)
+        status_matches = _message_status_filter_index == 0 or state == status_options[_message_status_filter_index]
+        if account_matches and status_matches and (not query or query in searchable):
+            filtered_messages.append((index, message))
+
+    if not filtered_messages:
+        PyImGui.text("No active messages match the current filters.")
+        return
+
+    if PyImGui.begin_table(
+        "messaging_queue_table",
+        7,
+        PyImGui.TableFlags.Borders
+        | PyImGui.TableFlags.RowBg
+        | PyImGui.TableFlags.SizingStretchProp
+        | PyImGui.TableFlags.ScrollY,
+        (0.0, 280.0),
+    ):
+        PyImGui.table_setup_column("State", PyImGui.TableColumnFlags.WidthFixed, 70)
+        PyImGui.table_setup_column("Age", PyImGui.TableColumnFlags.WidthFixed, 55)
+        PyImGui.table_setup_column("Sender", PyImGui.TableColumnFlags.WidthStretch, 1.0)
+        PyImGui.table_setup_column("Receiver", PyImGui.TableColumnFlags.WidthStretch, 1.0)
+        PyImGui.table_setup_column("Type", PyImGui.TableColumnFlags.WidthStretch, 1.0)
+        PyImGui.table_setup_column("Payload", PyImGui.TableColumnFlags.WidthStretch, 1.5)
+        PyImGui.table_setup_column("Action", PyImGui.TableColumnFlags.WidthFixed, 70)
+        PyImGui.table_headers_row()
+
+        for index, message in filtered_messages:
+            command = _message_command(message)
+            state = "Running" if message.Running else "Pending"
+            PyImGui.table_next_row()
+            PyImGui.table_next_column()
+            if PyImGui.selectable(
+                f"{state}##messaging_row_{index}",
+                _selected_message_index == index,
+                PyImGui.SelectableFlags.NoFlag,
+                (0.0, 0.0),
+            ):
+                _selected_message_index = index
+            PyImGui.table_next_column()
+            PyImGui.text(_message_age_text(message))
+            PyImGui.table_next_column()
+            PyImGui.text(str(message.SenderEmail or "—"))
+            PyImGui.table_next_column()
+            PyImGui.text(str(message.ReceiverEmail or "—"))
+            PyImGui.table_next_column()
+            PyImGui.text(_message_type_name(command))
+            PyImGui.table_next_column()
+            PyImGui.text(_message_payload_summary(message))
+            PyImGui.table_next_column()
+            if PyImGui.button(f"Finish##messaging_finish_{index}"):
+                GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+                if _selected_message_index == index:
+                    _selected_message_index = None
+        PyImGui.end_table()
+
+
+def _draw_selected_message(messages: list[tuple[int, SharedMessageStruct]]) -> None:
+    if _selected_message_index is None:
+        return
+
+    selected = next((message for index, message in messages if index == _selected_message_index), None)
+    if selected is None:
+        return
+
+    PyImGui.set_next_item_open(True, PyImGui.ImGuiCond.Once)
+    if not PyImGui.collapsing_header("Selected Message##messaging_selected_section"):
+        return
+
+    command = _message_command(selected)
+    PyImGui.text(f"State: {'Running' if selected.Running else 'Pending'}")
+    PyImGui.text(f"Sender: {selected.SenderEmail}")
+    PyImGui.text(f"Receiver: {selected.ReceiverEmail}")
+    PyImGui.text(f"Command: {_message_type_name(command)}")
+    PyImGui.text(f"Params: {', '.join(str(value) for value in selected.Params)}")
+    PyImGui.text_wrapped(f"Extra data: {', '.join(_message_extra_values(selected))}")
+    PyImGui.text(f"Timestamp: {selected.Timestamp}")
+
+
+def _history_age_text(entry: MessageHistoryEntry) -> str:
+    age_ms = max(0, int(PySystem.get_tick_count64()) - entry.timestamp)
+    if age_ms < 1000:
+        return f"{age_ms}ms"
+    if age_ms < 60_000:
+        return f"{age_ms // 1000}s"
+    return f"{age_ms // 60_000}m"
+
+
+def _draw_message_history() -> None:
+    global _message_history_direction_index, _message_history_filter_text
+
+    PyImGui.set_next_item_open(False, PyImGui.ImGuiCond.Once)
+    if not PyImGui.collapsing_header("Session History##messaging_history_section"):
+        return
+
+    _message_history_filter_text = PyImGui.input_text(
+        "Search##messaging_history_search", _message_history_filter_text
+    )
+    PyImGui.same_line()
+    direction_options = ["All", "Sent", "Received"]
+    _message_history_direction_index = PyImGui.combo(
+        "Direction##messaging_history_direction",
+        min(_message_history_direction_index, len(direction_options) - 1),
+        direction_options,
+    )
+    PyImGui.same_line()
+    if PyImGui.button("Clear##messaging_history_clear"):
+        _message_history.clear()
+
+    query = _message_history_filter_text.strip().lower()
+    selected_direction = direction_options[_message_history_direction_index]
+    entries = []
+    for entry in reversed(_message_history):
+        searchable = (
+            f"{entry.sender} {entry.receiver} {entry.command} "
+            f"{entry.direction} {entry.status} {_history_payload_summary(entry)}"
+        ).lower()
+        if selected_direction != "All" and entry.direction != selected_direction:
+            continue
+        if query and query not in searchable:
+            continue
+        entries.append(entry)
+
+    if not entries:
+        PyImGui.text("No runtime history entries match the current filters.")
+        PyImGui.text(f"Runtime history capacity: {_MESSAGE_HISTORY_LIMIT} entries.")
+        return
+
+    if PyImGui.begin_table(
+        "messaging_history_table",
+        7,
+        PyImGui.TableFlags.Borders
+        | PyImGui.TableFlags.RowBg
+        | PyImGui.TableFlags.SizingStretchProp
+        | PyImGui.TableFlags.ScrollY,
+        (0.0, 240.0),
+    ):
+        PyImGui.table_setup_column("Age", PyImGui.TableColumnFlags.WidthFixed, 55)
+        PyImGui.table_setup_column("Direction", PyImGui.TableColumnFlags.WidthFixed, 75)
+        PyImGui.table_setup_column("Sender", PyImGui.TableColumnFlags.WidthStretch, 1.0)
+        PyImGui.table_setup_column("Receiver", PyImGui.TableColumnFlags.WidthStretch, 1.0)
+        PyImGui.table_setup_column("Type", PyImGui.TableColumnFlags.WidthStretch, 1.0)
+        PyImGui.table_setup_column("Status", PyImGui.TableColumnFlags.WidthFixed, 80)
+        PyImGui.table_setup_column("Payload", PyImGui.TableColumnFlags.WidthStretch, 1.5)
+        PyImGui.table_headers_row()
+
+        for entry in entries:
+            PyImGui.table_next_row()
+            PyImGui.table_next_column()
+            PyImGui.text(_history_age_text(entry))
+            PyImGui.table_next_column()
+            PyImGui.text(entry.direction)
+            PyImGui.table_next_column()
+            PyImGui.text(entry.sender or "-")
+            PyImGui.table_next_column()
+            PyImGui.text(entry.receiver or "-")
+            PyImGui.table_next_column()
+            PyImGui.text(entry.command)
+            PyImGui.table_next_column()
+            PyImGui.text(entry.status)
+            PyImGui.table_next_column()
+            PyImGui.text(_history_payload_summary(entry))
+        PyImGui.end_table()
+
+    PyImGui.text(f"Runtime history: {len(_message_history)} / {_MESSAGE_HISTORY_LIMIT} entries.")
+
 # region ImGui
 def configure():
     DrawWindow()
@@ -204,73 +665,22 @@ def tooltip():
 
 
 def DrawWindow():
+    PyImGui.set_next_window_size_constraints(_MESSAGING_WINDOW_MIN_SIZE, _MESSAGING_WINDOW_MAX_SIZE)
     if PyImGui.begin(MODULE_NAME):
         account_email = Player.GetAccountEmail()
-        PyImGui.text(f"Account Email: {account_email}")
-        PyImGui.separator()
-        PyImGui.text("Messages for you:")
-        index, message = GLOBAL_CACHE.ShMem.PreviewNextMessage(account_email)
-
-        if index == -1 or message is None:
-            PyImGui.text("No new messages.")
-        else:
-            sender = message.SenderEmail
-            receiver = message.ReceiverEmail
-            if sender is None or receiver is None:
-                PyImGui.text("Invalid message data.")
-                PyImGui.end()
-                return
-
-            command: SharedCommandType = SharedCommandType(message.Command)
-            params: tuple[float, ...] = tuple(message.Params)
-            extra_data: tuple[str, ...] = tuple(message.ExtraData)
-            active = message.Active
-            running = message.Running
-            timestamp = message.Timestamp
-            PyImGui.text(f"Message {index}:")
-            PyImGui.text(f"Sender: {sender}")
-            PyImGui.text(f"Receiver: {receiver}")
-            PyImGui.text(f"Command: {SharedCommandType(command).name}")
-            PyImGui.text(f"Params: {', '.join(map(str, params))}")
-            PyImGui.text(f"ExtraData: {', '.join(map(str, extra_data))}")
-            PyImGui.text(f"Active: {active}")
-            PyImGui.text(f"Running: {running}")
-            PyImGui.text(f"Timestamp: {timestamp}")
-            if PyImGui.button(f"finish_{index}"):
-                GLOBAL_CACHE.ShMem.MarkMessageAsFinished(receiver, index)
-        PyImGui.separator()
-
-        PyImGui.text("All messages:")
-
         messages = GLOBAL_CACHE.ShMem.GetAllMessages()
-        if len(messages) == 0:
-            PyImGui.text("No messages available.")
-        else:
-            for msg in messages:
-                index, message = msg
-                if message is None:
-                    continue
+        pending_count = sum(1 for _, message in messages if not message.Running)
+        running_count = sum(1 for _, message in messages if message.Running)
+        PyImGui.text(f"Account: {account_email}")
+        PyImGui.text(
+            f"Active messages: {len(messages)}    Pending: {pending_count}    "
+            f"Running: {running_count}    Runtime history: {len(_message_history)}"
+        )
 
-                sender = message.SenderEmail
-                receiver = message.ReceiverEmail
-                if sender is None or receiver is None:
-                    continue
-
-                command: SharedCommandType = SharedCommandType(message.Command)
-                params: tuple[float, ...] = tuple(message.Params)
-                running = message.Running
-                timestamp = message.Timestamp
-
-                PyImGui.text(f"Message {index}:")
-                PyImGui.text(f"Sender: {sender}")
-                PyImGui.text(f"Receiver: {receiver}")
-                PyImGui.text(f"Command: {SharedCommandType(command).name}")
-                PyImGui.text(f"Params: {', '.join(map(str, params))}")
-                PyImGui.text(f"Running: {running}")
-                PyImGui.text(f"Timestamp: {timestamp}")
-                if PyImGui.button(f"finish_{index}"):
-                    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(receiver, index)
-                PyImGui.separator()
+        _draw_send_message_section(messages)
+        _draw_message_queue(messages)
+        _draw_selected_message(messages)
+        _draw_message_history()
 
     PyImGui.end()
 
@@ -502,6 +912,22 @@ def Resign(index: int, message: SharedMessageStruct):
         yield from Routines.Yield.wait(100)
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
     ConsoleLog(MODULE_NAME, "Resign message processed and finished.", Console.MessageType.Info, False)
+# endregion
+
+# region BroadcastChatCommand
+def BroadcastChatCommand(index: int, message: SharedMessageStruct):
+    """Execute a chat command received from the Messaging broadcast UI."""
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+
+    command = _extra_data(message)[0].strip().lstrip("/").strip()
+    if command:
+        Player.SendChatCommand(command)
+        ConsoleLog(MODULE_NAME, f"Broadcast chat command received: /{command}.", Console.MessageType.Info, False)
+    else:
+        ConsoleLog(MODULE_NAME, "Received an empty broadcast chat command.", Console.MessageType.Warning, False)
+
+    yield from Routines.Yield.wait(1)
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
 # endregion
 
 # region PixelStack
@@ -2703,6 +3129,8 @@ def ProcessMessages():
     if index == -1 or message is None:
         return
 
+    _record_received_message(message)
+
     match message.Command:
         case SharedCommandType.TravelToMap:
             GLOBAL_CACHE.Coroutines.append(TravelToMap(index, message))
@@ -2729,6 +3157,8 @@ def ProcessMessages():
             GLOBAL_CACHE.Coroutines.append(UseSkill(index, message))
         case SharedCommandType.Resign:
             GLOBAL_CACHE.Coroutines.append(Resign(index, message))
+        case SharedCommandType.BroadcastChatCommand:
+            GLOBAL_CACHE.Coroutines.append(BroadcastChatCommand(index, message))
         case SharedCommandType.PixelStack:
             GLOBAL_CACHE.Coroutines.append(PixelStack(index, message))
         case SharedCommandType.BruteForceUnstuck:

@@ -405,14 +405,12 @@ class Inventory:
         #return Inventory.inventory_instance().AcceptSalvageWindow()
 
     @staticmethod
-    def _get_frame_id_by_alias(frame_label: str) -> int:
-        from .UIManager import UIManager
-
+    def _frame_by_alias(frame_label: str) -> Frame:
+        """Alias lookup that yields an inert handle rather than raising."""
         try:
-            frame = Frame.from_label(frame_label)
+            return Frame.from_label(frame_label)
         except FrameKeyError:
-            return 0
-        return frame.frame_id if frame.exists else 0
+            return Frame.from_id(0)
 
     @staticmethod
     def _get_all_child_frame_ids_from_frame_id(root_frame_id: int, child_offsets: list[int]) -> list[int]:
@@ -421,56 +419,40 @@ class Inventory:
         return [f.frame_id for f in FrameTree.frames_under(root_frame_id, child_offsets)]
 
     @staticmethod
-    def _get_salvage_choice_material_confirm_yes_frame_id() -> int:
-        from .FrameTree import Frame, FrameId
-
-        yes_frame_id = Inventory._get_frame_id_by_alias(Inventory.SALVAGE_CHOICE_MATERIAL_CONFIRM_YES_LABEL)
-        if yes_frame_id != 0:
-            return yes_frame_id
-
-        frame = Frame(FrameId.SalvageWindow.OptionsWindowConfirmMaterialsWindow.Confirm)
-        return frame.frame_id if frame.exists else 0
+    def _salvage_material_confirm_yes() -> Frame:
+        frame = Inventory._frame_by_alias(Inventory.SALVAGE_CHOICE_MATERIAL_CONFIRM_YES_LABEL)
+        if frame.exists:
+            return frame
+        return Frame(FrameId.SalvageWindow.OptionsWindowConfirmMaterialsWindow.Confirm)
 
     @staticmethod
     def IsSalvageChoiceMaterialConfirmVisible() -> bool:
-        return Inventory._get_salvage_choice_material_confirm_yes_frame_id() != 0
+        return Inventory._salvage_material_confirm_yes().exists
 
     @staticmethod
-    def _get_salvage_choice_dialog_frame_id() -> int:
-        from .FrameTree import Frame, FrameId
-
-        dialog_frame_id = Inventory._get_frame_id_by_alias(Inventory.SALVAGE_CHOICE_DIALOG_LABEL)
-        if dialog_frame_id != 0:
-            return dialog_frame_id
-
-        frame = Frame(FrameId.SalvageWindow)
-        return frame.frame_id if frame.exists else 0
+    def _salvage_dialog() -> Frame:
+        frame = Inventory._frame_by_alias(Inventory.SALVAGE_CHOICE_DIALOG_LABEL)
+        if frame.exists:
+            return frame
+        return Frame(FrameId.SalvageWindow)
 
     @staticmethod
-    def _get_salvage_choice_option_container_frame_id() -> int:
-        from .FrameTree import Frame, FrameId
-
-        option_parent_id = Inventory._get_frame_id_by_alias(Inventory.SALVAGE_CHOICE_OPTION_CONTAINER_LABEL)
-        if option_parent_id != 0:
-            return option_parent_id
-
-        frame = Frame(FrameId.SalvageWindow.Options)
-        return frame.frame_id if frame.exists else 0
+    def _salvage_option_container() -> Frame:
+        frame = Inventory._frame_by_alias(Inventory.SALVAGE_CHOICE_OPTION_CONTAINER_LABEL)
+        if frame.exists:
+            return frame
+        return Frame(FrameId.SalvageWindow.Options)
 
     @staticmethod
-    def _get_salvage_choice_confirm_frame_id() -> int:
-        from .FrameTree import Frame, FrameId
-
-        confirm_frame_id = Inventory._get_frame_id_by_alias(Inventory.SALVAGE_CHOICE_CONFIRM_LABEL)
-        if confirm_frame_id != 0:
-            return confirm_frame_id
-
-        frame = Frame(FrameId.SalvageWindow.Button)
-        return frame.frame_id if frame.exists else 0
+    def _salvage_confirm() -> Frame:
+        frame = Inventory._frame_by_alias(Inventory.SALVAGE_CHOICE_CONFIRM_LABEL)
+        if frame.exists:
+            return frame
+        return Frame(FrameId.SalvageWindow.Button)
 
     @staticmethod
     def IsSalvageChoiceDialogVisible() -> bool:
-        return Inventory._get_salvage_choice_dialog_frame_id() != 0
+        return Inventory._salvage_dialog().exists
 
     @staticmethod
     def _build_frame_children_map() -> dict[int, list[int]]:
@@ -632,9 +614,11 @@ class Inventory:
     def _get_salvage_choice_dialog_options(
         visible_entries_by_parent: dict[int, list[VisibleFrameEntry]] | None = None,
     ) -> tuple[int, list[VisibleFrameEntry], list[SalvageChoiceEntry]]:
-        option_parent_id = Inventory._get_salvage_choice_option_container_frame_id()
-        if option_parent_id == 0:
+        option_parent = Inventory._salvage_option_container()
+        if not option_parent.exists:
             return 0, [], []
+        # this routine still keys its entry maps by id internally
+        option_parent_id = option_parent.frame_id
 
         if visible_entries_by_parent is None:
             visible_entries_by_parent = Inventory._build_visible_frame_entry_map()
@@ -879,24 +863,23 @@ class Inventory:
         from .UIManager import UIManager
 
         item_prefix = f"item_id={item_id} " if item_id else ""
-        yes_frame_id = Inventory._get_salvage_choice_material_confirm_yes_frame_id()
-        if yes_frame_id == 0:
+        yes_frame = Inventory._salvage_material_confirm_yes()
+        if not yes_frame.exists:
             return "not_visible"
 
         if not auto_confirm:
             Inventory._salvage_choice_debug_log(
                 debug_enabled,
                 log_module,
-                f"{item_prefix}destructive materials confirm visible yes_frame_id={yes_frame_id}; auto-confirm disabled.",
+                f"{item_prefix}destructive materials confirm visible yes={yes_frame}; auto-confirm disabled.",
             )
             return "confirm_pending"
 
         Inventory._salvage_choice_debug_log(
             debug_enabled,
             log_module,
-            f"{item_prefix}destructive materials confirm detected yes_frame_id={yes_frame_id}.",
+            f"{item_prefix}destructive materials confirm detected yes={yes_frame}.",
         )
-        yes_frame = Frame.from_id(yes_frame_id)
         ActionQueueManager().AddAction(queue_name, yes_frame.click)
         ActionQueueManager().AddAction(queue_name, yes_frame.mouse_action, 8, 0, 0)
         queue_drained = yield from Routines.Yield.Items._wait_for_empty_queue(
@@ -1016,7 +999,7 @@ class Inventory:
             )
             return "disabled"
 
-        dialog_frame_id = Inventory._get_salvage_choice_dialog_frame_id()
+        dialog_frame_id = Inventory._salvage_dialog()
         if dialog_frame_id == 0:
             return "not_visible"
 
@@ -1123,12 +1106,12 @@ class Inventory:
             f"{item_prefix}strategy result={strategy_description}; selected {selected_summary}.",
         )
 
-        selected_frame_id = int(selected_entry["frame_id"])
-        if not Frame.from_id(selected_frame_id).is_usable:
+        selected_frame = Frame.from_id(int(selected_entry["frame_id"]))
+        if not selected_frame.is_usable:
             Inventory._salvage_choice_debug_log(
                 debug_enabled,
                 log_module,
-                f"{item_prefix}safety exit: selected option frame_id={selected_frame_id} is no longer clickable.",
+                f"{item_prefix}safety exit: selected option {selected_frame} is no longer clickable.",
             )
             return "option_missing"
 
@@ -1137,7 +1120,7 @@ class Inventory:
             log_module,
             f"{item_prefix}activate option via test_mouse_click_action {selected_summary}.",
         )
-        ActionQueueManager().AddAction(queue_name, Frame.from_id(selected_frame_id).mouse_click_action, 0, 0)
+        ActionQueueManager().AddAction(queue_name, selected_frame.mouse_click_action, 0, 0)
         queue_drained = yield from Routines.Yield.Items._wait_for_empty_queue(
             queue_name,
             timeout_ms=queue_wait_timeout_ms,
@@ -1162,8 +1145,8 @@ class Inventory:
             )
             return "handled"
 
-        confirm_frame_id = Inventory._get_salvage_choice_confirm_frame_id()
-        if confirm_frame_id == 0:
+        confirm_frame = Inventory._salvage_confirm()
+        if not confirm_frame.exists:
             Inventory._salvage_choice_debug_log(
                 debug_enabled,
                 log_module,
@@ -1174,9 +1157,9 @@ class Inventory:
         Inventory._salvage_choice_debug_log(
             debug_enabled,
             log_module,
-            f"{item_prefix}dialog still visible after option click; clicking confirm frame_id={confirm_frame_id}.",
+            f"{item_prefix}dialog still visible after option click; clicking confirm {confirm_frame}.",
         )
-        ActionQueueManager().AddAction(queue_name, Frame.from_id(confirm_frame_id).click)
+        ActionQueueManager().AddAction(queue_name, confirm_frame.click)
         queue_drained = yield from Routines.Yield.Items._wait_for_empty_queue(
             queue_name,
             timeout_ms=queue_wait_timeout_ms,

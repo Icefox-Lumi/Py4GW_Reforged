@@ -469,7 +469,7 @@ class BTPlayer:
             """
             def _cancel_skill_reward_window() -> BehaviorTree.NodeState:
                 cancel_button_frame_id = Frame(FrameId.CancelButton)
-                if not cancel_button_frame_id.frame_id or not cancel_button_frame_id.exists:
+                if not cancel_button_frame_id.exists:
                     return BehaviorTree.NodeState.SUCCESS
                 cancel_button_frame_id.click()
                 return BehaviorTree.NodeState.SUCCESS

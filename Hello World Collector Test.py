@@ -111,11 +111,11 @@ def _click_customize_weapon() -> None:
         _log("Customize weapon button alias was not resolved.", PySystem.Console.MessageType.Warning)
         return
     if not frame_id.exists:
-        _log(f"Customize weapon button frame {frame_id.frame_id} is not visible.", PySystem.Console.MessageType.Warning)
+        _log(f"Customize weapon button frame {frame_id} is not visible.", PySystem.Console.MessageType.Warning)
         return
 
     frame_id.click()
-    _log(f"Clicked Merchant.CustomizeWeaponButton (frame_id={frame_id.frame_id})")
+    _log(f"Clicked Merchant.CustomizeWeaponButton (frame_id={frame_id})")
 
 
 def draw_window() -> None:
@@ -147,7 +147,7 @@ def draw_window() -> None:
         PyImGui.separator()
         PyImGui.text(f"Transaction complete: {GLOBAL_CACHE.Trading.IsTransactionComplete()}")
         customize_frame_id = Frame(FrameId.CustomizeWeaponButton)
-        PyImGui.text(f"Customize button frame id: {customize_frame_id.frame_id}")
+        PyImGui.text(f"Customize button frame id: {customize_frame_id}")
         PyImGui.text(f"Customize button visible: {customize_frame_id.is_usable}")
 
         offered_items = GLOBAL_CACHE.Trading.Crafter.GetOfferedItems() or []

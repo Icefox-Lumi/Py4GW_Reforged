@@ -71,7 +71,7 @@ class UIManagerExtensions:
     def ConfirmModMaterialSalvage():
         salvage_with_mods_yes_button_id = Frame(FrameId.SalvageWindow.OptionsWindowConfirmMaterialsWindow.Confirm)
         salvage_with_mods_yes_button_id.click()
-        (lambda fid, s, w=0, l=0: Frame.from_id(fid).mouse_action(s, w, l))(salvage_with_mods_yes_button_id.frame_id, 8, 0, 0) 
+        salvage_with_mods_yes_button_id.mouse_action(8, 0, 0) 
         
     @staticmethod
     def ConfirmModMaterialSalvageVisible():
@@ -97,14 +97,16 @@ class UIManagerExtensions:
         
         for i in range(1):
             for j in range(100):
-                id = Frame.from_hash(684387150, [5, i, j])
+                id = Frame(FrameId.SalvageWindow).find_child(5, i, j)
+                if id is None:
+                    continue
                 
                 if id.exists:
                     id.refresh()
-                    ConsoleLog("LootEx", f"Found visible element with ID: {id.frame_id} at ({i}, {j}) | template_type: {id.template_type}")
+                    ConsoleLog("LootEx", f"Found visible element with ID: {id} at ({i}, {j}) | template_type: {id.template_type}")
                     # Frame.from_id(id).click()
                 elif id.exists:
-                    ConsoleLog("LootEx", f"Element with ID: {id.frame_id} at ({i}, {j}) is not visible or does not exist.")
+                    ConsoleLog("LootEx", f"Element with ID: {id} at ({i}, {j}) is not visible or does not exist.")
         
     @staticmethod
     def SelectSalvageOption(option: enum.SalvageOption) -> bool:
@@ -123,7 +125,7 @@ class UIManagerExtensions:
             ConsoleLog("LootEx", f"Selecting salvage option: {option.name}")           
                                 
             # Frame.from_id(options[option]).click()
-            (lambda fid, s, w=0, l=0: Frame.from_id(fid).mouse_action(s, w, l))(options[option], 8, 0, 0)
+            options[option].mouse_action(8, 0, 0)
             
             return True
 
@@ -146,7 +148,7 @@ class UIManagerExtensions:
             ConsoleLog("LootEx", f"Selecting salvage option: {option.name}")           
                                 
             # Frame.from_id(options[option]).click()
-            (lambda fid, s, w=0, l=0: Frame.from_id(fid).mouse_action(s, w, l))(options[option], 8, 0, 0)              
+            options[option].mouse_action(8, 0, 0)              
             UIManagerExtensions.ConfirmSalvageOption()
             
             return True
@@ -190,16 +192,16 @@ class UIManagerExtensions:
         options: dict[enum.SalvageOption, int] = {}
 
         if salvage_window_mod_one_id.exists:
-            options[enum.SalvageOption.Prefix] = salvage_window_mod_one_id.frame_id
+            options[enum.SalvageOption.Prefix] = salvage_window_mod_one_id
 
         if salvage_window_mod_two_id.exists:
-            options[enum.SalvageOption.Suffix] = salvage_window_mod_two_id.frame_id
+            options[enum.SalvageOption.Suffix] = salvage_window_mod_two_id
 
         if salvage_window_mod_three_id.exists:
-            options[enum.SalvageOption.Inherent] = salvage_window_mod_three_id.frame_id
+            options[enum.SalvageOption.Inherent] = salvage_window_mod_three_id
 
         if salvage_window_materials_id.exists:
-            options[enum.SalvageOption.RareCraftingMaterials] = salvage_window_materials_id.frame_id
-            options[enum.SalvageOption.CraftingMaterials] = salvage_window_materials_id.frame_id
+            options[enum.SalvageOption.RareCraftingMaterials] = salvage_window_materials_id
+            options[enum.SalvageOption.CraftingMaterials] = salvage_window_materials_id
 
         return options

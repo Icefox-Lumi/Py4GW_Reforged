@@ -664,7 +664,7 @@ def draw_pregame_tab():
                     return
                 
                 rows: list[tuple[str, str | int | float]] = [
-                    ("frame_id", f'{context.frame_id}'),
+                    ("frame_id", f'{context}'),
                     ("scene_type", f'{context.scene_type}'),
                     ("scene_controller_iface", _fmt_ptr(context.scene_controller_iface)),
                     ("camera_pitch_frequency", f'{context.camera_pitch_frequency}'),

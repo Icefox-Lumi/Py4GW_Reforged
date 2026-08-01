@@ -35,8 +35,8 @@ def describe_frame(frame_id: int) -> str:
     if frame_id == 0:
         return '(none)'
     try:
-        frame = Frame.from_id(frame_id).raw
-        frame_hash = f' hash={frame.frame_hash}' if frame.frame_hash else ''
+        frame = Frame.from_id(frame_id)
+        frame_hash = f' hash={frame.hash}' if frame.hash else ''
         state = []
         if frame.is_created:
             state.append('created')
@@ -140,7 +140,7 @@ def render() -> None:
             return
 
         try:
-            frame = Frame.from_id(g_frame_id).raw
+            frame = Frame.from_id(g_frame_id)
         except Exception as exc:
             PyImGui.text(f'Frame #{g_frame_id} not found: {exc}')
             return
@@ -182,7 +182,7 @@ def render() -> None:
             
             PyImGui.spacing()
             PyImGui.text('  NameHash / Label Helpers:')
-            frame_hash = frame.frame_hash
+            frame_hash = frame.hash
             frame_label = safe_call((lambda fid: Frame.from_id(fid).label), g_frame_id, default='')
             text_enc = "" #safe_call((lambda fid: Frame.from_id(fid).encoded()), g_frame_id, default='')
             text_dec = "" #safe_call((lambda fid: Frame.from_id(fid).text()), g_frame_id, default='')
@@ -349,10 +349,10 @@ def render() -> None:
                 safe_call((lambda fid, sh: Frame.from_id(fid).show(sh)), g_frame_id, False, default=False)
 
         if PyImGui.collapsing_header('6. Raw Frame Info'):
-            PyImGui.text(f'  frame_id:         {frame.frame_id}')
+            PyImGui.text(f'  frame_id:         {frame}')
             PyImGui.text(f'  parent_id:        {frame.parent_id}')
-            PyImGui.text(f'  frame_hash:       {frame.frame_hash}')
-            PyImGui.text(f'  child_offset:     {frame.child_offset_id}')
+            PyImGui.text(f'  frame_hash:       {frame.hash}')
+            PyImGui.text(f'  child_offset:     {frame.code}')
             PyImGui.text(f'  type:             {frame.type}')
             PyImGui.text(f'  template_type:    {frame.template_type}')
             PyImGui.text(f'  is_created:       {frame.is_created}')

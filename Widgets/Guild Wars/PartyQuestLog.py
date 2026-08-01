@@ -7,13 +7,11 @@ from Py4GWCoreLib import ImGui, Quest
 from Py4GWCoreLib import Utils
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
-from Py4GWCoreLib.HotkeyManager import HOTKEY_MANAGER, HotkeyManager
 from Py4GWCoreLib.ImGui_src.types import Alignment
 from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.Party import Party
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.Routines import Routines
-from Py4GWCoreLib.enums_src.IO_enums import Key, ModifierKey
 from Py4GWCoreLib.py4gwcorelib_src import Console
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color
 from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
@@ -45,17 +43,6 @@ accounts : dict[int, AccountStruct] = {}
 widget_handler = get_widget_handler()
 module_info = None
 
-def open_quest_log_hotkey_callback():    
-    if UI.QuestLogWindow.open:
-        UI.QuestLogWindow.open = False
-        settings.LogOpen = False
-        settings.save_settings()
-        
-    else:
-        UI.QuestLogWindow.open = True
-        settings.LogOpen = True
-        settings.save_settings()
-
 def on_enable():
     global settings
     settings.load_settings()
@@ -63,17 +50,8 @@ def on_enable():
     UI.QuestLogWindow.window_pos = (settings.LogPosX, settings.LogPosY)
     UI.QuestLogWindow.window_size = (settings.LogPosWidth, settings.LogPosHeight)
 
-    settings.hotkey = HOTKEY_MANAGER.register_hotkey(
-    key=settings.HotKeyKey,
-    identifier=f"{MODULE_NAME}_OpenQuestLog",
-    name="Open Party Quest Log",
-    callback=open_quest_log_hotkey_callback,
-    modifiers=settings.Modifiers
-)
-    
 def on_disable():
-    global settings
-    HOTKEY_MANAGER.unregister_hotkey(f"{MODULE_NAME}_OpenQuestLog")
+    settings.write_settings()
 
 def configure():    
     UI.ConfigWindow.open = True
@@ -140,12 +118,6 @@ def main():
         
     settings.write_settings()  
     
-    if settings.ShowOnlyOnLeader and not is_party_leader:
-        return
-    
-    if settings.ShowOnlyInParty and not accounts:
-        return
-    
     UI.draw_overlays(accounts)
     
     if Map.WorldMap.IsWindowOpen():
@@ -178,7 +150,7 @@ def tooltip():
     PyImGui.text_colored("Features:", title_color.to_tuple_normalized())
     PyImGui.bullet_text("Show active quests of party members on the mission map and mini map.")
     PyImGui.bullet_text("Detailed quest log window with quest names and completion status.")
-    PyImGui.bullet_text("Configurable hotkey to open/close the quest log window.")
+    PyImGui.bullet_text("Use the configuration checkbox to display the quest log window.")
     PyImGui.bullet_text("Options to show the log only when in a party and/or only for the party leader.")
 
     PyImGui.spacing()

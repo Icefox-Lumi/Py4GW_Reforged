@@ -205,7 +205,7 @@ def _create_scrollable() -> None:
 
     PyGameThread.enqueue(_invoke)
     _log(
-        f"create scrollable enqueued window={window.frame_id} content={window.get_content_frame_id()} "
+        f"create scrollable enqueued window={window} content={window.get_content_frame_id()} "
         f"child_index={SCROLLABLE_CHILD_INDEX} flags=0x{SCROLLABLE_FLAGS:X} label='{SCROLLABLE_LABEL}'"
     )
     _schedule_report("state after create scrollable")
@@ -254,7 +254,7 @@ def _insert_text_labels() -> None:
 
     PyGameThread.enqueue(_invoke)
     _log(
-        f"insert text labels enqueued scrollable={scrollable.frame_id} "
+        f"insert text labels enqueued scrollable={scrollable} "
         f"count={TEXT_LABEL_COUNT} flags=0x{TEXT_LABEL_FLAGS:X} prefix='{TEXT_LABEL_PREFIX}'"
     )
     _schedule_report("state after insert text labels")
@@ -270,7 +270,7 @@ def _clear_scrollable_items() -> None:
         scrollable.clear_items()
 
     PyGameThread.enqueue(_invoke)
-    _log(f"clear scrollable items enqueued scrollable={scrollable.frame_id}")
+    _log(f"clear scrollable items enqueued scrollable={scrollable}")
     _schedule_report("state after clear scrollable items")
 
 
@@ -352,10 +352,10 @@ def _draw_window() -> None:
     page = scrollable.get_page()
 
     PyImGui.separator()
-    PyImGui.text(f"current_window={window.frame_id}")
+    PyImGui.text(f"current_window={window}")
     PyImGui.text(f"content_frame={window.get_content_frame_id() if window.exists() else 0}")
-    PyImGui.text(f"scrollable_frame={scrollable.frame_id}")
-    PyImGui.text(f"scrollable_page={page.frame_id}")
+    PyImGui.text(f"scrollable_frame={scrollable}")
+    PyImGui.text(f"scrollable_page={page}")
     PyImGui.text(f"scrollable_item_count={scrollable.get_count() if scrollable.exists() else 0}")
     PyImGui.text(f"last_text_labels={LAST_TEXT_LABEL_IDS}")
 

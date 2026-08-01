@@ -24,7 +24,7 @@ class _UI:
         global bot  
         yield from Routines.Yield.wait(500)
         cancel_button_frame_id = Frame(FrameId.CancelButton)  # Cancel button frame ID
-        if not cancel_button_frame_id.frame_id:
+        if not cancel_button_frame_id.exists:
             return  # No skill reward window open, nothing to cancel
         
         while not cancel_button_frame_id.exists:
@@ -53,14 +53,13 @@ class _UI:
         yield from Routines.Yield.Keybinds.ToggleAllBags()
         
         
-    def iter_frame_click(self, frame_id:int):
+    def iter_frame_click(self, frame):
         from ...Routines import Routines
         from ...UIManager import UIManager
         from ...Py4GWcorelib import ConsoleLog, Console
         yield from Routines.Yield.wait(500)
-        frame = Frame.from_id(frame_id)
         if not frame.is_usable:
-            ConsoleLog("UI Helper", f"Frame ID {frame_id} does not exist.", Console.MessageType.Error)
+            ConsoleLog("UI Helper", f"Frame {frame} does not exist.", Console.MessageType.Error)
             self._Events.on_unmanaged_fail()
             return
         frame.click()
@@ -79,7 +78,7 @@ class _UI:
         def _get_offsets(bag_id:int, slot:int):
             return [0,0,0,bag_id-1,slot+2]
 
-        frame_id = Frame.from_hash(_get_parent_hash(), _get_offsets(bag_id, slot))
+        frame_id = Frame.bag_slot(bag_id, slot)
         if not frame_id.exists:
             ConsoleLog("UI Helper", f"Frame does not exist for bag {bag_id} slot {slot}.", Console.MessageType.Error)
             self._Events.on_unmanaged_fail()
@@ -101,7 +100,7 @@ class _UI:
         def _get_offsets(bag_id:int, slot:int):
             return [0,0,0,bag_id-1,slot+2]
 
-        frame_id = Frame.from_hash(_get_parent_hash(), _get_offsets(bag_id, slot))
+        frame_id = Frame.bag_slot(bag_id, slot)
         if not frame_id.exists:
             ConsoleLog("UI Helper", f"Frame does not exist for bag {bag_id} slot {slot}.", Console.MessageType.Error)
             self._Events.on_unmanaged_fail()
@@ -124,7 +123,7 @@ class _UI:
         def _get_offsets(bag_id:int, slot:int):
             return [0,0,0,bag_id-1,slot+2]
 
-        frame_id = Frame.from_hash(_get_parent_hash(), _get_offsets(bag_id, slot))
+        frame_id = Frame.bag_slot(bag_id, slot)
         if not frame_id.exists:
             ConsoleLog("UI Helper", f"Frame does not exist for bag {bag_id} slot {slot}.", Console.MessageType.Error)
             self._Events.on_unmanaged_fail()
@@ -169,8 +168,8 @@ class _UI:
         yield from self.iter_close_all_bags()
         
     @_yield_step(label="FrameClick", counter_key="FRAME_CLICK")
-    def frame_click(self, frame_id:int):
-        yield from self.iter_frame_click(frame_id)
+    def frame_click(self, frame):
+        yield from self.iter_frame_click(frame)
         
     @_yield_step(label="FrameClickOnBagSlot", counter_key="FRAME_CLICK_ON_BAG_SLOT")
     def frame_click_on_bag_slot(self, bag_id:int, slot:int):

@@ -131,6 +131,20 @@ def build_window(controller) -> "ImGui.SidebarWindow":
     )
     for cat in model.CATALOG:
         group = win.add_group(cat.title, icon=_glyph(cat.icon))
+        if cat.key == "map":
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.map_utilities import config_ui as map_ui
+
+                map_ui.add_sections(win, group)
+            except Exception as exc:
+                import traceback
+
+                _log("Map & Missions feature sections failed to build: %r" % exc)
+                _log(traceback.format_exc())
+                _err = str(exc)
+                for _label in ("Vanquish Tracker", "Instance Timer", "Disable Alcohol Effect"):
+                    win.add_section(group, _label,
+                                    (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
         if cat.key == "agents":
             # Custom category rendered by the name_obfuscation feature. Lazy import keeps this module
             # (and the launch_bar toggle path that imports the controller) free of that package until
@@ -161,6 +175,47 @@ def build_window(controller) -> "ImGui.SidebarWindow":
                 win.add_section(group, "Agent Recolor",
                                 (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
             continue
+        if cat.key == "camera":
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.camera_smoothing import config_ui as camera_ui
+
+                camera_ui.add_sections(win, group)
+            except Exception as exc:
+                import traceback
+
+                _log("Camera / Disable Camera Smoothing section failed to build: %r" % exc)
+                _log(traceback.format_exc())
+                _err = str(exc)
+                win.add_section(group, "Disable Camera Smoothing",
+                                (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
+            continue
+        if cat.key == "system":
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.window_renamer import config_ui as renamer_ui
+
+                renamer_ui.add_sections(win, group)
+            except Exception as exc:
+                import traceback
+
+                _log("System / Window Renamer section failed to build: %r" % exc)
+                _log(traceback.format_exc())
+                _err = str(exc)
+                win.add_section(group, "Window Renamer",
+                                (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
+            continue
+        if cat.key == "skills":
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.skillbar_plus import config_ui as sbp_ui
+
+                sbp_ui.add_sections(win, group)
+            except Exception as exc:
+                import traceback
+
+                _log("Skills & Casting / Skillbar+ section failed to build: %r" % exc)
+                _log(traceback.format_exc())
+                _err = str(exc)
+                win.add_section(group, "Skillbar +",
+                                (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
         if cat.key == "loot":
             # Each subcategory is built independently, so a failure in one still leaves the others
             # usable. Never swallow a build failure silently -- surface it as a visible section.

@@ -895,19 +895,30 @@ class Map:
         last_left_clicked_timestamp: int = 0
         #--------- Mission Map Info Methods ---------
         @staticmethod
+        def GetFrame() -> "Frame | None":
+            """The mission map frame.
+
+            The context is the authority on which frame this is - that is what
+            the legacy implementation used, and it never lost the map.  The
+            named lookup in the frame tree is a fallback for the ticks where the
+            context pointer reads null, rather than a replacement for it.
+            """
+            frame_id = Map.MissionMap.GetFrameID()          # from the context
+            if frame_id:
+                frame = Frame.from_id(frame_id)
+                if frame.exists:
+                    return frame
+
+            frame = Frame(FrameId.MissionMap)               # fallback: by name
+            return frame if frame.exists else None
+
+        @staticmethod
         def GetFrameID() -> int:
-            """Get the frame ID of the mission map."""
+            """Frame id of the mission map, from the context.  Prefer GetFrame()."""
             if not (misison_map_ctx := GWContext.MissionMap.GetContext()):
                 return 0
             return misison_map_ctx.frame_id
-        
-        @staticmethod
-        def GetFrame() -> Frame | None:
-            """Get the frame info of the mission map."""
-            if not (frame_id := Map.MissionMap.GetFrameID()):
-                return None
-            return Frame.from_id(frame_id)
-        
+
         @staticmethod
         def IsWindowOpen() -> bool:
             """Check if the mission map window is open."""
@@ -1052,15 +1063,26 @@ class Map:
         
         
         
+        _last_pan_offset: tuple[float, float] = (0.0, 0.0)
+
         @staticmethod
         def GetPanOffset() -> tuple[float, float]:
-            """Get the pan offset of the mission map."""
-            if not (misison_map_ctx := GWContext.MissionMap.GetContext()):
-                return 0.0, 0.0
-            subcontext = misison_map_ctx.subcontext2
-            if subcontext is None:
-                return 0.0, 0.0
-            return subcontext.mission_map_pan_offset.to_tuple()
+            """Pan offset of the mission map - what centres it on the player.
+
+            Both the context and its subcontext read null for the odd tick.
+            Returning (0.0, 0.0) then is not a harmless default: it means
+            "panned to the world origin", so the whole overlay re-anchors on
+            0,0 instead of the player for that frame.  Hold the last real
+            offset instead.
+            """
+            if (misison_map_ctx := GWContext.MissionMap.GetContext()):
+                subcontext = misison_map_ctx.subcontext2
+                if subcontext is not None:
+                    offset = subcontext.mission_map_pan_offset.to_tuple()
+                    if offset != (0.0, 0.0):
+                        Map.MissionMap._last_pan_offset = offset
+                        return offset
+            return Map.MissionMap._last_pan_offset
         
         @staticmethod
         def GetMapScreenCenter() -> tuple[float, float]:

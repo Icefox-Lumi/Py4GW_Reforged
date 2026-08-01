@@ -164,10 +164,10 @@ class MerchantModule:
         
         
     def colorize_merchants(self):
-        merchant_frame_id = GWFrame.from_hash(MERCHANT_FRAME)
+        merchant_frame_id = GWFrame(FrameId.Merchant)
         merchant_frame_exists = merchant_frame_id.exists
         if not merchant_frame_exists:
-            content_frame = GWFrame.from_hash(_get_parent_hash(), [0])
+            content_frame = GWFrame(FrameId.InventoryBagsWindow.Content)
             left, top, right, bottom = content_frame.coords()
             y_offset = 2
             x_offset = 0
@@ -207,7 +207,7 @@ class MerchantModule:
                 quantity = Item.Properties.GetQuantity(item_id)
                 required_quantity = self._get_merchant_minimum_quantity()
 
-                frame_id = GWFrame.from_hash(_get_parent_hash(), _get_offsets(bag_id, slot))
+                frame_id = GWFrame.bag_slot(bag_id, slot)
                 is_visible = frame_id.exists
                 if not is_visible:
                     continue
