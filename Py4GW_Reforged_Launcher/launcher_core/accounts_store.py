@@ -229,8 +229,23 @@ def _dedup_keys(p: GameProfile) -> list[tuple]:
     against TestDuplicateDedup's existing coverage (both its cases share an
     identical character_name + gw_path across listings, so exe_char alone
     already matched them -- this narrowing doesn't regress either test).
+
+    RELAY 094 follow-up: `exe_char` used to apply unconditionally, same bug
+    shape as RELAY 083's email fix above -- an empty `executable_path` isn't
+    a real distinguishing signal, it's "nothing," so any two profiles that
+    both happen to have a blank path AND a blank character_name (a Steam
+    profile, which has no use for executable_path anymore, alongside any
+    other blank/placeholder profile) produced the identical key
+    `("exe_char", "", "")` and silently merged into one on the very next
+    load -- caught live: a real "Steam" profile vanished entirely after
+    clearing its executable_path, absorbed into an unrelated blank
+    "(unnamed)" profile (confirmed via _parse_raw_traced's own trace:
+    `merged_via_key: 'exe_char'`). Guarded the same way the email key
+    already is.
     """
-    keys: list[tuple] = [("id", p.id), ("exe_char", p.executable_path, p.character_name)]
+    keys: list[tuple] = [("id", p.id)]
+    if p.executable_path:
+        keys.append(("exe_char", p.executable_path, p.character_name))
     if p.email and not p.character_name:
         keys.append(("email", p.email))
     return keys

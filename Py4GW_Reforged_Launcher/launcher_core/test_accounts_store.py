@@ -295,6 +295,40 @@ class TestDuplicateDedup(unittest.TestCase):
         self.assertEqual(sorted(profiles[0].team_ids), ["Class Team", "Misc Team"])
         self.assertEqual(sorted(t.name for t in teams), ["Class Team", "Misc Team"])
 
+    def test_two_distinct_blank_path_profiles_are_not_collapsed(self):
+        """RELAY 094 follow-up: a Steam-login profile (no use for
+        executable_path anymore) sharing a blank path AND blank
+        character_name with any other placeholder/blank profile used to
+        merge into one via the unconditional exe_char key -- found live,
+        a real profile silently vanished this way. Two genuinely distinct
+        accounts, both blank on path and character_name, must stay separate
+        profiles across a save/reload round trip."""
+        steam_profile = {
+            "id": "steam-id-1",
+            "name": "Steam",
+            "gw_path": "",
+            "character_name": "",
+            "use_steam_login": True,
+        }
+        unnamed_profile = {
+            "id": "unnamed-id-2",
+            "name": "",
+            "gw_path": "",
+            "character_name": "",
+        }
+        data = {accounts_store._UNASSIGNED_TEAM_KEY: [steam_profile, unnamed_profile]}
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+
+        profiles = accounts_store.load_profiles(self.path)
+        self.assertEqual(len(profiles), 2)
+        self.assertEqual({p.id for p in profiles}, {"steam-id-1", "unnamed-id-2"})
+
+        # And a save/reload round trip must not collapse them either.
+        accounts_store.save_profiles(profiles, self.path)
+        reloaded = accounts_store.load_profiles(self.path)
+        self.assertEqual(len(reloaded), 2)
+        self.assertEqual({p.id for p in reloaded}, {"steam-id-1", "unnamed-id-2"})
+
     def test_inconsistent_email_across_listings_still_merges(self):
         # RELAY 061's own real gap -- one listing has email, the other blank.
         with_email = {
