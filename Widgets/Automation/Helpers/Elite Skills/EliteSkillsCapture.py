@@ -22,7 +22,7 @@ MODULE_CATEGORY = "Helpers"
 MODULE_TAGS = ["automation", "skills", "elite", "capture", "botting"]
 MODULE_DESCRIPTION = "An advanced automation bot for capturing elite skills from bosses throughout Guild Wars.\n\nFeatures:\n• Automated pathing to elite skill bosses across all campaigns\n• Intelligent boss detection and engagement system\n• Automatic Signet of Capture usage for skill learning\n• Support for all 10 professions with 151+ elite skills\n• Color-coded skill availability (Blue/Available, Green/Captured, Red/Map Locked)\n• Smart map access checking and unlock requirements\n• Progress tracking and capture status monitoring\n• Built-in safety features and stuck detection\n\nCredits:\n• Originally developed by Kendor with help from Wick Divinus and Simfoniya\n• Adapted for Py4GW widget system by Kendor"
 
-TEXTURE = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Automation", "Helpers", "Elite Skills", "elite_skills_capture.png")
+#TEXTURE = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Automation", "Helpers", "Elite Skills", "elite_skills_capture.png")
 
 def tooltip():
     PyImGui.begin_tooltip()
@@ -336,16 +336,16 @@ SECONDARY_BUILDS = {
         Profession.DERVISH:      "OAqkAyiMpoGT18a+NLnnNm5mbAA",    # Rt/D
     },
     Profession.PARAGON: {
-        Profession.WARRIOR:      "OQGkUFlopiyUNGQ4OmF2AQPm72ZN",   # P/W
-        Profession.RANGER:       "OQKkkFlopiyUNGQ4OmF2AQPm72ZN",   # P/R
-        Profession.MONK:         "OQOk8ElopiyUNGQ4OmF2AQPm72ZN",   # P/Mo
-        Profession.NECROMANCER:  "OQSkcElopiyUNGQ4OmF2AQPm72ZN",   # P/N
-        Profession.MESMER:       "OQWkMElopiyUNGQ4OmF2AQPm72ZN",   # P/Me
-        Profession.ELEMENTALIST: "OQaksElopiyUNGQ4OmF2AQPm72ZN",   # P/E
-        Profession.ASSASSIN:     "OQek8FlopiyUNGQ4OmF2AQPm72ZN",   # P/A
-        Profession.RITUALIST:    "OQikAGlopiyUNGQ4OmF2AQPm72ZN",   # P/Rt
+        Profession.WARRIOR:      "OQGkUdlqpimUN2VR62CGXBQo72AA",   # P/W
+        Profession.RANGER:       "OQKkkFlrpiqUNGAQ62CGAAQo72AA",   # P/R
+        Profession.MONK:         "OQOk8ElrpiqUNGAQ62CGAAQo72AA",   # P/Mo
+        Profession.NECROMANCER:  "OQSkcElrpiqUNGAQ62CGAAQo72AA",   # P/N
+        Profession.MESMER:       "OQWkMElrpiqUNGAQ62CGAAQo72AA",   # P/Me
+        Profession.ELEMENTALIST: "OQaksElrpiqUNGAQ62CGAAQo72AA",   # P/E
+        Profession.ASSASSIN:     "OQek8FlrpiqUNGAQ62CGAAQo72AA",   # P/A
+        Profession.RITUALIST:    "OQikAGlrpiqUNGAQ62CGAAQo72AA",   # P/Rt
         Profession.PARAGON:      "OQCjUimKKT1YAh7YWYDA9Yubn1A",   # P
-        Profession.DERVISH:      "OQqkUimKKnGUNGQ4OmF2AQPm72ZN",   # P/D
+        Profession.DERVISH:      "OQqkUumKqmGUNGAQ62CGAAQo72AA",   # P/D
     },
     Profession.DERVISH: { 
         Profession.WARRIOR:      "OgGkUFp5Kzmk513m4VMJB2+F71AA",   # D/W
@@ -3815,7 +3815,8 @@ def get_skill_attribute_offset(skill_id: int) -> int:
     """Get attribute offset for a given skill ID"""
     try:
         attribute = GLOBAL_CACHE.Skill.Attribute.GetAttribute(skill_id)
-        return attribute.attribute_id
+        # GetAttribute returns the attribute ID directly as an int
+        return attribute if isinstance(attribute, int) else 1
     except:
         return 1  # Default fallback
 

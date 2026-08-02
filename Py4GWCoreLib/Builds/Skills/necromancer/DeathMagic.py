@@ -160,8 +160,18 @@ class DeathMagic:
         required_profession: Profession = Profession.Necromancer,
         required_skill_id: int | None = None,
         other_ally: bool = False,
+        self_only: bool = False,
         assume_active_ms: int = 25000,
     ) -> BuildCoroutine:
+        """Maintain Dark Aura on a sacrificing Necromancer.
+
+        ``self_only`` restricts the aura to the caster instead of letting it
+        fall through to party targeting. Self-sacrifice bars such as Soul Taker
+        daggers need it on their own character: the caster pays the Health loss
+        for every sacrifice the *enchanted ally* makes, so parking it on another
+        Necromancer bills us for their attacks while the shadow damage lands
+        around them. Ignored when ``other_ally`` is set.
+        """
         dark_aura_id: int = Skill.GetID("Dark_Aura")
         if required_skill_id is None:
             required_skill_id = Skill.GetID("Soul_Taker")
@@ -171,15 +181,7 @@ class DeathMagic:
         if not (self.build.IsInAggro() or self.build.IsCloseToAggro()):
             return False
 
-        target_agent_id = Routines.Targeting.TargetAllyByProfession(
-            required_profession,
-            required_skill_id=required_skill_id,
-            other_ally=other_ally,
-            filter_skill_id=dark_aura_id,
-            distance=Range.Spellcast.value,
-        )
-
-        if not target_agent_id and not other_ally:
+        def _self_target_candidate() -> int:
             player_agent_id = Player.GetAgentID()
             primary_profession, _ = Agent.GetProfessions(player_agent_id)
             if (
@@ -187,7 +189,24 @@ class DeathMagic:
                 and self.build.IsSkillEquipped(required_skill_id)
                 and not Routines.Checks.Agents.HasEffect(player_agent_id, dark_aura_id)
             ):
-                target_agent_id = player_agent_id
+                return player_agent_id
+            return 0
+
+        if self_only and not other_ally:
+            # Deliberately no party fallback: for a self-sacrifice bar, "nobody
+            # to enchant" means do nothing, not enchant someone else.
+            target_agent_id = _self_target_candidate()
+        else:
+            target_agent_id = Routines.Targeting.TargetAllyByProfession(
+                required_profession,
+                required_skill_id=required_skill_id,
+                other_ally=other_ally,
+                filter_skill_id=dark_aura_id,
+                distance=Range.Spellcast.value,
+            )
+
+            if not target_agent_id and not other_ally:
+                target_agent_id = _self_target_candidate()
 
         if not target_agent_id:
             return False
