@@ -125,6 +125,11 @@ PROCESS_INJECTION_ACCESS = (
 
 CREATE_SUSPENDED = 0x00000004
 
+# RELAY 094: GW1's Steam app ID, confirmed against GWxLauncher's own
+# SteamLaunchService.Gw1SteamGameId.
+STEAM_GW1_APP_ID = "29720"
+STEAM_GW1_URI = f"steam://rungameid/{STEAM_GW1_APP_ID}"
+
 VIRTUAL_MEM = 0x1000 | 0x2000  # MEM_COMMIT | MEM_RESERVE
 PAGE_READWRITE = 0x04
 MEM_RELEASE = 0x8000
@@ -400,6 +405,36 @@ def _write_autoexec_script(script_path: str, log: list) -> None:
         _log(log, f"Could not write autoexec_script to Py4GW.ini (non-fatal): {e}")
 
 
+def _write_account_anchor(account_anchor: str, log: list) -> None:
+    """RELAY 094: writes `account_anchor` into Py4GW.ini's [settings]
+    account_anchor key, mirroring _write_autoexec_script() exactly (same
+    plain configparser read-modify-write, same best-effort/non-fatal
+    framing, same root-scoped/shared-file limitation -- moot here in
+    practice, per Apo's own confirmation a user can only have one
+    Steam-linked account, so there's nothing to race against).
+
+    Deliberately a distinct key from `email` -- Steam-linked accounts have
+    no email Py4GW can read from memory at all (Apo confirmed directly),
+    so this isn't a fallback value for that field, it's a different concept
+    entirely: an opaque anchor Py4GW_Reforged_Native's
+    System::UpdateAccountAnchor() reads to resolve the per-account settings
+    folder when the memory-based read can't run.
+    """
+    ini_path = _mod_root() / "Py4GW.ini"
+    try:
+        config = configparser.ConfigParser()
+        if ini_path.exists():
+            config.read(ini_path)
+        if not config.has_section("settings"):
+            config.add_section("settings")
+        config.set("settings", "account_anchor", account_anchor)
+        with open(ini_path, "w") as f:
+            config.write(f)
+        _log(log, f"Wrote account_anchor to {ini_path}")
+    except OSError as e:
+        _log(log, f"Could not write account_anchor to Py4GW.ini (non-fatal): {e}")
+
+
 def _inject_dll(pid: int, dll_path: str, log: list) -> bool:
     if not dll_path or not os.path.exists(dll_path):
         _log(log, f"Inject DLL - invalid DLL path: {dll_path!r}")
@@ -671,6 +706,56 @@ def _find_replacement_process(exe_path: str, exclude_pid: int, launched_after: f
     return None
 
 
+def _attach_to_steam_process(exe_path: str, launched_after: float, log: list, timeout: float = 5.0) -> Optional[int]:
+    """RELAY 094: Steam owns process creation once GW1 is launched via
+    `STEAM_GW1_URI` -- there is no suspended process handle to patch, by
+    design, not as a workaround. Ported from GWxLauncher's
+    SteamProcessAttachService.TryAttachToSteamProcess (confirmed directly
+    against Services/SteamProcessAttachService.cs): poll by process *name*
+    ("Gw"/"GW", since .NET's GetProcessesByName strips the extension) with a
+    2-second buffer against `launched_after` for clock skew, same as that
+    reference and the same buffer `_find_replacement_process` above already
+    uses for the same reason.
+
+    Adds one thing the C# reference doesn't have: once a name match is
+    found, validates its *resolved* exe path against `exe_path` before
+    accepting it. Name-only matching is fine for GWxLauncher's
+    single-account-type case, but this is a multibox tool where more than
+    one Gw.exe copy across different accounts/install folders is the normal
+    case, so precision matters more here -- an empty/unresolvable `exe_path`
+    (AccessDenied reading another user's process, or a genuinely empty
+    profile.executable_path) skips the path check rather than rejecting the
+    match outright, since name-plus-recency is still meaningfully selective
+    on its own.
+    """
+    target_path = os.path.normcase(os.path.abspath(exe_path)) if exe_path else None
+    start_time = time.time()
+
+    _log(log, f"Waiting for Steam to spawn Gw.exe (up to {timeout}s)")
+    while time.time() - start_time < timeout:
+        for proc in psutil.process_iter(["pid", "name", "exe", "create_time"]):
+            name = (proc.info["name"] or "").lower()
+            if name not in ("gw.exe", "gw"):
+                continue
+            try:
+                if proc.info["create_time"] < launched_after - 2.0:
+                    continue
+                proc_exe = proc.info["exe"]
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            if target_path and proc_exe and os.path.normcase(os.path.abspath(proc_exe)) != target_path:
+                continue
+
+            _log(log, f"Found Steam-spawned process PID {proc.info['pid']}")
+            return proc.info["pid"]
+
+        time.sleep(0.2)
+
+    _log(log, f"Timed out waiting for Steam to spawn a matching Gw.exe process (after {timeout}s)")
+    return None
+
+
 def _apply_gw1_registry_fix(profile: GameProfile, log: list) -> None:
     """Writes profile.executable_path into both Path and Src under
     HKEY_CURRENT_USER\\Software\\ArenaNet\\Guild Wars before every launch --
@@ -831,6 +916,121 @@ def _redact_command_line_for_log(command_line: str) -> str:
     return re.sub(r'(-password\s+)"[^"]*"', r'\1"***"', command_line)
 
 
+def _launch_gw1_via_steam(
+    profile: GameProfile,
+    *,
+    window_wait_timeout: float,
+    post_window_settle_delay: float,
+    multiclient_enabled: bool,
+    py4gw_injection_enabled: bool,
+    gmod_injection_enabled: bool,
+    steam_attach_timeout: float,
+    log: list,
+) -> LaunchResult:
+    """RELAY 094: Steam-login launch/attach path, used instead of the direct
+    `CreateProcessW` pipeline above whenever `profile.use_steam_login` is
+    set. Steam-linked accounts have no email Py4GW can read from memory and
+    no ArenaNet credentials this launcher can auto-fill, so this path is a
+    genuinely different shape, not a variant of the direct one:
+
+    1. Launch via the `STEAM_GW1_URI` (`os.startfile`, the Python equivalent
+       of GWxLauncher's `Process.Start(UseShellExecute=true)` on the same
+       URI) -- Steam owns process creation from this point on.
+    2. Discover the real process via `_attach_to_steam_process` (polls by
+       name, not exit-then-match -- there's no PID to wait on).
+    3. Multiclient patch and gMod injection become best-effort against an
+       already-running process. Verified directly against this file's own
+       `_apply_multiclient_patch` and `_inject_dll` before assuming a new
+       patch function was needed (RELAY 094's own entry text guessed one
+       would be): neither one actually depends on the target process being
+       suspended (both just `OpenProcess` by PID and read/write/inject),
+       and this module's own docstring already documents `_apply_multiclient_patch`
+       being reused best-effort against the update-hop replacement process
+       for the exact same reason -- established precedent in this codebase,
+       not a new pattern. Reused as-is; no new function.
+    4. Py4GW injection stays conceptually the same as the direct path (wait
+       for window, settle, inject) but keys off the discovered/attached PID.
+    5. `_apply_gw1_registry_fix` still runs first -- GW1 reads that registry
+       key at startup regardless of how the process was created, so it's
+       equally relevant here.
+
+    Elevation/UAC is NOT handled here -- flagged, not solved, per this
+    entry's own instruction. GWxLauncher's own Steam path has zero
+    elevation/admin handling either (confirmed directly against
+    `SteamLaunchService.cs`/`Gw1LaunchOrchestrator.cs`), so there's no
+    reference implementation to port. Whatever a protected default Steam
+    install actually needs here is unknown until tested for real.
+    """
+    _apply_gw1_registry_fix(profile, log)
+
+    launch_timestamp = time.time()
+    _log(log, f"Launching via Steam: {STEAM_GW1_URI}")
+    try:
+        os.startfile(STEAM_GW1_URI)
+    except OSError as e:
+        return LaunchResult(False, None, f"Steam URI launch failed: {e}", log)
+
+    pid = _attach_to_steam_process(profile.executable_path, launch_timestamp, log, timeout=steam_attach_timeout)
+    if pid is None:
+        return LaunchResult(
+            False, None, "Steam launch accepted, but no matching Gw.exe process was found", log
+        )
+
+    if multiclient_enabled:
+        if not _apply_multiclient_patch(pid, log):
+            _log(log, "Multiclient patch failed (Steam best-effort -- timing window missed / access denied / incompatible state, continuing)")
+    else:
+        _log(log, "Multiclient patch disabled (App Settings) -- skipping")
+
+    will_inject_gmod = _resolve_gmod_launch_decision(profile, gmod_injection_enabled, log)
+    if will_inject_gmod:
+        try:
+            per_profile_gmod_dll = _prepare_per_profile_gmod_folder(profile)
+        except Exception as e:
+            _log(log, f"gMod per-profile folder setup failed (Steam best-effort, continuing): {e}")
+        else:
+            if _inject_dll(pid, per_profile_gmod_dll, log):
+                _log(log, "gMod DLL injection reported success")
+            else:
+                _log(log, "gMod DLL injection failed (Steam best-effort -- injection window likely missed, continuing)")
+    elif profile.gmod_enabled and gmod_injection_enabled:
+        pass  # RELAY 091: already logged the specific unresolved-path reason above.
+    elif profile.gmod_enabled and not gmod_injection_enabled:
+        _log(log, "gMod injection globally disabled (App Settings) -- launching without it")
+    else:
+        _log(log, "gMod injection disabled for this profile -- launching without it")
+
+    if not _wait_for_gw_window(pid, log, timeout=window_wait_timeout):
+        return LaunchResult(False, pid, "GW window never appeared", log)
+
+    if profile.auto_select_character_enabled and profile.character_name:
+        window_title = profile.character_name
+    else:
+        window_title = profile.name
+    _set_gw_window_title(pid, window_title, log)
+
+    if profile.py4gw_enabled and py4gw_injection_enabled:
+        _log(log, f"Window found; waiting {post_window_settle_delay}s before injecting Py4GW")
+        time.sleep(post_window_settle_delay)
+
+        if profile.script_path:
+            _write_autoexec_script(profile.script_path, log)
+
+        if profile.use_steam_login and profile.steam_account_anchor:
+            _write_account_anchor(profile.steam_account_anchor, log)
+
+        if not _inject_dll(pid, profile.py4gw_dll_path, log):
+            return LaunchResult(False, pid, "Py4GW DLL injection failed", log)
+
+        _log(log, "Py4GW DLL injection reported success")
+    elif profile.py4gw_enabled and not py4gw_injection_enabled:
+        _log(log, "Py4GW injection globally disabled (App Settings) -- launching without it")
+    else:
+        _log(log, "Py4GW injection disabled for this profile -- launching without it")
+
+    return LaunchResult(True, pid, None, log)
+
+
 def launch_py4gw_profile(
     profile: GameProfile,
     *,
@@ -843,10 +1043,19 @@ def launch_py4gw_profile(
     multiclient_enabled: bool = True,
     py4gw_injection_enabled: bool = True,
     gmod_injection_enabled: bool = True,
+    steam_attach_timeout: float = 5.0,
     on_log: Optional[Callable[[str], None]] = None,
 ) -> LaunchResult:
     """Launch `profile`'s executable, optionally auto-logging in, and inject Py4GW
     and/or gMod into it per the profile's own toggles.
+
+    RELAY 094: if `profile.use_steam_login` is set, this dispatches entirely
+    to `_launch_gw1_via_steam` instead -- `profile.executable_path` is still
+    validated below first (same "meaningless without it" reasoning as the
+    direct path), but is used only for post-attach path verification and the
+    registry fix from that point on, never as a `CreateProcessW` target.
+    `steam_attach_timeout` (GWxLauncher parity default: 5s) only matters on
+    that path.
 
     `profile.py4gw_enabled`/`profile.gmod_enabled` each gate only their own
     DLL-path validation and injection call: a profile with both off still gets
@@ -898,6 +1107,18 @@ def launch_py4gw_profile(
 
     if not profile.executable_path or not os.path.exists(profile.executable_path):
         return LaunchResult(False, None, f"executable_path not found: {profile.executable_path!r}", log)
+
+    if profile.use_steam_login:
+        return _launch_gw1_via_steam(
+            profile,
+            window_wait_timeout=window_wait_timeout,
+            post_window_settle_delay=post_window_settle_delay,
+            multiclient_enabled=multiclient_enabled,
+            py4gw_injection_enabled=py4gw_injection_enabled,
+            gmod_injection_enabled=gmod_injection_enabled,
+            steam_attach_timeout=steam_attach_timeout,
+            log=log,
+        )
 
     _apply_gw1_registry_fix(profile, log)
 
@@ -1028,6 +1249,9 @@ def launch_py4gw_profile(
 
         if profile.script_path:
             _write_autoexec_script(profile.script_path, log)
+
+        if profile.use_steam_login and profile.steam_account_anchor:
+            _write_account_anchor(profile.steam_account_anchor, log)
 
         if not _inject_dll(pid, profile.py4gw_dll_path, log):
             return LaunchResult(False, pid, "Py4GW DLL injection failed", log)

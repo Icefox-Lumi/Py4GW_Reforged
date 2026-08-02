@@ -66,6 +66,18 @@ class GameProfile:
     auto_select_character_enabled: bool = False
     character_name: str = ""
 
+    # RELAY 094: Steam-linked accounts have no email Py4GW can read from
+    # memory (Apo confirmed directly -- no suitable replacement exists), so
+    # email/password_protected/auto_select_character_enabled/character_name
+    # are all meaningless when this is on and get hidden in the UI.
+    # steam_account_anchor is an opaque user-chosen string (not an email),
+    # written into Py4GW.ini's [settings] account_anchor key (a distinct
+    # key from autoexec_script's email-based settings-folder resolution) --
+    # only needed if a profile's widgets/scripts depend on the per-account
+    # settings folder existing.
+    use_steam_login: bool = False
+    steam_account_anchor: str = ""
+
     # -----------------------------
     # Window placement
     # -----------------------------

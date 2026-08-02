@@ -12,6 +12,14 @@ py4gw_dll_path hard-fail (deliberately unchanged by this entry) still fires
 before any process gets created -- that path doesn't touch Win32 either,
 since it returns before CreateProcessW.
 
+RELAY 094 adds two more testable-without-Win32 pieces: _write_account_anchor
+(same plain-configparser read-modify-write shape as _write_autoexec_script,
+just a different ini key) and _attach_to_steam_process's process-name-match-
+plus-path-validation logic (mocks psutil.process_iter directly rather than
+touching real OS processes -- the actual OpenProcess/ReadProcessMemory/
+CreateRemoteThread injection surface stays untested here, same boundary
+the rest of this file already draws).
+
 Run: .venv\\Scripts\\python.exe -m unittest launcher_core.test_gw1_launch -v
 """
 
@@ -23,7 +31,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from launcher_core import gw1_launch
-from launcher_core.gw1_launch import _resolve_gmod_launch_decision, launch_py4gw_profile
+from launcher_core.gw1_launch import (
+    _attach_to_steam_process,
+    _resolve_gmod_launch_decision,
+    _write_account_anchor,
+    launch_py4gw_profile,
+)
 from launcher_core.profile import GameProfile
 
 
@@ -110,6 +123,124 @@ class Py4GwHardFailRegressionTest(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("py4gw_dll_path not found", result.error or "")
+
+
+class WriteAccountAnchorTests(unittest.TestCase):
+    """RELAY 094: _write_account_anchor mirrors _write_autoexec_script's own
+    read-modify-write shape exactly (RELAY 057) -- these tests are the same
+    shape as that function would need, just none existed for either before
+    this entry (verified via a real search, same situation this file's own
+    module docstring already flags)."""
+
+    def setUp(self):
+        self.log: list = []
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.mod_root_path = Path(self._tmpdir.name)
+        self._patcher = patch.object(gw1_launch, "_mod_root", return_value=self.mod_root_path)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_writes_key_into_new_ini(self):
+        _write_account_anchor("my-anchor", self.log)
+        ini_path = self.mod_root_path / "Py4GW.ini"
+        self.assertTrue(ini_path.exists())
+        content = ini_path.read_text()
+        self.assertIn("account_anchor = my-anchor", content)
+        self.assertTrue(any("Wrote account_anchor" in line for line in self.log))
+
+    def test_preserves_other_keys_and_sections(self):
+        ini_path = self.mod_root_path / "Py4GW.ini"
+        ini_path.write_text("[settings]\nautoexec_script = C:/some/script.py\n\n[other]\nkey = value\n")
+
+        _write_account_anchor("my-anchor", self.log)
+
+        content = ini_path.read_text()
+        self.assertIn("autoexec_script = C:/some/script.py", content)
+        self.assertIn("account_anchor = my-anchor", content)
+        self.assertIn("[other]", content)
+        self.assertIn("key = value", content)
+
+    def test_overwrites_stale_value_for_same_key(self):
+        ini_path = self.mod_root_path / "Py4GW.ini"
+        ini_path.write_text("[settings]\naccount_anchor = old-anchor\n")
+
+        _write_account_anchor("new-anchor", self.log)
+
+        content = ini_path.read_text()
+        self.assertIn("account_anchor = new-anchor", content)
+        self.assertNotIn("old-anchor", content)
+
+    def test_write_failure_is_non_fatal(self):
+        with patch("builtins.open", side_effect=OSError("disk full")):
+            _write_account_anchor("my-anchor", self.log)  # must not raise
+        self.assertTrue(any("non-fatal" in line for line in self.log))
+
+
+class AttachToSteamProcessTests(unittest.TestCase):
+    """RELAY 094: _attach_to_steam_process's name-match-plus-path-validation
+    logic, ported from GWxLauncher's SteamProcessAttachService.TryAttachToSteamProcess
+    with one addition that reference doesn't have (see the function's own
+    docstring) -- mocks psutil.process_iter directly, no real processes or
+    Win32 calls involved."""
+
+    class _FakeProc:
+        def __init__(self, info: dict):
+            self.info = info
+
+    def _iter(self, procs):
+        return lambda attrs: iter(procs)
+
+    def test_finds_matching_process_by_name_and_path(self):
+        proc = self._FakeProc({"pid": 4242, "name": "Gw.exe", "exe": "C:/Games/GW/Gw.exe", "create_time": 1000.0})
+        with patch.object(gw1_launch.psutil, "process_iter", side_effect=self._iter([proc])):
+            pid = _attach_to_steam_process("C:/Games/GW/Gw.exe", launched_after=999.0, log=[], timeout=1.0)
+        self.assertEqual(pid, 4242)
+
+    def test_rejects_process_with_mismatched_exe_path(self):
+        """The addition GWxLauncher's own reference doesn't have: name-only
+        matching isn't enough in a multibox tool where more than one Gw.exe
+        copy across different accounts is the normal case."""
+        wrong_path_proc = self._FakeProc(
+            {"pid": 111, "name": "Gw.exe", "exe": "C:/Other/Account/Gw.exe", "create_time": 1000.0}
+        )
+        with patch.object(gw1_launch.psutil, "process_iter", side_effect=self._iter([wrong_path_proc])):
+            pid = _attach_to_steam_process("C:/Games/GW/Gw.exe", launched_after=999.0, log=[], timeout=0.05)
+        self.assertIsNone(pid)
+
+    def test_rejects_process_created_before_launch_timestamp(self):
+        """A leftover Gw.exe from an earlier session must not be mistaken
+        for the one Steam just spawned."""
+        stale_proc = self._FakeProc(
+            {"pid": 222, "name": "Gw.exe", "exe": "C:/Games/GW/Gw.exe", "create_time": 500.0}
+        )
+        with patch.object(gw1_launch.psutil, "process_iter", side_effect=self._iter([stale_proc])):
+            pid = _attach_to_steam_process("C:/Games/GW/Gw.exe", launched_after=999.0, log=[], timeout=0.05)
+        self.assertIsNone(pid)
+
+    def test_empty_exe_path_skips_path_check(self):
+        """profile.executable_path being unresolvable/empty shouldn't reject
+        an otherwise-good name+recency match -- name-plus-recency is still
+        meaningfully selective on its own (see the function's own docstring)."""
+        proc = self._FakeProc({"pid": 333, "name": "Gw.exe", "exe": "C:/Anything/Gw.exe", "create_time": 1000.0})
+        with patch.object(gw1_launch.psutil, "process_iter", side_effect=self._iter([proc])):
+            pid = _attach_to_steam_process("", launched_after=999.0, log=[], timeout=1.0)
+        self.assertEqual(pid, 333)
+
+    def test_ignores_unrelated_process_names(self):
+        unrelated = self._FakeProc(
+            {"pid": 444, "name": "notepad.exe", "exe": "C:/Windows/notepad.exe", "create_time": 1000.0}
+        )
+        with patch.object(gw1_launch.psutil, "process_iter", side_effect=self._iter([unrelated])):
+            pid = _attach_to_steam_process("C:/Games/GW/Gw.exe", launched_after=999.0, log=[], timeout=0.05)
+        self.assertIsNone(pid)
+
+    def test_timeout_returns_none_and_logs(self):
+        log: list = []
+        with patch.object(gw1_launch.psutil, "process_iter", side_effect=self._iter([])):
+            pid = _attach_to_steam_process("C:/Games/GW/Gw.exe", launched_after=999.0, log=log, timeout=0.05)
+        self.assertIsNone(pid)
+        self.assertTrue(any("Timed out" in line for line in log))
 
 
 if __name__ == "__main__":

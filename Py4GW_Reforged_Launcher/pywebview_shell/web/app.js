@@ -1510,6 +1510,9 @@ function openEditDrawer(profileId) {
   document.getElementById("edit-autologin").checked = p ? !!p.auto_login_enabled : false;
   document.getElementById("edit-autoselect").checked = p ? !!p.auto_select_character_enabled : false;
   document.getElementById("edit-charname").value = p ? p.character_name || "" : "";
+  document.getElementById("edit-steam-login").checked = p ? !!p.use_steam_login : false;
+  document.getElementById("edit-steam-anchor").value = p ? p.steam_account_anchor || "" : "";
+  updateSteamLoginFieldVisibility();
 
   // RELAY 024: Mods/Window tab fields.
   document.getElementById("edit-py4gw-dll-path").value = p ? p.py4gw_dll_path || "" : "";
@@ -1621,6 +1624,19 @@ async function onAddPluginClick() {
   }
 }
 
+// RELAY 094: hides email/password/auto-select/character-name (meaningless
+// for a Steam-authenticated session -- Apo confirmed there's no email Py4GW
+// can read from memory for a Steam-linked account) and shows the anchor
+// field instead, whenever "Use Steam login" is on. Called both from the
+// checkbox's own onchange and from openEditDrawer on initial render, same
+// pattern as every other drawer-visibility toggle in this file.
+function updateSteamLoginFieldVisibility() {
+  const useSteam = document.getElementById("edit-steam-login").checked;
+  document.getElementById("steam-hide-identity").style.display = useSteam ? "none" : "";
+  document.getElementById("steam-hide-autologin").style.display = useSteam ? "none" : "";
+  document.getElementById("steam-anchor-row").style.display = useSteam ? "" : "none";
+}
+
 async function onSaveProfileClick() {
   const data = {
     id: editingProfileId || undefined,
@@ -1633,6 +1649,8 @@ async function onSaveProfileClick() {
     auto_login_enabled: document.getElementById("edit-autologin").checked,
     auto_select_character_enabled: document.getElementById("edit-autoselect").checked,
     character_name: document.getElementById("edit-charname").value.trim(),
+    use_steam_login: document.getElementById("edit-steam-login").checked,
+    steam_account_anchor: document.getElementById("edit-steam-anchor").value.trim(),
     py4gw_dll_path: document.getElementById("edit-py4gw-dll-path").value.trim(),
     gmod_dll_path: document.getElementById("edit-gmod-dll-path").value.trim(),
     script_path: document.getElementById("edit-script-path").value.trim(),
