@@ -1635,21 +1635,29 @@ function updateSteamLoginFieldVisibility() {
   document.getElementById("steam-hide-identity").style.display = useSteam ? "none" : "";
   document.getElementById("steam-hide-autologin").style.display = useSteam ? "none" : "";
   document.getElementById("steam-anchor-row").style.display = useSteam ? "" : "none";
+  document.getElementById("steam-hide-client").style.display = useSteam ? "none" : "";
+  document.getElementById("steam-client-note").style.display = useSteam ? "block" : "none";
 }
 
 async function onSaveProfileClick() {
+  const useSteam = document.getElementById("edit-steam-login").checked;
+  // RELAY 094 follow-up: found live that a stale/wrong executable_path
+  // (e.g. left over from before the toggle existed) silently breaks Steam
+  // process-attach matching -- hiding the fields isn't enough on its own
+  // since a hidden input still submits its last value, so these are
+  // cleared outright whenever Steam login is on, not just visually hidden.
   const data = {
     id: editingProfileId || undefined,
     name: document.getElementById("edit-name").value.trim(),
     email: document.getElementById("edit-email").value.trim(),
-    executable_path: document.getElementById("edit-path").value.trim(),
-    launch_arguments: document.getElementById("edit-args").value.trim(),
+    executable_path: useSteam ? "" : document.getElementById("edit-path").value.trim(),
+    launch_arguments: useSteam ? "" : document.getElementById("edit-args").value.trim(),
     py4gw_enabled: document.getElementById("edit-py4gw").checked,
     gmod_enabled: document.getElementById("edit-gmod").checked,
     auto_login_enabled: document.getElementById("edit-autologin").checked,
     auto_select_character_enabled: document.getElementById("edit-autoselect").checked,
     character_name: document.getElementById("edit-charname").value.trim(),
-    use_steam_login: document.getElementById("edit-steam-login").checked,
+    use_steam_login: useSteam,
     steam_account_anchor: document.getElementById("edit-steam-anchor").value.trim(),
     py4gw_dll_path: document.getElementById("edit-py4gw-dll-path").value.trim(),
     gmod_dll_path: document.getElementById("edit-gmod-dll-path").value.trim(),

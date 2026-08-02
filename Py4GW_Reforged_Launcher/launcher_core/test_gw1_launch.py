@@ -125,6 +125,51 @@ class Py4GwHardFailRegressionTest(unittest.TestCase):
         self.assertIn("py4gw_dll_path not found", result.error or "")
 
 
+class SteamLoginBypassesExecutablePathGateTests(unittest.TestCase):
+    """RELAY 094 follow-up, found via a real live test: a Steam profile with
+    no (or a stale/wrong) executable_path used to either hard-fail at
+    launch_py4gw_profile's top gate, or -- worse -- silently reject every
+    real attach match once the direct-launch path check moved into
+    _launch_gw1_via_steam, because a profile that had ever been pointed at
+    steam.exe (the old pre-toggle habit) can never path-match the real
+    discovered Gw.exe. Confirmed live: character-select screen reached,
+    zero injection attempted, console showed repeated attach timeouts."""
+
+    def test_empty_executable_path_does_not_hard_fail_a_steam_profile(self):
+        profile = GameProfile(use_steam_login=True, executable_path="")
+        with patch.object(gw1_launch, "_launch_gw1_via_steam") as mock_steam_launch:
+            mock_steam_launch.return_value = gw1_launch.LaunchResult(True, 123, None, [])
+            result = launch_py4gw_profile(profile)
+        self.assertTrue(result.success)
+        mock_steam_launch.assert_called_once()
+
+    def test_attach_ignores_profile_executable_path_even_when_wrong(self):
+        """The exact failure mode hit live: executable_path left pointing at
+        steam.exe (or anything else) must not stop a real Gw.exe from being
+        accepted -- Apo's own confirmation that a user can only have one
+        Steam-linked account is what makes dropping this check safe."""
+        profile = GameProfile(
+            use_steam_login=True,
+            executable_path="C:/Program Files (x86)/Steam/steam.exe",  # deliberately wrong/stale
+        )
+        with (
+            patch.object(gw1_launch.os, "startfile"),
+            patch.object(gw1_launch, "_attach_to_steam_process", return_value=None) as mock_attach,
+        ):
+            launch_py4gw_profile(profile)
+        mock_attach.assert_called_once()
+        called_exe_path = mock_attach.call_args[0][0]
+        self.assertEqual(called_exe_path, "")  # not profile.executable_path
+
+    def test_steam_attach_timeout_default_bumped_past_gwxlauncher_parity(self):
+        """GWxLauncher's own reference default is 5s -- found live that a
+        cold Steam launch can legitimately take longer than that just to
+        spawn Gw.exe as a process, well before any window ever appears."""
+        import inspect
+        sig = inspect.signature(launch_py4gw_profile)
+        self.assertGreater(sig.parameters["steam_attach_timeout"].default, 5.0)
+
+
 class WriteAccountAnchorTests(unittest.TestCase):
     """RELAY 094: _write_account_anchor mirrors _write_autoexec_script's own
     read-modify-write shape exactly (RELAY 057) -- these tests are the same

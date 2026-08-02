@@ -960,6 +960,18 @@ def _launch_gw1_via_steam(
     `SteamLaunchService.cs`/`Gw1LaunchOrchestrator.cs`), so there's no
     reference implementation to port. Whatever a protected default Steam
     install actually needs here is unknown until tested for real.
+
+    `profile.executable_path` is deliberately NOT passed to
+    `_attach_to_steam_process` here -- found live: a Steam profile that had
+    ever been pointed at `steam.exe` (the old pre-toggle shortcut, or just
+    an editable field a user can drift back into out of habit) permanently
+    fails to attach, since the real discovered `Gw.exe`'s path can never
+    equal that. Apo's own confirmation that a user can only have one
+    Steam-linked account (see this repo's RELAY 094 notes) means the
+    multibox-precision reason that check exists for the direct-launch case
+    doesn't apply here -- name-plus-recency is already unambiguous for a
+    Steam-owned launch, so there's nothing this validation actually buys on
+    this path, only a way for a stale field to silently break it.
     """
     _apply_gw1_registry_fix(profile, log)
 
@@ -970,7 +982,7 @@ def _launch_gw1_via_steam(
     except OSError as e:
         return LaunchResult(False, None, f"Steam URI launch failed: {e}", log)
 
-    pid = _attach_to_steam_process(profile.executable_path, launch_timestamp, log, timeout=steam_attach_timeout)
+    pid = _attach_to_steam_process("", launch_timestamp, log, timeout=steam_attach_timeout)
     if pid is None:
         return LaunchResult(
             False, None, "Steam launch accepted, but no matching Gw.exe process was found", log
@@ -1043,19 +1055,27 @@ def launch_py4gw_profile(
     multiclient_enabled: bool = True,
     py4gw_injection_enabled: bool = True,
     gmod_injection_enabled: bool = True,
-    steam_attach_timeout: float = 5.0,
+    steam_attach_timeout: float = 30.0,
     on_log: Optional[Callable[[str], None]] = None,
 ) -> LaunchResult:
     """Launch `profile`'s executable, optionally auto-logging in, and inject Py4GW
     and/or gMod into it per the profile's own toggles.
 
     RELAY 094: if `profile.use_steam_login` is set, this dispatches entirely
-    to `_launch_gw1_via_steam` instead -- `profile.executable_path` is still
-    validated below first (same "meaningless without it" reasoning as the
-    direct path), but is used only for post-attach path verification and the
-    registry fix from that point on, never as a `CreateProcessW` target.
-    `steam_attach_timeout` (GWxLauncher parity default: 5s) only matters on
-    that path.
+    to `_launch_gw1_via_steam` instead, and skips the `executable_path`
+    requirement below -- Steam owns the actual launch, and (found live)
+    `executable_path` no longer has any real use on that path either (see
+    `_launch_gw1_via_steam`'s own docstring for why it stopped being used
+    for post-attach validation too), so requiring it here would just be an
+    artificial gate with nothing behind it. `steam_attach_timeout` only
+    matters on that path -- bumped from GWxLauncher's 5s parity default to
+    30s after a real live test: a cold Steam launch (DRM/overlay/update
+    checks before `Gw.exe` even exists as a process) can legitimately take
+    longer than 5s to spawn the process at all, well before any window-wait
+    logic even begins. Confirmed live: `_attach_to_steam_process` timed out
+    twice at 5s while Steam was still genuinely loading the game in the
+    background, and the character-select screen appeared afterward with no
+    injection ever attempted, since the launcher had already given up.
 
     `profile.py4gw_enabled`/`profile.gmod_enabled` each gate only their own
     DLL-path validation and injection call: a profile with both off still gets
@@ -1105,9 +1125,6 @@ def launch_py4gw_profile(
     """
     log: list = _ObservableLog(on_log)
 
-    if not profile.executable_path or not os.path.exists(profile.executable_path):
-        return LaunchResult(False, None, f"executable_path not found: {profile.executable_path!r}", log)
-
     if profile.use_steam_login:
         return _launch_gw1_via_steam(
             profile,
@@ -1119,6 +1136,9 @@ def launch_py4gw_profile(
             steam_attach_timeout=steam_attach_timeout,
             log=log,
         )
+
+    if not profile.executable_path or not os.path.exists(profile.executable_path):
+        return LaunchResult(False, None, f"executable_path not found: {profile.executable_path!r}", log)
 
     _apply_gw1_registry_fix(profile, log)
 
