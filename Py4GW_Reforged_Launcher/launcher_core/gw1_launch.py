@@ -130,6 +130,40 @@ CREATE_SUSPENDED = 0x00000004
 STEAM_GW1_APP_ID = "29720"
 STEAM_GW1_URI = f"steam://rungameid/{STEAM_GW1_APP_ID}"
 
+# RELAY 094 follow-up: GW1 shows two genuinely distinct Win32 window
+# classes during startup, confirmed via a real live capture (GetClassName
+# on every new window for the launched PID, not assumed) -- the
+# splash/patch dialog is `ArenaNet_Dialog_Class` (a real window, not just a
+# transient flash: it stayed up across several observed launches, exactly
+# the thing a slow content update would keep visible for minutes), and the
+# actual 3D game client is a separate, later-appearing
+# `ArenaNet_Dx_Window_Class`. Waiting specifically for this class (see
+# `_is_gw_main_window` below), instead of "any visible window for this
+# PID," means injection timing no longer depends on how long the dialog
+# stays up -- a multi-minute patch just means a longer wait for this class
+# to exist, not a premature "found a window" against the splash/patch
+# dialog. Applies to both launch paths (direct and Steam) since both share
+# `_wait_for_gw_window`/`_wait_for_window_or_exit`.
+GW_MAIN_WINDOW_CLASS = "ArenaNet_Dx_Window_Class"
+
+
+def _is_gw_main_window(hwnd: int, pid: int) -> bool:
+    """True only for `pid`'s real 3D game window -- see `GW_MAIN_WINDOW_CLASS`'s
+    own comment for why class name, not just visibility+PID, is the right
+    filter here. Swallows `pywintypes.error` itself (returns False) rather
+    than letting callers each repeat the same "a window can be destroyed
+    mid-enumeration" guard.
+    """
+    try:
+        if not win32gui.IsWindowVisible(hwnd):
+            return False
+        _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
+        if window_pid != pid:
+            return False
+        return win32gui.GetClassName(hwnd) == GW_MAIN_WINDOW_CLASS
+    except pywintypes.error:
+        return False
+
 VIRTUAL_MEM = 0x1000 | 0x2000  # MEM_COMMIT | MEM_RESERVE
 PAGE_READWRITE = 0x04
 MEM_RELEASE = 0x8000
@@ -508,15 +542,8 @@ def _wait_for_gw_window(pid: int, log: list, timeout: float = 30.0) -> bool:
     found_windows = []
 
     def enum_windows_callback(hwnd, _):
-        try:
-            if win32gui.IsWindowVisible(hwnd):
-                _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if window_pid == pid:
-                    found_windows.append(hwnd)
-        except pywintypes.error:
-            # A window can be destroyed mid-enumeration; skip it rather than letting
-            # one bad handle crash the whole enumeration (see window_control.py).
-            pass
+        if _is_gw_main_window(hwnd, pid):
+            found_windows.append(hwnd)
         return True
 
     while time.time() - start_time < timeout:
@@ -546,18 +573,32 @@ def _wait_for_window_or_exit(
     absolute_ceiling: float = ABSOLUTE_CEILING_DEFAULT,
     hang_fail_threshold: float = HANG_FAIL_THRESHOLD_DEFAULT,
 ) -> str:
-    """Poll `pid` for whichever happens first: a visible, *responsive* window while
-    still alive (the normal case -- return "window"), or the process exiting before
-    any window appears (the updater/relaunch handoff case -- return "exited").
+    """Poll `pid` for whichever happens first: a visible, *responsive*
+    `GW_MAIN_WINDOW_CLASS` window while still alive (the normal case --
+    return "window"), or the process exiting before that window appears
+    (the updater/relaunch handoff case -- return "exited").
 
-    Stall-based, not elapsed-time-based: a window that exists but reports hung
-    (``IsHungAppWindow``) is treated as "still legitimately busy" -- e.g. GW showing
-    a not-responding window while it unpacks a large update -- and polling continues.
-    Only two things actually fail this wait: (a) the process exits with no window
-    ever appearing, or (b) a window stays hung for `hang_fail_threshold` seconds
-    straight, which is treated as an actual freeze/crash rather than a slow update.
-    `absolute_ceiling` is a last-resort safety valve for the case where neither of
-    those clean signals ever fires, not a tuned duration -- see its docstring.
+    Class-filtered, not "any window for this PID" -- see
+    `GW_MAIN_WINDOW_CLASS`'s own comment. The splash/patch dialog
+    (`ArenaNet_Dialog_Class`) staying up for however long a real content
+    update takes is exactly why this matters: this function simply doesn't
+    count it as a match at all, rather than accepting it early and reporting
+    "window" before the game is actually ready. A slow patch just reads as
+    "still polling, nothing found yet" here -- `absolute_ceiling` (not
+    `hang_fail_threshold`) is what actually bounds that wait now.
+
+    Still stall-based on top of that class filter, not elapsed-time-based,
+    for the main window itself once it exists: a `GW_MAIN_WINDOW_CLASS`
+    window that reports hung (``IsHungAppWindow``) is treated as "still
+    legitimately busy" -- e.g. a large in-place data redownload after the
+    real window already appeared (see this module's own docstring for that
+    variant) -- and polling continues. Only two things actually fail this
+    wait: (a) the process exits with no matching window ever appearing, or
+    (b) a `GW_MAIN_WINDOW_CLASS` window stays hung for `hang_fail_threshold`
+    seconds straight, treated as an actual freeze/crash rather than a slow
+    update. `absolute_ceiling` is a last-resort safety valve for the case
+    where neither of those clean signals ever fires, not a tuned duration --
+    see its docstring.
 
     This also has to be a single combined poll, not a sequential "wait for exit,
     then wait for a window": sequencing them means the normal (no update pending)
@@ -574,15 +615,8 @@ def _wait_for_window_or_exit(
     found_windows = []
 
     def enum_windows_callback(hwnd, _):
-        try:
-            if win32gui.IsWindowVisible(hwnd):
-                _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if window_pid == pid:
-                    found_windows.append(hwnd)
-        except pywintypes.error:
-            # A window can be destroyed mid-enumeration; skip it rather than letting
-            # one bad handle crash the whole enumeration (see window_control.py).
-            pass
+        if _is_gw_main_window(hwnd, pid):
+            found_windows.append(hwnd)
         return True
 
     while time.time() - start_time < absolute_ceiling:
@@ -919,7 +953,8 @@ def _redact_command_line_for_log(command_line: str) -> str:
 def _launch_gw1_via_steam(
     profile: GameProfile,
     *,
-    window_wait_timeout: float,
+    absolute_ceiling: float,
+    hang_fail_threshold: float,
     post_window_settle_delay: float,
     multiclient_enabled: bool,
     py4gw_injection_enabled: bool,
@@ -972,6 +1007,16 @@ def _launch_gw1_via_steam(
     doesn't apply here -- name-plus-recency is already unambiguous for a
     Steam-owned launch, so there's nothing this validation actually buys on
     this path, only a way for a stale field to silently break it.
+
+    Uses `_wait_for_window_or_exit` (`absolute_ceiling`/`hang_fail_threshold`),
+    not a flat `window_wait_timeout` -- found live, same failure shape as
+    the attach-timeout bug above: a genuine content update after a Steam
+    launch can take minutes, and this now specifically waits for
+    `GW_MAIN_WINDOW_CLASS` (see that constant's own comment), not just any
+    window, so the splash/patch dialog staying up doesn't get mistaken for
+    "ready." Chris's own point, and correct: this is the same shape of
+    problem the direct-launch path already handles for exactly this reason
+    -- unified onto the same function rather than re-solving it here.
     """
     _apply_gw1_registry_fix(profile, log)
 
@@ -1012,8 +1057,14 @@ def _launch_gw1_via_steam(
     else:
         _log(log, "gMod injection disabled for this profile -- launching without it")
 
-    if not _wait_for_gw_window(pid, log, timeout=window_wait_timeout):
-        return LaunchResult(False, pid, "GW window never appeared", log)
+    outcome = _wait_for_window_or_exit(pid, log, absolute_ceiling=absolute_ceiling, hang_fail_threshold=hang_fail_threshold)
+    if outcome == "exited":
+        return LaunchResult(False, pid, "Gw.exe exited before its main window ever appeared", log)
+    elif outcome == "hung":
+        return LaunchResult(False, pid, f"Window stayed hung for {hang_fail_threshold}s+; treating as stuck, not a slow update", log)
+    elif outcome == "timeout":
+        return LaunchResult(False, pid, f"Hit the absolute ceiling ({absolute_ceiling}s) with no window, exit, or hang signal", log)
+    # outcome == "window": pid's window is already confirmed, fall straight through.
 
     if profile.auto_select_character_enabled and profile.character_name:
         window_title = profile.character_name
@@ -1128,7 +1179,8 @@ def launch_py4gw_profile(
     if profile.use_steam_login:
         return _launch_gw1_via_steam(
             profile,
-            window_wait_timeout=window_wait_timeout,
+            absolute_ceiling=absolute_ceiling,
+            hang_fail_threshold=hang_fail_threshold,
             post_window_settle_delay=post_window_settle_delay,
             multiclient_enabled=multiclient_enabled,
             py4gw_injection_enabled=py4gw_injection_enabled,

@@ -25,6 +25,7 @@ Run: .venv\\Scripts\\python.exe -m unittest launcher_core.test_gw1_launch -v
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,7 +34,10 @@ from unittest.mock import patch
 from launcher_core import gw1_launch
 from launcher_core.gw1_launch import (
     _attach_to_steam_process,
+    _is_gw_main_window,
     _resolve_gmod_launch_decision,
+    _wait_for_gw_window,
+    _wait_for_window_or_exit,
     _write_account_anchor,
     launch_py4gw_profile,
 )
@@ -123,6 +127,116 @@ class Py4GwHardFailRegressionTest(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("py4gw_dll_path not found", result.error or "")
+
+
+class GwMainWindowClassFilterTests(unittest.TestCase):
+    """RELAY 094 follow-up: found live (real GetClassName capture during an
+    actual launch, not assumed) that GW1 shows two genuinely distinct Win32
+    window classes at startup -- ArenaNet_Dialog_Class (the splash/patch
+    dialog) and ArenaNet_Dx_Window_Class (the real 3D game window),
+    confirmed as two separate hwnds for the same PID a fraction of a
+    second apart. Chris's own point: a real content update can keep the
+    dialog up for minutes, so injection timing must not treat "any window
+    for this PID" as "ready" -- _is_gw_main_window is the fix."""
+
+    def test_true_for_matching_class_and_pid(self):
+        with (
+            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, 123)),
+            patch.object(gw1_launch.win32gui, "GetClassName", return_value=gw1_launch.GW_MAIN_WINDOW_CLASS),
+        ):
+            self.assertTrue(_is_gw_main_window(999, 123))
+
+    def test_false_for_splash_dialog_class(self):
+        with (
+            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, 123)),
+            patch.object(gw1_launch.win32gui, "GetClassName", return_value="ArenaNet_Dialog_Class"),
+        ):
+            self.assertFalse(_is_gw_main_window(999, 123))
+
+    def test_false_for_wrong_pid(self):
+        with (
+            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, 456)),
+            patch.object(gw1_launch.win32gui, "GetClassName", return_value=gw1_launch.GW_MAIN_WINDOW_CLASS),
+        ):
+            self.assertFalse(_is_gw_main_window(999, 123))
+
+    def test_false_for_invisible_window(self):
+        with patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=False):
+            self.assertFalse(_is_gw_main_window(999, 123))
+
+    def test_false_not_raises_on_pywintypes_error(self):
+        """A window can be destroyed mid-enumeration -- must not raise."""
+        with patch.object(gw1_launch.win32gui, "IsWindowVisible", side_effect=gw1_launch.pywintypes.error("boom")):
+            self.assertFalse(_is_gw_main_window(999, 123))
+
+
+class WaitFunctionsIgnoreSplashDialogTests(unittest.TestCase):
+    """Confirms _wait_for_gw_window/_wait_for_window_or_exit actually use
+    the class filter end to end (not just that _is_gw_main_window is
+    correct in isolation) -- reproduces the exact live scenario: a real
+    ArenaNet_Dialog_Class window appearing before ArenaNet_Dx_Window_Class."""
+
+    @staticmethod
+    def _fake_enum_windows(hwnd_classes):
+        def fake_enum_windows(callback, extra):
+            for hwnd in hwnd_classes:
+                callback(hwnd, extra)
+        return fake_enum_windows
+
+    def test_wait_for_gw_window_ignores_dialog_finds_dx_window(self):
+        pid = os.getpid()  # a real, running process -- psutil's status check needs one
+        hwnd_classes = {111: "ArenaNet_Dialog_Class", 222: gw1_launch.GW_MAIN_WINDOW_CLASS}
+        with (
+            patch.object(gw1_launch.win32gui, "EnumWindows", side_effect=self._fake_enum_windows(hwnd_classes)),
+            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, pid)),
+            patch.object(gw1_launch.win32gui, "GetClassName", side_effect=lambda h: hwnd_classes[h]),
+        ):
+            self.assertTrue(_wait_for_gw_window(pid, log=[], timeout=1.0))
+
+    def test_wait_for_gw_window_times_out_if_only_dialog_ever_appears(self):
+        pid = os.getpid()
+        hwnd_classes = {111: "ArenaNet_Dialog_Class"}
+        with (
+            patch.object(gw1_launch.win32gui, "EnumWindows", side_effect=self._fake_enum_windows(hwnd_classes)),
+            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, pid)),
+            patch.object(gw1_launch.win32gui, "GetClassName", side_effect=lambda h: hwnd_classes[h]),
+        ):
+            self.assertFalse(_wait_for_gw_window(pid, log=[], timeout=0.3))
+
+    def test_wait_for_window_or_exit_ignores_dialog_returns_window_for_dx_class(self):
+        pid = os.getpid()
+        hwnd_classes = {111: "ArenaNet_Dialog_Class", 222: gw1_launch.GW_MAIN_WINDOW_CLASS}
+        with (
+            patch.object(gw1_launch.win32gui, "EnumWindows", side_effect=self._fake_enum_windows(hwnd_classes)),
+            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, pid)),
+            patch.object(gw1_launch.win32gui, "GetClassName", side_effect=lambda h: hwnd_classes[h]),
+            patch.object(gw1_launch.user32, "IsHungAppWindow", return_value=False),
+        ):
+            outcome = _wait_for_window_or_exit(pid, log=[], absolute_ceiling=1.0, hang_fail_threshold=60.0)
+        self.assertEqual(outcome, "window")
+
+    def test_wait_for_window_or_exit_only_dialog_present_hits_ceiling_not_hang(self):
+        """The core fix, proven end to end: a slow patch (dialog window
+        staying up, never reporting hung itself since it's a real,
+        responsive UI) must read as 'still waiting' bounded by
+        absolute_ceiling -- not mistaken for a hung main window, and not
+        accepted early as 'ready'."""
+        pid = os.getpid()
+        hwnd_classes = {111: "ArenaNet_Dialog_Class"}
+        with (
+            patch.object(gw1_launch.win32gui, "EnumWindows", side_effect=self._fake_enum_windows(hwnd_classes)),
+            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, pid)),
+            patch.object(gw1_launch.win32gui, "GetClassName", side_effect=lambda h: hwnd_classes[h]),
+        ):
+            outcome = _wait_for_window_or_exit(pid, log=[], absolute_ceiling=0.3, hang_fail_threshold=60.0)
+        self.assertEqual(outcome, "timeout")
 
 
 class SteamLoginBypassesExecutablePathGateTests(unittest.TestCase):
