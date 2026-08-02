@@ -12,6 +12,7 @@ salvage APIs, storage capacity, or preview consistency cannot be verified.
 import json
 import os
 import re
+import sys
 import time
 import traceback
 from collections import Counter
@@ -52,6 +53,38 @@ from Sources.marks_sources.mods_parser import parse_modifiers
 from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import DEFAULT_NPC_SELECTORS
 from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import SUPPORTED_MAP_NPC_SELECTORS
 
+_sources_namespace = sys.modules.get("Sources")
+_sources_namespace_path = getattr(_sources_namespace, "__path__", None)
+if isinstance(_sources_namespace_path, list):
+    _sources_project_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "Sources")
+    )
+    if _sources_project_path not in _sources_namespace_path:
+        _sources_namespace_path.append(_sources_project_path)
+
+from Sources.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME
+from Sources.MerchantRules.profiles import BACKUP_DOC_NAME
+from Sources.MerchantRules.profiles import BACKUP_SCHEMA
+from Sources.MerchantRules.profiles import BACKUP_SCHEMA_VERSION
+from Sources.MerchantRules.profiles import LIVE_CONFIG_DOC_NAME
+from Sources.MerchantRules.profiles import LOADED_PROFILE_STATE_DOC_NAME
+from Sources.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA
+from Sources.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA_VERSION
+from Sources.MerchantRules.profiles import PROFILE_SCOPES
+from Sources.MerchantRules.profiles import PROFILE_SCOPE_ACCOUNT
+from Sources.MerchantRules.profiles import PROFILE_SCOPE_SHARED
+from Sources.MerchantRules.profiles import PROFILE_WINDOW_GEOMETRY_KEYS
+from Sources.MerchantRules.profiles import ProfileIdentity
+from Sources.MerchantRules.profiles import ProfileStore
+from Sources.MerchantRules.profiles import ProfileSummary
+from Sources.MerchantRules.profiles import LoadedProfileProvenance
+from Sources.MerchantRules.profiles import SHARED_PROFILE_SCHEMA
+from Sources.MerchantRules.profiles import SHARED_PROFILE_SCHEMA_VERSION
+from Sources.MerchantRules.profiles import SHARED_PROFILES_DOC_NAME
+from Sources.MerchantRules.profiles import _looks_like_merchant_rules_payload
+from Sources.MerchantRules.profiles import _normalize_shared_profile_display_name
+from Sources.MerchantRules.profiles import _strip_window_geometry_from_profile_payload
+
 
 MODULE_NAME = "Merchant Rules"
 MODULE_ICON = "Textures\\Module_Icons\\MerchantRules.png"
@@ -82,13 +115,6 @@ INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 PROFILE_VERSION = 36
 # Live and private rule profiles remain account-scoped. Shared profiles use one
 # global document whose per-key journal writes merge safely across multibox clients.
-LIVE_CONFIG_DOC_NAME = "Widgets/MerchantRules/LiveConfig.json"
-ACCOUNT_PROFILES_DOC_NAME = "Widgets/MerchantRules/Profiles.json"
-SHARED_PROFILES_DOC_NAME = "Widgets/MerchantRules/SharedProfiles.json"
-BACKUP_DOC_NAME = "Widgets/MerchantRules/LiveConfigBackup.json"
-LOADED_PROFILE_STATE_DOC_NAME = "Widgets/MerchantRules/LoadedProfileState.json"
-BACKUP_SCHEMA = "merchant_rules_live_config_backup_v1"
-BACKUP_SCHEMA_VERSION = 1
 DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Data")
 CATALOG_PATH = os.path.join(DATA_DIR, "merchant_rules_catalog.json")
 DROP_DATA_PATH = os.path.join(DATA_DIR, "modelid_drop_data.json")
@@ -172,23 +198,6 @@ IDENTIFY_CONFIRM_TIMEOUT_MS = 5000
 STACKABLE_DESTROY_MAX_STACK_SIZE = 250
 CRAFTING_MATERIAL_MAX_STACK_SIZE = 250
 INVENTORY_BAG_IDS: tuple[int, ...] = (1, 2, 3, 4)
-PROFILE_WINDOW_GEOMETRY_KEYS: tuple[str, ...] = (
-    "window_x",
-    "window_y",
-    "window_width",
-    "window_height",
-    "window_collapsed",
-)
-SHARED_PROFILE_SCHEMA = "merchant_rules_shared_profile_v1"
-SHARED_PROFILE_SCHEMA_VERSION = 1
-LOADED_PROFILE_STATE_SCHEMA = "merchant_rules_loaded_profile_state_v1"
-LOADED_PROFILE_STATE_SCHEMA_VERSION = 1
-PROFILE_SCOPE_SHARED = "shared"
-PROFILE_SCOPE_ACCOUNT = "account"
-PROFILE_SCOPES: tuple[str, ...] = (
-    PROFILE_SCOPE_SHARED,
-    PROFILE_SCOPE_ACCOUNT,
-)
 HELPER_TOOLTIPS_ENABLED_DEFAULT = True
 
 MERCHANT_TYPE_TRAVEL = "travel"
@@ -3584,45 +3593,6 @@ class MultiboxAccountStatus:
 
 
 @dataclass(frozen=True)
-class ProfileIdentity:
-    """Identify one saved profile by semantic scope and exact JsonFactory key."""
-
-    scope: str
-    key: str
-
-
-@dataclass(frozen=True)
-class LoadedProfileProvenance:
-    """Remember the exact saved profile explicitly loaded into one account's live config."""
-
-    source_identity: ProfileIdentity
-    display_name_snapshot: str
-    normalized_content_fingerprint: str
-    associated_at_unix_ms: int
-
-
-@dataclass
-class ProfileSummary:
-    """Hold validated saved-profile metadata and its normalized serialized payload."""
-
-    identity: ProfileIdentity
-    display_name: str
-    saved_at_label: str = ""
-    saved_at_unix_ms: int = 0
-    payload: dict[str, object] = field(default_factory=dict)
-    serialized_payload: str = ""
-    fingerprint: str = ""
-
-    @property
-    def scope(self) -> str:
-        return self.identity.scope
-
-    @property
-    def key(self) -> str:
-        return self.identity.key
-
-
-@dataclass(frozen=True)
 class ParsedUpgradeMatch:
     identifier: str = ""
     target_item_type: str = ""
@@ -4156,42 +4126,6 @@ def _build_parsed_weapon_mod_match(
 def _sanitize_filename(value: str) -> str:
     sanitized = re.sub(r'[<>:"/\\|?*]+', "_", str(value or "").strip())
     return sanitized or "default"
-
-
-def _normalize_shared_profile_display_name(raw_value: object) -> str:
-    return _normalize_rule_name(raw_value)
-
-
-def _strip_window_geometry_from_profile_payload(payload: object) -> dict[str, object]:
-    raw_payload = dict(payload) if isinstance(payload, dict) else {}
-    return {
-        key: value
-        for key, value in raw_payload.items()
-        if key not in PROFILE_WINDOW_GEOMETRY_KEYS
-    }
-
-
-def _looks_like_merchant_rules_payload(raw_payload: object) -> bool:
-    """Return whether a decoded object has the minimum shape of a Merchant Rules profile."""
-
-    if not isinstance(raw_payload, dict):
-        return False
-    return any(
-        key in raw_payload
-        for key in (
-            "buy_rules",
-            "sell_rules",
-            "destroy_rules",
-            "identify_settings",
-            "cleanup_targets",
-            "cleanup_protection_sources",
-            "auto_cleanup_on_outpost_entry",
-            "auto_travel_enabled",
-            "target_outpost_id",
-            "favorite_outpost_ids",
-            "debug_logging",
-        )
-    )
 
 
 def _normalize_outpost_match_text(raw_value: object) -> str:
@@ -6573,6 +6507,11 @@ class MerchantRulesWidget:
 
     def __init__(self):
         self.initialized = False
+        self._profile_store = ProfileStore(
+            json_factory_provider=JsonFactory,
+            normalize_payload=self._normalize_profile_payload,
+            profile_version=PROFILE_VERSION,
+        )
         self.account_key = ""
         self.config_path = ""
         self.active_profile_display_name = ""
@@ -6847,24 +6786,19 @@ class MerchantRulesWidget:
 
     def _live_config_doc(self) -> JsonFactory:
         """The current account's live working config (account-scoped, self-persisting)."""
-        return JsonFactory(LIVE_CONFIG_DOC_NAME)
+        return self._profile_store.live_config_doc()
 
     def _profile_doc(self, scope: str) -> JsonFactory:
         """Return the saved-profile document for one explicit semantic scope."""
-
-        if scope == PROFILE_SCOPE_SHARED:
-            return JsonFactory(SHARED_PROFILES_DOC_NAME, "global")
-        if scope == PROFILE_SCOPE_ACCOUNT:
-            return JsonFactory(ACCOUNT_PROFILES_DOC_NAME)
-        raise ValueError(f"Unsupported Merchant Rules profile scope: {scope!r}")
+        return self._profile_store.profile_doc(scope)
 
     def _backup_doc(self) -> JsonFactory:
         """Account-scoped last-known-good live profile used by the Restore Backup action."""
-        return JsonFactory(BACKUP_DOC_NAME)
+        return self._profile_store.backup_doc()
 
     def _loaded_profile_state_doc(self) -> JsonFactory:
         """Account-scoped provenance for the exact saved profile last loaded explicitly."""
-        return JsonFactory(LOADED_PROFILE_STATE_DOC_NAME)
+        return self._profile_store.loaded_profile_state_doc()
 
     def _get_live_profile_display_name(self) -> str:
         config_path = str(self.config_path or "").strip()
@@ -10135,7 +10069,7 @@ class MerchantRulesWidget:
         return payload
 
     def _serialize_profile_payload(self, payload: dict[str, object]) -> str:
-        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return self._profile_store.serialize_profile_payload(payload)
 
     def _normalize_profile_payload(self, raw_payload: object) -> dict[str, object]:
         """Validate and migrate a decoded profile without weakening safe defaults.
@@ -10544,9 +10478,7 @@ class MerchantRulesWidget:
         return "SHARED" if scope == PROFILE_SCOPE_SHARED else "ACCOUNT"
 
     def _get_profiles_dir(self, scope: str) -> str:
-        doc = self._profile_doc(scope)
-        doc_path = doc.path()
-        return os.path.dirname(doc_path) if doc_path else doc.name
+        return self._profile_store.profiles_dir(scope)
 
     def _build_shareable_profile_payload(self) -> dict[str, object]:
         normalized_payload = self._normalize_profile_payload(
@@ -10555,73 +10487,24 @@ class MerchantRulesWidget:
         return _strip_window_geometry_from_profile_payload(normalized_payload)
 
     def _serialize_shareable_profile_payload(self, payload: dict[str, object]) -> str:
-        return self._serialize_profile_payload(
+        return self._profile_store.serialize_profile_payload(
             _strip_window_geometry_from_profile_payload(payload)
         )
 
     def _shareable_profile_content_fingerprint(self, serialized_payload: str) -> str:
-        return md5(str(serialized_payload or "").encode("utf-8")).hexdigest()
+        return self._profile_store.shareable_profile_content_fingerprint(serialized_payload)
 
     def _loaded_profile_provenance_to_json(
         self,
         provenance: LoadedProfileProvenance,
     ) -> dict[str, object]:
-        return {
-            "schema": LOADED_PROFILE_STATE_SCHEMA,
-            "schema_version": LOADED_PROFILE_STATE_SCHEMA_VERSION,
-            "source_scope": provenance.source_identity.scope,
-            "source_key": provenance.source_identity.key,
-            "display_name_snapshot": provenance.display_name_snapshot,
-            "normalized_content_fingerprint": provenance.normalized_content_fingerprint,
-            "associated_at_unix_ms": max(0, int(provenance.associated_at_unix_ms)),
-        }
+        return self._profile_store.provenance_to_json(provenance)
 
     def _normalize_loaded_profile_provenance(
         self,
         raw_state: object,
     ) -> LoadedProfileProvenance:
-        if not isinstance(raw_state, dict):
-            raise ValueError("Loaded-profile provenance must be a JSON object.")
-        if str(raw_state.get("schema", "") or "").strip() != LOADED_PROFILE_STATE_SCHEMA:
-            raise ValueError("Loaded-profile provenance schema is not supported.")
-
-        schema_version = _safe_int(raw_state.get("schema_version", 0), 0)
-        if schema_version <= 0:
-            raise ValueError("Loaded-profile provenance schema version is missing.")
-        if schema_version > LOADED_PROFILE_STATE_SCHEMA_VERSION:
-            raise ValueError(
-                f"Loaded-profile provenance schema v{schema_version} is newer than supported schema "
-                f"v{LOADED_PROFILE_STATE_SCHEMA_VERSION}."
-            )
-
-        source_scope = str(raw_state.get("source_scope", "") or "").strip()
-        if source_scope not in PROFILE_SCOPES:
-            raise ValueError("Loaded-profile provenance source scope is invalid.")
-        source_key = str(raw_state.get("source_key", "") or "").strip()
-        if not source_key:
-            raise ValueError("Loaded-profile provenance source key is missing.")
-
-        display_name_snapshot = _normalize_shared_profile_display_name(
-            raw_state.get("display_name_snapshot", "")
-        )
-        if not display_name_snapshot:
-            display_name_snapshot = source_key
-
-        content_fingerprint = str(
-            raw_state.get("normalized_content_fingerprint", "") or ""
-        ).strip().lower()
-        if re.fullmatch(r"[0-9a-f]{32}", content_fingerprint) is None:
-            raise ValueError("Loaded-profile provenance content fingerprint is invalid.")
-
-        return LoadedProfileProvenance(
-            source_identity=ProfileIdentity(source_scope, source_key),
-            display_name_snapshot=display_name_snapshot,
-            normalized_content_fingerprint=content_fingerprint,
-            associated_at_unix_ms=max(
-                0,
-                _safe_int(raw_state.get("associated_at_unix_ms", 0), 0),
-            ),
-        )
+        return self._profile_store.normalize_provenance(raw_state)
 
     def _load_loaded_profile_provenance(self):
         self.loaded_profile_provenance = None
@@ -10668,18 +10551,9 @@ class MerchantRulesWidget:
             ),
             associated_at_unix_ms=int(time.time() * 1000),
         )
-        expected_state = self._loaded_profile_provenance_to_json(provenance)
         doc = self._loaded_profile_state_doc()
         self._require_loaded_profile_state_writable(doc)
-        doc.set_json("", expected_state)
-        if not doc.save():
-            doc.reload()
-            raise OSError("JsonFactory could not flush loaded-profile provenance.")
-        if not doc.reload():
-            raise OSError("Loaded-profile provenance was saved but could not be reloaded.")
-        verified = self._normalize_loaded_profile_provenance(doc.get_json("", None))
-        if self._loaded_profile_provenance_to_json(verified) != expected_state:
-            raise RuntimeError("Loaded-profile provenance failed post-save verification.")
+        verified = self._profile_store.record_provenance(doc, provenance)
         self.loaded_profile_provenance = verified
         self.loaded_profile_provenance_warning = ""
         self.active_profile_display_name = (
@@ -10695,14 +10569,7 @@ class MerchantRulesWidget:
                 self.loaded_profile_provenance_warning = ""
                 return True
             self._require_loaded_profile_state_writable(doc)
-            doc.set_json("", {})
-            if not doc.save():
-                doc.reload()
-                raise OSError("JsonFactory could not clear loaded-profile provenance.")
-            if not doc.reload():
-                raise OSError("Loaded-profile provenance was cleared but could not be reloaded.")
-            if doc.get_json("", None) not in (None, {}):
-                raise RuntimeError("Loaded-profile provenance is still present after clearing it.")
+            self._profile_store.clear_provenance(doc)
             self.loaded_profile_provenance_warning = ""
             return True
         except Exception as exc:
@@ -10719,27 +10586,16 @@ class MerchantRulesWidget:
             return False
 
     def _serialize_saved_profile_wrapper(self, wrapper: object) -> str:
-        normalized_wrapper = dict(wrapper) if isinstance(wrapper, dict) else {}
-        return json.dumps(normalized_wrapper, sort_keys=True, separators=(",", ":"))
+        return self._profile_store.serialize_saved_profile_wrapper(wrapper)
 
     def _saved_profile_wrapper_fingerprint(self, wrapper: object) -> str:
-        serialized_wrapper = self._serialize_saved_profile_wrapper(wrapper)
-        return md5(serialized_wrapper.encode("utf-8")).hexdigest()
+        return self._profile_store.saved_profile_wrapper_fingerprint(wrapper)
 
     def _format_shared_profile_timestamp(
         self,
         saved_at_unix_ms: int,
     ) -> str:
-        safe_timestamp = max(0, _safe_int(saved_at_unix_ms, 0))
-        if safe_timestamp <= 0:
-            return ""
-        try:
-            return time.strftime(
-                "%Y-%m-%d %H:%M:%S",
-                time.localtime(float(safe_timestamp) / 1000.0),
-            )
-        except Exception:
-            return ""
+        return self._profile_store.format_shared_profile_timestamp(saved_at_unix_ms)
 
     def _build_shared_profile_wrapper(
         self,
@@ -10749,33 +10605,18 @@ class MerchantRulesWidget:
         saved_at_unix_ms: int | None = None,
         saved_at_label: str | None = None,
     ) -> dict[str, object]:
-        normalized_name = _normalize_shared_profile_display_name(display_name)
-        if not normalized_name:
-            raise ValueError("Enter a profile name before saving.")
-        effective_saved_at_unix_ms = (
-            max(0, _safe_int(saved_at_unix_ms, 0))
-            if saved_at_unix_ms is not None
-            else int(time.time() * 1000)
-        )
-        shareable_payload = (
+        source_payload = (
             self._build_shareable_profile_payload()
             if payload is None
-            else _strip_window_geometry_from_profile_payload(
-                self._normalize_profile_payload(payload)
-            )
+            else payload
         )
-        return {
-            "schema": SHARED_PROFILE_SCHEMA,
-            "schema_version": SHARED_PROFILE_SCHEMA_VERSION,
-            "name": normalized_name,
-            "saved_at_unix_ms": effective_saved_at_unix_ms,
-            "saved_at": (
-                str(saved_at_label or "").strip()
-                if saved_at_label is not None
-                else self._format_shared_profile_timestamp(effective_saved_at_unix_ms)
-            ),
-            "payload": shareable_payload,
-        }
+        return self._profile_store.build_shared_profile_wrapper(
+            display_name,
+            source_payload,
+            saved_at_unix_ms=saved_at_unix_ms,
+            saved_at_label=saved_at_label,
+            payload_is_normalized=payload is None,
+        )
 
     def _normalize_shared_profile_wrapper(
         self,
@@ -10783,67 +10624,10 @@ class MerchantRulesWidget:
         *,
         fallback_name: str = "",
     ) -> dict[str, object]:
-        """Validate a saved-profile wrapper and normalize its embedded Merchant Rules payload."""
-
-        if not isinstance(raw_payload, dict):
-            raise ValueError("This saved profile is incomplete or damaged.") from ValueError(
-                f"Saved Merchant Rules profile must be a JSON object, got {type(raw_payload).__name__}."
-            )
-
-        schema = str(raw_payload.get("schema", "") or "").strip()
-        if schema == SHARED_PROFILE_SCHEMA:
-            raw_schema_version = _safe_int(raw_payload.get("schema_version", 0), 0)
-            if raw_schema_version > SHARED_PROFILE_SCHEMA_VERSION:
-                raise ValueError("This profile was created by a newer Merchant Rules version.") from ValueError(
-                    f"Saved profile schema v{raw_schema_version} is newer than supported schema "
-                    f"v{SHARED_PROFILE_SCHEMA_VERSION}."
-                )
-            payload_source = raw_payload.get("payload", {})
-            display_name_source = raw_payload.get("name", fallback_name)
-        elif _looks_like_merchant_rules_payload(raw_payload):
-            payload_source = raw_payload
-            display_name_source = fallback_name
-        else:
-            raise ValueError("This saved profile uses an unsupported format.") from ValueError(
-                f"Saved Merchant Rules profile schema {schema!r} is not supported."
-            )
-
-        display_name = _normalize_shared_profile_display_name(display_name_source)
-        if not display_name:
-            raise ValueError(
-                "This saved profile is incomplete or damaged because its name is missing."
-            ) from ValueError("Saved Merchant Rules profile name is missing.")
-
-        payload_version = (
-            _safe_int(payload_source.get("version", 0), 0)
-            if isinstance(payload_source, dict)
-            else 0
+        return self._profile_store.normalize_shared_profile_wrapper(
+            raw_payload,
+            fallback_name=fallback_name,
         )
-        if payload_version > PROFILE_VERSION:
-            raise ValueError("This profile was created by a newer Merchant Rules version.") from ValueError(
-                f"Saved profile settings version {payload_version} is newer than Merchant Rules version "
-                f"{PROFILE_VERSION}."
-            )
-
-        try:
-            normalized_payload = _strip_window_geometry_from_profile_payload(
-                self._normalize_profile_payload(payload_source)
-            )
-        except Exception as exc:
-            raise ValueError("This saved profile is incomplete or damaged.") from exc
-        saved_at_unix_ms = max(0, _safe_int(raw_payload.get("saved_at_unix_ms", 0), 0))
-        saved_at = str(raw_payload.get("saved_at", "") or "").strip()
-        if not saved_at:
-            saved_at = self._format_shared_profile_timestamp(saved_at_unix_ms)
-
-        return {
-            "schema": SHARED_PROFILE_SCHEMA,
-            "schema_version": SHARED_PROFILE_SCHEMA_VERSION,
-            "name": display_name,
-            "saved_at_unix_ms": saved_at_unix_ms,
-            "saved_at": saved_at,
-            "payload": normalized_payload,
-        }
 
     def _load_profile_summary_from_key(
         self,
@@ -10852,42 +10636,10 @@ class MerchantRulesWidget:
         *,
         doc: JsonFactory | None = None,
     ) -> ProfileSummary:
-        safe_key = str(profile_key)
-        source_doc = doc or self._profile_doc(scope)
-        raw_payload = source_doc.get_json(safe_key, {})
-
-        normalized_wrapper = self._normalize_shared_profile_wrapper(
-            raw_payload,
-            fallback_name=safe_key,
-        )
-        normalized_payload = normalized_wrapper.get("payload", {})
-        if not isinstance(normalized_payload, dict):
-            raise ValueError("This saved profile is incomplete or damaged.") from ValueError(
-                "Saved Merchant Rules profile settings are missing."
-            )
-        payload: dict[str, object] = {}
-        for raw_key, value in normalized_payload.items():
-            if not isinstance(raw_key, str):
-                raise ValueError("This saved profile is incomplete or damaged.") from ValueError(
-                    "Saved Merchant Rules profile settings contain a non-string key."
-                )
-            payload[raw_key] = value
-        saved_at_unix_ms = max(
-            0,
-            _safe_int(normalized_wrapper.get("saved_at_unix_ms", 0), 0),
-        )
-        saved_at_label = str(normalized_wrapper.get("saved_at", "") or "").strip()
-        if not saved_at_label:
-            saved_at_label = self._format_shared_profile_timestamp(saved_at_unix_ms)
-
-        return ProfileSummary(
-            identity=ProfileIdentity(scope=scope, key=safe_key),
-            display_name=str(normalized_wrapper.get("name", "") or safe_key),
-            saved_at_label=saved_at_label,
-            saved_at_unix_ms=saved_at_unix_ms,
-            payload=payload,
-            serialized_payload=self._serialize_shareable_profile_payload(payload),
-            fingerprint=self._saved_profile_wrapper_fingerprint(normalized_wrapper),
+        return self._profile_store.load_profile_summary_from_key(
+            scope,
+            profile_key,
+            doc=doc,
         )
 
     def _get_saved_profile_read_error_text(self, exc: Exception) -> str:
@@ -11018,13 +10770,7 @@ class MerchantRulesWidget:
         return normalized_name
 
     def _new_profile_key(self, doc: JsonFactory) -> str:
-        """Allocate an opaque, display-name-independent root key."""
-
-        for _attempt in range(8):
-            profile_key = f"profile_{uuid4().hex}"
-            if not doc.has(profile_key):
-                return profile_key
-        raise RuntimeError("Merchant Rules could not create a new profile entry.")
+        return self._profile_store.new_profile_key(doc)
 
     def _refresh_profile_entries(
         self,
@@ -11062,17 +10808,11 @@ class MerchantRulesWidget:
         entries: list[ProfileSummary] = []
         load_failures: list[str] = []
 
-        for profile_key in doc.keys(""):
-            safe_key = str(profile_key)
-            try:
-                entries.append(
-                    self._load_profile_summary_from_key(
-                        scope,
-                        safe_key,
-                        doc=doc,
-                    )
-                )
-            except Exception as exc:
+        for safe_key, summary, exc in self._profile_store.scan_profile_entries(scope, doc=doc):
+            if exc is None and summary is not None:
+                entries.append(summary)
+                continue
+            if exc is not None:
                 load_failures.append(self._get_saved_profile_read_error_text(exc))
                 ConsoleLog(
                     MODULE_NAME,
@@ -11139,31 +10879,13 @@ class MerchantRulesWidget:
         """Save one exact key immediately, reload it, and verify its normalized wrapper."""
 
         doc = self._profile_doc(scope)
-        expected_wrapper = self._normalize_shared_profile_wrapper(
-            wrapper,
-            fallback_name=profile_key,
-        )
-        expected_fingerprint = self._saved_profile_wrapper_fingerprint(expected_wrapper)
-        doc.set_json(profile_key, expected_wrapper)
-        if not doc.save():
-            doc.reload()
-            raise OSError(
-                f"Merchant Rules could not save {self._profile_scope_label(scope)}."
-            )
-        if not doc.reload():
-            raise OSError(
-                f"The change was saved, but Merchant Rules could not verify {self._profile_scope_label(scope)}."
-            )
-        self.profile_document_reload_failed[scope] = False
-        verified = self._load_profile_summary_from_key(
+        verified = self._profile_store.persist_profile_wrapper(
             scope,
             profile_key,
+            wrapper,
             doc=doc,
         )
-        if verified.fingerprint != expected_fingerprint:
-            raise RuntimeError(
-                f"Merchant Rules could not verify the saved {self._profile_scope_badge(scope).title()} profile."
-            )
+        self.profile_document_reload_failed[scope] = False
         self._refresh_profile_entries(scope)
         return verified
 
@@ -11171,21 +10893,8 @@ class MerchantRulesWidget:
         """Delete one exact key immediately, reload, and verify absence."""
 
         doc = self._profile_doc(identity.scope)
-        if not doc.delete(identity.key):
-            raise RuntimeError("The selected profile disappeared before it could be deleted.")
-        if not doc.save():
-            doc.reload()
-            raise OSError(
-                f"Merchant Rules could not save {self._profile_scope_label(identity.scope)}."
-            )
-        if not doc.reload():
-            raise OSError(
-                f"The profile was deleted, but Merchant Rules could not verify "
-                f"{self._profile_scope_label(identity.scope)} afterward."
-            )
+        self._profile_store.persist_profile_delete(identity, doc=doc)
         self.profile_document_reload_failed[identity.scope] = False
-        if doc.has(identity.key):
-            raise RuntimeError("Merchant Rules could not verify that the profile was deleted.")
         self._refresh_profile_entries(identity.scope)
 
     def _resolve_profile_for_action(
@@ -11582,28 +11291,7 @@ class MerchantRulesWidget:
             return False
 
     def _get_backup_payload(self) -> dict[str, object] | None:
-        raw_backup = self._backup_doc().get_json("", None)
-        if not isinstance(raw_backup, dict):
-            return None
-        if str(raw_backup.get("schema", "") or "") != BACKUP_SCHEMA:
-            return None
-        schema_version = _safe_int(raw_backup.get("schema_version", 0), 0)
-        if schema_version > BACKUP_SCHEMA_VERSION:
-            raise ValueError(
-                f"Backup schema v{schema_version} is newer than supported schema v{BACKUP_SCHEMA_VERSION}."
-            )
-        last_known_good = raw_backup.get("last_known_good", {})
-        if not isinstance(last_known_good, dict):
-            return None
-        raw_payload = last_known_good.get("payload")
-        if not isinstance(raw_payload, dict):
-            return None
-        raw_version = _safe_int(raw_payload.get("version", 0), 0)
-        if raw_version > PROFILE_VERSION:
-            raise ValueError(
-                f"Backup profile version {raw_version} is newer than Merchant Rules version {PROFILE_VERSION}."
-            )
-        return self._normalize_profile_payload(raw_payload)
+        return self._profile_store.get_backup_payload(self._backup_doc())
 
     def _store_backup_payload(
         self,
@@ -11611,22 +11299,11 @@ class MerchantRulesWidget:
         *,
         slot: str = "last_known_good",
     ):
-        raw_version = _safe_int(payload.get("version", 0), 0)
-        if raw_version > PROFILE_VERSION:
-            raise ValueError(
-                f"Cannot back up future Merchant Rules profile version {raw_version}."
-            )
-        normalized_payload = self._normalize_profile_payload(payload)
-        backup_doc = self._backup_doc()
-        root = backup_doc.get_json("", {})
-        backup_root = dict(root) if isinstance(root, dict) else {}
-        backup_root["schema"] = BACKUP_SCHEMA
-        backup_root["schema_version"] = BACKUP_SCHEMA_VERSION
-        backup_root[slot] = {
-            "saved_at_unix_ms": int(time.time() * 1000),
-            "payload": normalized_payload,
-        }
-        backup_doc.set_json("", backup_root)
+        self._profile_store.store_backup_payload(
+            self._backup_doc(),
+            payload,
+            slot=slot,
+        )
 
     def _write_live_profile_payload(
         self,
@@ -11635,27 +11312,13 @@ class MerchantRulesWidget:
         create_backup: bool = True,
         force_save: bool = False,
     ):
-        raw_version = _safe_int(payload.get("version", 0), 0)
-        if raw_version > PROFILE_VERSION:
-            raise ValueError(
-                f"Cannot write future Merchant Rules profile version {raw_version}."
-            )
-        normalized_payload = self._normalize_profile_payload(payload)
-        doc = self._live_config_doc()
-        existing = doc.get_json("", None)
-        if create_backup and existing not in (None, {}):
-            if not isinstance(existing, dict):
-                raise ValueError("Stored Merchant Rules live config is malformed; refusing to overwrite it.")
-            existing_version = _safe_int(existing.get("version", 0), 0)
-            if existing_version > PROFILE_VERSION:
-                raise ValueError(
-                    f"Stored live config version {existing_version} is newer than Merchant Rules "
-                    f"version {PROFILE_VERSION}; refusing to overwrite it."
-                )
-            self._store_backup_payload(existing)
-        doc.set_json("", normalized_payload)
-        if force_save and not doc.save():
-            raise OSError("JsonFactory could not flush the Merchant Rules live config")
+        self._profile_store.write_live_profile_payload(
+            self._live_config_doc(),
+            self._backup_doc(),
+            payload,
+            create_backup=create_backup,
+            force_save=force_save,
+        )
 
     def _write_profile_payload_for_account(
         self,
