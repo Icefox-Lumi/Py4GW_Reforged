@@ -116,6 +116,8 @@ def _account_from_dict(raw: dict) -> tuple[GameProfile, dict]:
     window_lock_changes = extras.pop("window_lock_changes", False)
     window_block_inputs = extras.pop("window_block_inputs", False)
     bulk_launch_enabled = extras.pop("bulk_launch_enabled", False)
+    use_steam_login = extras.pop("use_steam_login", False)
+    steam_account_anchor = extras.pop("steam_account_anchor", "") or ""
 
     # RELAY 066 item 6: encrypt on first touch. A real plaintext `password`
     # value always wins over whatever password_protected already exists --
@@ -160,6 +162,8 @@ def _account_from_dict(raw: dict) -> tuple[GameProfile, dict]:
         window_lock_changes=bool(window_lock_changes),
         window_block_inputs=bool(window_block_inputs),
         bulk_launch_enabled=bool(bulk_launch_enabled),
+        use_steam_login=bool(use_steam_login),
+        steam_account_anchor=steam_account_anchor,
     )
     if profile_id:
         kwargs["id"] = profile_id
@@ -435,6 +439,8 @@ def _profile_to_dict(profile: GameProfile) -> dict:
             "window_lock_changes": profile.window_lock_changes,
             "window_block_inputs": profile.window_block_inputs,
             "bulk_launch_enabled": profile.bulk_launch_enabled,
+            "use_steam_login": profile.use_steam_login,
+            "steam_account_anchor": profile.steam_account_anchor,
         }
     )
     return extras
