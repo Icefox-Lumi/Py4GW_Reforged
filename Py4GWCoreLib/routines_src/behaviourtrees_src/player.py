@@ -1627,6 +1627,7 @@ class BTPlayer:
             )
             return tree
 
+        @staticmethod
         def HasLocalEffect(
             effect_id: int,
             log: bool = False,
