@@ -143,8 +143,27 @@ STEAM_GW1_URI = f"steam://rungameid/{STEAM_GW1_APP_ID}"
 # stays up -- a multi-minute patch just means a longer wait for this class
 # to exist, not a premature "found a window" against the splash/patch
 # dialog. Applies to both launch paths (direct and Steam) since both share
-# `_wait_for_gw_window`/`_wait_for_window_or_exit`.
+# `_wait_for_window_or_exit` (the only window-wait function left in this
+# file -- `_wait_for_gw_window` used to be a second, flat-timeout variant
+# for the Steam path and the post-respawn direct-path wait, but both call
+# sites moved onto this one during the same follow-up, since a respawned
+# process can show its own splash dialog too and deserves the same
+# patient, class-filtered wait as the first one).
 GW_MAIN_WINDOW_CLASS = "ArenaNet_Dx_Window_Class"
+
+# RELAY 094 follow-up: Chris's own live-play observation -- the splash/patch
+# dialog can close and re-open several times ("1-2 maybe 3" transitions)
+# over the course of a single patch cycle, not just once. A window closing
+# and re-opening within the *same* process is already handled for free by
+# _wait_for_window_or_exit's own polling (it re-checks GW_MAIN_WINDOW_CLASS's
+# existence from scratch every pass, regardless of how many times the
+# dialog itself has cycled in between) -- but this pipeline's "exited"
+# branch (the Gw.tmp-style handoff: the process itself exits and a new one
+# takes over) previously only tolerated ONE such exit/respawn before giving
+# up, on both launch paths. Bumped to a bounded retry loop instead -- 5 is
+# a generous margin over Chris's own "1-2 maybe 3," not a guess pulled from
+# nowhere.
+MAX_PROCESS_RESPAWN_ATTEMPTS = 5
 
 
 def _is_gw_main_window(hwnd: int, pid: int) -> bool:
@@ -536,37 +555,6 @@ def _inject_dll(pid: int, dll_path: str, log: list) -> bool:
             kernel32.CloseHandle(process_handle)
 
 
-def _wait_for_gw_window(pid: int, log: list, timeout: float = 30.0) -> bool:
-    _log(log, f"Waiting for GW window (PID {pid})")
-    start_time = time.time()
-    found_windows = []
-
-    def enum_windows_callback(hwnd, _):
-        if _is_gw_main_window(hwnd, pid):
-            found_windows.append(hwnd)
-        return True
-
-    while time.time() - start_time < timeout:
-        try:
-            if psutil.Process(pid).status() != psutil.STATUS_RUNNING:
-                _log(log, f"Process {pid} is no longer running")
-                return False
-        except psutil.NoSuchProcess:
-            _log(log, f"Process {pid} no longer exists")
-            return False
-
-        found_windows.clear()
-        win32gui.EnumWindows(enum_windows_callback, None)
-        if found_windows:
-            _log(log, f"Found {len(found_windows)} window(s) for PID {pid}")
-            return True
-
-        time.sleep(0.5)
-
-    _log(log, f"Timed out waiting for a window from PID {pid}")
-    return False
-
-
 def _wait_for_window_or_exit(
     pid: int,
     log: list,
@@ -678,7 +666,7 @@ def _set_gw_window_title(pid: int, title: str, log: list) -> None:
             except pywintypes.error:
                 # A window can be destroyed mid-enumeration; skip it rather than
                 # letting one bad handle crash the whole enumeration (see
-                # _wait_for_gw_window/_wait_for_window_or_exit above).
+                # _is_gw_main_window/_wait_for_window_or_exit above).
                 pass
             return True
 
@@ -1057,9 +1045,28 @@ def _launch_gw1_via_steam(
     else:
         _log(log, "gMod injection disabled for this profile -- launching without it")
 
-    outcome = _wait_for_window_or_exit(pid, log, absolute_ceiling=absolute_ceiling, hang_fail_threshold=hang_fail_threshold)
+    outcome = "exited"
+    for attempt in range(MAX_PROCESS_RESPAWN_ATTEMPTS + 1):
+        outcome = _wait_for_window_or_exit(pid, log, absolute_ceiling=absolute_ceiling, hang_fail_threshold=hang_fail_threshold)
+        if outcome != "exited" or attempt == MAX_PROCESS_RESPAWN_ATTEMPTS:
+            break
+        _log(
+            log,
+            f"Process exited (possible patch-cycle restart, attempt {attempt + 1}/{MAX_PROCESS_RESPAWN_ATTEMPTS}) "
+            "-- looking for a follow-up Steam-spawned process",
+        )
+        new_pid = _attach_to_steam_process("", time.time(), log, timeout=steam_attach_timeout)
+        if new_pid is None:
+            break
+        pid = new_pid
+        if multiclient_enabled:
+            if not _apply_multiclient_patch(pid, log):
+                _log(log, "Multiclient patch on the follow-up process failed (best-effort, continuing)")
+        else:
+            _log(log, "Multiclient patch disabled (App Settings) -- skipping")
+
     if outcome == "exited":
-        return LaunchResult(False, pid, "Gw.exe exited before its main window ever appeared", log)
+        return LaunchResult(False, pid, "Gw.exe kept exiting during patch/update without ever showing its main window", log)
     elif outcome == "hung":
         return LaunchResult(False, pid, f"Window stayed hung for {hang_fail_threshold}s+; treating as stuck, not a slow update", log)
     elif outcome == "timeout":
@@ -1098,7 +1105,6 @@ def launch_py4gw_profile(
     profile: GameProfile,
     *,
     pre_injection_config: Optional[PreInjectionConfig] = None,
-    window_wait_timeout: float = 30.0,
     post_window_settle_delay: float = 5.0,
     absolute_ceiling: float = ABSOLUTE_CEILING_DEFAULT,
     hang_fail_threshold: float = HANG_FAIL_THRESHOLD_DEFAULT,
@@ -1281,16 +1287,22 @@ def launch_py4gw_profile(
     kernel32.CloseHandle(process_info.hProcess)
     kernel32.CloseHandle(process_info.hThread)
 
-    outcome = _wait_for_window_or_exit(pid, log, absolute_ceiling=absolute_ceiling, hang_fail_threshold=hang_fail_threshold)
-
-    if outcome == "exited":
+    outcome = "exited"
+    for attempt in range(MAX_PROCESS_RESPAWN_ATTEMPTS + 1):
+        outcome = _wait_for_window_or_exit(pid, log, absolute_ceiling=absolute_ceiling, hang_fail_threshold=hang_fail_threshold)
+        if outcome != "exited" or attempt == MAX_PROCESS_RESPAWN_ATTEMPTS:
+            break
+        _log(
+            log,
+            f"Process exited (possible patch-cycle restart, attempt {attempt + 1}/{MAX_PROCESS_RESPAWN_ATTEMPTS}) "
+            "-- scanning for a follow-up process",
+        )
         replacement_pid = _find_replacement_process(
             profile.executable_path, exclude_pid=pid, launched_after=launch_timestamp, log=log,
             timeout=replacement_scan_timeout,
         )
         if replacement_pid is None:
-            return LaunchResult(False, pid, "Updater process exited but no follow-up Gw.exe process was found", log)
-
+            break
         pid = replacement_pid
         if multiclient_enabled:
             if not _apply_multiclient_patch(pid, log):
@@ -1298,8 +1310,8 @@ def launch_py4gw_profile(
         else:
             _log(log, "Multiclient patch disabled (App Settings) -- skipping")
 
-        if not _wait_for_gw_window(pid, log, timeout=window_wait_timeout):
-            return LaunchResult(False, pid, "GW window never appeared", log)
+    if outcome == "exited":
+        return LaunchResult(False, pid, "Gw.exe kept exiting during update without ever showing its main window", log)
 
     elif outcome == "hung":
         return LaunchResult(False, pid, f"Window stayed hung for {hang_fail_threshold}s+; treating as stuck, not a slow update", log)

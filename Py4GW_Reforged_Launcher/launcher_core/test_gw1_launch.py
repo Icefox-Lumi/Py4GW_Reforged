@@ -36,7 +36,6 @@ from launcher_core.gw1_launch import (
     _attach_to_steam_process,
     _is_gw_main_window,
     _resolve_gmod_launch_decision,
-    _wait_for_gw_window,
     _wait_for_window_or_exit,
     _write_account_anchor,
     launch_py4gw_profile,
@@ -174,10 +173,10 @@ class GwMainWindowClassFilterTests(unittest.TestCase):
 
 
 class WaitFunctionsIgnoreSplashDialogTests(unittest.TestCase):
-    """Confirms _wait_for_gw_window/_wait_for_window_or_exit actually use
-    the class filter end to end (not just that _is_gw_main_window is
-    correct in isolation) -- reproduces the exact live scenario: a real
-    ArenaNet_Dialog_Class window appearing before ArenaNet_Dx_Window_Class."""
+    """Confirms _wait_for_window_or_exit actually uses the class filter end
+    to end (not just that _is_gw_main_window is correct in isolation) --
+    reproduces the exact live scenario: a real ArenaNet_Dialog_Class window
+    appearing before ArenaNet_Dx_Window_Class."""
 
     @staticmethod
     def _fake_enum_windows(hwnd_classes):
@@ -185,28 +184,6 @@ class WaitFunctionsIgnoreSplashDialogTests(unittest.TestCase):
             for hwnd in hwnd_classes:
                 callback(hwnd, extra)
         return fake_enum_windows
-
-    def test_wait_for_gw_window_ignores_dialog_finds_dx_window(self):
-        pid = os.getpid()  # a real, running process -- psutil's status check needs one
-        hwnd_classes = {111: "ArenaNet_Dialog_Class", 222: gw1_launch.GW_MAIN_WINDOW_CLASS}
-        with (
-            patch.object(gw1_launch.win32gui, "EnumWindows", side_effect=self._fake_enum_windows(hwnd_classes)),
-            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
-            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, pid)),
-            patch.object(gw1_launch.win32gui, "GetClassName", side_effect=lambda h: hwnd_classes[h]),
-        ):
-            self.assertTrue(_wait_for_gw_window(pid, log=[], timeout=1.0))
-
-    def test_wait_for_gw_window_times_out_if_only_dialog_ever_appears(self):
-        pid = os.getpid()
-        hwnd_classes = {111: "ArenaNet_Dialog_Class"}
-        with (
-            patch.object(gw1_launch.win32gui, "EnumWindows", side_effect=self._fake_enum_windows(hwnd_classes)),
-            patch.object(gw1_launch.win32gui, "IsWindowVisible", return_value=True),
-            patch.object(gw1_launch.win32process, "GetWindowThreadProcessId", return_value=(0, pid)),
-            patch.object(gw1_launch.win32gui, "GetClassName", side_effect=lambda h: hwnd_classes[h]),
-        ):
-            self.assertFalse(_wait_for_gw_window(pid, log=[], timeout=0.3))
 
     def test_wait_for_window_or_exit_ignores_dialog_returns_window_for_dx_class(self):
         pid = os.getpid()
@@ -237,6 +214,60 @@ class WaitFunctionsIgnoreSplashDialogTests(unittest.TestCase):
         ):
             outcome = _wait_for_window_or_exit(pid, log=[], absolute_ceiling=0.3, hang_fail_threshold=60.0)
         self.assertEqual(outcome, "timeout")
+
+
+class RespawnRetryLoopTests(unittest.TestCase):
+    """RELAY 094 follow-up: Chris's own live-play observation -- a patch
+    cycle can involve the process itself exiting and respawning more than
+    once (his own words: "1-2 maybe 3 splash window transitions"), not
+    just the single Gw.tmp-style handoff this pipeline originally only
+    tolerated once. Tests the Steam path's retry loop directly (mocking
+    _wait_for_window_or_exit/_attach_to_steam_process) -- the direct
+    path's loop shares the identical shape but pulls in CreateProcessW and
+    the rest of the suspended-launch pipeline, outside this file's
+    existing Win32-mocking boundary (see this module's own docstring)."""
+
+    @staticmethod
+    def _steam_profile():
+        return GameProfile(use_steam_login=True, executable_path="")
+
+    def test_retries_through_multiple_exits_then_succeeds(self):
+        wait_outcomes = iter(["exited", "exited", "window"])
+        with (
+            patch.object(gw1_launch.os, "startfile"),
+            patch.object(gw1_launch, "_attach_to_steam_process", side_effect=[111, 222, 333]),
+            patch.object(gw1_launch, "_wait_for_window_or_exit", side_effect=lambda *a, **k: next(wait_outcomes)),
+            patch.object(gw1_launch, "_apply_multiclient_patch", return_value=True),
+        ):
+            result = launch_py4gw_profile(self._steam_profile(), py4gw_injection_enabled=False)
+        self.assertTrue(result.success)
+        self.assertEqual(result.pid, 333)  # the second respawn's pid, not the original
+
+    def test_gives_up_after_exhausting_max_respawn_attempts(self):
+        with (
+            patch.object(gw1_launch.os, "startfile"),
+            patch.object(gw1_launch, "_attach_to_steam_process", return_value=999),
+            patch.object(gw1_launch, "_wait_for_window_or_exit", return_value="exited") as mock_wait,
+            patch.object(gw1_launch, "_apply_multiclient_patch", return_value=True),
+        ):
+            result = launch_py4gw_profile(self._steam_profile(), py4gw_injection_enabled=False)
+        self.assertFalse(result.success)
+        self.assertIn("kept exiting", result.error)
+        # initial wait + MAX_PROCESS_RESPAWN_ATTEMPTS retries, never more
+        self.assertEqual(mock_wait.call_count, gw1_launch.MAX_PROCESS_RESPAWN_ATTEMPTS + 1)
+
+    def test_stops_retrying_if_rediscovery_itself_fails(self):
+        with (
+            patch.object(gw1_launch.os, "startfile"),
+            patch.object(gw1_launch, "_attach_to_steam_process", side_effect=[111, None]),
+            patch.object(gw1_launch, "_wait_for_window_or_exit", return_value="exited") as mock_wait,
+            patch.object(gw1_launch, "_apply_multiclient_patch", return_value=True),
+        ):
+            result = launch_py4gw_profile(self._steam_profile(), py4gw_injection_enabled=False)
+        self.assertFalse(result.success)
+        self.assertIn("kept exiting", result.error)
+        # gave up right after rediscovery failed, not after exhausting every attempt
+        self.assertEqual(mock_wait.call_count, 1)
 
 
 class SteamLoginBypassesExecutablePathGateTests(unittest.TestCase):
