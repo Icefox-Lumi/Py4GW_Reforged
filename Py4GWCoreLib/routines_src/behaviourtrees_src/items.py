@@ -2016,6 +2016,7 @@ class BTItems:
             BehaviorTree.ActionNode(name="SalvageInventoryItems", action_fn=tick, aftercast_ms=0)
         )
 
+    @staticmethod
     def PickupGroundItemByModelID(
         model_ids: int | Sequence[int],
         max_distance: float = 5_000.0,

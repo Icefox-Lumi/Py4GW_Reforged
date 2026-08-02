@@ -22,6 +22,8 @@ from ...Py4GWcorelib import ConsoleLog, Console
 from ...Skillbar import SkillBar
 from ...py4gwcorelib_src.BehaviorTree import BehaviorTree
 from .composite import BTComposite
+from ...Quest import Quest
+from ...enums import SharedCommandType
 
 
 def _log(source: str, message: str, *, log: bool = False, message_type=Console.MessageType.Info) -> None:
@@ -1048,6 +1050,7 @@ class BTParty:
             )
         )
 
+    @staticmethod
     def IsQuestState(
         quest_id: int,
         state: str,
@@ -1156,109 +1159,5 @@ class BTParty:
                     f"{normalized_state})"
                 ),
                 condition_fn=_is_quest_state,
-            )
-        )
-
-    def WaitForQuestState(
-        quest_id: int,
-        state: str,
-        timeout_ms: int = 10000,
-        throttle_interval_ms: int = 250,
-        log: bool = False,
-    ) -> BehaviorTree:
-        """
-        Build a tree that waits until the requested quest reaches the requested state.
-
-        Valid states:
-        - "active"
-        - "complete"
-        - "missing"
-
-        Meta:
-        Expose: true
-        Audience: intermediate
-        Display: Wait For Quest State
-        Purpose: Wait until a quest reaches the requested state.
-        UserDescription: Use this when a dialog or interaction should be confirmed by waiting for a quest state change.
-        Notes: Returns SUCCESS only when the requested state is reached before timeout.
-        """
-
-        expected_state = str(state).strip().lower()
-
-        valid_states = {
-            "active",
-            "complete",
-            "missing",
-        }
-
-        if expected_state not in valid_states:
-            raise ValueError(
-                f"Unsupported quest state '{state}'. "
-                f"Expected one of {sorted(valid_states)}."
-            )
-
-        def _wait_for_quest_state() -> BehaviorTree.NodeState:
-            from ...Quest import Quest
-
-            quest_ids = {
-                int(qid)
-                for qid in (Quest.GetQuestLogIds() or [])
-            }
-
-            quest_in_log = int(quest_id) in quest_ids
-
-            try:
-                quest_complete = bool(
-                    Quest.IsQuestCompleted(
-                        int(quest_id)
-                    )
-                )
-            except Exception:
-                quest_complete = False
-
-            if expected_state == "missing":
-                matched = not quest_in_log
-
-            elif expected_state == "active":
-                matched = (
-                    quest_in_log
-                    and not quest_complete
-                )
-
-            else:  # complete
-                matched = (
-                    quest_in_log
-                    and quest_complete
-                )
-
-            if matched:
-                _log(
-                    "BTQuest.WaitForQuestState",
-                    (
-                        f"Quest {int(quest_id)} "
-                        f"reached state '{expected_state}'."
-                    ),
-                    log=log,
-                )
-                return BehaviorTree.NodeState.SUCCESS
-
-            return BehaviorTree.NodeState.RUNNING
-
-        return BehaviorTree(
-            BehaviorTree.WaitUntilNode(
-                name=(
-                    f"WaitForQuestState"
-                    f"({int(quest_id)},"
-                    f"{expected_state})"
-                ),
-                condition_fn=_wait_for_quest_state,
-                throttle_interval_ms=max(
-                    1,
-                    int(throttle_interval_ms),
-                ),
-                timeout_ms=max(
-                    0,
-                    int(timeout_ms),
-                ),
             )
         )
