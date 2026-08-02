@@ -383,8 +383,9 @@ class Party:
         """
         Return to the outpost.
         Args: None
+        Returns: bool: Whether the native UI action was dispatched.
         """
-        Party.party_instance().ReturnToOutpost()
+        return Party.party_instance().ReturnToOutpost()
 
     @staticmethod
     def LeaveParty():

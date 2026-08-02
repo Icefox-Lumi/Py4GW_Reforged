@@ -79,10 +79,12 @@ class Items:
     @staticmethod
     def _wait_for_salvage_materials_window(timeout_ms: int = 1200, poll_ms: int = 50, initial_wait_ms: int = 150):
         yield from wait(max(0, initial_wait_ms))
+
+        from ...FrameTree import Frame, FrameId
         waited_ms = 0
 
         while waited_ms < max(0, timeout_ms):
-            if is_materials_confirm_window_open():
+            if Frame(FrameId.ScreenFrame.C6.SalvageMaterialsDialog.YesButton).exists:
                 yield from wait(max(0, poll_ms))
                 return True
 

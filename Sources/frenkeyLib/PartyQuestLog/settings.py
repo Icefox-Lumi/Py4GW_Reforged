@@ -2,9 +2,8 @@
 import os
 from typing import Optional
 
+import PySystem
 from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
-from Py4GWCoreLib.HotkeyManager import HotKey
-from Py4GWCoreLib.enums_src.IO_enums import Key, ModifierKey
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings as NativeSettings
 from Py4GWCoreLib.py4gwcorelib_src.Console import Console, ConsoleLog
 from Py4GWCoreLib.py4gwcorelib_src.Timer import ThrottledTimer
@@ -48,10 +47,6 @@ class Settings:
         self.ShowFollowerActiveQuestOnMinimap : bool = True
         self.ShowFollowerActiveQuestOnMissionMap : bool = True
         
-        self.HotKeyKey : Key = Key.L
-        self.Modifiers : ModifierKey = ModifierKey.Ctrl
-        
-        self.hotkey : Optional[HotKey] = None
         self.show_quests_for_accounts : dict[str, bool] = {}
             
     def save_settings(self):
@@ -79,9 +74,6 @@ class Settings:
         self.ini_handler.set("Overlays", "ShowFollowerActiveQuestOnMinimap", str(self.ShowFollowerActiveQuestOnMinimap))
         self.ini_handler.set("Overlays", "ShowFollowerActiveQuestOnMissionMap", str(self.ShowFollowerActiveQuestOnMissionMap))
         
-        self.ini_handler.set("Hotkey", "HotKeyKey", self.HotKeyKey.name.replace('VK_',''))
-        self.ini_handler.set("Hotkey", "Modifiers", self.Modifiers.name)
-        
         for account_email, enabled in self.show_quests_for_accounts.items():
             self.ini_handler.set("OverlayAccounts", account_email, str(enabled))
         
@@ -97,25 +89,6 @@ class Settings:
         self.ShowFollowerActiveQuestOnMinimap = self.ini_handler.get_bool("Overlays", "ShowFollowerActiveQuestOnMinimap", self.ShowFollowerActiveQuestOnMinimap)
         self.ShowFollowerActiveQuestOnMissionMap = self.ini_handler.get_bool("Overlays", "ShowFollowerActiveQuestOnMissionMap", self.ShowFollowerActiveQuestOnMissionMap)
         
-        hotkeykey = self.ini_handler.get_str("Hotkey", "HotKeyKey", "VK_L")
-        modifiers = self.ini_handler.get_str("Hotkey", "Modifiers", "Ctrl")
-        
-        try:
-            self.HotKeyKey = Key[hotkeykey]
-            ConsoleLog("Party Quest Log", f"Loaded HotKeyKey '{hotkeykey}' from settings.")
-            
-        except KeyError:
-            ConsoleLog("Party Quest Log", f"Invalid HotKeyKey '{hotkeykey}' in settings. Using default 'VK_L'.")
-            self.HotKeyKey = Key.L
-            
-        try:
-            self.Modifiers = ModifierKey[modifiers]
-            ConsoleLog("Party Quest Log", f"Loaded Modifiers '{modifiers}' from settings.")
-            
-        except KeyError:
-            ConsoleLog("Party Quest Log", f"Invalid Modifiers '{modifiers}' in settings. Using default 'Ctrl'.")
-            self.Modifiers = ModifierKey.Ctrl
-            
         account_section = self.ini_handler.items("OverlayAccounts")
 
         if account_section:
@@ -123,14 +96,4 @@ class Settings:
                 self.show_quests_for_accounts[account_email] = self.ini_handler.get_bool("OverlayAccounts", account_email, True)
         pass
 
-    def set_questlog_hotkey_keys(self, key: Key, modifiers: ModifierKey):
-        self.HotKeyKey = key
-        self.Modifiers = modifiers
-        
-        if self.hotkey:
-            self.hotkey.key = key
-            self.hotkey.modifiers = modifiers
-            
-        self.save_settings()
-    
     

@@ -25,10 +25,6 @@ class QuestNode:
         self.complete_data_fetched: bool = False
         
     def coro_initialize(self):
-        def _wait_until_active(qid):
-            while GLOBAL_CACHE.Quest.GetActiveQuest() != qid:
-                yield from Routines.Yield.wait(50)
-                
         def _fetch_with_retries(req_fn, is_ready_fn, get_fn, attr_name):
             for _ in range(5):
                 req_fn(self.quest_id)
@@ -41,11 +37,10 @@ class QuestNode:
                 if value != "Timeout":
                     break
                 
-        current = GLOBAL_CACHE.Quest.GetActiveQuest()
-        if self.quest_id != current:
-            GLOBAL_CACHE.Quest.SetActiveQuest(self.quest_id)
-            yield from Routines.Yield.wait(50)
-            yield from _wait_until_active(self.quest_id)
+        # Quest text requests are keyed by quest id. They do not require changing
+        # the player's active quest, so keep the current quest untouched while
+        # requesting each node's data.
+        if self.quest_id >= 0:
             GLOBAL_CACHE.Quest.RequestQuestInfo(self.quest_id, update_marker=True)
             yield from Routines.Yield.wait(100)
             
@@ -90,10 +85,6 @@ class QuestNode:
             "npc_quest_giver",
         )
             
-        # --- restore original active quest ---
-        GLOBAL_CACHE.Quest.SetActiveQuest(current)
-        yield from Routines.Yield.wait(50)
-        yield from _wait_until_active(current)
 
 class QuestData:
     # ===============================
@@ -129,7 +120,7 @@ class QuestData:
         if self.mission_map_quest is None:
             self.mission_map_quest = QuestNode(-1)
             yield from self.mission_map_quest.coro_initialize()
-        self.mission_map_quest_loaded = True
+        self.mission_map_quest_initialized = True
         self.mission_map_quest_force_update = False
         yield
         
