@@ -289,3 +289,23 @@ def load_custom_palette(path: Path | str | None = None) -> Optional[dict]:
 def save_custom_palette(custom_palette: dict, path: Path | str | None = None) -> None:
     resolved = Path(path) if path is not None else default_settings_path()
     _save_one("custom_palette", dict(custom_palette), resolved)
+
+
+def load_window_geometry(path: Path | str | None = None) -> Optional[dict]:
+    """RELAY 095: None means "nothing saved yet" -- run_shell.main() falls
+    back to its own hardcoded first-run default (width=601, height=817, no
+    x/y, not maximized), same "None means use the default, caller resolves
+    it" shape as load_mod_repo_path/load_custom_palette above. Stores
+    logical px (pywebview's own create_window unit), restored-state size
+    (not the maximized size -- see run_shell.py's own resize/move handlers
+    for why those are skipped while maximized) plus a separate maximized
+    flag."""
+    resolved = Path(path) if path is not None else default_settings_path()
+    data = _load_all(resolved)
+    value = data.get("window_geometry")
+    return dict(value) if value else None
+
+
+def save_window_geometry(window_geometry: dict, path: Path | str | None = None) -> None:
+    resolved = Path(path) if path is not None else default_settings_path()
+    _save_one("window_geometry", dict(window_geometry), resolved)

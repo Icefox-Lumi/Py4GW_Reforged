@@ -125,6 +125,64 @@ PROCESS_INJECTION_ACCESS = (
 
 CREATE_SUSPENDED = 0x00000004
 
+# RELAY 094: GW1's Steam app ID, confirmed against GWxLauncher's own
+# SteamLaunchService.Gw1SteamGameId.
+STEAM_GW1_APP_ID = "29720"
+STEAM_GW1_URI = f"steam://rungameid/{STEAM_GW1_APP_ID}"
+
+# RELAY 094 follow-up: GW1 shows two genuinely distinct Win32 window
+# classes during startup, confirmed via a real live capture (GetClassName
+# on every new window for the launched PID, not assumed) -- the
+# splash/patch dialog is `ArenaNet_Dialog_Class` (a real window, not just a
+# transient flash: it stayed up across several observed launches, exactly
+# the thing a slow content update would keep visible for minutes), and the
+# actual 3D game client is a separate, later-appearing
+# `ArenaNet_Dx_Window_Class`. Waiting specifically for this class (see
+# `_is_gw_main_window` below), instead of "any visible window for this
+# PID," means injection timing no longer depends on how long the dialog
+# stays up -- a multi-minute patch just means a longer wait for this class
+# to exist, not a premature "found a window" against the splash/patch
+# dialog. Applies to both launch paths (direct and Steam) since both share
+# `_wait_for_window_or_exit` (the only window-wait function left in this
+# file -- `_wait_for_gw_window` used to be a second, flat-timeout variant
+# for the Steam path and the post-respawn direct-path wait, but both call
+# sites moved onto this one during the same follow-up, since a respawned
+# process can show its own splash dialog too and deserves the same
+# patient, class-filtered wait as the first one).
+GW_MAIN_WINDOW_CLASS = "ArenaNet_Dx_Window_Class"
+
+# RELAY 094 follow-up: Chris's own live-play observation -- the splash/patch
+# dialog can close and re-open several times ("1-2 maybe 3" transitions)
+# over the course of a single patch cycle, not just once. A window closing
+# and re-opening within the *same* process is already handled for free by
+# _wait_for_window_or_exit's own polling (it re-checks GW_MAIN_WINDOW_CLASS's
+# existence from scratch every pass, regardless of how many times the
+# dialog itself has cycled in between) -- but this pipeline's "exited"
+# branch (the Gw.tmp-style handoff: the process itself exits and a new one
+# takes over) previously only tolerated ONE such exit/respawn before giving
+# up, on both launch paths. Bumped to a bounded retry loop instead -- 5 is
+# a generous margin over Chris's own "1-2 maybe 3," not a guess pulled from
+# nowhere.
+MAX_PROCESS_RESPAWN_ATTEMPTS = 5
+
+
+def _is_gw_main_window(hwnd: int, pid: int) -> bool:
+    """True only for `pid`'s real 3D game window -- see `GW_MAIN_WINDOW_CLASS`'s
+    own comment for why class name, not just visibility+PID, is the right
+    filter here. Swallows `pywintypes.error` itself (returns False) rather
+    than letting callers each repeat the same "a window can be destroyed
+    mid-enumeration" guard.
+    """
+    try:
+        if not win32gui.IsWindowVisible(hwnd):
+            return False
+        _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
+        if window_pid != pid:
+            return False
+        return win32gui.GetClassName(hwnd) == GW_MAIN_WINDOW_CLASS
+    except pywintypes.error:
+        return False
+
 VIRTUAL_MEM = 0x1000 | 0x2000  # MEM_COMMIT | MEM_RESERVE
 PAGE_READWRITE = 0x04
 MEM_RELEASE = 0x8000
@@ -400,6 +458,36 @@ def _write_autoexec_script(script_path: str, log: list) -> None:
         _log(log, f"Could not write autoexec_script to Py4GW.ini (non-fatal): {e}")
 
 
+def _write_account_anchor(account_anchor: str, log: list) -> None:
+    """RELAY 094: writes `account_anchor` into Py4GW.ini's [settings]
+    account_anchor key, mirroring _write_autoexec_script() exactly (same
+    plain configparser read-modify-write, same best-effort/non-fatal
+    framing, same root-scoped/shared-file limitation -- moot here in
+    practice, per Apo's own confirmation a user can only have one
+    Steam-linked account, so there's nothing to race against).
+
+    Deliberately a distinct key from `email` -- Steam-linked accounts have
+    no email Py4GW can read from memory at all (Apo confirmed directly),
+    so this isn't a fallback value for that field, it's a different concept
+    entirely: an opaque anchor Py4GW_Reforged_Native's
+    System::UpdateAccountAnchor() reads to resolve the per-account settings
+    folder when the memory-based read can't run.
+    """
+    ini_path = _mod_root() / "Py4GW.ini"
+    try:
+        config = configparser.ConfigParser()
+        if ini_path.exists():
+            config.read(ini_path)
+        if not config.has_section("settings"):
+            config.add_section("settings")
+        config.set("settings", "account_anchor", account_anchor)
+        with open(ini_path, "w") as f:
+            config.write(f)
+        _log(log, f"Wrote account_anchor to {ini_path}")
+    except OSError as e:
+        _log(log, f"Could not write account_anchor to Py4GW.ini (non-fatal): {e}")
+
+
 def _inject_dll(pid: int, dll_path: str, log: list) -> bool:
     if not dll_path or not os.path.exists(dll_path):
         _log(log, f"Inject DLL - invalid DLL path: {dll_path!r}")
@@ -467,62 +555,38 @@ def _inject_dll(pid: int, dll_path: str, log: list) -> bool:
             kernel32.CloseHandle(process_handle)
 
 
-def _wait_for_gw_window(pid: int, log: list, timeout: float = 30.0) -> bool:
-    _log(log, f"Waiting for GW window (PID {pid})")
-    start_time = time.time()
-    found_windows = []
-
-    def enum_windows_callback(hwnd, _):
-        try:
-            if win32gui.IsWindowVisible(hwnd):
-                _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if window_pid == pid:
-                    found_windows.append(hwnd)
-        except pywintypes.error:
-            # A window can be destroyed mid-enumeration; skip it rather than letting
-            # one bad handle crash the whole enumeration (see window_control.py).
-            pass
-        return True
-
-    while time.time() - start_time < timeout:
-        try:
-            if psutil.Process(pid).status() != psutil.STATUS_RUNNING:
-                _log(log, f"Process {pid} is no longer running")
-                return False
-        except psutil.NoSuchProcess:
-            _log(log, f"Process {pid} no longer exists")
-            return False
-
-        found_windows.clear()
-        win32gui.EnumWindows(enum_windows_callback, None)
-        if found_windows:
-            _log(log, f"Found {len(found_windows)} window(s) for PID {pid}")
-            return True
-
-        time.sleep(0.5)
-
-    _log(log, f"Timed out waiting for a window from PID {pid}")
-    return False
-
-
 def _wait_for_window_or_exit(
     pid: int,
     log: list,
     absolute_ceiling: float = ABSOLUTE_CEILING_DEFAULT,
     hang_fail_threshold: float = HANG_FAIL_THRESHOLD_DEFAULT,
 ) -> str:
-    """Poll `pid` for whichever happens first: a visible, *responsive* window while
-    still alive (the normal case -- return "window"), or the process exiting before
-    any window appears (the updater/relaunch handoff case -- return "exited").
+    """Poll `pid` for whichever happens first: a visible, *responsive*
+    `GW_MAIN_WINDOW_CLASS` window while still alive (the normal case --
+    return "window"), or the process exiting before that window appears
+    (the updater/relaunch handoff case -- return "exited").
 
-    Stall-based, not elapsed-time-based: a window that exists but reports hung
-    (``IsHungAppWindow``) is treated as "still legitimately busy" -- e.g. GW showing
-    a not-responding window while it unpacks a large update -- and polling continues.
-    Only two things actually fail this wait: (a) the process exits with no window
-    ever appearing, or (b) a window stays hung for `hang_fail_threshold` seconds
-    straight, which is treated as an actual freeze/crash rather than a slow update.
-    `absolute_ceiling` is a last-resort safety valve for the case where neither of
-    those clean signals ever fires, not a tuned duration -- see its docstring.
+    Class-filtered, not "any window for this PID" -- see
+    `GW_MAIN_WINDOW_CLASS`'s own comment. The splash/patch dialog
+    (`ArenaNet_Dialog_Class`) staying up for however long a real content
+    update takes is exactly why this matters: this function simply doesn't
+    count it as a match at all, rather than accepting it early and reporting
+    "window" before the game is actually ready. A slow patch just reads as
+    "still polling, nothing found yet" here -- `absolute_ceiling` (not
+    `hang_fail_threshold`) is what actually bounds that wait now.
+
+    Still stall-based on top of that class filter, not elapsed-time-based,
+    for the main window itself once it exists: a `GW_MAIN_WINDOW_CLASS`
+    window that reports hung (``IsHungAppWindow``) is treated as "still
+    legitimately busy" -- e.g. a large in-place data redownload after the
+    real window already appeared (see this module's own docstring for that
+    variant) -- and polling continues. Only two things actually fail this
+    wait: (a) the process exits with no matching window ever appearing, or
+    (b) a `GW_MAIN_WINDOW_CLASS` window stays hung for `hang_fail_threshold`
+    seconds straight, treated as an actual freeze/crash rather than a slow
+    update. `absolute_ceiling` is a last-resort safety valve for the case
+    where neither of those clean signals ever fires, not a tuned duration --
+    see its docstring.
 
     This also has to be a single combined poll, not a sequential "wait for exit,
     then wait for a window": sequencing them means the normal (no update pending)
@@ -539,15 +603,8 @@ def _wait_for_window_or_exit(
     found_windows = []
 
     def enum_windows_callback(hwnd, _):
-        try:
-            if win32gui.IsWindowVisible(hwnd):
-                _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if window_pid == pid:
-                    found_windows.append(hwnd)
-        except pywintypes.error:
-            # A window can be destroyed mid-enumeration; skip it rather than letting
-            # one bad handle crash the whole enumeration (see window_control.py).
-            pass
+        if _is_gw_main_window(hwnd, pid):
+            found_windows.append(hwnd)
         return True
 
     while time.time() - start_time < absolute_ceiling:
@@ -609,7 +666,7 @@ def _set_gw_window_title(pid: int, title: str, log: list) -> None:
             except pywintypes.error:
                 # A window can be destroyed mid-enumeration; skip it rather than
                 # letting one bad handle crash the whole enumeration (see
-                # _wait_for_gw_window/_wait_for_window_or_exit above).
+                # _is_gw_main_window/_wait_for_window_or_exit above).
                 pass
             return True
 
@@ -668,6 +725,56 @@ def _find_replacement_process(exe_path: str, exclude_pid: int, launched_after: f
         time.sleep(0.5)
 
     _log(log, f"Timed out waiting for a follow-up process for {exe_path!r}")
+    return None
+
+
+def _attach_to_steam_process(exe_path: str, launched_after: float, log: list, timeout: float = 5.0) -> Optional[int]:
+    """RELAY 094: Steam owns process creation once GW1 is launched via
+    `STEAM_GW1_URI` -- there is no suspended process handle to patch, by
+    design, not as a workaround. Ported from GWxLauncher's
+    SteamProcessAttachService.TryAttachToSteamProcess (confirmed directly
+    against Services/SteamProcessAttachService.cs): poll by process *name*
+    ("Gw"/"GW", since .NET's GetProcessesByName strips the extension) with a
+    2-second buffer against `launched_after` for clock skew, same as that
+    reference and the same buffer `_find_replacement_process` above already
+    uses for the same reason.
+
+    Adds one thing the C# reference doesn't have: once a name match is
+    found, validates its *resolved* exe path against `exe_path` before
+    accepting it. Name-only matching is fine for GWxLauncher's
+    single-account-type case, but this is a multibox tool where more than
+    one Gw.exe copy across different accounts/install folders is the normal
+    case, so precision matters more here -- an empty/unresolvable `exe_path`
+    (AccessDenied reading another user's process, or a genuinely empty
+    profile.executable_path) skips the path check rather than rejecting the
+    match outright, since name-plus-recency is still meaningfully selective
+    on its own.
+    """
+    target_path = os.path.normcase(os.path.abspath(exe_path)) if exe_path else None
+    start_time = time.time()
+
+    _log(log, f"Waiting for Steam to spawn Gw.exe (up to {timeout}s)")
+    while time.time() - start_time < timeout:
+        for proc in psutil.process_iter(["pid", "name", "exe", "create_time"]):
+            name = (proc.info["name"] or "").lower()
+            if name not in ("gw.exe", "gw"):
+                continue
+            try:
+                if proc.info["create_time"] < launched_after - 2.0:
+                    continue
+                proc_exe = proc.info["exe"]
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            if target_path and proc_exe and os.path.normcase(os.path.abspath(proc_exe)) != target_path:
+                continue
+
+            _log(log, f"Found Steam-spawned process PID {proc.info['pid']}")
+            return proc.info["pid"]
+
+        time.sleep(0.2)
+
+    _log(log, f"Timed out waiting for Steam to spawn a matching Gw.exe process (after {timeout}s)")
     return None
 
 
@@ -831,11 +938,173 @@ def _redact_command_line_for_log(command_line: str) -> str:
     return re.sub(r'(-password\s+)"[^"]*"', r'\1"***"', command_line)
 
 
+def _launch_gw1_via_steam(
+    profile: GameProfile,
+    *,
+    absolute_ceiling: float,
+    hang_fail_threshold: float,
+    post_window_settle_delay: float,
+    multiclient_enabled: bool,
+    py4gw_injection_enabled: bool,
+    gmod_injection_enabled: bool,
+    steam_attach_timeout: float,
+    log: list,
+) -> LaunchResult:
+    """RELAY 094: Steam-login launch/attach path, used instead of the direct
+    `CreateProcessW` pipeline above whenever `profile.use_steam_login` is
+    set. Steam-linked accounts have no email Py4GW can read from memory and
+    no ArenaNet credentials this launcher can auto-fill, so this path is a
+    genuinely different shape, not a variant of the direct one:
+
+    1. Launch via the `STEAM_GW1_URI` (`os.startfile`, the Python equivalent
+       of GWxLauncher's `Process.Start(UseShellExecute=true)` on the same
+       URI) -- Steam owns process creation from this point on.
+    2. Discover the real process via `_attach_to_steam_process` (polls by
+       name, not exit-then-match -- there's no PID to wait on).
+    3. Multiclient patch and gMod injection become best-effort against an
+       already-running process. Verified directly against this file's own
+       `_apply_multiclient_patch` and `_inject_dll` before assuming a new
+       patch function was needed (RELAY 094's own entry text guessed one
+       would be): neither one actually depends on the target process being
+       suspended (both just `OpenProcess` by PID and read/write/inject),
+       and this module's own docstring already documents `_apply_multiclient_patch`
+       being reused best-effort against the update-hop replacement process
+       for the exact same reason -- established precedent in this codebase,
+       not a new pattern. Reused as-is; no new function.
+    4. Py4GW injection stays conceptually the same as the direct path (wait
+       for window, settle, inject) but keys off the discovered/attached PID.
+    5. `_apply_gw1_registry_fix` still runs first -- GW1 reads that registry
+       key at startup regardless of how the process was created, so it's
+       equally relevant here.
+
+    Elevation/UAC is NOT handled here -- flagged, not solved, per this
+    entry's own instruction. GWxLauncher's own Steam path has zero
+    elevation/admin handling either (confirmed directly against
+    `SteamLaunchService.cs`/`Gw1LaunchOrchestrator.cs`), so there's no
+    reference implementation to port. Whatever a protected default Steam
+    install actually needs here is unknown until tested for real.
+
+    `profile.executable_path` is deliberately NOT passed to
+    `_attach_to_steam_process` here -- found live: a Steam profile that had
+    ever been pointed at `steam.exe` (the old pre-toggle shortcut, or just
+    an editable field a user can drift back into out of habit) permanently
+    fails to attach, since the real discovered `Gw.exe`'s path can never
+    equal that. Apo's own confirmation that a user can only have one
+    Steam-linked account (see this repo's RELAY 094 notes) means the
+    multibox-precision reason that check exists for the direct-launch case
+    doesn't apply here -- name-plus-recency is already unambiguous for a
+    Steam-owned launch, so there's nothing this validation actually buys on
+    this path, only a way for a stale field to silently break it.
+
+    Uses `_wait_for_window_or_exit` (`absolute_ceiling`/`hang_fail_threshold`),
+    not a flat `window_wait_timeout` -- found live, same failure shape as
+    the attach-timeout bug above: a genuine content update after a Steam
+    launch can take minutes, and this now specifically waits for
+    `GW_MAIN_WINDOW_CLASS` (see that constant's own comment), not just any
+    window, so the splash/patch dialog staying up doesn't get mistaken for
+    "ready." Chris's own point, and correct: this is the same shape of
+    problem the direct-launch path already handles for exactly this reason
+    -- unified onto the same function rather than re-solving it here.
+    """
+    _apply_gw1_registry_fix(profile, log)
+
+    launch_timestamp = time.time()
+    _log(log, f"Launching via Steam: {STEAM_GW1_URI}")
+    try:
+        os.startfile(STEAM_GW1_URI)
+    except OSError as e:
+        return LaunchResult(False, None, f"Steam URI launch failed: {e}", log)
+
+    pid = _attach_to_steam_process("", launch_timestamp, log, timeout=steam_attach_timeout)
+    if pid is None:
+        return LaunchResult(
+            False, None, "Steam launch accepted, but no matching Gw.exe process was found", log
+        )
+
+    if multiclient_enabled:
+        if not _apply_multiclient_patch(pid, log):
+            _log(log, "Multiclient patch failed (Steam best-effort -- timing window missed / access denied / incompatible state, continuing)")
+    else:
+        _log(log, "Multiclient patch disabled (App Settings) -- skipping")
+
+    will_inject_gmod = _resolve_gmod_launch_decision(profile, gmod_injection_enabled, log)
+    if will_inject_gmod:
+        try:
+            per_profile_gmod_dll = _prepare_per_profile_gmod_folder(profile)
+        except Exception as e:
+            _log(log, f"gMod per-profile folder setup failed (Steam best-effort, continuing): {e}")
+        else:
+            if _inject_dll(pid, per_profile_gmod_dll, log):
+                _log(log, "gMod DLL injection reported success")
+            else:
+                _log(log, "gMod DLL injection failed (Steam best-effort -- injection window likely missed, continuing)")
+    elif profile.gmod_enabled and gmod_injection_enabled:
+        pass  # RELAY 091: already logged the specific unresolved-path reason above.
+    elif profile.gmod_enabled and not gmod_injection_enabled:
+        _log(log, "gMod injection globally disabled (App Settings) -- launching without it")
+    else:
+        _log(log, "gMod injection disabled for this profile -- launching without it")
+
+    outcome = "exited"
+    for attempt in range(MAX_PROCESS_RESPAWN_ATTEMPTS + 1):
+        outcome = _wait_for_window_or_exit(pid, log, absolute_ceiling=absolute_ceiling, hang_fail_threshold=hang_fail_threshold)
+        if outcome != "exited" or attempt == MAX_PROCESS_RESPAWN_ATTEMPTS:
+            break
+        _log(
+            log,
+            f"Process exited (possible patch-cycle restart, attempt {attempt + 1}/{MAX_PROCESS_RESPAWN_ATTEMPTS}) "
+            "-- looking for a follow-up Steam-spawned process",
+        )
+        new_pid = _attach_to_steam_process("", time.time(), log, timeout=steam_attach_timeout)
+        if new_pid is None:
+            break
+        pid = new_pid
+        if multiclient_enabled:
+            if not _apply_multiclient_patch(pid, log):
+                _log(log, "Multiclient patch on the follow-up process failed (best-effort, continuing)")
+        else:
+            _log(log, "Multiclient patch disabled (App Settings) -- skipping")
+
+    if outcome == "exited":
+        return LaunchResult(False, pid, "Gw.exe kept exiting during patch/update without ever showing its main window", log)
+    elif outcome == "hung":
+        return LaunchResult(False, pid, f"Window stayed hung for {hang_fail_threshold}s+; treating as stuck, not a slow update", log)
+    elif outcome == "timeout":
+        return LaunchResult(False, pid, f"Hit the absolute ceiling ({absolute_ceiling}s) with no window, exit, or hang signal", log)
+    # outcome == "window": pid's window is already confirmed, fall straight through.
+
+    if profile.auto_select_character_enabled and profile.character_name:
+        window_title = profile.character_name
+    else:
+        window_title = profile.name
+    _set_gw_window_title(pid, window_title, log)
+
+    if profile.py4gw_enabled and py4gw_injection_enabled:
+        _log(log, f"Window found; waiting {post_window_settle_delay}s before injecting Py4GW")
+        time.sleep(post_window_settle_delay)
+
+        if profile.script_path:
+            _write_autoexec_script(profile.script_path, log)
+
+        if profile.use_steam_login and profile.steam_account_anchor:
+            _write_account_anchor(profile.steam_account_anchor, log)
+
+        if not _inject_dll(pid, profile.py4gw_dll_path, log):
+            return LaunchResult(False, pid, "Py4GW DLL injection failed", log)
+
+        _log(log, "Py4GW DLL injection reported success")
+    elif profile.py4gw_enabled and not py4gw_injection_enabled:
+        _log(log, "Py4GW injection globally disabled (App Settings) -- launching without it")
+    else:
+        _log(log, "Py4GW injection disabled for this profile -- launching without it")
+
+    return LaunchResult(True, pid, None, log)
+
+
 def launch_py4gw_profile(
     profile: GameProfile,
     *,
     pre_injection_config: Optional[PreInjectionConfig] = None,
-    window_wait_timeout: float = 30.0,
     post_window_settle_delay: float = 5.0,
     absolute_ceiling: float = ABSOLUTE_CEILING_DEFAULT,
     hang_fail_threshold: float = HANG_FAIL_THRESHOLD_DEFAULT,
@@ -843,10 +1112,27 @@ def launch_py4gw_profile(
     multiclient_enabled: bool = True,
     py4gw_injection_enabled: bool = True,
     gmod_injection_enabled: bool = True,
+    steam_attach_timeout: float = 30.0,
     on_log: Optional[Callable[[str], None]] = None,
 ) -> LaunchResult:
     """Launch `profile`'s executable, optionally auto-logging in, and inject Py4GW
     and/or gMod into it per the profile's own toggles.
+
+    RELAY 094: if `profile.use_steam_login` is set, this dispatches entirely
+    to `_launch_gw1_via_steam` instead, and skips the `executable_path`
+    requirement below -- Steam owns the actual launch, and (found live)
+    `executable_path` no longer has any real use on that path either (see
+    `_launch_gw1_via_steam`'s own docstring for why it stopped being used
+    for post-attach validation too), so requiring it here would just be an
+    artificial gate with nothing behind it. `steam_attach_timeout` only
+    matters on that path -- bumped from GWxLauncher's 5s parity default to
+    30s after a real live test: a cold Steam launch (DRM/overlay/update
+    checks before `Gw.exe` even exists as a process) can legitimately take
+    longer than 5s to spawn the process at all, well before any window-wait
+    logic even begins. Confirmed live: `_attach_to_steam_process` timed out
+    twice at 5s while Steam was still genuinely loading the game in the
+    background, and the character-select screen appeared afterward with no
+    injection ever attempted, since the launcher had already given up.
 
     `profile.py4gw_enabled`/`profile.gmod_enabled` each gate only their own
     DLL-path validation and injection call: a profile with both off still gets
@@ -895,6 +1181,19 @@ def launch_py4gw_profile(
     anything that isn't thread-safe (e.g. no direct ImGui calls).
     """
     log: list = _ObservableLog(on_log)
+
+    if profile.use_steam_login:
+        return _launch_gw1_via_steam(
+            profile,
+            absolute_ceiling=absolute_ceiling,
+            hang_fail_threshold=hang_fail_threshold,
+            post_window_settle_delay=post_window_settle_delay,
+            multiclient_enabled=multiclient_enabled,
+            py4gw_injection_enabled=py4gw_injection_enabled,
+            gmod_injection_enabled=gmod_injection_enabled,
+            steam_attach_timeout=steam_attach_timeout,
+            log=log,
+        )
 
     if not profile.executable_path or not os.path.exists(profile.executable_path):
         return LaunchResult(False, None, f"executable_path not found: {profile.executable_path!r}", log)
@@ -988,16 +1287,22 @@ def launch_py4gw_profile(
     kernel32.CloseHandle(process_info.hProcess)
     kernel32.CloseHandle(process_info.hThread)
 
-    outcome = _wait_for_window_or_exit(pid, log, absolute_ceiling=absolute_ceiling, hang_fail_threshold=hang_fail_threshold)
-
-    if outcome == "exited":
+    outcome = "exited"
+    for attempt in range(MAX_PROCESS_RESPAWN_ATTEMPTS + 1):
+        outcome = _wait_for_window_or_exit(pid, log, absolute_ceiling=absolute_ceiling, hang_fail_threshold=hang_fail_threshold)
+        if outcome != "exited" or attempt == MAX_PROCESS_RESPAWN_ATTEMPTS:
+            break
+        _log(
+            log,
+            f"Process exited (possible patch-cycle restart, attempt {attempt + 1}/{MAX_PROCESS_RESPAWN_ATTEMPTS}) "
+            "-- scanning for a follow-up process",
+        )
         replacement_pid = _find_replacement_process(
             profile.executable_path, exclude_pid=pid, launched_after=launch_timestamp, log=log,
             timeout=replacement_scan_timeout,
         )
         if replacement_pid is None:
-            return LaunchResult(False, pid, "Updater process exited but no follow-up Gw.exe process was found", log)
-
+            break
         pid = replacement_pid
         if multiclient_enabled:
             if not _apply_multiclient_patch(pid, log):
@@ -1005,8 +1310,8 @@ def launch_py4gw_profile(
         else:
             _log(log, "Multiclient patch disabled (App Settings) -- skipping")
 
-        if not _wait_for_gw_window(pid, log, timeout=window_wait_timeout):
-            return LaunchResult(False, pid, "GW window never appeared", log)
+    if outcome == "exited":
+        return LaunchResult(False, pid, "Gw.exe kept exiting during update without ever showing its main window", log)
 
     elif outcome == "hung":
         return LaunchResult(False, pid, f"Window stayed hung for {hang_fail_threshold}s+; treating as stuck, not a slow update", log)
@@ -1028,6 +1333,9 @@ def launch_py4gw_profile(
 
         if profile.script_path:
             _write_autoexec_script(profile.script_path, log)
+
+        if profile.use_steam_login and profile.steam_account_anchor:
+            _write_account_anchor(profile.steam_account_anchor, log)
 
         if not _inject_dll(pid, profile.py4gw_dll_path, log):
             return LaunchResult(False, pid, "Py4GW DLL injection failed", log)

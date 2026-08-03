@@ -36,6 +36,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import webview
 
@@ -88,6 +89,153 @@ RESIZE_MARGIN = 6
 #     the window edge. 320x300 landed on cleanly, matching every check in
 #     the entry: nothing overlapping, nothing missing, nothing unreachable.
 MIN_SIZE = (320, 300)
+
+
+# RELAY 095: debounced, same "quiet period before an autosave flush" idea the
+# native SettingsManager's own autosave pump already uses (settings-ini-
+# design.md) -- moved/resized fire on every pixel during a live drag/resize,
+# not something to write to disk on every single one of.
+_WINDOW_GEOMETRY_SAVE_DEBOUNCE_SECONDS = 0.5
+
+
+def clamp_window_geometry(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    screens: list[tuple[int, int, int, int]],
+    min_size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """Pure geometry (RELAY 095, same "no live window needed" spirit as
+    snap.py's own zone_rect/classify_zone split): clamp a saved (x, y,
+    width, height) against `screens` (each a (left, top, right, bottom)
+    rect, same coordinate space as x/y/width/height -- pywebview's logical
+    px) and `min_size`, so a saved position from a monitor that's since
+    been disconnected can never strand the window off-screen, and a saved
+    size below the window's own declared minimum is never applied.
+
+    Grows width/height up to min_size first. Then picks whichever screen
+    the saved rect overlaps the most (covers the common multi-monitor
+    case where the window was mostly on one screen); if it overlaps none
+    at all (the disconnected-monitor case), falls back to the first
+    screen instead of leaving the window unreachable. Finally shrinks
+    width/height to fit that screen if needed (a saved size from a larger
+    monitor applied to a smaller one) and nudges x/y so the whole window
+    -- not just some corner of it -- lands fully within that screen's
+    bounds.
+
+    Empty `screens` (couldn't query any -- shouldn't happen in practice,
+    but nothing here should ever hard-fail a window launch) is a no-op:
+    trust the (already min-size-clamped) input rather than guessing at a
+    fallback rect with no real data behind it.
+    """
+    min_w, min_h = min_size
+    width = max(width, min_w)
+    height = max(height, min_h)
+
+    if not screens:
+        return (x, y, width, height)
+
+    def _overlap_area(rect: tuple[int, int, int, int]) -> int:
+        left, top, right, bottom = rect
+        overlap_w = max(0, min(x + width, right) - max(x, left))
+        overlap_h = max(0, min(y + height, bottom) - max(y, top))
+        return overlap_w * overlap_h
+
+    best = max(screens, key=_overlap_area)
+    if _overlap_area(best) <= 0:
+        best = screens[0]
+
+    left, top, right, bottom = best
+    width = min(width, right - left)
+    height = min(height, bottom - top)
+    x = max(left, min(x, right - width))
+    y = max(top, min(y, bottom - height))
+    return (x, y, width, height)
+
+
+class _WindowGeometrySaver:
+    """RELAY 095: persists the launcher window's position/size/maximized
+    state across restarts, debounced (see
+    _WINDOW_GEOMETRY_SAVE_DEBOUNCE_SECONDS) via a Timer, flushed
+    immediately and synchronously on window close so an in-flight
+    debounce is never lost.
+
+    Deliberately ignores moved/resized while maximized -- confirmed
+    directly against webview's own winforms.py backend: a single on_resize
+    handler always calls events.resized.set(...) unconditionally, right
+    alongside the maximized/restored checks in that same handler, so
+    WinForms fires resized with the *maximized* dimensions on every
+    maximize too, not just genuine restored-state resizes. Saving blindly
+    would overwrite the remembered restored-state geometry with the
+    maximized one -- un-maximizing (or the next restart, if closed while
+    still maximized) would then have nothing sane to go back to. Only the
+    maximized flag itself updates while maximized; restored geometry is
+    left untouched until an actual restore happens.
+    """
+
+    def __init__(self) -> None:
+        self._x = 0
+        self._y = 0
+        self._width = 0
+        self._height = 0
+        self._maximized = False
+        self._timer: Optional[threading.Timer] = None
+        self._lock = threading.Lock()
+
+    def seed(self, x: int, y: int, width: int, height: int, maximized: bool) -> None:
+        """Initial known-good geometry -- the real, live values read back
+        from the window once shown (not just what was requested at
+        creation, which pywebview/the OS can adjust), so the first move/
+        resize event updates a true baseline instead of starting blank."""
+        self._x, self._y, self._width, self._height = x, y, width, height
+        self._maximized = maximized
+
+    def on_moved(self, x: int, y: int) -> None:
+        if self._maximized:
+            return
+        self._x, self._y = x, y
+        self._schedule_save()
+
+    def on_resized(self, width: int, height: int) -> None:
+        if self._maximized:
+            return
+        self._width, self._height = width, height
+        self._schedule_save()
+
+    def on_maximized(self) -> None:
+        self._maximized = True
+        self._schedule_save()
+
+    def on_restored(self) -> None:
+        self._maximized = False
+        self._schedule_save()
+
+    def _schedule_save(self) -> None:
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = threading.Timer(_WINDOW_GEOMETRY_SAVE_DEBOUNCE_SECONDS, self._save_now)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def flush(self) -> None:
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+        self._save_now()
+
+    def _save_now(self) -> None:
+        settings_store.save_window_geometry(
+            {
+                "x": self._x,
+                "y": self._y,
+                "width": self._width,
+                "height": self._height,
+                "maximized": self._maximized,
+            }
+        )
 
 
 def _webview2_storage_path() -> str:
@@ -266,6 +414,29 @@ def main() -> None:
     bridge = ShellBridge("main")
     bridge.set_preview(preview)
     bridge.set_min_size(*MIN_SIZE)
+
+    # RELAY 095: remember the window's last position/size/maximized state.
+    # None saved yet (first run, or a pre-095 install) -- x/y stay None
+    # (create_window's own "let the OS decide" default, unchanged first-run
+    # behavior) and width/height stay the existing hardcoded defaults below.
+    saved_geometry = settings_store.load_window_geometry()
+    geometry_x: Optional[int] = None
+    geometry_y: Optional[int] = None
+    geometry_width = 601
+    geometry_height = 817
+    geometry_maximized = False
+    if saved_geometry:
+        screens = [(s.x, s.y, s.x + s.width, s.y + s.height) for s in webview.screens]
+        geometry_x, geometry_y, geometry_width, geometry_height = clamp_window_geometry(
+            int(saved_geometry.get("x", 0)),
+            int(saved_geometry.get("y", 0)),
+            int(saved_geometry.get("width", geometry_width)),
+            int(saved_geometry.get("height", geometry_height)),
+            screens,
+            MIN_SIZE,
+        )
+        geometry_maximized = bool(saved_geometry.get("maximized", False))
+
     window = webview.create_window(
         "Py4GW Reforged Launcher",
         url=str(WEB_DIR / "index.html"),
@@ -282,9 +453,13 @@ def main() -> None:
         # than requested (confirmed reproducibly: the old 1000x720 default
         # measured 984x681 in every screenshot this app has ever had taken
         # of it, a constant (16, 39) shortfall). Compensated for here so
-        # the ACTUAL window really is 585x778, not 569x739.
-        width=601,
-        height=817,
+        # the ACTUAL window really is 585x778, not 569x739. Overridden by
+        # saved geometry above once one exists.
+        width=geometry_width,
+        height=geometry_height,
+        x=geometry_x,
+        y=geometry_y,
+        maximized=geometry_maximized,
         min_size=MIN_SIZE,
         frameless=True,
         easy_drag=False,  # we move the window ourselves (bridge.drag_tick, wired
@@ -293,6 +468,19 @@ def main() -> None:
                           # WS_THICKFRAME border -- see bridge.on_drag_start.
     )
     bridge.bind_window(window)
+
+    # RELAY 095: hook geometry persistence right after the Window object
+    # exists -- events.moved/resized/maximized/restored/closing are plain
+    # Event objects on the instance, independent of the GUI thread's own
+    # lifecycle, so this doesn't need to wait for on_shown. Seeding with the
+    # real post-shown values (not just what was requested, which the OS can
+    # still adjust) happens inside on_shown below instead.
+    geometry_saver = _WindowGeometrySaver()
+    window.events.moved += geometry_saver.on_moved
+    window.events.resized += geometry_saver.on_resized
+    window.events.maximized += geometry_saver.on_maximized
+    window.events.restored += geometry_saver.on_restored
+    window.events.closing += lambda: geometry_saver.flush()
 
     # Seeded (not push_event'd -- see _record_console_line's own docstring)
     # before the page loads, so get_console_lines() picks it up on the
@@ -330,6 +518,14 @@ def main() -> None:
                 icon_path = Path(__file__).parent.parent / "assets" / "python_icon.ico"
                 window_control.set_window_icon(hwnd, str(icon_path))
             _start_render_watchdog(hwnd, bridge)
+        # RELAY 095: seed with the real, live post-shown geometry -- what
+        # actually got applied (pywebview/the OS can still adjust a
+        # requested x/y/width/height, e.g. clamping onto a work area of its
+        # own), not just what was requested above.
+        try:
+            geometry_saver.seed(window.x, window.y, window.width, window.height, geometry_maximized)
+        except Exception:
+            pass  # cosmetic persistence feature -- must never block startup
         preview.start()
 
     webview.start(on_shown, debug=False, storage_path=_webview2_storage_path())
