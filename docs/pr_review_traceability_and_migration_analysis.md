@@ -6,6 +6,27 @@ Use this guide when reviewing a pull request that reorganizes, migrates, extract
 
 The objective is not only to determine whether the new code works. The review must also determine whether the change remains understandable, traceable, reversible, and safe for future human and AI maintainers.
 
+## Rule status and enforcement
+
+This document defines repository rules and acceptance criteria. It is not a list
+of optional discussion points or suggestions for negotiation during review.
+
+Authors must comply with these rules. Reviewers must enforce them and request
+changes when a pull request does not comply. Evidence such as runtime
+equivalence, AST identity, byte identity, or recoverable Git history may prove
+that a rule is satisfied, but it does not waive or renegotiate the rule.
+
+In this document:
+
+- **must**, **required**, and **shall** are mandatory;
+- **must not**, **forbidden**, and **not permitted** are prohibitions;
+- **prefer** describes the required default when no approved exception exists.
+
+An exception requires explicit maintainer/owner approval and must be documented
+with the pull request before implementation. An author’s disagreement with a
+rule, or a claim that an alternative is technically equivalent, is not an
+exception.
+
 This guide is especially important for migrations from legacy code, architecture changes, framework replacements, and large refactors presented as “no-op” changes.
 
 ## Project vision
@@ -19,8 +40,88 @@ The preferred change is additive and traceable:
 - Make the original implementation recognizable while it is being reorganized.
 - Keep each intermediate state buildable and testable.
 - Prefer a sequence of small, reversible migrations over a parallel replacement implementation.
+- Always use an existing project class or approved library when it provides the required capability.
+- Extend or modify the provided class/mechanism when the required behavior belongs to it; do not create a replacement copy of equivalent functionality.
+- Treat replacement copies and parallel implementations as forbidden by default. They require a documented capability gap, ownership boundary, migration or retirement plan, and explicit maintainer/owner approval.
 
 Runtime equivalence is necessary, but it is not sufficient. A refactor that behaves the same today can still be unacceptable if it destroys source history, hides dependencies, prevents useful review, or makes future regressions difficult to diagnose.
+
+## Reuse existing implementations before creating new ones
+
+Pull requests must first use an existing project mechanism that already
+provides the required behavior. This includes core classes, shared utilities,
+settings and JSON factories, native bindings, callbacks, queues, UI helpers,
+window handling, logging/diagnostic facilities, and approved third-party
+libraries already used by the repository.
+
+Always prefer modifying or extending the provided mechanism over creating a
+replacement copy. Copies are generally harmful because they create competing
+sources of truth, divide fixes, obscure ownership, and make future migration
+and review harder.
+
+Do not create a parallel implementation merely because a local version appears
+easier to write or more convenient to call. A new implementation is justified
+only when the existing mechanism cannot provide the required capability and an
+approved exception exists. The pull request should then document:
+
+- which existing mechanism was considered;
+- the specific capability gap or incompatible contract;
+- why extending or adapting the existing mechanism is insufficient;
+- who owns the new implementation;
+- how duplicate behavior will be avoided or retired.
+
+This rule applies to both feature code and infrastructure. Custom settings,
+JSON/INI handlers, file-backed debuggers, window managers, queues, native
+dispatch wrappers, and utility classes are not acceptable substitutes for
+existing repository mechanisms without an explicit infrastructure decision.
+
+## Acceptance rule: traceability must be human-readable
+
+The change must be readable and traceable by a human reviewer in the normal
+pull-request diff. A reviewer should be able to understand what moved, what
+changed ownership, and what contracts were introduced without reconstructing
+the implementation manually.
+
+Human-readable traceability does not mean that every moved method must remain
+in the original file, nor does it mean that a legitimate class extension must
+be implemented by duplicating or retyping code. When the intended change is a
+mechanical extraction into a mixin or base class, byte-identical method bodies,
+an explicit host contract, unchanged initialization/call paths, and a clearly
+described mapping can provide the required traceability.
+
+Git can often recover the relationship between an old implementation and a new
+file by using rename/copy detection, `git blame -C`, `git log --follow`, or a
+custom AST comparison. These are useful review aids, but they are not a
+substitute for human-readable traceability.
+
+The normal pull-request diff must remain understandable to a human or AI
+reviewer without requiring special Git commands or manually comparing two
+complete files. A change that appears as a large deletion from the original
+file plus a large addition in a new file can be structurally opaque, but that
+appearance alone does not establish that the implementation was rewritten.
+When the moved lines are byte-identical and the new class boundary is the
+intended change, the mechanical evidence may be enough to make the migration
+traceable.
+
+This is an approval concern, not an automatic rejection of every file split. A
+large diff is a blocker when it hides semantic edits, lifecycle changes,
+unresolved dependencies, or a reimplementation behind the appearance of a
+move. It is not a blocker merely because a legitimate class extension causes
+GitHub to display relocated code as a deletion plus an addition.
+
+Do not accept an author instruction such as “do not read the relocated lines”
+as the only review strategy. Reviewers must still be able to inspect the
+changed ownership, contracts, imports, inheritance, and lifecycle in the
+ordinary diff, while mechanical comparison may establish that the relocated
+method bodies themselves were not rewritten.
+
+When a separate file is architecturally useful, that is not automatic approval
+or automatic rejection. Prefer same-file reorganization when it preserves the
+intended architecture, but allow a separate-file extraction when the new class
+or mixin is the actual purpose of the change. The author must make the reason
+for the new ownership boundary, host contract, initialization behavior, and
+unchanged method mapping clear. Do not require a rewrite or duplicate
+implementation solely to make the diff appear smaller.
 
 ## Core distinction: logic rewrite versus structural rewrite
 
@@ -103,6 +204,13 @@ Prefer:
 - one follow-up commit for architectural adaptation;
 - explicit compatibility wrappers during transition.
 
+The requirement is about understanding the review shape, not merely whether Git
+can infer a rename. `--find-copies-harder`, `git blame -C`, `git log --follow`,
+and byte/AST identity reports may support a review of a mechanical extraction.
+They are insufficient when semantic edits or new lifecycle behavior are mixed
+into the move, but they are valid evidence when the class extension is the
+intended change and the moved implementation is unchanged.
+
 Be cautious when:
 
 - one file loses most of its implementation and another file is created almost entirely with additions;
@@ -167,17 +275,21 @@ For a claimed no-op refactor, require evidence proportional to the risk:
 - representative runtime smoke tests;
 - no unexpected changes in logs, queues, settings, or native dispatch.
 
-AST comparison is useful as supplemental evidence. It must not be the only evidence when file ownership, inheritance, initialization, or lifecycle changes.
+AST or byte comparison is useful evidence for a movement-only refactor. Git
+copy/rename detection and blame continuity can further establish provenance.
+They do not replace review of file ownership, inheritance, initialization, or
+lifecycle changes, but a reviewer should not demand a rewrite when those
+contracts are explicit and the implementation is unchanged.
 
 ### 8. Check whether the pull request is correctly scoped
 
 A safe sequence commonly looks like this:
 
-1. Preserve behavior and add tests around the existing implementation.
-2. Reorganize code in place or perform a mechanical extraction with no formatting changes.
-3. Verify the intermediate state.
+1. Preserve behavior in the existing implementation.
+2. Reorganize code in place when practical, or obtain explicit approval for a separate-file extraction.
+3. Keep the movement stage source-preserving and independently reviewable, with no formatting or unrelated edits.
 4. Introduce the new abstraction or second consumer in a separate change.
-5. Introduce behavior changes behind an explicit, tested adoption path.
+5. Introduce behavior changes behind an explicit adoption path.
 6. Retire compatibility code only after consumers have migrated.
 
 Do not combine all six stages into one “cleanup” pull request.
@@ -412,11 +524,21 @@ Compare the implementation against the user’s vision:
 - Does a new service actually have an explicit dependency contract?
 - Are old APIs and call paths preserved?
 - Are settings, persistence, callbacks, queues, and native dispatch contracts unchanged?
+- Does the implementation reuse existing project classes and approved libraries instead of reimplementing equivalent functionality?
+- If a provided class already owns the capability, was it modified or extended instead of copied?
 - Are tests and pyright/Pylance checks sufficient for the changed scope?
 
 Do not modify the repository. Produce evidence-backed findings with file paths and line references. Separate blockers, requested changes, risks, and positive evidence.
 
-If the change violates traceability, recommend a smaller sequence of commits. Prefer same-file reorganization when practical. If a new file is required, recommend a mechanical movement stage followed by separate architecture and behavior stages.
+If the change violates traceability, recommend a smaller sequence of commits
+and request changes. Prefer same-file reorganization when practical, but do not
+require it when the new file is the intended class extension and the extraction
+is mechanical. For a separate-file extraction, require a clear ownership and
+host-contract explanation, unchanged method mapping, and separate treatment of
+any semantic or lifecycle changes. Do not treat AST identity, byte identity,
+rename detection, `git blame`, or `git log --follow` as proof that semantic
+changes are safe; do not reject a mechanically proven class extension merely
+because GitHub renders it as a large deletion and addition.
 ```
 
 ## Feedback template
@@ -444,10 +566,14 @@ Required direction:
 Acceptance criteria:
 - Existing behavior and public contracts are preserved.
 - The original implementation remains recognizable.
-- Git can show the movement or reorganization clearly.
+- The ordinary pull-request diff clearly identifies the ownership/class-extension change and its contracts.
+- Moved implementation is byte/AST-identical when the change is claimed to be mechanical.
+- Git provenance tools and mechanical comparison are supporting evidence, not substitutes for reviewing inheritance, initialization, and dependencies.
 - No unrelated formatting or bug fixes are included.
 - Initialization, MRO, lifecycle, and dependency contracts are explicit.
-- Relevant tests and pyright/Pylance checks pass.
+- Existing project mechanisms and approved libraries are reused where applicable; any new parallel implementation documents a concrete capability gap and retirement/ownership plan.
+- Provided classes are extended or modified when appropriate; replacement copies are not introduced without an approved exception.
+- Pyright/Pylance checks pass for the changed Python scope. Behavioral test suites are not a default approval requirement unless specifically requested.
 ```
 
 ## Case study: combat-service extraction
@@ -456,7 +582,21 @@ The review of PR #34 is a useful example of the distinction between runtime equi
 
 The pull request presents itself as a pure relocation of combat utilities from `BuildMgr.py` into `combat_services.py`. The method-body preservation claims and compile checks are useful positive evidence. However, the diff removes most of the implementation from the original file, recreates it in a new file, changes `BuildMgr` inheritance, and introduces a second initialization contract.
 
-The correct review conclusion is not necessarily “the code is behaviorally wrong.” The correct conclusion is that the change is too structurally broad for a traceable no-op migration. The requested remedy is to split movement, abstraction, and behavior-tree integration into independently reviewable stages, while keeping the source recognizable and documenting the actual dependency contract.
+The correct review conclusion is not necessarily “the code is behaviorally wrong.”
+First determine whether the large diff is a genuine mechanical extraction needed
+for the class extension or an opaque reimplementation. If the moved methods are
+byte-identical, the host contract is explicit, initialization and call paths are
+unchanged, and no semantic changes are bundled, the class extension can be
+accepted as a traceable mechanical migration. Do not require a rewrite merely
+because the file split makes GitHub display deletions and additions.
+
+The author may provide evidence that the moved methods are byte-identical and
+that Git can recover their prior commits. That is meaningful positive evidence,
+not something to disregard. The review must then focus on the actual structural
+risks: inheritance/MRO, host dependencies, initialization order, public call
+paths, and whether any semantic edits were bundled into the move. A large
+deletion plus a large new-file addition is not, by itself, grounds to require a
+rewrite.
 
 ## Review record to append after each analysis
 
