@@ -40,7 +40,6 @@ area_distance = GameAreas()
 class BotVars:
     def __init__(self, map_id=0):
         self.bot_started = False
-        self.window_module:ImGui.WindowModule
         self.variables = {}
 
         #HEROES SECTION
@@ -210,7 +209,6 @@ class BotVars:
         self.TheWilds_CoordinateList_6 = [(-10063, -4381),(-9887, -5138),(-9653, -5695),(-10485, -6260)]
 
 bot_vars = BotVars() 
-bot_vars.window_module = ImGui.WindowModule(module_name, window_name="TH3KUM1KO'S LEGENDARY GUARDIAN BOT", window_size=(800, 800), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 
 timer_instance = Timer()
 elapsed_time = timer_instance.GetElapsedTime()
@@ -1517,45 +1515,45 @@ def main():
 
     except ImportError as e:
         PySystem.Console.Log(
-            bot_vars.window_module.module_name,
+            module_name,
             f"ImportError encountered: {str(e)}",
             PySystem.Console.MessageType.Error
         )
         PySystem.Console.Log(
-            bot_vars.window_module.module_name,
+            module_name,
             f"Stack trace: {traceback.format_exc()}",
             PySystem.Console.MessageType.Error
         )
     except ValueError as e:
         PySystem.Console.Log(
-            bot_vars.window_module.module_name,
+            module_name,
             f"ValueError encountered: {str(e)}",
             PySystem.Console.MessageType.Error
         )
         PySystem.Console.Log(
-            bot_vars.window_module.module_name,
+            module_name,
             f"Stack trace: {traceback.format_exc()}",
             PySystem.Console.MessageType.Error
         )
     except TypeError as e:
         PySystem.Console.Log(
-            bot_vars.window_module.module_name,
+            module_name,
             f"TypeError encountered: {str(e)}",
             PySystem.Console.MessageType.Error
         )
         PySystem.Console.Log(
-            bot_vars.window_module.module_name,
+            module_name,
             f"Stack trace: {traceback.format_exc()}",
             PySystem.Console.MessageType.Error
         )
     except Exception as e:
         PySystem.Console.Log(
-            bot_vars.window_module.module_name,
+            module_name,
             f"Unexpected error encountered: {str(e)}",
             PySystem.Console.MessageType.Error
         )
         PySystem.Console.Log(
-            bot_vars.window_module.module_name,
+            module_name,
             f"Stack trace: {traceback.format_exc()}",
             PySystem.Console.MessageType.Error
         )

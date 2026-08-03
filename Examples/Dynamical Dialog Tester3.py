@@ -114,15 +114,11 @@ def click_dialog_button(choice: int, debug: bool = False) -> bool:
     return True
 
 # â€”â€” ImGui window â€”â€”
-window = ImGui.WindowModule(
-    "Dialog Tester",
-    window_name="Dialog Tester",
-    window_size=(360, 240),
-    window_flags=PyImGui.WindowFlags.AlwaysAutoResize
-)
+WINDOW_NAME = "Dialog Tester"
+WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
 
 def on_ui():
-    window.begin()
+    PyImGui.begin(WINDOW_NAME, WINDOW_FLAGS)
     PyImGui.text("NPC Dialog Tester")
     PyImGui.separator()
 
@@ -151,7 +147,7 @@ def on_ui():
         if (i % 3) != 0:
             PyImGui.separator()
 
-    window.end()
+    PyImGui.end()
 
 def main():
     on_ui()

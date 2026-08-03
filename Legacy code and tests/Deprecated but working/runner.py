@@ -1,6 +1,7 @@
 from Py4GWCoreLib import *
 
 MODULE_NAME = "Boreal Bot 2.0"
+WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
 
 #region globals
 path_points_to_exit_outpost = [(8180, -27084), (4790, -27870)]
@@ -12,20 +13,17 @@ class Botconfig:
         self.is_script_running = False  
         self.log_to_console = True
         self.routine_finished = False
-        self.window_module = ImGui.WindowModule()
 
 class BOTVARIABLES:
     def __init__(self):
         self.action_queue = ActionQueueNode(100)
         self.loot_queue = ActionQueueNode(1250)
         self.config = Botconfig()
-        self.window_module = ImGui.WindowModule()
 
 
 MAIN_THREAD_NAME = "RunBotSequentialLogic"
 
 bot_variables = BOTVARIABLES()
-bot_variables.config.window_module = ImGui.WindowModule(MODULE_NAME, window_name=MODULE_NAME, window_size=(300, 300), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 
 thread_manager = MultiThreading(1)
 #endregion
@@ -34,12 +32,7 @@ thread_manager = MultiThreading(1)
 def DrawWindow():
     global bot_variables
 
-    if bot_variables.config.window_module.first_run:
-        PyImGui.set_next_window_size(bot_variables.config.window_module.window_size[0], bot_variables.config.window_module.window_size[1])     
-        PyImGui.set_next_window_pos(bot_variables.config.window_module.window_pos[0], bot_variables.config.window_module.window_pos[1])
-        bot_variables.config.window_module.first_run = False
-
-    if PyImGui.begin(bot_variables.config.window_module.window_name, bot_variables.config.window_module.window_flags):
+    if PyImGui.begin(MODULE_NAME, True, WINDOW_FLAGS):
         button_text = "Start script" if not bot_variables.config.is_script_running else "Stop script"
         if PyImGui.button(button_text):
             bot_variables.config.is_script_running = not bot_variables.config.is_script_running      

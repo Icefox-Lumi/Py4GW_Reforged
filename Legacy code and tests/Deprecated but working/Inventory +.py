@@ -23,6 +23,8 @@ from time import sleep
 
 
 MODULE_NAME = "ID & Salvage"
+WINDOW_NAME = "ID & Salvage"
+WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
 
 COMPACT_WIDTH = 275
 MAX_BAGS = 4
@@ -180,7 +182,6 @@ def floating_checkbox(caption, state,x,y, color):
     width=20
     height=20
     # Set the position and size of the floating button
-    PyImGui.set_next_window_pos(x, y)
     PyImGui.set_next_window_size(width, height)
     
 
@@ -213,7 +214,6 @@ def floating_button(caption, name, x,y, color):
     width=18
     height=18
     # Set the position and size of the floating button
-    PyImGui.set_next_window_pos(x, y)
     PyImGui.set_next_window_size(width, height)
     
 
@@ -242,14 +242,6 @@ def floating_button(caption, name, x,y, color):
 #region globals     
 
 xunlai_vault_config = xunlaivault_config()
-
-
-window_module = ImGui.WindowModule(
-    MODULE_NAME, 
-    window_name="ID & Salvage", 
-    window_size=(300, 200),
-    window_flags=PyImGui.WindowFlags.AlwaysAutoResize
-)
 
 
 #endregion
@@ -315,13 +307,10 @@ class TitleClass():
         
         def draw(self):
             global global_vars
-            window_title_x = global_vars.inventory_frame_coords.left + 140
-            window_title_y = global_vars.inventory_frame_coords.top + 4
             PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding,0.0)
             flags= ImGui.PushTransparentWindow()
             
             PyImGui.push_style_var_vec2(ImGui.ImGuiStyleVar.WindowPadding, (0.0, 0.0))
-            PyImGui.set_next_window_pos(window_title_x, window_title_y)
             PyImGui.set_next_window_size(0, 15)
             if PyImGui.begin("##titleWindow",True, flags):
                 PyImGui.text(self.name)
@@ -390,10 +379,9 @@ def DrawButtonStrip():
 
     flags= ImGui.PushTransparentWindow()
 
-    PyImGui.set_next_window_pos(global_vars.inventory_frame_coords.left+10, global_vars.inventory_frame_coords.top-23)
     PyImGui.set_next_window_size(0 if global_vars.inventory_frame_coords.width > 275 else global_vars.inventory_frame_coords.width, 23)
         
-    if PyImGui.begin(window_module.window_name,True, flags):
+    if PyImGui.begin(WINDOW_NAME, True, flags | WINDOW_FLAGS):
         ImGui.PopTransparentWindow()
         global_vars.config.colorize_vars = ColorizeType.colorize
         if PyImGui.begin_tab_bar("##TabBar"):
@@ -503,8 +491,6 @@ def DrawColorizeBottomWindow():
     PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding,0.0)
     flags=bottom_window_flags()
     
-    PyImGui.set_next_window_pos(global_vars.inventory_frame_coords.left, global_vars.inventory_frame_coords.bottom)
-    
     if global_vars.inventory_frame_coords.width > COMPACT_WIDTH:
         window_height = 45
     else:
@@ -602,8 +588,6 @@ def DrawIdentifyBottomWindow():
     
     PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding,0.0)
     flags=bottom_window_flags()
-    
-    PyImGui.set_next_window_pos(global_vars.inventory_frame_coords.left, global_vars.inventory_frame_coords.bottom)
     
     if global_vars.inventory_frame_coords.width > COMPACT_WIDTH:
         window_height = 45
@@ -720,8 +704,6 @@ def DrawSalvageBottomWindow():
     
     PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding,0.0)
     flags=bottom_window_flags()
-    
-    PyImGui.set_next_window_pos(global_vars.inventory_frame_coords.left, global_vars.inventory_frame_coords.bottom)
     
     if global_vars.inventory_frame_coords.width > COMPACT_WIDTH:
         window_height = 45
@@ -1255,7 +1237,6 @@ def DrawAutoHandler():
     )
     PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding,0.0)
     
-    PyImGui.set_next_window_pos(left, top)
     PyImGui.set_next_window_size(width, height)
     
     if PyImGui.begin("Embedded AutoHandler",True, flags):

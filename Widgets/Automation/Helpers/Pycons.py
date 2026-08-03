@@ -414,57 +414,25 @@ try:
     _icon_path_by_key_cache = {}
 
     # -------------------------
-    # Window position persistence (minimal)
-    # -------------------------
-    _ini_ready = False
-    INI_KEY_MAIN = ""
-    INI_KEY_SETTINGS = ""
-    INI_KEY_FLOATING_UI = ""
-    _INI_PATH = "Widgets/Pycons"
-    _INI_MAIN_FILE = "Pycons.MainWindow.ini"
-    _INI_SETTINGS_FILE = "Pycons.SettingsWindow.ini"
-    _INI_FLOATING_FILE = "Pycons.FloatingIcon.ini"
+    # ImGui owns window position, size, and collapse state. Settings only stores the
+    # floating button's feature visibility.
+    FLOATING_ICON_SETTINGS = "Widgets/Pycons/Pycons.FloatingIcon.ini"
     FLOATING_ICON_WINDOW_ID = "##pycons_floating_icon_button"
     FLOATING_ICON_WINDOW_NAME = "Pycons Toggle"
-
-    def _init_window_persistence_once() -> bool:
-        """Create/load separate ImGui ini files for main, settings, and floating icon UI."""
-        global _ini_ready, INI_KEY_MAIN, INI_KEY_SETTINGS, INI_KEY_FLOATING_UI
-        if _ini_ready:
-            return True
-        if not Routines.Checks.Map.MapValid():
-            return False
-
-        INI_KEY_MAIN = Settings(f"{_INI_PATH}/{_INI_MAIN_FILE}", "account").name
-        if not INI_KEY_MAIN:
-            return False
-
-        INI_KEY_SETTINGS = Settings(f"{_INI_PATH}/{_INI_SETTINGS_FILE}", "account").name
-        if not INI_KEY_SETTINGS:
-            return False
-
-        INI_KEY_FLOATING_UI = Settings(f"{_INI_PATH}/{_INI_FLOATING_FILE}", "account").name
-        if not INI_KEY_FLOATING_UI:
-            return False
-
-        _ini_ready = True
-        return True
 
     def _get_floating_icon_path() -> str:
         return os.path.join(PySystem.Console.get_projects_path(), MODULE_ICON)
 
-    def _set_main_window_visible(visible: bool, *, persist: bool = False, expand_on_show: bool = True):
+    def _set_main_window_visible(visible: bool, *, persist: bool = False):
         value = bool(visible)
         _rt.show_main_window = value
-        if value and expand_on_show:
-            _rt.expand_main_window_on_next_show = True
         if not value:
             show_settings[0] = False
         if _rt.floating_button is not None:
             _rt.floating_button.set_visible(value, persist=persist, invoke_callback=False)
 
     def _on_floating_icon_visibility_toggled(visible: bool):
-        _set_main_window_visible(bool(visible), persist=False, expand_on_show=bool(visible))
+        _set_main_window_visible(bool(visible), persist=False)
 
     def _ensure_floating_ui():
         if _rt.floating_button is None:
@@ -475,7 +443,7 @@ try:
                 tooltip_visible="Hide Pycons window",
                 tooltip_hidden="Show Pycons window",
                 visible=bool(_rt.show_main_window),
-                toggle_ini_key=INI_KEY_FLOATING_UI,
+                toggle_ini_key=FLOATING_ICON_SETTINGS,
                 toggle_var_name="show_main_window",
                 toggle_default=True,
                 on_toggle=_on_floating_icon_visibility_toggled,
@@ -4666,7 +4634,6 @@ try:
         """Runtime-only mutable state grouped for clearer ownership."""
         def __init__(self):
             self.show_main_window = True
-            self.expand_main_window_on_next_show = False
             self.floating_button = None
             self.show_settings = [False]
             self.filter_text = [""]
@@ -11243,35 +11210,23 @@ try:
             expanded = bool(begin_result)
             window_open = bool(begin_result)
 
-        if ImGui._is_textured_theme():
-            window = ImGui.WindowModule._windows.get(name)
-            if window is not None:
-                window_open = bool(window.open)
-                expanded = bool(window.open and not window.collapse)
-
         return expanded, window_open
 
     def _draw_main_window():
         if cfg is None or not bool(_rt.show_main_window):
             return  # Config not yet loaded
-        if bool(_rt.expand_main_window_on_next_show):
-            try:
-                PyImGui.set_next_window_collapsed(False, PyImGui.ImGuiCond.Always)
-            except Exception:
-                pass
-            _rt.expand_main_window_on_next_show = False
         try:
             PyImGui.set_next_window_size(MAIN_WINDOW_DEFAULT_SIZE, PyImGui.ImGuiCond.FirstUseEver)
         except Exception:
             pass
 
-        window_expanded, window_open = _begin_persistent_window_with_close_state(INI_KEY_MAIN, BOT_NAME)
-        _set_main_window_visible(bool(window_open), persist=True, expand_on_show=False)
+        window_expanded, window_open = _begin_persistent_window_with_close_state("", BOT_NAME)
+        _set_main_window_visible(bool(window_open), persist=True)
         if not window_open:
-            ImGui.End(INI_KEY_MAIN)
+            PyImGui.end()
             return
         if not window_expanded:
-            ImGui.End(INI_KEY_MAIN)
+            PyImGui.end()
             return
 
         if PyImGui.button("Settings##pycons_settings"):
@@ -11694,7 +11649,7 @@ try:
                             _draw_main_regular_row(k, c["label"], "pycons_party", int(c.get("model_id", 0)))
                     PyImGui.end_child()
 
-        ImGui.End(INI_KEY_MAIN)
+        PyImGui.end()
 
     # -------------------------
     # Settings Window
@@ -12139,15 +12094,15 @@ try:
         # AlwaysAutoResize flag. Users can now expand/collapse and resize
         # the settings window to their preference.
         window_expanded, window_open = _begin_persistent_window_with_close_state(
-            INI_KEY_SETTINGS,
+            "",
             "Pycons - Settings##PyconsSettings",
         )
         if not window_open:
             show_settings[0] = False
-            ImGui.End(INI_KEY_SETTINGS)
+            PyImGui.end()
             return
         if not window_expanded:
-            ImGui.End(INI_KEY_SETTINGS)
+            PyImGui.end()
             return
 
         _section_text("General behavior:", "settings_select")
@@ -13638,16 +13593,13 @@ try:
             _show_setting_tooltip("tooltip_show_why")
             PyImGui.separator()
 
-        ImGui.End(INI_KEY_SETTINGS)
+        PyImGui.end()
 
     def configure():
         pass
 
     def main():
         global _first_main_call, cfg
-        if not _init_window_persistence_once():  # NEW: ensure both window INIs are ready
-            return
-
         # Initialize config on first call (after player is logged in)
         if cfg is None:
             cfg = Config()
@@ -13672,7 +13624,7 @@ try:
         _update_movement_tracker()
 
         floating_button = _ensure_floating_ui()
-        floating_button.draw(INI_KEY_FLOATING_UI)
+        floating_button.draw(FLOATING_ICON_SETTINGS)
         _rt.show_main_window = bool(floating_button.visible)
 
         _draw_main_window()

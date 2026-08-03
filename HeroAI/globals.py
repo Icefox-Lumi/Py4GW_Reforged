@@ -1,4 +1,4 @@
-from Py4GWCoreLib import ImGui, PyImGui, Timer
+from Py4GWCoreLib import PyImGui, Timer
 from .constants import MODULE_NAME, MAX_NUM_PLAYERS, NUMBER_OF_SKILLS
 from .types import PlayerStruct, CandidateStruct
 
@@ -13,17 +13,19 @@ class HeroAI_varsClass:
 class HeroAI_Window_varsClass:
     global MODULE_NAME
     def __init__(self):
-        self.main_window = ImGui.WindowModule(MODULE_NAME, "HeroAI - Follower", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
-        self.control_window = ImGui.WindowModule(MODULE_NAME, "HeroAI", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
-        self.tools_window = ImGui.WindowModule(MODULE_NAME, "Multibox Tools", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
-        self.follow_formations_window = ImGui.WindowModule(MODULE_NAME, "Follow Formations", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+        self.main_window_name = "HeroAI - Follower"
+        self.control_window_name = "HeroAI"
+        self.tools_window_name = "Multibox Tools"
+        self.follow_formations_window_name = "Follow Formations"
+        self.window_flags = PyImGui.WindowFlags.AlwaysAutoResize
 
 class DebugWindowClass:
     global MODULE_NAME
     def __init__(self, name):
         self.name = name
         self.visible = False
-        self.window = ImGui.WindowModule(MODULE_NAME, name, window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+        self.window_name = name
+        self.window_flags = PyImGui.WindowFlags.AlwaysAutoResize
 
 
 class DebugWindowListClass:

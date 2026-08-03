@@ -5,7 +5,7 @@ import random
 import json
 import os
 from Py4GWCoreLib import ThrottledTimer
-from Py4GWCoreLib import PyImGui, ImGui, Color
+from Py4GWCoreLib import PyImGui, Color
 from Py4GWCoreLib import FSM
 from Py4GWCoreLib import AutoInventoryHandler
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
@@ -82,27 +82,17 @@ class YAVB:
             PyImGui.WindowFlags.AlwaysAutoResize | 
             PyImGui.WindowFlags.MenuBar
         )
-        self.main_window_pos = (100, 100)  # fallback default
-        self.main_window_size = (400, 300) # fallback default
-        self.option_window_pos = (100, 100)  # fallback default
-        self.option_window_size = (300, 250)  # fallback default
-        self.console_pos = (100, 100)  # fallback default
-        self.console_size = (400, 300)  # fallback default
+        self.main_window_name = f"{self.name} {self.version} by {self.author}"
+        self.option_window_name = f"{self.name} Options"
+        self.option_window_flags = PyImGui.WindowFlags.AlwaysAutoResize
         #option window
         self.option_window_visible = False
-        self.option_window_snapped = True
-        self.option_window_snapped_border = "Bottom"
         #Console
         self.console_visible = False
-        self.console_snapped = True
-        self.console_snapped_border = "Right"
         self.console_log_to_file = False
         
         self.console = LogConsole(
             module_name="YAVB Console",
-            window_pos=self.main_window_pos,
-            window_size=self.main_window_size,
-            is_snapped=self.option_window_snapped, 
             log_to_file=False
         )
         
@@ -129,31 +119,6 @@ class YAVB:
         
         self.load_config()
         
-        # Initialize the main window module
-
-        
-        self.window_module = ImGui.WindowModule(
-            module_name=self.name,
-            window_name=f"{self.name} {self.version} by {self.author}",
-            window_pos=self.main_window_pos,
-            window_size=self.main_window_size,
-            window_flags=self.window_flags,
-            
-        )
-        
-        self.option_window_module = ImGui.WindowModule(
-            module_name=f"{self.name} Options",
-            window_name=f"{self.name} Options",
-            window_flags= PyImGui.WindowFlags(
-                PyImGui.WindowFlags.AlwaysAutoResize)
-            )
-        
-        
-        self.console.SetSnapped(self.console_snapped, self.console_snapped_border)
-        self.console.SetWindowPosition(self.console_pos)
-        self.console.SetWindowSize(self.console_size)
-        self.console.SetMainWindowPosition(self.main_window_pos)
-        self.console.SetMainWindowSize(self.main_window_size)
         self.console.SetLogToFile(self.console_log_to_file)
         
         self.LONGEYES_LEDGE = Map.GetMapIDByName("Longeyes Ledge")
@@ -194,29 +159,7 @@ class YAVB:
     def save_config(self):
         ih = self.ini_handler
 
-        # Main Window
-        ih.set("MainWindow", "pos_x", self.main_window_pos[0])
-        ih.set("MainWindow", "pos_y", self.main_window_pos[1])
-        ih.set("MainWindow", "size_x", self.main_window_size[0])
-        ih.set("MainWindow", "size_y", self.main_window_size[1])
-
-        # Option Window
-        ih.set("OptionWindow", "pos_x", self.option_window_pos[0])
-        ih.set("OptionWindow", "pos_y", self.option_window_pos[1])
-        ih.set("OptionWindow", "size_x", self.option_window_size[0])
-        ih.set("OptionWindow", "size_y", self.option_window_size[1])
-        ih.set("OptionWindow", "visible", self.option_window_visible)
-        ih.set("OptionWindow", "snapped", self.option_window_snapped)
-        ih.set("OptionWindow", "snapped_border", self.option_window_snapped_border)
-
-        # Console
-        ih.set("Console", "pos_x", self.console_pos[0])
-        ih.set("Console", "pos_y", self.console_pos[1])
-        ih.set("Console", "size_x", self.console_size[0])
-        ih.set("Console", "size_y", self.console_size[1])
-        ih.set("Console", "visible", self.console_visible)
-        ih.set("Console", "snapped", self.console_snapped)
-        ih.set("Console", "snapped_border", self.console_snapped_border)
+        # Window position, size, collapse, and visibility are owned by ImGui/runtime state.
         ih.set("Console", "log_to_file", self.console_log_to_file)
         ih.set("Console", "detailed_logging", self.detailed_logging)
 
@@ -236,41 +179,7 @@ class YAVB:
         
         ConsoleLog("debug", "Loading configuration from INI file", log=True)
 
-        # Main Window
-        self.main_window_pos = (
-            ih.get_float("MainWindow", "pos_x", self.main_window_pos[0]),
-            ih.get_float("MainWindow", "pos_y", self.main_window_pos[1]),
-        )
-        self.main_window_size = (
-            ih.get_float("MainWindow", "size_x", self.main_window_size[0]),
-            ih.get_float("MainWindow", "size_y", self.main_window_size[1]),
-        )
-
-        # Option Window
-        self.option_window_pos = (
-            ih.get_float("OptionWindow", "pos_x", self.option_window_pos[0]),
-            ih.get_float("OptionWindow", "pos_y", self.option_window_pos[1]),
-        )
-        self.option_window_size = (
-            ih.get_float("OptionWindow", "size_x", self.option_window_size[0]),
-            ih.get_float("OptionWindow", "size_y", self.option_window_size[1]),
-        )
-        self.option_window_visible = ih.get_bool("OptionWindow", "visible", self.option_window_visible)
-        self.option_window_snapped = ih.get_bool("OptionWindow", "snapped", self.option_window_snapped)
-        self.option_window_snapped_border = ih.get_str("OptionWindow", "snapped_border", self.option_window_snapped_border)
-
-        # Console
-        self.console_pos = (
-            ih.get_float("Console", "pos_x", self.console_pos[0]),
-            ih.get_float("Console", "pos_y", self.console_pos[1]),
-        )
-        self.console_size = (
-            ih.get_float("Console", "size_x", self.console_size[0]),
-            ih.get_float("Console", "size_y", self.console_size[1]),
-        )
-        self.console_visible = ih.get_bool("Console", "visible", self.console_visible)
-        self.console_snapped = ih.get_bool("Console", "snapped", self.console_snapped)
-        self.console_snapped_border = ih.get_str("Console", "snapped_border", self.console_snapped_border)
+        # Window position, size, collapse, and visibility are owned by ImGui/runtime state.
         self.console_log_to_file = ih.get_bool("Console", "log_to_file", self.console_log_to_file)
         self.detailed_logging = ih.get_bool("Console", "detailed_logging", self.detailed_logging)
         

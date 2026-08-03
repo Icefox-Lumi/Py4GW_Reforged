@@ -13,14 +13,9 @@ MODULE_ICON = "Textures/Module_Icons/Agent Info.png"
 LOG_ACTIONS = True
 
 
-#region WinwowStup
-window_module = ImGui.WindowModule(
-    MODULE_NAME, 
-    window_name="Agent Info Viewer", 
-    window_size=(0, 0),
-    window_flags=PyImGui.WindowFlags.AlwaysAutoResize
-)
-
+#region Window Setup
+WINDOW_NAME = "Agent Info Viewer"
+WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
 #endregion
 
 #region ImGui
@@ -442,7 +437,7 @@ def DrawMainWindow():
     nearest_npc:AgentStruct | None = Agent.GetAgentByID(Routines.Agents.GetNearestNPC() or 0)
     target:AgentStruct | None = Agent.GetAgentByID(Player.GetTargetID() or 0)
 
-    if PyImGui.begin(window_module.window_name, window_module.window_flags):
+    if PyImGui.begin(WINDOW_NAME, WINDOW_FLAGS):
         if PyImGui.begin_child("NearestAgents Info", size=(600, 330),border=True, flags=PyImGui.WindowFlags.HorizontalScrollbar):
             headers = ["Closest", "ID", "Name", "{x,y,z}", "Type"]
             data = [

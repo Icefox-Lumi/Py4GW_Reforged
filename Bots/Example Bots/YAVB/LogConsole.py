@@ -1,6 +1,5 @@
 from enum import IntEnum
 from Py4GWCoreLib import Color
-from Py4GWCoreLib import ImGui
 from Py4GWCoreLib import PyImGui
 from datetime import datetime
 from typing import Optional
@@ -44,54 +43,16 @@ class LogConsole:
         def __str__(self):
             return f"[{self.severity}] {self.message}"
 
-    def __init__(self,module_name="LogConsole", window_pos= (100, 100), window_size= (400, 300), is_snapped= True,  log_to_file: bool = False):
+    def __init__(self, module_name="LogConsole", log_to_file: bool = False):
         self.messages: list[LogConsole.LogEntry] = []
         self.log_to_file: bool = log_to_file
-        self.window_flags = PyImGui.WindowFlags(
-            PyImGui.WindowFlags.AlwaysAutoResize
-        )
-        self.main_window_pos = (100, 100)  # fallback default
-        self.main_window_size = (400, 300)
-        
-        self.window_pos = window_pos
-        self.window_size = window_size
-        self.is_snapped = is_snapped
-        self.window_snapped_border = "Right"
-        self.window_module_initialized = False
-        self.window_module = ImGui.WindowModule(
-            module_name=module_name,
-            window_name=module_name,
-            window_pos=self.window_pos,
-            window_size=self.window_size,
-            window_flags=self.window_flags,
-            
-        )
+        self.window_name = module_name
+        self.window_flags = PyImGui.WindowFlags.AlwaysAutoResize
         
     def SetLogToFile(self, log_to_file: bool):
         """Set whether to log messages to a file."""
         self.log_to_file = log_to_file     
     
-    def SetSnapped(self, is_snapped: bool, snapped_border: str = "Right"):
-        """Set whether the console window is snapped to the main window."""
-        self.is_snapped = is_snapped
-        self.window_snapped_border = snapped_border
-        
-    def SetWindowPosition(self, pos: tuple[int, int]):
-        """Set the position of the log console window."""
-        self.window_pos = pos
-            
-    def SetWindowSize(self, size: tuple[int, int]):
-        """Set the size of the log console window."""
-        self.window_size = size
-        
-    def SetMainWindowPosition(self, pos):
-        """Set the position of the main window."""
-        self.main_window_pos = pos
-        
-    def SetMainWindowSize(self, size):
-        """Set the size of the main window."""
-        self.main_window_size = size
-
     def LogMessage(self, message: str, extra_info: Optional[str], severity: Optional['LogConsole.LogSeverity'] = None):
         """Add a new log entry to the console."""
         entry = LogConsole.LogEntry(message, extra_info, severity)
@@ -99,31 +60,8 @@ class LogConsole:
 
     def DrawConsole(self):
         """Draw the log console window."""
-        self.window_module.initialize()
-        border = self.window_snapped_border.lower()
-        if border == "right":
-            snapped_x = self.main_window_pos[0] + self.main_window_size[0] + 1
-            snapped_y = self.main_window_pos[1]
-        elif border == "left":
-            snapped_x = self.main_window_pos[0] - self.main_window_size[0] - 1
-            snapped_y = self.main_window_pos[1]
-        elif border == "top":
-            snapped_x = self.main_window_pos[0]
-            snapped_y = self.main_window_pos[1] - self.window_size[1] - 1
-        elif border == "bottom":
-            snapped_x = self.main_window_pos[0]
-            snapped_y = self.main_window_pos[1] + self.main_window_size[1] + 1
-        else:
-            # Fallback to right
-            snapped_x = self.main_window_pos[0] + self.main_window_size[0] + 1
-            snapped_y = self.main_window_pos[1]
-
-        if self.is_snapped:
-            PyImGui.set_next_window_pos(snapped_x, snapped_y)
-            
-        PyImGui.set_next_window_size(self.main_window_size[0] * 2, self.main_window_size[1])
-            
-        if self.window_module.begin():
+        visible, _ = PyImGui.begin(self.window_name, None, self.window_flags)
+        if visible:
             if PyImGui.begin_child("Log Messages", (0, 0), True, PyImGui.WindowFlags.AlwaysVerticalScrollbar):
                 if PyImGui.begin_table("LogTable", 3, PyImGui.TableFlags.RowBg | PyImGui.TableFlags.ScrollY | PyImGui.TableFlags.Borders):
                     PyImGui.table_setup_column("Time", PyImGui.TableColumnFlags.WidthFixed, 75)
@@ -143,8 +81,7 @@ class LogConsole:
                         PyImGui.pop_style_color(1)
                     PyImGui.end_table()
                 PyImGui.end_child()
-            self.window_module.process_window()
-        self.window_module.end()
+        PyImGui.end()
 
     
     

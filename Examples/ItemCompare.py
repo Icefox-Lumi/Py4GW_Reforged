@@ -8,7 +8,8 @@ json_file_path = "modifiers.json"
 
 from enum import Enum
 
-window_module = ImGui.WindowModule("Item Compare", window_name="Item Compare", window_size=(300, 300))
+WINDOW_NAME = "Item Compare"
+WINDOW_FLAGS = PyImGui.WindowFlags.NoFlag
 
 
 class ModifierInfo:
@@ -1016,14 +1017,9 @@ hovered_item = 0
 def ShowOffhandItemdescription():
     try:
         global item1_id, item2_id, hovered_item
-        global modifiers, window_module
+        global modifiers
 
-        if window_module.first_run:
-            PyImGui.set_next_window_size(window_module.window_size[0], window_module.window_size[1])     
-            PyImGui.set_next_window_pos(window_module.window_pos[0], window_module.window_pos[1])
-            window_module.first_run = False
-
-        if PyImGui.begin(f"Offhand Item Description", window_module.window_flags):
+        if PyImGui.begin(f"Offhand Item Description", WINDOW_FLAGS):
 
             hovered_item = Inventory.GetHoveredItemID()
             PyImGui.text(f"Hovered Item: {hovered_item}")
@@ -1080,14 +1076,9 @@ def ShowOffhandItemdescription():
 def ShowItemdescription():
     try:
         global item1_id, item2_id, hovered_item
-        global modifiers, window_module
+        global modifiers
 
-        if window_module.first_run:
-            PyImGui.set_next_window_size(window_module.window_size[0], window_module.window_size[1])     
-            PyImGui.set_next_window_pos(window_module.window_pos[0], window_module.window_pos[1])
-            window_module.first_run = False
-
-        if PyImGui.begin(f"Item Description", window_module.window_flags):
+        if PyImGui.begin(f"Item Description", WINDOW_FLAGS):
 
             hovered_item = Inventory.GetHoveredItemID()
             PyImGui.text(f"Hovered Item: {hovered_item}")
@@ -1202,14 +1193,9 @@ def ShowItemdescription():
 identifier = 0
 def ShowModifierDecoderWindow():
     try:
-        global window_module, identifier
+        global identifier
 
-        if window_module.first_run:
-            PyImGui.set_next_window_size(window_module.window_size[0], window_module.window_size[1])
-            PyImGui.set_next_window_pos(0, 0)
-            window_module.first_run = False
-
-        if PyImGui.begin("Modifier Decoder", window_module.window_flags):
+        if PyImGui.begin("Modifier Decoder", WINDOW_FLAGS):
             PyImGui.text("Enter Modifier Identifier:")
             identifier = PyImGui.input_int("Identifier", identifier)
 
@@ -1234,14 +1220,9 @@ def ShowItemComparisonWindow():
     try:
         global item1_id, item2_id, hovered_item
         global item_show, input_item1, input_item2
-        global modifiers, window_module
+        global modifiers
 
-        if window_module.first_run:
-            PyImGui.set_next_window_size(window_module.window_size[0], window_module.window_size[1])     
-            PyImGui.set_next_window_pos(window_module.window_pos[0], window_module.window_pos[1])
-            window_module.first_run = False
-
-        if PyImGui.begin(f"Compare Items", window_module.window_flags):
+        if PyImGui.begin(f"Compare Items", WINDOW_FLAGS):
 
             hovered_item = Inventory.GetHoveredItemID()
             PyImGui.text(f"Hovered Item: {hovered_item}")

@@ -160,41 +160,12 @@ handler = sys.modules["_Py4GW_GLOBAL_WIDGET_HANDLER"].handler
 enable_all = ini_handler.get_bool(module_name, "enable_all", True)
 old_enable_all = enable_all
 
-window_module = ImGui.WindowModule(module_name, window_name="Widgets", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
-
-window_x = ini_handler.get_int(module_name, "x", 100)
-window_y = ini_handler.get_int(module_name, "y", 100)
-window_module.window_pos = (window_x, window_y)
-
-window_module.collapse = ini_handler.get_bool(module_name, "collapsed", True)
-current_window_collapsed = window_module.collapse
-
-
 write_timer = Timer()
 write_timer.Start()
-
-current_window_pos = window_module.window_pos
 
 def write_ini():
     if not write_timer.HasElapsed(1000):
         return
-    global enable_all
-    
-    if current_window_pos != window_module.window_pos:
-        x, y = map(int, current_window_pos)
-        window_module.window_pos = (x, y)
-        ini_handler.set(module_name, "x", str(x))
-        ini_handler.set(module_name, "y", str(y))
-    
-    # if current_window_pos[0] != window_module.window_pos[0] or current_window_pos[1] != window_module.window_pos[1]:
-    #     window_module.window_pos = (int(current_window_pos[0]), int(current_window_pos[1]))
-    #     ini_handler.set(module_name, "x", str(int(current_window_pos[0])))
-    #     ini_handler.set(module_name, "y", str(int(current_window_pos[1])))
-        
-    if current_window_collapsed != window_module.collapse:
-        window_module.collapse = current_window_collapsed
-        ini_handler.set(module_name, "collapsed", str(current_window_collapsed))
-            
     if old_enable_all != enable_all:
         enable_all = old_enable_all
         ini_handler.set(module_name, "enable_all", str(enable_all))
@@ -275,25 +246,16 @@ def draw_widget_ui():
             PyImGui.tree_pop()
 
 def main():
-    global initialized, enable_all, old_enable_all, current_window_pos, current_window_collapsed
+    global initialized, enable_all, old_enable_all
 
     try:
         if not initialized:
             handler.discover_widgets()
             initialized = True
 
-        if window_module.first_run:
-            PyImGui.set_next_window_size(*window_module.window_size)
-            PyImGui.set_next_window_pos(*window_module.window_pos)
-            PyImGui.set_next_window_collapsed(window_module.collapse, 0)
-            window_module.first_run = False
-
-        current_window_collapsed = True
         old_enable_all = enable_all
 
-        if PyImGui.begin(window_module.window_name, window_module.window_flags):
-            current_window_pos = PyImGui.get_window_pos()
-            current_window_collapsed = False
+        if PyImGui.begin("Widgets", PyImGui.WindowFlags.AlwaysAutoResize):
             draw_widget_ui()
         PyImGui.end()
 

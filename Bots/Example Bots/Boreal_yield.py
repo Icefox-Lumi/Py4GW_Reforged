@@ -12,15 +12,14 @@ class Botconfig:
         self.is_script_running = False  
         self.log_to_console = True
         self.routine_finished = False
-        self.window_module = ImGui.WindowModule()
+        self.window_name = MODULE_NAME
+        self.window_flags = PyImGui.WindowFlags.AlwaysAutoResize
 
 class BOTVARIABLES:
     def __init__(self):
         self.config = Botconfig()
-        self.window_module = ImGui.WindowModule()
 
 bot_variables = BOTVARIABLES()
-bot_variables.config.window_module = ImGui.WindowModule(MODULE_NAME, window_name=MODULE_NAME, window_size=(300, 300), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 #endregion
 
 coroutines = GLOBAL_CACHE.Coroutines
@@ -34,12 +33,7 @@ def StopEnvironment():
 def DrawWindow():
     global bot_variables
 
-    if bot_variables.config.window_module.first_run:
-        PyImGui.set_next_window_size(bot_variables.config.window_module.window_size[0], bot_variables.config.window_module.window_size[1])     
-        PyImGui.set_next_window_pos(bot_variables.config.window_module.window_pos[0], bot_variables.config.window_module.window_pos[1])
-        bot_variables.config.window_module.first_run = False
-
-    if PyImGui.begin(bot_variables.config.window_module.window_name, bot_variables.config.window_module.window_flags):
+    if PyImGui.begin(bot_variables.config.window_name, bot_variables.config.window_flags):
         button_text = "Start script" if not bot_variables.config.is_script_running else "Stop script"
         if PyImGui.button(button_text):
             bot_variables.config.is_script_running = not bot_variables.config.is_script_running  

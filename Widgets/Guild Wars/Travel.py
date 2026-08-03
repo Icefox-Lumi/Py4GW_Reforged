@@ -36,37 +36,28 @@ MODULE_ICON = "Textures\\Module_Icons\\travel_cursor.png"
 class Config:
     global MODULE_NAME
     def __init__(self):
-        self.button_position : tuple[float, float] = (100, 100)
-        self.config_position : tuple[float, float] = (100, 100)
         self.show_travel_history : bool = True
         self.history_length : int = 5
         self.favorites : list[int] = []
         self.show_favorites : bool = True
         self.save_requested : bool = False
         self.close_after_travel : bool = True
-        self.button_size : int = 48
     
     def load(self):
         # Load the configuration from the jailed JSON document (self-persisting).
-        self.button_position = tuple(_cfg.get_json("button_position", [100, 100]))
-        self.config_position = tuple(_cfg.get_json("config_position", [100, 100]))
         self.favorites = _cfg.get_json("favorites", [])
         self.show_travel_history = _cfg.get_bool("show_travel_history", True)
         self.show_favorites = _cfg.get_bool("show_favorites", True)
         self.history_length = _cfg.get_int("history_length", 5)
         self.close_after_travel = _cfg.get_bool("close_after_travel", True)
-        self.button_size = _cfg.get_int("button_size", 48)
 
     def save(self):
         # Write into the jailed JSON document; autosaved on a debounce.
-        _cfg.set_json("button_position", list(self.button_position))
-        _cfg.set_json("config_position", list(self.config_position))
         _cfg.set_json("favorites", list(self.favorites))
         _cfg.set_bool("show_travel_history", self.show_travel_history)
         _cfg.set_bool("show_favorites", self.show_favorites)
         _cfg.set_int("history_length", self.history_length)
         _cfg.set_bool("close_after_travel", self.close_after_travel)
-        _cfg.set_int("button_size", self.button_size)
 
         self.save_requested = False
             
@@ -77,17 +68,10 @@ class Config:
 widget_config = Config()
 widget_config.load()
 
-window_module = ImGui.WindowModule(
-    MODULE_NAME, 
-    window_name="Travel", 
-    window_size=(235, 145),
-    window_pos=(1500, 100),
-    window_flags=PyImGui.WindowFlags(PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.AlwaysAutoResize),
-    can_close=True,
-)
-
 new_favorite = 0
-config_module = ImGui.WindowModule(f"Config {MODULE_NAME}", window_name="Travel##config", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize, can_close=True)
+travel_window_open = False
+config_window_open = False
+TRAVEL_BUTTON_SIZE = 48.0
 outposts = dict(zip(Map.GetOutpostIDs(), Map.GetOutpostNames()))
 outposts = {id: outpost.replace("outpost", "") for id, outpost in outposts.items() if outpost}  # Filter out empty names
 outpost_index = 0
@@ -95,7 +79,6 @@ filtered_outposts = [(id, outpost) for id, outpost in outposts.items()]
 filtered_history = []
 search_outpost = ""
 is_traveling = False
-is_dragging = False
 is_map_ready = False
 is_party_loaded = False
 travel_history = []
@@ -113,8 +96,6 @@ priority_outposts = {
 outpost_aliases = {
     474: ["doa", "domain of anguish"],
 }
-
-window_open = window_module.open = False
 
 widget_handler : WidgetHandler = get_widget_handler()
 widget_info : Optional[Widget] = None
@@ -155,24 +136,17 @@ def tooltip():
     PyImGui.end_tooltip()
 
 def configure():
-    global widget_config, config_module, new_favorite, widget_info, widget_handler
+    global widget_config, config_window_open, new_favorite, widget_info, widget_handler
     global MODULE_NAME
     
     if widget_info is None:
         widget_info = widget_handler.get_widget_info(MODULE_NAME)
     
-    config_module.open = True
-
-    if config_module.first_run:
-        PyImGui.set_next_window_size(config_module.window_size[0], config_module.window_size[1])     
-        PyImGui.set_next_window_pos(config_module.window_pos[0], config_module.window_pos[1])
-        PyImGui.set_next_window_collapsed(config_module.collapse, 0)
-        config_module.first_run = False
-
-    new_collapsed = True
-    end_pos = config_module.window_pos
-    if config_module.begin():
-        new_collapsed = PyImGui.is_window_collapsed()
+    config_window_open = True
+    visible, config_window_open = PyImGui.begin_with_close(
+        "Travel##config", config_window_open, PyImGui.WindowFlags.AlwaysAutoResize
+    )
+    if visible:
         
         
         if PyImGui.begin_tab_bar("##TravelConfigTabs"):                
@@ -258,13 +232,6 @@ def configure():
                     widget_config.history_length = max(1, min(20, history_length))
                     widget_config.request_save()
                 
-                ImGui.text_aligned("Travel Button Size", width=100, height=24, alignment=Alignment.MidLeft)
-                PyImGui.same_line(0, 2)
-                button_size = ImGui.slider_int(f"##Travel Button Size", widget_config.button_size, 32, 256)
-                if button_size != widget_config.button_size:
-                    widget_config.button_size = max(32, min(256, button_size))
-                    widget_config.request_save()
-                
                 PyImGui.end_tab_item()
                 
             if PyImGui.begin_tab_item("Help"):
@@ -279,16 +246,9 @@ def configure():
                 PyImGui.end_tab_item()
             PyImGui.end_tab_bar()  
         
-        config_module.process_window()
-        
-        if config_module.window_pos != config_module.end_pos:
-            config_module.window_pos = config_module.end_pos
-            widget_config.config_position = config_module.window_pos
-            widget_config.request_save()            
-        
-    config_module.end()
+    PyImGui.end()
     
-    if not config_module.open:
+    if not config_window_open:
         if widget_info and widget_info.configuring:
             widget_handler.set_widget_configuring(MODULE_NAME, False)
 
@@ -357,7 +317,7 @@ def themed_floating_button(button_rect : tuple[float, float, float, float]):
             pass
 
 def DrawWindow():
-    global is_traveling, widget_config, search_outpost, window_module, window_open, filtered_outposts, outpost_index, window_x, window_y, filtered_history, is_dragging
+    global is_traveling, widget_config, search_outpost, travel_window_open, filtered_outposts, outpost_index, filtered_history
     global game_throttle_time, game_throttle_timer, save_throttle_time, save_throttle_timer
     
     try:    
@@ -366,21 +326,22 @@ def DrawWindow():
         if not show_ui:
             return
         
-        padding = widget_config.button_size * 0.05
+        padding = TRAVEL_BUTTON_SIZE * 0.05
         style = ImGui.get_style()
-        button_rect = (widget_config.button_position[0], widget_config.button_position[1], widget_config.button_size, widget_config.button_size)
-        ## Ensure the button is within the screen bounds
-        io = PyImGui.get_io()  
-        screen_width, screen_height = io.display_size_x, io.display_size_y
-        
-        button_rect = ensure_on_screen(button_rect, screen_width, screen_height)                
-        PyImGui.set_next_window_size(button_rect[2], button_rect[3])
-        
+        io = PyImGui.get_io()
+        button_rect = (0.0, 0.0, TRAVEL_BUTTON_SIZE, TRAVEL_BUTTON_SIZE)
+        PyImGui.set_next_window_size((TRAVEL_BUTTON_SIZE, TRAVEL_BUTTON_SIZE), PyImGui.ImGuiCond.FirstUseEver)
         style.WindowPadding.push_style_var_direct(padding, padding)
-        win_open  = PyImGui.begin("##TravelButton", PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.NoScrollbar)
+        win_open = PyImGui.begin("##TravelButton", PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.NoScrollbar)
         style.WindowPadding.pop_style_var_direct()
-        
+        if not win_open:
+            PyImGui.end()
+            return
+
         if win_open:
+            button_pos = PyImGui.get_window_pos()
+            actual_button_size = PyImGui.get_window_size()
+            button_rect = (button_pos[0], button_pos[1], actual_button_size[0], actual_button_size[1])
             is_hovered = ImGui.is_mouse_in_rect(button_rect)
             button_size = PyImGui.get_content_region_avail()[0] * (1 if is_hovered else 0.8)
             
@@ -394,55 +355,22 @@ def DrawWindow():
             PyImGui.invisible_button("##Open Travel Window", (button_rect[2], button_rect[3]))
 
             item_hovered = PyImGui.is_item_hovered()
-            item_active = PyImGui.is_item_active()
-            item_dragging = item_active and PyImGui.is_mouse_dragging(0, 6.0)
 
-            if item_dragging:
-                is_dragging = True
-                delta = PyImGui.get_mouse_drag_delta(0, 6.0)
-                PyImGui.reset_mouse_drag_delta(0)
-                widget_config.button_position = (
-                    widget_config.button_position[0] + delta[0],
-                    widget_config.button_position[1] + delta[1],
-                )
-                widget_config.request_save()
+            if item_hovered and PyImGui.is_mouse_released(0):
+                travel_window_open = not travel_window_open
 
-                window_module.end_pos = window_module.window_pos = (
-                    int(window_module.window_pos[0] + delta[0]),
-                    int(window_module.window_pos[1] + delta[1]),
-                )
-
-            if item_hovered and PyImGui.is_mouse_released(0) and not is_dragging:
-                window_module.open = not window_module.open
-                PyImGui.set_next_window_pos(window_module.window_pos[0], window_module.window_pos[1])
-
-            if PyImGui.is_mouse_released(0):
-                is_dragging = False
-
-            ImGui.show_tooltip("Click to open travel window\nDrag to reposition button")
+            ImGui.show_tooltip("Click to open travel window")
             
             PyImGui.end()
         
-        if not window_module.open:
+        if not travel_window_open:
             return
         
-        window_x = widget_config.button_position[0] + button_rect[2] + style.WindowBorderSize.value1
-        window_y = widget_config.button_position[1]
-        
-        if window_y + window_module.window_size[1] > screen_height:
-            window_y = screen_height - window_module.window_size[1] - (ImGui.get_style().Theme is Style.StyleTheme.Guild_Wars and 10 or 0)
-            
-        if window_x + window_module.window_size[0] > screen_width:
-            window_x = widget_config.button_position[0] - window_module.window_size[0] - 10
-        
-        window_module.window_pos = (window_x, window_y)
-        PyImGui.set_next_window_pos(window_x, window_y)
-        
-        if window_module.open:
-            PyImGui.set_next_window_focus()
-        
         traveled = False
-        if window_module.begin():
+        expanded, travel_window_open = PyImGui.begin_with_close(
+            "Travel", travel_window_open, PyImGui.WindowFlags.AlwaysAutoResize
+        )
+        if expanded:
             search_focused = False
             
             style = ImGui.get_style()
@@ -577,16 +505,16 @@ def DrawWindow():
                                 
                 PyImGui.end_child()
                                 
-            window_module.process_window()
-            
             if PyImGui.is_mouse_clicked(0):
-                window_rect = (window_x, window_y, window_module.window_size[0], window_module.window_size[1])     
+                window_pos = PyImGui.get_window_pos()
+                window_size = PyImGui.get_window_size()
+                window_rect = (window_pos[0], window_pos[1], window_size[0], window_size[1])
                 if not ImGui.is_mouse_in_rect(button_rect) and not ImGui.is_mouse_in_rect(window_rect):
-                    window_module.open = False
+                    travel_window_open = False
                                  
                                    
                 
-        window_module.end()
+        PyImGui.end()
         
 
         if save_throttle_timer.HasElapsed(save_throttle_time):
@@ -599,27 +527,6 @@ def DrawWindow():
     except Exception as e:
         is_traveling = False
         PySystem.Console.Log(MODULE_NAME, f"Error in DrawWindow: {str(e)}", PySystem.Console.MessageType.Debug)
-
-def ensure_on_screen(button_rect, screen_width, screen_height) -> tuple[float, float, float, float]:
-    global widget_config
-    
-    """Ensure the button rectangle is within the screen bounds."""
-    
-    if button_rect[0] < 0:
-        button_rect = (0, button_rect[1], button_rect[2], button_rect[3])
-            
-    elif button_rect[0] + button_rect[2] > screen_width:
-        button_rect = (screen_width - button_rect[2], button_rect[1], button_rect[2], button_rect[3])
-            
-    if button_rect[1] < 0:
-        button_rect = (button_rect[0], 0, button_rect[2], button_rect[3])
-    elif button_rect[1] + button_rect[3] > screen_height:
-        button_rect = (button_rect[0], screen_height - button_rect[3], button_rect[2], button_rect[3])
-        
-    widget_config.button_position = (button_rect[0], button_rect[1])
-    PyImGui.set_next_window_pos(button_rect[0], button_rect[1])
-    
-    return button_rect
 
 def generate_initials(name):
     return ''.join(word[0] for word in name.split() if word)
@@ -662,7 +569,7 @@ def TravelToOutpost(outpost_id):
         ConsoleLog(MODULE_NAME, "Already traveling, please wait.", PySystem.Console.MessageType.Warning)
     
     if widget_config.close_after_travel:
-        window_module.open = False
+        travel_window_open = False
         
 
 
@@ -696,7 +603,7 @@ def _chat_travel(args, raw):
     """/travel <name|initials|id>  — travel to an outpost. No arg opens the travel window."""
     query = (raw or "").strip() or " ".join(args)
     if not query:
-        window_module.open = True
+        travel_window_open = True
         return
     oid = _resolve_outpost(query)
     if oid is not None:

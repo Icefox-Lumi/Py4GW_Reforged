@@ -8,25 +8,7 @@ def draw_old_widget_ui():
     global timer
     is_enabled = state.enable_all
     
-    if state.window_module.first_run:
-            PyImGui.set_next_window_size(*state.window_module.window_size)
-            PyImGui.set_next_window_pos(*state.window_module.window_pos)
-            PyImGui.set_next_window_collapsed(state.window_module.collapse, 0)
-            state.window_module.first_run = False
-            
-    if PyImGui.begin(state.window_module.window_name, state.window_module.window_flags):
-        current_pos = PyImGui.get_window_pos()
-        if (current_pos != state.old_menu_window_pos) and timer.IsExpired():
-            state.old_menu_window_pos = tuple(current_pos)
-            handler._write_setting("WidgetManager", "omx", str(int(current_pos[0])), to_account=use_account_settings())
-            handler._write_setting("WidgetManager", "omy", str(int(current_pos[1])), to_account=use_account_settings())
-            timer.Reset()
-
-
-        collapsed = PyImGui.is_window_collapsed()
-        if collapsed != state.old_menu_window_collapsed:
-            state.old_menu_window_collapsed = collapsed
-            handler._write_setting("WidgetManager", "collapsed", str(collapsed), to_account=use_account_settings())
+    if PyImGui.begin(state.window_name, state.window_flags):
         if PyImGui.button(IconsFontAwesome5.ICON_RETWEET + "##Reload Widgets"):
             ConsoleLog(state.module_name, "Reloading Widgets...", PySystem.Console.MessageType.Info)
             handler.discover_widgets()

@@ -27,7 +27,6 @@ bot = Botting(
 class BotVars:
     def __init__(self, map_id=0):
         self.bot_started = False
-        self.window_module:ImGui.WindowModule
         self.variables = {}
 
         #HEROES SECTION

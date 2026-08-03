@@ -83,14 +83,8 @@ class BotVariables:
         relics: bool = True
 
     class Gui:
-        window_module = ImGui.WindowModule(
-            'Bone Farmer',
-            window_name='CoF Bone Farm',
-            window_pos=(234, 802),
-            window_flags=PyImGui.WindowFlags.AlwaysAutoResize,
-        )
-        window_pos: tuple[float, float] = (0, 0)
-        window_size: tuple[float, float] = (0, 0)
+        window_name = 'CoF Bone Farm'
+        window_flags = PyImGui.WindowFlags.AlwaysAutoResize
         settings_pos: tuple[int, int] = (0, 0)
         settings_size: tuple[int, int] = (0, 0)
 
@@ -1595,15 +1589,6 @@ class Draw:
             PyImGui.tree_pop()
 
     def Run(self):
-        if bot_vars.gui.window_module.first_run:
-            PyImGui.set_next_window_size(
-                bot_vars.gui.window_module.window_size[0], bot_vars.gui.window_module.window_size[1]
-            )
-            PyImGui.set_next_window_pos(
-                bot_vars.gui.window_module.window_pos[0], bot_vars.gui.window_module.window_pos[1]
-            )
-            bot_vars.gui.window_module.first_run = False
-
         try:
             PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowBorderSize, 0.0)
             PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
@@ -1619,9 +1604,7 @@ class Draw:
             PyImGui.push_style_color(PyImGui.ImGuiCol.TitleBgActive, (0.0, 0.0, 0.0, 0.7))
             PyImGui.push_style_color(PyImGui.ImGuiCol.TitleBgCollapsed, (0.0, 0.0, 0.0, 0.7))
 
-            if PyImGui.begin(bot_vars.gui.window_module.window_name, bot_vars.gui.window_module.window_flags):
-                bot_vars.gui.window_pos = PyImGui.get_window_pos()
-                bot_vars.gui.window_size = PyImGui.get_window_size()
+            if PyImGui.begin(bot_vars.gui.window_name, bot_vars.gui.window_flags):
 
                 self.CreateRunButton()
                 self.CreateStateLog()
