@@ -116,6 +116,8 @@ def _account_from_dict(raw: dict) -> tuple[GameProfile, dict]:
     window_lock_changes = extras.pop("window_lock_changes", False)
     window_block_inputs = extras.pop("window_block_inputs", False)
     bulk_launch_enabled = extras.pop("bulk_launch_enabled", False)
+    use_steam_login = extras.pop("use_steam_login", False)
+    steam_account_anchor = extras.pop("steam_account_anchor", "") or ""
 
     # RELAY 066 item 6: encrypt on first touch. A real plaintext `password`
     # value always wins over whatever password_protected already exists --
@@ -160,6 +162,8 @@ def _account_from_dict(raw: dict) -> tuple[GameProfile, dict]:
         window_lock_changes=bool(window_lock_changes),
         window_block_inputs=bool(window_block_inputs),
         bulk_launch_enabled=bool(bulk_launch_enabled),
+        use_steam_login=bool(use_steam_login),
+        steam_account_anchor=steam_account_anchor,
     )
     if profile_id:
         kwargs["id"] = profile_id
@@ -225,8 +229,23 @@ def _dedup_keys(p: GameProfile) -> list[tuple]:
     against TestDuplicateDedup's existing coverage (both its cases share an
     identical character_name + gw_path across listings, so exe_char alone
     already matched them -- this narrowing doesn't regress either test).
+
+    RELAY 094 follow-up: `exe_char` used to apply unconditionally, same bug
+    shape as RELAY 083's email fix above -- an empty `executable_path` isn't
+    a real distinguishing signal, it's "nothing," so any two profiles that
+    both happen to have a blank path AND a blank character_name (a Steam
+    profile, which has no use for executable_path anymore, alongside any
+    other blank/placeholder profile) produced the identical key
+    `("exe_char", "", "")` and silently merged into one on the very next
+    load -- caught live: a real "Steam" profile vanished entirely after
+    clearing its executable_path, absorbed into an unrelated blank
+    "(unnamed)" profile (confirmed via _parse_raw_traced's own trace:
+    `merged_via_key: 'exe_char'`). Guarded the same way the email key
+    already is.
     """
-    keys: list[tuple] = [("id", p.id), ("exe_char", p.executable_path, p.character_name)]
+    keys: list[tuple] = [("id", p.id)]
+    if p.executable_path:
+        keys.append(("exe_char", p.executable_path, p.character_name))
     if p.email and not p.character_name:
         keys.append(("email", p.email))
     return keys
@@ -435,6 +454,8 @@ def _profile_to_dict(profile: GameProfile) -> dict:
             "window_lock_changes": profile.window_lock_changes,
             "window_block_inputs": profile.window_block_inputs,
             "bulk_launch_enabled": profile.bulk_launch_enabled,
+            "use_steam_login": profile.use_steam_login,
+            "steam_account_anchor": profile.steam_account_anchor,
         }
     )
     return extras
