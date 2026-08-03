@@ -39,7 +39,7 @@ from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
 from Py4GWCoreLib.py4gwcorelib_src.Timer import ThrottledTimer, Timer
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
-from Py4GWCoreLib.FrameTree import Frame, FrameId
+from Py4GWCoreLib.FrameTree import Frame, FrameId, FrameTree
 
 class CachedSkillInfo:
     def __init__(self, skill_id: int):
@@ -2492,7 +2492,7 @@ def draw_party_search_overlay(cached_data: CacheData):
     if party_search_throttle.IsExpired():
         party_search_throttle.Reset()
             
-        party_search_id = Frame(FrameId.PartySearchWindow.Panel)
+        party_search_id = FrameTree.child_by_parent_hash(3199024334, [14])
         if not party_search_id.exists:
             party_search = None
             party_search_throttle.SetThrottleTime(500)
@@ -2503,13 +2503,13 @@ def draw_party_search_overlay(cached_data: CacheData):
         # The three tab children use runtime-only offsets.  They are deliberately
         # excluded from FrameId registry resolution, so walk them from the live
         # panel frame just as the legacy GetChildFrameID call did.
-        players_tab_id = party_search_id.child_native(0xFFFFFFFF)
+        players_tab_id = FrameTree.child_by_parent_hash(3199024334, [14, 0xFFFFFFFF])
         player_tab = FramePosition(players_tab_id)
             
-        heroes_tab_id = party_search_id.child_native(0xFFFFFFFE)
+        heroes_tab_id = FrameTree.child_by_parent_hash(3199024334, [14, 0xFFFFFFFE])
         hero_tab = FramePosition(heroes_tab_id)
         
-        henchmen_tab_id = party_search_id.child_native(0xFFFFFFFD)
+        henchmen_tab_id = FrameTree.child_by_parent_hash(3199024334, [14, 0xFFFFFFFD])
         henchmen_tab = FramePosition(henchmen_tab_id)
             
         active_tab = next((tab for tab in [player_tab, hero_tab, henchmen_tab] if tab.position.content_top == max(
