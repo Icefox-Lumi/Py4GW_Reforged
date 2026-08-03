@@ -74,12 +74,6 @@ class FSMVars:
 
 class BotVars:
     def __init__(self):
-        self.window_module = ImGui.WindowModule(
-            module_name,
-            window_name="MQVQ Bot",
-            window_size=(300, 300),
-            window_flags=PyImGui.WindowFlags.AlwaysAutoResize
-        )
         self.is_running = False
         self.is_paused = False
         self.starting_map = OUTPOST_ID

@@ -477,13 +477,10 @@ Known modules/surfaces include:
       - 1/3/9-slice scalable textured controls
       - precomputed UV regions
       - theme-dependent texture selection (`ThemeTexture`, `ThemeTextures`)
-    - window orchestration through `WindowModule`, including:
-      - managed window creation state
-      - geometry tracking
-      - themed custom window decorations
-      - draggable faux title bars
-      - close-button handling
-      - overlay-aware centering and sizing
+    - native ImGui window lifecycle and layout through `PyImGui.begin/end` and
+      `begin_with_close`; the former `WindowModule` orchestration layer is retired.
+      Window position, size, collapse, and persistence are owned by ImGui's
+      native `imgui.ini` handling.
     - alignment, clamping, and display-port layout helpers
     - text helpers, decorators, alignment, scaling, and font-aware rendering
     - higher-level interactive controls such as:

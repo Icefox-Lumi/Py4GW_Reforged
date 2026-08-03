@@ -436,7 +436,6 @@ def draw_agents_view():
     target:AgentStruct | None = Agent.GetAgentByID(Player.GetTargetID() or 0)
 
 #region main
-    #if PyImGui.begin(window_module.window_name, window_module.window_flags):
     if PyImGui.begin_child("NearestAgents Info", size=(600, 230),border=True, flags=PyImGui.WindowFlags.HorizontalScrollbar):
         headers = ["Closest", "ID", "Name", "{x,y,z}", "Type"]
         data = [

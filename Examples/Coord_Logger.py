@@ -49,7 +49,7 @@ def GetTimer():
         return True
     if timer_check != 0 and timer.get_elapsed_time() > 0:
         if timer.has_elapsed(timer_check):
-            # PySystem.Console.Log(bot_vars.window_module.module_name, f"Stopping timer. Elapsed_time = {FSM_vars.casting_timer.get_elapsed_time()}", PySystem.Console.MessageType.Info)
+            # PySystem.Console.Log("GWMapper", f"Stopping timer. Elapsed_time = {FSM_vars.casting_timer.get_elapsed_time()}", PySystem.Console.MessageType.Info)
             player_timer_check = 0
             timer.reset()
             return True
@@ -428,9 +428,6 @@ def DrawWindow():
     columns = 3  # Number of columns grids
     selected_button_index = 0
     try:
-        width, height = 600,300
-        PyImGui.set_next_window_size(width, height)
-
         if PyImGui.begin("GWMapper", PyImGui.WindowFlags.NoCollapse):
 
 

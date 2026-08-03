@@ -2422,9 +2422,12 @@ class HeroAI_BaseUI:
     @staticmethod
     def DrawMultiboxTools(cached_data:CacheData):
         global MAX_NUM_PLAYERS
-        cached_data.HeroAI_windows.tools_window.initialize()
-
-        if cached_data.HeroAI_windows.tools_window.begin():
+        visible, _ = PyImGui.begin(
+            cached_data.HeroAI_windows.tools_window_name,
+            None,
+            cached_data.HeroAI_windows.window_flags,
+        )
+        if visible:
             if Map.IsOutpost() and Player.GetAgentID() == GLOBAL_CACHE.Party.GetPartyLeaderID():
                 if PyImGui.collapsing_header("Party Setup",PyImGui.TreeNodeFlags.DefaultOpen):
                     HeroAI_BaseUI.DrawCandidateWindow(cached_data)
@@ -2435,8 +2438,7 @@ class HeroAI_BaseUI:
             if PyImGui.collapsing_header("Debug Options"):
                 HeroAI_BaseUI.draw_debug_window(cached_data)
     
-        cached_data.HeroAI_windows.tools_window.process_window()
-        cached_data.HeroAI_windows.tools_window.end()            
+        PyImGui.end()
         
     
 

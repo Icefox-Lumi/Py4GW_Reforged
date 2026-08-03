@@ -132,7 +132,8 @@ class Botconfig:
         self.non_movement_timer = Timer()
         self.old_player_x = 0.0
         self.old_player_y = 0.0
-        self.window_module = ImGui.WindowModule()
+        self.window_name = MODULE_NAME
+        self.window_flags = PyImGui.WindowFlags.AlwaysAutoResize
 
 class BOTVARIABLES:
     def __init__(self):
@@ -146,7 +147,6 @@ class BOTVARIABLES:
         self.skillbar = build()
         
 bot_variables = BOTVARIABLES()
-bot_variables.config.window_module = ImGui.WindowModule(MODULE_NAME, window_name=MODULE_NAME, window_size=(300, 300), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 
 #endregion
 
@@ -1005,13 +1005,7 @@ def DrawWindow():
     global bot_variables
 
     try:
-        # First run: set window size and position
-        if bot_variables.config.window_module.first_run:
-            PyImGui.set_next_window_size(*bot_variables.config.window_module.window_size)     
-            PyImGui.set_next_window_pos(*bot_variables.config.window_module.window_pos)
-            bot_variables.config.window_module.first_run = False
-
-        if PyImGui.begin(bot_variables.config.window_module.window_name, bot_variables.config.window_module.window_flags):
+        if PyImGui.begin(bot_variables.config.window_name, bot_variables.config.window_flags):
             # Control Table
             if PyImGui.begin_table("ControlTable", 2):
                 PyImGui.table_next_row()

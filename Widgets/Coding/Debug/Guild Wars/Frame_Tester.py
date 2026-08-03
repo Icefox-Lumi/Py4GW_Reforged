@@ -354,12 +354,8 @@ class InfoWindow:
 
 #region MainWindow
 module_name = "Frame Tester"
-window_module = ImGui.WindowModule(
-    module_name, 
-    window_name="UI Frame Debugger", 
-    window_size=(300, 200),
-    window_flags=PyImGui.WindowFlags.AlwaysAutoResize
-)
+WINDOW_NAME = "UI Frame Debugger"
+WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
 
 frame_array = []
 full_tree = FrameTree()
@@ -368,7 +364,6 @@ full_tree = FrameTree()
 
 
 def DrawMainWindow():
-    global window_module
     global frame_array
     global full_tree
     global config_options
@@ -376,13 +371,7 @@ def DrawMainWindow():
     if config_options.keep_data_updated:
         full_tree.update()
     
-    if window_module.first_run:
-        PyImGui.set_next_window_size(window_module.window_size[0], window_module.window_size[1])     
-        PyImGui.set_next_window_pos(window_module.window_pos[0], window_module.window_pos[1])
-        PyImGui.set_next_window_collapsed(window_module.collapse, 0)
-        window_module.first_run = False
-
-    if PyImGui.begin(window_module.window_name, window_module.window_flags):
+    if PyImGui.begin(WINDOW_NAME, WINDOW_FLAGS):
         if PyImGui.begin_tab_bar("FrameDebuggerTabBar"):
             if PyImGui.begin_tab_item("Frame Tree"):
                 if PyImGui.collapsing_header("options"):

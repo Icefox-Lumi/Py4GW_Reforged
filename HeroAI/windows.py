@@ -3,7 +3,6 @@ from Py4GWCoreLib import GLOBAL_CACHE, Map,IconsFontAwesome5, ImGui, Utils, Over
 from Py4GWCoreLib import UIManager, ModelID, GLOBAL_CACHE
 from Py4GWCoreLib import Agent, Player
 from Py4GWCoreLib import (Routines, ActionQueueManager,Key, Keystroke, ThrottledTimer)
-from Py4GWCoreLib.ImGui_src.WindowModule import WindowModule
 from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct, HeroAIOptionStruct, SharedMessageStruct
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
 
@@ -40,27 +39,15 @@ class HeroAI_FloatingWindows():
     settings : Settings = Settings()
     SETTINGS_THROTTLE = ThrottledTimer(50)
     ACCOUNT_THROTTLE = ThrottledTimer(500)
-    hero_windows : dict[str, WindowModule] = {}
+    hero_windows : dict[str, bool] = {}
     messages : list[tuple[int, SharedMessageStruct]] = []
     widget_handler = get_widget_handler()
     init_success:bool  = False
     module_info = None
     
-    configure_window : WindowModule = WindowModule(
-        module_name="HeroAI Configuration",
-        window_name="HeroAI Configuration",
-        window_size=(400, 300),
-        window_pos=(200, 200),
-        can_close=True,
-    )
-    command_panel_window : WindowModule = WindowModule(
-        module_name="HeroAI Command Panel",
-        window_name="heroai_command_panel",
-        window_size=(200, 100),
-        window_pos=(200, 200),
-        can_close=False,
-        window_flags=PyImGui.WindowFlags(PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.AlwaysAutoResize),
-    )
+    configure_window_name = "HeroAI Configuration"
+    command_panel_window_name = "heroai_command_panel"
+    command_panel_window_open = True
     
     @staticmethod
     def draw_Targeting_floating_buttons(cached_data: CacheData):
@@ -137,9 +124,6 @@ class HeroAI_FloatingWindows():
             if not HeroAI_FloatingWindows.settings.ensure_initialized(): 
                 HeroAI_FloatingWindows.SETTINGS_THROTTLE.SetThrottleTime(50)                              
                 HeroAI_FloatingWindows.hero_windows.clear()
-                info = HeroAI_FloatingWindows.settings.get_hero_panel_info(HeroAI_FloatingWindows.command_panel_window.window_name)
-                HeroAI_FloatingWindows.command_panel_window.window_pos = (info.x, info.y)
-                HeroAI_FloatingWindows.command_panel_window.first_run = True             
                 return
             
             elif HeroAI_FloatingWindows.SETTINGS_THROTTLE.throttle_time != 1000:
@@ -159,16 +143,13 @@ class HeroAI_FloatingWindows():
                 if HeroAI_FloatingWindows.settings.CombinePanels:
                                 
                     if not combined_identifier in HeroAI_FloatingWindows.hero_windows:
-                        info = HeroAI_FloatingWindows.settings.get_hero_panel_info(combined_identifier)
-                        HeroAI_FloatingWindows.hero_windows[combined_identifier] = WindowModule(
-                            module_name=f"HeroAI - {combined_identifier}",
-                            window_name=f"Heroes##HeroAI - {combined_identifier}",
-                            window_pos=(info.x, info.y),
-                            collapse=info.collapsed,
-                            can_close=True,
-                        )
-                        
-                    open = HeroAI_FloatingWindows.hero_windows[combined_identifier].begin(True, PyImGui.WindowFlags.AlwaysAutoResize)
+                        HeroAI_FloatingWindows.hero_windows[combined_identifier] = True
+
+                    open, HeroAI_FloatingWindows.hero_windows[combined_identifier] = PyImGui.begin_with_close(
+                        f"Heroes##HeroAI - {combined_identifier}",
+                        HeroAI_FloatingWindows.hero_windows[combined_identifier],
+                        PyImGui.WindowFlags.AlwaysAutoResize,
+                    )
                 
                 for account in accounts:
                     if not account.AccountEmail or not account.IsAccount:
@@ -182,30 +163,21 @@ class HeroAI_FloatingWindows():
                         
                         if not email in HeroAI_FloatingWindows.hero_windows:
                             ConsoleLog("HeroAI", f"Creating Hero Panel for account: {email}")
-                            
-                            info = HeroAI_FloatingWindows.settings.get_hero_panel_info(email)
-                            HeroAI_FloatingWindows.hero_windows[email] = WindowModule(
-                                module_name=f"HeroAI - {email}",
-                                window_name=f"##HeroAI - {email}",
-                                window_pos=(info.x, info.y),
-                                collapse=info.collapsed, 
-                                can_close=True,
-                            )
-                            
-                        draw_hero_panel(HeroAI_FloatingWindows.hero_windows[email], account, cached_data, messages)
-                    else:                    
+
+                            HeroAI_FloatingWindows.hero_windows[email] = True
+
+                        HeroAI_FloatingWindows.hero_windows[email] = draw_hero_panel(
+                            f"##HeroAI - {email}",
+                            HeroAI_FloatingWindows.hero_windows[email],
+                            account,
+                            cached_data,
+                            messages,
+                        )
+                    else:
                         draw_combined_hero_panel(account, cached_data, messages)
                         
                 if HeroAI_FloatingWindows.settings.CombinePanels:
-                    HeroAI_FloatingWindows.hero_windows[combined_identifier].end()
-                    
-                    if HeroAI_FloatingWindows.hero_windows[combined_identifier].changed:
-                        info = HeroAI_FloatingWindows.settings.get_hero_panel_info(combined_identifier)                        
-                        info.x = round(HeroAI_FloatingWindows.hero_windows[combined_identifier].window_pos[0])
-                        info.y = round(HeroAI_FloatingWindows.hero_windows[combined_identifier].window_pos[1])
-                        info.collapsed = HeroAI_FloatingWindows.hero_windows[combined_identifier].collapse
-                        info.open = HeroAI_FloatingWindows.hero_windows[combined_identifier].open
-                        HeroAI_FloatingWindows.settings.save_settings()
+                    PyImGui.end()
         
     @staticmethod
     def show_ui(cached_data: CacheData):
@@ -219,6 +191,9 @@ class HeroAI_FloatingWindows():
             HeroAI_FloatingWindows.combined_hero_panel(own_data, cached_data)
 
             if HeroAI_FloatingWindows.settings.ShowPartyOverlay:
+                for account in cached_data.party.accounts.values():
+                    if account.AccountEmail:
+                        HeroAI_FloatingWindows.hero_windows.setdefault(account.AccountEmail, True)
                 draw_party_overlay(cached_data, HeroAI_FloatingWindows.hero_windows)
                 
             if HeroAI_FloatingWindows.settings.ShowPartySearchOverlay:
@@ -226,7 +201,11 @@ class HeroAI_FloatingWindows():
             
             if (HeroAI_FloatingWindows.settings.ShowCommandPanel and (own_data.AgentPartyData.IsPartyLeader or not HeroAI_FloatingWindows.settings.ShowCommandPanelOnlyOnLeaderAccount) 
                 ):
-                draw_command_panel(HeroAI_FloatingWindows.command_panel_window, cached_data)
+                HeroAI_FloatingWindows.command_panel_window_open = draw_command_panel(
+                    HeroAI_FloatingWindows.command_panel_window_name,
+                    HeroAI_FloatingWindows.command_panel_window_open,
+                    cached_data,
+                )
             
             # Command Hotbars are deprecated — their commands now live on the Launch Bar (see
             # HeroAI/command_api.py). The saved hotbar data is kept only so the "Import to Launch

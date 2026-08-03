@@ -511,7 +511,6 @@ class Py4GWLibrary:
         if ImGui.Begin(ini_key=self.ini_key, name=self.module_name, flags=PyImGui.WindowFlags(PyImGui.WindowFlags.NoResize|PyImGui.WindowFlags.NoTitleBar|PyImGui.WindowFlags.NoScrollbar|PyImGui.WindowFlags.NoScrollWithMouse)):   
             win_size = PyImGui.get_window_size()
             self.win_size = (win_size[0], win_size[1])
-            ImGui.set_window_within_displayport(*self.win_size)
             style = ImGui.get_style()
             
             spacing = 5
@@ -568,7 +567,6 @@ class Py4GWLibrary:
             window_hovered = PyImGui.is_window_hovered()
             win_size = PyImGui.get_window_size()
             self.win_size = (win_size[0], win_size[1])
-            ImGui.set_window_within_displayport(*self.win_size)
             
             style = ImGui.get_style()
             width = win_size[0] - style.WindowPadding.value1 * 2
@@ -614,13 +612,6 @@ class Py4GWLibrary:
         open = False
         
         if self.filtered_widgets and self.widget_filter:
-            win_pos = PyImGui.get_window_pos()
-                
-            PyImGui.set_next_window_pos(
-                    (win_pos[0], win_pos[1] + win_size[1] - style.WindowBorderSize.value1),
-                    PyImGui.ImGuiCond.Always
-                )
-
             height = min(self.max_suggestions, len(self.filtered_widgets)) * 30 + (style.ItemSpacing.value2 or 0) + (style.WindowPadding.value2 or 0) * 2
             PyImGui.set_next_window_size((win_size[0], height),
                     PyImGui.ImGuiCond.Always
@@ -628,7 +619,7 @@ class Py4GWLibrary:
                 
             suggestion_hovered = False
             
-            if PyImGui.begin("##WidgetsList", False, PyImGui.WindowFlags(PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.NoSavedSettings | PyImGui.WindowFlags.NoFocusOnAppearing )):
+            if PyImGui.begin("##WidgetsList", False, PyImGui.WindowFlags(PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.NoFocusOnAppearing )):
                 suggestion_hovered = PyImGui.is_window_hovered()
                 card_width = PyImGui.get_content_region_avail()[0]
                 open = True
@@ -806,7 +797,6 @@ class Py4GWLibrary:
                 self._save("Configuration", "library_width", self.win_size[0])
                 self._save("Configuration", "library_height", self.win_size[1])
                 
-            ImGui.set_window_within_displayport(*self.win_size, PyImGui.ImGuiCond.Once)            
             style = ImGui.get_style()
             
             PyImGui.push_clip_rect(*win_pos, self.win_size[0], self.win_size[1], False)
@@ -1214,15 +1204,6 @@ class Py4GWLibrary:
         self.draw_confirmation_modal()
 
     def draw_confirmation_modal(self):
-        io = PyImGui.get_io()
-        center_x = (io.display_size_x / 2) - 250
-        center_y = (io.display_size_y / 2) - 100
-
-        PyImGui.set_next_window_pos(
-            (center_x, center_y),
-            PyImGui.ImGuiCond.Always,
-        )
-
         PyImGui.set_next_window_size(
             (500, 175),
             PyImGui.ImGuiCond.Always,
@@ -1231,8 +1212,7 @@ class Py4GWLibrary:
         if PyImGui.begin_popup_modal(
             self.CONFIRMATION_MODAL_ID,
             True,
-            PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.NoTitleBar
-            | PyImGui.WindowFlags.NoSavedSettings
+            PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.NoTitleBar
         ):
             widget = self._pending_disable_widget
 
@@ -1530,7 +1510,6 @@ class Py4GWLibrary:
         if self.win_size:       
             PyImGui.set_next_window_size(self.win_size, PyImGui.ImGuiCond.Always)
             
-        PyImGui.set_next_window_collapsed(False, PyImGui.ImGuiCond.Always)
         style = ImGui.get_style()
         
         padding = self.single_button_size * 0.05
@@ -1545,7 +1524,6 @@ class Py4GWLibrary:
         if win_open:
             win_size = PyImGui.get_window_size()
             self.win_size = (win_size[0], win_size[1])
-            ImGui.set_window_within_displayport(*self.win_size)
             win_pos = PyImGui.get_window_pos()
             win_center = (win_pos[0] + self.win_size[0] / 2, win_pos[1] + self.win_size[1] / 2)
             radius = (min(self.win_size) - (padding * 2)) / 2

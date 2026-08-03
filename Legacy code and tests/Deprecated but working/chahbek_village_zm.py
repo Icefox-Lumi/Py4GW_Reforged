@@ -4,6 +4,7 @@ import random
 import ctypes
 
 module_name = "Chahbek Village ZM farm"
+window_flags = PyImGui.WindowFlags.AlwaysAutoResize
 
 #region coordinate lists
 start_area_coordinate_list      = [
@@ -380,11 +381,8 @@ class BotVars:
         }
         self.character_name_logged = False
         self.request_name = False
-        self.window_module = ImGui.WindowModule()
 
 bot_vars = BotVars()
-bot_vars.window_module = ImGui.WindowModule(module_name, window_name=module_name, window_size=(300, 300), 
-                                            window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 combat_handler:SkillManager.Autocombat = SkillManager.Autocombat()
 
 class StateMachineVars:
@@ -1984,12 +1982,7 @@ fsm_vars.state_machine.AddSubroutine(
 #region Draw Window
 def draw_window():
 
-    if bot_vars.window_module.first_run:
-        PyImGui.set_next_window_size(*bot_vars.window_module.window_size)
-        PyImGui.set_next_window_pos(*bot_vars.window_module.window_pos)
-        bot_vars.window_module.first_run = False
-
-    if not PyImGui.begin(bot_vars.window_module.window_name, bot_vars.window_module.window_flags):
+    if not PyImGui.begin(module_name, True, window_flags):
         return
     
     PyImGui.begin_group()
@@ -2324,17 +2317,17 @@ def main():
         fsm_vars.state_machine.update()
         
     except ImportError as e:
-        ConsoleLog(bot_vars.window_module.module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        ConsoleLog(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        ConsoleLog(module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        ConsoleLog(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except ValueError as e:
-        ConsoleLog(bot_vars.window_module.module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        ConsoleLog(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        ConsoleLog(module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        ConsoleLog(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except TypeError as e:
-        ConsoleLog(bot_vars.window_module.module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        ConsoleLog(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        ConsoleLog(module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        ConsoleLog(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except Exception as e:
-        ConsoleLog(bot_vars.window_module.module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        ConsoleLog(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        ConsoleLog(module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        ConsoleLog(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     finally:
         pass
 #endregion
