@@ -52,6 +52,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: main
+          # Full history, not the action's default shallow (fetch-depth: 1)
+          # clone -- this job does its own git pull --rebase + push back to
+          # this same repo later, and a shallow clone's history boundary is
+          # exactly the wrong thing to risk a rebase tripping over.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
@@ -59,7 +64,7 @@ jobs:
           architecture: 'x86'
 
       - name: Install the launcher's dependencies
-        run: pip install --only-binary=:all: --no-binary=proxy_tools -r Py4GW_Reforged_Launcher/requirements.txt
+        run: 'pip install --only-binary=:all: --no-binary=proxy_tools -r Py4GW_Reforged_Launcher/requirements.txt'
 
       - name: Run the real test suite
         working-directory: Py4GW_Reforged_Launcher
