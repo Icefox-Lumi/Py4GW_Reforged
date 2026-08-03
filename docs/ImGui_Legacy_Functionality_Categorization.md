@@ -13,10 +13,6 @@ The goal is deprecation planning:
 
 This is a classification document, not a migration implementation plan.
 
-> Status: this document describes the former legacy behavior for historical
-> reference. `WindowModule` has since been removed from active Python source;
-> callers use native ImGui window lifecycle and persistence instead.
-
 
 ## High-Level Conclusion
 
@@ -320,7 +316,7 @@ But it should be evaluated as infrastructure, not as a mere wrapper.
 
 This is one of the most important unique categories.
 
-### Sources (historical)
+### Sources
 
 - [Py4GWCoreLib/ImGui_Legacy_src/WindowModule.py](Py4GWCoreLib/ImGui_Legacy_src/WindowModule.py:1)
 - [Py4GWCoreLib/ImGui_Legacy_src/ImGuisrc.py](Py4GWCoreLib/ImGui_Legacy_src/ImGuisrc.py:286)

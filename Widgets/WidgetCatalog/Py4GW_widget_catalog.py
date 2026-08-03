@@ -50,6 +50,8 @@ class address_bar_vars:
 
 @dataclass
 class floating_icon_vars:
+    position_x: float = 40.0
+    position_y: float = 40.0
     button_size: float = 45.0
     button_size_min: float = 20.0
     button_size_max: float = 96.0
@@ -185,6 +187,8 @@ class address_bar_snapshot:
 
 @dataclass
 class floating_icon_snapshot:
+    icon_x: float = 40.0
+    icon_y: float = 40.0
     icon_path: str = ""
     icon_size: float = 45.0
     idle_scale: float = 1.25
@@ -1276,11 +1280,16 @@ class WidgetCatalogWindow:
         serialized_entries = "|".join(active_view.search_entries)
         self._write_ini_value_immediately(self.ini_key, "saved_entries", serialized_entries, section="Search", name="saved_entries")
 
+    def _save_floating_position(self) -> None:
+        self.floating_button.position = (float(self.floating_button.position[0]), float(self.floating_button.position[1]))
+
     def _capture_setup_snapshot(self) -> None:
         self.setup_snapshot.tree_labels.width = float(self.ui_catalog.tree.width)
         self.setup_snapshot.address_bar.button_size = int(self.config.address_bar.button_size)
         self.setup_snapshot.address_bar.gradient_start = self.config.address_bar.gradient_start.copy()
         self.setup_snapshot.address_bar.gradient_end = self.config.address_bar.gradient_end.copy()
+        self.setup_snapshot.floating_icon.icon_x = float(self.floating_button.position[0])
+        self.setup_snapshot.floating_icon.icon_y = float(self.floating_button.position[1])
         self.setup_snapshot.floating_icon.icon_path = self.floating_button.icon_path
         self.setup_snapshot.floating_icon.icon_size = float(self.floating_button.button_size)
         self.setup_snapshot.floating_icon.idle_scale = float(self.floating_button.idle_icon_scale)
@@ -1310,6 +1319,8 @@ class WidgetCatalogWindow:
         self.config.address_bar.gradient_end = self.setup_snapshot.address_bar.gradient_end.copy()
         self._save_config()
 
+        self.floating_button.reposition_to((float(self.setup_snapshot.floating_icon.icon_x), float(self.setup_snapshot.floating_icon.icon_y)))
+        self._save_floating_position()
         self.floating_button.icon_path = self.setup_snapshot.floating_icon.icon_path
         self.floating_button.button_size = max(1.0, float(self.setup_snapshot.floating_icon.icon_size))
         self.floating_button.idle_icon_scale = max(0.1, float(self.setup_snapshot.floating_icon.idle_scale))
@@ -1349,6 +1360,11 @@ class WidgetCatalogWindow:
         self.floating_button.idle_icon_scale = floating_defaults.idle_scale
         self.floating_button.hover_icon_scale = floating_defaults.hover_scale
         self._save_floating_config()
+
+    def _reset_floating_position(self) -> None:
+        floating_defaults = floating_icon_vars()
+        self.floating_button.reposition_to((floating_defaults.position_x, floating_defaults.position_y))
+        self._save_floating_position()
 
     @classmethod
     def _pick_texture_path(cls) -> str | None:
@@ -2484,8 +2500,12 @@ class WidgetCatalogWindow:
             if not self.runtime.setup_snapshot_captured:
                 self._capture_setup_snapshot()
             PyImGui.text("Catalog Configuration")
-            PyImGui.text_wrapped("Navigation settings apply immediately. Window placement is owned and persisted by ImGui.")
+            PyImGui.text_wrapped("Navigation settings apply immediately. Floating icon styling is saved in this catalog, while the floating button position is persisted by its own window config.")
             PyImGui.separator()
+
+            pyimgui_io = PyImGui.get_io()
+            max_x = max(float(pyimgui_io.display_size_x), float(self.floating_button.position[0]) + 1.0)
+            max_y = max(float(pyimgui_io.display_size_y), float(self.floating_button.position[1]) + 1.0)
 
             if ImGui.collapsing_header("Address Bar"):
                 address_bar = self.config.address_bar
@@ -2507,7 +2527,19 @@ class WidgetCatalogWindow:
 
             if ImGui.collapsing_header("Floating Icon"):
                 floating_icon = self.config.floating_icon
-                PyImGui.text_wrapped("The icon is a normal ImGui window. Its placement and size are managed by ImGui.")
+                PyImGui.text_wrapped("The icon can be dragged directly in the UI. These controls update its position and appearance immediately.")
+
+                icon_x = ImGui.slider_float("Icon X", float(self.floating_button.position[0]), 0.0, max_x)
+                icon_y = ImGui.slider_float("Icon Y", float(self.floating_button.position[1]), 0.0, max_y)
+                if icon_x != float(self.floating_button.position[0]) or icon_y != float(self.floating_button.position[1]):
+                    self.floating_button.reposition_to((icon_x, icon_y))
+                    self._save_floating_position()
+
+                if ImGui.button("Reset Position", width=140):
+                    self._reset_floating_position()
+                ImGui.show_tooltip("Move the floating icon back to its default position.")
+
+                PyImGui.text(f"Current position: ({self.floating_button.position[0]:.1f}, {self.floating_button.position[1]:.1f})")
                 PyImGui.separator()
 
                 icon_path = ImGui.input_text("Icon Texture", self._texture_display_path(self.floating_button.icon_path))
@@ -2694,6 +2726,7 @@ class WidgetCatalogWindow:
 
     def _draw_window(self) -> None:
         if self.runtime.expand_on_next_show:
+            PyImGui.set_next_window_collapsed(False, PyImGui.ImGuiCond.Always)
             self.runtime.expand_on_next_show = False
 
         min_window_width = DEFAULT_WINDOW_WIDTH

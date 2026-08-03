@@ -89,7 +89,12 @@ floating_custom_colors = {
     )
 }
 
-# Menu window identity and runtime state
-window_name = "Widgets"
-window_flags = PyImGui.WindowFlags.AlwaysAutoResize
+# Menu window and layout state
+window_module = ImGui.WindowModule(module_name, window_name="Widgets", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+window_x = handler._read_setting_int(module_name, "omx", 100)
+window_y = handler._read_setting_int(module_name, "omy", 100)
+window_module.window_pos = (window_x, window_y)
+window_module.collapse = handler._read_setting_bool(module_name, "collapsed", True)
+old_menu_window_collapsed = window_module.collapse
+old_menu_window_pos = window_module.window_pos
     

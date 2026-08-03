@@ -13,6 +13,13 @@ class Settings:
         COMBAT_RANGE_MODE_LEGACY: "Legacy",
     }
 
+    class HeroPanelInfo:
+        def __init__(self, x: int = 200, y: int = 200, collapsed: bool = False, visible: bool = True):
+            self.x: int = x
+            self.y: int = y
+            self.collapsed: bool = collapsed
+            self.open: bool = visible
+            
     class CommandHotBar:
         def __init__(self, identifier: str = ""):
             self.identifier: str = identifier
@@ -138,6 +145,8 @@ class Settings:
         self.CombatRangeMode = self.COMBAT_RANGE_MODE_PARTY_AGGRO
         self._combat_range_mode_override: str | None = None
         self.ShowPartyPanelUI = True
+        self.HeroPanelPositions : dict[str, Settings.HeroPanelInfo] = {}
+        
         default_hotbar = Settings.CommandHotBar("hotbar_1")
         
         commands = HeroAICommands()
@@ -282,6 +291,9 @@ class Settings:
             self.ini_handler.set("CommandHotBars", hotbar_id, hotbar.to_ini_string())
             
         if self.account_ini_handler is not None:
+            for hero_email, info in self.HeroPanelPositions.items():
+                self.account_ini_handler.set("HeroPanelPositions", hero_email, f"{info.x},{info.y},{info.collapsed},{info.open}")
+                            
             for hotbar_id, hotbar in self.CommandHotBars.items():
                 self.account_ini_handler.set("CommandHotBars", hotbar_id, hotbar.to_pos_string())
             
@@ -292,6 +304,8 @@ class Settings:
         # Global part ([General] + hotbar definitions) always available; account part loaded after.
         self.load_global_settings()
 
+        self.HeroPanelPositions.clear()
+        self.import_hero_panel_positions(self.account_ini_handler)
 
     def load_global_settings(self):
         self.ShowCommandPanel = self.ini_handler.get_bool("General", "ShowCommandPanel", True)
@@ -336,6 +350,36 @@ class Settings:
             self.CommandHotBars.clear()
             self.import_command_hotbars()
 
+    def import_hero_panel_positions(self, ini_handler: NativeSettings | None):
+        if ini_handler is None:
+            return
+        
+        items = ini_handler.items("HeroPanelPositions")
+        request_save = False
+
+        for key, value in items.items():
+            try:
+                parts = value.split(",")
+                if len(parts) != 4:
+                    ConsoleLog("HeroAI", f"Legacy HeroPanelPosition format detected for {key}, upgrading...")
+                    x_str, y_str, collapsed_str, visible_str = parts[0] if len(parts) > 0 else "200", parts[1] if len(parts) > 1 else "200", "false", "true"
+                else:
+                    x_str, y_str, collapsed_str, visible_str = parts
+                    
+                x = int(x_str)
+                y = int(y_str)
+                collapsed = collapsed_str.lower() == "true"
+                visible = visible_str and visible_str.lower() == "true" 
+                request_save = key not in self.HeroPanelPositions or request_save
+                self.HeroPanelPositions[key] = Settings.HeroPanelInfo(x, y, collapsed, visible)
+                
+            except Exception as e:
+                ConsoleLog("HeroAI", f"Invalid format for Hero Panel of {key}. Using default.")
+                self.HeroPanelPositions[key] = Settings.HeroPanelInfo()
+        
+        if request_save:
+            self.save_requested = True
+    
     def import_command_hotbars(self):        
         items = self.ini_handler.items("CommandHotBars")        
         positions = self.account_ini_handler.items("CommandHotBars") if self.account_ini_handler is not None else {}
@@ -358,6 +402,15 @@ class Settings:
         
         if request_save:
             self.save_requested = True  
+
+    def get_hero_panel_info(self, account_email: str) -> 'Settings.HeroPanelInfo':
+        info = self.HeroPanelPositions.get(account_email, self.HeroPanelPositions.get(account_email.lower(), Settings.HeroPanelInfo()))
+        
+        if account_email not in self.HeroPanelPositions:
+            self.HeroPanelPositions[account_email] = info
+            self.save_requested = True
+        
+        return info
 
     def _get_account_settings_handler(self) -> NativeSettings | None:
         """The LOCAL account's settings document, or None until the account anchor resolves.

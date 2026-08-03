@@ -643,7 +643,8 @@ def main():
 
     bot.Update()
     projects_path = PySystem.Console.get_projects_path()
-    bot.UI.draw_window(icon_path=projects_path + "\\" + MODULE_ICON)
+    widgets_path = projects_path + "\\Widgets\\Config\\textures\\"
+    bot.UI.draw_window(icon_path=widgets_path + "YAVB 2.0 mascot.png")
 
 
 if __name__ == "__main__":

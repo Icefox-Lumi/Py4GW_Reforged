@@ -1,12 +1,10 @@
 from Py4GWCoreLib import *
 
 boreal_station = 675
-MODULE_NAME = "Boreal Bot Tutorial"
 
 @dataclass
 class BotVariables:
-    window_name: str = "Control Panel"
-    window_flags: int = PyImGui.WindowFlags.AlwaysAutoResize
+    window_info: ImGui.WindowModule = field(default=None)
     state: str = "Not Started"
     fsm: FSM = field(default=None)
     total_timer: Timer = field(default=None)
@@ -18,7 +16,10 @@ class BotVariables:
     gold_item_count: int = 0
     sell_to_vendor_fsm = FSM("SellToVendor")
 
-bot_vars = BotVariables(fsm = FSM("MainRoutine"),
+bot_vars = BotVariables(window_info = ImGui.WindowModule("Boreal Bot Tutorial",
+                                 window_name = "Control Panel",
+                                 window_flags = PyImGui.WindowFlags.AlwaysAutoResize),
+                        fsm = FSM("MainRoutine"),
                         total_timer = Timer(),
                         run_timer = Timer())
 
@@ -59,14 +60,13 @@ def IsSkillBarLoaded(log_action = True):
     global bot_vars
     primary_profession, secondary_profession = Agent.GetProfessionNames(Player.GetAgentID())
     if primary_profession != "Assassin" and secondary_profession != "Assassin":
-        frame = inspect.currentframe()
-        current_function = frame.f_code.co_name if frame else "IsSkillBarLoaded"
-        PySystem.Console.Log(MODULE_NAME, f"{current_function} - This bot requires A/Any or Any/A to work, halting.", PySystem.Console.MessageType.Error)
+        current_function = inspect.currentframe().f_code.co_name
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"{current_function} - This bot requires A/Any or Any/A to work, halting.", PySystem.Console.MessageType.Error)
         StopBot()
         return False
 
     if log_action:
-        PySystem.Console.Log(MODULE_NAME, "Skill bar loaded successfully.", PySystem.Console.MessageType.Info)
+        PySystem.Console.Log(bot_vars.window_info.module_name, "Skill bar loaded successfully.", PySystem.Console.MessageType.Info)
     return True
 
 def IsInventoryHandlingNeeded():
@@ -101,7 +101,12 @@ bot_vars.fsm.AddSubroutine(name="Inventory Handling",
 def DrawWindow():
     global bot_vars
     try:
-        if PyImGui.begin(bot_vars.window_name, bot_vars.window_flags):
+        if bot_vars.window_info.first_run:
+            PyImGui.set_next_window_size(bot_vars.window_info.window_size[0], bot_vars.window_info.window_size[1])     
+            PyImGui.set_next_window_pos(bot_vars.window_info.window_pos[0], bot_vars.window_info.window_pos[1])
+            bot_vars.window_info.first_run = False
+
+        if PyImGui.begin(bot_vars.window_info.window_name, bot_vars.window_info.window_flags):
 
             headers = ["Value","Data"]
             data = [
@@ -132,9 +137,8 @@ def DrawWindow():
                     
             PyImGui.end()
     except Exception as e:
-        frame = inspect.currentframe()
-        current_function = frame.f_code.co_name if frame else "DrawWindow"
-        PySystem.Console.Log(MODULE_NAME, f"Error in {current_function}: {str(e)}", PySystem.Console.MessageType.Error)
+        current_function = inspect.currentframe().f_code.co_name
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"Error in {current_function}: {str(e)}", PySystem.Console.MessageType.Error)
         raise
 
 def main():
@@ -166,17 +170,17 @@ def main():
             
 
     except ImportError as e:
-        PySystem.Console.Log(MODULE_NAME, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(MODULE_NAME, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except ValueError as e:
-        PySystem.Console.Log(MODULE_NAME, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(MODULE_NAME, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except TypeError as e:
-        PySystem.Console.Log(MODULE_NAME, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(MODULE_NAME, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except Exception as e:
-        PySystem.Console.Log(MODULE_NAME, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(MODULE_NAME, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_info.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     finally:
         pass
 

@@ -8,8 +8,14 @@ from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
 
 MODULE_NAME = "Chat Command Broadcast"
 
-WINDOW_NAME = "Chat Command Broadcast"
-WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
+window_module = ImGui.WindowModule(
+    MODULE_NAME,
+    window_name="Chat Command Broadcast",
+    window_size=(300, 80),
+    window_pos=(100, 100),
+    window_flags=PyImGui.WindowFlags.AlwaysAutoResize,
+    can_close=False,
+)
 
 message_text = ""
 
@@ -45,7 +51,7 @@ def check_inbox():
 def DrawWindow():
     global message_text
     try:
-        if PyImGui.begin(WINDOW_NAME, WINDOW_FLAGS):
+        if window_module.begin():
             message_text = PyImGui.input_text("##message", message_text)
             submitted = PyImGui.is_item_deactivated_after_edit()
             if submitted and message_text.strip():
@@ -53,7 +59,8 @@ def DrawWindow():
                 Player.SendChatCommand(cmd)   # send on this account
                 broadcast(cmd)                # signal all others
                 message_text = ""
-        PyImGui.end()
+            window_module.process_window()
+        window_module.end()
     except Exception as e:
         PySystem.Console.Log(MODULE_NAME, f"Error in DrawWindow: {str(e)}", PySystem.Console.MessageType.Debug)
 

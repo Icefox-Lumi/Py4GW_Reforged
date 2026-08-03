@@ -88,6 +88,12 @@ def load_account_settings():
 
     state.floating_attachment_index = handler._read_setting_int("FloatingMenu", "floating_attachment_index", 0, force_account=True)
 
+    state.old_menu_window_pos = (
+        handler._read_setting_int("WidgetManager", "omx", 100, force_account=True),
+        handler._read_setting_int("WidgetManager", "omy", 100, force_account=True),
+    )
+    state.old_menu_window_collapsed = handler._read_setting_bool("WidgetManager", "collapsed", False, force_account=True)
+
     state.enable_quick_dock = handler._read_setting_bool("QuickDock", "enable_quick_dock", True, force_account=True)
     state.quick_dock_width = handler._read_setting_int("QuickDock", "width", 10, force_account=True)
     state.quick_dock_height = handler._read_setting_int("QuickDock", "height", 50, force_account=True)
@@ -111,6 +117,12 @@ def load_global_settings():
 
     state.floating_attachment_index = handler._read_setting_int("FloatingMenu", "floating_attachment_index", 0, force_global=True)
 
+
+    state.old_menu_window_pos = (
+        handler._read_setting_int("WidgetManager", "omx", 100, force_global=True),
+        handler._read_setting_int("WidgetManager", "omx", 100, force_global=True),
+    )
+    state.old_menu_window_collapsed = handler._read_setting_bool("WidgetManager", "collapsed", False, force_global=True)
 
     state.enable_quick_dock = handler._read_setting_bool("QuickDock", "enable_quick_dock", True, force_global=True)
     state.quick_dock_width = handler._read_setting_int("QuickDock", "width", 10, force_global=True)

@@ -133,8 +133,7 @@ class BotVars:
     def __init__(self, map_id=0):
         self.starting_map = map_id
         self.bot_started = False
-        self.window_name = "Vaettir Bot v2.3.3 Enums WIP D"
-        self.window_flags = PyImGui.WindowFlags.AlwaysAutoResize
+        self.window_module = ImGui.WindowModule()
         self.variables = {}
         self.window_statistics = WindowStatistics()
         self.show_config_options = False
@@ -186,6 +185,7 @@ FSM_vars = StateMachineVars()
 
 follow_delay_timer = Timer()
 bot_vars = BotVars(map_id=650) #Longeye's Ledge
+bot_vars.window_module = ImGui.WindowModule(module_name, window_name="Vaettir Bot v2.3.3 Enums WIP D", window_size=(300, 300), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 looting_state_entered = False
 
 
@@ -371,7 +371,7 @@ def get_filtered_loot_array():
 
     # --- Logging block is now after calculations ---
     if final_filtered_count == 0 and initial_nearby_count > 0:
-         PySystem.Console.Log(module_name, f"[Debug] get_filtered_loot_array: Initial Nearby={initial_nearby_count}, Valid Owner={valid_owner_count}, Pre-Filter={pre_filter_count}, Final Filtered={final_filtered_count}", PySystem.Console.MessageType.Info)
+         PySystem.Console.Log(bot_vars.window_module.module_name, f"[Debug] get_filtered_loot_array: Initial Nearby={initial_nearby_count}, Valid Owner={valid_owner_count}, Pre-Filter={pre_filter_count}, Final Filtered={final_filtered_count}", PySystem.Console.MessageType.Info)
          # Optional: Log model IDs here if needed
 
     return AgentArray.Sort.ByDistance(filtered_agent_ids, Player.GetXY())
@@ -436,7 +436,7 @@ def finished_looting():
 
         # Log only if we were actually attempting to loot (flag is True)
         if looting_state_entered:
-             PySystem.Console.Log(module_name, f"[Debug] Exiting 'Loot routine'. Reason: {reason.strip()}", PySystem.Console.MessageType.Warning) # Use Warning to make it stand out
+             PySystem.Console.Log(bot_vars.window_module.module_name, f"[Debug] Exiting 'Loot routine'. Reason: {reason.strip()}", PySystem.Console.MessageType.Warning) # Use Warning to make it stand out
              looting_state_entered = False # Reset flag for next time ONLY when exiting
 
         # --- End logging block ---
@@ -597,7 +597,7 @@ def DepositGold():
         # --- ADDED Confirmation Log ---
         # Format the number with commas for readability
         log_message = f"[Deposit] Deposited {gold_to_deposit:,} gold to Xunlai Chest." 
-        PySystem.Console.Log(module_name, log_message, PySystem.Console.MessageType.Info)
+        PySystem.Console.Log(bot_vars.window_module.module_name, log_message, PySystem.Console.MessageType.Info)
         # --- END Added Log ---
 
         return True # Indicate deposit was performed
@@ -664,7 +664,7 @@ def IsSkillBarLoaded():
     if primary_profession != "Assassin" and primary_profession != "Mesmer":
         frame = inspect.currentframe()
         current_function = frame.f_code.co_name if frame else "Unknown"
-        PySystem.Console.Log(module_name, f"{current_function} - This bot requires either A/Me or Me/A to work, halting.", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - This bot requires either A/Me or Me/A to work, halting.", PySystem.Console.MessageType.Error)
         ResetEnvironment()
         StopBot()
         return False
@@ -678,7 +678,7 @@ def IsSkillBarLoaded():
     skillbar.arcane_echo = SkillBar.GetSkillIDBySlot(7)
     skillbar.channeling = SkillBar.GetSkillIDBySlot(8)
     
-    PySystem.Console.Log(module_name, f"SkillBar Loaded.", PySystem.Console.MessageType.Info)
+    PySystem.Console.Log(bot_vars.window_module.module_name, f"SkillBar Loaded.", PySystem.Console.MessageType.Info)       
     return True
     
 #region inventory
@@ -693,13 +693,13 @@ def HasThingsToSell(log = False):
     frame = inspect.currentframe()
     current_function = frame.f_code.co_name if frame else "Unknown"
     if log:
-        PySystem.Console.Log(module_name, f"{current_function} - Initial items: {items_to_sell}", PySystem.Console.MessageType.Info)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - Initial items: {items_to_sell}", PySystem.Console.MessageType.Info)
 
     # General material filtering
     if not bot_vars.config_vars.sell_materials:
         items_to_sell = ItemArray.Filter.ByCondition(items_to_sell, lambda item_id: not Item.Type.IsMaterial(item_id))
         if log:
-            PySystem.Console.Log(module_name, f"{current_function} - After filtering out all materials: {items_to_sell}", PySystem.Console.MessageType.Info)
+            PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - After filtering out all materials: {items_to_sell}", PySystem.Console.MessageType.Info)
     else:
         # Filter specific materials if 'sell_materials' is enabled
         filtered_items = []
@@ -720,33 +720,33 @@ def HasThingsToSell(log = False):
         # Replace 'items_to_sell' with filtered items
         items_to_sell = filtered_items
         if log:
-            PySystem.Console.Log(module_name, f"{current_function} - After filtering specific materials: {items_to_sell}", PySystem.Console.MessageType.Info)
+            PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - After filtering specific materials: {items_to_sell}", PySystem.Console.MessageType.Info)
 
     # Filter based on rarity
     if not bot_vars.config_vars.sell_whites:
         items_to_sell = ItemArray.Filter.ByCondition(items_to_sell, lambda item_id: not Item.Rarity.IsWhite(item_id))
         if log:
-            PySystem.Console.Log(module_name, f"{current_function} - After filtering whites: {items_to_sell}", PySystem.Console.MessageType.Info)
+            PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - After filtering whites: {items_to_sell}", PySystem.Console.MessageType.Info)
 
     if not bot_vars.config_vars.sell_blues:
         items_to_sell = ItemArray.Filter.ByCondition(items_to_sell, lambda item_id: not Item.Rarity.IsBlue(item_id))
         if log:
-            PySystem.Console.Log(module_name, f"{current_function} - After filtering blues: {items_to_sell}", PySystem.Console.MessageType.Info)
+            PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - After filtering blues: {items_to_sell}", PySystem.Console.MessageType.Info)
 
     if not bot_vars.config_vars.sell_purples:
         items_to_sell = ItemArray.Filter.ByCondition(items_to_sell, lambda item_id: not Item.Rarity.IsPurple(item_id))
         if log:
-            PySystem.Console.Log(module_name, f"{current_function} - After filtering purples: {items_to_sell}", PySystem.Console.MessageType.Info)
+            PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - After filtering purples: {items_to_sell}", PySystem.Console.MessageType.Info)
 
     if not bot_vars.config_vars.sell_golds:
         items_to_sell = ItemArray.Filter.ByCondition(items_to_sell, lambda item_id: not Item.Rarity.IsGold(item_id))
         if log:
-            PySystem.Console.Log(module_name, f"{current_function} - After filtering golds: {items_to_sell}", PySystem.Console.MessageType.Info)
+            PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - After filtering golds: {items_to_sell}", PySystem.Console.MessageType.Info)
 
     # Check if there are any remaining items to sell
     if len(items_to_sell) > 0:
         if log:
-            PySystem.Console.Log(module_name, f"{current_function} - We have Items to sell: {items_to_sell}", PySystem.Console.MessageType.Info)
+            PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - We have Items to sell: {items_to_sell}", PySystem.Console.MessageType.Info)
         return True
 
     return False
@@ -965,7 +965,7 @@ def SellMaterials(log=False):
         if value == 0:
             if log:
                 PySystem.Console.Log(
-                    module_name,
+                    bot_vars.window_module.module_name,
                     f"[Sell] Skipped item {item_id} (qty: {quantity}) because value is 0",
                     PySystem.Console.MessageType.Warning
                 )
@@ -978,14 +978,14 @@ def SellMaterials(log=False):
 
         if log:
             PySystem.Console.Log(
-                module_name,
+                bot_vars.window_module.module_name,
                 f"[Sell] Queued item {item_id} for sale (qty: {quantity}, value: {value})",
                 PySystem.Console.MessageType.Info
             )
 
     if log and len(items) == 0: # --- MODIFIED: Check length of 'items' (filtered list), not queue ---
         PySystem.Console.Log(
-            module_name,
+            bot_vars.window_module.module_name,
             "[Sell] No items matched filters for sale.",
             PySystem.Console.MessageType.Info
         )
@@ -1057,7 +1057,7 @@ def DepositItems():
         queued_count += 1
 
     # Keep this final summary log if you find it useful
-    PySystem.Console.Log(module_name, f"[Deposit] Finished queuing {queued_count} items for deposit.", PySystem.Console.MessageType.Info)
+    PySystem.Console.Log(bot_vars.window_module.module_name, f"[Deposit] Finished queuing {queued_count} items for deposit.", PySystem.Console.MessageType.Info)
 
 
 def DepositItemsComplete():
@@ -1154,10 +1154,10 @@ def handle_end_state_machine():
     #bot_vars.window_statistics.lap_timer.Reset()
     inventory_check_result = InventoryCheck() # Store result
     if not inventory_check_result: # If InventoryCheck is FALSE (means inventory IS full / needs handling)
-        PySystem.Console.Log(module_name, f"[Debug] Inventory full or needs handling. Jumping to 'End State Machine Loop' (triggers Outpost return).", PySystem.Console.MessageType.Info)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"[Debug] Inventory full or needs handling. Jumping to 'End State Machine Loop' (triggers Outpost return).", PySystem.Console.MessageType.Info)
         FSM_vars.state_machine.jump_to_state_by_name("End State Machine Loop")
     else: # InventoryCheck is TRUE (means inventory is NOT full / okay to continue)
-         PySystem.Console.Log(module_name, f"[Debug] Inventory OK. Proceeding to 'Exit Jaga Moraine' state.", PySystem.Console.MessageType.Info)
+         PySystem.Console.Log(bot_vars.window_module.module_name, f"[Debug] Inventory OK. Proceeding to 'Exit Jaga Moraine' state.", PySystem.Console.MessageType.Info)
 
 
 def FollowPathwithDelayTimer(path_handler,follow_handler, log_actions=False, delay=50):
@@ -1713,12 +1713,12 @@ def IsEnemyBehind (agent_id):
 def CastSkill (skill_id):
     global bot_vars
     SkillBar.UseSkill(SkillBar.GetSlotBySkillID(skill_id))
-    #PySystem.Console.Log(module_name, f"Cast {Skill.GetName(skill_id)}, slot: {SkillBar.GetSlotBySkillID(skill_id)}", PySystem.Console.MessageType.Info)
+    #PySystem.Console.Log(bot_vars.window_module.module_name, f"Cast {Skill.GetName(skill_id)}, slot: {SkillBar.GetSlotBySkillID(skill_id)}", PySystem.Console.MessageType.Info)
  
 def CastSkill2(skill_slot):
     global bot_vars
     SkillBar.UseSkill(skill_slot)
-    #PySystem.Console.Log(module_name, f"Cast {Skill.GetName(SkillBar.GetSkillIDBySlot(skill_slot))}, slot: {skill_slot}", PySystem.Console.MessageType.Info)
+    #PySystem.Console.Log(bot_vars.window_module.module_name, f"Cast {Skill.GetName(SkillBar.GetSkillIDBySlot(skill_slot))}, slot: {skill_slot}", PySystem.Console.MessageType.Info)
 
 def assign_skill_ids():
     global skillbar
@@ -2065,7 +2065,12 @@ def DrawWindow():
     global bot_vars, FSM_vars, overlay
 
     try:
-        if PyImGui.begin(bot_vars.window_name, bot_vars.window_flags):
+        if bot_vars.window_module.first_run:
+            PyImGui.set_next_window_size(bot_vars.window_module.window_size[0], bot_vars.window_module.window_size[1])     
+            PyImGui.set_next_window_pos(bot_vars.window_module.window_pos[0], bot_vars.window_module.window_pos[1])
+            bot_vars.window_module.first_run = False
+
+        if PyImGui.begin(bot_vars.window_module.window_name, bot_vars.window_module.window_flags):
             # Start a nested table for controls
             if PyImGui.begin_table("ControlTable", 2):
                 # Row 1: Control
@@ -2382,7 +2387,7 @@ def DrawWindow():
     except Exception as e:
         frame = inspect.currentframe()
         current_function = frame.f_code.co_name if frame else "Unknown"
-        PySystem.Console.Log(module_name, f"Error in {current_function}: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Error in {current_function}: {str(e)}", PySystem.Console.MessageType.Error)
         raise
     
 #endregion
@@ -2428,7 +2433,7 @@ def restart_due_to_stuck():
     global FSM_vars, bot_vars
     if Map.GetMapID() == bot_vars.starting_map:
         return
-    PySystem.Console.Log(module_name,
+    PySystem.Console.Log(bot_vars.window_module.module_name, 
                       "Player is stuck, cannot recover, restarting.", 
                       PySystem.Console.MessageType.Error)
     FSM_vars.stuck_count = 0
@@ -2567,17 +2572,17 @@ def main():
             bot_vars.deposit_action_queue.execute_next() 
             
     except ImportError as e:
-        PySystem.Console.Log(module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except ValueError as e:
-        PySystem.Console.Log(module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except TypeError as e:
-        PySystem.Console.Log(module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except Exception as e:
-        PySystem.Console.Log(module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     finally:
         pass
 

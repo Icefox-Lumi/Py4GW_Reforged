@@ -24,8 +24,29 @@ class YAVB_GUI:
 
 
     def DrawOptionsWindow(self):
-        visible, _ = PyImGui.begin(self.parent.option_window_name, None, self.parent.option_window_flags)
-        if visible:
+        self.parent.option_window_module.initialize()
+        border = self.parent.option_window_snapped_border.lower()
+        if border == "right":
+            snapped_x = self.parent.main_window_pos[0] + self.parent.main_window_size[0] + 1
+            snapped_y = self.parent.main_window_pos[1]
+        elif border == "left":
+            snapped_x = self.parent.main_window_pos[0] - self.option_window_size[0] - 1
+            snapped_y = self.parent.main_window_pos[1]
+        elif border == "top":
+            snapped_x = self.parent.main_window_pos[0]
+            snapped_y = self.parent.main_window_pos[1] - self.option_window_size[1] - 1
+        elif border == "bottom":
+            snapped_x = self.parent.main_window_pos[0]
+            snapped_y = self.parent.main_window_pos[1] + self.parent.main_window_size[1] + 1
+        else:
+            # Fallback to right
+            snapped_x = self.parent.main_window_pos[0] + self.parent.main_window_size[0] + 1
+            snapped_y = self.parent.main_window_pos[1]
+
+        if self.parent.option_window_snapped:
+            PyImGui.set_next_window_pos(snapped_x, snapped_y)
+        
+        if self.parent.option_window_module.begin():
             if PyImGui.begin_child("YAVB Options Child Window", (300, 250), True, PyImGui.WindowFlags.NoFlag):
                 if PyImGui.collapsing_header("Looting Options"):
                     PyImGui.text_wrapped("Looting is handled by the Looting Manager Widget, configure it there.")
@@ -55,7 +76,10 @@ class YAVB_GUI:
                 
                 PyImGui.end_child()
             
-        PyImGui.end()
+            self.parent.option_window_module.process_window()
+            self.option_window_pos = PyImGui.get_window_pos()
+            self.option_window_size = PyImGui.get_window_size() 
+        self.parent.option_window_module.end()
 
 #endregion
 
@@ -63,8 +87,8 @@ class YAVB_GUI:
    
 #region MainWindow
     def DrawMainWindow(self):
-        visible, _ = PyImGui.begin(self.parent.main_window_name, None, self.parent.window_flags)
-        if visible:
+        self.parent.window_module.initialize()
+        if self.parent.window_module.begin():
             if PyImGui.begin_menu_bar():
                 # Direct clickable item on the menu bar
                 if PyImGui.begin_menu("File"):
@@ -78,6 +102,12 @@ class YAVB_GUI:
                     PyImGui.end_menu()
                 if PyImGui.begin_menu("Options"):
                     self.parent.option_window_visible = PyImGui.checkbox("Show window", self.parent.option_window_visible)
+                    self.parent.option_window_snapped = PyImGui.checkbox("Snapped", self.parent.option_window_snapped)
+                    if self.parent.option_window_snapped:
+                        snap_directions = ["Right", "Left", "Bottom"]
+                        current_index = snap_directions.index(self.parent.option_window_snapped_border)
+                        selected_index = PyImGui.combo("Snap Direction", current_index, snap_directions)
+                        self.parent.option_window_snapped_border = snap_directions[selected_index]
                     PyImGui.end_menu()
 
                 # Dropdown menu called "Console"
@@ -96,6 +126,20 @@ class YAVB_GUI:
                         self.parent.LogDetailedMessage("Detailed logging",f"{'ENABLED' if self.parent.detailed_logging else 'DISABLED'}.", LogConsole.LogSeverity.INFO)
                     ImGui.show_tooltip("Will output Extra Info to the YAVB Console,\nWill output Full Logging to the Py4GWConsole.")
                     
+                    prev_value = self.parent.console_snapped
+                    self.parent.console_snapped = PyImGui.checkbox("Snapped", self.parent.console_snapped)
+                    if prev_value != self.parent.console_snapped:
+                        self.parent.console.SetSnapped(self.parent.console_snapped, self.parent.console_snapped_border)
+                    
+                    if self.parent.console_snapped:
+                        prev_value = self.parent.console_snapped_border
+                        snap_directions = ["Right", "Left", "Bottom"]
+                        current_index = snap_directions.index(self.parent.console_snapped_border)
+                        selected_index = PyImGui.combo("Snap Direction", current_index, snap_directions)
+                        self.parent.console_snapped_border = snap_directions[selected_index]
+                        if prev_value != self.parent.console_snapped_border:
+                            self.parent.console.SetSnapped(self.parent.console_snapped, self.parent.console_snapped_border)
+
                     PyImGui.end_menu()
 
                 PyImGui.end_menu_bar()
@@ -304,5 +348,6 @@ class YAVB_GUI:
                         
                 PyImGui.end_child()
             
-        PyImGui.end()
+            self.parent.window_module.process_window()            
+        self.parent.window_module.end()
 #endregion

@@ -28,8 +28,13 @@ if TYPE_CHECKING:
 MODULE_NAME = "HeroAI Skill Editor"
 MODULE_ICON = "Textures/Module_Icons/HeroAI Skill Editor.png"
 
-WINDOW_NAME = "HeroAI Skillbar"
-WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoCollapse
+window_module = ImGui.WindowModule(
+	MODULE_NAME,
+	window_name="HeroAI Skillbar",
+	window_size=(1200, 700),
+	window_flags=PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoCollapse),
+	can_close=False,
+)
 
 custom_skill_provider = CustomSkillClass()
 _default_conditions = CastConditions()
@@ -2091,8 +2096,8 @@ def _draw_skill_table(entries: List[SkillRow]) -> None:
 
 def _draw_window() -> None:
 	global _selected_account_email
-	if not PyImGui.begin(WINDOW_NAME, WINDOW_FLAGS):
-		PyImGui.end()
+	if not window_module.begin():
+		window_module.end()
 		return
 
 	PyImGui.separator()
@@ -2130,7 +2135,8 @@ def _draw_window() -> None:
 	PyImGui.text_colored("Use with Caution: Modifying skill conditions can lead to unintended consequences. Always review changes before applying.", Color(255, 0, 0, 255).to_tuple_normalized())
 
 
-	PyImGui.end()
+	window_module.process_window()
+	window_module.end()
 
 
 def main() -> None:

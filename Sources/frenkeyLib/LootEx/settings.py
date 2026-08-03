@@ -52,6 +52,9 @@ class Settings:
         self.selected_filter: Optional[Filter] = None
         self.automatic_inventory_handling: bool = False
         self.enable_loot_filters: bool = False
+        self.window_size: tuple[float, float] = (800, 600)
+        self.window_position: tuple[float, float] = (500, 200)
+        self.window_collapsed: bool = False
         self.window_visible: bool = False
         self.scraper_window_visible: bool = False
 
@@ -141,6 +144,9 @@ class Settings:
         doc.set_json("character_profiles", self.character_profiles)
         doc.set("automatic_inventory_handling", self.automatic_inventory_handling)
         doc.set("enable_loot_filters", self.enable_loot_filters)
+        doc.set_json("window_size", list(self.window_size))
+        doc.set_json("window_position", list(self.window_position))
+        doc.set("window_collapsed", self.window_collapsed)
         doc.set("collect_items", self.collect_items)
         doc.set("max_xunlai_storage", self.max_xunlai_storage.value)
         doc.set("last_xunlai_check", self.last_xunlai_check.isoformat())
@@ -158,6 +164,9 @@ class Settings:
         self.character_profiles = doc.get_json("character_profiles", {})
         self.automatic_inventory_handling = doc.get_bool("automatic_inventory_handling", False)
         self.enable_loot_filters = doc.get_bool("enable_loot_filters", False)
+        self.window_size = tuple(doc.get_json("window_size", [400, 200]))
+        self.window_position = tuple(doc.get_json("window_position", [200, 200]))
+        self.window_collapsed = doc.get_bool("window_collapsed", False)
         self.max_xunlai_storage = Bag_enum(
             doc.get_int("max_xunlai_storage", Bag_enum.Storage_4.value))
         last_xunlai_check_str = doc.get_str("last_xunlai_check", "")

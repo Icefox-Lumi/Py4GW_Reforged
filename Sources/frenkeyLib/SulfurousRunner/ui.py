@@ -4,6 +4,7 @@ import PyImGui
 from Py4GWCoreLib import Camera, ImGui, Player
 from Py4GWCoreLib.DXOverlay import DXOverlay
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+from Py4GWCoreLib.ImGui_src.WindowModule import WindowModule
 from Py4GWCoreLib.Overlay import Overlay
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color
 from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
@@ -19,8 +20,13 @@ widget_info : Widget | None = None
 # line segment registers a callback per segment, per frame. The flags below draw through
 # Overlay instead, which is the ImGui draw list and retains nothing.
 path_overlay : DXOverlay = DXOverlay()
-CONFIGURE_WINDOW_NAME = "Sulfurous Runner"
-configure_window_open = False
+configure_window : WindowModule = WindowModule(
+    "Sulfurous Runner",
+    "Sulfurous Runner",
+    window_size=(500, 280),
+    window_pos=(200, 200),
+    can_close=True,
+)
 
 def draw_flag(overlay: Overlay, wp: Waypoint3D, flag_color : Color = Color(0, 204, 156, 100), collision : bool = False):
     size = 25
@@ -87,25 +93,21 @@ def color_equal(a: tuple[float, float, float, float],
     return all(math.isclose(x, y, abs_tol=eps) for x, y in zip(a, b))
 
 def draw_configure():
-    global widget_info, configure_window_open
+    global widget_info
     
     if widget_info is None:
         wh = get_widget_handler()
         widget_info = wh.get_widget_info("Sulfurous Runner")
         
-    configure_window_open = widget_info.configuring if widget_info else False
+    configure_window.open = widget_info.configuring if widget_info else False
     
     if not widget_info:
         return
     
-    if not configure_window_open:
+    if not configure_window.open:
         return
     
-    open, configure_window_open = PyImGui.begin_with_close(
-        CONFIGURE_WINDOW_NAME,
-        configure_window_open,
-        PyImGui.WindowFlags.NoFlag,
-    )
+    open = configure_window.begin()
     
     if open: 
         settings = Settings()
@@ -142,9 +144,11 @@ def draw_configure():
             settings.path_color = Color.from_tuple(path_color)
             settings.save()
         
-    PyImGui.end()
+        configure_window.process_window()
         
-    if not configure_window_open:
-        if widget_info and widget_info.configuring:
-            widget_info.set_configuring(False)
+    configure_window.end()
+        
+    if configure_window.changed or not configure_window.open:
+        if widget_info and widget_info.configuring != configure_window.open:
+            widget_info.set_configuring(configure_window.open)
     pass

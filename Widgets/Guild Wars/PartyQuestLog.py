@@ -29,6 +29,9 @@ from Sources.frenkeyLib.PartyQuestLog.quest import QuestCache
         
 settings = Settings()
 
+UI.QuestLogWindow.window_pos = (settings.LogPosX, settings.LogPosY)
+UI.QuestLogWindow.window_size = (settings.LogPosWidth, settings.LogPosHeight)
+
 quest_cache = QuestCache()
 fetch_and_handle_quests = True
 previous_quest_log : list[int] = [quest.quest_id for quest in quest_cache.quest_data.quest_log.values()]
@@ -44,12 +47,14 @@ def on_enable():
     global settings
     settings.load_settings()
         
+    UI.QuestLogWindow.window_pos = (settings.LogPosX, settings.LogPosY)
+    UI.QuestLogWindow.window_size = (settings.LogPosWidth, settings.LogPosHeight)
 
 def on_disable():
     settings.write_settings()
 
 def configure():    
-    UI.ConfigWindowOpen = True
+    UI.ConfigWindow.open = True
     UI.draw_configure(accounts)
 
 def create_quest_node_generator(fresh_ids: list[int]):

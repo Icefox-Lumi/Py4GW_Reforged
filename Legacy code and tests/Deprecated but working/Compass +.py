@@ -40,8 +40,7 @@ class Ring:
         self.custom = custom
 
 class Compass():
-    window_name = 'Compass+'
-    window_flags = PyImGui.WindowFlags.AlwaysAutoResize
+    window_module = ImGui.WindowModule('Compass+',window_name='Compass+', window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
     window_pos = (1200,400)
     ini = Settings("Widgets/Config/Compass +.ini", "global")
     config_loaded = False
@@ -56,6 +55,7 @@ class Compass():
     geometry   = []
     primitives_set = False
     map_bounds: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    window_rect = (0, 0, 0, 0)
 
     class Position:
         frame_id   = 0
@@ -674,23 +674,32 @@ class Compass():
     
         buffer = self.position.buffer
         size = self.position.current_size 
+        x = self.position.current_pos.x - size - buffer
+        y = self.position.current_pos.y - size - buffer
+        self.window_rect = (x, y, (size + buffer)*2, (size + buffer)*2)
+        
+        self.imgui.set_next_window_pos(x, y)
         self.imgui.set_next_window_size((size + buffer)*2, (size + buffer)*2)
 
         if self.imgui.get_io().key_ctrl or self.imgui.get_io().key_alt:
             flags = (self.imgui.WindowFlags.NoTitleBar        | 
                      self.imgui.WindowFlags.NoResize          |
-                     self.imgui.WindowFlags.NoScrollbar       |
-                     self.imgui.WindowFlags.NoScrollWithMouse |
-                     self.imgui.WindowFlags.NoCollapse        |
-                     self.imgui.WindowFlags.NoBackground)
-        else:
-            flags = (self.imgui.WindowFlags.NoTitleBar        |
-                     self.imgui.WindowFlags.NoResize          |
+                     self.imgui.WindowFlags.NoMove            |
                      self.imgui.WindowFlags.NoScrollbar       |
                      self.imgui.WindowFlags.NoScrollWithMouse |
                      self.imgui.WindowFlags.NoCollapse        |
                      self.imgui.WindowFlags.NoBackground      |
-                     self.imgui.WindowFlags.NoMouseInputs)
+                     self.imgui.WindowFlags.NoSavedSettings)
+        else:
+            flags = (self.imgui.WindowFlags.NoTitleBar        |
+                     self.imgui.WindowFlags.NoResize          |
+                     self.imgui.WindowFlags.NoMove            |
+                     self.imgui.WindowFlags.NoScrollbar       |
+                     self.imgui.WindowFlags.NoScrollWithMouse |
+                     self.imgui.WindowFlags.NoCollapse        |
+                     self.imgui.WindowFlags.NoBackground      |
+                     self.imgui.WindowFlags.NoMouseInputs     |
+                     self.imgui.WindowFlags.NoSavedSettings)
 
         if self.imgui.begin("Py4GW Minimap",  flags):
 
@@ -705,7 +714,7 @@ class Compass():
         self.imgui.end()
 
     def CheckClick(self):
-        if self.imgui.is_mouse_clicked(0) and self.imgui.is_window_hovered():
+        if self.imgui.is_mouse_clicked(0) and ImGui.is_mouse_in_rect(self.window_rect): 
             if self.imgui.get_io().key_alt:
                 pos = self.overlay.GetMouseCoords()
                 mouse_pos = (pos.x, pos.y)
@@ -789,7 +798,7 @@ def configure():
     # Window geometry delegated to ImGui native persistence
 
     try:
-        if PyImGui.begin(compass.window_name, compass.window_flags):
+        if PyImGui.begin(compass.window_module.window_name, compass.window_module.window_flags):
 
             header_opened = False
 

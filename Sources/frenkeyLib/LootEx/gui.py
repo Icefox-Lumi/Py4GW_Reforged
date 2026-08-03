@@ -195,9 +195,23 @@ class UI:
         
         self.widget_handler = get_widget_handler()
 
+        # Window geometry is delegated to ImGui's native persistence; these are first-run
+        # defaults only (position handled by ImGui / WindowModule, not restored from disk).
         # self.cached_item = cache.Cached_Item(1401)
-        self.collection_window_name = "LootEx Data Collection"
-        self.main_window_name = "LootEx"
+        self.collection_module_window : ImGui.WindowModule = ImGui.WindowModule(
+            "LootEx Data Collection",
+            "LootEx Data Collection",
+            window_size=(800, 500),
+            window_flags=PyImGui.WindowFlags.NoFlag,
+            can_close=True,
+        )
+        self.module_window : ImGui.WindowModule = ImGui.WindowModule(
+            "LootEx",
+            "LootEx",
+            window_size=(800, 600),
+            window_flags=PyImGui.WindowFlags.NoFlag,
+            can_close=True,
+        )
         self.style = ex_style.ExStyle()
         file_directory = os.path.dirname(os.path.abspath(__file__))
         self.textures_folder = os.path.join(PySystem.Console.get_projects_path(), "Textures")
@@ -280,6 +294,7 @@ class UI:
         self.first_draw: bool = True
         self.gui_open: bool = True
         
+        self.window_flags: int = PyImGui.WindowFlags.NoFlag
         self.weapon_types = [
             ItemType.Axe,
             ItemType.Sword,
@@ -759,6 +774,8 @@ class UI:
             RuleFilter("Reward Trophies", lambda rule: any(item.category == ItemCategory.RewardTrophy for item in rule.get_items())),
             RuleFilter("Quest Items", lambda rule: any(item.category == ItemCategory.QuestItem for item in rule.get_items())),            
         ]
+        self.ensure_window_on_screen = True
+        
         self.data_collector = DataCollector()
         self.filter_weapon_mods()        
         self.filter_items()    
@@ -802,6 +819,10 @@ class UI:
         width = self.inventory_coords.width - window_offsets.get(ui_size, (0, 0))[0] - 50
         height = 19
         
+        PyImGui.set_next_window_pos(
+            (self.inventory_coords.left + window_offsets.get(ui_size, (0, 0))[0], self.inventory_coords.top),
+            PyImGui.ImGuiCond.Always,
+        )
         PyImGui.set_next_window_size(
             (width, height),
             PyImGui.ImGuiCond.Always,
@@ -816,8 +837,10 @@ class UI:
             | PyImGui.WindowFlags.NoResize
             | PyImGui.WindowFlags.AlwaysAutoResize
             | PyImGui.WindowFlags.NoCollapse
+            | PyImGui.WindowFlags.NoMove
             | PyImGui.WindowFlags.NoScrollbar
             | PyImGui.WindowFlags.NoScrollWithMouse
+            | PyImGui.WindowFlags.NoSavedSettings            
             | PyImGui.WindowFlags.NoMouseInputs  
             | PyImGui.WindowFlags.NoBackground  
         ):
@@ -854,6 +877,7 @@ class UI:
         widget_info = self.widget_handler.get_widget_info("LootEx")
         
         self.settings.window_visible = widget_info.configuring if widget_info else False
+        self.module_window.open = self.settings.window_visible
         
         if not widget_info or not widget_info.configuring:
             return       
@@ -861,16 +885,19 @@ class UI:
         window_style = ex_style.ExStyle()
         window_style.push_style()
                 
-        opened, self.settings.window_visible = PyImGui.begin_with_close(
-            self.main_window_name,
-            self.settings.window_visible,
-            PyImGui.WindowFlags.NoFlag,
-        )
-
-        if opened:
+        if self.module_window.begin():
             style = ImGui.get_style()
             
+            if self.ensure_window_on_screen:
+                ImGui.set_window_within_displayport(300, 100)
+                self.ensure_window_on_screen = False
+            
             if self.settings.profile:
+                self.window_flags = (
+                    PyImGui.WindowFlags.NoMove if PyImGui.is_mouse_down(
+                        0) else PyImGui.WindowFlags.NoFlag
+                )
+
                 profile_names = [
                     profile.name for profile in self.settings.profiles]
                 profile_index = profile_names.index(self.settings.profile.name) if self.settings.profile else 0
@@ -962,14 +989,25 @@ class UI:
 
                 ImGui.end_tab_bar()
 
+                pos = PyImGui.get_window_pos()
+                size = PyImGui.get_window_size()
+
+                if self.module_window.window_size != (size[0], size[1]) and not self.module_window.collapse:
+                    self.mod_heights.clear()
+
                 self.draw_delete_profile_popup()
                 self.draw_profiles_popup()
 
-        PyImGui.end()
+            self.module_window.process_window()
+                
+        self.module_window.end()
         window_style.pop_style()
         
-        if not self.settings.window_visible and widget_info.configuring:
-            widget_info.set_configuring(False)
+        if self.module_window.open != self.settings.window_visible:
+            self.settings.window_visible = self.module_window.open
+            if widget_info.configuring != self.module_window.open:
+                widget_info.set_configuring(self.module_window.open)
+            self.settings.save()
     
     def InventoryBagsVisible(self) -> bool:
         # return UIManager.IsWindowVisible(WindowID.WindowID_InventoryBags) 
@@ -990,6 +1028,7 @@ class UI:
             return
         
         width = 30
+        PyImGui.set_next_window_pos(coords.right - (width) - 20, coords.top + 50)
         PyImGui.set_next_window_size(width, 0)
         PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg,
                                     Utils.ColorToTuple(Utils.RGBToColor(0, 0, 0, 125)))
@@ -1000,7 +1039,9 @@ class UI:
             | PyImGui.WindowFlags.NoResize
             | PyImGui.WindowFlags.NoBackground
             | PyImGui.WindowFlags.AlwaysAutoResize
-            | PyImGui.WindowFlags.NoCollapse,
+            | PyImGui.WindowFlags.NoCollapse
+            | PyImGui.WindowFlags.NoMove
+            | PyImGui.WindowFlags.NoSavedSettings,
         ):
             PyImGui.pop_style_var(1)
             PyImGui.pop_style_color(1)
@@ -1036,6 +1077,7 @@ class UI:
             return
 
         width = 30
+        PyImGui.set_next_window_pos(self.inventory_coords.left - (width - 5), self.inventory_coords.top + 20)
         PyImGui.set_next_window_size(width, 0)
         PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg,
                                 Utils.ColorToTuple(Utils.RGBToColor(0, 0, 0, 125)))
@@ -1047,7 +1089,9 @@ class UI:
             | PyImGui.WindowFlags.NoResize
             | PyImGui.WindowFlags.NoBackground
             | PyImGui.WindowFlags.AlwaysAutoResize
-            | PyImGui.WindowFlags.NoCollapse,
+            | PyImGui.WindowFlags.NoCollapse
+            | PyImGui.WindowFlags.NoMove
+            | PyImGui.WindowFlags.NoSavedSettings,
         ):
             PyImGui.pop_style_var(1)
             PyImGui.pop_style_color(1)
@@ -2450,7 +2494,7 @@ class UI:
                             cursor = PyImGui.get_cursor_pos()
                             # PyImGui.set_cursor_pos((cursor[0] + (frame_size * count), cursor[1])
                             ImGui.DrawTextureExtended(texture_path=texture_map.CoreTextures.UI_Inventory_Slot.value, size=(frame_size[0], frame_size[1]), tint=frame_color)
-                            PyImGui.set_cursor_pos((cursor[0], cursor[1] + ((frame_size[1] - skin_size) / 2)))
+                            PyImGui.set_cursor_pos((cursor[0], cursor[1] + ((frame_size[1] - skin_size) / 2))
                                                                   
                             ImGui.DrawTextureExtended(texture_path=texture, size=(skin_size, skin_size), tint=texture_color)
                             
@@ -2649,7 +2693,7 @@ class UI:
                     PyImGui.draw_list_add_rect(screen_cursor[0], screen_cursor[1], screen_cursor[0] + remaining_size[0], screen_cursor[1] + size, self.style.Selected_Item.color_int, 1.0, 0, 2.0)
                 
                 cursor = PyImGui.get_cursor_pos()
-                PyImGui.set_cursor_pos((cursor[0] + padding, cursor[1] + padding))
+                PyImGui.set_cursor_pos((cursor[0] + padding, cursor[1] + padding)
                 
                 ImGui.begin_child(f"skin_texture_child{rule.skin}", (skin_size, skin_size), False, PyImGui.WindowFlags.NoFlag| PyImGui.WindowFlags.NoScrollWithMouse | PyImGui.WindowFlags.NoScrollbar)
                 if texture.endswith(((".jpg",".png"))) and os.path.exists(texture):
@@ -2724,7 +2768,7 @@ class UI:
                     PyImGui.draw_list_add_rect(cursor[0], cursor[1], cursor[0] + remaining_size[0], cursor[1] + size, self.style.Selected_Item.color_int, 1.0, 0, 2.0)
                 
                 cursor = PyImGui.get_cursor_pos()
-                PyImGui.set_cursor_pos((cursor[0] + padding, cursor[1] + padding))
+                PyImGui.set_cursor_pos((cursor[0] + padding, cursor[1] + padding)
                 
                 ImGui.begin_child(f"skin_texture_child{skin}", (skin_size, skin_size), False, PyImGui.WindowFlags.NoFlag| PyImGui.WindowFlags.NoScrollWithMouse | PyImGui.WindowFlags.NoScrollbar)
                 if texture.endswith((".jpg",".png")) and os.path.exists(texture):
@@ -2758,13 +2802,18 @@ class UI:
         if not self.settings.profile or not self.selected_rule:
             return
         
-        if not self.skin_select_popup:
+        opened = False
+        is_mouse_over = False
+        if self.skin_select_popup:
+            if not self.skin_select_popup_open:
+                PyImGui.set_next_window_size(300, 600)
+                PyImGui.set_next_window_pos(self.py_io.mouse_pos_x, self.py_io.mouse_pos_y)
+                opened = True
+        else:
             self.skin_select_popup_open = False
             return
-
-        if not self.skin_select_popup_open:
-            PyImGui.open_popup("Select Skin")
-        self.skin_select_popup_open = PyImGui.begin_popup("Select Skin")
+            
+        self.skin_select_popup_open = PyImGui.begin("Select Skin", PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.NoMove)
         
         if self.skin_select_popup_open:     
             popup_size = PyImGui.get_content_region_avail()       
@@ -2810,16 +2859,23 @@ class UI:
                                     self.skin_search = ""            
                                     self.settings.profile.save()     
                                     
-                                    self.skin_select_popup = False
-                                    PyImGui.close_current_popup()
+                                    self.skin_select_popup = False  
                                 
             ImGui.end_child()
                 
-            PyImGui.end_popup()
+            window_pos = PyImGui.get_window_pos()
+            window_size = PyImGui.get_window_size()
+            window_rect = (window_pos[0], window_pos[1], window_size[0], window_size[1])
+            is_mouse_over = GUI.is_mouse_in_rect(window_rect)
+        
+        PyImGui.end()   
 
-        if not self.skin_select_popup_open:
-            self.skin_select_popup = False
-
+        if self.skin_select_popup_open and not is_mouse_over:
+            if not self.filter_popup:
+                if PyImGui.is_mouse_clicked(0):
+                    self.skin_select_popup_open = False
+                    self.skin_select_popup = False
+                
         self.draw_filter_popup()
     
     def draw_item_selectable(self, item: models.Item, is_selected: bool) -> tuple[bool, bool]:
@@ -2845,7 +2901,7 @@ class UI:
                     PyImGui.draw_list_add_rect(cursor[0], cursor[1], cursor[0] + remaining_size[0], cursor[1] + remaining_size[1], self.style.Selected_Colored_Item.color_int, 1.0, 0, 2.0)
                 
                 cursor = PyImGui.get_cursor_pos()
-                PyImGui.set_cursor_pos((cursor[0] + padding, cursor[1] + padding))
+                PyImGui.set_cursor_pos((cursor[0] + padding, cursor[1] + padding)
                 
                 ImGui.begin_child(f"skin_texture_child{item.model_id}_{item.inventory_icon or ""}", (skin_size, skin_size), False, PyImGui.WindowFlags.NoFlag| PyImGui.WindowFlags.NoScrollWithMouse | PyImGui.WindowFlags.NoScrollbar)
                 if texture.endswith((".jpg",".png")) and os.path.exists(texture):
@@ -3094,7 +3150,7 @@ class UI:
                         ImGui.begin_child(f"selected_rule {rule.skin}", (size, size), False, PyImGui.WindowFlags.NoFlag| PyImGui.WindowFlags.NoScrollWithMouse | PyImGui.WindowFlags.NoScrollbar)
                         if texture_exists:
                             cursor = PyImGui.get_cursor_pos()
-                            PyImGui.set_cursor_pos((cursor[0] + padding, cursor[1] + padding))
+                            PyImGui.set_cursor_pos((cursor[0] + padding, cursor[1] + padding)
                             ImGui.DrawTextureExtended(texture_path=texture, size=(skin_size, skin_size))                    
                         else:            
                             ImGui.push_font("Bold", 28)
@@ -3147,7 +3203,7 @@ class UI:
                                 cursor = PyImGui.get_cursor_pos()
                                 # PyImGui.set_cursor_pos((cursor[0] + (frame_size * count), cursor[1])
                                 ImGui.DrawTextureExtended(texture_path=texture_map.CoreTextures.UI_Inventory_Slot.value, size=(frame_size[0], frame_size[1]), tint=frame_color)
-                                PyImGui.set_cursor_pos((cursor[0], cursor[1] + ((frame_size[1] - skin_size) / 2)))
+                                PyImGui.set_cursor_pos((cursor[0], cursor[1] + ((frame_size[1] - skin_size) / 2))
                                 
                                 if texture_exists:                                        
                                     ImGui.DrawTextureExtended(texture_path=texture, size=(skin_size, skin_size), tint=texture_color)
@@ -5385,7 +5441,7 @@ class UI:
                 x,y = PyImGui.get_cursor_pos()
                 ImGui.dummy(64, 64)
                 
-                PyImGui.set_cursor_pos((x, y))
+                PyImGui.set_cursor_pos((x, y)
                 ImGui.image(data_item.texture_file, (64, 64))
             else:
                 ImGui.dummy(64, 64)
@@ -5430,7 +5486,9 @@ class UI:
         self.data.SaveItems(True)
                     
     def draw_data_collection(self): 
-        if not self.settings.scraper_window_visible:
+        self.collection_module_window.open = self.settings.scraper_window_visible
+        
+        if not self.collection_module_window.open:
             return
         
         if self.collection_timer.IsExpired():
@@ -5501,13 +5559,7 @@ class UI:
                 del self.collection_items[k]                
 
         style = ImGui.get_style()
-        opened, self.settings.scraper_window_visible = PyImGui.begin_with_close(
-            self.collection_window_name,
-            self.settings.scraper_window_visible,
-            PyImGui.WindowFlags.NoFlag,
-        )
-
-        if opened:
+        if self.collection_module_window.begin():
             avail = PyImGui.get_content_region_avail()
             
             ImGui.text("Collected Items: " + str(len(self.data.Items.All)), 16, "Bold")
@@ -5573,7 +5625,12 @@ class UI:
                     
             ImGui.end_child()                        
             
-        PyImGui.end()
+            self.collection_module_window.process_window()
+        
+        self.collection_module_window.end()
+        
+        if not self.collection_module_window.open:
+            self.settings.scraper_window_visible = False
     
     
     #endregion
@@ -5608,21 +5665,21 @@ class UI:
         ImGui.begin_child(f"ImageToggle{id}{texture_path}", (width, height), False, PyImGui.WindowFlags.NoScrollbar | PyImGui.WindowFlags.NoScrollWithMouse)
         
         # cursor = PyImGui.get_cursor_pos()
-        PyImGui.set_cursor_pos((padding[0], padding[1]))
+        PyImGui.set_cursor_pos((padding[0], padding[1])
         
         if texture_path:
             ImGui.DrawTextureExtended(texture_path=texture_path, size=texture_size, tint=tint)
         else:
             ImGui.push_font("Bold", 28)
             text_size = PyImGui.calc_text_size(IconsFontAwesome5.ICON_QUESTION)
-            PyImGui.set_cursor_pos(((size[0] - text_size[0]) / 2, (size[1] - (28 - 6)) / 2))
+            PyImGui.set_cursor_pos(((size[0] - text_size[0]) / 2, (size[1] - (28 - 6)) / 2)
             ImGui.text_colored(IconsFontAwesome5.ICON_QUESTION, (tint[0] / 255, tint[1] / 255, tint[2] / 255, tint[3] / 255))
             ImGui.pop_font()
             pass
                 
         if label:
             PyImGui.push_style_color(PyImGui.ImGuiCol.Text, Utils.ColorToTuple(Utils.RGBToColor(255, 255, 255, 255 if selected else 200 if hovered else 125)))
-            PyImGui.set_cursor_pos((size[0] + 5, (size[1] - label_size[1]) / 2 + 3))
+            PyImGui.set_cursor_pos((size[0] + 5, (size[1] - label_size[1]) / 2 + 3)
             ImGui.text(label)
             PyImGui.pop_style_color(1)
         
@@ -6014,7 +6071,7 @@ class RichTextRenderer:
             if tok.type == "newline":
                 x = cursor_x_start
                 y += line_height
-                PyImGui.set_cursor_pos((x, y))
+                PyImGui.set_cursor_pos((x, y)
                 continue
 
             if tok.type == "font_push":
@@ -6039,9 +6096,9 @@ class RichTextRenderer:
                 if x + w > cursor_x_start + max_width:
                     x = cursor_x_start
                     y += line_height
-                    PyImGui.set_cursor_pos((x, y))
+                    PyImGui.set_cursor_pos((x, y)
 
-                PyImGui.set_cursor_pos((x, y))
+                PyImGui.set_cursor_pos((x, y)
                 ImGui.image(tok.texture_path, (w, h), tok.uv0 or (0, 0), tok.uv1 or (1, 1))
                 x += w
                 continue
@@ -6051,10 +6108,10 @@ class RichTextRenderer:
                 if x + size[0] > cursor_x_start + max_width:
                     x = cursor_x_start
                     y += line_height
-                    PyImGui.set_cursor_pos((x, y))
+                    PyImGui.set_cursor_pos((x, y)
                     
-                PyImGui.set_cursor_pos((x, y))
+                PyImGui.set_cursor_pos((x, y)
                 PyImGui.text_unformatted(tok.text)
                 x += size[0]
 
-        PyImGui.set_cursor_pos((cursor_x_start, y + line_height))
+        PyImGui.set_cursor_pos((cursor_x_start, y + line_height)

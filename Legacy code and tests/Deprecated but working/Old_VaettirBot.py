@@ -126,6 +126,7 @@ class BotVars:
     def __init__(self, map_id=0):
         self.starting_map = map_id
         self.bot_started = False
+        self.window_module = None
         self.variables = {}
         self.window_statistics = WindowStatistics()
         self.show_config_options = False
@@ -136,6 +137,7 @@ class BotVars:
         self.show_visual_path = False
 
 bot_vars = BotVars(map_id=650) #Longeye's Ledge
+bot_vars.window_module = ImGui.WindowModule(module_name, window_name="Apoguita's Vaettir Bot", window_size=(300, 300), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
 
 class StateMachineVars:
         def __init__(self):
@@ -258,7 +260,7 @@ def IsSkillBarLoaded():
     primary_profession, secondary_profession = Agent.GetProfessionNames(Player.GetAgentID())
     if primary_profession != "Assassin" and secondary_profession != "Mesmer":
         current_function = inspect.currentframe().f_code.co_name
-        PySystem.Console.Log(module_name, f"{current_function} - This bot requires A/Me to work, halting.", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"{current_function} - This bot requires A/Me to work, halting.", PySystem.Console.MessageType.Error)
         ResetEnvironment()
         StopBot()
         return False
@@ -274,7 +276,7 @@ def IsSkillBarLoaded():
     
     
     #bot_vars.skill_caster.skills = SkillBar.GetSkillbar()
-    PySystem.Console.Log(module_name, f"SkillBar Loaded.", PySystem.Console.MessageType.Info)
+    PySystem.Console.Log(bot_vars.window_module.module_name, f"SkillBar Loaded.", PySystem.Console.MessageType.Info)       
     return True
 
 def set_waiting_routine():
@@ -706,7 +708,7 @@ def handle_end_state_machine():
     global bot_vars
     bot_vars.window_statistics.lap_timer.Reset()
     if not InventoryCheck():
-        PySystem.Console.Log(module_name, f"Loop restarted.", PySystem.Console.MessageType.Info)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Loop restarted.", PySystem.Console.MessageType.Info)
         FSM_vars.state_machine.jump_to_state_by_name("End State Machine Loop")
 
 
@@ -1240,12 +1242,12 @@ def IsEnemyBehind (agent_id):
 def CastSkill (skill_id):
     global bot_vars
     SkillBar.UseSkill(SkillBar.GetSlotBySkillID(skill_id))
-    #PySystem.Console.Log(module_name, f"Cast {Skill.GetName(skill_id)}, slot: {SkillBar.GetSlotBySkillID(skill_id)}", PySystem.Console.MessageType.Info)
+    #PySystem.Console.Log(bot_vars.window_module.module_name, f"Cast {Skill.GetName(skill_id)}, slot: {SkillBar.GetSlotBySkillID(skill_id)}", PySystem.Console.MessageType.Info)
  
 def CastSkill2(skill_slot):
     global bot_vars, aftercast
     SkillBar.UseSkill(skill_slot)
-    #PySystem.Console.Log(module_name, f"Cast {Skill.GetName(SkillBar.GetSkillIDBySlot(skill_slot))}, slot: {skill_slot}", PySystem.Console.MessageType.Info)
+    #PySystem.Console.Log(bot_vars.window_module.module_name, f"Cast {Skill.GetName(SkillBar.GetSkillIDBySlot(skill_slot))}, slot: {skill_slot}", PySystem.Console.MessageType.Info)
 
 def assign_skill_ids():
     global skillbar
@@ -1495,7 +1497,12 @@ def DrawWindow():
     global bot_vars, FSM_vars, overlay
 
     try:
-        if PyImGui.begin("Apoguita's Vaettir Bot", True, PyImGui.WindowFlags.AlwaysAutoResize):
+        if bot_vars.window_module.first_run:
+            PyImGui.set_next_window_size(bot_vars.window_module.window_size[0], bot_vars.window_module.window_size[1])     
+            PyImGui.set_next_window_pos(bot_vars.window_module.window_pos[0], bot_vars.window_module.window_pos[1])
+            bot_vars.window_module.first_run = False
+
+        if PyImGui.begin(bot_vars.window_module.window_name, bot_vars.window_module.window_flags):
             # Start a nested table for controls
             if PyImGui.begin_table("ControlTable", 2):
                 # Row 1: Control
@@ -1771,7 +1778,7 @@ def DrawWindow():
 
     except Exception as e:
         current_function = inspect.currentframe().f_code.co_name
-        PySystem.Console.Log(module_name, f"Error in {current_function}: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Error in {current_function}: {str(e)}", PySystem.Console.MessageType.Error)
         raise
 
 def Handle_Stuck():
@@ -1781,7 +1788,7 @@ def Handle_Stuck():
             FSM_vars.auto_stuck_command_timer.Reset()
 
     if FSM_vars.stuck_count > 10:
-        PySystem.Console.Log(module_name, f"Player is stuck, cannot recover, restarting.", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Player is stuck, cannot recover, restarting.", PySystem.Console.MessageType.Error)
         FSM_vars.stuck_count = 0
         bot_vars.forced_restart = True
                     
@@ -1801,7 +1808,7 @@ def Handle_Stuck():
             FSM_vars.stuck_count += 1
             player_x, player_y = Player.GetXY()
             distance = Utils.Distance((player_x, player_y), (escape_location[0], escape_location[1]))
-            PySystem.Console.Log(module_name, f"Player is stuck, attempting to recover", PySystem.Console.MessageType.Warning)
+            PySystem.Console.Log(bot_vars.window_module.module_name, f"Player is stuck, attempting to recover", PySystem.Console.MessageType.Warning)
     else:
         new_player_x, new_player_y = Player.GetXY()
         if FSM_vars.old_player_x != new_player_x or FSM_vars.old_player_y != new_player_y:
@@ -1847,17 +1854,17 @@ def main():
                     FSM_vars.non_movement_timer.Stop()
 
     except ImportError as e:
-        PySystem.Console.Log(module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except ValueError as e:
-        PySystem.Console.Log(module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except TypeError as e:
-        PySystem.Console.Log(module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except Exception as e:
-        PySystem.Console.Log(module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     finally:
         pass
 
