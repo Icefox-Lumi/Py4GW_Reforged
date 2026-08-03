@@ -27,6 +27,11 @@ with the pull request before implementation. An author’s disagreement with a
 rule, or a claim that an alternative is technically equivalent, is not an
 exception.
 
+All paths written in review documents, findings, comments, and examples must
+be repository-relative. Never include a developer’s username, home directory,
+machine-specific drive letter, or absolute local filesystem path. Use paths such
+as `Py4GWCoreLib/BuildMgr.py` or `docs/review.md`.
+
 This guide is especially important for migrations from legacy code, architecture changes, framework replacements, and large refactors presented as “no-op” changes.
 
 ## Project vision
@@ -74,6 +79,111 @@ This rule applies to both feature code and infrastructure. Custom settings,
 JSON/INI handlers, file-backed debuggers, window managers, queues, native
 dispatch wrappers, and utility classes are not acceptable substitutes for
 existing repository mechanisms without an explicit infrastructure decision.
+
+## Decide between extension and extraction
+
+Before moving code into a new class or file, answer the architectural question:
+can the existing class be extended or modified to provide the required
+capability? If yes, extend or modify it. Do not create a new ownership boundary
+just because a copy in another file appears cleaner.
+
+Extraction is justified only when another consumer must reuse a defined subset
+of the capability without inheriting the original class’s unrelated behavior,
+engine, or lifecycle. In that case, the shared class should own the unchanged
+implementation and the original class should extend it. The extraction is a
+structural ownership change, not a reason to rewrite the method bodies.
+
+When the implementation is byte-identical before and after the move, do not
+request retyping, reformatting, or a replacement implementation. Review whether
+the new ownership boundary is necessary, whether the host contract is explicit,
+and whether initialization, MRO, and call paths remain correct. If no real
+second consumer or isolation requirement exists, the correct change is to keep
+the code in the existing class and extend that class as needed.
+
+For clarity, a true move removes the implementation from the old owner and
+changes which class owns it. A copy leaves two implementations. The latter is
+forbidden unless explicitly approved; the former is acceptable when the
+ownership change is architecturally required and the implementation remains
+unchanged.
+
+## Do not build features around opportunistic attachment points
+
+A feature must not be implemented by searching for incidental override points,
+wrapping methods from the outside, monkey-patching classes, shadowing methods,
+or intercepting unrelated lifecycle paths merely because those locations are
+available. A design does not comply with this policy simply because it uses
+existing names or technically attaches to an existing class.
+
+The owning class and its normal extension points must remain the source of
+truth. The required order of implementation is:
+
+1. Reuse the existing class and its public API when it already provides the capability.
+2. Modify the owning class when the capability is missing or its existing behavior is incorrect.
+3. Extend the owning class through an explicit, stable inheritance or composition boundary when the feature intentionally changes or specializes behavior.
+4. Add a new shared abstraction only when the ownership/isolation requirement is real and cannot be satisfied by the existing class.
+
+The following patterns are forbidden by default:
+
+- external method replacement or monkey-patching;
+- wrappers that bypass the owning class’s normal implementation path;
+- overriding incidental methods to inject unrelated policy;
+- duplicate helper layers that reproduce the owning class’s logic;
+- using private/internal “holes” as the primary integration contract;
+- building an entire feature around an accidental callback, lifecycle gap, or side effect instead of adding an explicit extension point.
+
+If the existing class lacks a required extension point, add or modify that
+extension point in the owning class. Do not base the feature on a workaround
+that exploits the gap. Any required new extension boundary must be explicit,
+documented, and owned by the class being extended.
+
+### Hole-based attachment is not an architecture
+
+Some code may technically reuse existing classes while building a feature around
+incidental override points, private state, lifecycle gaps, wrappers, or
+externally injected policy. Those patterns may appear compliant because they
+call existing methods or inherit from existing classes, but they create a
+second owner for the behavior.
+
+This is a mandatory repository rule for every pull request and every
+contributor. It applies to new features, refactors, extensions, migrations, and
+code from any source. Do not introduce or preserve a design that uses an
+available “hole” as its primary architecture.
+The implementation must use the current owning class and current extension
+model:
+
+- If the current class already owns the behavior, call its existing API.
+- If the legacy behavior fills a missing capability, add that capability to the
+  current owning class or its approved shared library.
+- If the behavior intentionally mutates or specializes the class, extend the
+  class through an explicit subclass, mixin, composition, or callback contract.
+- If multiple classes must share the behavior, create a shared abstraction only
+  after establishing that inheritance from the original class would import
+  unrelated engine or lifecycle behavior.
+- Preserve the current class’s ownership, initialization, dispatch, settings,
+  queue, and native-thread contracts while adding or adapting the behavior.
+
+The following approaches are specifically forbidden:
+
+- importing a current class and replacing one of its methods from outside the
+  class definition;
+- saving the original method, installing a wrapper, and using the wrapper as a
+  hidden feature entry point;
+- inheriting solely to intercept an unrelated method because it happens to run
+  at a convenient time;
+- attaching to private fields, private registries, or accidental callbacks
+  instead of adding an explicit owner-controlled extension point;
+- injecting behavior into a generic lifecycle method that belongs to another
+  feature or subsystem;
+- maintaining a wrapper that duplicates or shadows current-class behavior while
+  claiming to be an adapter;
+- copying the current class into a replacement and modifying the copy instead
+  of changing or extending the source class.
+
+The implementation is compliant only when a maintainer can identify one
+authoritative owner for the behavior and one explicit path by which the feature
+reaches that owner. “It uses an existing class,” “it calls the original method,”
+or “the override is technically compatible” does not satisfy this rule when the
+feature still depends on an incidental attachment point.
 
 ## Acceptance rule: traceability must be human-readable
 
@@ -501,6 +611,14 @@ They make rollback and regression analysis ambiguous. Move them to a separate pu
 
 This can create two sources of truth. Require an explicit compatibility strategy and a retirement plan.
 
+### A feature is built around incidental override points
+
+This creates hidden coupling and makes the accidental integration location part
+of the architecture. Require the owning class to be modified or given an
+explicit extension point, or require a genuine subclass/composition boundary.
+Do not approve wrappers, monkey patches, method shadowing, or unrelated
+lifecycle interception as the primary implementation strategy.
+
 ## AI-oriented review instructions
 
 When asking another AI agent to review a pull request, provide these instructions:
@@ -526,6 +644,8 @@ Compare the implementation against the user’s vision:
 - Are settings, persistence, callbacks, queues, and native dispatch contracts unchanged?
 - Does the implementation reuse existing project classes and approved libraries instead of reimplementing equivalent functionality?
 - If a provided class already owns the capability, was it modified or extended instead of copied?
+- Is the feature using an explicit extension point, or is it exploiting an incidental override, wrapper, monkey patch, or lifecycle hole?
+- Does the implementation avoid hole-based attachment regardless of where the code originated or who authored the pull request?
 - Are tests and pyright/Pylance checks sufficient for the changed scope?
 
 Do not modify the repository. Produce evidence-backed findings with file paths and line references. Separate blockers, requested changes, risks, and positive evidence.
@@ -573,6 +693,7 @@ Acceptance criteria:
 - Initialization, MRO, lifecycle, and dependency contracts are explicit.
 - Existing project mechanisms and approved libraries are reused where applicable; any new parallel implementation documents a concrete capability gap and retirement/ownership plan.
 - Provided classes are extended or modified when appropriate; replacement copies are not introduced without an approved exception.
+- Hole-based attachment patterns are not introduced or preserved; the current class owns the behavior through an explicit integration path.
 - Pyright/Pylance checks pass for the changed Python scope. Behavioral test suites are not a default approval requirement unless specifically requested.
 ```
 
