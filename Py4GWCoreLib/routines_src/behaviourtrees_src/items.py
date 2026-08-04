@@ -2015,3 +2015,237 @@ class BTItems:
         return BehaviorTree(
             BehaviorTree.ActionNode(name="SalvageInventoryItems", action_fn=tick, aftercast_ms=0)
         )
+
+    @staticmethod
+    def PickupGroundItemByModelID(
+        model_ids: int | Sequence[int],
+        max_distance: float = 5_000.0,
+        timeout_ms: int = 15_000,
+        allow_unassigned: bool = True,
+        interaction_interval_ms: int = 500,
+        aftercast_ms: int = 100,
+        log: bool = False,
+    ) -> BehaviorTree:
+        """
+        Pick up the nearest ground item matching one of the supplied model IDs.
+
+        The routine targets and interacts with the matching ground-item agent,
+        allowing the game client to handle movement and pickup naturally.
+
+        Meta:
+        Expose: true
+        Audience: intermediate
+        Display: Pickup Ground Item By Model ID
+        Purpose: Find and pick up a specific nearby ground item by model ID.
+        UserDescription: Use this for bundles, torches, quest objects, or other
+        ground items that should be picked up by the local account.
+        Notes: Does not use LootConfig, multibox loot, or shared loot locks.
+        """
+        accepted_model_ids = (
+            {int(model_ids)}
+            if isinstance(model_ids, int)
+            else {
+                int(model_id)
+                for model_id in model_ids
+            }
+        )
+
+        state = {
+            "started_at": 0.0,
+            "target_agent_id": 0,
+            "last_interaction_at": 0.0,
+            "interacted": False,
+        }
+
+        def _trace(message: str) -> None:
+            if log:
+                ConsoleLog(
+                    "PickupGroundItemByModelID",
+                    message,
+                    log=True,
+                )
+
+        def _reset() -> None:
+            state["started_at"] = 0.0
+            state["target_agent_id"] = 0
+            state["last_interaction_at"] = 0.0
+            state["interacted"] = False
+
+        def _item_exists(agent_id: int) -> bool:
+            if agent_id <= 0:
+                return False
+
+            try:
+                return bool(
+                    Agent.GetItemAgentByID(agent_id)
+                )
+            except Exception:
+                return False
+
+        def _find_nearest_matching_item() -> int:
+            local_player_id = int(
+                Player.GetAgentID() or 0
+            )
+
+            item_agents = AgentArray.GetItemArray()
+            item_agents = AgentArray.Filter.ByDistance(
+                item_agents,
+                Player.GetXY(),
+                float(max_distance),
+            )
+            item_agents = AgentArray.Sort.ByDistance(
+                item_agents,
+                Player.GetXY(),
+            )
+
+            for candidate in item_agents:
+                agent_id = int(candidate)
+
+                if not _item_exists(agent_id):
+                    continue
+
+                try:
+                    owner_id = int(
+                        Agent.GetItemAgentOwnerID(
+                            agent_id
+                        )
+                        or 0
+                    )
+                except Exception:
+                    owner_id = 0
+
+                if owner_id != local_player_id:
+                    if not (
+                        allow_unassigned
+                        and owner_id == 0
+                    ):
+                        continue
+
+                try:
+                    item_id = int(
+                        Agent.GetItemAgentItemID(
+                            agent_id
+                        )
+                        or 0
+                    )
+                except Exception:
+                    continue
+
+                if item_id <= 0:
+                    continue
+
+                try:
+                    model_id = int(
+                        GLOBAL_CACHE.Item.GetModelID(
+                            item_id
+                        )
+                        or 0
+                    )
+                except Exception:
+                    continue
+
+                if model_id in accepted_model_ids:
+                    return agent_id
+
+            return 0
+
+        def _pickup_item() -> BehaviorTree.NodeState:
+            now = time.monotonic()
+
+            if not accepted_model_ids:
+                _reset()
+                return BehaviorTree.NodeState.FAILURE
+
+            if state["started_at"] <= 0.0:
+                state["started_at"] = now
+
+            if (
+                now - float(state["started_at"])
+            ) * 1000.0 >= max(
+                1,
+                int(timeout_ms),
+            ):
+                _trace(
+                    "Timed out while trying to pick up the item."
+                )
+                _reset()
+                return BehaviorTree.NodeState.FAILURE
+
+            target_agent_id = int(
+                state["target_agent_id"]
+            )
+
+            if target_agent_id > 0:
+                if not _item_exists(target_agent_id):
+                    if state["interacted"]:
+                        _trace(
+                            "Ground item disappeared after interaction."
+                        )
+                        _reset()
+                        return BehaviorTree.NodeState.SUCCESS
+
+                    state["target_agent_id"] = 0
+                    return BehaviorTree.NodeState.RUNNING
+
+            if target_agent_id <= 0:
+                target_agent_id = (
+                    _find_nearest_matching_item()
+                )
+
+                if target_agent_id <= 0:
+                    return BehaviorTree.NodeState.RUNNING
+
+                state["target_agent_id"] = (
+                    target_agent_id
+                )
+                state["interacted"] = False
+
+                _trace(
+                    f"Found item agent "
+                    f"{target_agent_id}."
+                )
+
+            interval_s = (
+                max(
+                    0,
+                    int(interaction_interval_ms),
+                )
+                / 1000.0
+            )
+
+            if (
+                now
+                - float(
+                    state["last_interaction_at"]
+                )
+                < interval_s
+            ):
+                return BehaviorTree.NodeState.RUNNING
+
+            # Remember whether this is the first interaction attempt.
+            first_interaction = not bool(
+                state["interacted"]
+            )
+
+            state["last_interaction_at"] = now
+            state["interacted"] = True
+
+            Player.ChangeTarget(target_agent_id)
+            Player.Interact(target_agent_id, False)
+
+            # Keep retrying every tick, but only log the first attempt.
+            if first_interaction:
+                _trace(
+                    f"Interacting with item agent "
+                    f"{target_agent_id}."
+                )
+
+            return BehaviorTree.NodeState.RUNNING
+
+        return BehaviorTree(
+            BehaviorTree.ActionNode(
+                name="PickupGroundItemByModelID",
+                action_fn=_pickup_item,
+                aftercast_ms=aftercast_ms,
+            )
+        )

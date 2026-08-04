@@ -619,7 +619,7 @@ explorables = {
     704: "Fronis Irontoe's Lair",
     705: "The Justiciar's End",
     707: "The Great Norn Alemoot",
-    708: "Varajar Fells",
+    708: "Varajar Fells(unknow)",
     710: "Epilogue",
     711: "Insidious Remnants",
     717: "Attack on Jalis's Camp",

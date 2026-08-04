@@ -389,27 +389,54 @@
           <h4 style="margin-bottom:8px">Identity</h4>
           <label class="field-label">Profile name</label>
           <input class="field-input" id="edit-name" placeholder="e.g. Aldric Vale">
-          <label class="field-label">Account email</label>
-          <input class="field-input" id="edit-email" placeholder="account@email.com">
-          <label class="field-label">Password</label>
-          <input class="field-input" id="edit-password" type="password" placeholder="••••••••">
+          <div id="steam-hide-identity">
+            <label class="field-label">Account email</label>
+            <input class="field-input" id="edit-email" placeholder="account@email.com">
+            <label class="field-label">Password</label>
+            <input class="field-input" id="edit-password" type="password" placeholder="••••••••">
+          </div>
         </div>
         <div>
           <h4 style="margin-bottom:8px">Client</h4>
-          <label class="field-label">Gw.exe path</label>
-          <div class="path-browse-row">
-            <input class="field-input" id="edit-path" placeholder="C:\Games\Guild Wars\Gw.exe">
-            <button class="ghost-btn" onclick="onBrowsePathClick('edit-path','Guild Wars executable','*.exe')">Browse…</button>
+          <!-- RELAY 094 follow-up: found live that leaving these editable
+               under Steam login let a profile drift back to pointing at
+               steam.exe (the old pre-toggle habit), which then silently
+               broke process-attach matching. Steam owns the actual launch
+               once the toggle is on, so these have no real use anymore --
+               hidden, and cleared on save (onSaveProfileClick) rather than
+               just visually hidden, so a stale value can't linger unseen. -->
+          <div id="steam-hide-client">
+            <label class="field-label">Gw.exe path</label>
+            <div class="path-browse-row">
+              <input class="field-input" id="edit-path" placeholder="C:\Games\Guild Wars\Gw.exe">
+              <button class="ghost-btn" onclick="onBrowsePathClick('edit-path','Guild Wars executable','*.exe')">Browse…</button>
+            </div>
+            <label class="field-label">Extra launch args</label>
+            <input class="field-input" id="edit-args" placeholder="-optional -flags">
           </div>
-          <label class="field-label">Extra launch args</label>
-          <input class="field-input" id="edit-args" placeholder="-optional -flags">
+          <p id="steam-client-note" style="display:none;font-size:11px;color:var(--faint,#5f6491);line-height:1.5;margin:4px 0 0">
+            Launched via Steam (steam://rungameid/29720) -- no path or launch args needed.
+          </p>
         </div>
         <div>
           <h4 style="margin-bottom:8px">Auto-Login</h4>
-          <div class="pal-row"><span>Enable auto-login</span><input type="checkbox" id="edit-autologin"></div>
-          <div class="pal-row"><span>Auto-select character</span><input type="checkbox" id="edit-autoselect"></div>
-          <label class="field-label">Character name to auto-select</label>
-          <input class="field-input" id="edit-charname" placeholder="in-game character name">
+          <!-- RELAY 094: Steam-linked accounts have no email Py4GW can read
+               from memory, and no suitable replacement (Apo confirmed
+               directly: "Steam accounts dont have that... the user will
+               have to set up an alias") -- so email/password/auto-select
+               are all meaningless once this is on, and get hidden rather
+               than left sitting there disabled. -->
+          <div class="pal-row"><span>Use Steam login</span><input type="checkbox" id="edit-steam-login" onchange="updateSteamLoginFieldVisibility()"></div>
+          <div id="steam-anchor-row" style="display:none">
+            <label class="field-label">Account anchor (only needed if widgets/scripts don't work)</label>
+            <input class="field-input" id="edit-steam-anchor" placeholder="any short label to identify this account">
+          </div>
+          <div id="steam-hide-autologin">
+            <div class="pal-row"><span>Enable auto-login</span><input type="checkbox" id="edit-autologin"></div>
+            <div class="pal-row"><span>Auto-select character</span><input type="checkbox" id="edit-autoselect"></div>
+            <label class="field-label">Character name to auto-select</label>
+            <input class="field-input" id="edit-charname" placeholder="in-game character name">
+          </div>
         </div>
       </div>
 
