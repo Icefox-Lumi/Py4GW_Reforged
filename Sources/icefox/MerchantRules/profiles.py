@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from hashlib import md5
-from typing import Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 
@@ -18,13 +18,6 @@ BACKUP_DOC_NAME = 'Widgets/MerchantRules/LiveConfigBackup.json'
 LOADED_PROFILE_STATE_DOC_NAME = 'Widgets/MerchantRules/LoadedProfileState.json'
 BACKUP_SCHEMA = 'merchant_rules_live_config_backup_v1'
 BACKUP_SCHEMA_VERSION = 1
-PROFILE_WINDOW_GEOMETRY_KEYS: tuple[str, ...] = (
-    'window_x',
-    'window_y',
-    'window_width',
-    'window_height',
-    'window_collapsed',
-)
 SHARED_PROFILE_SCHEMA = 'merchant_rules_shared_profile_v1'
 SHARED_PROFILE_SCHEMA_VERSION = 1
 LOADED_PROFILE_STATE_SCHEMA = 'merchant_rules_loaded_profile_state_v1'
@@ -38,7 +31,8 @@ PROFILE_SCOPES: tuple[str, ...] = (
 
 
 class JsonDocument(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     def get_json(self, path: str = '', default: object = None) -> object: ...
 
@@ -55,8 +49,6 @@ class JsonDocument(Protocol):
     def keys(self, path: str = '') -> list[str]: ...
 
     def path(self) -> str: ...
-
-    def resolved_path(self) -> str: ...
 
 
 class JsonFactoryProvider(Protocol):
@@ -106,7 +98,7 @@ def _safe_int(value: object, default: int = 0) -> int:
     try:
         if isinstance(value, str):
             return int(value.strip(), 0)
-        return int(value)
+        return int(cast(Any, value))
     except Exception:
         return default
 
@@ -116,15 +108,6 @@ def _normalize_shared_profile_display_name(raw_value: object) -> str:
         return ''
     normalized = ' '.join(str(raw_value).replace('\r', ' ').replace('\n', ' ').split())
     return normalized.strip()
-
-
-def _strip_window_geometry_from_profile_payload(payload: object) -> dict[str, object]:
-    raw_payload = dict(payload) if isinstance(payload, dict) else {}
-    return {
-        key: value
-        for key, value in raw_payload.items()
-        if key not in PROFILE_WINDOW_GEOMETRY_KEYS
-    }
 
 
 def _looks_like_merchant_rules_payload(raw_payload: object) -> bool:
@@ -255,9 +238,7 @@ class ProfileStore:
             if saved_at_unix_ms is not None
             else int(time.time() * 1000)
         )
-        shareable_payload = _strip_window_geometry_from_profile_payload(
-            payload if payload_is_normalized else self._normalize_payload(payload)
-        )
+        shareable_payload = payload if payload_is_normalized else self._normalize_payload(payload)
         return {
             'schema': SHARED_PROFILE_SCHEMA,
             'schema_version': SHARED_PROFILE_SCHEMA_VERSION,
@@ -320,9 +301,7 @@ class ProfileStore:
             )
 
         try:
-            normalized_payload = _strip_window_geometry_from_profile_payload(
-                self._normalize_payload(payload_source)
-            )
+            normalized_payload = self._normalize_payload(payload_source)
         except Exception as exc:
             raise ValueError('This saved profile is incomplete or damaged.') from exc
         saved_at_unix_ms = max(0, _safe_int(raw_payload.get('saved_at_unix_ms', 0), 0))

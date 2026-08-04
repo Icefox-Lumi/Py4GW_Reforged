@@ -12,7 +12,6 @@ salvage APIs, storage capacity, or preview consistency cannot be verified.
 import json
 import os
 import re
-import sys
 import time
 import traceback
 from collections import Counter
@@ -20,6 +19,7 @@ from collections.abc import Callable
 from collections.abc import Iterable
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
+from typing import cast
 from urllib.parse import unquote
 from uuid import uuid4
 
@@ -53,37 +53,26 @@ from Sources.marks_sources.mods_parser import parse_modifiers
 from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import DEFAULT_NPC_SELECTORS
 from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import SUPPORTED_MAP_NPC_SELECTORS
 
-_sources_namespace = sys.modules.get("Sources")
-_sources_namespace_path = getattr(_sources_namespace, "__path__", None)
-if isinstance(_sources_namespace_path, list):
-    _sources_project_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "Sources")
-    )
-    if _sources_project_path not in _sources_namespace_path:
-        _sources_namespace_path.append(_sources_project_path)
-
-from Sources.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME
-from Sources.MerchantRules.profiles import BACKUP_DOC_NAME
-from Sources.MerchantRules.profiles import BACKUP_SCHEMA
-from Sources.MerchantRules.profiles import BACKUP_SCHEMA_VERSION
-from Sources.MerchantRules.profiles import LIVE_CONFIG_DOC_NAME
-from Sources.MerchantRules.profiles import LOADED_PROFILE_STATE_DOC_NAME
-from Sources.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA
-from Sources.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA_VERSION
-from Sources.MerchantRules.profiles import PROFILE_SCOPES
-from Sources.MerchantRules.profiles import PROFILE_SCOPE_ACCOUNT
-from Sources.MerchantRules.profiles import PROFILE_SCOPE_SHARED
-from Sources.MerchantRules.profiles import PROFILE_WINDOW_GEOMETRY_KEYS
-from Sources.MerchantRules.profiles import ProfileIdentity
-from Sources.MerchantRules.profiles import ProfileStore
-from Sources.MerchantRules.profiles import ProfileSummary
-from Sources.MerchantRules.profiles import LoadedProfileProvenance
-from Sources.MerchantRules.profiles import SHARED_PROFILE_SCHEMA
-from Sources.MerchantRules.profiles import SHARED_PROFILE_SCHEMA_VERSION
-from Sources.MerchantRules.profiles import SHARED_PROFILES_DOC_NAME
-from Sources.MerchantRules.profiles import _looks_like_merchant_rules_payload
-from Sources.MerchantRules.profiles import _normalize_shared_profile_display_name
-from Sources.MerchantRules.profiles import _strip_window_geometry_from_profile_payload
+from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import BACKUP_SCHEMA
+from Sources.icefox.MerchantRules.profiles import BACKUP_SCHEMA_VERSION
+from Sources.icefox.MerchantRules.profiles import LIVE_CONFIG_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import LOADED_PROFILE_STATE_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA
+from Sources.icefox.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA_VERSION
+from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPES
+from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPE_ACCOUNT
+from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPE_SHARED
+from Sources.icefox.MerchantRules.profiles import ProfileIdentity
+from Sources.icefox.MerchantRules.profiles import ProfileStore
+from Sources.icefox.MerchantRules.profiles import ProfileSummary
+from Sources.icefox.MerchantRules.profiles import LoadedProfileProvenance
+from Sources.icefox.MerchantRules.profiles import SHARED_PROFILE_SCHEMA
+from Sources.icefox.MerchantRules.profiles import SHARED_PROFILE_SCHEMA_VERSION
+from Sources.icefox.MerchantRules.profiles import SHARED_PROFILES_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import _looks_like_merchant_rules_payload
+from Sources.icefox.MerchantRules.profiles import _normalize_shared_profile_display_name
 
 
 MODULE_NAME = "Merchant Rules"
@@ -130,11 +119,8 @@ MODS_DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Sources", "m
 RUNES_CATALOG_PATH = os.path.join(MODS_DATA_DIR, "runes.json")
 SEARCH_RESULT_LIMIT = 12
 TRAVEL_TIMEOUT_MS = 20000
-WINDOW_GEOMETRY_SAVE_THROTTLE_MS = 750
 SHARED_PROFILE_REFRESH_INTERVAL_MS = 4000
 DESTRUCTIVE_BUTTON_CONFIRM_TIMEOUT_MS = 5000
-DEFAULT_WINDOW_WIDTH = 760
-DEFAULT_WINDOW_HEIGHT = 860
 WORKSPACE_OVERVIEW = "overview"
 WORKSPACE_PREVIEW_PLAN = "preview_plan"
 WORKSPACE_RULES = "rules"
@@ -6699,14 +6685,6 @@ class MerchantRulesWidget:
         self.rune_buy_entries_by_profession: dict[str, list[dict[str, object]]] = {}
         self.rune_buy_professions: list[str] = []
         self.outpost_entries: list[dict[str, object]] = []
-        self.window_x: int | None = None
-        self.window_y: int | None = None
-        self.window_width = 0
-        self.window_height = 0
-        self.window_collapsed = False
-        self.window_geometry_needs_apply = True
-        self.window_geometry_dirty = False
-        self.window_geometry_save_timer = ThrottledTimer(WINDOW_GEOMETRY_SAVE_THROTTLE_MS)
         self.shared_profile_refresh_timer = ThrottledTimer(SHARED_PROFILE_REFRESH_INTERVAL_MS)
         self.instant_destroy_poll_timer = ThrottledTimer(INSTANT_DESTROY_POLL_MS)
         self.instant_destroy_rescan_requested = False
@@ -6786,19 +6764,19 @@ class MerchantRulesWidget:
 
     def _live_config_doc(self) -> JsonFactory:
         """The current account's live working config (account-scoped, self-persisting)."""
-        return self._profile_store.live_config_doc()
+        return cast(JsonFactory, self._profile_store.live_config_doc())
 
     def _profile_doc(self, scope: str) -> JsonFactory:
         """Return the saved-profile document for one explicit semantic scope."""
-        return self._profile_store.profile_doc(scope)
+        return cast(JsonFactory, self._profile_store.profile_doc(scope))
 
     def _backup_doc(self) -> JsonFactory:
         """Account-scoped last-known-good live profile used by the Restore Backup action."""
-        return self._profile_store.backup_doc()
+        return cast(JsonFactory, self._profile_store.backup_doc())
 
     def _loaded_profile_state_doc(self) -> JsonFactory:
         """Account-scoped provenance for the exact saved profile last loaded explicitly."""
-        return self._profile_store.loaded_profile_state_doc()
+        return cast(JsonFactory, self._profile_store.loaded_profile_state_doc())
 
     def _get_live_profile_display_name(self) -> str:
         config_path = str(self.config_path or "").strip()
@@ -9957,7 +9935,6 @@ class MerchantRulesWidget:
         self._update_instant_destroy_runtime()
 
     def _draw_main_window(self):
-        self._apply_window_geometry()
         if self.expand_main_window_on_next_show:
             PyImGui.set_next_window_collapsed(False, PyImGui.ImGuiCond.Always)
             self.expand_main_window_on_next_show = False
@@ -9967,59 +9944,12 @@ class MerchantRulesWidget:
             self.show_main_window,
             PyImGui.WindowFlags.NoFlag,
         )
-        self._track_window_geometry(window_expanded)
         self._set_main_window_visible(window_open, expand_on_show=False)
         if not window_expanded or not window_open:
             PyImGui.end()
             return False
         return True
-
-    def _get_default_window_geometry_payload(self) -> dict[str, object]:
-        return {
-            "window_x": None,
-            "window_y": None,
-            "window_width": 0,
-            "window_height": 0,
-            "window_collapsed": False,
-        }
-
-    def _build_window_geometry_payload(self) -> dict[str, object]:
-        return {
-            "window_x": self.window_x,
-            "window_y": self.window_y,
-            "window_width": max(0, int(self.window_width)),
-            "window_height": max(0, int(self.window_height)),
-            "window_collapsed": bool(self.window_collapsed),
-        }
-
-    def _normalize_window_geometry_payload(self, raw_payload: object) -> dict[str, object]:
-        geometry_payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
-        default_payload = self._get_default_window_geometry_payload()
-        raw_window_x = geometry_payload.get("window_x", default_payload["window_x"])
-        raw_window_y = geometry_payload.get("window_y", default_payload["window_y"])
-        return {
-            "window_x": _safe_int(raw_window_x, 0) if raw_window_x is not None else None,
-            "window_y": _safe_int(raw_window_y, 0) if raw_window_y is not None else None,
-            "window_width": max(0, _safe_int(geometry_payload.get("window_width", default_payload["window_width"]), 0)),
-            "window_height": max(0, _safe_int(geometry_payload.get("window_height", default_payload["window_height"]), 0)),
-            "window_collapsed": bool(geometry_payload.get("window_collapsed", default_payload["window_collapsed"])),
-        }
-
-    def _snapshot_window_geometry_state(self) -> dict[str, object]:
-        return self._build_window_geometry_payload()
-
-    def _restore_window_geometry_state(self, raw_payload: object) -> bool:
-        current_payload = self._snapshot_window_geometry_state()
-        normalized_payload = self._normalize_window_geometry_payload(raw_payload)
-        self.window_x = normalized_payload["window_x"]
-        self.window_y = normalized_payload["window_y"]
-        self.window_width = normalized_payload["window_width"]
-        self.window_height = normalized_payload["window_height"]
-        self.window_collapsed = normalized_payload["window_collapsed"]
-        self.window_geometry_needs_apply = True
-        return normalized_payload != current_payload
-
-    def _build_profile_payload(self, *, include_window_geometry: bool = True) -> dict[str, object]:
+    def _build_profile_payload(self) -> dict[str, object]:
         """Serialize current settings into a normalized profile-v36 payload."""
 
         payload = {
@@ -10064,8 +9994,6 @@ class MerchantRulesWidget:
             "cleanup_protection_sources": _serialize_cleanup_protection_sources(self.cleanup_protection_sources),
             "protected_item_model_ids": _serialize_protected_item_model_ids(self.protected_item_model_ids),
         }
-        if include_window_geometry:
-            payload.update(self._build_window_geometry_payload())
         return payload
 
     def _serialize_profile_payload(self, payload: dict[str, object]) -> str:
@@ -10287,7 +10215,6 @@ class MerchantRulesWidget:
 
         normalized_protected_item_model_ids = _normalize_protected_item_model_ids(protected_item_model_ids_raw)
 
-        window_geometry = self._normalize_window_geometry_payload(raw_payload)
         return {
             "version": PROFILE_VERSION,
             "auto_cleanup_on_outpost_entry": bool(raw_payload.get("auto_cleanup_on_outpost_entry", False)),
@@ -10314,7 +10241,6 @@ class MerchantRulesWidget:
                 raw_payload.get("helper_tooltips_enabled", HELPER_TOOLTIPS_ENABLED_DEFAULT)
             ),
             "detailed_preview": bool(raw_payload.get("detailed_preview", False)),
-            **window_geometry,
             "buy_rules": [asdict(rule) for rule in normalized_buy_rules],
             "sell_rules": [_serialize_sell_rule(rule) for rule in normalized_sell_rules],
             "destroy_rules": [_serialize_destroy_rule(rule) for rule in normalized_destroy_rules],
@@ -10438,15 +10364,6 @@ class MerchantRulesWidget:
             payload.get("helper_tooltips_enabled", HELPER_TOOLTIPS_ENABLED_DEFAULT)
         )
         self.detailed_preview = bool(payload.get("detailed_preview", False))
-        window_geometry = self._normalize_window_geometry_payload(payload)
-        self.window_x = window_geometry["window_x"]
-        self.window_y = window_geometry["window_y"]
-        self.window_width = window_geometry["window_width"]
-        self.window_height = window_geometry["window_height"]
-        self.window_collapsed = window_geometry["window_collapsed"]
-        self.window_geometry_needs_apply = True
-        self.window_geometry_dirty = False
-        self.window_geometry_save_timer.Reset()
         self.buy_rules = _normalize_buy_rules(self.buy_rules)
         self.sell_rules = _normalize_sell_rules(self.sell_rules)
         self.destroy_rules = _normalize_destroy_rules(self.destroy_rules)
@@ -10481,15 +10398,10 @@ class MerchantRulesWidget:
         return self._profile_store.profiles_dir(scope)
 
     def _build_shareable_profile_payload(self) -> dict[str, object]:
-        normalized_payload = self._normalize_profile_payload(
-            self._build_profile_payload(include_window_geometry=False)
-        )
-        return _strip_window_geometry_from_profile_payload(normalized_payload)
+        return self._normalize_profile_payload(self._build_profile_payload())
 
     def _serialize_shareable_profile_payload(self, payload: dict[str, object]) -> str:
-        return self._profile_store.serialize_profile_payload(
-            _strip_window_geometry_from_profile_payload(payload)
-        )
+        return self._profile_store.serialize_profile_payload(payload)
 
     def _shareable_profile_content_fingerprint(self, serialized_payload: str) -> str:
         return self._profile_store.shareable_profile_content_fingerprint(serialized_payload)
@@ -11083,7 +10995,6 @@ class MerchantRulesWidget:
             self._write_profile_payload_for_account(
                 self.account_key,
                 current.payload,
-                preserve_existing_window_geometry=True,
             )
             if not live_doc.save():
                 rollback_loaded = live_doc.reload()
@@ -11098,7 +11009,6 @@ class MerchantRulesWidget:
                 )
             self.reload_profile_from_disk(
                 status_message="",
-                preserve_window_geometry=True,
                 preserve_workspace_state=True,
                 log_profile_load_summary=False,
             )
@@ -11324,8 +11234,6 @@ class MerchantRulesWidget:
         self,
         account_key: str,
         payload: dict[str, object],
-        *,
-        preserve_existing_window_geometry: bool = False,
     ) -> str:
         """Persist ``payload`` as an account's live config.
 
@@ -11340,23 +11248,9 @@ class MerchantRulesWidget:
         payload_to_write = dict(payload)
 
         if not target_email or target_email == own_email:
-            if preserve_existing_window_geometry:
-                existing = doc.get_json("", {})
-                existing_map = existing if isinstance(existing, dict) else {}
-                for key in PROFILE_WINDOW_GEOMETRY_KEYS:
-                    payload_to_write[key] = existing_map.get(key)
-            for key, value in self._get_default_window_geometry_payload().items():
-                payload_to_write.setdefault(key, value)
             self._write_live_profile_payload(payload_to_write)
             return own_email
 
-        # Cross-account overlay: a merge-patch leaves paths we do not send untouched, so
-        # dropping the window-geometry keys preserves the follower's own window placement.
-        if preserve_existing_window_geometry:
-            payload_to_write = _strip_window_geometry_from_profile_payload(payload_to_write)
-        else:
-            for key, value in self._get_default_window_geometry_payload().items():
-                payload_to_write.setdefault(key, value)
         if not doc.apply_to_account("", payload_to_write, account_key):
             raise OSError(f"JsonFactory rejected the cross-account update for {target_email}.")
         return target_email
@@ -11534,25 +11428,18 @@ class MerchantRulesWidget:
         self,
         *,
         status_message: str = "Merchant Rules live config reloaded from disk.",
-        preserve_window_geometry: bool = False,
         preserve_workspace_state: bool = False,
         profile_display_name: str = "",
         log_profile_load_summary: bool = True,
     ):
-        """Reload the active profile and optionally preserve only UI geometry or workspace state."""
+        """Reload the active profile and optionally preserve workspace state."""
 
-        window_geometry_snapshot = self._snapshot_window_geometry_state() if preserve_window_geometry else None
         workspace_snapshot = self.active_workspace if preserve_workspace_state else ""
         rules_workspace_snapshot = self.active_rules_workspace if preserve_workspace_state else ""
         self._ensure_initialized()
         # Pick up any external write (e.g. a multibox leader's cross-account overlay) before reloading.
         self._live_config_doc().reload()
         self._load_profile()
-        if window_geometry_snapshot is not None:
-            geometry_changed = self._restore_window_geometry_state(window_geometry_snapshot)
-            if geometry_changed:
-                self.window_geometry_dirty = True
-                self.window_geometry_save_timer.Reset()
         if preserve_workspace_state:
             self.active_workspace = workspace_snapshot or self.active_workspace
             self.active_rules_workspace = rules_workspace_snapshot or self.active_rules_workspace
@@ -15373,11 +15260,6 @@ class MerchantRulesWidget:
             "debug_logging": False,
             "helper_tooltips_enabled": HELPER_TOOLTIPS_ENABLED_DEFAULT,
             "detailed_preview": False,
-            "window_x": None,
-            "window_y": None,
-            "window_width": 0,
-            "window_height": 0,
-            "window_collapsed": False,
             "buy_rules": [asdict(rule) for rule in (_default_buy_rules() if profile_exists else [])],
             "sell_rules": [asdict(rule) for rule in (_default_sell_rules() if profile_exists else [])],
             "destroy_rules": [asdict(rule) for rule in (_default_destroy_rules() if profile_exists else [])],
@@ -15438,7 +15320,6 @@ class MerchantRulesWidget:
     def _save_profile(self) -> bool:
         """Persist through JsonFactory while retaining a last-known-good account backup."""
 
-        saved_window_geometry = bool(self.window_geometry_dirty)
         payload = self._build_profile_payload()
         if self.profile_write_blocked:
             self.profile_warning = (
@@ -15448,9 +15329,6 @@ class MerchantRulesWidget:
             return False
         try:
             self._write_live_profile_payload(payload)
-            if saved_window_geometry:
-                self.window_geometry_dirty = False
-                self.window_geometry_save_timer.Reset()
             return True
         except Exception as exc:
             self.profile_warning = f"Failed to save Merchant Rules live config safely: {exc}"
@@ -15463,51 +15341,6 @@ class MerchantRulesWidget:
         self._clear_preview_inventory_diff()
         if message:
             self.status_message = message
-
-    def _apply_window_geometry(self):
-        if self.window_geometry_needs_apply:
-            if self.window_x is not None and self.window_y is not None:
-                PyImGui.set_next_window_pos(float(self.window_x), float(self.window_y))
-            if self.window_width > 0 and self.window_height > 0:
-                PyImGui.set_next_window_size(float(self.window_width), float(self.window_height))
-            else:
-                PyImGui.set_next_window_size(float(DEFAULT_WINDOW_WIDTH), float(DEFAULT_WINDOW_HEIGHT))
-            PyImGui.set_next_window_collapsed(bool(self.window_collapsed), 0)
-            self.window_geometry_needs_apply = False
-
-    def _track_window_geometry(self, window_expanded: bool):
-        end_pos = PyImGui.get_window_pos()
-        end_size = PyImGui.get_window_size()
-        new_collapsed = bool(PyImGui.is_window_collapsed())
-
-        next_x = int(end_pos[0]) if isinstance(end_pos, (tuple, list)) and len(end_pos) >= 2 else self.window_x
-        next_y = int(end_pos[1]) if isinstance(end_pos, (tuple, list)) and len(end_pos) >= 2 else self.window_y
-        next_width = self.window_width
-        next_height = self.window_height
-        if window_expanded and isinstance(end_size, (tuple, list)) and len(end_size) >= 2:
-            next_width = max(0, int(end_size[0]))
-            next_height = max(0, int(end_size[1]))
-
-        changed = False
-        if next_x != self.window_x or next_y != self.window_y:
-            self.window_x = next_x
-            self.window_y = next_y
-            changed = True
-        if next_width != self.window_width or next_height != self.window_height:
-            self.window_width = next_width
-            self.window_height = next_height
-            changed = True
-        if new_collapsed != self.window_collapsed:
-            self.window_collapsed = new_collapsed
-            changed = True
-
-        if changed:
-            self.window_geometry_dirty = True
-
-        if self.window_geometry_dirty and self.window_geometry_save_timer.IsExpired():
-            self._save_profile()
-            self.window_geometry_dirty = False
-            self.window_geometry_save_timer.Reset()
 
     def _get_supported_context(self, *, passive: bool = False) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
         current_map_id = int(Map.GetMapID() or 0)
@@ -29521,7 +29354,7 @@ class MerchantRulesWidget:
         self.multibox_active_action = "sync"
         self.multibox_active_request_id = self._next_multibox_request_id("sync")
         self._clear_multibox_batch_runtime()
-        payload = self._build_profile_payload(include_window_geometry=False)
+        payload = self._build_profile_payload()
         for account_email in selected_emails:
             self._set_multibox_status(
                 account_email,
@@ -29533,7 +29366,6 @@ class MerchantRulesWidget:
                 self._write_profile_payload_for_account(
                     account_email,
                     payload,
-                    preserve_existing_window_geometry=True,
                 )
                 send_succeeded = self._send_multibox_command(
                     account_email,
@@ -30084,7 +29916,6 @@ class MerchantRulesWidget:
             self._clear_loaded_profile_provenance("multibox synchronization")
             self.reload_profile_from_disk(
                 status_message="Merchant Rules live config reloaded by multibox sync.",
-                preserve_window_geometry=True,
             )
             return
 
