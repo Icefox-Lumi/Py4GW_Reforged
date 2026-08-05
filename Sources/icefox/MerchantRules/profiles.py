@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from hashlib import md5
-from typing import Any, Protocol, cast
-from uuid import uuid4
+from typing import Any, cast
 
 
 LIVE_CONFIG_DOC_NAME = 'Widgets/MerchantRules/LiveConfig.json'
@@ -30,34 +28,9 @@ PROFILE_SCOPES: tuple[str, ...] = (
 )
 
 
-class JsonDocument(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    def get_json(self, path: str = '', default: object = None) -> object: ...
-
-    def set_json(self, path: str, value: object) -> None: ...
-
-    def save(self) -> bool: ...
-
-    def reload(self) -> bool: ...
-
-    def delete(self, path: str) -> bool: ...
-
-    def has(self, path: str) -> bool: ...
-
-    def keys(self, path: str = '') -> list[str]: ...
-
-    def path(self) -> str: ...
-
-
-class JsonFactoryProvider(Protocol):
-    def __call__(self, name: str, scope: str = 'account') -> JsonDocument: ...
-
-
 @dataclass(frozen=True)
 class ProfileIdentity:
-    """Identify one saved profile by semantic scope and exact JsonFactory key."""
+    """Identify one saved profile by semantic scope and exact saved-profile key."""
 
     scope: str
     key: str
@@ -160,51 +133,16 @@ def _format_shared_profile_timestamp(saved_at_unix_ms: int) -> str:
         return ''
 
 
-def _profile_scope_label(scope: str) -> str:
-    if scope == PROFILE_SCOPE_SHARED:
-        return 'Shared Profiles — All Accounts'
-    if scope == PROFILE_SCOPE_ACCOUNT:
-        return 'Account Profiles — This Account Only'
-    return 'Profiles'
-
-
-def _profile_scope_badge(scope: str) -> str:
-    return 'SHARED' if scope == PROFILE_SCOPE_SHARED else 'ACCOUNT'
-
-
 class ProfileStore:
-    """Own Merchant Rules document access and verified persistence primitives."""
+    """Provide pure Merchant Rules profile models, validation, and transformations."""
 
     def __init__(
         self,
-        json_factory_provider: JsonFactoryProvider,
         normalize_payload: Callable[[object], dict[str, object]],
         profile_version: int,
     ) -> None:
-        self._json_factory_provider = json_factory_provider
         self._normalize_payload = normalize_payload
         self._profile_version = max(0, int(profile_version))
-
-    def live_config_doc(self) -> JsonDocument:
-        return self._json_factory_provider(LIVE_CONFIG_DOC_NAME)
-
-    def profile_doc(self, scope: str) -> JsonDocument:
-        if scope == PROFILE_SCOPE_SHARED:
-            return self._json_factory_provider(SHARED_PROFILES_DOC_NAME, 'global')
-        if scope == PROFILE_SCOPE_ACCOUNT:
-            return self._json_factory_provider(ACCOUNT_PROFILES_DOC_NAME)
-        raise ValueError(f'Unsupported Merchant Rules profile scope: {scope!r}')
-
-    def backup_doc(self) -> JsonDocument:
-        return self._json_factory_provider(BACKUP_DOC_NAME)
-
-    def loaded_profile_state_doc(self) -> JsonDocument:
-        return self._json_factory_provider(LOADED_PROFILE_STATE_DOC_NAME)
-
-    def profiles_dir(self, scope: str) -> str:
-        doc = self.profile_doc(scope)
-        doc_path = doc.path()
-        return os.path.dirname(doc_path) if doc_path else doc.name
 
     def serialize_profile_payload(self, payload: dict[str, object]) -> str:
         return _serialize_profile_payload(payload)
@@ -322,12 +260,9 @@ class ProfileStore:
         self,
         scope: str,
         profile_key: str,
-        *,
-        doc: JsonDocument | None = None,
+        raw_payload: object,
     ) -> ProfileSummary:
         safe_key = str(profile_key)
-        source_doc = doc or self.profile_doc(scope)
-        raw_payload = source_doc.get_json(safe_key, {})
         normalized_wrapper = self.normalize_shared_profile_wrapper(
             raw_payload,
             fallback_name=safe_key,
@@ -361,85 +296,7 @@ class ProfileStore:
             fingerprint=_saved_profile_wrapper_fingerprint(normalized_wrapper),
         )
 
-    def scan_profile_entries(
-        self,
-        scope: str,
-        *,
-        doc: JsonDocument | None = None,
-    ) -> Iterator[tuple[str, ProfileSummary | None, Exception | None]]:
-        source_doc = doc or self.profile_doc(scope)
-        for profile_key in source_doc.keys(''):
-            safe_key = str(profile_key)
-            try:
-                yield safe_key, self.load_profile_summary_from_key(scope, safe_key, doc=source_doc), None
-            except Exception as exc:
-                yield safe_key, None, exc
-
-    def new_profile_key(self, doc: JsonDocument) -> str:
-        """Allocate an opaque, display-name-independent root key."""
-
-        for _attempt in range(8):
-            profile_key = f'profile_{uuid4().hex}'
-            if not doc.has(profile_key):
-                return profile_key
-        raise RuntimeError('Merchant Rules could not create a new profile entry.')
-
-    def persist_profile_wrapper(
-        self,
-        scope: str,
-        profile_key: str,
-        wrapper: dict[str, object],
-        *,
-        doc: JsonDocument | None = None,
-    ) -> ProfileSummary:
-        """Save one exact key immediately, reload it, and verify its normalized wrapper."""
-
-        source_doc = doc or self.profile_doc(scope)
-        expected_wrapper = self.normalize_shared_profile_wrapper(
-            wrapper,
-            fallback_name=profile_key,
-        )
-        expected_fingerprint = _saved_profile_wrapper_fingerprint(expected_wrapper)
-        source_doc.set_json(profile_key, expected_wrapper)
-        if not source_doc.save():
-            source_doc.reload()
-            raise OSError(f'Merchant Rules could not save {_profile_scope_label(scope)}.')
-        if not source_doc.reload():
-            raise OSError(
-                f'The change was saved, but Merchant Rules could not verify '
-                f'{_profile_scope_label(scope)}.'
-            )
-        verified = self.load_profile_summary_from_key(scope, profile_key, doc=source_doc)
-        if verified.fingerprint != expected_fingerprint:
-            raise RuntimeError(
-                f'Merchant Rules could not verify the saved {_profile_scope_badge(scope).title()} profile.'
-            )
-        return verified
-
-    def persist_profile_delete(
-        self,
-        identity: ProfileIdentity,
-        *,
-        doc: JsonDocument | None = None,
-    ) -> None:
-        """Delete one exact key immediately, reload, and verify absence."""
-
-        source_doc = doc or self.profile_doc(identity.scope)
-        if not source_doc.delete(identity.key):
-            raise RuntimeError('The selected profile disappeared before it could be deleted.')
-        if not source_doc.save():
-            source_doc.reload()
-            raise OSError(f'Merchant Rules could not save {_profile_scope_label(identity.scope)}.')
-        if not source_doc.reload():
-            raise OSError(
-                f'The profile was deleted, but Merchant Rules could not verify '
-                f'{_profile_scope_label(identity.scope)} afterward.'
-            )
-        if source_doc.has(identity.key):
-            raise RuntimeError('Merchant Rules could not verify that the profile was deleted.')
-
-    def get_backup_payload(self, backup_doc: JsonDocument) -> dict[str, object] | None:
-        raw_backup = backup_doc.get_json('', None)
+    def get_backup_payload(self, raw_backup: object) -> dict[str, object] | None:
         if not isinstance(raw_backup, dict):
             return None
         if str(raw_backup.get('schema', '') or '') != BACKUP_SCHEMA:
@@ -463,54 +320,25 @@ class ProfileStore:
             )
         return self._normalize_payload(raw_payload)
 
-    def store_backup_payload(
+    def build_backup_root(
         self,
-        backup_doc: JsonDocument,
+        existing_root: object,
         payload: dict[str, object],
         *,
         slot: str = 'last_known_good',
-    ) -> None:
+    ) -> dict[str, object]:
         raw_version = _safe_int(payload.get('version', 0), 0)
         if raw_version > self._profile_version:
             raise ValueError(f'Cannot back up future Merchant Rules profile version {raw_version}.')
         normalized_payload = self._normalize_payload(payload)
-        root = backup_doc.get_json('', {})
-        backup_root = dict(root) if isinstance(root, dict) else {}
+        backup_root = dict(existing_root) if isinstance(existing_root, dict) else {}
         backup_root['schema'] = BACKUP_SCHEMA
         backup_root['schema_version'] = BACKUP_SCHEMA_VERSION
         backup_root[slot] = {
             'saved_at_unix_ms': int(time.time() * 1000),
             'payload': normalized_payload,
         }
-        backup_doc.set_json('', backup_root)
-
-    def write_live_profile_payload(
-        self,
-        live_doc: JsonDocument,
-        backup_doc: JsonDocument,
-        payload: dict[str, object],
-        *,
-        create_backup: bool = True,
-        force_save: bool = False,
-    ) -> None:
-        raw_version = _safe_int(payload.get('version', 0), 0)
-        if raw_version > self._profile_version:
-            raise ValueError(f'Cannot write future Merchant Rules profile version {raw_version}.')
-        normalized_payload = self._normalize_payload(payload)
-        existing = live_doc.get_json('', None)
-        if create_backup and existing not in (None, {}):
-            if not isinstance(existing, dict):
-                raise ValueError('Stored Merchant Rules live config is malformed; refusing to overwrite it.')
-            existing_version = _safe_int(existing.get('version', 0), 0)
-            if existing_version > self._profile_version:
-                raise ValueError(
-                    f'Stored live config version {existing_version} is newer than Merchant Rules '
-                    f'version {self._profile_version}; refusing to overwrite it.'
-                )
-            self.store_backup_payload(backup_doc, existing)
-        live_doc.set_json('', normalized_payload)
-        if force_save and not live_doc.save():
-            raise OSError('JsonFactory could not flush the Merchant Rules live config')
+        return backup_root
 
     def provenance_to_json(self, provenance: LoadedProfileProvenance) -> dict[str, object]:
         return {
@@ -556,30 +384,3 @@ class ProfileStore:
             normalized_content_fingerprint=content_fingerprint,
             associated_at_unix_ms=max(0, _safe_int(raw_state.get('associated_at_unix_ms', 0), 0)),
         )
-
-    def record_provenance(
-        self,
-        doc: JsonDocument,
-        provenance: LoadedProfileProvenance,
-    ) -> LoadedProfileProvenance:
-        expected_state = self.provenance_to_json(provenance)
-        doc.set_json('', expected_state)
-        if not doc.save():
-            doc.reload()
-            raise OSError('JsonFactory could not flush loaded-profile provenance.')
-        if not doc.reload():
-            raise OSError('Loaded-profile provenance was saved but could not be reloaded.')
-        verified = self.normalize_provenance(doc.get_json('', None))
-        if self.provenance_to_json(verified) != expected_state:
-            raise RuntimeError('Loaded-profile provenance failed post-save verification.')
-        return verified
-
-    def clear_provenance(self, doc: JsonDocument) -> None:
-        doc.set_json('', {})
-        if not doc.save():
-            doc.reload()
-            raise OSError('JsonFactory could not clear loaded-profile provenance.')
-        if not doc.reload():
-            raise OSError('Loaded-profile provenance was cleared but could not be reloaded.')
-        if doc.get_json('', None) not in (None, {}):
-            raise RuntimeError('Loaded-profile provenance is still present after clearing it.')
