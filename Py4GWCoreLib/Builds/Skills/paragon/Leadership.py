@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from Py4GWCoreLib.BuildMgr import BuildCoroutine
-from Py4GWCoreLib import Player, Routines
+from Py4GWCoreLib import GLOBAL_CACHE, Player, Routines
 from Py4GWCoreLib.Skill import Skill
 
 if TYPE_CHECKING:
@@ -24,6 +24,31 @@ class Leadership:
         leadership = next((attribute for attribute in attributes if attribute.GetName() == "Leadership"), None)
         return int(getattr(leadership, "level", 0) or 0)
 
+    @staticmethod
+    def _get_effect_attribute_level(skill_id: int) -> int:
+        player_agent_id = Player.GetAgentID()
+        effect = next(
+            (
+                item
+                for item in GLOBAL_CACHE.Effects.GetEffects(player_agent_id)
+                if item.skill_id == skill_id
+            ),
+            None,
+        )
+        return int(getattr(effect, "attribute_level", 0) or 0)
+
+    def _heroic_refrain_needs_self_bootstrap(self, heroic_refrain_id: int) -> bool:
+        player_agent_id = Player.GetAgentID()
+        if not Routines.Checks.Agents.HasEffect(player_agent_id, heroic_refrain_id):
+            return True
+
+        leadership_level = self._get_leadership_level()
+        if leadership_level >= 20:
+            return False
+
+        cast_level = self._get_effect_attribute_level(heroic_refrain_id)
+        return cast_level > 0 and leadership_level > cast_level
+
     #region H
     def Heroic_Refrain(self) -> BuildCoroutine:
         heroic_refrain_id: int = Skill.GetID("Heroic_Refrain")
@@ -33,7 +58,7 @@ class Leadership:
             return False
 
         player_agent_id = Player.GetAgentID()
-        if self._get_leadership_level() < 20:
+        if self._heroic_refrain_needs_self_bootstrap(heroic_refrain_id):
             return (yield from self.build.CastSkillIDAndRestoreTarget(
                 skill_id=heroic_refrain_id,
                 target_agent_id=player_agent_id,
@@ -64,13 +89,27 @@ class Leadership:
     #endregion
 
     #region A
+    def Anthem_of_Flame(self) -> BuildCoroutine:
+        anthem_of_flame_id: int = Skill.GetID("Anthem_of_Flame")
+        player_agent_id = Player.GetAgentID()
+
+        if not self.build.IsSkillEquipped(anthem_of_flame_id):
+            return False
+        if Routines.Checks.Agents.HasEffect(player_agent_id, anthem_of_flame_id):
+            return False
+
+        return (yield from self.build.CastSkillID(
+            skill_id=anthem_of_flame_id,
+            target_agent_id=player_agent_id,
+            log=False,
+            aftercast_delay=250,
+        ))
+
     def Aggressive_Refrain(self) -> BuildCoroutine:
         aggressive_refrain_id: int = Skill.GetID("Aggressive_Refrain")
         player_agent_id = Player.GetAgentID()
 
         if not self.build.IsSkillEquipped(aggressive_refrain_id):
-            return False
-        if not (self.build.IsInAggro() or self.build.IsCloseToAggro()):
             return False
         if Routines.Checks.Agents.HasEffect(player_agent_id, aggressive_refrain_id):
             return False
