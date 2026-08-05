@@ -1,0 +1,26 @@
+# Agent-Workflow Research Map
+
+This folder contains research and proposal records about agent skills,
+OpenCode, and workflow orchestration. These documents inform harness design;
+they are not automatically active repository rules.
+
+## Authority and status
+
+- `agent_skills_research.md` is a cross-platform standards and ecosystem
+  compendium. Use it for terminology and comparative research, then verify
+  platform behavior against current official documentation.
+- `opencode_agentic_workflow_research_2026-07.md` records research into
+  OpenCode capabilities and workflow patterns as of its compilation date.
+  Treat time-sensitive product claims as historical until rechecked.
+- `opencode_workflow_redesign_proposal_2026-07.md` is a proposed design, not
+  an approved implementation or a mandate for the current `.opencode` setup.
+- Current project instructions and platform configuration outrank all three
+  documents when they conflict.
+
+## Review order
+
+1. Use the skills compendium for vocabulary and source links.
+2. Use the OpenCode research document for observed capability evidence.
+3. Read the redesign proposal only when evaluating workflow changes.
+4. Inspect `.opencode/`, `.agents/`, `.claude/`, and `.codex/` in the current
+   repository before applying any proposed configuration.

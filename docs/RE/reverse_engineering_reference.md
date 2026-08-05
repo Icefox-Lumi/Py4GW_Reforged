@@ -986,9 +986,9 @@ All files in `docs/RE/`:
 | `window_creation_architecture.md` | CContainerFrame window creation architecture reference |
 
 Other project docs remain in `docs/`:
-- `Py4GW_Conceptual_Model.md` - canonical architecture
-- `widget_manager_and_catalog.md` - widget discovery metadata
-- `MCP_bridge.md` - MCP bridge planning
+- `architecture/conceptual_model/Py4GW_Conceptual_Model.md` - canonical architecture
+- `ui/widget_manager/widget_manager_and_catalog.md` - widget discovery metadata
+- `integration/bridge/MCP_bridge.md` - MCP bridge planning
 - `ui_controls_catalog.md` - Complete UI controls catalog (39 types, 2026-06-05)
 - Build, bot, AI, and UI-specific docs
 

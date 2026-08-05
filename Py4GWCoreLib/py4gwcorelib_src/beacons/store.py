@@ -9,7 +9,8 @@ Red. They are always present because the code defines them, so they cannot go mi
 whose document already existed. They are editable -- an edit is stored here as an override under the
 same name -- but not deletable, since deleting something the code defines only makes it reappear.
 
-**Sharing is by file, never the clipboard** (`docs/pending_fixes.md` PF-4): export writes a file the
+**Sharing is by file, never the clipboard**
+(`docs/architecture/project_records/pending_fixes.md` PF-4): export writes a file the
 user puts wherever they like, import reads one back in.
 """
 

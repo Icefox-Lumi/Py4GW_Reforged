@@ -7,7 +7,8 @@ binding surface and the current `Py4GWCoreLib`.
 and imports, but it calls APIs that no longer exist and reads data shapes that changed. This is the
 list of what is severed, so a migration can be scoped.
 
-**Related:** `docs/pending_fixes.md` PF-2 (Merchant Rules) and PF-3 (frenkeyLib reachability).
+**Related:** `docs/architecture/project_records/pending_fixes.md` PF-2
+(Merchant Rules) and PF-3 (frenkeyLib reachability).
 `docs/item_mods/04_frenkeylib_reference.md` documents the mod-model side.
 
 ---
