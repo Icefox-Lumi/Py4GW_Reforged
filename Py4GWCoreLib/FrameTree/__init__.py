@@ -13,7 +13,7 @@ Modules:
   frame_names    hash <-> engine frame name
   frame_aliases  legacy label-keyed paths, kept as the registry's source data
 
-See docs/FrameTree_Design.md.
+See docs/ui/frame_tree/FrameTree_Design.md.
 """
 
 from .frame import (

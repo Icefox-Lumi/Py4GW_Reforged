@@ -6,7 +6,8 @@ game until the launchpad host callback calls :func:`main` once per frame.
 This is the entry/orchestration module for the from-scratch configurable floating toolbar that
 replaced the old ``LaunchSurface`` UI. It owns the persistent :class:`LaunchBarManager` instance
 (``_manager``) and ties the package together; the data model, host and manager live in the sibling
-modules of this package. See ``docs/LaunchBar_ImGui_Implementation_Plan.md``.
+modules of this package. See
+``docs/ui/launch_bar/LaunchBar_ImGui_Implementation_Plan.md``.
 
 Note: this module is named ``app`` (not ``LaunchBar``) on purpose — the package already exports a
 ``LaunchBar`` *class* from :mod:`.model`; this is the launch-bar *application*, a different thing.

@@ -2619,7 +2619,7 @@ class ImGui:
     
     class FloatingIcon:
         #doc for this class can be found in:
-        #/Py4GWCoreLib/docs/floating_icon_class.md
+        #/Py4GW_Reforged/docs/ui/imgui/FloatingIcon_Class.md
         def __init__(
             self,
             icon_path: str,

@@ -159,7 +159,7 @@ one filter be written two ways — `MartialWeapon` versus Axe+Sword+… — whic
 **A2c — the Weapons group is the 11.** It uses the broader definition (`WEAPON_TYPES` /
 `EquippableItem`): the 9 weapons **plus Offhand and Shield**. The enum's narrower `ItemType.Weapon` (9)
 is not used here. The enum's self-contradiction is **not** fixed as part of this work — see
-`docs/pending_fixes.md` PF-1.
+`docs/architecture/project_records/pending_fixes.md` PF-1.
 
 **Non-weapon groups · APPROVED:**
 
@@ -326,7 +326,8 @@ repeat and to be renamed.**
 **No uuid.** The reverted build proposed one, copied from `agent_recolor` (`controller.py:110`), and
 justified it with cross-account id collision. That justification is wrong twice over: the pool is a
 single global store, and the concurrency case is not real (below). A 32-character random hex makes the
-stored JSON unreadable and buys nothing. See `docs/pending_fixes.md` PF-4.
+stored JSON unreadable and buys nothing. See
+`docs/architecture/project_records/pending_fixes.md` PF-4.
 
 *On the concurrency question, which was investigated rather than assumed:* global documents really do
 have concurrent writers — `JsonFactory.py:37-40` says Global saves take a cross-process lock and merge
@@ -568,7 +569,7 @@ bearable. **All of the below are built.**
   fall back to
 - **reset this preset to the base** — one action undoes a session of fiddling
 - **export to file / import from file** — files, **never the clipboard** (the rule from
-  `docs/pending_fixes.md` PF-4)
+  `docs/architecture/project_records/pending_fixes.md` PF-4)
 - **no thumbnails** in the picker
 
 **Emitters**
