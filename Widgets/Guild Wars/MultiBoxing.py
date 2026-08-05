@@ -43,9 +43,9 @@ module_info = None
 
 settings = Settings()
 
-ACCESS_WINDOW_NAME = f"{MODULE_NAME}##access"
-CONFIGURE_WINDOW_NAME = f"{MODULE_NAME} Configure"
-gui = GUI(CONFIGURE_WINDOW_NAME, ACCESS_WINDOW_NAME)
+access_window = ImGui.WindowModule(MODULE_NAME, MODULE_NAME, (300, 600))
+configure_window = ImGui.WindowModule(MODULE_NAME, MODULE_NAME + " Configure", (1400, 800), can_close=True)
+gui = GUI(configure_window, access_window)
 
 regions: list[Region] = []
 active_region: Optional[Region] = None  

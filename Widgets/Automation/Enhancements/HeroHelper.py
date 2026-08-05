@@ -213,8 +213,10 @@ class Config:
 
 
 widget_config = Config()
-CONFIG_WINDOW_NAME = "Hero Helper Configuration"
-CONFIG_WINDOW_FLAGS = PyImGui.WindowFlags.NoFlag
+config_module = ImGui.WindowModule(f"Config {MODULE_NAME}", window_name="Hero Helper Configuration", window_size=(300, 175), window_flags=PyImGui.WindowFlags.NoFlag)
+
+# Window geometry delegated to ImGui native persistence
+config_module.window_size = (620, 460)
 
 
 class Helper:
@@ -1781,9 +1783,14 @@ def draw_embedded_window():
     return
 
 def configure():
-    global widget_config, ini_handler
-
-    if PyImGui.begin(CONFIG_WINDOW_NAME, CONFIG_WINDOW_FLAGS):
+    global widget_config, config_module, ini_handler
+       
+    if config_module.first_run:
+        PyImGui.set_next_window_size(config_module.window_size[0], config_module.window_size[1])
+        # Window position delegated to ImGui native persistence
+        config_module.first_run = False
+        
+    if PyImGui.begin(config_module.window_name, config_module.window_flags):
         PyImGui.text_colored(f"{IconsFontAwesome5.ICON_COG} Hero Helper", Utils.ColorToTuple(Utils.RGBToColor(255, 210, 120, 255)))
         PyImGui.same_line(0, 8)
         PyImGui.text_disabled("Configuration Center")
@@ -1803,6 +1810,8 @@ def configure():
                 PyImGui.end_tab_item()
 
             PyImGui.end_tab_bar()
+
+        # Window geometry delegated to ImGui native persistence
 
     PyImGui.end()
     

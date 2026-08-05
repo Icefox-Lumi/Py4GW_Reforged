@@ -8,8 +8,7 @@ MODULE_NAME = "Skillbar +"
 MODULE_ICON = "Textures/Module_Icons/SkillBar+.png"
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
-WINDOW_NAME = 'Skillbar+'
-WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
+window_module = ImGui.WindowModule('Skillbar+', window_name = 'Skillbar+', window_flags = PyImGui.WindowFlags.AlwaysAutoResize)
 
 class SkillBarPlus:
     ini = Settings("Widgets/Config/Skillbar +.ini", "global")
@@ -45,6 +44,7 @@ class SkillBarPlus:
                 self.coords = []
 
         def DrawText(self, caption, text, x, y, w, h):
+            PyImGui.set_next_window_pos(x, y)
             PyImGui.set_next_window_size(w, h)
             
             flags=(PyImGui.WindowFlags.NoCollapse        | 
@@ -182,6 +182,7 @@ class SkillBarPlus:
         bg_color  = Utils.RGBToColor(0, 0, 0, 150)
 
         def DrawText(self, caption, text, x, y, w, h):
+            PyImGui.set_next_window_pos(x, y)
             PyImGui.set_next_window_size(w, h)
             
             flags=(PyImGui.WindowFlags.NoCollapse        | 
@@ -344,14 +345,14 @@ def IsKeyPressed(vk_code):
     return False
 
 def configure():
-    global sbp
+    global window_module, sbp
 
     if not Map.IsMapReady() or not Party.IsPartyLoaded() or Map.IsInCinematic(): return
     
     # Window geometry delegated to ImGui native persistence
 
     try:
-        if PyImGui.begin(WINDOW_NAME, WINDOW_FLAGS):
+        if PyImGui.begin(window_module.window_name, window_module.window_flags):
             PyImGui.push_style_color(PyImGui.ImGuiCol.Header,           (.2,.2,.2,1))
             PyImGui.push_style_color(PyImGui.ImGuiCol.HeaderHovered,    (.3,.3,.3,1))
             PyImGui.push_style_color(PyImGui.ImGuiCol.HeaderActive,     (.4,.4,.4,1))

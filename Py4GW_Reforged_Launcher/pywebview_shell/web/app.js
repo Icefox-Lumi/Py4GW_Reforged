@@ -1510,6 +1510,9 @@ function openEditDrawer(profileId) {
   document.getElementById("edit-autologin").checked = p ? !!p.auto_login_enabled : false;
   document.getElementById("edit-autoselect").checked = p ? !!p.auto_select_character_enabled : false;
   document.getElementById("edit-charname").value = p ? p.character_name || "" : "";
+  document.getElementById("edit-steam-login").checked = p ? !!p.use_steam_login : false;
+  document.getElementById("edit-steam-anchor").value = p ? p.steam_account_anchor || "" : "";
+  updateSteamLoginFieldVisibility();
 
   // RELAY 024: Mods/Window tab fields.
   document.getElementById("edit-py4gw-dll-path").value = p ? p.py4gw_dll_path || "" : "";
@@ -1621,18 +1624,41 @@ async function onAddPluginClick() {
   }
 }
 
+// RELAY 094: hides email/password/auto-select/character-name (meaningless
+// for a Steam-authenticated session -- Apo confirmed there's no email Py4GW
+// can read from memory for a Steam-linked account) and shows the anchor
+// field instead, whenever "Use Steam login" is on. Called both from the
+// checkbox's own onchange and from openEditDrawer on initial render, same
+// pattern as every other drawer-visibility toggle in this file.
+function updateSteamLoginFieldVisibility() {
+  const useSteam = document.getElementById("edit-steam-login").checked;
+  document.getElementById("steam-hide-identity").style.display = useSteam ? "none" : "";
+  document.getElementById("steam-hide-autologin").style.display = useSteam ? "none" : "";
+  document.getElementById("steam-anchor-row").style.display = useSteam ? "" : "none";
+  document.getElementById("steam-hide-client").style.display = useSteam ? "none" : "";
+  document.getElementById("steam-client-note").style.display = useSteam ? "block" : "none";
+}
+
 async function onSaveProfileClick() {
+  const useSteam = document.getElementById("edit-steam-login").checked;
+  // RELAY 094 follow-up: found live that a stale/wrong executable_path
+  // (e.g. left over from before the toggle existed) silently breaks Steam
+  // process-attach matching -- hiding the fields isn't enough on its own
+  // since a hidden input still submits its last value, so these are
+  // cleared outright whenever Steam login is on, not just visually hidden.
   const data = {
     id: editingProfileId || undefined,
     name: document.getElementById("edit-name").value.trim(),
     email: document.getElementById("edit-email").value.trim(),
-    executable_path: document.getElementById("edit-path").value.trim(),
-    launch_arguments: document.getElementById("edit-args").value.trim(),
+    executable_path: useSteam ? "" : document.getElementById("edit-path").value.trim(),
+    launch_arguments: useSteam ? "" : document.getElementById("edit-args").value.trim(),
     py4gw_enabled: document.getElementById("edit-py4gw").checked,
     gmod_enabled: document.getElementById("edit-gmod").checked,
     auto_login_enabled: document.getElementById("edit-autologin").checked,
     auto_select_character_enabled: document.getElementById("edit-autoselect").checked,
     character_name: document.getElementById("edit-charname").value.trim(),
+    use_steam_login: useSteam,
+    steam_account_anchor: document.getElementById("edit-steam-anchor").value.trim(),
     py4gw_dll_path: document.getElementById("edit-py4gw-dll-path").value.trim(),
     gmod_dll_path: document.getElementById("edit-gmod-dll-path").value.trim(),
     script_path: document.getElementById("edit-script-path").value.trim(),

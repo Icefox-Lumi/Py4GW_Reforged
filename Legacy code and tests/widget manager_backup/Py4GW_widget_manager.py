@@ -290,6 +290,16 @@ handler : WidgetHandler = sys.modules["_Py4GW_GLOBAL_WIDGET_HANDLER"].handler
 enable_all = ini_handler.get_bool(module_name, "enable_all", True)
 old_enable_all = enable_all
 
+window_module = ImGui.WindowModule(module_name, window_name="Widgets", window_size=(130, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+
+window_x = ini_handler.get_int(module_name, "x", 100)
+window_y = ini_handler.get_int(module_name, "y", 100)
+window_module.window_pos = (window_x, window_y)
+
+window_module.collapse = ini_handler.get_bool(module_name, "collapsed", True)
+current_window_collapsed = window_module.collapse
+current_window_pos = window_module.window_pos
+
 write_timer = Timer()
 write_timer.Start()
 
@@ -297,8 +307,18 @@ write_timer.Start()
 def write_ini():
     if not write_timer.HasElapsed(1000):
         return
-    global enable_all, old_enable_all
-
+    global enable_all, current_window_collapsed, current_window_pos, old_enable_all
+    
+    if window_module.window_pos != current_window_pos:
+        x, y = map(int, current_window_pos)
+        current_window_pos = window_module.window_pos = (x, y)
+        ini_handler.set(module_name, "x", str(x))
+        ini_handler.set(module_name, "y", str(y))
+            
+    if window_module.collapse != current_window_collapsed:
+        current_window_collapsed = window_module.collapse
+        ini_handler.set(module_name, "collapsed", str(current_window_collapsed))
+            
     if old_enable_all != enable_all:
         enable_all = old_enable_all
         ini_handler.set(module_name, "enable_all", str(enable_all))
@@ -409,9 +429,11 @@ def main():
 
         old_enable_all = enable_all
 
-        if PyImGui.begin("Widgets", PyImGui.WindowFlags.AlwaysAutoResize):
+        if window_module.begin():
             draw_widget_ui()
-        PyImGui.end()
+            
+        window_module.process_window()
+        window_module.end()
 
         write_ini()
 

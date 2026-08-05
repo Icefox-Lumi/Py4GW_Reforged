@@ -126,8 +126,14 @@ class PCons:
                                   name, str(data['active']))
 
 widget_config = PCons()
-WINDOW_NAME = "PCons Manager"
-WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
+window_module = ImGui.WindowModule(module_name,window_name="PCons Manager", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+
+window_x = ini_handler.get_int(module_name +str(" Config"), "x", 100)
+window_y = ini_handler.get_int(module_name +str(" Config"), "y", 100)
+window_collapsed = ini_handler.get_bool(module_name +str(" Config"), "collapsed", False)
+
+window_module.window_pos = (window_x, window_y)
+window_module.collapse = window_collapsed
 
 def handle_pcons():
     """Check and use PCONS if needed"""
@@ -163,9 +169,19 @@ def handle_pcons():
 
 def DrawWindow():
     """Draw the PCONS manager window"""
-    global widget_config, matching_items
+    global window_module, widget_config, matching_items
     try:
-        if PyImGui.begin(WINDOW_NAME, WINDOW_FLAGS):
+        if window_module.first_run:
+            PyImGui.set_next_window_size(window_module.window_size[0], window_module.window_size[1])     
+            PyImGui.set_next_window_pos(window_module.window_pos[0], window_module.window_pos[1])
+            PyImGui.set_next_window_collapsed(window_module.collapse, 0)
+            window_module.first_run = False
+
+        new_collapsed = True
+        end_pos = window_module.window_pos
+
+        if PyImGui.begin(window_module.window_name, window_module.window_flags):
+            new_collapsed = PyImGui.is_window_collapsed()
             PyImGui.text("PCons Auto-Usage")
             PyImGui.separator()
 
@@ -204,7 +220,16 @@ def DrawWindow():
                     
 
             widget_config.save()
+            end_pos = PyImGui.get_window_pos()
+
         PyImGui.end()
+
+        if end_pos[0] != window_module.window_pos[0] or end_pos[1] != window_module.window_pos[1]:
+            ini_handler.set(module_name + " Config", "config_x", str(int(end_pos[0])))
+            ini_handler.set(module_name + " Config", "config_y", str(int(end_pos[1])))
+
+        if new_collapsed != window_module.collapse:
+            ini_handler.set(module_name + " Config", "collapsed", str(new_collapsed))
 
     except Exception as e:
         PySystem.Console.Log(module_name, f"Error in DrawWindow: {str(e)}", PySystem.Console.MessageType.Debug)

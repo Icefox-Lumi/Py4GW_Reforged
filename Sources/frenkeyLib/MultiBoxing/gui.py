@@ -21,21 +21,25 @@ from Sources.frenkeyLib.MultiBoxing.window_handling import set_window_active
 
 ## Set the MODULE_NAME to the folder
 MODULE_NAME = __file__.split("\\")[-2]
+CONFIGURE_WINDOW_MIN_SIZE = (300.0, 400.0)
+CONFIGURE_WINDOW_MAX_SIZE = (float("inf"), float("inf"))
+
 class GUI:
     _instance = None
-    def __new__(cls, configure_window_name: str, access_window_name: str):
+    def __new__(cls, configure_window: ImGui.WindowModule, access_window: ImGui.WindowModule):
         if cls._instance is None:
             cls._instance = super(GUI, cls).__new__(cls)         
-            cls._instance.__init__(configure_window_name, access_window_name)
+            cls._instance.__init__(configure_window, access_window)   
             
         return cls._instance
     
-    def __init__(self, configure_window_name: str, access_window_name: str):
+    def __init__(self, configure_window: ImGui.WindowModule, access_window: ImGui.WindowModule):
         self.settings = Settings()
         self.overlay : Overlay = Overlay()
-        self.configure_window_name = configure_window_name
-        self.access_window_name = access_window_name
-        self.configure_window_open = False
+        self.screen_width = self.overlay.GetDisplaySize().x
+        
+        self.configure_window = configure_window
+        self.access_window = access_window
         self.widget_handler = get_widget_handler()
         self.module_info = None
         self.layout_name = ""
@@ -106,19 +110,12 @@ class GUI:
 
     def draw_configure_window(self):
         module_info = self.get_module_info(MODULE_NAME)
-        self.configure_window_open = module_info.configuring if module_info else False
+        self.configure_window.open = module_info.configuring if module_info else False
 
-        window_begun = self.configure_window_open
-        if window_begun:
-            opened, self.configure_window_open = PyImGui.begin_with_close(
-                self.configure_window_name,
-                self.configure_window_open,
-                PyImGui.WindowFlags.NoFlag,
-            )
-        else:
-            opened = False
-
-        if opened:
+        if self.configure_window.open:
+            PyImGui.set_next_window_size_constraints(CONFIGURE_WINDOW_MIN_SIZE, CONFIGURE_WINDOW_MAX_SIZE)
+        if self.configure_window.begin(None):
+            self.configure_window.window_flags = PyImGui.WindowFlags.NoFlag
             style = ImGui.get_style()
         
             style.CellPadding.push_style_var(5, 0)
@@ -468,11 +465,10 @@ class GUI:
             self.settings.remove_region(self.settings.active_region)
             self.settings.active_region = None
 
-        if not self.configure_window_open and module_info and module_info.configuring:
+        if not self.configure_window.open and module_info and module_info.configuring:
             self.widget_handler.set_widget_configuring(MODULE_NAME, False)
 
-        if window_begun:
-            PyImGui.end()
+        self.configure_window.end()
         
     def draw_region_canvas(self, style, win_size, header_bottom):
         ratio = self.settings.screen_size[0] / self.settings.screen_size[1]
@@ -516,6 +512,9 @@ class GUI:
         PyImGui.set_cursor_pos((drawing_area_pos[0], drawing_area_pos[1]))
         drawing_area_screen_pos = PyImGui.get_cursor_screen_pos()
 
+        if ImGui.is_mouse_in_rect((drawing_area_screen_pos[0], drawing_area_screen_pos[1], drawing_area_size[0], drawing_area_size[1])):
+            self.configure_window.window_flags = PyImGui.WindowFlags.NoMove
+                        
         if drawing_area_size[0] > 0 and drawing_area_size[1] > 0 and PyImGui.is_rect_visible((drawing_area_size[0], drawing_area_size[1])):
             style.WindowPadding.push_style_var(0, 0)
                 
@@ -793,11 +792,17 @@ class GUI:
         
         header_size = 30
         account_btn_size = (window_width - 7, 20)
-        if PyImGui.begin(
-            self.access_window_name,
-            PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize,
-        ):
+        window_height = len(self.settings.accounts) * (account_btn_size[1] + (style.ItemSpacing.value2 or 0) / 2) + header_size
+        
+        self.access_window.window_pos = (self.screen_width - window_width - 2, 2)
+        self.access_window.window_size = (window_width, window_height)
+        
+        PyImGui.set_next_window_pos(self.screen_width - window_width - 2, 2)
+        PyImGui.set_next_window_size(window_width, window_height - (len(self.settings.accounts)))
+
+        if self.access_window.begin(None, PyImGui.WindowFlags(PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.NoMove | PyImGui.WindowFlags.NoSavedSettings)):
             i = 0
+            self.screen_width = ImGui.overlay_instance.GetDisplaySize().x
             
             ImGui.text_centered("Accounts", window_width, header_size, font_size=18, font_style="Regular")
 
@@ -843,4 +848,4 @@ class GUI:
                 
         style.ItemSpacing.pop_style_var()
         style.WindowPadding.pop_style_var()
-        PyImGui.end()
+        self.access_window.end()

@@ -202,17 +202,22 @@ class Config:
 
 widget_config = Config()
 
-CONFIG_WINDOW_NAME = f"{module_name} Config##{module_name}"
-CONFIG_WINDOW_FLAGS = PyImGui.WindowFlags.AlwaysAutoResize
+config_module = ImGui.WindowModule(f"{module_name} Config", window_name=f"{module_name} Config##{module_name}", window_size=(100, 100), window_flags=PyImGui.WindowFlags.AlwaysAutoResize)
+# Window geometry delegated to ImGui native persistence
 
 def configure():
-    global widget_config, ini_handler, global_vars
+    global widget_config, config_module, ini_handler, global_vars
     try:
         if not Routines.Checks.Map.MapValid():
             global_vars.reset_vars()
             return
         
-        if PyImGui.begin(CONFIG_WINDOW_NAME, CONFIG_WINDOW_FLAGS):
+        if config_module.first_run:
+            PyImGui.set_next_window_size(config_module.window_size[0], config_module.window_size[1])
+            # Window position delegated to ImGui native persistence
+            config_module.first_run = False
+
+        if PyImGui.begin(config_module.window_name, config_module.window_flags):
             # new_collapsed = PyImGui.is_window_collapsed()
 
             agent_level = Agent.GetLevel(global_vars.player_agent_id)
@@ -260,6 +265,8 @@ def configure():
             widget_config.save()
 
         PyImGui.end()
+
+        # Window geometry delegated to ImGui native persistence
 
     except ImportError as e:
         PySystem.Console.Log(module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)

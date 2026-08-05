@@ -9,6 +9,7 @@ from typing import Callable, Tuple, TypeAlias, Optional, overload
 from .types import Alignment, HorizontalAlignment, ImGuiStyleVar, StyleTheme, ControlAppearance, TextDecorator, VerticalAlignment
 from .Style import Style
 from .Textures import ThemeTextures, TextureState
+from .WindowModule import WindowModule
 from .SidebarWindow import SidebarWindow
 from .IconsFontAwesome5 import IconsFontAwesome5
 import PyImGui
@@ -16,6 +17,7 @@ import PySystem
 
 #region ImGui
 class ImGui:
+    WindowModule: TypeAlias = WindowModule
     SidebarWindow: TypeAlias = SidebarWindow
     ImGuiStyleVar: TypeAlias  = ImGuiStyleVar
     style = PyImGui.StyleConfig()
@@ -239,9 +241,13 @@ class ImGui:
         Returns:
             New clamped (x, y) position tuple.
         """
-        return
         
-        return
+        pos = PyImGui.get_window_pos()
+        size = PyImGui.get_window_size()
+        clamped_x, clamped_y = ImGui.get_clamped_to_displayport(pos=pos, size=size, min_visible_x=min_visible_x, min_visible_y=min_visible_y, relative=relative)
+        
+        if (clamped_x, clamped_y) != pos:
+            PyImGui.set_window_pos(clamped_x, clamped_y, cond)
     
     @staticmethod
     def get_item_rect() -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
@@ -2111,6 +2117,8 @@ class ImGui:
             popup_id,
             True,
             PyImGui.WindowFlags.AlwaysAutoResize
+            | PyImGui.WindowFlags.NoMove
+            | PyImGui.WindowFlags.NoSavedSettings
             | PyImGui.WindowFlags.NoTitleBar
         ):
             ImGui.text_aligned("Press a key combination", alignment=Alignment.TopCenter, height=30)
@@ -2169,6 +2177,9 @@ class ImGui:
         if not name:
             name = caption
         
+        PyImGui.set_next_window_pos(x, y)
+        PyImGui.set_next_window_size(width, height)
+
         flags = (
             PyImGui.WindowFlags.NoCollapse |
             PyImGui.WindowFlags.NoTitleBar |
@@ -2233,6 +2244,9 @@ class ImGui:
         if not name:
             name = caption
 
+        PyImGui.set_next_window_pos(x, y)
+        PyImGui.set_next_window_size(width, height)
+
         flags = (
             PyImGui.WindowFlags.NoCollapse |
             PyImGui.WindowFlags.NoTitleBar |
@@ -2271,6 +2285,11 @@ class ImGui:
     
     @staticmethod
     def floating_checkbox(caption, state,  x, y, width = 18, height = 18 , color: Color = Color(255, 255, 255, 255)):
+        # Set the position and size of the floating button
+        PyImGui.set_next_window_pos(x, y)
+        PyImGui.set_next_window_size(width, height)
+        
+
         flags=( PyImGui.WindowFlags.NoCollapse | 
             PyImGui.WindowFlags.NoTitleBar |
             PyImGui.WindowFlags.NoScrollbar |
@@ -2600,7 +2619,7 @@ class ImGui:
     
     class FloatingIcon:
         #doc for this class can be found in:
-        #/Py4GWCoreLib/docs/floating_icon_class.md
+        #/Py4GW_Reforged/docs/ui/imgui/FloatingIcon_Class.md
         def __init__(
             self,
             icon_path: str,
@@ -2625,6 +2644,7 @@ class ImGui:
             self.button_size = button_size
             self.idle_icon_scale = idle_icon_scale
             self.hover_icon_scale = hover_icon_scale
+            self.position = start_pos
             self.window_id = window_id
             self.window_name = window_name
             self.tooltip_visible = tooltip_visible
@@ -2637,7 +2657,9 @@ class ImGui:
             self.toggle_default = toggle_default
             self.on_toggle = on_toggle
             self.draw_callback = draw_callback
+            self._dragged = False
             self._visibility_loaded = False
+            self._pending_reposition = False
 
         def _ensure_visibility_var(self) -> None:
             return
@@ -2681,6 +2703,12 @@ class ImGui:
             cfg = Settings(self.toggle_ini_key, "account")
             cfg.set(self.toggle_section, self.toggle_var_name, self.visible)
 
+        def reposition_to(self, pos: tuple[float, float]) -> None:
+            """Programmatically move the button. ImGui owns placement, so this forces the
+            new position for a single frame, after which ImGui persists it (imgui.ini)."""
+            self.position = (float(pos[0]), float(pos[1]))
+            self._pending_reposition = True
+
         def set_visible(self, value: bool, persist: bool = False, invoke_callback: bool = False) -> bool:
             if self.visible == value:
                 return False
@@ -2704,17 +2732,27 @@ class ImGui:
             flags = PyImGui.WindowFlags(
                 PyImGui.WindowFlags.NoResize
                 | PyImGui.WindowFlags.NoCollapse
+                | PyImGui.WindowFlags.NoTitleBar
                 | PyImGui.WindowFlags.NoScrollbar
                 | PyImGui.WindowFlags.NoScrollWithMouse
-            )
+            )  # NoSavedSettings removed: ImGui now persists the button position in imgui.ini.
 
             padding = max(2.0, self.button_size * 0.05)
             window_size = (self.button_size + padding * 2, self.button_size + padding * 2)
             PyImGui.set_next_window_size(window_size, PyImGui.ImGuiCond.Always)
+            # Position is owned by ImGui's native persistence (imgui.ini), keyed by the unique
+            # window name below. start_pos only seeds the first appearance; a programmatic
+            # reposition (reposition_to) forces the new position for a single frame.
+            if self._pending_reposition:
+                PyImGui.set_next_window_pos((self.position[0], self.position[1]), PyImGui.ImGuiCond.Always)
+                self._pending_reposition = False
+            else:
+                PyImGui.set_next_window_pos((self.position[0], self.position[1]), PyImGui.ImGuiCond.FirstUseEver)
             window_key = f"{self.window_name}{self.window_id}-Fbutton"
-            expanded, open_ = ImGui.begin_with_close(window_key, self.visible, flags)
-            self.visible = open_
-            if expanded:
+            if ImGui.Begin(ini_key=ini_key, name=window_key, flags=flags):
+                win_pos = PyImGui.get_window_pos()
+                self.position = (win_pos[0], win_pos[1])
+
                 window_hovered = PyImGui.is_window_hovered()
                 scale = self.hover_icon_scale if window_hovered else self.idle_icon_scale
                 image_size = PyImGui.get_content_region_avail()[0] * scale
@@ -2726,16 +2764,28 @@ class ImGui:
                 PyImGui.set_cursor_pos((cursor_pos[0], cursor_pos[1]))
                 PyImGui.invisible_button(f"{self.window_id}_hitbox", (image_size, image_size))
 
+                drag_delta = PyImGui.get_mouse_drag_delta(0, self.drag_threshold)
+                is_dragging = PyImGui.is_item_active() and PyImGui.is_mouse_dragging(0, self.drag_threshold)
                 item_hovered = PyImGui.is_item_hovered()
 
-                if item_hovered:
+                if item_hovered and not is_dragging:
                     PyImGui.set_tooltip(self.tooltip_visible if self.visible else self.tooltip_hidden)
 
-                if item_hovered and PyImGui.is_mouse_released(0):
+                if is_dragging:
+                    self._dragged = True
+                    new_pos = (win_pos[0] + drag_delta[0], win_pos[1] + drag_delta[1])
+                    self.position = new_pos
+                    PyImGui.set_window_pos(new_pos[0], new_pos[1], PyImGui.ImGuiCond.Always)
+                    PyImGui.reset_mouse_drag_delta(0)
+
+                if item_hovered and PyImGui.is_mouse_released(0) and not self._dragged:
                     self.set_visible(not self.visible, persist=True, invoke_callback=True)
                     toggled = True
 
-            ImGui.end()
+                if PyImGui.is_mouse_released(0):
+                    self._dragged = False
+
+            ImGui.End(ini_key)
             if self.visible and self.draw_callback is not None:
                 self.draw_callback()
             return toggled

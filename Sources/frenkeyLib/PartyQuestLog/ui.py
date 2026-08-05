@@ -7,6 +7,7 @@ from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
 from Py4GWCoreLib.ImGui_src.ImGuisrc import ImGui
 from Py4GWCoreLib.ImGui_src.Textures import TextureState, ThemeTextures
+from Py4GWCoreLib.ImGui_src.WindowModule import WindowModule
 from Py4GWCoreLib.ImGui_src.types import Alignment, StyleTheme
 from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.Overlay import Overlay
@@ -52,8 +53,8 @@ class UI():
     gray_color = Color(150, 150, 150, 255)
     
     Settings : "Settings" = Settings()
-    QuestLogOpen: bool = False
-    ConfigWindowOpen: bool = False
+    QuestLogWindow : WindowModule = WindowModule("PartyQuestLog", "Party Quest Log", window_size=(Settings.LogPosWidth, Settings.LogPosHeight), window_pos=(Settings.LogPosX, Settings.LogPosY), can_close=True)
+    ConfigWindow : WindowModule = WindowModule("PartyQuestLog#Config", "Party Quest Log - Settings", window_size=(500, 300), can_close=True)
     ActiveQuest : QuestNode | None = None
     ActiveQuestObjectiveTokens = []
     ActiveQuestDescriptionTokens = []
@@ -95,7 +96,9 @@ class UI():
     
     @staticmethod
     def draw_log(quest_data : QuestData, accounts: dict[int, AccountStruct]):
-        if not UI.QuestLogOpen:
+        UI.QuestLogWindow.open = UI.Settings.LogOpen
+        
+        if not UI.QuestLogWindow.open:
             return
         
         active_quest_id = Quest.GetActiveQuest()
@@ -108,11 +111,8 @@ class UI():
             else None,
         )
         
-        open, UI.QuestLogOpen = PyImGui.begin_with_close(
-            "Party Quest Log",
-            UI.QuestLogOpen,
-            PyImGui.WindowFlags.NoFlag,
-        )
+        UI.QuestLogWindow.window_name = "Party Quest Log"
+        open = UI.QuestLogWindow.begin()
         
         if open:
             style = ImGui.get_style()
@@ -276,7 +276,20 @@ class UI():
                 UI.draw_quest_details(UI.ActiveQuest, accounts)
             ImGui.end_child()
             
-        PyImGui.end()
+        if UI.QuestLogWindow.changed or (not UI.QuestLogWindow.open):
+            pos = UI.QuestLogWindow.window_pos
+            UI.Settings.LogPosX = pos[0]
+            UI.Settings.LogPosY = pos[1]
+            
+            size = UI.QuestLogWindow.window_size
+            UI.Settings.LogPosWidth = size[0]
+            UI.Settings.LogPosHeight = size[1]
+            
+            UI.Settings.LogOpen = UI.QuestLogWindow.open
+            UI.Settings.save_settings()
+            UI.QuestLogWindow.changed = False
+                                            
+        UI.QuestLogWindow.end()
         
     
     @staticmethod
@@ -519,14 +532,10 @@ class UI():
     
     @staticmethod
     def draw_configure(accounts : dict[int, AccountStruct]):
-        if not UI.ConfigWindowOpen:
+        if not UI.ConfigWindow.open:
             return
         
-        open, UI.ConfigWindowOpen = PyImGui.begin_with_close(
-            "Party Quest Log - Settings",
-            UI.ConfigWindowOpen,
-            PyImGui.WindowFlags.NoFlag,
-        )
+        open = UI.ConfigWindow.begin()
         
         if open:
             style = ImGui.get_style()
@@ -536,7 +545,10 @@ class UI():
                     avail = PyImGui.get_content_region_avail()
                     _, height = avail[0], avail[1]
                     
-                    UI.QuestLogOpen = ImGui.checkbox("Show Quest Log", UI.QuestLogOpen)
+                    show_quest_log = ImGui.checkbox("Show Quest Log", UI.Settings.LogOpen)
+                    if show_quest_log != UI.Settings.LogOpen:
+                        UI.Settings.LogOpen = show_quest_log
+                        UI.Settings.save_settings()
                     
                     PyImGui.spacing()
                     
@@ -575,9 +587,9 @@ class UI():
                 ImGui.end_tab_bar()
                 
                 
-        if not UI.ConfigWindowOpen:
-            get_widget_handler().set_widget_configuring("PartyQuestLog", False)
+        if UI.ConfigWindow.changed or not UI.ConfigWindow.open:
+            get_widget_handler().set_widget_configuring("PartyQuestLog", UI.ConfigWindow.open)
         
-        PyImGui.end()
+        UI.ConfigWindow.end()
         
         pass

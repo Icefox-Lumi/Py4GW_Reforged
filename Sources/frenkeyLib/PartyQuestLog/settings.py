@@ -36,6 +36,12 @@ class Settings:
         self.save_throttle_timer = ThrottledTimer(1000)
         self.ini_handler = NativeSettings("Widgets/Config/PartyQuestLog.ini", "global")
         
+        self.LogOpen : bool = False
+        self.LogPosX : float = 0
+        self.LogPosY : float = 0
+        self.LogPosHeight : float = 800
+        self.LogPosWidth : float = 300
+            
         self.ShowOnlyInParty : bool = True
         self.ShowOnlyOnLeader : bool = True
         self.ShowFollowerActiveQuestOnMinimap : bool = True
@@ -56,6 +62,12 @@ class Settings:
         self.save_throttle_timer.Reset()
         self.save_requested = False
         
+        self.ini_handler.set("Window", "LogOpen", str(self.LogOpen))
+        self.ini_handler.set("Window", "LogPosX", str(self.LogPosX))
+        self.ini_handler.set("Window", "LogPosY", str(self.LogPosY))
+        self.ini_handler.set("Window", "LogPosHeight", str(self.LogPosHeight))
+        self.ini_handler.set("Window", "LogPosWidth", str(self.LogPosWidth))
+        
         self.ini_handler.set("QuestLog", "ShowOnlyInParty", str(self.ShowOnlyInParty))
         self.ini_handler.set("QuestLog", "ShowOnlyOnLeader", str(self.ShowOnlyOnLeader))
         
@@ -66,6 +78,12 @@ class Settings:
             self.ini_handler.set("OverlayAccounts", account_email, str(enabled))
         
     def load_settings(self):
+        self.LogOpen = self.ini_handler.get_bool("Window", "LogOpen", self.LogOpen)
+        self.LogPosX = self.ini_handler.get_float("Window", "LogPosX", self.LogPosX)
+        self.LogPosY = self.ini_handler.get_float("Window", "LogPosY", self.LogPosY)
+        self.LogPosHeight = self.ini_handler.get_float("Window", "LogPosHeight", self.LogPosHeight)
+        self.LogPosWidth = self.ini_handler.get_float("Window", "LogPosWidth", self.LogPosWidth)
+        
         self.ShowOnlyInParty = self.ini_handler.get_bool("QuestLog", "ShowOnlyInParty", self.ShowOnlyInParty)
         self.ShowOnlyOnLeader = self.ini_handler.get_bool("QuestLog", "ShowOnlyOnLeader", self.ShowOnlyOnLeader)
         self.ShowFollowerActiveQuestOnMinimap = self.ini_handler.get_bool("Overlays", "ShowFollowerActiveQuestOnMinimap", self.ShowFollowerActiveQuestOnMinimap)

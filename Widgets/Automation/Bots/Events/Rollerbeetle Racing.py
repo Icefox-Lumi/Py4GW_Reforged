@@ -200,6 +200,7 @@ class BotVars:
     def __init__(self, map_id=0):
         self.starting_map = map_id
         self.bot_started = False
+        self.window_module = ImGui.WindowModule()
         self.variables = {}
         self.run_count = 0
         self.initial_medals = 0
@@ -215,8 +216,7 @@ class BotVars:
         self.result_did_not_finish = 0
 
 bot_vars = BotVars(map_id=ROLLERBEETLE_RACING_OUTPOST_ID)
-WINDOW_NAME = "Rollerbeetle Racing Bot"
-WINDOW_FLAGS = PyImGui.WindowFlags.NoFlag
+bot_vars.window_module = ImGui.WindowModule(module_name, window_name="Rollerbeetle Racing Bot", window_size=(250, 325))
 
 class StateMachineVars:
     def __init__(self):
@@ -395,7 +395,12 @@ def DrawWindow():
     global bot_vars, FSM_vars
 
     try:
-        if PyImGui.begin(WINDOW_NAME, WINDOW_FLAGS):
+        if bot_vars.window_module.first_run:
+            PyImGui.set_next_window_size(bot_vars.window_module.window_size[0], bot_vars.window_module.window_size[1])
+            PyImGui.set_next_window_pos(bot_vars.window_module.window_pos[0], bot_vars.window_module.window_pos[1])
+            bot_vars.window_module.first_run = False
+
+        if PyImGui.begin(bot_vars.window_module.window_name, bot_vars.window_module.window_flags):
 
             if IsBotStarted():
                 if PyImGui.button("Stop Bot"):
@@ -449,7 +454,7 @@ def DrawWindow():
     except Exception as e:
         frame = inspect.currentframe()
         current_function = frame.f_code.co_name if frame else "Unknown"
-        PySystem.Console.Log(module_name, f"Error in {current_function}: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Error in {current_function}: {str(e)}", PySystem.Console.MessageType.Error)
         raise
 
 def UseSkills():
@@ -601,17 +606,17 @@ def main():
                 FSM_vars.state_machine.update()
 
     except ImportError as e:
-        PySystem.Console.Log(module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"ImportError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except ValueError as e:
-        PySystem.Console.Log(module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"ValueError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except TypeError as e:
-        PySystem.Console.Log(module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"TypeError encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     except Exception as e:
-        PySystem.Console.Log(module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
-        PySystem.Console.Log(module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Unexpected error encountered: {str(e)}", PySystem.Console.MessageType.Error)
+        PySystem.Console.Log(bot_vars.window_module.module_name, f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error)
     finally:
         pass
 
