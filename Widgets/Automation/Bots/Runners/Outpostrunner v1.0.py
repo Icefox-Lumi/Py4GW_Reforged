@@ -66,9 +66,13 @@ RUN_NAME_MAP = {
         "_8_GatesOfKryta_To_LionsArch": "8 - Gates Of Kryta -> Lion's Arch",
     },
     "Tyria - Beacon's Perch To Droknars Forge": {
-        "_1_BeaconsPerch_To_CampRankor": "1 - Beacons Perch -> Camp Rankor",
-        "_2_CampRankor_To_DroknarsForge": "2 - Camp Rankor -> Droknars Forge",
-
+        "_1_BeaconsPerch_To_DeldrimorWarCamp": "1 - Beacons Perch -> Deldrimor War Camp",
+        "_2_BeaconsPerch_To_CampRankor": "2 - Beacons Perch -> Camp Rankor",
+        "_3_BeaconsPerch_To_DroknarsForge": "3 - Beacons Perch -> Droknars Forge",
+        "_4_DeldrimorWarCamp_To_CampRankor": "4 - Deldrimor War Camp -> Camp Rankor",
+        "_5_CampRankor_To_DeldrimorWarCamp": "5 - Camp Rankor -> Deldrimor War Camp",
+        "_6_CampRankor_To_DroknarsForge": "6 - Camp Rankor -> Droknars Forge",
+        "_7_DroknarsForge_To_CampRankor": "7 - Droknars Forge -> Camp Rankor",
     },
     "Tyria - Ascalon - East Outposts": {
         "_1_AscalonCity_To_Sardelac": "1 - Ascalon City -> Sardelac",
