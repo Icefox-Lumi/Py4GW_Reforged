@@ -31,7 +31,6 @@ from typing import Optional
 
 from Py4GWCoreLib.native_src.context.TextContext import TextParser
 from Py4GWCoreLib.native_src.internals.helpers import read_wstr
-from Py4GWCoreLib.native_src.methods.DatFileMethods import read_dat_file_by_hash
 
 
 # ─── Codepoint parsing (base-0x7F00 encoding) ────────────────────────────
@@ -203,6 +202,7 @@ _string_table_loaded: bool = False
 _load_enqueued: bool = False
 _loaded_language: int = 0
 _string_tables_by_language: dict[int, dict[int, bytes]] = {}
+_last_load_status: str = "not requested"
 
 _decode_cache: dict[bytes, str] = {}
 _decode_cache_by_language: dict[tuple[int, bytes], str] = {}
@@ -662,7 +662,9 @@ def _decode_formatted_codepoints(codepoints: tuple[int, ...], start: int = 0, ta
 
 def _load_dat_file(file_hash: str) -> Optional[bytes]:
     """Load a single dat file by its hash string. Must run on game thread."""
-    return read_dat_file_by_hash(file_hash)
+    import PyDatReader
+    data = PyDatReader.read_file_by_hash(file_hash)
+    return bytes(data) if data else None
 
 
 def _parse_string_file(file_data: bytes, start_index: int, target_table: Optional[dict[int, bytes]] = None) -> int:
@@ -683,20 +685,26 @@ def _parse_string_file(file_data: bytes, start_index: int, target_table: Optiona
 
 
 def _load_table_for_language(language: int) -> dict[int, bytes]:
+    global _last_load_status
     existing = _string_tables_by_language.get(language)
     if existing is not None:
+        _last_load_status = f"using cached table ({len(existing)} entries)"
         return existing
 
     tp = TextParser.get_context()
     if tp is None:
+        _last_load_status = "TextParser context unavailable"
         return {}
 
     epf = tp.entries_per_file
     if not epf:
+        _last_load_status = "TextParser entries_per_file is zero"
         return {}
 
     lang_slot = tp.language_slots[language]
     table: dict[int, bytes] = {}
+    readable_files = 0
+    failed_files = 0
 
     for slot_idx in range(lang_slot.slot_count):
         file_slot = tp.get_file_slot(slot_idx, language)
@@ -705,13 +713,22 @@ def _load_table_for_language(language: int) -> dict[int, bytes]:
         try:
             file_data = _load_dat_file(file_slot.file_hash)
         except Exception:
+            failed_files += 1
             continue
         if not file_data:
+            failed_files += 1
             continue
+        readable_files += 1
         _parse_string_file(file_data, slot_idx * epf, table)
 
     if table:
         _string_tables_by_language[language] = table
+        _last_load_status = f"loaded {len(table)} entries from {readable_files} files"
+    else:
+        _last_load_status = (
+            f"no entries (slots={lang_slot.slot_count}, readable_files={readable_files}, "
+            f"failed_files={failed_files})"
+        )
 
     return table
 
@@ -719,14 +736,19 @@ def _load_table_for_language(language: int) -> dict[int, bytes]:
 def _do_load_string_table(language: int) -> None:
     """Synchronous load — must run on the game thread.
 
-    Reads file slot metadata from TextParser, loads each dat file via
-    DatFileMethods, and parses all entries into _string_table.
+    Reads file slot metadata from TextParser, loads each dat file through
+    PyTexture's native GW.dat reader, and parses all entries into _string_table.
     Caller must ensure TextParser context is fresh (e.g. _update_ptr ran).
     """
-    global _string_table_loaded, _loaded_language
+    global _string_table_loaded, _last_load_status, _loaded_language
     if _string_table_loaded and _loaded_language == language:
         return
-    table = _load_table_for_language(language)
+    _last_load_status = "callback running"
+    try:
+        table = _load_table_for_language(language)
+    except Exception as error:
+        _last_load_status = f"load exception: {type(error).__name__}"
+        raise
     if not table:
         return
 
@@ -743,11 +765,12 @@ def load_string_table(language: int = 0) -> None:
     game frame via Game.enqueue. After completion, _string_table_loaded
     is True and decode functions return results.
     """
-    global _load_enqueued, _loaded_language
+    global _last_load_status, _load_enqueued, _loaded_language
     if _string_table_loaded or _load_enqueued:
         return
     _load_enqueued = True
     _loaded_language = language
+    _last_load_status = "queued for game thread"
 
     import PyGameThread
     PyGameThread.enqueue(lambda: _do_load_string_table(language))

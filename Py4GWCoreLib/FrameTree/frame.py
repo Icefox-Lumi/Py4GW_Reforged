@@ -22,7 +22,7 @@ walk the relative child codes.
 
 Reads are served from a live copy, not from the game.  A frame is read at most
 once per tick no matter how many properties are touched; every later read that
-tick is a dict hit.  See docs/ui/frame_tree/FrameTree_Design.md sections 8-10.
+tick is a dict hit.  See docs/ui/frame-tree/frame-tree-design.md sections 8-10.
 
 Two kinds of member, and they fail differently:
 

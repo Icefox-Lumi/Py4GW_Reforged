@@ -6,7 +6,7 @@ value a section displays is passed through one of these helpers so the CAST happ
 section's row-builder, BEFORE the value reaches a renderer. No generic ``repr()``/``str()``
 fallback exists here on purpose — a struct must be dereferenced field-by-field by the caller.
 
-The four mechanisms (see docs/demo_replacement/reengineer/R3_wrapper_casting.md):
+The four mechanisms (see docs/validation/demo/research/wrapper-casting.md):
   M1  ctypes reinterpret cast  -> handled by the wrappers / Context path (GWContext facade)
   M2  enum int -> name         -> enum_pair / enum_name
   M3  encoded wide-string      -> decoded by the wrappers (*_str); we just display both

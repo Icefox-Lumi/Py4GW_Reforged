@@ -10,7 +10,7 @@ ways (`MartialWeapon` versus Axe+Sword+...), and **no group may duplicate anothe
 **Weapons is one flat group of 11.** The enum contradicts itself here -- `ItemType.Weapon` is 9 while
 `WEAPON_TYPES` is 11 -- and we take the broader reading, including Offhand and Shield. The
 contradiction itself is *not* fixed as part of this work; see
-`docs/architecture/project_records/pending_fixes.md` PF-1.
+`docs/architecture/records/pending-fixes.md` PF-1.
 
 The martial / spellcasting / offhand subdivision the enum describes is deliberately **not** surfaced:
 the user sees the weapon list, not its internal taxonomy.

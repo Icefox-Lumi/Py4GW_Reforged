@@ -7,12 +7,12 @@ finished, human-readable catalogs — resolving every ETextStr id to its word vi
 game's string table, and composing the 390 mod names via the native binding.
 
 Inputs (produced offline by the Ghidra dumps):
-  docs/item_mods/catalogs/raw_item_catalogs.json   (ids / numbers / struct fields)
-  docs/item_mods/catalogs/formulas_recipes.json    (crafting recipes)
-  docs/item_mods/tools/game_mod_table.py           (mod codes / upgrade_id)
+  docs/items/modifiers/generated/raw-item-catalogs.json   (ids / numbers / struct fields)
+  docs/items/modifiers/generated/formulas-recipes.json    (crafting recipes)
+  docs/items/modifiers/tools/game_mod_table.py           (mod codes / upgrade_id)
 
 Outputs (final, string-filled CSVs):
-  docs/item_mods/catalogs/*.csv   (colors, attributes, descriptions, elements,
+  docs/items/modifiers/generated/*.csv   (colors, attributes, descriptions, elements,
                                     formulas, pvp_items, pvp_unlocks, books)
 
 String decoding is async, so a press captures + warms the string-table cache for a few
@@ -33,8 +33,8 @@ from Py4GWCoreLib.native_src.internals import string_table
 from Py4GWCoreLib.native_src.internals.encoded_strings import GWEncoded
 
 MODULE_NAME = "Dump Item Catalogs"
-CATDIR = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\catalogs"
-TOOLS = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\tools"
+CATDIR = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\catalogs"
+TOOLS = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\tools"
 
 STATE_IDLE, STATE_WARMING, STATE_WRITING, STATE_DONE = 0, 1, 2, 3
 _WARM_FRAMES = 500

@@ -1,10 +1,10 @@
 # Architecture Documentation
 
-Use this directory for project architecture, ownership, and change-governance
-records.
+Use this topic for the project model, ownership, governance, and durable
+project records. Current source and runtime evidence outrank these records
+when they conflict.
 
-- `conceptual_model/` — canonical layer stack and terminology.
-- `governance/` — traceable-refactor and migration review procedure.
-- `project_records/` — active issue pool and architecture whiteboards.
-
-Current source and runtime evidence outrank design records when they conflict.
+- `reference/` contains the conceptual model and derived feature inventory.
+- `guides/` contains the traceable-refactor and migration review guide.
+- `records/` contains pending work, whiteboards, and the Reforged migration
+  record.

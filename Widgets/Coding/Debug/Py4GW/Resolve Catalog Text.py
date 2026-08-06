@@ -3,7 +3,7 @@ Resolve Catalog Text
 ===================
 
 In-client pass that resolves every ETextStr id used by the item catalogs
-(docs/item_mods/catalogs/raw_item_catalogs.json) to its game text, and writes a flat
+(docs/items/modifiers/generated/raw-item-catalogs.json) to its game text, and writes a flat
 map catalogs/textid_resolved.json = {"0x<id>": "text"}. The offline formatter
 (format_catalogs.py) joins this to add a readable "text" column to the text-id catalogs
 (colors / attributes / descriptions / elements-name).
@@ -23,8 +23,8 @@ from Py4GWCoreLib.native_src.internals import string_table
 from Py4GWCoreLib.native_src.internals.encoded_strings import GWEncoded
 
 MODULE_NAME = "Resolve Catalog Text"
-RAW_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\catalogs\raw_item_catalogs.json"
-OUT_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\catalogs\textid_resolved.json"
+RAW_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\generated\raw-item-catalogs.json"
+OUT_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\generated\textid_resolved.json"
 
 STATE_IDLE, STATE_WARMING, STATE_WRITING, STATE_DONE = 0, 1, 2, 3
 _WARM_FRAMES = 300

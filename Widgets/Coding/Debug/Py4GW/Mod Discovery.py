@@ -12,7 +12,7 @@ inventory / equipped / storage it reads each modifier; any "Upgrade" modifier (i
     (the ~19 PvE-only ones — of Slaying / of the Profession — and possibly more),
     logged with the item's decoded name for identification.
 
-Output: docs/item_mods/catalogs/mod_discovery.txt  (+ unknown upgrade_ids as CSV).
+Output: docs/items/modifiers/generated/mod_discovery.txt  (+ unknown upgrade_ids as CSV).
 Run in-game; scan more characters/storage over time to widen coverage.
 """
 
@@ -28,8 +28,8 @@ from Py4GWCoreLib.Item import Item
 from Py4GWCoreLib.native_src.internals import string_table
 
 MODULE_NAME = "Mod Discovery"
-TOOLS = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\tools"
-OUT = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\catalogs\mod_discovery.txt"
+TOOLS = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\tools"
+OUT = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\generated\mod_discovery.txt"
 
 UPGRADE_IDENTIFIER = 0x2408   # mod >> 16 for the "Upgrade" modifier; GetArg() = upgrade_id
 

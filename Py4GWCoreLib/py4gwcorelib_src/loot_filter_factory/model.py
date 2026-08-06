@@ -81,7 +81,7 @@ class Rule:
     # -- the MOD criteria. --
     #
     # Deliberately only three, because only three are *there*. A drop is unidentified, and the
-    # dump of one (`docs/item_mods/catalogs/single_item_dump.txt`) shows exactly what that means:
+    # dump of one (`docs/items/modifiers/generated/single-item-dump.txt`) shows exactly what that means:
     #
     #     Chaos Dmg: 11-21 (Requires 11 Illusion Magic)
     #       0x2798  arg1=1  arg2=11   Requirement 11 (IllusionMagic)

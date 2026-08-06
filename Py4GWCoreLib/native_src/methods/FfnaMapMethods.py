@@ -82,12 +82,12 @@ class FfnaMapMethods:
     @staticmethod
     def _read_ffna(map_id: int) -> Optional[bytes]:
         """Read raw FFNA bytes for a map. Returns None on failure."""
-        from .DatFileMethods import dat_hooks_available, read_dat_file
-
         file_id = _MAP_ID_TO_DAT_FILE_ID.get(map_id)
-        if not file_id or not dat_hooks_available():
+        if not file_id:
             return None
-        return read_dat_file(file_id, stream_id=1)
+        import PyDatReader
+        data = PyDatReader.read_file_by_id(file_id, stream_id=1)
+        return bytes(data) if data else None
 
     @staticmethod
     def GetPathingMapsForMap(map_id: int) -> List[PathingMap]:

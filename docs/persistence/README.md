@@ -36,6 +36,6 @@ must remain on the concrete `Settings` or `JsonFactory` object.
 
 - `ini_manager/` — INI/Settings migration and behavior records.
 - `database/` — SQLite database manager and namespace documentation.
-- `../persistence_jail/` — audit and rationale for the persistence boundary.
+- `audit/` — audit and rationale for the persistence boundary.
 
 The owning implementation and native backend remain authoritative.

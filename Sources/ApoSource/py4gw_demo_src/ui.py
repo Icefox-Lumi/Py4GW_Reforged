@@ -1,7 +1,7 @@
 """
 Render kit for Py4GW DEMO 2.0 — raw PyImGui only (no ImGui, no reflection).
 
-Design (see docs/demo_replacement/reengineer/SPEC_reengineer.md):
+Design (see docs/validation/demo/research/spec-reengineer.md):
   * A section's ``build_*()`` returns a list of **Blocks** — already-cast display data.
   * ``draw_blocks()`` renders them; ``diagnostics.dump()`` serializes the SAME blocks to file,
     so the on-screen view and the log never diverge.

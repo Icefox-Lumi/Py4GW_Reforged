@@ -12,7 +12,7 @@ Per unlock index it calls the binding to get the ENCODED (name, description) byt
 decodes them with the native string_table (async → warmed over a few seconds), and cross-
 references upgrade_id/codes from the dumped game_mod_table.py.
 
-Output: docs/item_mods/tools/game_mod_table_named.txt
+Output: docs/items/modifiers/tools/game-mod-table-named.txt
 """
 
 import os
@@ -25,8 +25,8 @@ import PySystem
 from Py4GWCoreLib.native_src.internals import string_table
 
 MODULE_NAME = "Dump Named Mod Table"
-MODTABLE_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\tools\game_mod_table.py"
-OUT_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\tools\game_mod_table_named.txt"
+MODTABLE_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\tools\game_mod_table.py"
+OUT_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\tools\game-mod-table-named.txt"
 
 HAS_BINDING = hasattr(PyItem, "get_pvp_unlock_name_enc") and hasattr(PyItem, "get_pvp_unlock_count")
 

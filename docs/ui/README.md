@@ -1,12 +1,14 @@
-# UI and Rendering Documentation
+# UI Documentation
 
-Use this directory for PyImGui, native-overlay, frame-tree, launch-surface,
-and widget presentation records.
+Use this topic for PyImGui, native overlay, frame tree, launch surfaces, and
+widget presentation records. Do not transfer web UI assumptions into the
+injected ImGui runtime.
 
-- `imgui/` — PyImGui wrapper and ImGui migration/ergonomics records.
-- `frame_tree/` — frame-tree design and implementation status.
-- `launch_bar/` and `launch_surface/` — launcher surfaces and providers.
-- `overlay/` — 3D-overlay performance evidence.
-- `widget_manager/` — widget discovery, metadata, and catalog ownership.
-
-Do not transfer web UI assumptions into the injected ImGui runtime.
+- `imgui/` - PyImGui wrapper and migration/ergonomics records.
+- `frame-tree/` - frame-tree design and implementation status.
+- `launch-bar/` and `launch-surface/` - launcher surfaces and providers.
+- `map-overlay/` - map-overlay consolidation records.
+- `name-tag-colors/` - agent and item name-tag coloring feature/research.
+- `overlay/` - 3D-overlay performance evidence.
+- `research/` - native UI investigation and its reproducible probes.
+- `widget-manager/` - widget discovery, metadata, and catalog ownership.

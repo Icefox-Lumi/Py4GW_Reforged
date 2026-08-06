@@ -5,8 +5,8 @@ Resolve Mod Tables
 Resolves the RE-dumped game tables (which hold raw ETextStr string-table IDs) to
 their in-game text via the native string_table decoder. Two sources:
 
-  - docs/item_mods/tools/game_mod_tables.py   -> the *_TEXT_IDS label tables
-  - docs/item_mods/tools/game_mod_table.py    -> MOD_UNLOCKS (the 390-entry mod table)
+  - docs/items/modifiers/tools/game_mod_tables.py   -> the *_TEXT_IDS label tables
+  - docs/items/modifiers/tools/game_mod_table.py    -> MOD_UNLOCKS (the 390-entry mod table)
 
 For the mod table it resolves each unlock's name_id + desc_id, so we get the game's
 own name/description for every mod alongside its upgrade_id and raw mod codes.
@@ -31,10 +31,10 @@ from Py4GWCoreLib.native_src.internals.encoded_strings import GWEncoded
 
 MODULE_NAME = "Resolve Mod Tables"
 
-LABELS_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\tools\game_mod_tables.py"
-MODTABLE_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\tools\game_mod_table.py"
-OUT_LABELS = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\tools\game_mod_tables_resolved.txt"
-OUT_NAMED = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\tools\game_mod_table_named.txt"
+LABELS_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\tools\game_mod_tables.py"
+MODTABLE_PATH = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\tools\game_mod_table.py"
+OUT_LABELS = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\tools\game-mod-tables-resolved.txt"
+OUT_NAMED = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\tools\game-mod-table-named.txt"
 
 STATE_IDLE, STATE_WARMING, STATE_WRITING, STATE_DONE = 0, 1, 2, 3
 _WARM_FRAMES = 250

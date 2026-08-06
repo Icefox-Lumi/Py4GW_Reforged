@@ -31,7 +31,6 @@ from typing import NamedTuple, Optional
 
 from Py4GWCoreLib.native_src.context.TextContext import TextParser
 from Py4GWCoreLib.native_src.internals.helpers import read_wstr
-from Py4GWCoreLib.native_src.methods.DatFileMethods import read_dat_file_by_hash
 
 
 class ItemNameParts(NamedTuple):
@@ -984,7 +983,9 @@ def _extract_parts_encoded_from_tree(tree: dict) -> ItemNamePartsEncoded:
 
 def _load_dat_file(file_hash: str) -> Optional[bytes]:
     """Load a single dat file by its hash string. Must run on game thread."""
-    return read_dat_file_by_hash(file_hash)
+    import PyDatReader
+    data = PyDatReader.read_file_by_hash(file_hash)
+    return bytes(data) if data else None
 
 
 def _parse_string_file(file_data: bytes, start_index: int) -> int:
@@ -1006,8 +1007,8 @@ def _parse_string_file(file_data: bytes, start_index: int) -> int:
 def _do_load_string_table(language: int) -> None:
     """Synchronous load — must run on the game thread.
 
-    Reads file slot metadata from TextParser, loads each dat file via
-    DatFileMethods, and parses all entries into _string_table.
+    Reads file slot metadata from TextParser, loads each dat file through
+    PyTexture's native GW.dat reader, and parses all entries into _string_table.
     Caller must ensure TextParser context is fresh (e.g. _update_ptr ran).
     """
     global _string_table_loaded, _loaded_language

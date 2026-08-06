@@ -11,7 +11,7 @@ log file so the ground-vs-bag difference for the SAME item is a straight compari
 Every accessor is called defensively: if one throws or returns nothing for a ground item,
 that fact is recorded in the dump rather than aborting it.
 
-Log file: docs/loot_redesign/ground_item_dump.log (appended; "Clear Log" empties it).
+Log file: docs/loot/redesign/ground_item_dump.log (appended; "Clear Log" empties it).
 """
 
 import os
@@ -37,7 +37,7 @@ INI_KEY = ""
 INI_PATH = "Widgets/GroundItemDump"
 INI_FILENAME = "GroundItemDump.ini"
 
-LOG_RELATIVE_PATH = os.path.join("docs", "loot_redesign", "ground_item_dump.log")
+LOG_RELATIVE_PATH = os.path.join("docs", "automation", "loot_redesign", "ground_item_dump.log")
 
 # --- state -------------------------------------------------------------------
 # The item id captured by step 1, so step 2 needs no typing.
@@ -374,7 +374,7 @@ def tooltip():
     PyImGui.text_colored("Usage:", title_color.to_tuple_normalized())
     PyImGui.bullet_text("Target an item on the ground, press button 1.")
     PyImGui.bullet_text("Pick it up, press button 2.")
-    PyImGui.bullet_text("Both dumps land in docs/loot_redesign/ground_item_dump.log")
+    PyImGui.bullet_text("Both dumps land in docs/loot/redesign/ground_item_dump.log")
     PyImGui.end_tooltip()
 
 

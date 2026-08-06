@@ -7,7 +7,7 @@ near-duplicate widgets ``Compass +`` and ``Mission Map +``.
 
 Layered like ``launch_bar``: :mod:`.model` is pure data + taxonomy (no ImGui, no live-game
 imports); the render / projection / agent / interaction / persistence layers (added in later
-passes) consume it. See ``docs/map_overlay_merge/`` for the design.
+passes) consume it. See ``docs/ui/map-overlay/`` for the design.
 """
 
 from .host import MapOverlay

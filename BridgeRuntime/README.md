@@ -11,7 +11,7 @@ It is the runtime/operator document for the bridge stack:
 
 It is not the canonical full architecture document.
 
-For the full explicit architecture model, use [docs/architecture/conceptual_model/Py4GW_Conceptual_Model.md](/c:/Users/Apo/Py4GW_Reforged/docs/architecture/conceptual_model/Py4GW_Conceptual_Model.md).
+For the full explicit architecture model, use [docs/architecture/reference/py4-gw-conceptual-model.md](/c:/Users/Apo/Py4GW_Reforged/docs/architecture/reference/py4-gw-conceptual-model.md).
 
 The bridge lets you talk to **live injected Py4GW clients** from a normal Python process (outside injection) using a local TCP protocol.
 

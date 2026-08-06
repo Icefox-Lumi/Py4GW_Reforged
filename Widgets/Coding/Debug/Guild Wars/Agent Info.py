@@ -38,6 +38,34 @@ def DrawMainWindow():
             return "Gadget"
         else:
             return "Unknown"
+
+    def _get_name_or_decode_error(agent_id: int) -> str:
+        """Expose name-decoder state in this diagnostic widget.
+
+        Production callers retain Agent.GetNameByID()'s empty-string contract;
+        the viewer must not hide the distinction between missing native data and
+        a string-table decode that has not completed.
+        """
+        encoded_name = Agent.GetEncNameByID(agent_id)
+        if not encoded_name:
+            return "[error: native encoded name unavailable]"
+
+        name = Agent.GetNameByID(agent_id)
+        if name:
+            return name
+
+        raw = bytes(encoded_name)
+        if raw[:2] == b"\xa9\x0b":
+            return "[error: malformed inline player name]"
+
+        from Py4GWCoreLib.native_src.internals import string_table
+        if not string_table._string_table_loaded:
+            if string_table._load_enqueued:
+                return f"[error: string-table stalled ({string_table._last_load_status})]"
+            return f"[error: string-table was not queued ({string_table._last_load_status})]"
+        if raw in string_table._pending:
+            return "[pending: string-table decode]"
+        return "[error: string-table decode failed]"
         
     def _format_agent_row(label: str, agent:AgentStruct | None) -> tuple: 
         from Py4GWCoreLib import GLOBAL_CACHE
@@ -46,7 +74,7 @@ def DrawMainWindow():
         return (
             label,
             agent.agent_id,
-            Agent.GetNameByID(agent.agent_id),
+            _get_name_or_decode_error(agent.agent_id),
             f"({agent.pos.x:.2f}, {agent.pos.y:.2f}, {agent.z:.2f})",
             _get_type(agent)
         )
@@ -58,7 +86,7 @@ def DrawMainWindow():
         from Py4GWCoreLib import GLOBAL_CACHE
         _AGENT_ID = agent_id
         PyImGui.text(f"ID: {_AGENT_ID}")
-        PyImGui.text(f"Name: {Agent.GetNameByID(_AGENT_ID)}")
+        PyImGui.text(f"Name: {_get_name_or_decode_error(_AGENT_ID)}")
         PyImGui.text(f"EncString: {Agent.GetEncNameStrByID(_AGENT_ID)}")
         if PyImGui.button("Target Agent"):
             Player.ChangeTarget(_AGENT_ID)
@@ -492,7 +520,7 @@ def DrawMainWindow():
                 agent = Agent.GetAgentByID(agent_id)
                 if agent and agent.agent_id != 0:
                     from Py4GWCoreLib import GLOBAL_CACHE
-                    combo_items.append(f"{agent.agent_id} - {Agent.GetNameByID(agent.agent_id)}")
+                    combo_items.append(f"{agent.agent_id} - {_get_name_or_decode_error(agent.agent_id)}")
                     id_map.append(agent.agent_id)  # maintain index mapping
 
             # Show combo

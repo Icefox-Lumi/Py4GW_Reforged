@@ -1284,7 +1284,7 @@ def MerchantItems(index: int, message: SharedMessageStruct):
     if mode == "report_salvage_kits":
         # No file I/O in the router. Report the count to console; if a caller needs
         # this value it must be relayed back via a message payload and persisted by
-        # the calling platform (see docs/persistence/ini_manager/Configparser_To_Settings_Migration_Plan.md).
+        # the calling platform (see docs/persistence/ini-manager/configparser-to-settings-migration-plan.md).
         try:
             salvage_kits_in_inv = int(GLOBAL_CACHE.Inventory.GetModelCount(ModelID.Salvage_Kit.value))
             ConsoleLog(MODULE_NAME, f"MerchantItems: salvage kits in inventory = {salvage_kits_in_inv}.", Console.MessageType.Info, False)

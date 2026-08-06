@@ -159,7 +159,7 @@ class GWUI:
     # A real, textured, clickable GW button = a STYLED button (IUi::UiCtlBtnProc) item in a
     # NO-STRETCH scrollable frame list. The list sizes items to their content; the item gets
     # the 0x40000 paint bit + the shared button image list (msg 0x05); clicks are read from the
-    # engine's own pushed state (msg 0x59). Full RE: docs/RE/native_button_pipeline.md.
+    # engine's own pushed state (msg 0x59). Full RE: docs/ui/research/native-button-pipeline.md.
     #
     # Usage:
     #     win   = GWUI.CreateWindow(x, y, w, h, "Title")

@@ -6,7 +6,7 @@ Tiers, most to least corroborated:
   HARVESTED     - hash matched an identifier-like string in Gw.exe; not seen live
   RECONSTRUCTED - hash matched a generated candidate; not a literal in the exe
 
-See Py4GW_Reforged_Native/docs/RE/ui_frame_identity_reverse_engineering.md
+See Py4GW_Reforged_Native/docs/game-client/research/ui_frame_identity_reverse_engineering.md
 Generated - do not hand-edit.
 """
 

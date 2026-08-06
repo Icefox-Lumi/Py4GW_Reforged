@@ -10,7 +10,7 @@ Scans every item you have (inventory / equipped / storage) and, per item, writes
 Put side by side, this lets you assess PARITY: does every game line have a matching mod in
 ours, with the right value? Divergences are the implementation bugs to fix.
 
-Run in-game (map loaded). Output: docs/item_mods/catalogs/mod_parity_scan.txt
+Run in-game (map loaded). Output: docs/items/modifiers/generated/mod-parity-scan.txt
 """
 
 import traceback
@@ -24,7 +24,7 @@ from Py4GWCoreLib.ItemArray import ItemArray
 from Py4GWCoreLib.native_src.internals import string_table
 
 MODULE_NAME = "Mod Parity Scan"
-OUT = r"C:\Users\Apo\Py4GW_Reforged\docs\item_mods\catalogs\mod_parity_scan.txt"
+OUT = r"C:\Users\Apo\Py4GW_Reforged\docs\items\modifiers\generated\mod-parity-scan.txt"
 # inventory bags (1-4) + belt/equip packs (5) + equipped (22) + storage (8-18) + material (6)
 SCAN_BAGS = [1, 2, 3, 4, 5, 22, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 6]
 
