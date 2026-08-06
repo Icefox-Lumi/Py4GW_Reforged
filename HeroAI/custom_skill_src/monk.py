@@ -1040,7 +1040,7 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Symbol_of_Wrath")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.Self.value
+        skill.TargetAllegiance = Skilltarget.Enemy.value
         skill.Nature = SkillNature.Offensive.value
         skill_data[skill.SkillID] = skill
 
