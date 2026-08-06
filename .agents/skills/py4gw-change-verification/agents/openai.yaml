@@ -1,0 +1,4 @@
+interface:
+  display_name: "Py4GW Change Verification"
+  short_description: "Select evidence-led Py4GW verification"
+  default_prompt: "Use $py4gw-change-verification to select and report checks for this Py4GW change."

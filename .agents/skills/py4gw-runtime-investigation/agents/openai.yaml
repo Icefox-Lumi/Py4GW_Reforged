@@ -1,0 +1,4 @@
+interface:
+  display_name: "Py4GW Runtime Investigation"
+  short_description: "Investigate injected-client runtime failures"
+  default_prompt: "Use $py4gw-runtime-investigation to investigate this Py4GW runtime symptom without changing code."

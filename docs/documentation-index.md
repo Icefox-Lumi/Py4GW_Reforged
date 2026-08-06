@@ -8,7 +8,7 @@ navigation inventory, not a source of behavioral authority. Start with
 
 | Category | Purpose | Files |
 |---|---|---:|
-| `py4gw-ai` | Py4GW AI operating guidance, instruction history, and agent research. | 29 |
+| `py4gw-ai` | Py4GW AI operating guidance, instruction history, and agent research. | 32 |
 | `architecture` | Architecture models, migration records, decisions, and project records. | 13 |
 | `automation` | Bots, behavior trees, HeroAI, builds, and gameplay automation. | 18 |
 | `bridge` | Bridge, shared-memory, MCP, and external operator integration. | 6 |
@@ -25,41 +25,44 @@ navigation inventory, not a source of behavioral authority. Start with
 
 | Path | Title | Type | Bytes |
 |---|---|---|---:|
+| `py4gw-ai/agent-environment-roadmap.md` | # Py4GW Agent Environment Roadmap | `.md` | 11706 |
 | `py4gw-ai/change-control-and-verification.md` | # Change Control and Verification | `.md` | 7132 |
-| `py4gw-ai/engineering-practices.md` | # Engineering Practices | `.md` | 5414 |
-| `py4gw-ai/instruction-history/agents-draft.md` | # Py4GW AGENTS.md - Draft | `.md` | 8812 |
-| `py4gw-ai/instruction-history/agents-merged-sources.md` | # AGENTS.md - Merged Source Draft | `.md` | 17980 |
-| `py4gw-ai/instruction-history/agents-py4gw-draft.md` | # Py4GW AGENTS.md - Draft | `.md` | 25335 |
-| `py4gw-ai/instruction-history/current-rule-source-scope.md` | # Current Py4GW Rule-Source Scope Map | `.md` | 8097 |
-| `py4gw-ai/instruction-history/design-intent.md` | # Replacement Instruction System - Design Intent | `.md` | 2213 |
-| `py4gw-ai/instruction-history/feature-inventory.md` | # AI Harness Feature Inventory for Py4GW | `.md` | 27335 |
-| `py4gw-ai/instruction-history/previous-topic-map.md` | # Agent Documentation | `.md` | 430 |
-| `py4gw-ai/instruction-history/project-specific-context-recovered.md` | # Recovered Py4GW Project-Specific Context | `.md` | 20933 |
-| `py4gw-ai/instruction-history/README.md` | # AGENTS.md Replacement Working Set | `.md` | 514 |
-| `py4gw-ai/operating-model.md` | # Py4GW AI Operating Model | `.md` | 11123 |
-| `py4gw-ai/project-context.md` | # Py4GW Project Context | `.md` | 18147 |
-| `py4gw-ai/README.md` | # Py4GW AI Guidance | `.md` | 1221 |
-| `py4gw-ai/reference/code-reviewer.md` | ## Review Process | `.md` | 9084 |
+| `py4gw-ai/engineering-practices.md` | # Engineering Practices | `.md` | 5715 |
+| `py4gw-ai/instruction-history/agents-draft.md` | # Py4GW AGENTS.md - Draft | `.md` | 8927 |
+| `py4gw-ai/instruction-history/agents-merged-sources.md` | # AGENTS.md - Merged Source Draft | `.md` | 18350 |
+| `py4gw-ai/instruction-history/agents-py4gw-draft.md` | # Py4GW AGENTS.md - Draft | `.md` | 25617 |
+| `py4gw-ai/instruction-history/current-rule-source-scope.md` | # Current Py4GW Rule-Source Scope Map | `.md` | 8323 |
+| `py4gw-ai/instruction-history/design-intent.md` | # Replacement Instruction System - Design Intent | `.md` | 2244 |
+| `py4gw-ai/instruction-history/feature-inventory.md` | # AI Harness Feature Inventory for Py4GW | `.md` | 27814 |
+| `py4gw-ai/instruction-history/previous-topic-map.md` | # Agent Documentation | `.md` | 439 |
+| `py4gw-ai/instruction-history/project-specific-context-recovered.md` | # Recovered Py4GW Project-Specific Context | `.md` | 21140 |
+| `py4gw-ai/instruction-history/README.md` | # AGENTS.md Replacement Working Set | `.md` | 524 |
+| `py4gw-ai/operating-model.md` | # Py4GW AI Operating Model | `.md` | 13079 |
+| `py4gw-ai/project-context.md` | # Py4GW Project Context | `.md` | 18778 |
+| `py4gw-ai/README.md` | # Py4GW AI Guidance | `.md` | 1807 |
+| `py4gw-ai/reference/code-reviewer.md` | ## Review Process | `.md` | 11892 |
 | `py4gw-ai/reference/code-simplifier.md` | # Code Simplifier Agent | `.md` | 1321 |
 | `py4gw-ai/reference/python-patterns.md` | # Python Development Patterns | `.md` | 17498 |
-| `py4gw-ai/reference/README.md` | # Prompt and LLM Instruction References | `.md` | 602 |
+| `py4gw-ai/reference/README.md` | # Prompt and LLM Instruction References | `.md` | 615 |
 | `py4gw-ai/research/agent-skills-research.md` | # Agent Skills & Agentic Flows — Research Compendium | `.md` | 25734 |
 | `py4gw-ai/research/opencode-agentic-workflow-research-2026-07.md` | # OpenCode Agentic Workflow Research | `.md` | 17351 |
 | `py4gw-ai/research/opencode-workflow-redesign-proposal-2026-07.md` | # OpenCode Workflow Redesign Proposal | `.md` | 15033 |
-| `py4gw-ai/research/README.md` | # Agent-Workflow Research Map | `.md` | 1299 |
+| `py4gw-ai/research/README.md` | # Agent-Workflow Research Map | `.md` | 1599 |
 | `py4gw-ai/runtime-conventions.md` | # Py4GW Runtime Conventions | `.md` | 1954 |
-| `py4gw-ai/source-archive/README.md` | # Instruction Source Archive | `.md` | 544 |
-| `py4gw-ai/source-archive/source-codex-agents.md` | # Rust/codex-rs | `.md` | 22519 |
-| `py4gw-ai/source-archive/source-codex-default.md` | # How you work | `.md` | 20903 |
-| `py4gw-ai/source-archive/source-opencode-anthropic.txt` | - | `.txt` | 8212 |
-| `py4gw-ai/source-archive/source-opencode-codex.txt` | - | `.txt` | 7390 |
-| `py4gw-ai/source-archive.md` | # Source Files | `.md` | 1491 |
+| `py4gw-ai/skill-authoring-guide.md` | # Py4GW Skill Authoring Guide | `.md` | 5356 |
+| `py4gw-ai/skill-catalog.md` | # Py4GW Skill Catalog | `.md` | 5234 |
+| `py4gw-ai/source-archive/README.md` | # Instruction Source Archive | `.md` | 557 |
+| `py4gw-ai/source-archive/source-codex-agents.md` | # Rust/codex-rs | `.md` | 22841 |
+| `py4gw-ai/source-archive/source-codex-default.md` | # How you work | `.md` | 21178 |
+| `py4gw-ai/source-archive/source-opencode-anthropic.txt` | - | `.txt` | 8317 |
+| `py4gw-ai/source-archive/source-opencode-codex.txt` | - | `.txt` | 7469 |
+| `py4gw-ai/source-archive.md` | # Source Files | `.md` | 1512 |
 
 ## architecture
 
 | Path | Title | Type | Bytes |
 |---|---|---|---:|
-| `architecture/guides/pr-review-traceability-and-migration-analysis.md` | # PR Review Guide: Traceable Refactors and Migration Analysis | `.md` | 41572 |
+| `architecture/guides/pr-review-traceability-and-migration-analysis.md` | # PR Review Guide: Traceable Refactors and Migration Analysis | `.md` | 47645 |
 | `architecture/guides/README.md` | # Architecture Governance Documentation | `.md` | 458 |
 | `architecture/README.md` | # Architecture Documentation | `.md` | 433 |
 | `architecture/records/pending-fixes.md` | # Pending fixes — a pool of known issues, deliberately not fixed yet | `.md` | 24999 |
@@ -118,15 +121,15 @@ navigation inventory, not a source of behavioral authority. Start with
 | `game-client/research/cpp-wasm-mapping.md` | # CPP ↔ WASM ↔ EXE Mapping Guide | `.md` | 16408 |
 | `game-client/research/gw-combat-ai-reverse-engineering.md` | # Guild Wars Combat AI Reverse Engineering | `.md` | 60639 |
 | `game-client/research/map-travel-research.md` | # Map Travel — Reverse Engineering Research | `.md` | 25133 |
-| `game-client/research/map-travel-reverse-engineering.md` | # Guild Wars Map Travel — Reverse Engineering (2026-06-08) | `.md` | 63644 |
+| `game-client/research/map-travel-reverse-engineering.md` | # Guild Wars Map Travel — Reverse Engineering (2026-06-08) | `.md` | 63574 |
 | `game-client/research/name-obfuscation-reverse-engineering.md` | # Name Obfuscation Reverse Engineering | `.md` | 28845 |
 | `game-client/research/packet-sniffers-reference.md` | # Packet Sniffers Reference | `.md` | 7501 |
 | `game-client/research/player-skill-system-callable-functions.md` | # Player Skill System — Callable Functions Reference | `.md` | 13487 |
 | `game-client/research/quest-data-request-pipeline.md` | # Quest Data Request Pipeline | `.md` | 10406 |
 | `game-client/research/README.md` | # Game-Client Research | `.md` | 704 |
-| `game-client/research/reverse-engineering-reference.md` | # Reverse Engineering Reference | `.md` | 107735 |
+| `game-client/research/reverse-engineering-reference.md` | # Reverse Engineering Reference | `.md` | 107482 |
 | `game-client/research/rosetta-stone.txt` | - | `.txt` | 42249 |
-| `game-client/research/struct-identification-methodology.md` | # Struct Identification Methodology | `.md` | 28579 |
+| `game-client/research/struct-identification-methodology.md` | # Struct Identification Methodology | `.md` | 28388 |
 
 ## items
 
@@ -199,12 +202,12 @@ navigation inventory, not a source of behavioral authority. Start with
 
 | Path | Title | Type | Bytes |
 |---|---|---|---:|
-| `maintenance/documentation-style-guide.md` | # Py4GW Documentation Style and Maintenance Guide | `.md` | 6703 |
-| `maintenance/generate_documentation_index.py` | - | `.py` | 5866 |
+| `maintenance/documentation-style-guide.md` | # Py4GW Documentation Style and Maintenance Guide | `.md` | 6859 |
+| `maintenance/generate_documentation_index.py` | - | `.py` | 6024 |
 | `maintenance/README.md` | # Documentation Maintenance | `.md` | 503 |
 | `maintenance/records/documentation-path-migration-2026-08-05.json` | - | `.json` | 37480 |
 | `maintenance/records/README.md` | # Documentation Maintenance Records | `.md` | 343 |
-| `README.md` | # Py4GW Documentation Guide | `.md` | 3058 |
+| `README.md` | # Py4GW Documentation Guide | `.md` | 3124 |
 
 ## persistence
 
@@ -318,11 +321,11 @@ navigation inventory, not a source of behavioral authority. Start with
 | `ui/research/README.md` | # UI Research | `.md` | 564 |
 | `ui/research/title-rendering-research.md` | # Window Title Rendering — Investigation Summary (2026-06-02) | `.md` | 7963 |
 | `ui/research/tools/find_find_related_frame.py` | - | `.py` | 2816 |
-| `ui/research/ui-controls-catalog.md` | # Guild Wars UI Controls Catalog | `.md` | 24263 |
+| `ui/research/ui-controls-catalog.md` | # Guild Wars UI Controls Catalog | `.md` | 24149 |
 | `ui/research/ui-controls-master-catalog.md` | # GW UI Controls - Master Catalog (Ghidra swarm, 2026-07-01) | `.md` | 888181 |
 | `ui/research/ui-elements-creation-recipes.md` | # GW UI Elements — Corrected Creation Recipes (Ghidra-verified) | `.md` | 100132 |
 | `ui/research/ui-frame-system-mapping.md` | # UI Frame System — GWCA ↔ WASM ↔ EXE Mapping | `.md` | 36315 |
-| `ui/research/window-creation-architecture.md` | # Arbitrary Window Creation — WASM Architecture Analysis | `.md` | 32171 |
+| `ui/research/window-creation-architecture.md` | # Arbitrary Window Creation — WASM Architecture Analysis | `.md` | 31946 |
 | `ui/widget-manager/README.md` | # Widget Manager Documentation | `.md` | 574 |
 | `ui/widget-manager/widget-manager-and-catalog.md` | # Widget Manager And Catalog | `.md` | 10889 |
 
