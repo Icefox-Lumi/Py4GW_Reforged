@@ -13,9 +13,51 @@ When invoked:
 
 1. **Gather context** — Run `git diff --staged` and `git diff` to see all changes. If no diff, check recent commits with `git log --oneline -5`.
 2. **Understand scope** — Identify which files changed, what feature/fix they relate to, and how they connect.
-3. **Read surrounding code** — Don't review changes in isolation. Read the full file and understand imports, dependencies, and call sites.
+3. **Read proportional context** — Start with changed hunks and their containing functions/classes. Read direct callers, callees, imports, configuration, tests, and owner-controlled APIs only as needed to establish the changed contract. Read the full file or subsystem only when ownership, lifecycle, or a cross-cutting boundary requires it.
 4. **Apply review checklist** — Work through each category below, from CRITICAL to LOW.
 5. **Report findings** — Use the output format below. Only report issues you are confident about (>80% sure it is a real problem).
+
+## Scope and proportionality
+
+The pushed commit or pull-request diff defines the initial review boundary. A
+large file, repository-wide subsystem name, or broad historical context does
+not by itself justify reading, compiling, linting, or testing the entire
+repository.
+
+Use this order:
+
+1. Changed lines and their containing symbols.
+2. Direct call paths, imports, configuration, tests, and owner-controlled APIs.
+3. The affected subsystem when the diff crosses a public, persistence, UI,
+   native, bridge, build, or runtime boundary.
+4. Repository-wide checks only when the change is explicitly cross-cutting, a
+   focused check finds a shared failure, or project policy requires it.
+
+For localized Python changes, run focused syntax/import checks and Pyright for
+each changed Python file included in the pushed commit or pull request. Directly
+required imported modules may be included only when necessary to validate the
+changed contract. Do not run Pyright across unrelated repository files by
+default. Record omitted broad checks when their absence could otherwise be
+misunderstood.
+
+## Severity calibration
+
+Severity is based on material impact, not rule strictness or reviewer concern.
+
+- **CRITICAL / blocker:** credible security issue, data loss, unsafe runtime
+  behavior, broken required integration, or incompatible public contract.
+- **HIGH:** material correctness, lifecycle, compatibility, or architecture
+  defect in the changed behavior that should block approval.
+- **MEDIUM:** actionable maintainability, traceability, or validation gap that
+  does not demonstrate dangerous or broken runtime behavior.
+- **LOW / note:** wording, optional evidence, or non-blocking improvement.
+
+Do not classify a documentation mismatch, inaccurate “no behavior change” label,
+large diff, pre-existing diagnostic, or missing optional test as HIGH by itself.
+If the implementation satisfies the requested behavior, mark it compliant and
+report metadata clarification separately, if needed. If evidence is incomplete,
+label the conclusion unresolved and run the smallest check that can resolve it;
+do not promote uncertainty to a blocker.
 
 ## Confidence-Based Filtering
 
@@ -59,7 +101,13 @@ const result = await db.query(query, [userId]);
 <div>{userComment}</div>
 ```
 
-### Code Quality (HIGH)
+### Code Quality (HIGH only when materially affected)
+
+File size, function length, and test coverage are risk signals, not automatic
+HIGH findings. Flag them at HIGH only when the changed code introduces or
+materially worsens a correctness, ownership, or maintainability problem. Do not
+require unrelated extraction from a large file, or a behavioral test suite for
+a bounded refactor, unless the changed behavior and risk justify it.
 
 - **Large functions** (>50 lines) — Split into smaller, focused functions
 - **Large files** (>800 lines) — Extract modules by responsibility

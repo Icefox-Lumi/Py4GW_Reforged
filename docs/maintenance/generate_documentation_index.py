@@ -12,7 +12,7 @@ MARKDOWN_INDEX: Final = DOCS_ROOT / "documentation-index.md"
 JSON_INDEX: Final = DOCS_ROOT / "documentation-index.json"
 EXCLUDED_NAMES: Final = {MARKDOWN_INDEX.name, JSON_INDEX.name}
 CATEGORY_PREFIXES: Final = (
-    ("agents/", "agents"),
+    ("py4gw-ai/", "py4gw-ai"),
     ("architecture/", "architecture"),
     ("automation/", "automation"),
     ("bridge/", "bridge"),
@@ -25,7 +25,7 @@ CATEGORY_PREFIXES: Final = (
     ("validation/", "validation"),
 )
 CATEGORY_DESCRIPTIONS: Final = {
-    "agents": "Agent instructions, skills, harness research, and prompt references.",
+    "py4gw-ai": "Py4GW AI operating guidance, instruction history, and agent research.",
     "architecture": "Architecture models, migration records, decisions, and project records.",
     "automation": "Bots, behavior trees, HeroAI, builds, and gameplay automation.",
     "bridge": "Bridge, shared-memory, MCP, and external operator integration.",

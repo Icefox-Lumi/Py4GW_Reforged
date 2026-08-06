@@ -23,7 +23,7 @@ provenance, and maintenance rules.
 | Work on item modifiers or game-derived catalogs | `items/modifiers/` |
 | Work on loot behavior or its redesign | `loot/redesign/` |
 | Validate the demo replacement | `validation/demo/` |
-| Design a repeatable agent workflow | `agents/` |
+| Work with Py4GW AI guidance or agent workflows | `py4gw-ai/` |
 
 ## Specialized Records
 
@@ -31,8 +31,8 @@ provenance, and maintenance rules.
 - `automation/behavior-trees/modular-json/` records the modular JSON behavior-tree
   architecture.
 - `persistence/audit/` preserves the storage-boundary audit and migration history.
-- `agents/reference/` contains prompt-pattern references, not active repository
-  rules.
+- `py4gw-ai/reference/` contains prompt-pattern references, not active
+  repository rules.
 
 ## Authority And Status
 

@@ -43,7 +43,7 @@ or evidence method.
 ## Topics and Document Kinds
 
 Topic folders describe the subject, such as UI, items, loot, automation,
-persistence, bridge, game client, architecture, agents, or validation. They
+persistence, bridge, game client, architecture, Py4GW AI, or validation. They
 must use names a new contributor can understand without repository history.
 
 Use a kind folder only when it makes a topic easier to browse. The controlled

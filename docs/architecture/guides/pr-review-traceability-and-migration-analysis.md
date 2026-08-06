@@ -1,5 +1,9 @@
 # PR Review Guide: Traceable Refactors and Migration Analysis
 
+Status: current
+Scope: proportional review of refactors, migrations, and bounded pull requests
+Authority: current implementation, applicable project guidance, and reproducible validation
+
 ## Purpose
 
 Use this guide when reviewing a pull request that reorganizes, migrates, extracts, or rewrites an existing feature.
@@ -50,6 +54,63 @@ The preferred change is additive and traceable:
 - Treat replacement copies and parallel implementations as forbidden by default. They require a documented capability gap, ownership boundary, migration or retirement plan, and explicit maintainer/owner approval.
 
 Runtime equivalence is necessary, but it is not sufficient. A refactor that behaves the same today can still be unacceptable if it destroys source history, hides dependencies, prevents useful review, or makes future regressions difficult to diagnose.
+
+## Proportional scope and review cost
+
+Review the requested change at the smallest scope that can establish correctness.
+The commit or pull-request diff is the primary review surface. A large file does
+not make the whole file in scope, and a repository-wide feature name does not
+authorize a repository-wide investigation.
+
+Use this scope ladder:
+
+1. Changed lines and their containing functions, classes, or declarations.
+2. Direct callers, callees, imports, configuration, tests, and owner-controlled
+   extension points needed to understand those changes.
+3. The affected subsystem only when the diff crosses a runtime, native, UI,
+   persistence, bridge, or public-API boundary.
+4. Repository-wide analysis only when the change is explicitly cross-cutting,
+   a focused check demonstrates a shared failure, or a project rule requires it.
+
+Do not infer a need for full-repository compilation, testing, linting, or system
+analysis from the existence of a large file or a broad subsystem name. For a
+localized Python change, prefer compilation and Pyright for the changed module
+or changed scope, plus the narrowest relevant test. Expand verification only
+when the change affects shared APIs, build metadata, native code, injection,
+bridge transport, persistence infrastructure, or another boundary whose
+consumers cannot be validated locally.
+
+Every review should state what was intentionally not inspected or run when that
+omission could otherwise be mistaken for a gap. Unrelated pre-existing issues
+must be recorded as baseline evidence, not converted into findings against the
+reviewed change.
+
+## Finding severity and enforcement
+
+Severity describes the material effect of the reviewed change, not how strongly
+the reviewer feels about a rule. Enforce mandatory rules, but do so at the
+lowest severity that accurately represents the consequence.
+
+- **Blocker / critical:** the changed code creates a credible security issue,
+  data loss, unsafe runtime behavior, broken ownership boundary, incompatible
+  public contract, or an unverified failure on a required integration path.
+- **High:** a material correctness, lifecycle, compatibility, or architectural
+  defect in the changed behavior that should be fixed before approval. High is
+  not a synonym for “the PR description is imperfect” or “the diff is large.”
+- **Medium / requested change:** a real maintainability, traceability, or
+  validation gap that should be corrected, but does not itself demonstrate a
+  dangerous or broken runtime outcome.
+- **Low / note:** wording, optional evidence, or an improvement that does not
+  affect approval when the implementation is otherwise compliant.
+
+A documentation mismatch, missing explanation, or disputed classification must
+not be reported as High unless it hides a material code or contract defect. If
+the implementation satisfies an explicitly requested behavior change, report
+the implementation as compliant and, at most, request that the PR description
+be clarified. Do not require a code change to correct a metadata-only issue.
+
+When evidence is incomplete, label the conclusion unresolved and run the
+smallest check that can resolve it. Do not promote uncertainty to a blocker.
 
 ## Reuse existing implementations before creating new ones
 
@@ -270,6 +331,11 @@ If the vision is unclear, ask before evaluating architecture. Do not silently re
 
 Record the base and head commits, changed files, and working-tree state. Do not make review conclusions from the head branch alone.
 
+Use the merge-base-to-head diff as the primary evidence. If the request names a
+specific commit or bounded hunk, review that boundary first and do not silently
+expand the scope to the rest of the branch. Read surrounding code only to
+establish a direct contract, call path, or ownership fact.
+
 Useful evidence includes:
 
 ```text
@@ -384,6 +450,12 @@ For a claimed no-op refactor, require evidence proportional to the risk:
 - call-path comparison;
 - representative runtime smoke tests;
 - no unexpected changes in logs, queues, settings, or native dispatch.
+
+These are options, not a blanket suite. Select only the checks justified by the
+changed layer and contract. A localized Python extraction normally needs focused
+syntax/import validation and Pyright for the changed files or symbols; it does
+not require compiling or testing the entire repository unless the diff crosses a
+shared boundary or focused evidence identifies a broader impact.
 
 AST or byte comparison is useful evidence for a movement-only refactor. Git
 copy/rename detection and blame continuity can further establish provenance.
@@ -566,7 +638,28 @@ ownership violations even when no raw filesystem call is present.
 
 Do not accept “compiles,” “pyflakes passes,” or “AST-identical” as a substitute for the project’s required checks.
 
-For Python changes, pyright/Pylance is mandatory for the changed Python scope. Report the command, target, and result. A reviewer may accept pre-existing diagnostics when they are clearly separated from new diagnostics, but new type errors must be addressed or explicitly justified.
+For Python changes, pyright/Pylance is mandatory for every changed Python file
+included in the pushed commit or pull request. It is not mandatory for unrelated
+repository files. Include directly required imported modules only when the
+changed contract cannot be checked without them; do not turn that allowance into
+a repository-wide scan.
+
+Report the exact changed-file targets and results. For a large changed file,
+target the changed symbols when the tool supports it, and compare against a
+baseline when diagnostics are pre-existing. A reviewer may accept pre-existing
+diagnostics when they are clearly separated from new diagnostics, but new type
+errors in pushed files must be addressed or explicitly justified.
+
+Do not run a full-repository compile, lint, or test suite by default. Broaden
+verification only when the change is shared, cross-cutting, build-affecting,
+native/runtime-facing, or when a focused check shows a broader regression.
+
+### 15.1 Verification budget and reporting
+
+Before running a broad check, identify the changed layer, the failure it is
+intended to detect, and why a focused check cannot detect it. If that reason is
+not present, keep the check focused. Report both executed and intentionally
+omitted checks, with the scope and reason for each.
 
 This review policy does not require behavioral test suites, runtime smoke tests, client-test matrices, or test evidence as a condition of approval. Do not add testing requirements to review comments when the task is a refactor or code review and the user has not specifically requested tests.
 
@@ -774,5 +867,7 @@ For future pull requests, add a short record containing:
 - validation performed;
 - blockers and required decomposition;
 - accepted exceptions to this guide and why.
+- review scope, checks run, checks omitted, and the reason for each;
+- severity rationale for every requested change or blocker.
 
 This record allows later reviews to enrich the guide with project-specific patterns instead of repeating the same analysis from scratch.

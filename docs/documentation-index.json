@@ -6,9 +6,9 @@
     "documentation-index.json",
     "**/__pycache__/**"
   ],
-  "file_count": 270,
+  "file_count": 275,
   "categories": {
-    "agents": 24,
+    "py4gw-ai": 29,
     "architecture": 13,
     "automation": 18,
     "bridge": 6,
@@ -22,222 +22,6 @@
     "needs-review": 0
   },
   "entries": [
-    {
-      "path": "agents/instructions/agents-merged-sources.md",
-      "title": "# AGENTS.md - Merged Source Draft",
-      "extension": ".md",
-      "bytes": 17980,
-      "lines": 370,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/agents-py4gw.md",
-      "title": "# Py4GW AGENTS.md - Draft",
-      "extension": ".md",
-      "bytes": 25335,
-      "lines": 282,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/AGENTS.md",
-      "title": "# Py4GW AGENTS.md - Draft",
-      "extension": ".md",
-      "bytes": 8812,
-      "lines": 115,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/current-rule-source-scope.md",
-      "title": "# Current Py4GW Rule-Source Scope Map",
-      "extension": ".md",
-      "bytes": 8097,
-      "lines": 226,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/design-intent.md",
-      "title": "# Replacement Instruction System - Design Intent",
-      "extension": ".md",
-      "bytes": 2213,
-      "lines": 31,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/feature-inventory.md",
-      "title": "# AI Harness Feature Inventory for Py4GW",
-      "extension": ".md",
-      "bytes": 27335,
-      "lines": 479,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/project-specific-context-recovered.md",
-      "title": "# Recovered Py4GW Project-Specific Context",
-      "extension": ".md",
-      "bytes": 20933,
-      "lines": 207,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/py4gw-project-context.md",
-      "title": "# Py4GW Project Context",
-      "extension": ".md",
-      "bytes": 18147,
-      "lines": 323,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/README.md",
-      "title": "# AGENTS.md Replacement Working Set",
-      "extension": ".md",
-      "bytes": 362,
-      "lines": 8,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/sources/README.md",
-      "title": "# Instruction Source Archive",
-      "extension": ".md",
-      "bytes": 544,
-      "lines": 13,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/sources/source-codex-agents.md",
-      "title": "# Rust/codex-rs",
-      "extension": ".md",
-      "bytes": 22519,
-      "lines": 322,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/sources/source-codex-default.md",
-      "title": "# How you work",
-      "extension": ".md",
-      "bytes": 20903,
-      "lines": 275,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/sources/source-opencode-anthropic.txt",
-      "title": "",
-      "extension": ".txt",
-      "bytes": 8212,
-      "lines": 105,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/sources/source-opencode-codex.txt",
-      "title": "",
-      "extension": ".txt",
-      "bytes": 7390,
-      "lines": 79,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/instructions/sources.md",
-      "title": "# Source Files",
-      "extension": ".md",
-      "bytes": 1466,
-      "lines": 21,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/README.md",
-      "title": "# Agent Documentation",
-      "extension": ".md",
-      "bytes": 430,
-      "lines": 9,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/reference/code-reviewer.md",
-      "title": "## Review Process",
-      "extension": ".md",
-      "bytes": 9084,
-      "lines": 237,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/reference/code-simplifier.md",
-      "title": "# Code Simplifier Agent",
-      "extension": ".md",
-      "bytes": 1321,
-      "lines": 47,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/reference/python-patterns.md",
-      "title": "# Python Development Patterns",
-      "extension": ".md",
-      "bytes": 17498,
-      "lines": 750,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/reference/README.md",
-      "title": "# Prompt and LLM Instruction References",
-      "extension": ".md",
-      "bytes": 602,
-      "lines": 13,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/research/agent-skills-research.md",
-      "title": "# Agent Skills & Agentic Flows \u2014 Research Compendium",
-      "extension": ".md",
-      "bytes": 25734,
-      "lines": 596,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/research/opencode-agentic-workflow-research-2026-07.md",
-      "title": "# OpenCode Agentic Workflow Research",
-      "extension": ".md",
-      "bytes": 17351,
-      "lines": 487,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/research/opencode-workflow-redesign-proposal-2026-07.md",
-      "title": "# OpenCode Workflow Redesign Proposal",
-      "extension": ".md",
-      "bytes": 15033,
-      "lines": 593,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
-    {
-      "path": "agents/research/README.md",
-      "title": "# Agent-Workflow Research Map",
-      "extension": ".md",
-      "bytes": 1299,
-      "lines": 26,
-      "category": "agents",
-      "review_status": "navigation-only"
-    },
     {
       "path": "architecture/guides/pr-review-traceability-and-migration-analysis.md",
       "title": "# PR Review Guide: Traceable Refactors and Migration Analysis",
@@ -620,7 +404,7 @@
       "path": "game-client/research/gw-combat-ai-reverse-engineering.md",
       "title": "# Guild Wars Combat AI Reverse Engineering",
       "extension": ".md",
-      "bytes": 60640,
+      "bytes": 60639,
       "lines": 1441,
       "category": "game-client",
       "review_status": "navigation-only"
@@ -692,7 +476,7 @@
       "path": "game-client/research/reverse-engineering-reference.md",
       "title": "# Reverse Engineering Reference",
       "extension": ".md",
-      "bytes": 107740,
+      "bytes": 107735,
       "lines": 1887,
       "category": "game-client",
       "review_status": "navigation-only"
@@ -1232,7 +1016,7 @@
       "path": "maintenance/documentation-style-guide.md",
       "title": "# Py4GW Documentation Style and Maintenance Guide",
       "extension": ".md",
-      "bytes": 6701,
+      "bytes": 6703,
       "lines": 156,
       "category": "maintenance",
       "review_status": "navigation-only"
@@ -1241,7 +1025,7 @@
       "path": "maintenance/generate_documentation_index.py",
       "title": "",
       "extension": ".py",
-      "bytes": 5859,
+      "bytes": 5866,
       "lines": 158,
       "category": "maintenance",
       "review_status": "navigation-only"
@@ -1409,10 +1193,271 @@
       "review_status": "navigation-only"
     },
     {
+      "path": "py4gw-ai/change-control-and-verification.md",
+      "title": "# Change Control and Verification",
+      "extension": ".md",
+      "bytes": 7132,
+      "lines": 79,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/engineering-practices.md",
+      "title": "# Engineering Practices",
+      "extension": ".md",
+      "bytes": 5414,
+      "lines": 60,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/agents-draft.md",
+      "title": "# Py4GW AGENTS.md - Draft",
+      "extension": ".md",
+      "bytes": 8812,
+      "lines": 115,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/agents-merged-sources.md",
+      "title": "# AGENTS.md - Merged Source Draft",
+      "extension": ".md",
+      "bytes": 17980,
+      "lines": 370,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/agents-py4gw-draft.md",
+      "title": "# Py4GW AGENTS.md - Draft",
+      "extension": ".md",
+      "bytes": 25335,
+      "lines": 282,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/current-rule-source-scope.md",
+      "title": "# Current Py4GW Rule-Source Scope Map",
+      "extension": ".md",
+      "bytes": 8097,
+      "lines": 226,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/design-intent.md",
+      "title": "# Replacement Instruction System - Design Intent",
+      "extension": ".md",
+      "bytes": 2213,
+      "lines": 31,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/feature-inventory.md",
+      "title": "# AI Harness Feature Inventory for Py4GW",
+      "extension": ".md",
+      "bytes": 27335,
+      "lines": 479,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/previous-topic-map.md",
+      "title": "# Agent Documentation",
+      "extension": ".md",
+      "bytes": 430,
+      "lines": 9,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/project-specific-context-recovered.md",
+      "title": "# Recovered Py4GW Project-Specific Context",
+      "extension": ".md",
+      "bytes": 20933,
+      "lines": 207,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/instruction-history/README.md",
+      "title": "# AGENTS.md Replacement Working Set",
+      "extension": ".md",
+      "bytes": 514,
+      "lines": 10,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/operating-model.md",
+      "title": "# Py4GW AI Operating Model",
+      "extension": ".md",
+      "bytes": 11123,
+      "lines": 125,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/project-context.md",
+      "title": "# Py4GW Project Context",
+      "extension": ".md",
+      "bytes": 18147,
+      "lines": 323,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/README.md",
+      "title": "# Py4GW AI Guidance",
+      "extension": ".md",
+      "bytes": 1221,
+      "lines": 29,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/reference/code-reviewer.md",
+      "title": "## Review Process",
+      "extension": ".md",
+      "bytes": 9084,
+      "lines": 237,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/reference/code-simplifier.md",
+      "title": "# Code Simplifier Agent",
+      "extension": ".md",
+      "bytes": 1321,
+      "lines": 47,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/reference/python-patterns.md",
+      "title": "# Python Development Patterns",
+      "extension": ".md",
+      "bytes": 17498,
+      "lines": 750,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/reference/README.md",
+      "title": "# Prompt and LLM Instruction References",
+      "extension": ".md",
+      "bytes": 602,
+      "lines": 13,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/research/agent-skills-research.md",
+      "title": "# Agent Skills & Agentic Flows \u2014 Research Compendium",
+      "extension": ".md",
+      "bytes": 25734,
+      "lines": 596,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/research/opencode-agentic-workflow-research-2026-07.md",
+      "title": "# OpenCode Agentic Workflow Research",
+      "extension": ".md",
+      "bytes": 17351,
+      "lines": 487,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/research/opencode-workflow-redesign-proposal-2026-07.md",
+      "title": "# OpenCode Workflow Redesign Proposal",
+      "extension": ".md",
+      "bytes": 15033,
+      "lines": 593,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/research/README.md",
+      "title": "# Agent-Workflow Research Map",
+      "extension": ".md",
+      "bytes": 1299,
+      "lines": 26,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/runtime-conventions.md",
+      "title": "# Py4GW Runtime Conventions",
+      "extension": ".md",
+      "bytes": 1954,
+      "lines": 22,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/source-archive/README.md",
+      "title": "# Instruction Source Archive",
+      "extension": ".md",
+      "bytes": 544,
+      "lines": 13,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/source-archive/source-codex-agents.md",
+      "title": "# Rust/codex-rs",
+      "extension": ".md",
+      "bytes": 22519,
+      "lines": 322,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/source-archive/source-codex-default.md",
+      "title": "# How you work",
+      "extension": ".md",
+      "bytes": 20903,
+      "lines": 275,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/source-archive/source-opencode-anthropic.txt",
+      "title": "",
+      "extension": ".txt",
+      "bytes": 8212,
+      "lines": 105,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/source-archive/source-opencode-codex.txt",
+      "title": "",
+      "extension": ".txt",
+      "bytes": 7390,
+      "lines": 79,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
+      "path": "py4gw-ai/source-archive.md",
+      "title": "# Source Files",
+      "extension": ".md",
+      "bytes": 1491,
+      "lines": 21,
+      "category": "py4gw-ai",
+      "review_status": "navigation-only"
+    },
+    {
       "path": "README.md",
       "title": "# Py4GW Documentation Guide",
       "extension": ".md",
-      "bytes": 3042,
+      "bytes": 3058,
       "lines": 66,
       "category": "maintenance",
       "review_status": "navigation-only"

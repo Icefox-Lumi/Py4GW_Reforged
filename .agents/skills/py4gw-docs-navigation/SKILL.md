@@ -24,7 +24,7 @@ documentation more authoritative than source code or live runtime behavior.
    - `bridge/` for bridge, shared-memory, or MCP boundaries.
    - `architecture/records/reforged-migration/` for parity or migration history.
    - `items/modifiers/` or `loot/redesign/` for item and loot work.
-   - `agents/` for repository skills or instruction-system work.
+   - `py4gw-ai/` for repository skills, instruction-system guidance, or agent workflows.
 3. Read only the cited subsystem record needed for the task. Use
    `documentation-index.*` to locate a record, not to establish behavior.
 4. Confirm the owner in current source, stubs, build configuration, and, when
