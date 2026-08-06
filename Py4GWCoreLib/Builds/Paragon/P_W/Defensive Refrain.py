@@ -6,9 +6,12 @@ from Py4GWCoreLib.Skill import Skill
 from Py4GWCoreLib.Builds.Skills import SkillsTemplate
 
 Heroic_Refrain_ID = Skill.GetID("Heroic_Refrain")
+Anthem_of_Flame_ID = Skill.GetID("Anthem_of_Flame")
 Theyre_on_Fire_ID = Skill.GetID("Theyre_on_Fire")
+Mending_Refrain_ID = Skill.GetID("Mending_Refrain")
 Hasty_Refrain_ID = Skill.GetID("Hasty_Refrain")
 Aggressive_Refrain_ID = Skill.GetID("Aggressive_Refrain")
+Mighty_Throw_ID = Skill.GetID("Mighty_Throw")
 Stand_Your_Ground_ID = Skill.GetID("Stand_Your_Ground")
 For_Great_Justice_ID = Skill.GetID("For_Great_Justice")
 Theres_Nothing_to_Fear_ID = Skill.GetID("Theres_Nothing_to_Fear")
@@ -39,9 +42,12 @@ class Paragon_Refrain(BuildMgr):
             optional_skills=[
                 Save_Yourselves_luxon_ID,
                 Save_Yourselves_kurzick_ID,
+                Anthem_of_Flame_ID,
+                Mending_Refrain_ID,
                 Hasty_Refrain_ID,
                 Never_Surrender_ID,
                 Aggressive_Refrain_ID,
+                Mighty_Throw_ID,
                 Stand_Your_Ground_ID,
                 For_Great_Justice_ID,
                 Blazing_Finale_ID,
@@ -69,6 +75,18 @@ class Paragon_Refrain(BuildMgr):
         if self.IsSkillEquipped(Heroic_Refrain_ID) and (yield from self.skills.Paragon.Leadership.Heroic_Refrain()):
             return True
 
+        if self.IsSkillEquipped(Mending_Refrain_ID) and (yield from self.skills.Paragon.Motivation.Mending_Refrain()):
+            return True
+
+        if self.IsSkillEquipped(Hasty_Refrain_ID) and (yield from self.skills.Paragon.Motivation.Hasty_Refrain()):
+            return True
+
+        if self.IsSkillEquipped(Aggressive_Refrain_ID) and (yield from self.skills.Paragon.Leadership.Aggressive_Refrain()):
+            return True
+
+        if self.IsSkillEquipped(Anthem_of_Flame_ID) and (yield from self.skills.Paragon.Leadership.Anthem_of_Flame()):
+            return True
+
         if self.IsSkillEquipped(Theyre_on_Fire_ID) and (yield from self.skills.Paragon.Leadership.Theyre_on_Fire()):
             return True
 
@@ -78,10 +96,13 @@ class Paragon_Refrain(BuildMgr):
         if self.IsSkillEquipped(Angelic_Protection_ID) and (yield from self.skills.Paragon.Leadership.Angelic_Protection(health_threshold=0.30)):
             return True
 
-        if self.IsSkillEquipped(Theres_Nothing_to_Fear_ID) and (yield from self.skills.Any.NoAttribute.Theres_Nothing_to_Fear()):
+        if self.IsSkillEquipped(Save_Yourselves_luxon_ID) and (yield from self.skills.Any.NoAttribute.Save_Yourselves_luxon()):
             return True
 
-        if self.IsSkillEquipped(Aggressive_Refrain_ID) and (yield from self.skills.Paragon.Leadership.Aggressive_Refrain()):
+        if self.IsSkillEquipped(Save_Yourselves_kurzick_ID) and (yield from self.skills.Any.NoAttribute.Save_Yourselves_kurzick()):
+            return True
+
+        if self.IsSkillEquipped(Theres_Nothing_to_Fear_ID) and (yield from self.skills.Any.NoAttribute.Theres_Nothing_to_Fear()):
             return True
 
         if self.IsSkillEquipped(For_Great_Justice_ID) and (yield from self.skills.Warrior.NoAttribute.For_Great_Justice()):
@@ -90,19 +111,10 @@ class Paragon_Refrain(BuildMgr):
         if self.IsSkillEquipped(Make_Your_Time_ID) and (yield from self.skills.Paragon.Leadership.Make_Your_Time()):
             return True
 
-        if self.IsSkillEquipped(Save_Yourselves_luxon_ID) and (yield from self.skills.Any.NoAttribute.Save_Yourselves_luxon()):
-            return True
-
-        if self.IsSkillEquipped(Save_Yourselves_kurzick_ID) and (yield from self.skills.Any.NoAttribute.Save_Yourselves_kurzick()):
-            return True
-
         if self.IsSkillEquipped(Stand_Your_Ground_ID) and (yield from self.skills.Paragon.Command.Stand_Your_Ground()):
             return True
 
         if self.IsSkillEquipped(Cant_Touch_This_ID) and (yield from self.skills.Paragon.Command.Cant_Touch_This()):
-            return True
-
-        if self.IsSkillEquipped(Hasty_Refrain_ID) and (yield from self.skills.Paragon.Motivation.Hasty_Refrain()):
             return True
 
         if self.IsSkillEquipped(Never_Surrender_ID) and (yield from self.skills.Paragon.Motivation.Never_Surrender()):
@@ -118,6 +130,9 @@ class Paragon_Refrain(BuildMgr):
             return True
 
         if self.IsSkillEquipped(Ebon_Battle_Standard_of_Wisdom_ID) and (yield from self.skills.Any.NoAttribute.Ebon_Battle_Standard_of_Wisdom()):
+            return True
+
+        if self.IsSkillEquipped(Mighty_Throw_ID) and (yield from self.skills.Paragon.SpearMastery.Mighty_Throw()):
             return True
 
         if (yield from self.AutoAttack()):
