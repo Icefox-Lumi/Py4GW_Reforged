@@ -9,6 +9,7 @@ _8_deldrimorwarcamp_to_thegranitecitadel_ids = {
 _8_deldrimorwarcamp_to_thegranitecitadel_outpost_path = [
     (-3169.08, -5067.32),
     (-2929.86, -4627.93),
+    (-2908.64, -4574.38),
 ]
 
 # 3) Segments
@@ -80,6 +81,7 @@ _8_deldrimorwarcamp_to_thegranitecitadel_segments = [
             (21045.69, 2641.61),
             (21540.24, 2743.81),
             (21991.95, 2964.18),
+            (22261.00, 3302.17),
         ]
     },
 
@@ -115,6 +117,7 @@ _8_deldrimorwarcamp_to_thegranitecitadel_segments = [
             (-11805.73, 13993.24),
             (-11733.8, 14492.23),
             (-11662.06, 14990.81),
+            (-11611.79, 15340.15),
         ]
     },
 
