@@ -10,6 +10,13 @@ most specific current source available; treat historical plans, handovers, and
 legacy trees as evidence with an explicit status rather than as automatic
 runtime truth.
 
+## Project-Specific Reference
+
+For concrete project paths, commands, migration parity, persistence,
+reverse-engineering, bridge, widget, ImGui, and runtime facts, read this
+document when relevant. It supplements the behavioral rules in `AGENTS.md` and
+the other current Py4GW AI guides; it does not replace them.
+
 ## Extraction coverage
 
 This file is the active destination for concrete project facts removed from

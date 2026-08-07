@@ -1,0 +1,4 @@
+interface:
+  display_name: "Py4GW Bridge and MCP"
+  short_description: "Guide bridge, CLI, and MCP boundaries"
+  default_prompt: "Use $py4gw-bridge-mcp to plan this Py4GW bridge or MCP change safely."
