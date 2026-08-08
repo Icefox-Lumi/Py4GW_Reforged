@@ -2439,7 +2439,7 @@ RESUME_SEARCH_DIST = 1200.0 # max dist to find a nearby move step at rez
 def S_BlacklistModel(model_id: int):
     """Custom FSM step: add a MODEL ID to loot blacklist (script-only)."""
     from Py4GWCoreLib.Routines import Routines
-    from Py4GWCoreLib.py4gwcorelib_src.loot_filters import LootFilters
+    from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import LootFilters
 
     def _gen():
         loot = LootFilters()
@@ -2451,7 +2451,7 @@ def S_BlacklistModel(model_id: int):
 
 def S_BlacklistModels(model_ids) -> Generator:
     from Py4GWCoreLib.Routines import Routines
-    from Py4GWCoreLib.py4gwcorelib_src.loot_filters import LootFilters
+    from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import LootFilters
 
     def _gen():
         loot = LootFilters()

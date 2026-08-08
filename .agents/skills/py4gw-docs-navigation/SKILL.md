@@ -33,7 +33,7 @@ authoritative than source code or live runtime behavior.
    - `items/modifiers/` or `loot/redesign/` for item and loot work.
    - `py4gw-ai/` for repository skills, instruction-system guidance, or agent workflows.
 3. Read only the cited subsystem record needed for the task. Use
-   `documentation-index.*` to locate a record, not to establish behavior.
+   `documentation-index.md` as a route map, not to establish behavior.
 4. Confirm the owner in current source, stubs, build configuration, and, when
    relevant, `Py4GW_Reforged_Native`. Treat legacy Py4GW/GWCA as parity evidence.
 5. For runtime-dependent claims, distinguish source proof from live injected

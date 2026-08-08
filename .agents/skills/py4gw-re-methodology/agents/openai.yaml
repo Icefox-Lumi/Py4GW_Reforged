@@ -1,4 +1,0 @@
-interface:
-  display_name: "Py4GW RE Methodology"
-  short_description: "Investigate Guild Wars client behavior safely"
-  default_prompt: "Use $py4gw-re-methodology to investigate this Guild Wars client behavior before modifying code."

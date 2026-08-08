@@ -1,4 +1,0 @@
-interface:
-  display_name: "Py4GW Task Guidance"
-  short_description: "Guide uncertain Py4GW work"
-  default_prompt: "Use $py4gw-task-guidance to frame this uncertain Py4GW task before editing."

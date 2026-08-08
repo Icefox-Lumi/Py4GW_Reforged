@@ -233,8 +233,7 @@ The persistence policy is a project hard rule:
 
 ### Additional RE references
 
-- `docs/ui/research/generated/native-gw-ui-function-catalog.json` catalogs native UI functions;
-  `docs/ui/research/native-gw-window-creation-investigation.md` covers window creation;
+- `docs/ui/research/native-gw-window-creation-investigation.md` covers window creation;
   and `docs/ui/research/native-ui-title-and-encoded-string-reference.md` covers title
   and encoded-string handling.
 - `docs/ui/name-tag-colors/feature-guide.md` is the historical usage guide for
@@ -243,7 +242,7 @@ The persistence policy is a project hard rule:
   pipeline, `GetConsiderColor` resolver detour/ABI, allegiance-to-ARGB table,
   and item-rarity markup. The current Python surface is `AgentRecolor` /
   `PyAgentRecolor` under `Py4GWCoreLib/AgentRecolor.py`,
-  `Py4GWCoreLib/py4gwcorelib_src/agent_recolor/`, and
+  `Py4GWCoreLib/py4gwcorelib_src/system_settings/agent_recolor/`, and
   `stubs/PyAgentRecolor.pyi`; the historical native implementation reference
   is `Py4GW/src/py_agent_tag_color.cpp`. Its in-client test harness is
   `tests/name_tag_color/name_tag_color_test.py`.
