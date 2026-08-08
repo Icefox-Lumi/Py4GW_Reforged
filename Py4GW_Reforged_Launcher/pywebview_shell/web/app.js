@@ -1510,6 +1510,7 @@ function openEditDrawer(profileId) {
   document.getElementById("edit-autologin").checked = p ? !!p.auto_login_enabled : false;
   document.getElementById("edit-autoselect").checked = p ? !!p.auto_select_character_enabled : false;
   document.getElementById("edit-charname").value = p ? p.character_name || "" : "";
+  document.getElementById("edit-rename-client").checked = p ? !!p.enable_client_rename : false;
   document.getElementById("edit-steam-login").checked = p ? !!p.use_steam_login : false;
   document.getElementById("edit-steam-anchor").value = p ? p.steam_account_anchor || "" : "";
   updateSteamLoginFieldVisibility();
@@ -1657,6 +1658,7 @@ async function onSaveProfileClick() {
     auto_login_enabled: document.getElementById("edit-autologin").checked,
     auto_select_character_enabled: document.getElementById("edit-autoselect").checked,
     character_name: document.getElementById("edit-charname").value.trim(),
+    enable_client_rename: document.getElementById("edit-rename-client").checked,
     use_steam_login: useSteam,
     steam_account_anchor: document.getElementById("edit-steam-anchor").value.trim(),
     py4gw_dll_path: document.getElementById("edit-py4gw-dll-path").value.trim(),

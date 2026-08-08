@@ -120,6 +120,13 @@ def _draw_chat_commands_monitor() -> None:
 
 def build_window(controller) -> "ImGui.SidebarWindow":
     """Construct the settings :class:`SidebarWindow` from the catalog (pure construction)."""
+    category_by_title = {cat.title: cat for cat in model.CATALOG}
+
+    def _save_group_state(title: str, is_open: bool) -> None:
+        cat = category_by_title.get(title)
+        if cat is not None:
+            controller.set_group_open(cat.key, is_open)
+
     win = ImGui.SidebarWindow(
         "System Settings",
         sidebar_width=240.0,
@@ -127,10 +134,12 @@ def build_window(controller) -> "ImGui.SidebarWindow":
         height=560.0,
         collapsible_groups=True,
         show_search=True,
+        on_group_open=_save_group_state,
         on_close=controller.close,   # the window's X hides it (same as toggling the cog off)
     )
     for cat in model.CATALOG:
         group = win.add_group(cat.title, icon=_glyph(cat.icon))
+        win.set_group_open(cat.title, controller.is_group_open(cat.key))
         if cat.key == "map":
             try:
                 from Py4GWCoreLib.py4gwcorelib_src.system_settings.map_utilities import config_ui as map_ui
@@ -213,6 +222,20 @@ def build_window(controller) -> "ImGui.SidebarWindow":
                 _log(traceback.format_exc())
                 _err = str(exc)
                 win.add_section(group, "Window Renamer",
+                                (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
+            continue
+        if cat.key == "items":
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.inventory import config_ui as inventory_ui
+
+                inventory_ui.add_sections(win, group)
+            except Exception as exc:
+                import traceback
+
+                _log("Items / Inventory+ migration sections failed to build: %r" % exc)
+                _log(traceback.format_exc())
+                _err = str(exc)
+                win.add_section(group, "Inventory+ migration",
                                 (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
             continue
         if cat.key == "skills":
