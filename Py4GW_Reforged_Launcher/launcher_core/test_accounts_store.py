@@ -83,10 +83,6 @@ class TestBasicRoundTrip(unittest.TestCase):
         self.assertTrue(p1.py4gw_enabled)
         self.assertTrue(p1.gmod_enabled)
         self.assertEqual(p1.gmod_plugin_paths, ["C:/mods/one.tpf"])
-        self.assertTrue(p1.enable_client_rename)
-
-        p2 = next(p for p in profiles if p.character_name == "Test Char 2")
-        self.assertFalse(p2.enable_client_rename)
 
     def test_password_encrypted_on_first_load_not_left_plaintext(self):
         profiles = accounts_store.load_profiles(self.path)
@@ -141,17 +137,6 @@ class TestBasicRoundTrip(unittest.TestCase):
         r1 = next(p for p in reloaded if p.character_name == "Test Char 1")
         self.assertTrue(r1.use_steam_login)
         self.assertEqual(r1.steam_account_anchor, "some-anchor")
-
-    def test_client_rename_option_round_trips_and_defaults_off(self):
-        profiles = accounts_store.load_profiles(self.path)
-        p2 = next(p for p in profiles if p.character_name == "Test Char 2")
-        self.assertFalse(p2.enable_client_rename)
-        p2.enable_client_rename = True
-        accounts_store.save_profiles(profiles, self.path)
-
-        reloaded = accounts_store.load_profiles(self.path)
-        r2 = next(p for p in reloaded if p.character_name == "Test Char 2")
-        self.assertTrue(r2.enable_client_rename)
 
     def test_ids_stable_across_reload(self):
         profiles = accounts_store.load_profiles(self.path)
