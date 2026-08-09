@@ -72,7 +72,7 @@ class LootConfig:
     respect_loot_lock: bool = True
     blacklist_item_ids: set[int] = field(default_factory=set)  # session-only
 
-    #: The profile in use. One at a time; the filters come from the Loot Filter Factory.
+    #: The account-local selected global Factory profile. All other persisted policy is global.
     profile: str = ""
 
     def copy(self) -> "LootConfig":

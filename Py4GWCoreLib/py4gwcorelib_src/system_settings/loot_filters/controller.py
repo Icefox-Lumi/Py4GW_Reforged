@@ -77,7 +77,7 @@ class LootFilters:
         self._profiles = factory_store.load_profiles()
 
     def save(self) -> None:
-        """Persist the user's configuration. NEVER called with live."""
+        """Persist global policy plus this account's selected profile. NEVER called with live."""
         store.save(self.persisted)
 
     def active_filters(self):
