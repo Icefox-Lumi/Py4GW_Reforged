@@ -693,6 +693,18 @@ def _set_gw_window_title(pid: int, title: str, log: list) -> None:
         _log(log, f"Window title - failed to set (cosmetic, continuing): {e}")
 
 
+def _set_profile_window_title(profile: GameProfile, pid: int, log: list) -> None:
+    """Apply the profile's explicit opt-in window-title behavior."""
+    if not profile.enable_client_rename:
+        return
+
+    if profile.auto_select_character_enabled and profile.character_name:
+        window_title = profile.character_name
+    else:
+        window_title = profile.name
+    _set_gw_window_title(pid, window_title, log)
+
+
 def _find_replacement_process(exe_path: str, exclude_pid: int, launched_after: float, log: list, timeout: float = 15.0) -> Optional[int]:
     """Poll for a new process running `exe_path` that started after `launched_after`.
 
@@ -1073,11 +1085,7 @@ def _launch_gw1_via_steam(
         return LaunchResult(False, pid, f"Hit the absolute ceiling ({absolute_ceiling}s) with no window, exit, or hang signal", log)
     # outcome == "window": pid's window is already confirmed, fall straight through.
 
-    if profile.auto_select_character_enabled and profile.character_name:
-        window_title = profile.character_name
-    else:
-        window_title = profile.name
-    _set_gw_window_title(pid, window_title, log)
+    _set_profile_window_title(profile, pid, log)
 
     if profile.py4gw_enabled and py4gw_injection_enabled:
         _log(log, f"Window found; waiting {post_window_settle_delay}s before injecting Py4GW")
@@ -1321,11 +1329,7 @@ def launch_py4gw_profile(
 
     # outcome == "window": pid's window is already confirmed, fall straight through.
 
-    if profile.auto_select_character_enabled and profile.character_name:
-        window_title = profile.character_name
-    else:
-        window_title = profile.name
-    _set_gw_window_title(pid, window_title, log)
+    _set_profile_window_title(profile, pid, log)
 
     if profile.py4gw_enabled and py4gw_injection_enabled:
         _log(log, f"Window found; waiting {post_window_settle_delay}s before injecting Py4GW")

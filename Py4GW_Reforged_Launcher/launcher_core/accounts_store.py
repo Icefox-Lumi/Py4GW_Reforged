@@ -97,6 +97,7 @@ def _account_from_dict(raw: dict) -> tuple[GameProfile, dict]:
     inject_gmod = extras.pop("inject_gmod", False)
     gmod_mods = extras.pop("gmod_mods", []) or []
     script_path = extras.pop("script_path", "") or ""
+    enable_client_rename = extras.pop("enable_client_rename", False)
 
     # New-format fields this app owns -- already present if a prior save by
     # this app wrote them, absent on a first-ever load of the old format.
@@ -152,6 +153,7 @@ def _account_from_dict(raw: dict) -> tuple[GameProfile, dict]:
         auto_login_enabled=bool(auto_login_enabled),
         password_protected=password_protected,
         auto_select_character_enabled=bool(auto_select_character_enabled),
+        enable_client_rename=bool(enable_client_rename),
         windowed_mode_enabled=bool(windowed_mode_enabled),
         window_x=int(window_x),
         window_y=int(window_y),
@@ -444,6 +446,7 @@ def _profile_to_dict(profile: GameProfile) -> dict:
             "password_protected": profile.password_protected,
             "auto_login_enabled": profile.auto_login_enabled,
             "auto_select_character_enabled": profile.auto_select_character_enabled,
+            "enable_client_rename": profile.enable_client_rename,
             "windowed_mode_enabled": profile.windowed_mode_enabled,
             "window_x": profile.window_x,
             "window_y": profile.window_y,

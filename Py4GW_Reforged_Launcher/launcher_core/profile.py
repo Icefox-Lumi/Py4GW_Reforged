@@ -65,6 +65,9 @@ class GameProfile:
 
     auto_select_character_enabled: bool = False
     character_name: str = ""
+    # Explicit opt-in. New profiles must never rename the Guild Wars window
+    # unless the user enables this profile option.
+    enable_client_rename: bool = False
 
     # RELAY 094: Steam-linked accounts have no email Py4GW can read from
     # memory (Apo confirmed directly -- no suitable replacement exists), so
