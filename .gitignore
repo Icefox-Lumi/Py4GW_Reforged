@@ -54,6 +54,9 @@ json/**
 # JsonFactory state. Keep the rest of the runtime JSON jail ignored.
 !json/modular/
 !json/modular/**
+# Enemy Tracker's global documents are curated repository data, not private
+# per-account runtime state.
+!json/Global/EnemyTracker/*.json
 
 Bots/marks_coding_corner/alcohol_procs.ini
 Bots/marks_coding_corner/**.json

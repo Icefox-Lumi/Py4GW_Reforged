@@ -67,9 +67,9 @@ Python (`Settings` / `JsonFactory`):
   into `Widgets/Data/rarity_filter_data.json`** — stop writing to `Widgets/Data`.
 - `Items & Loot/MerchantRules.py` (5839/6368/6408 + backups 6258/6266/6354) — big hand-rolled
   per-account profile store with atomic temp+fsync+os.replace and `.bak` snapshots.
-- `System/Enemy Tracker.py` — cross-account `EnemyData/EnemyTrackerData.json` +
-  `EnemyTrackerNames.*.json` with a **hand-rolled `O_EXCL` cross-process lock** → **JsonFactory
-  (Global)** — *verify Global-scope cross-process lock parity before removing the lock*.
+- `System/Enemy Tracker.py` - migrated from the legacy `EnemyData/` files to
+  **JsonFactory (Global)**; the retired source and cleaner are preserved under
+  `Legacy code and tests/EnemyData/`.
 - `Automation/Multiboxing/CombatPrep.py:162/174/192` — `formation_hotkey.json`.
 - `Automation/Enhancements/Dhuum Helper.py:59/81` **and** `Bots/Missions/Core/Underworld.py:2623/2640`
   — shared `Widgets/Config/EquippedArmor.json` → one shared JsonFactory doc.
