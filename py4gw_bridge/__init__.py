@@ -1,4 +1,4 @@
-from .protocol import (
+from .transport import (
     PROTOCOL_VERSION,
     ProtocolError,
     make_error_response,

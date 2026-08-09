@@ -21,7 +21,6 @@ class InventorySlot:
     rarity: str
     bag: Bags
     slot: int
-    is_identified: bool = False
     is_id_kit: bool = False
     is_salvage_kit: bool = False
     bag_frame: Frame | None = None
@@ -64,7 +63,6 @@ class InventoryMonitor:
                         rarity=rarity,
                         bag=bag,
                         slot=slot,
-                        is_identified=bool(item_instance.is_identified),
                         is_id_kit=bool(item_instance.is_id_kit),
                         is_salvage_kit=bool(item_instance.is_salvage_kit),
                         bag_frame=bag_frame if bag_frame and bag_frame.is_usable else None,

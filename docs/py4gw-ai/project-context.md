@@ -169,7 +169,7 @@ The persistence policy is a project hard rule:
 - `docs/architecture/reference/py4-gw-conceptual-model.md` is the canonical architecture and
   terminology reference.
 - `docs/bridge/mcp/mcp-bridge.md` is the MCP-facing planning summary; use
-  `BridgeRuntime/README.md` for daemon, injected client, CLI, and operator
+  `py4gw_bridge/README.md` for daemon, injected client, CLI, and operator
   usage.
 - `docs/architecture/reference/py4-gw-model-features-detail.txt` is a derived quick-scan export, not a
   separate authority.
@@ -279,9 +279,9 @@ The persistence policy is a project hard rule:
   INI key, runs widget discovery, and hands off to
   `Widgets/WidgetCatalog/Py4GW_widget_catalog.py`.
 - `Py4GW_Launcher.py` is the external launcher/injector UI.
-- Bridge flow: `Widgets/Coding/Tools/Bridge Client.py` -> `bridge_daemon.py`
-  -> `bridge_cli.py`.
-- `py4gw_mcp_server.py` is the MCP adapter; it bridges to the daemon over stdio
+- Bridge flow: `Widgets/Coding/Tools/Bridge Client.py` -> `py4gw_bridge/daemon.py`
+  -> `py4gw_bridge/cli.py`.
+- `py4gw_bridge/mcp_server.py` is the MCP adapter; it bridges to the daemon over stdio
   rather than directly to injected clients.
 - The MCP adapter intentionally exposes a narrow safe surface rather than
   arbitrary bridge calls: `list_clients`, `list_namespaces`, `list_commands`,
@@ -291,9 +291,9 @@ The persistence policy is a project hard rule:
 - `Sources/modular_bot/` is authoritative for ModularBot; widget copies are
   mostly wrappers.
 - Focused checks include:
-  - `python "bridge_daemon.py" --help`
-  - `python "bridge_cli.py" --help`
-  - `python "py4gw_mcp_server.py" --help`
+  - `python -m py4gw_bridge.daemon --help`
+  - `python -m py4gw_bridge.cli --help`
+  - `python -m py4gw_bridge.mcp_server --help`
   - `python "Sources/modular_bot/tools/validate_modular_docs.py"`
   - `python "Widgets/Data/test_merchant_rules_regression.py"`
   - applicable standalone root `test_*.py` scripts

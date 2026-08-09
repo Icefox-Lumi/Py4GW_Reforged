@@ -1,4 +1,4 @@
-"""Pure data for the account-scoped item profile."""
+"""Plain System Settings data for Xunlai access and Colorize."""
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,14 +15,10 @@ _FALLBACK_COLORS: dict[str, tuple[int, int, int, int]] = {
 
 
 def _palette_colors() -> dict[str, tuple[int, int, int, int]]:
-    """Use the repository palette; the fallback only keeps offline model tests importable."""
     try:
         from Py4GWCoreLib.py4gwcorelib_src.Color import ColorPalette
 
-        return {
-            rarity: tuple(ColorPalette.GetColor("GW_%s" % rarity).to_tuple())
-            for rarity in RARITIES
-        }
+        return {rarity: tuple(ColorPalette.GetColor("GW_%s" % rarity).to_tuple()) for rarity in RARITIES}
     except Exception:
         return dict(_FALLBACK_COLORS)
 
@@ -39,9 +35,7 @@ def _color(value: Any, fallback: tuple[int, int, int, int]) -> tuple[int, int, i
 
 
 @dataclass
-class ColorizeProfile:
-    """Per-rarity tint choices and independent render targets."""
-
+class ColorizeSettings:
     enabled: bool = False
     imgui_frame: bool = True
     imgui_outline: bool = True
@@ -51,9 +45,7 @@ class ColorizeProfile:
     rarities: dict[str, bool] = field(default_factory=lambda: {
         "White": False, "Blue": True, "Green": True, "Purple": True, "Gold": True,
     })
-    colors: dict[str, tuple[int, int, int, int]] = field(
-        default_factory=lambda: dict(DEFAULT_COLORS)
-    )
+    colors: dict[str, tuple[int, int, int, int]] = field(default_factory=lambda: dict(DEFAULT_COLORS))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,80 +60,36 @@ class ColorizeProfile:
         }
 
     @staticmethod
-    def from_dict(raw: Any) -> "ColorizeProfile":
+    def from_dict(raw: Any) -> "ColorizeSettings":
         raw = raw if isinstance(raw, dict) else {}
         stored_rarities = raw.get("rarities", {})
         stored_colors = raw.get("colors", {})
-        return ColorizeProfile(
+        return ColorizeSettings(
             enabled=bool(raw.get("enabled", False)),
             imgui_frame=bool(raw.get("imgui_frame", True)),
             imgui_outline=bool(raw.get("imgui_outline", True)),
             native_frame=bool(raw.get("native_frame", False)),
             native_outline=bool(raw.get("native_outline", False)),
             context_menu_toggle=bool(raw.get("context_menu_toggle", True)),
-            rarities={name: bool(stored_rarities.get(name, False))
-                      for name in RARITIES} if isinstance(stored_rarities, dict) else {},
-            colors={name: _color(stored_colors.get(name), DEFAULT_COLORS[name])
-                    for name in RARITIES} if isinstance(stored_colors, dict) else dict(DEFAULT_COLORS),
+            rarities={name: bool(stored_rarities.get(name, False)) for name in RARITIES}
+            if isinstance(stored_rarities, dict) else {},
+            colors={name: _color(stored_colors.get(name), DEFAULT_COLORS[name]) for name in RARITIES}
+            if isinstance(stored_colors, dict) else dict(DEFAULT_COLORS),
         )
 
 
 @dataclass
-class SalvageProfile:
-    """Reserved independent filter state for the future salvage feature."""
-
-    excluded: list[dict[str, Any]] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"excluded": list(self.excluded)}
-
-    @staticmethod
-    def from_dict(raw: Any) -> "SalvageProfile":
-        return SalvageProfile(list(raw.get("excluded", [])) if isinstance(raw, dict) else [])
-
-
-@dataclass
-class InventoryProfile:
-    """Reserved independent filter state for future inventory/deposit handling."""
-
-    excluded: list[dict[str, Any]] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"excluded": list(self.excluded)}
-
-    @staticmethod
-    def from_dict(raw: Any) -> "InventoryProfile":
-        return InventoryProfile(list(raw.get("excluded", [])) if isinstance(raw, dict) else [])
-
-
-@dataclass
-class ItemProfile:
-    name: str = "Default"
-    #: Reference only. ID Filter Profile data is owned by ``identification_filters``.
-    identification_profile: str = ""
-    salvage: SalvageProfile = field(default_factory=SalvageProfile)
-    inventory: InventoryProfile = field(default_factory=InventoryProfile)
-    colorize: ColorizeProfile = field(default_factory=ColorizeProfile)
+class InventoryFeatureSettings:
+    colorize: ColorizeSettings = field(default_factory=ColorizeSettings)
     context_menu_xunlai: bool = True
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "identification_profile": self.identification_profile,
-            "salvage": self.salvage.to_dict(),
-            "inventory": self.inventory.to_dict(),
-            "colorize": self.colorize.to_dict(),
-            "context_menu_xunlai": self.context_menu_xunlai,
-        }
+        return {"colorize": self.colorize.to_dict(), "context_menu_xunlai": self.context_menu_xunlai}
 
     @staticmethod
-    def from_dict(raw: Any) -> "ItemProfile":
+    def from_dict(raw: Any) -> "InventoryFeatureSettings":
         raw = raw if isinstance(raw, dict) else {}
-        return ItemProfile(
-            name=str(raw.get("name", "Default")) or "Default",
-            identification_profile=str(raw.get("identification_profile", "")),
-            salvage=SalvageProfile.from_dict(raw.get("salvage")),
-            inventory=InventoryProfile.from_dict(raw.get("inventory")),
-            colorize=ColorizeProfile.from_dict(raw.get("colorize")),
+        return InventoryFeatureSettings(
+            colorize=ColorizeSettings.from_dict(raw.get("colorize")),
             context_menu_xunlai=bool(raw.get("context_menu_xunlai", True)),
         )

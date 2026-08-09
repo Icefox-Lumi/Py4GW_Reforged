@@ -1,10 +1,10 @@
-# Py4GW Bridge Runtime (Daemon + Injected Client + CLI)
+# Py4GW Bridge (Daemon, Injected Client, CLI, and MCP)
 
 This document explains the bridge infrastructure added for Py4GW and how to use it.
 
-It is the runtime/operator document for the bridge stack:
+It is the operator document for the Py4GW bridge stack:
 
-- what the runtime components are
+- what the bridge components are
 - how to run them
 - how to use the daemon, widget client, and CLI
 - what control/runtime behaviors are available
@@ -21,7 +21,7 @@ It is designed for:
 - live runtime introspection
 - multi-client orchestration
 - stress testing / repeated action execution
-- future MCP adapter integration
+- MCP adapter integration
 
 ## Foundational Base
 
@@ -210,7 +210,7 @@ The current bridge-facing handle into the shared memory / multiboxing coordinati
 
 File:
 
-- `bridge_daemon.py`
+- `py4gw_bridge/daemon.py`
 
 This runs outside injection and:
 
@@ -223,17 +223,17 @@ This runs outside injection and:
 
 File:
 
-- `bridge_cli.py`
+- `py4gw_bridge/cli.py`
 
 This is a local CLI for testing and using the daemon without writing raw socket code.
 
 ## Architecture (brief)
 
 ```text
-[bridge_cli.py / future MCP adapter]
+[py4gw_bridge/cli.py / py4gw_bridge/mcp_server.py]
             |
             v
-      [bridge_daemon.py]
+      [py4gw_bridge/daemon.py]
             |
    (routes by HWND / PID)
             |
@@ -263,7 +263,7 @@ This is a local CLI for testing and using the daemon without writing raw socket 
 Run outside injection:
 
 ```powershell
-python bridge_daemon.py --token mytoken
+python -m py4gw_bridge.daemon --token mytoken
 ```
 
 Defaults:
@@ -282,7 +282,7 @@ Optional flags:
 Example custom ports:
 
 ```powershell
-python bridge_daemon.py --widget-port 50011 --control-port 50012 --token mytoken
+python -m py4gw_bridge.daemon --widget-port 50011 --control-port 50012 --token mytoken
 ```
 
 ## Connect the injected bridge client (widget)
@@ -312,13 +312,13 @@ The CLI talks to the daemon **control API** (default `47812`).
 ### Ping the daemon
 
 ```powershell
-python bridge_cli.py ping
+python -m py4gw_bridge.cli ping
 ```
 
 ### List connected clients
 
 ```powershell
-python bridge_cli.py list-clients
+python -m py4gw_bridge.cli list-clients
 ```
 
 This returns connected injected clients with:
@@ -334,7 +334,7 @@ This returns connected injected clients with:
 1. Start daemon
 2. Connect one or more injected clients (via widget)
 3. Get `HWND` from `list-clients`
-4. Query data or call methods on that client using `bridge_cli.py request`
+4. Query data or call methods on that client using `python -m py4gw_bridge.cli request`
 
 ## CLI command reference
 
@@ -343,7 +343,7 @@ This returns connected injected clients with:
 Ping the daemon.
 
 ```powershell
-python bridge_cli.py ping
+python -m py4gw_bridge.cli ping
 ```
 
 ### `list-clients`
@@ -351,7 +351,7 @@ python bridge_cli.py ping
 List all connected injected clients.
 
 ```powershell
-python bridge_cli.py list-clients
+python -m py4gw_bridge.cli list-clients
 ```
 
 ### `namespaces`
@@ -363,13 +363,13 @@ The CLI uses the daemon control command `client.list_namespaces`, which normaliz
 By `HWND` (preferred):
 
 ```powershell
-python bridge_cli.py namespaces --hwnd 123456
+python -m py4gw_bridge.cli namespaces --hwnd 123456
 ```
 
 By `PID` (fallback):
 
 ```powershell
-python bridge_cli.py namespaces --pid 12340
+python -m py4gw_bridge.cli namespaces --pid 12340
 ```
 
 ### `commands`
@@ -381,13 +381,13 @@ The CLI uses the daemon control command `client.list_commands`, which normalizes
 By `HWND` (preferred):
 
 ```powershell
-python bridge_cli.py commands --hwnd 123456
+python -m py4gw_bridge.cli commands --hwnd 123456
 ```
 
 By `PID` (fallback):
 
 ```powershell
-python bridge_cli.py commands --pid 12340
+python -m py4gw_bridge.cli commands --pid 12340
 ```
 
 ### `request`
@@ -395,7 +395,7 @@ python bridge_cli.py commands --pid 12340
 Send a bridge request to a target client.
 
 ```powershell
-python bridge_cli.py request --hwnd 123456 --cmd player.get_state
+python -m py4gw_bridge.cli request --hwnd 123456 --cmd player.get_state
 ```
 
 Parameters:
@@ -413,12 +413,12 @@ Parameters:
 Poll the status of a previously submitted async/queued request.
 
 ```powershell
-python bridge_cli.py status --hwnd 123456 --tracked-request-id abc123
+python -m py4gw_bridge.cli status --hwnd 123456 --tracked-request-id abc123
 ```
 
 ## First Safe Control Subset
 
-The daemon now exposes a first stable, validated control-layer subset intended for higher-level tooling (including a future MCP adapter) to prefer over generic `client.request`:
+The daemon now exposes a first stable, validated control-layer subset intended for higher-level tooling (including the MCP adapter) to prefer over generic `client.request`:
 
 - `client.describe_runtime`
 - `client.get_map_state`
@@ -443,8 +443,8 @@ Run these in order.
 ### 1. Infrastructure test
 
 ```powershell
-python bridge_cli.py ping
-python bridge_cli.py list-clients
+python -m py4gw_bridge.cli ping
+python -m py4gw_bridge.cli list-clients
 ```
 
 Expected:
@@ -455,37 +455,37 @@ Expected:
 ### 2. Basic runtime state reads
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd player.get_state
-python bridge_cli.py request --hwnd <HWND> --cmd map.get_state
-python bridge_cli.py request --hwnd <HWND> --cmd agent.list --params-json "{\"group\":\"enemy\"}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd player.get_state
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd map.get_state
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd agent.list --params-json "{\"group\":\"enemy\"}"
 ```
 
 ### 3. Namespace discovery
 
 ```powershell
-python bridge_cli.py namespaces --hwnd <HWND>
+python -m py4gw_bridge.cli namespaces --hwnd <HWND>
 ```
 
 ### 4. Method introspection (whole layer)
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd player.list_methods
-python bridge_cli.py request --hwnd <HWND> --cmd agent.list_methods
-python bridge_cli.py request --hwnd <HWND> --cmd agent_array.list_methods
-python bridge_cli.py request --hwnd <HWND> --cmd party.list_methods
-python bridge_cli.py request --hwnd <HWND> --cmd inventory.list_methods
-python bridge_cli.py request --hwnd <HWND> --cmd shmem.list_methods
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd player.list_methods
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd agent.list_methods
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd agent_array.list_methods
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd party.list_methods
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd inventory.list_methods
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd shmem.list_methods
 ```
 
 ### 5. Generic method calls (read-only first)
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"GetName\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"GetAgentID\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd map.call --params-json "{\"method\":\"GetMapID\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd agent_array.call --params-json "{\"method\":\"GetEnemyArray\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd party.call --params-json "{\"method\":\"GetPartyID\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd inventory.call --params-json "{\"method\":\"GetFreeSlotCount\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"GetName\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"GetAgentID\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd map.call --params-json "{\"method\":\"GetMapID\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd agent_array.call --params-json "{\"method\":\"GetEnemyArray\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd party.call --params-json "{\"method\":\"GetPartyID\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd inventory.call --params-json "{\"method\":\"GetFreeSlotCount\",\"args\":[]}"
 ```
 
 ### 6. Curated queued action test (safe)
@@ -493,13 +493,13 @@ python bridge_cli.py request --hwnd <HWND> --cmd inventory.call --params-json "{
 Travel example (polls until completion/timeout):
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd map.travel --params-json "{\"map_id\":55}" --poll
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd map.travel --params-json "{\"map_id\":55}" --poll
 ```
 
 Skip cinematic (only when in cinematic):
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd map.skip_cinematic --poll
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd map.skip_cinematic --poll
 ```
 
 ### 7. Async status polling (manual)
@@ -507,8 +507,8 @@ python bridge_cli.py request --hwnd <HWND> --cmd map.skip_cinematic --poll
 If you want to control request IDs yourself:
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd map.travel --params-json "{\"map_id\":55}" --request-id travel_test_001
-python bridge_cli.py status --hwnd <HWND> --tracked-request-id travel_test_001
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd map.travel --params-json "{\"map_id\":55}" --request-id travel_test_001
+python -m py4gw_bridge.cli status --hwnd <HWND> --tracked-request-id travel_test_001
 ```
 
 ## Curated bridge commands (stable helpers)
@@ -607,57 +607,57 @@ In practical terms:
 ### Player
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"GetXY\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"GetTargetID\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"IsPlayerLoaded\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"GetXY\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"GetTargetID\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd player.call --params-json "{\"method\":\"IsPlayerLoaded\",\"args\":[]}"
 ```
 
 ### Agent / AgentArray
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd agent_array.call --params-json "{\"method\":\"GetAllyArray\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd agent.call --params-json "{\"method\":\"GetXY\",\"args\":[12345]}"
-python bridge_cli.py request --hwnd <HWND> --cmd agent.call --params-json "{\"method\":\"IsDead\",\"args\":[12345]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd agent_array.call --params-json "{\"method\":\"GetAllyArray\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd agent.call --params-json "{\"method\":\"GetXY\",\"args\":[12345]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd agent.call --params-json "{\"method\":\"IsDead\",\"args\":[12345]}"
 ```
 
 ### Party (cache/service layer)
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd party.call --params-json "{\"method\":\"GetPartyID\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd party.call --params-json "{\"method\":\"GetPartySize\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd party.call --params-json "{\"method\":\"IsPartyLoaded\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd party.players.call --params-json "{\"method\":\"GetAgentIDByLoginNumber\",\"args\":[1]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd party.call --params-json "{\"method\":\"GetPartyID\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd party.call --params-json "{\"method\":\"GetPartySize\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd party.call --params-json "{\"method\":\"IsPartyLoaded\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd party.players.call --params-json "{\"method\":\"GetAgentIDByLoginNumber\",\"args\":[1]}"
 ```
 
 ### Inventory (cache/service layer)
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd inventory.call --params-json "{\"method\":\"GetFreeSlotCount\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd inventory.call --params-json "{\"method\":\"GetGoldOnCharacter\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd inventory.call --params-json "{\"method\":\"GetModelCount\",\"args\":[2992]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd inventory.call --params-json "{\"method\":\"GetFreeSlotCount\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd inventory.call --params-json "{\"method\":\"GetGoldOnCharacter\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd inventory.call --params-json "{\"method\":\"GetModelCount\",\"args\":[2992]}"
 ```
 
 ### Skillbar (cache/service layer)
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd skillbar.call --params-json "{\"method\":\"GetZeroFilledSkillbar\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd skillbar.call --params-json "{\"method\":\"GetCasting\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd skillbar.call --params-json "{\"method\":\"GetHoveredSkillID\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd skillbar.call --params-json "{\"method\":\"GetZeroFilledSkillbar\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd skillbar.call --params-json "{\"method\":\"GetCasting\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd skillbar.call --params-json "{\"method\":\"GetHoveredSkillID\",\"args\":[]}"
 ```
 
 ### Quest
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd quest.call --params-json "{\"method\":\"GetActiveQuest\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd quest_raw.call --params-json "{\"method\":\"GetQuestLogIds\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd quest.call --params-json "{\"method\":\"GetActiveQuest\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd quest_raw.call --params-json "{\"method\":\"GetQuestLogIds\",\"args\":[]}"
 ```
 
 ### Shared Memory / Multibox state
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd shmem.call --params-json "{\"method\":\"GetNumActivePlayers\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd shmem.call --params-json "{\"method\":\"GetAllMessages\",\"args\":[]}"
-python bridge_cli.py request --hwnd <HWND> --cmd shmem.call --params-json "{\"method\":\"GetAllAccountData\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd shmem.call --params-json "{\"method\":\"GetNumActivePlayers\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd shmem.call --params-json "{\"method\":\"GetAllMessages\",\"args\":[]}"
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd shmem.call --params-json "{\"method\":\"GetAllAccountData\",\"args\":[]}"
 ```
 
 ## Cross-account command examples (shmem)
@@ -667,7 +667,7 @@ Use the curated `shmem.send_command` helper when you want to send commands throu
 ### Example: Send a remote message (generic)
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd shmem.send_command --params-json "{\"receiver_email\":\"alt@example.com\",\"command\":\"TravelToMap\",\"msg_params\":[55,0,1,0]}" --poll
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd shmem.send_command --params-json "{\"receiver_email\":\"alt@example.com\",\"command\":\"TravelToMap\",\"msg_params\":[55,0,1,0]}" --poll
 ```
 
 Notes:
@@ -679,7 +679,7 @@ Notes:
 With `extra_data`:
 
 ```powershell
-python bridge_cli.py request --hwnd <HWND> --cmd shmem.send_command --params-json "{\"receiver_email\":\"alt@example.com\",\"command\":\"LoadSkillTemplate\",\"msg_params\":[0,0,0,0],\"extra_data\":[\"OQhjUxmM5QAA\"]}" --poll
+python -m py4gw_bridge.cli request --hwnd <HWND> --cmd shmem.send_command --params-json "{\"receiver_email\":\"alt@example.com\",\"command\":\"LoadSkillTemplate\",\"msg_params\":[0,0,0,0],\"extra_data\":[\"OQhjUxmM5QAA\"]}" --poll
 ```
 
 ## Async / status model
@@ -749,7 +749,7 @@ You can script repeated calls via CLI or a future adapter and collect structured
 
 ## Next steps (recommended)
 
-1. Build an MCP adapter on top of `bridge_daemon.py` control API
+1. Build higher-level MCP tools on top of the `py4gw_bridge.daemon` control API
 2. Add more curated commands for common workflows (`party.*`, `inventory.*`, `skillbar.*`)
 3. Add `test.*` namespace for stress/repeat/analyze helpers
 4. Add logging/capture tools for automated test runs

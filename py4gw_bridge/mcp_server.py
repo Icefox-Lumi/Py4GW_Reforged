@@ -6,8 +6,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from BridgeRuntime.protocol import recv_json_message
-from BridgeRuntime.protocol import send_json_message
+if __package__:
+    from .transport import recv_json_message
+    from .transport import send_json_message
+else:
+    from transport import recv_json_message
+    from transport import send_json_message
 
 
 SERVER_NAME = "py4gw-bridge-mcp"

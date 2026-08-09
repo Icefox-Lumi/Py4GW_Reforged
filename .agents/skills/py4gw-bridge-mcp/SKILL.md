@@ -19,8 +19,8 @@ description: Use when a Py4GW bridge daemon, injected bridge widget, CLI, shared
 
 ## Current Orientation
 
-- Start with `Widgets/Coding/Tools/Bridge Client.py`, `bridge_daemon.py`,
-  `bridge_cli.py`, and `py4gw_mcp_server.py`; inspect their current schemas
+- Start with `Widgets/Coding/Tools/Bridge Client.py`, `py4gw_bridge/daemon.py`,
+  `py4gw_bridge/cli.py`, and `py4gw_bridge/mcp_server.py`; inspect their current schemas
   before relying on an operator document.
 - The injected widget defaults to port `47811`; the daemon control, CLI, and
   MCP adapter default to `47812`. Treat these as defaults to verify, not a

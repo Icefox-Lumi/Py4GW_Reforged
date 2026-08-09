@@ -226,9 +226,7 @@ def build_window(controller) -> "ImGui.SidebarWindow":
             continue
         if cat.key == "items":
             for label, module_path in (
-                ("Item Profiles", "Py4GWCoreLib.py4gwcorelib_src.system_settings.inventory.config_ui"),
-                ("ID Filters", "Py4GWCoreLib.py4gwcorelib_src.system_settings.identification_filters.config_ui"),
-                ("Identification", "Py4GWCoreLib.py4gwcorelib_src.system_settings.identification.config_ui"),
+                ("Inventory Features", "Py4GWCoreLib.py4gwcorelib_src.system_settings.inventory.config_ui"),
             ):
                 try:
                     import importlib

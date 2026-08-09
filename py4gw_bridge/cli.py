@@ -6,7 +6,10 @@ import time
 import uuid
 from typing import Any
 
-from BridgeRuntime.protocol import recv_json_message, send_json_message
+if __package__:
+    from .transport import recv_json_message, send_json_message
+else:
+    from transport import recv_json_message, send_json_message
 
 
 def _request(

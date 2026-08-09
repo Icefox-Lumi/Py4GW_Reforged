@@ -6,14 +6,24 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from BridgeRuntime.protocol import (
-    PROTOCOL_VERSION,
-    ProtocolError,
-    make_error_response,
-    make_response,
-    recv_json_message,
-    send_json_message,
-)
+if __package__:
+    from .transport import (
+        PROTOCOL_VERSION,
+        ProtocolError,
+        make_error_response,
+        make_response,
+        recv_json_message,
+        send_json_message,
+    )
+else:
+    from transport import (
+        PROTOCOL_VERSION,
+        ProtocolError,
+        make_error_response,
+        make_response,
+        recv_json_message,
+        send_json_message,
+    )
 
 
 def _now_ms() -> int:
