@@ -36,37 +36,11 @@ from launcher_core.gw1_launch import (
     _attach_to_steam_process,
     _is_gw_main_window,
     _resolve_gmod_launch_decision,
-    _set_profile_window_title,
     _wait_for_window_or_exit,
     _write_account_anchor,
     launch_py4gw_profile,
 )
 from launcher_core.profile import GameProfile
-
-
-class ProfileWindowTitleOptionTests(unittest.TestCase):
-    def test_disabled_by_default_does_not_rename(self):
-        profile = GameProfile(name="Profile", character_name="Character")
-        with patch.object(gw1_launch, "_set_gw_window_title") as set_title:
-            _set_profile_window_title(profile, 123, [])
-        set_title.assert_not_called()
-
-    def test_enabled_uses_selected_character_name(self):
-        profile = GameProfile(
-            name="Profile",
-            character_name="Character",
-            auto_select_character_enabled=True,
-            enable_client_rename=True,
-        )
-        with patch.object(gw1_launch, "_set_gw_window_title") as set_title:
-            _set_profile_window_title(profile, 123, [])
-        set_title.assert_called_once_with(123, "Character", [])
-
-    def test_enabled_falls_back_to_profile_name(self):
-        profile = GameProfile(name="Profile", enable_client_rename=True)
-        with patch.object(gw1_launch, "_set_gw_window_title") as set_title:
-            _set_profile_window_title(profile, 123, [])
-        set_title.assert_called_once_with(123, "Profile", [])
 
 
 class ResolveGmodLaunchDecisionTests(unittest.TestCase):
