@@ -47,9 +47,11 @@ from launcher_core.profile import GameProfile
 class ProfileWindowTitleOptionTests(unittest.TestCase):
     def test_disabled_by_default_does_not_rename(self):
         profile = GameProfile(name="Profile", character_name="Character")
-        with patch.object(gw1_launch, "_set_gw_window_title") as set_title:
+        with (patch.object(gw1_launch, "_set_gw_window_title") as set_title,
+              patch.object(gw1_launch.time, "sleep") as sleep):
             _set_profile_window_title(profile, 123, [])
         set_title.assert_not_called()
+        sleep.assert_called_once_with(1.0)
 
     def test_enabled_uses_selected_character_name(self):
         profile = GameProfile(

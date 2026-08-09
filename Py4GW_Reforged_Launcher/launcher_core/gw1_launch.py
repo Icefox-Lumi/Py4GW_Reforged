@@ -694,8 +694,12 @@ def _set_gw_window_title(pid: int, title: str, log: list) -> None:
 
 
 def _set_profile_window_title(profile: GameProfile, pid: int, log: list) -> None:
-    """Apply the profile's explicit opt-in window-title behavior."""
+    """Apply opt-in title behavior without changing the pre-injection settle time."""
     if not profile.enable_client_rename:
+        # The legacy title path waited for the splash/main-window handoff before
+        # injection. Keep that timing even when the cosmetic title change is off.
+        _log(log, "Window title - disabled; preserving 1.0s window settle before injection")
+        time.sleep(1.0)
         return
 
     if profile.auto_select_character_enabled and profile.character_name:
