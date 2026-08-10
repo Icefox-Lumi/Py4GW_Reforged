@@ -268,8 +268,8 @@ The persistence policy is a project hard rule:
   to the first `widget_path` segment, `MODULE_TAGS` defaults to all path
   segments, and `OPTIONAL` defaults to `False` except for `System` and
   `Py4GW` categories.
-- `HeroAI/follow/__init__.py` intentionally exports nothing; import exact
-  submodules such as `HeroAI.follow.leader_publish`.
+- `Py4GWCoreLib/HeroAI/follow/__init__.py` intentionally exports nothing; import exact
+  submodules such as `Py4GWCoreLib.HeroAI.follow.leader_publish`.
 - `Py4GWCoreLib/GlobalCache/SharedMemory.py` is startup-sensitive and imports
   that exact submodule; do not broaden the package-root import.
 

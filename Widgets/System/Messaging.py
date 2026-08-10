@@ -7,7 +7,7 @@ from datetime import timezone
 import Py4GW
 import ctypes
 
-from HeroAI.cache_data import CacheData
+from Py4GWCoreLib.HeroAI.cache_data import CacheData
 from Py4GWCoreLib import GLOBAL_CACHE, Player, Map, Agent, Effects, Inventory, Party
 from Py4GWCoreLib import ActionQueueManager
 from Py4GWCoreLib import CombatPrepSkillsType

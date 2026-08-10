@@ -93,7 +93,7 @@ https://github.com/apoguita/Py4GW_Reforged_Native
     |-- Py4GWCoreLib/        Core library: the single source-of-truth layer
     |                        (Agent, Player, Map, Inventory, Skill, Party, ImGui,
     |                        Pathing, GlobalCache, shared memory, and more)
-    |-- HeroAI/              Hero AI automation and combat logic
+    |-- Py4GWCoreLib/HeroAI/ Hero AI automation and combat logic
     |-- Widgets/             In-game widgets (folder-based discovery)
     |-- Sources/             Larger script projects (ModularBot, tools, libraries)
     |-- Bots/ , bot_factory/ Bot implementations and scaffolding

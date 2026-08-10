@@ -4,7 +4,7 @@ import traceback
 
 import Py4GW  # type: ignore
 import Py4GWCoreLib
-from HeroAI.cache_data import CacheData
+from Py4GWCoreLib.HeroAI.cache_data import CacheData
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from Py4GWCoreLib import PyImGui
 from Py4GWCoreLib import Routines

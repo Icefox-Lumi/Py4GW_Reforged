@@ -2,7 +2,7 @@ import os
 import traceback
 
 import Py4GW  # type: ignore
-from HeroAI.cache_data import CacheData
+from Py4GWCoreLib.HeroAI.cache_data import CacheData
 from Py4GWCoreLib import GLOBAL_CACHE
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from Py4GWCoreLib import PyImGui, Color, ImGui

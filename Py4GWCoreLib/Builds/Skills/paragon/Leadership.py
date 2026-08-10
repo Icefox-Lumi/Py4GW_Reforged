@@ -170,7 +170,7 @@ class Leadership:
     #region M
     def Make_Your_Time(self) -> BuildCoroutine:
         from Py4GWCoreLib import Agent, AgentArray, Range
-        from HeroAI.utils import IsPartyMember
+        from Py4GWCoreLib.HeroAI.utils import IsPartyMember
 
         make_your_time_id: int = Skill.GetID("Make_Your_Time")
         player_agent_id = Player.GetAgentID()

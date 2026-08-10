@@ -84,7 +84,7 @@ class Motivation:
 
     #region N
     def Never_Surrender(self) -> BuildCoroutine:
-        from HeroAI.targeting import GetAllAlliesArray
+        from Py4GWCoreLib.HeroAI.targeting import GetAllAlliesArray
         from Py4GWCoreLib import AgentArray
         from Py4GWCoreLib.Agent import Agent
 

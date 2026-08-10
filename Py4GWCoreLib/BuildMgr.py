@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, Any, Callable, cast
 import PySystem
 
 if TYPE_CHECKING:
-    from HeroAI.custom_skill import CustomSkillClass
-    from HeroAI.custom_skill_src.skill_types import CastConditions, CustomSkill
+    from Py4GWCoreLib.HeroAI.custom_skill import CustomSkillClass
+    from Py4GWCoreLib.HeroAI.custom_skill_src.skill_types import CastConditions, CustomSkill
     from Py4GWCoreLib import Profession
 
 BuildCoroutine = Generator[None, None, Any]
@@ -90,7 +90,7 @@ class BuildMgr:
         self._cached_data = cached_data
 
     def GetEffectAndBuffIds(self, agent_id: int) -> list[int]:
-        from HeroAI.utils import GetEffectAndBuffIds
+        from Py4GWCoreLib.HeroAI.utils import GetEffectAndBuffIds
 
         return GetEffectAndBuffIds(agent_id, cached_data=self._cached_data)
         
@@ -206,7 +206,7 @@ class BuildMgr:
         )
 
     def GetCustomSkill(self, skill_id: int) -> CustomSkill:
-        from HeroAI.custom_skill import CustomSkillClass
+        from Py4GWCoreLib.HeroAI.custom_skill import CustomSkillClass
 
         if self._custom_skill_data_handler is None:
             self._custom_skill_data_handler = CustomSkillClass()
@@ -381,7 +381,7 @@ class BuildMgr:
             return float(cached_data.GetActiveScanRange())
         
         try:
-            from HeroAI.cache_data import CacheData
+            from Py4GWCoreLib.HeroAI.cache_data import CacheData
             cached_data = CacheData()
             cached_data.Update()
             return float(cached_data.GetActiveScanRange())
@@ -411,7 +411,7 @@ class BuildMgr:
         *,
         max_range: float | None = None,
     ) -> int:
-        from HeroAI.targeting import (
+        from Py4GWCoreLib.HeroAI.targeting import (
             TargetAllyByPredicate,
             TargetLowestAlly,
             TargetLowestAllyCaster,
@@ -425,7 +425,7 @@ class BuildMgr:
             TargetMinionOrAllyNonEnchanted,
             TargetDeadPartyMember,
         )
-        from HeroAI.types import Skilltarget, SkillType
+        from Py4GWCoreLib.HeroAI.types import Skilltarget, SkillType
         from Py4GWCoreLib import Agent, AgentArray, Player, Routines, Skill
 
         if custom_skill is None:
@@ -770,7 +770,7 @@ class BuildMgr:
         return lambda agent_id: all(check(agent_id) for check in checks)
 
     def EvaluatePartyWideThreshold(self, skill_id: int, custom_skill: CustomSkill | None = None) -> bool:
-        from HeroAI.targeting import GetAllAlliesArray
+        from Py4GWCoreLib.HeroAI.targeting import GetAllAlliesArray
         from Py4GWCoreLib import AgentArray, Range, Routines
 
         if custom_skill is None:
@@ -1111,7 +1111,7 @@ class BuildMgr:
         return best_target if _score_target(best_target) != float("-inf") else desired_target
     
     def _pick_fallback_target(self, target_type: str) -> int:
-        from HeroAI.targeting import GetEnemyAttacking, GetEnemyInjured, TargetClusteredEnemy
+        from Py4GWCoreLib.HeroAI.targeting import GetEnemyAttacking, GetEnemyInjured, TargetClusteredEnemy
         from Py4GWCoreLib import Routines
         from Py4GWCoreLib.Agent import Agent
 
@@ -1597,7 +1597,7 @@ class BuildMgr:
         return getattr(self.tick_state, "name", None) == "SUCCESS"
 
     def _validate_target_for_skill_cast(self, skill_id: int, target_agent_id: int) -> bool:
-        from HeroAI.types import Skilltarget, SkillType
+        from Py4GWCoreLib.HeroAI.types import Skilltarget, SkillType
         from Py4GWCoreLib import Routines
         from Py4GWCoreLib.Agent import Agent
         from Py4GWCoreLib.Skill import Skill
@@ -1627,7 +1627,7 @@ class BuildMgr:
 
         target_allegiance = custom_skill.TargetAllegiance
         if target_allegiance == Skilltarget.NonWeaponSpelledAlly.value:
-            from HeroAI.targeting import TargetAllyNonWeaponSpelled
+            from Py4GWCoreLib.HeroAI.targeting import TargetAllyNonWeaponSpelled
 
             return bool(TargetAllyNonWeaponSpelled())
 
@@ -1784,7 +1784,7 @@ class BuildMgr:
         skill_id: int,
         extra_condition: bool | Callable[[], bool] = True,
     ) -> bool:
-        from HeroAI.types import SkillType
+        from Py4GWCoreLib.HeroAI.types import SkillType
         from Py4GWCoreLib import GLOBAL_CACHE, Player, Routines, SkillBar
 
         if not Routines.Checks.Map.IsExplorable():
@@ -1829,7 +1829,7 @@ class BuildMgr:
         slot: int,
         extra_condition: bool | Callable[[], bool] = True,
     ) -> bool:
-        from HeroAI.types import SkillType
+        from Py4GWCoreLib.HeroAI.types import SkillType
         from Py4GWCoreLib import GLOBAL_CACHE, Player, Routines, SkillBar
 
         if not Routines.Checks.Map.IsExplorable():
@@ -1891,12 +1891,12 @@ class BuildMgr:
             return False
 
         # Interrupt feasibility gate — only for skills classified as
-        # SkillNature.Interrupt in HeroAI/custom_skill_src/. Non-interrupts
+        # SkillNature.Interrupt in Py4GWCoreLib/HeroAI/custom_skill_src/. Non-interrupts
         # short-circuit on the registry lookup with zero further work.
         # Lazy import keeps BuildMgr independent at module load; HeroAI
         # pushes the gate down via the registry.
         try:
-            from HeroAI.interrupt import (
+            from Py4GWCoreLib.HeroAI.interrupt import (
                 is_classified_as_interrupt,
                 is_interrupt_feasible,
                 _get_player_fast_casting_level,

@@ -7,7 +7,7 @@ from Py4GWCoreLib import AgentArray, GLOBAL_CACHE, Profession, Range, Routines, 
 from Py4GWCoreLib.Agent import Agent
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.Skill import Skill
-from HeroAI.targeting import TargetMinionNonEnchanted
+from Py4GWCoreLib.HeroAI.targeting import TargetMinionNonEnchanted
 
 if TYPE_CHECKING:
     from Py4GWCoreLib.BuildMgr import BuildMgr

@@ -1,7 +1,7 @@
 from Py4GWCoreLib import PyImGui, GLOBAL_CACHE, Timer, ThrottledTimer
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from HeroAI.cache_data import CacheData
-from HeroAI.constants import MAX_NUM_PLAYERS
+from Py4GWCoreLib.HeroAI.cache_data import CacheData
+from Py4GWCoreLib.HeroAI.constants import MAX_NUM_PLAYERS
 
 import os
 import sys

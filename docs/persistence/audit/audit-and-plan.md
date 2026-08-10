@@ -85,14 +85,14 @@ Python (`Settings` / `JsonFactory`):
 **B — legit bundled reads (no action):** shipped catalogs/tables (Nick_cycles, modelid_drop_data,
 runes, merchant_rules_catalog, skill catalogs), reading `.py` source for AST/exec.
 
-### 3c. `HeroAI/`, `Sources/`, `Bots/`
+### 3c. `Py4GWCoreLib/HeroAI/`, `Sources/`, `Bots/`
 **A — migrate:**
 - `Sources/frenkeyLib/MultiBoxing/settings.py` — **own parallel `Settings` class** → `Widgets/Config/
   MultiBoxing/settings.json` + `Layouts/<name>.json`. Migrate settings→Settings, layouts→JsonFactory;
   delete the parallel class.
 - `Sources/frenkeyLib/LootEx/*` — **own parallel `Settings` class** + profiles + scraped data.
   *See decision D4: LootEx is already slated for replacement by `docs/loot/redesign/`.*
-- `HeroAI/hex_removal_src/hex_removal_config.py` — per email+char JSONC (hand-rolled comment
+- `Py4GWCoreLib/HeroAI/hex_removal_src/hex_removal_config.py` — per email+char JSONC (hand-rolled comment
   stripping) → **JsonFactory** (drop the JSONC serializer).
 - `Sources/frenkeyLib/ItemHandling/{RuleConfig,Rules/profile,Items/ItemData}.py` → JsonFactory.
 - `Bots/marks_coding_corner/AlcoholProc.py` → JsonFactory/Settings.

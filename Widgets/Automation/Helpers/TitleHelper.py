@@ -4,7 +4,7 @@ import traceback
 import Py4GW
 from Py4GWCoreLib import PyImGui, Routines, Timer, Color, ImGui
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from HeroAI.cache_data import CacheData
+from Py4GWCoreLib.HeroAI.cache_data import CacheData
 
 from Sources.aC_Scripts.Titlehelper.titlehelper_main import TitleHelper, draw_title_helper_window
 from Sources.aC_Scripts.Titlehelper import ItemSelector
