@@ -73,20 +73,26 @@ from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_GENERIC_KEY_PREFIX
 from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_VARIANT_KEY_PREFIX
 from Sources.icefox.MerchantRules.catalog import _build_catalog_alias_labels as _catalog_build_catalog_alias_labels
 from Sources.icefox.MerchantRules.catalog import _get_catalog_entry_priority as _catalog_get_catalog_entry_priority
+from Sources.icefox.MerchantRules.catalog import _humanize_model_id_enum_name
 from Sources.icefox.MerchantRules.catalog import _get_rune_profession_label
 from Sources.icefox.MerchantRules.catalog import _get_weapon_mod_type_name
-from Sources.icefox.MerchantRules.catalog import _humanize_model_id_enum_name
 from Sources.icefox.MerchantRules.catalog import _humanize_weapon_mod_component_kind
 from Sources.icefox.MerchantRules.catalog import _is_expandable_weapon_mod_type
 from Sources.icefox.MerchantRules.catalog import _make_weapon_mod_identifier_choice_key
 from Sources.icefox.MerchantRules.catalog import _make_weapon_mod_variant_choice_key
+from Sources.icefox.MerchantRules.catalog import _iter_item_handling_catalog_entries as _catalog_iter_item_handling_catalog_entries
+from Sources.icefox.MerchantRules.catalog import _iter_model_id_members as _iter_model_id_enum_members
 from Sources.icefox.MerchantRules.catalog import _normalize_catalog_search_text
 from Sources.icefox.MerchantRules.catalog import _normalize_weapon_mod_component_kind
 from Sources.icefox.MerchantRules.catalog import _normalize_weapon_mod_target_item_type
 from Sources.icefox.MerchantRules.catalog import _normalize_weapon_mod_variant_parts
-from Sources.icefox.MerchantRules.catalog import _iter_item_handling_catalog_entries as _catalog_iter_item_handling_catalog_entries
 from Sources.icefox.MerchantRules.catalog import _resolve_rune_description_template as _catalog_resolve_rune_description_template
 from Sources.icefox.MerchantRules.catalog import _format_weapon_mod_variant_label
+
+
+_build_catalog_alias_labels = _catalog_build_catalog_alias_labels
+_iter_item_handling_catalog_entries = _catalog_iter_item_handling_catalog_entries
+_resolve_rune_description_template = _catalog_resolve_rune_description_template
 
 
 MODULE_NAME = "Merchant Rules"
@@ -3711,18 +3717,6 @@ def _get_catalog_entry_priority(
     )
 
 
-def _build_catalog_alias_labels(name: object, skin: object = "", wiki_url: object = "") -> dict[str, str]:
-    return _catalog_build_catalog_alias_labels(name, skin, wiki_url)
-
-
-def _iter_item_handling_catalog_entries(raw_catalog: object) -> list[dict[str, object]]:
-    return _catalog_iter_item_handling_catalog_entries(raw_catalog)
-
-
-def _resolve_rune_description_template(description: str, modifiers: object) -> str:
-    return _catalog_resolve_rune_description_template(description, modifiers)
-
-
 def _safe_int(value: object, default: int = 0) -> int:
     try:
         if isinstance(value, str):
@@ -3739,7 +3733,6 @@ def _coerce_list(value: object) -> list[object]:
         return list(value)
     if isinstance(value, tuple):
         return list(value)
-    return []
     return []
 
 
@@ -3775,7 +3768,6 @@ def _weapon_mod_variant_rule_key(rule: object) -> tuple[str, str, str]:
 
 def _weapon_mod_variant_rule_choice_key(rule: object) -> str:
     identifier, target_item_type, component_kind = _weapon_mod_variant_rule_key(rule)
-    return _make_weapon_mod_variant_choice_key(identifier, target_item_type, component_kind)
     return _make_weapon_mod_variant_choice_key(identifier, target_item_type, component_kind)
 
 
@@ -4088,7 +4080,6 @@ def _dedupe_weapon_item_type_ids(item_type_ids: list[object]) -> list[int]:
         seen.add(item_type_id)
         unique.append(item_type_id)
     return unique
-    return unique
 
 
 def _parse_agent_selector_point(step: dict[str, object]) -> tuple[float, float] | None:
@@ -4284,7 +4275,6 @@ def resolve_agent_xy_from_step(
             f"Could not resolve {safe_agent_kind} within {max_dist:.0f} at index {step_idx}",
         )
     return None
-    return None
 
 
 def _strip_item_display_markup(raw_value: object) -> str:
@@ -4298,33 +4288,6 @@ def _strip_item_display_markup(raw_value: object) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
-    return text.strip()
-
-
-def _iter_model_id_enum_members() -> list[tuple[str, int]]:
-    members = getattr(ModelID, "__members__", None)
-    if isinstance(members, dict):
-        raw_members = list(members.items())
-    else:
-        raw_members = [
-            (name, getattr(ModelID, name))
-            for name in dir(ModelID)
-            if not name.startswith("_")
-        ]
-
-    resolved_members: list[tuple[str, int]] = []
-    for raw_name, raw_value in raw_members:
-        name = str(raw_name or "").strip()
-        if not name:
-            continue
-        try:
-            model_id = int(raw_value.value)
-        except Exception:
-            model_id = _safe_int(raw_value, 0)
-        if model_id > 0:
-            resolved_members.append((name, model_id))
-    return resolved_members
-    return resolved_members
 
 
 def _is_common_crafting_material_model(model_id: object) -> bool:
@@ -11332,7 +11295,7 @@ class MerchantRulesWidget:
             return str(coords)
 
     def _get_catalog_alias_group_count(self) -> int:
-        return sum(1 for model_ids in self.catalog_alias_to_model_ids.values() if len(model_ids) > 1)
+        return CatalogLoader.get_catalog_alias_group_count(self.catalog_alias_to_model_ids)
 
     def _get_catalog_summary_text(self) -> str:
         final_models = int(self.catalog_stats.get("final_models", len(self.catalog_by_model_id)) or 0)
