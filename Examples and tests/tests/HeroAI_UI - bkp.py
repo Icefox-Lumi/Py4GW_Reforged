@@ -30,7 +30,7 @@ RICH_PANEL_WIDTH = 319
 RICH_BAR_HEIGHT = 28
 
 MODULE_NAME = "HeroAI"
-MODULE_ICON = "Textures/Module_Icons/HeroAI.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/HeroAI.png"
 
 @dataclass
 class HeroAIFloatingIcon:
@@ -44,7 +44,7 @@ class HeroAIFloatingIcon:
     FLOATING_INI_KEY: str = ""
     CONFIG_INI_KEY: str = ""
     INI_INIT: bool = False
-    ICON_PATH: str = os.path.join(PySystem.Console.get_projects_path(), "Textures", "Module_Icons", "HeroAI.png")
+    ICON_PATH: str = os.path.join(PySystem.Console.get_projects_path(), "Assets", "Textures", "Module_Icons", "HeroAI.png")
 
 
 window_factory = WindowFactory(HeroAIFloatingIcon.INI_PATH)

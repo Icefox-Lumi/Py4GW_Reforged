@@ -27,7 +27,7 @@ save_window_timer.Start()
 
 # String consts
 MODULE_NAME = "Dialog Sender (Factions)"  # Change this Module name
-MODULE_ICON = "Textures\\Module_Icons\\Dialogs - Factions.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Dialogs - Factions.png"
 COLLAPSED = "collapsed"
 X_POS = "x"
 Y_POS = "y"

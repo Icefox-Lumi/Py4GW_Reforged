@@ -2,7 +2,7 @@ from Py4GWCoreLib import *
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 
 MODULE_NAME = "Compass+"
-MODULE_ICON = "Textures\\Module_Icons\\Compass+.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Compass+.png"
 
 def Debug(message, title = 'DEBUG', msg_type = 'Debug'):
     py4gw_msg_type = PySystem.Console.MessageType.Debug

@@ -24,9 +24,11 @@ background or archival material.
 - `skill-authoring-guide.md` - proposed repository convention for deciding
   between instructions, skills, MCP tools, hooks, plugins, and automation.
 
-## Current Skill Catalog
+## Current Workflow Catalog
 
-- `skill-catalog.md` - active foundation skills, trigger fixtures, legacy
+- `skills/` - task-oriented Py4GW workflow guides, grouped by recognizable
+  engineering goal.
+- `skill-catalog.md` - active workflow catalog, trigger fixtures, legacy
   OpenCode replacement map, and the retirement protocol.
 
 ## Supporting Material

@@ -877,7 +877,7 @@ class ModelID(IntEnum):
     Zhu_Hanuku_Mini = 34398
 
 # ----[ SETTINGS ]----
-OUTPUT_FOLDER = "Textures/Item Models"
+OUTPUT_FOLDER = "Assets/Textures/Item Models"
 BASE_URL = "https://wiki.guildwars.com/wiki/"
 HEADERS = {
     "User-Agent": "Py4GWBot (image scraper)"

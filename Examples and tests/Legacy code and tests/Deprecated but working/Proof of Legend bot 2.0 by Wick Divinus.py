@@ -15,7 +15,7 @@ LAST_PRIMARY_PROF: str = ""
 LAST_CAMPAIGN: str = "Nightfall"
 
 MODULE_NAME = "Proof of Legend Bot 2.0 by Wick Divinus"
-MODULE_ICON = "Textures\\Module_Icons\\Proof of Legend.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Proof of Legend.png"
 
 bot = Botting("Proof of Legend Bot 2.0 by Wick Divinus", MODULE_NAME, MODULE_ICON,
               upkeep_auto_inventory_management_active=False,

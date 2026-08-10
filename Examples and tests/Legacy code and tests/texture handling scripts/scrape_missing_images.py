@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 
 INPUT_FILE = "links_of_missing_images.txt"
-OUTPUT_DIR = "Textures/Item Models"
+OUTPUT_DIR = "Assets/Textures/Item Models"
 LOG_FILE = "missing_items_log.txt"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)

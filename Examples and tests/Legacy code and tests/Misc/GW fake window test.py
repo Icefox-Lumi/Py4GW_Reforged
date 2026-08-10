@@ -3,7 +3,7 @@ from Py4GWCoreLib import *
 import webbrowser
 
 MODULE_NAME = "GwFake Window Test"
-TEXTURE_FOLDER = "Textures\\Game UI\\"
+TEXTURE_FOLDER = "Assets\\Textures\\Game UI\\"
 FRAME_ATLAS = "ui_window_frame_atlas.png"
 FRAME_ATLAS_DIMENSIONS = (128,128)
 TITLE_ATLAS = "ui_window_title_frame_atlas.png"

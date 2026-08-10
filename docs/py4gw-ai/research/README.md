@@ -25,6 +25,6 @@ they are not automatically active repository rules.
 1. Use the skills compendium for vocabulary and source links.
 2. Use the OpenCode research document for observed capability evidence.
 3. Read the redesign proposal only when evaluating workflow changes.
-4. Inspect `.agents/`, `.claude/`, and `.codex/` in the current repository
+4. Inspect `docs/py4gw-ai/skills/`, `.claude/`, and `.codex/` in the current repository
    before applying any proposed configuration. The former `.opencode/`
    workspace was removed after its useful material was consolidated.

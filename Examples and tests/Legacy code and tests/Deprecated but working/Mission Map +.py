@@ -25,7 +25,7 @@ import sys
 
 #region CONSTANTS
 MODULE_NAME = "Mission Map+"
-MODULE_ICON = "Textures\\Module_Icons\\Mission Map+.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Mission Map+.png"
 INI_PATH = "Widgets/Guild Wars/Screen Overlays"
 INI_FILENAME = "Mission Map +.ini"
 MATH_PI = math.pi

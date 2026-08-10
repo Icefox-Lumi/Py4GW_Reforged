@@ -29,7 +29,7 @@ _cached_regions = None
 _cached_runs_by_region = {} 
 
 MODULE_NAME = "Outpost Runner"
-MODULE_ICON = "Textures\\Skill_Icons\\[1543] - Pious Haste.jpg"
+MODULE_ICON = "Assets\\Textures\\Skill_Icons\\[1543] - Pious Haste.jpg"
 
 # === STATIC FRIENDLY NAME MAP ===
 RUN_NAME_MAP = {
@@ -324,6 +324,9 @@ def draw_ui():
 
             PyImGui.pop_style_color(3)
 
+        if selected_region is None:
+            selected_region = next(iter(RUN_NAME_MAP))
+
         if not Build_Manager.FREESTYLE_MODE and not fsm_active:
             # --- Region Dropdown ---
             regions = list(RUN_NAME_MAP.keys())
@@ -508,8 +511,8 @@ def draw_build_window():
     if PyImGui.begin("Welcome To OutpostRunner - by: aC", True, PyImGui.WindowFlags.AlwaysAutoResize):
 
         # --- Title ---
-        dervish = os.path.join(PY4GW_ROOT, "Textures/Profession_Icons/[10] - Dervish.png")
-        assasin = os.path.join(PY4GW_ROOT, "Textures/Profession_Icons/[7] - Assassin.png")
+        dervish = os.path.join(PY4GW_ROOT, "Assets/Textures/Profession_Icons/[10] - Dervish.png")
+        assasin = os.path.join(PY4GW_ROOT, "Assets/Textures/Profession_Icons/[7] - Assassin.png")
         ImGui.DrawTexture(dervish, 30, 30)
         PyImGui.same_line(0, 6)
         ImGui.DrawTexture(assasin, 30, 30)
@@ -590,7 +593,19 @@ def draw_build_window():
 
 # Constants
 SCRIPT_DIR = os.getcwd()
-OUTPOST_PATH_DIR = "Wayfarer's_Reverie_maps/"
+OUTPOST_MAPS_DIR = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "..",
+        "..",
+        "Sources",
+        "aC_Scripts",
+        "OutpostRunner",
+        "maps",
+    )
+)
 
 state = {
     "active": False,
@@ -601,11 +616,9 @@ state = {
     "last_pos": None,
     "last_map_id": None,
     "mode": None,
-    "waiting_for_new_map": False
+    "waiting_for_new_map": False,
+    "region": None,
 }
-
-if not os.path.exists(OUTPOST_PATH_DIR):
-    os.makedirs(OUTPOST_PATH_DIR)
 
 def get_map_name():
     return Map.GetMapName()
@@ -623,13 +636,23 @@ def reset_state():
     state["last_map_id"] = None
     state["mode"] = None
     state["waiting_for_new_map"] = False
+    state["region"] = None
 
 def render_path_ui():
     PyImGui.begin("OutpostRunner Logger", PyImGui.WindowFlags.AlwaysAutoResize)
 
     if not state["active"]:
         if PyImGui.button("Start Logging Run"):
+            if selected_region not in RUN_NAME_MAP:
+                ConsoleLog(
+                    "Logger",
+                    "Cannot start route logging without a valid map region.",
+                    Console.MessageType.Error,
+                )
+                return
+
             state["active"] = True
+            state["region"] = selected_region
             name = get_map_name().replace(" ", "")
             state["outpost"] = {
                 "name": name,
@@ -659,9 +682,14 @@ def render_path_ui():
             state["final_outpost"] = {"name": final_name, "id": final_id}
 
             base_var = f"_1_{state['outpost']['name'].lower()}_to_{final_name.lower()}"
-            filename = os.path.join(OUTPOST_PATH_DIR, f"{base_var}.py")
+            region_dir = os.path.join(OUTPOST_MAPS_DIR, state["region"])
+            filename = os.path.join(region_dir, f"{base_var}.py")
 
             try:
+                if not os.path.isdir(region_dir):
+                    raise FileNotFoundError(
+                        f"Outpost Runner map region is missing: {region_dir}"
+                    )
                 with open(filename, "w") as f:
                     f.write("from Py4GWCoreLib.enums import outpost_name_to_id, explorable_name_to_id\n\n")
 

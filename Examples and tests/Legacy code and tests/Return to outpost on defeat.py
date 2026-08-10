@@ -4,7 +4,7 @@ from Py4GWCoreLib import Map, Color, ImGui
 import PyImGui
 
 MODULE_NAME = "Return on Defeat"
-MODULE_ICON = "Textures/Module_Icons/Defeated.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Defeated.png"
 module_name = "Return to Outpost"
 
 class config:

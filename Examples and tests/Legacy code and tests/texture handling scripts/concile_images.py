@@ -2,7 +2,7 @@ import os
 import re
 
 ENUM_FILE = "modelids.txt"
-TEXTURE_FOLDER = os.path.join("Textures", "Item Models")
+TEXTURE_FOLDER = os.path.join("Assets", "Textures", "Item Models")
 OUTPUT_FILE = "missing_modelids_from_enum.txt"
 
 # 1. Read all model IDs already scraped

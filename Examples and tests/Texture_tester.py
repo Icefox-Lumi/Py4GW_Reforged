@@ -9,7 +9,7 @@ def main():
         window_flags=PyImGui.WindowFlags.AlwaysAutoResize 
         if PyImGui.begin("Tester for Everything", window_flags):
             
-            python_logo = "python_icon.jpg"
+            python_logo = "Assets/Branding/python_icon.jpg"
 
             size = 32
             for size in [32, 64, 128, 256]:

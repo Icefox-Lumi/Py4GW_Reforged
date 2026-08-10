@@ -5,7 +5,7 @@ import PyImGui
 module_name = "Drop Unyielding Aura"
 
 MODULE_NAME = "Drop Unyielding Aura"
-MODULE_ICON = "Textures\\Skill_Icons\\[268] - Unyielding Aura.jpg"
+MODULE_ICON = "Assets\\Textures\\Skill_Icons\\[268] - Unyielding Aura.jpg"
 
 class config:
     def __init__(self):

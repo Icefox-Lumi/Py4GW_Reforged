@@ -6,7 +6,7 @@ from Py4GWCoreLib import Map, ImGui, Color
 import PyImGui
 
 MODULE_NAME = "Skip Cinematic"
-MODULE_ICON = "Textures/Module_Icons/Skip Cinematic.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Skip Cinematic.png"
 
 module_name = "Skip Cinematic"
 

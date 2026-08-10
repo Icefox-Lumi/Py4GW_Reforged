@@ -14,7 +14,7 @@ makes the system feel like one thing. What sits *inside* a header is chosen to f
 4. ``texture_grid``    -- the most compact, and the heaviest: one texture per entry
 
 Where a texture is missing, ``get_texture_for_model`` already returns
-``Textures/Item Models/0-File_Not_found.png``, so the textured layout is offered everywhere and simply
+``Assets/Textures/Item Models/0-File_Not_found.png``, so the textured layout is offered everywhere and simply
 shows the placeholder. Layout 3 is a *choice*; the placeholder is a *safety net*.
 """
 

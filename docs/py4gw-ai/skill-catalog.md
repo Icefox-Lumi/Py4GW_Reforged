@@ -1,7 +1,7 @@
 # Py4GW Skill Catalog
 
 Status: current catalog; OpenCode consolidation completed on 2026-08-06
-Scope: repository-local `.agents/skills/` workflows
+Scope: repository-local `docs/py4gw-ai/skills/` workflows
 Authority: `AGENTS.md`, current skill files, and `skill-authoring-guide.md`
 
 ## Active Foundation Skills
@@ -20,6 +20,10 @@ Authority: `AGENTS.md`, current skill files, and `skill-authoring-guide.md`
 The primary ApoBot agent owns user communication, planning, edits, and final
 synthesis. A skill supplies a workflow; it is not a second agent and does not
 transfer accountability.
+
+The workflow documents live beside the rest of the Py4GW AI guidance at
+`skills/<name>/SKILL.md`. Read the matching workflow when its task goal
+applies; the documents are not runtime assets or application dependencies.
 
 ## Trigger Fixtures
 

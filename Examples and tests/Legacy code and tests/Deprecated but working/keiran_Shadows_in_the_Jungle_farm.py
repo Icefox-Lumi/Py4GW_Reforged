@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 bot = Botting("Keiran Shadows in the Jungle Farm")
 MODULE_NAME = "Keiran - Shadows in the Jungle Farm (War Supplies)"
-MODULE_ICON = "Textures\\Module_Icons\\Keiran Farm.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Keiran Farm.png"
      
 def create_bot_routine(bot: Botting) -> None:
     InitializeBot(bot)
