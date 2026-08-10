@@ -1,7 +1,7 @@
 # Py4GW Skill Authoring Guide
 
 Status: proposed; adopt with the agent-environment roadmap
-Scope: repository skills under `.agents/skills/`
+Scope: repository workflows under `docs/py4gw-ai/skills/`
 Authority: `AGENTS.md`, the current Py4GW AI guides, and the skill surface
 described by current Codex documentation
 
@@ -37,7 +37,7 @@ are not.
 ## Recommended Layout
 
 ```text
-.agents/skills/<lower-kebab-name>/
+docs/py4gw-ai/skills/<lower-kebab-name>/
   SKILL.md
   references/                 # small, stable supporting material only
   scripts/                    # optional deterministic helpers

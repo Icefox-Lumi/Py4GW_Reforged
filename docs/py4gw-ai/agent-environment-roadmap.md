@@ -34,7 +34,7 @@ Treat the system as layers with different jobs:
 | `AGENTS.md` | Always-loaded repository contract | Keep the durable behavior, safety, ownership, and verification rules. |
 | Nested `AGENTS.md` | Local invariants that truly differ by subtree | Add only for a stable native, bridge, or generated-artifact boundary. |
 | `docs/py4gw-ai/` | Detailed current guidance, research, and plans | Keep evidence-rich knowledge here; never assume it is loaded unless a skill or root contract routes to it. |
-| `.agents/skills/<name>/` | On-demand workflow for a recognizable recurring user goal | Use for investigation, migration, validation, and authoring procedures. |
+| `docs/py4gw-ai/skills/<name>/` | Task-oriented workflow guide for a recognizable recurring user goal | Use for investigation, migration, validation, and authoring procedures. |
 | MCP server/tool | Live data or controlled actions | Keep tool schemas narrow, typed, and permission-aware. |
 | Temporary subagent | Isolated research, review, or independent verification | Make it read-only unless one owner explicitly grants a bounded write task. |
 | Hook | Mechanical lifecycle enforcement | Add only after a manual check has proven worth automating. |
@@ -47,12 +47,12 @@ The repository already has useful pieces, but they are fragmented:
 
 - `AGENTS.md` is now the active root operating contract and routes detailed
   rules to `docs/py4gw-ai/`.
-- `.agents/skills/` contains the current repository-local skill catalog.
+- `docs/py4gw-ai/skills/` contains the current repository-local workflow catalog.
 - `.codex/config.toml` configures a local Ghidra MCP bridge. It has no
   project-local hook or wider tool catalog yet.
 - The former ignored `.opencode/` workspace was consolidated and removed on
   2026-08-06. Its verified RE, bridge, and task-guidance material now has
-  explicit current owners in `.agents/skills/`; stale platform configuration,
+  explicit current owners in `docs/py4gw-ai/skills/`; stale platform configuration,
   duplicate prompts, packages, and task transcripts were retired.
 - `CLAUDE.md` delegates to `AGENTS.md`, which is the right direction for shared
   repository behavior.
@@ -60,7 +60,7 @@ The repository already has useful pieces, but they are fragmented:
 The first task is therefore consolidation, not creating twenty more skills.
 
 **Decision recorded on 2026-08-05:** build a fresh cross-platform foundation
-catalog under `.agents/skills/` as the replacement. The OpenCode material was
+catalog under `docs/py4gw-ai/skills/` as the replacement. The OpenCode material was
 consolidated and removed after review on 2026-08-06.
 
 ## Proposed Skill Segmentation
