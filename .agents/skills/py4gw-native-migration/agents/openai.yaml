@@ -1,4 +1,0 @@
-interface:
-  display_name: "Py4GW Native Migration"
-  short_description: "Map legacy parity to Reforged Native"
-  default_prompt: "Use $py4gw-native-migration to map this legacy behavior to its current native owner."

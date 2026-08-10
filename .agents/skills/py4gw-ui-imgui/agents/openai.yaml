@@ -1,4 +1,0 @@
-interface:
-  display_name: "Py4GW UI and ImGui"
-  short_description: "Guide UI, widget, and ImGui changes"
-  default_prompt: "Use $py4gw-ui-imgui to investigate this Py4GW UI or ImGui change."

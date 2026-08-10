@@ -91,7 +91,7 @@ def _heroai_runtime_summary() -> list[str]:
         if widget is None:
             return ["HeroAI widget: not discovered by WidgetManager"]
 
-        from HeroAI.windows import HeroAI_FloatingWindows
+        from Py4GWCoreLib.HeroAI.windows import HeroAI_FloatingWindows
 
         module = widget.module
         cached_data = getattr(module, "cached_data", None)

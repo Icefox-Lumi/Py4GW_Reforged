@@ -536,7 +536,7 @@ class _BottingTreeUI:
         if not PyImGui.collapsing_header('Headless HeroAI'):
             return
 
-        from HeroAI.ui_base import HeroAI_BaseUI
+        from Py4GWCoreLib.HeroAI.ui_base import HeroAI_BaseUI
 
         option_snapshot, options_source, resurrection_scroll_enabled = self._build_headless_heroai_option_snapshot()
 

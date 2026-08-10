@@ -2,7 +2,7 @@ from time import time
 
 import Py4GW
 import PyImGui
-from HeroAI.utils import SameMapAsAccount, SameMapOrPartyAsAccount
+from Py4GWCoreLib.HeroAI.utils import SameMapAsAccount, SameMapOrPartyAsAccount
 from Py4GWCoreLib import ImGui, Quest
 from Py4GWCoreLib import Utils
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE

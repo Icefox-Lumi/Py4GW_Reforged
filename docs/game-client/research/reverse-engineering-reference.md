@@ -974,7 +974,6 @@ All files in `docs/game-client/research/`:
 | `cpp-wasm-mapping.md` | Full procedure for CPP-to-WASM-to-EXE translation |
 | `gw-combat-ai-reverse-engineering.md` | Combat AI reverse engineering analysis |
 | `name-obfuscation-reverse-engineering.md` | Name-obfuscation subsystem reference: packet rewrite hook, timing behavior, capture workflow, unresolved surfaces, and the current friend/guild/comm split |
-| `native-gw-ui-function-catalog.json` | Catalog of native GW UI functions with addresses |
 | `native-gw-window-creation-investigation.md` | Window creation/proc RE investigation |
 | `native-ui-title-and-encoded-string-reference.md` | Native UI title and encoding reference |
 | `inventory-slot-tint-reverse-engineering.md` | Confirmed `CItemImageFrame` background tint path, EXE hook target, and Reforged-Native implementation spec |
