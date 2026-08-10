@@ -10,7 +10,7 @@ from Py4GWCoreLib import (GLOBAL_CACHE, Routines, Range, Py4GW, ConsoleLog, Mode
 from Py4GWCoreLib import *
 
 MODULE_NAME = "Auspicious Beginnings (War Supplies)" 
-MODULE_ICON = "Textures\\Module_Icons\\Keiran Farm.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Keiran Farm.png"
 
 class BotSettings:
     # Map/Outpost IDs

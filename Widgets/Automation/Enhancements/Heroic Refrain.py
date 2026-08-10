@@ -16,7 +16,7 @@ Players/heroes without HR have a clickable blue button to apply HR to them.
 '''
 
 MODULE_NAME = "Heroic Refrain Manager"
-MODULE_ICON = "Textures\\Skill_Icons\\[3431] - Heroic Refrain.jpg"
+MODULE_ICON = "Assets\\Textures\\Skill_Icons\\[3431] - Heroic Refrain.jpg"
 
 # global cached data singleton
 cached_data = CacheData()

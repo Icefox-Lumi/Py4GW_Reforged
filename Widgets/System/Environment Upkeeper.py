@@ -5,7 +5,7 @@ from Py4GWCoreLib.HotkeyManager import HOTKEY_MANAGER
 
 #do not ever disable this module, it is the main module for everything
 MODULE_NAME = "Environment Upkeeper"
-MODULE_ICON = "Textures/Module_Icons/Environment Upkeeper.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Environment Upkeeper.png"
 OPTIONAL = False
 
 __widget__ = {

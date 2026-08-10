@@ -91,7 +91,7 @@ TEXTURE = os.path.join(
 )
 
 
-MODULE_ICON = "Textures\\Module_Icons\\BDS.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\BDS.png"
 
 # endregion
 

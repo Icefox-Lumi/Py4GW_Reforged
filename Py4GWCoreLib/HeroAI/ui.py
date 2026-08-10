@@ -1590,25 +1590,25 @@ def send_command_to_all_heroes(accounts: list[AccountStruct], command: SharedCom
         )
 
 consumables = [
-    (ModelID.Essence_Of_Celerity, ("Textures\\Consumables\\Trimmed\\Essence_of_Celerity.png", (ModelID.Essence_Of_Celerity.value, GLOBAL_CACHE.Skill.GetID("Essence_of_Celerity_item_effect"), 0, 0))),
-    (ModelID.Grail_Of_Might, ("Textures\\Consumables\\Trimmed\\Grail_of_Might.png", (ModelID.Grail_Of_Might.value, GLOBAL_CACHE.Skill.GetID("Grail_of_Might_item_effect"), 0, 0))),
-    (ModelID.Armor_Of_Salvation, ("Textures\\Consumables\\Trimmed\\Armor_of_Salvation.png", (ModelID.Armor_Of_Salvation.value, GLOBAL_CACHE.Skill.GetID("Armor_of_Salvation_item_effect"), 0, 0))),
+    (ModelID.Essence_Of_Celerity, ("Assets\\Textures\\Consumables\\Trimmed\\Essence_of_Celerity.png", (ModelID.Essence_Of_Celerity.value, GLOBAL_CACHE.Skill.GetID("Essence_of_Celerity_item_effect"), 0, 0))),
+    (ModelID.Grail_Of_Might, ("Assets\\Textures\\Consumables\\Trimmed\\Grail_of_Might.png", (ModelID.Grail_Of_Might.value, GLOBAL_CACHE.Skill.GetID("Grail_of_Might_item_effect"), 0, 0))),
+    (ModelID.Armor_Of_Salvation, ("Assets\\Textures\\Consumables\\Trimmed\\Armor_of_Salvation.png", (ModelID.Armor_Of_Salvation.value, GLOBAL_CACHE.Skill.GetID("Armor_of_Salvation_item_effect"), 0, 0))),
     
     (0, ("", (0, 0, 0, 0))),  # Empty slot
     (0, ("", (0, 0, 0, 0))),  # Empty slot
-    (ModelID.Rainbow_Candy_Cane, ("Textures\\Consumables\\Trimmed\\Rainbow_Candy_Cane.png", (ModelID.Rainbow_Candy_Cane.value, 0, ModelID.Honeycomb.value, 0))),
-    
-    (ModelID.Birthday_Cupcake, ("Textures\\Consumables\\Trimmed\\Birthday_Cupcake.png", (ModelID.Birthday_Cupcake.value, GLOBAL_CACHE.Skill.GetID("Birthday_Cupcake_skill"), 0, 0))),
-    (ModelID.Candy_Apple, ("Textures\\Consumables\\Trimmed\\Candy_Apple.png", (ModelID.Candy_Apple.value, GLOBAL_CACHE.Skill.GetID("Candy_Apple_skill"), 0, 0))),
-    (ModelID.Candy_Corn, ("Textures\\Consumables\\Trimmed\\Candy_Corn.png", (ModelID.Candy_Corn.value, GLOBAL_CACHE.Skill.GetID("Candy_Corn_skill"), 0, 0))),
-    (ModelID.Golden_Egg, ("Textures\\Consumables\\Trimmed\\Golden_Egg.png", (ModelID.Golden_Egg.value, GLOBAL_CACHE.Skill.GetID("Golden_Egg_skill"), 0, 0))),
-    (ModelID.Slice_Of_Pumpkin_Pie, ("Textures\\Consumables\\Trimmed\\Slice_of_Pumpkin_Pie.png", (ModelID.Slice_Of_Pumpkin_Pie.value, GLOBAL_CACHE.Skill.GetID("Pie_Induced_Ecstasy"), 0, 0))),
-    (ModelID.War_Supplies, ("Textures\\Consumables\\Trimmed\\War_Supplies.png", (ModelID.War_Supplies.value, GLOBAL_CACHE.Skill.GetID("Well_Supplied"), 0, 0))),
-    
-    (ModelID.Drake_Kabob, ("Textures\\Consumables\\Trimmed\\Drake_Kabob.png", (ModelID.Drake_Kabob.value, GLOBAL_CACHE.Skill.GetID("Drake_Skin"), 0, 0))),
-    (ModelID.Bowl_Of_Skalefin_Soup, ("Textures\\Consumables\\Trimmed\\Bowl_of_Skalefin_Soup.png", (ModelID.Bowl_Of_Skalefin_Soup.value, GLOBAL_CACHE.Skill.GetID("Skale_Vigor"), 0, 0))),
-    (ModelID.Pahnai_Salad, ("Textures\\Consumables\\Trimmed\\Pahnai_Salad.png", (ModelID.Pahnai_Salad.value, GLOBAL_CACHE.Skill.GetID("Pahnai_Salad_item_effect"), 0, 0))),
-    # (ModelID.Dwarven_Ale, ("Textures\\Consumables\\Trimmed\\Dwarven_Ale.png", (ModelID.Dwarven_Ale.value, GLOBAL_CACHE.Skill.GetID("Dwarven_Ale_item_effect"), 0, 0))),
+    (ModelID.Rainbow_Candy_Cane, ("Assets\\Textures\\Consumables\\Trimmed\\Rainbow_Candy_Cane.png", (ModelID.Rainbow_Candy_Cane.value, 0, ModelID.Honeycomb.value, 0))),
+
+    (ModelID.Birthday_Cupcake, ("Assets\\Textures\\Consumables\\Trimmed\\Birthday_Cupcake.png", (ModelID.Birthday_Cupcake.value, GLOBAL_CACHE.Skill.GetID("Birthday_Cupcake_skill"), 0, 0))),
+    (ModelID.Candy_Apple, ("Assets\\Textures\\Consumables\\Trimmed\\Candy_Apple.png", (ModelID.Candy_Apple.value, GLOBAL_CACHE.Skill.GetID("Candy_Apple_skill"), 0, 0))),
+    (ModelID.Candy_Corn, ("Assets\\Textures\\Consumables\\Trimmed\\Candy_Corn.png", (ModelID.Candy_Corn.value, GLOBAL_CACHE.Skill.GetID("Candy_Corn_skill"), 0, 0))),
+    (ModelID.Golden_Egg, ("Assets\\Textures\\Consumables\\Trimmed\\Golden_Egg.png", (ModelID.Golden_Egg.value, GLOBAL_CACHE.Skill.GetID("Golden_Egg_skill"), 0, 0))),
+    (ModelID.Slice_Of_Pumpkin_Pie, ("Assets\\Textures\\Consumables\\Trimmed\\Slice_of_Pumpkin_Pie.png", (ModelID.Slice_Of_Pumpkin_Pie.value, GLOBAL_CACHE.Skill.GetID("Pie_Induced_Ecstasy"), 0, 0))),
+    (ModelID.War_Supplies, ("Assets\\Textures\\Consumables\\Trimmed\\War_Supplies.png", (ModelID.War_Supplies.value, GLOBAL_CACHE.Skill.GetID("Well_Supplied"), 0, 0))),
+
+    (ModelID.Drake_Kabob, ("Assets\\Textures\\Consumables\\Trimmed\\Drake_Kabob.png", (ModelID.Drake_Kabob.value, GLOBAL_CACHE.Skill.GetID("Drake_Skin"), 0, 0))),
+    (ModelID.Bowl_Of_Skalefin_Soup, ("Assets\\Textures\\Consumables\\Trimmed\\Bowl_of_Skalefin_Soup.png", (ModelID.Bowl_Of_Skalefin_Soup.value, GLOBAL_CACHE.Skill.GetID("Skale_Vigor"), 0, 0))),
+    (ModelID.Pahnai_Salad, ("Assets\\Textures\\Consumables\\Trimmed\\Pahnai_Salad.png", (ModelID.Pahnai_Salad.value, GLOBAL_CACHE.Skill.GetID("Pahnai_Salad_item_effect"), 0, 0))),
+    # (ModelID.Dwarven_Ale, ("Assets\\Textures\\Consumables\\Trimmed\\Dwarven_Ale.png", (ModelID.Dwarven_Ale.value, GLOBAL_CACHE.Skill.GetID("Dwarven_Ale_item_effect"), 0, 0))),
 ]
 
 _last_pcon_post_ms = 0

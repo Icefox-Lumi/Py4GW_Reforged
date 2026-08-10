@@ -9,7 +9,7 @@ from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from Py4GWCoreLib.routines_src.BehaviourTrees import BT
 
 MODULE_NAME = "HeroAI Parallel Tree Example"
-MODULE_ICON = "Textures/Module_Icons/Template.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Template.png"
 
 INI_KEY = ""
 INI_PATH = "Widgets/HeroAIParallelTreeExample"

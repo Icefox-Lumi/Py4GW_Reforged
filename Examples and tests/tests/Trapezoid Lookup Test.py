@@ -10,7 +10,7 @@ from Py4GWCoreLib.Pathing import AutoPathing, AStar
 from Py4GWCoreLib.Player import Player
 
 MODULE_NAME = "Trapezoid Lookup Test"
-MODULE_ICON = "Textures/Module_Icons/Pathing.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Pathing.png"
 
 START_X = -8658.560546875
 START_Y = 4971.7080078125

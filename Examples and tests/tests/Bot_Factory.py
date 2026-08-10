@@ -20,7 +20,7 @@ from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
 
 
 MODULE_NAME = "Bot Factory"
-MODULE_ICON = "Textures/Module_Icons/Template.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Template.png"
 SCRIPT_REVISION = "2026-03-30-bot-factory-2"
 INI_KEY = ""
 INI_PATH = "Widgets/BotFactory"

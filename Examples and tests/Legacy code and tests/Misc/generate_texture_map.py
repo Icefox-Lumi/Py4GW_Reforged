@@ -1,7 +1,7 @@
 import os
 import re
 
-ITEM_MODEL_TEXTURE_PATH = "Textures\\Item Models\\"
+ITEM_MODEL_TEXTURE_PATH = "Assets\\Textures\\Item Models\\"
 
 def generate_texture_map(directory):
     texture_map = {}
@@ -20,7 +20,7 @@ if __name__ == "__main__":
     texture_map = generate_texture_map(ITEM_MODEL_TEXTURE_PATH)
 
     with open(output_file, "w", encoding="utf-8") as f:
-        f.write("ITEM_MODEL_TEXTURE_PATH = \"Textures\\\\Item Models\\\\\"\n")
+        f.write("ITEM_MODEL_TEXTURE_PATH = \"Assets\\Textures\\\\Item Models\\\\\"\n")
         f.write("ItemModelTextureMap = {\n")
         for model_id, path in sorted(texture_map.items()):
             f.write(f"    {model_id}: ITEM_MODEL_TEXTURE_PATH + \"{os.path.basename(path)}\",\n")

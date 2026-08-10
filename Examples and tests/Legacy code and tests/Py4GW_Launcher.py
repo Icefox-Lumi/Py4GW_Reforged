@@ -1832,7 +1832,7 @@ def main() -> None:
 
         runner_params.callbacks.show_gui = update_gui
         
-        set_taskbar_icon("python_icon.ico")
+        set_taskbar_icon("Assets/Branding/python_icon.ico")
         
         hello_imgui.run(runner_params)
     except Exception as e:

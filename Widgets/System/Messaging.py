@@ -37,7 +37,7 @@ cached_data = CacheData()
 
 
 MODULE_NAME = "Messaging"
-MODULE_ICON = "Textures/Module_Icons/Messaging.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Messaging.png"
 OPTIONAL = False
 
 SUMMON_SPIRITS_LUXON = "Summon_Spirits_luxon"

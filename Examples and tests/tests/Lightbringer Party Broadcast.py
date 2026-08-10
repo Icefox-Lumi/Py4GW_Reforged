@@ -4,7 +4,7 @@ from Py4GWCoreLib import GLOBAL_CACHE, Party, Player, PySystem, SharedCommandTyp
 
 
 MODULE_NAME = 'Lightbringer Party Broadcast'
-MODULE_ICON = 'Textures/Skill_Icons/[1813] - Lightbringer.jpg'
+MODULE_ICON = 'Assets/Textures/Skill_Icons/[1813] - Lightbringer.jpg'
 
 
 class _State:

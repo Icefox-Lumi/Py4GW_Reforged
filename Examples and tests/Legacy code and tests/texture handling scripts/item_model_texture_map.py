@@ -1,4 +1,4 @@
-ITEM_MODEL_TEXTURE_PATH = "Textures\\Item Models\\"
+ITEM_MODEL_TEXTURE_PATH = "Assets\\Textures\\Item Models\\"
 ItemModelTextureMap = {
     34: ITEM_MODEL_TEXTURE_PATH + "[34] - Belt Pouch.png",
     35: ITEM_MODEL_TEXTURE_PATH + "[35] - Bag.png",

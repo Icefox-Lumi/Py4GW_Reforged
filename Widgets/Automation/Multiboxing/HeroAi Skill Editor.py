@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 	from Py4GWCoreLib.HeroAI.custom_skill_src.skill_types import CustomSkill as _CustomSkill
 
 MODULE_NAME = "HeroAI Skill Editor"
-MODULE_ICON = "Textures/Module_Icons/HeroAI Skill Editor.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/HeroAI Skill Editor.png"
 
 window_module = ImGui.WindowModule(
 	MODULE_NAME,

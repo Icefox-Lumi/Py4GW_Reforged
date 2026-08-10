@@ -35,7 +35,7 @@ from Py4GWCoreLib.py4gwcorelib_src.system_settings import get_controller
 OPTIONAL = False
 
 MODULE_NAME = "System Settings"
-MODULE_ICON = "Textures\\Module_Icons\\Py4GW.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Py4GW.png"
 
 _controller = get_controller()
 _inventory_controller = None

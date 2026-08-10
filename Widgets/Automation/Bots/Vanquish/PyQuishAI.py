@@ -24,7 +24,7 @@ blessed = whandler.get_widget_info("Blessed")
 module_name = "PyQuishAI "
 cache_data = CacheData()
 MODULE_NAME = "PyQuishAI"
-MODULE_ICON = "Textures\\Module_Icons\\PyQuishAI.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\PyQuishAI.png"
 
 RECHECK_INTERVAL_MS = 500 # Used for followpathandaggro 
 ARRIVAL_TOLERANCE = 250  # Used for path point arrival

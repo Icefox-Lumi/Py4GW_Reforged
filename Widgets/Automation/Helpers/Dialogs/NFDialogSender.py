@@ -27,7 +27,7 @@ save_window_timer.Start()
 
 # String consts
 MODULE_NAME = "Dialog Sender (Nightfall)"  # Change this Module name
-MODULE_ICON = "Textures\\Module_Icons\\Dialogs - Nightfall.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Dialogs - Nightfall.png"
 COLLAPSED = "collapsed"
 X_POS = "x"
 Y_POS = "y"

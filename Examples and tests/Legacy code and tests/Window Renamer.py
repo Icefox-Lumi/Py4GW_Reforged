@@ -5,7 +5,7 @@ import PyImGui
 from Py4GWCoreLib import ImGui, Color
 
 MODULE_NAME = "Window Renamer"
-MODULE_ICON = "Textures/Module_Icons/Rename.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Rename.png"
 _last_char_name: str = ""
 
 def main():

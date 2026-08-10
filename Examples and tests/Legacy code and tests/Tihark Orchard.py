@@ -2,7 +2,7 @@ from Py4GWCoreLib import (Routines,Botting,ActionQueueManager)
 
 bot = Botting("tihark_orchard")
 MODULE_NAME = "Tihark Orchard"
-MODULE_ICON = "Textures\\Module_Icons\\Mission - Tihark Orchard.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Mission - Tihark Orchard.png"
      
 def create_bot_routine(bot: Botting) -> None:
     InitializeBot(bot)

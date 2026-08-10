@@ -3,9 +3,9 @@ import re
 
 # List of font files to load
 fonts = [
-    "fonts/Font Awesome 6 Free-Solid-900.otf",
-    "fonts/Font Awesome 6 Free-Regular-400.otf",
-    "fonts/Font Awesome 6 Brands-Regular-400.otf"
+    "Assets/Fonts/Font Awesome 6 Free-Solid-900.otf",
+    "Assets/Fonts/Font Awesome 6 Free-Regular-400.otf",
+    "Assets/Fonts/Font Awesome 6 Brands-Regular-400.otf"
 ]
 
 def list_glyphs(font_path):

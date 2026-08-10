@@ -361,7 +361,7 @@ class _BottingTreeUI:
         return re.sub(r'[^A-Za-z0-9_-]+', '_', value).strip('_') or 'BottingTree'
 
     def _default_icon_path(self) -> str:
-        return os.path.join(PySystem.Console.get_projects_path(), 'python_icon_round.png')
+        return os.path.join(PySystem.Console.get_projects_path(), 'Assets', 'Branding', 'python_icon_round.png')
 
     def _ensure_window_paths(self) -> bool:
         # The window documents are process-wide Settings singletons; we only need

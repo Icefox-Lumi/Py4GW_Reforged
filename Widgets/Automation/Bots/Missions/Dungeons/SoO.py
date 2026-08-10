@@ -26,7 +26,7 @@ from Widgets.System.Messaging import get_inventory_count, reset_inventory_count
 
 # ==================== CONFIGURATION ====================
 BOT_NAME = "Shards of Orr"
-MODULE_ICON = "Textures\\Module_Icons\\Shards of Orr.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Shards of Orr.png"
 MODULE_TAGS = ["Bone Dragon Staff", "BDS", "Bones", "Asura", "Drawf", "Rep"]
 
 # Widgets you want to force-manage at startup.

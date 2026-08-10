@@ -26,7 +26,7 @@ from Widgets.System.Messaging import get_inventory_count, reset_inventory_count
 
 # ==================== CONFIGURATION ====================
 BOT_NAME = "Bogroot Growths"
-MODULE_ICON = "Textures\\Module_Icons\\Bogroot Growths.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Bogroot Growths.png"
 MODULE_TAGS = ["Frog Scepter", "BOG", "Frog", "Asura", "Drawf", "Rep"]
 
 # Widgets you want to force-manage at startup.

@@ -15,7 +15,7 @@ from Sources.modular_data.tools import script_helper
 
 module_name = "Modular Coder"
 MODULE_NAME = "Modular Coder"
-MODULE_ICON = "Textures/Module_Icons/Route Planner.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Route Planner.png"
 MODULE_TAGS = ["Automation", "modular_bot"]
 
 

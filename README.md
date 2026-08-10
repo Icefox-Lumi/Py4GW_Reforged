@@ -99,7 +99,7 @@ https://github.com/apoguita/Py4GW_Reforged_Native
     |-- Bots/ , bot_factory/ Bot implementations and scaffolding
     |-- py4gw_bridge/       Bridge stack for external tools and MCP integration
     |-- stubs/               Type stubs for the Py* binding modules
-    |-- Textures/ , fonts/ , Styles/   UI assets
+    |-- Assets/                       Shared runtime textures, fonts, styles, and branding
     |-- Examples/            Example scripts demonstrating library usage
     |-- docs/                Architecture notes and subsystem guides
     |-- Py4GW_Launcher.py            External launcher and injector

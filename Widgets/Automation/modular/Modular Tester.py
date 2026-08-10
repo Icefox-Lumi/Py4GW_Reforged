@@ -28,7 +28,7 @@ from Py4GWCoreLib.modular.widget_runtime import guarded_widget_main
 
 
 MODULE_NAME = "Modular Tester"
-MODULE_ICON = "Textures/Module_Icons/Route Planner.png"
+MODULE_ICON = "Assets/Textures/Module_Icons/Route Planner.png"
 MODULE_TAGS = ["Automation", "modular_bot"]
 
 ACCENT = (0.30, 0.78, 0.86, 1.0)

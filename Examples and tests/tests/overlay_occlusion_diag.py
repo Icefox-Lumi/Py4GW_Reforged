@@ -30,7 +30,7 @@ from Py4GWCoreLib.Player import Player
 renderer = PyDXOverlay.get_overlay()   # shared singleton (same object everywhere)
 _overlay = PyOverlay.Overlay()
 
-BEAM_TEXTURE = "Textures/loot_beam.png"
+BEAM_TEXTURE = "Assets/Textures/loot_beam.png"
 PRIMS = ["disc", "ring", "line", "triangle", "quad", "cube", "beam", "texture"]
 
 # (label, D3DCMPFUNC value)

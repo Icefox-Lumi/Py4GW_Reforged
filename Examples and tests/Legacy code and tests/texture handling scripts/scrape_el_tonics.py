@@ -2,7 +2,7 @@ import os
 import requests
 from bs4 import BeautifulSoup
 
-OUTPUT_FOLDER = os.path.join("Textures", "Item Models")
+OUTPUT_FOLDER = os.path.join("Assets", "Textures", "Item Models")
 MISSING_LOG = "missing_el_tonics.txt"
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
