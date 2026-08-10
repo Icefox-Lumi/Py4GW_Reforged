@@ -2652,7 +2652,7 @@ def draw_party_search_overlay(cached_data: CacheData):
                     if same_map:
                         if not is_party_member:
                             # /invite needs the REAL name; name obfuscation may make the shared name an alias.
-                            from Py4GWCoreLib.py4gwcorelib_src.name_obfuscation.resolve import require_real_name
+                            from Py4GWCoreLib.py4gwcorelib_src.system_settings.name_obfuscation.resolve import require_real_name
                             Player.SendChatCommand("invite " + require_real_name(account.AgentData.CharacterName))
                             GLOBAL_CACHE.ShMem.SendMessage(
                                 sender_email,

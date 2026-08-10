@@ -216,7 +216,7 @@ class HeroAICommands:
                 def send_invite(name = char_name):
                     ConsoleLog("HeroAI", f"Inviting {name} to party.")
                     # /invite needs the REAL name; name obfuscation may make the shared name an alias.
-                    from Py4GWCoreLib.py4gwcorelib_src.name_obfuscation.resolve import require_real_name
+                    from Py4GWCoreLib.py4gwcorelib_src.system_settings.name_obfuscation.resolve import require_real_name
                     Player.SendChatCommand("invite " + require_real_name(name))
                     SetWaitingActions(250)
                     
