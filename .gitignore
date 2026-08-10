@@ -21,6 +21,7 @@ Py4GW_injection_log.txt
 .opencode
 .codex
 .backups
+/.vs/
 
 # 1. Ignore ALL .ini files in Settings and subfolders
 Settings/**/*.ini
