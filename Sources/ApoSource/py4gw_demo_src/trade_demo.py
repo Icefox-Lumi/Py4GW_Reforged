@@ -14,7 +14,8 @@ getter (the stub's ``IsTradeInitiated`` / ``IsTradeAccepted`` / ``IsTradeOffered
 bound). The only readable is ``is_item_offered(item_id)``, a subject-id query; it is surfaced
 both as a live Data row (driven by the query input) and as an explicit Actions button.
 
-Trade calls map directly to the legacy/GWToolbox native functions.
+Trade calls use the current native client paths. In particular, ``submit_offer``
+sets the editable offered-gold amount; it does not submit or lock the offer.
 
 R2 coverage (PyTrade, 8/8 wired, 0 skipped):
   Actions wired: open_trade_window, accept_trade, cancel_trade, change_offer, submit_offer,
@@ -86,8 +87,8 @@ def _draw_actions():
     PyImGui.spacing()
     ui.section_header("Offer")
     ui.action_button("Change Offer", PyTrade.change_offer, key="change_offer")
-    state.submit_gold = PyImGui.input_int("Gold to Offer", state.submit_gold)
-    ui.action_button("Offer Gold", PyTrade.submit_offer, state.submit_gold, key="submit_offer")
+    state.submit_gold = PyImGui.input_int("Offered Gold Amount", state.submit_gold)
+    ui.action_button("Set Offered Gold", PyTrade.submit_offer, state.submit_gold, key="submit_offer")
 
     PyImGui.spacing()
     ui.section_header("Items")
