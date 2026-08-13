@@ -3,7 +3,7 @@ from enum import Enum
 import math
 from typing import Callable, Generator
 
-import PySystem
+from Py4GWCoreLib.py4gwcorelib_src.Console import Console
 from PyItem import PyItem
 
 from Py4GWCoreLib import Merchant

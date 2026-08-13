@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Callable, Generator
 
-import PySystem
+from Py4GWCoreLib.py4gwcorelib_src.Console import Console
 from PyItem import PyItem
 from Py4GWCoreLib import ItemArray
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE

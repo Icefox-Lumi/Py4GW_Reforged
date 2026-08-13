@@ -7,14 +7,14 @@ import base64
 from dataclasses import dataclass, field
 from typing import ClassVar, Iterable, Iterator, List, Optional, SupportsIndex, overload
 
-import Py4GW
+import PySystem
 from PyItem import ItemModifier
 from Sources.frenkeyLib.Core.utility import get_image_name
 from Sources.frenkeyLib.LootEx import enum
 from Sources.frenkeyLib.LootEx.enum import INVALID_NAMES, Campaign, EnemyType, MaterialType, ModType, ModifierIdentifier, ModifierValueArg, ModsModels
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 from Py4GWCoreLib.Py4GWcorelib import ConsoleLog
-from Py4GWCoreLib.enums import Attribute, Console, DamageType, ItemType, ModelID, Profession, Rarity, ServerLanguage
+from Py4GWCoreLib.enums import Attribute, Console, DamageType, ItemType, ModelID, Profession, Rarity, ServerLanguage, get_texture_for_model
 from Sources.frenkeyLib.LootEx.texture_scraping_models import ScrapedItem
 
 language_order = [
@@ -421,7 +421,7 @@ class ItemsByType(dict[ItemType, dict[int, 'Item']]):
         
         for item in self.All:
             if item.get_name(language).lower() == name.lower():
-                if item.texture_file and not "missing_texture" in item.texture_file:
+                if item.texture_file and "missing_texture" not in item.texture_file and "File_Not_found" not in item.texture_file:
                     return item.texture_file
             
         return missing_texture_path
@@ -481,11 +481,11 @@ class Item():
         self.next_nick_week: Optional[date] = self.get_next_nick_date()
         self.weeks_until_next_nick: Optional[int] = self.get_weeks_until_next_nick()
         
-        texture_file = os.path.join(item_textures_path, f"{self.inventory_icon}")
+        texture_file = os.path.join(item_textures_path, f"{self.inventory_icon}") if self.inventory_icon else ""
         if texture_file and os.path.exists(texture_file):
             self.texture_file = texture_file
         else:
-            self.texture_file = missing_texture_path
+            self.texture_file = get_texture_for_model(self.model_id)
     
     def is_minimum_complete(self) -> bool:
         english_name = self.names.get(ServerLanguage.English, "")
@@ -1109,7 +1109,8 @@ class Rune(ItemMod):
     
     def __post_init__(self):
         super().__post_init__()
-        self.texture_file = os.path.join(item_textures_path, f"{self.inventory_icon}") if self.inventory_icon and os.path.exists(os.path.join(item_textures_path, f"{self.inventory_icon}")) else missing_texture_path       
+        texture_file = os.path.join(item_textures_path, f"{self.inventory_icon}") if self.inventory_icon else ""
+        self.texture_file = texture_file if texture_file and os.path.exists(texture_file) else get_texture_for_model(self.model_id)
         
     def get_applied_name(self, language: Optional[ServerLanguage] = None) -> str:
         if language is None:

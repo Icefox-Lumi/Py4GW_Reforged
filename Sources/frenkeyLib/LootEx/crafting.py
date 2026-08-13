@@ -2,7 +2,7 @@ from datetime import datetime
 import math
 from typing import Generator, Callable, List
 
-import PySystem
+from Py4GWCoreLib.py4gwcorelib_src.Console import Console
 from PyItem import PyItem
 
 from Py4GWCoreLib.Inventory import Inventory

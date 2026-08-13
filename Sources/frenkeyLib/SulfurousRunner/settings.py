@@ -1,6 +1,6 @@
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color
 from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
-from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings as NativeSettings
+from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings as Py4GWSettings
 
 class Settings:
     __instance = None
@@ -17,7 +17,7 @@ class Settings:
         
         self.__initalized = True
         
-        self.ini_handler : NativeSettings = NativeSettings("Widgets/Config/Sulfurous Runner.ini", "global")
+        self.ini_handler = Py4GWSettings("Widgets/Config/Sulfurous Runner.ini")
         self.draw_flags: bool = True
         self.draw_paths: bool = True
         

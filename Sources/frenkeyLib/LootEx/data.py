@@ -4,8 +4,7 @@ import os
 import shutil
 from typing import Optional
 
-import PySystem
-import Py4GW
+from Py4GWCoreLib.py4gwcorelib_src.Console import Console
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.enums_src.GameData_enums import DyeColor
 from Py4GWCoreLib.enums_src.Item_enums import Rarity
@@ -32,7 +31,7 @@ class Data():
         if self._initialized:
             return
         
-        ConsoleLog("LootEx", "Initializing Data Module", PySystem.Console.MessageType.Debug)
+        ConsoleLog("LootEx", "Initializing Data Module", Console.MessageType.Debug)
         
         self._initialized = True
     
@@ -892,7 +891,7 @@ class Data():
         path = os.path.join(data_directory, "materials.json")
 
         ConsoleLog(
-            "LootEx", f"Loading materials...", PySystem.Console.MessageType.Debug)
+            "LootEx", f"Loading materials...", Console.MessageType.Debug)
 
         if not os.path.exists(data_directory):
             os.makedirs(data_directory)
@@ -927,7 +926,7 @@ class Data():
 
         with open(path, 'w', encoding='utf-8') as file:
             ConsoleLog(
-                "LootEx", f"Saving materials ...", PySystem.Console.MessageType.Debug)
+                "LootEx", f"Saving materials ...", Console.MessageType.Debug)
             json.dump({material.model_id: material.to_json()
                     for material in self.Materials.values()}, file, indent=4, ensure_ascii=False)
 
@@ -938,7 +937,7 @@ class Data():
         path = os.path.join(data_directory, "weapon_mods.json")
 
         ConsoleLog(
-            "LootEx", f"Loading weapon mods from {path}...", PySystem.Console.MessageType.Debug)
+            "LootEx", f"Loading weapon mods from {path}...", Console.MessageType.Debug)
 
         if not os.path.exists(data_directory):
             os.makedirs(data_directory)
@@ -957,7 +956,7 @@ class Data():
                     if not mod.identifier in self.Weapon_Mods:
                         self.Weapon_Mods[mod.identifier] = mod
 
-        account_file = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Config", "DataCollection", Player.GetAccountEmail(), "weapon_mods.json")
+        account_file = os.path.join(Console.get_projects_path(), "Widgets", "Config", "DataCollection", Player.GetAccountEmail(), "weapon_mods.json")
         if os.path.exists(account_file):
             with open(account_file, 'r', encoding='utf-8') as file:
                 weapon_mods = json.load(file)
@@ -1004,12 +1003,12 @@ class Data():
 
         if mods is None:
             ConsoleLog(
-                "LootEx", "No weapon mods to save.", PySystem.Console.MessageType.Warning)
+                "LootEx", "No weapon mods to save.", Console.MessageType.Warning)
             return
         
         with open(path, 'w', encoding='utf-8') as file:
             ConsoleLog(
-                "LootEx", f"Saving weapon mods ...", PySystem.Console.MessageType.Debug)
+                "LootEx", f"Saving weapon mods ...", Console.MessageType.Debug)
             json.dump({mod.identifier: mod.to_json()
                     for mod in mods.values()}, file, indent=4, ensure_ascii=False)
 
@@ -1021,7 +1020,7 @@ class Data():
         path = os.path.join(data_directory, "runes.json")
 
         ConsoleLog(
-            "LootEx", f"Loading runes ...", PySystem.Console.MessageType.Debug)
+            "LootEx", f"Loading runes ...", Console.MessageType.Debug)
 
         if not os.path.exists(data_directory):
             os.makedirs(data_directory)
@@ -1062,7 +1061,7 @@ class Data():
         with open(path, 'w', encoding='utf-8') as file:
             if debug:
                 ConsoleLog(
-                    "LootEx", f"Saving runes ...", PySystem.Console.MessageType.Debug)
+                    "LootEx", f"Saving runes ...", Console.MessageType.Debug)
                 
             json.dump({rune.identifier: rune.to_json() for rune in self.Runes.values()}, file, indent=4, ensure_ascii=False)
 
@@ -1075,7 +1074,7 @@ class Data():
         self.Items.clear()
 
         ConsoleLog(
-            "LootEx", f"Loading items...", PySystem.Console.MessageType.Debug)
+            "LootEx", f"Loading items...", Console.MessageType.Debug)
 
         if not os.path.exists(data_directory):
             os.makedirs(data_directory)
@@ -1104,7 +1103,7 @@ class Data():
                         else:
                             self.Items[item_type][model_id].update(item)
               
-        local_path = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Config", "LootEx", "items.json")
+        local_path = os.path.join(Console.get_projects_path(), "Widgets", "Config", "LootEx", "items.json")
         if os.path.exists(local_path):
             with open(local_path, 'r', encoding='utf-8') as file:
                 local_items = models.ItemsByType.from_dict(json.load(file))
@@ -1142,7 +1141,7 @@ class Data():
         
         
         ConsoleLog(
-            "LootEx", f"Loaded {len(self.Items.All)} items ({len(self.Nick_Items)} Nick items).", PySystem.Console.MessageType.Debug)
+            "LootEx", f"Loaded {len(self.Items.All)} items ({len(self.Nick_Items)} Nick items).", Console.MessageType.Debug)
 
     def SaveItems(self, shared_file: bool = False, items: Optional[models.ItemsByType] = None):
         # Save items to data/items.json
@@ -1184,7 +1183,7 @@ class Data():
         
         if shared_file:
             all_item_json_string = self.Items.to_json()
-            local_path = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Config", "LootEx", "items.json")
+            local_path = os.path.join(Console.get_projects_path(), "Widgets", "Config", "LootEx", "items.json")
             
             with open(local_path, 'w', encoding='utf-8') as file:
                 json.dump(all_item_json_string, file, indent=4, ensure_ascii=False)
@@ -1235,7 +1234,7 @@ class Data():
                 # Delete the diff file after merging
                 os.remove(file_path)
                 ConsoleLog(
-                    "LootEx", f"Delete {file_path}...", PySystem.Console.MessageType.Debug)
+                    "LootEx", f"Delete {file_path}...", Console.MessageType.Debug)
         
         ## Load all files in path/import
         import_folder = os.path.join(path, "import")
@@ -1278,7 +1277,7 @@ class Data():
                     # Delete the diff file after merging
                     os.remove(file_path)
                     ConsoleLog(
-                        "LootEx", f"Delete {file_path}...", PySystem.Console.MessageType.Debug)
+                        "LootEx", f"Delete {file_path}...", Console.MessageType.Debug)
         
         for item in list(self.Items.All):
             ## remove all invalid names from item.names
@@ -1295,10 +1294,10 @@ class Data():
         if items_found:
             for item_type, items in new_items.items():
                 ConsoleLog(
-                    "LootEx", f"Merged {len(items)} new items of type {item_type}: {', '.join(items)}", PySystem.Console.MessageType.Info)
+                    "LootEx", f"Merged {len(items)} new items of type {item_type}: {', '.join(items)}", Console.MessageType.Info)
                 
             ConsoleLog(
-                "LootEx", f"Saving merged items...", PySystem.Console.MessageType.Debug)
+                "LootEx", f"Saving merged items...", Console.MessageType.Debug)
             self.SaveItems(shared_file=True, items=self.Items)
         
         
@@ -1309,7 +1308,7 @@ class Data():
             if os.path.exists(file_path):            
                 with open(file_path, 'r', encoding='utf-8') as file:
                     # ConsoleLog(
-                    #     "LootEx", f"Merging diff items from {file_path}...", PySystem.Console.MessageType.Debug)
+                    #     "LootEx", f"Merging diff items from {file_path}...", Console.MessageType.Debug)
                     
                     mods = json.load(file)
                     mods_found = len(mods.values()) > 0 or mods_found

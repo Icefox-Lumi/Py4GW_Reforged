@@ -1,6 +1,17 @@
 # frenkeyLib — Severance Audit
 
 **Date:** 2026-07-26
+
+> **Historical audit; not the current execution plan.** The active migration
+> authority is now [the layered migration plan](frenkeylib-layered-migration-plan.md)
+> and [the Stage 0 cutover ledger](frenkeylib-stage-0-cutover-ledger.md). In
+> particular, `AutoInventoryHandler`, ItemHandling snapshots/BT nodes, and the
+> historical LootEx execution graph are explicitly excluded from this Frenkey
+> migration and are not repair targets. Native System Settings owns the later,
+> separately scoped explicit inventory-action/deprecation program. References
+> below to “live” or “do first” describe the 2026-07-26 state only and must not
+> be read as current implementation direction.
+
 **Scope:** `Sources/frenkeyLib/` (30,991 lines, 9 subsystems) against the current Reforged Native
 binding surface and the current `Py4GWCoreLib`.
 **Purpose:** `frenkeyLib` was never carried through the GWCA → Reforged migration. It still compiles

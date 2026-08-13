@@ -1,9 +1,8 @@
 
 
-import PySystem
-from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
+from Py4GWCoreLib.py4gwcorelib_src.Console import Console, ConsoleLog
 
-PERSISTENT = True
+PERSISTENT = False
 
 class InstanceManager:
     _initialized = False
@@ -24,12 +23,8 @@ class InstanceManager:
         if self._initialized:
             return
         
-        from Py4GWCoreLib.py4gwcorelib_src.MerchantHandler import MerchantHandler
         from Py4GWCoreLib.py4gwcorelib_src.AutoInventoryHandler import AutoInventoryHandler
-        
-        if getattr(self, "merchant_handler", None) is None:
-            self.merchant_handler = MerchantHandler()
-        
+                
         if getattr(self, "auto_inventory_handler", None) is None:
             self.auto_inventory_handler = AutoInventoryHandler()
             
