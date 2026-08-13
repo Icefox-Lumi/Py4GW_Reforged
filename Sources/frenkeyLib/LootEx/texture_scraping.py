@@ -515,7 +515,7 @@ def scrape_info_from_wiki(path: str) -> Optional[ScrapedItem]:
                     img = a.find("img")
                     
                     if img is not None:
-                        if item.inventory_icon_url is None or img['src'].lower().endswith('.png') and (not item.inventory_icon_url.lower().endswith('.png') or (img['width'] == '64' and img['height'] == '64')):
+                        if item.inventory_icon_url is None or img['src'].lower().endswith('.png') and (not item.inventory_icon_url.lower().endswith('.png') or (img['width'] == '64' and img['height'] == '64')):  # type: ignore[union-attr]
                             item.inventory_icon_url = img['src'].lstrip("/\\").replace("/", "\\")
                         
         if item is None:

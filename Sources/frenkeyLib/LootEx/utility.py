@@ -715,12 +715,10 @@ class Util:
         if GLOBAL_CACHE.Item.GetModelID(item_id) == ModelID.Vial_Of_Dye:
             # ConsoleLog("LootEx", f"Item ID: {item_id} is a dye item.")
             
-            dye_info = GLOBAL_CACHE.Item.Dye.GetInfo(item_id)
+            color_id = GLOBAL_CACHE.Item.GetDyeColor(item_id)
 
-            if dye_info is not None:
-                color_id = dye_info.dye1.ToInt() if dye_info.dye1 else -1
-                color = DyeColor(color_id) if color_id != -1 else None
-                return color if color is not None else DyeColor.NoColor
+            if color_id:
+                return DyeColor(color_id)
 
         return DyeColor.NoColor
     
@@ -765,8 +763,8 @@ class Util:
             slots = [0] * bag_sizes[bag_enum]
             
             for item in bag.GetItems():
-                if 0 <= item.slot < bag_sizes[bag_enum]:
-                    slots[item.slot] = item.item_id
+                if 0 <= item.slot < bag_sizes[bag_enum]:  # type: ignore[attr-defined]
+                    slots[item.slot] = item.item_id  # type: ignore[attr-defined]
                     
                     
             inventory.extend(slots)

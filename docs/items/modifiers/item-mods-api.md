@@ -13,15 +13,21 @@ Self-contained, reads the raw `ItemModifier` words directly, and **does not** de
 ## The API — `Py4GWCoreLib/Item.py`
 
 Identifiers come from `ModifierIdentifier` (aliased `ModId`) in `Py4GWCoreLib/mods_types.py`.
-The value axis is **type-routed**: an `IntEnum` narrows the *subtype*, a number is a *threshold*
-(direction-aware — see below), a callable is a predicate on the value.
+The value axis is **type-routed**: an `IntEnum` narrows the *subtype*, and a
+number is one direction-aware threshold (see below). Callable predicates and
+two-number/range-shaped input are not accepted.
 
 ```python
 # -- presence / matching --
 Item.Mods.HasMod(item_id, mod, *values)   -> bool   # mod present, optionally value/subtype-filtered
+Item.Mods.HasEffect(item_id, criterion)   -> bool   # typed effect criterion; selects one effect-value component
 Item.Mods.HasAllMods(item_id, modlist)    -> bool   # every entry matches
 Item.Mods.HasAnyMods(item_id, modlist)    -> bool   # any entry matches
-#   modlist entry = mod | (mod, *values)
+#   modlist entry = mod | (mod, *values) | EffectCriterion(...)
+Item.Mods.HasUpgrade(item_id, criterion)  -> bool   # typed installed-upgrade identity/slot/value criterion
+Item.Mods.GetMatchingUpgrades(item_id, criterion) -> tuple[UpgradeFact] # typed installed-upgrade facts satisfying it
+Item.Mods.HasAllUpgrades(item_id, rules)  -> bool   # every UpgradeCriterion matches
+Item.Mods.HasAnyUpgrades(item_id, rules)  -> bool   # any UpgradeCriterion matches
 
 # -- reads --
 Item.Mods.GetMods(item_id)                -> list[ModId]      # distinct mod ids present
@@ -32,12 +38,19 @@ Item.Mods.GetName(mod)                    -> str              # the mod's effect
 
 # -- applied upgrades (prefixes/suffixes/inscriptions/runes/insignias) --
 Item.Mods.GetUpgrades(item_id)            -> list[(name, Slot)]
+Item.Mods.GetKnownUpgrades()               -> list[(name, Slot)] # supported configuration choices
+Item.Mods.Inspect(item_id)                 -> ItemInspection     # typed effects + installed upgrade facts
+Item.Mods.GetKnownUpgradeFacts()           -> tuple[UpgradeFact] # typed core-owned upgrade catalog
+Item.Mods.NormalizeUpgradeIdentifier(value)-> str | None         # persisted display name -> stable identity
+Item.Mods.ResolveUpgradeSlot(value)        -> Slot | None        # persisted slot name/value -> public slot
+Item.Mods.CreateUpgradeCriterion(identifier, *, slot=None, threshold=None, value_index=0)
+                                                    -> UpgradeCriterion # typed N-or-better query
 Item.Mods.GetUpgradeInSlot(item_id, slot) -> str | None
 Item.Mods.HasUpgradeInSlot(item_id, slot) -> bool
 Item.Mods.GetSlot(item_id, upgrade_name)  -> Slot | None
 Item.Mods.IsMaxed(item_id, upgrade_name)  -> bool
 
-# -- raw modifier words (diagnostics; replaces Customization.Modifiers.*) --
+# -- raw modifier words (diagnostics and legacy compatibility only) --
 Item.Mods.GetModifiers(item_id)           -> list[ItemModifier]
 Item.Mods.GetModifierCount(item_id)       -> int
 Item.Mods.ModifierExists(item_id, ident)  -> bool
@@ -46,15 +59,43 @@ Item.Mods.GetModifierValues(item_id, ident) -> (arg, arg1, arg2)
 
 `Slot` (from `mods_core`): `Inherent, Prefix, Suffix, Inscription, Rune, Insignia`.
 
+`ItemInspection.effects` contains `EffectFact(identifier, name, values, subtype,
+better_is_lower)`. `ItemInspection.upgrades` contains
+`UpgradeFact(identifier, display_name, slot, values, is_maxed)`. Those immutable facts are the public
+surface for rule consumers such as Merchant Rules: identities, slots, and
+threshold direction are available without a raw triple, JSON catalog, or
+consumer-owned parser. `NormalizeUpgradeIdentifier` accepts an old
+display-style persisted name only to resolve it to the stable Reforged identity.
+The catalog has no upper-range or exact-match mode.
+
+`EffectCriterion(identifier, threshold=None, value_index=0, subtype=None)`
+is the declarative form for one specific effect-value component. Its threshold
+is always match-or-better and it takes its comparison direction from the
+matching `EffectFact`. This is how a consumer requests the displayed high
+damage component: there is no callable predicate, raw modifier triple, or
+consumer-owned range comparison.
+
+`CreateUpgradeCriterion(identifier, slot=..., threshold=...)` constructs the
+public query for `GetMatchingUpgrades`; it normalizes persisted identities and
+slots and rejects unknown non-empty values rather than widening a rule.
+`GetMatchingUpgrades(item_id, UpgradeCriterion(...))` is the typed companion
+to `HasUpgrade`. A consumer that needs a matching fact's display name, slot,
+or values after Reforged has made the match uses this result; it must not
+rebuild the comparison from cached tuples. `HasUpgrade` is the boolean form of
+the same owner operation.
+
 ### Value routing in `HasMod(item_id, mod, *values)`
 
 Each extra arg is dispatched by its Python type:
 
 - **`IntEnum`** → subtype filter (e.g. `Attribute.Marksmanship`, `DamageType.Piercing`).
-- **number** → **"that value or better"**, not exact. Direction is the *mod's* metadata
+- **one number** → **"that value or better"**, not exact. Direction is the *mod's* metadata
   (`better_low`): requirement is lower-is-better (`9` ⇒ req ≤ 9); damage/armor/health are
-  higher-is-better (`15` ⇒ ≥ 15). No per-call parameter, no lambda needed for the common case.
-- **callable** → `predicate(value) -> bool`, for anything the threshold shorthand can't express.
+  higher-is-better (`15` ⇒ ≥ 15). More than one numeric value is rejected;
+  select a specific effect component with `EffectCriterion(value_index=...)`.
+  No per-call parameter or lambda is needed.
+- **callable** → rejected. `Item.Mods` accepts declarative subtype and numeric
+  threshold values only.
 
 ### Usage
 
@@ -64,11 +105,16 @@ from Py4GWCoreLib.mods_types import ModifierIdentifier as ModId
 from Py4GWCoreLib.enums_src.GameData_enums import Attribute, DamageType
 
 Item.Mods.HasMod(item_id, ModId.AttributeRequirement, Attribute.Marksmanship, 9)  # Marks req ≤ 9
-Item.Mods.HasMod(item_id, ModId.Damage, 15, 28)                                   # dmg ≥ 15–28
+Item.Mods.HasEffect(item_id, Item.Mods.EffectCriterion(ModId.Damage, 28, 1))      # damage high end ≥ 28
 Item.Mods.HasAllMods(item_id, [
     ModId.DamageTypeProperty,                       # present (any)
     (ModId.AttributeRequirement, 9),                # req 9 or better
+    Item.Mods.EffectCriterion(ModId.Damage, 28, 1), # damage high end 28 or better
 ])
+Item.Mods.HasUpgrade(
+    item_id,
+    Item.Mods.CreateUpgradeCriterion("Icy", slot="Prefix", threshold=15),
+)
 vals = Item.Mods.GetValues(item_id, ModId.Damage)   # e.g. [15, 28]
 ```
 
@@ -101,10 +147,11 @@ value-arg table** in the binary.
 
 ## Validate before building on it
 
-`Widgets/Coding/Debug/Py4GW/Item.Mods Test.py` — hover any item; it shows the `Item.Mods` decode
-(id / arg1 / arg2 / value / subtype) next to the game's composed info-string. Confirm the value
-matches the number the game renders; if a row is off, fix that identifier's `_Def` in
-`mods_core.py`.
+`Widgets/Coding/Debug/Py4GW/Item Mods Playground.py` latches a hovered item,
+compares public descriptions with the game tooltip, and exercises directional
+ALL/ANY and threshold helpers. `Widgets/Coding/Debug/Py4GW/Mod Parity Scan.py`
+writes the broader game-versus-Reforged report. If a row is off, fix the
+owner's `_Def` in `mods_core.py`; do not give a consumer a raw fallback.
 
 ## Regenerating
 - The `_Def` read rules and `ModifierIdentifier` derive from the Ghidra dump

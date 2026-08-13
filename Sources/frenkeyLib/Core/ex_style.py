@@ -126,7 +126,7 @@ class ExStyle:
             return
         
         match theme:
-            case UIStyle.StyleTheme.Py4GW:                
+            case UIStyle.StyleTheme.ImGui:                
                 self.Info_Icon : StyleColor = StyleColor(245, 172, 47, 255)
                 self.Selected_Item : StyleColor = StyleColor(100, 100, 100, 150)
                 self.Hovered_Item : StyleColor = StyleColor(128, 128, 128, 100)

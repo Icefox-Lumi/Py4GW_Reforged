@@ -22,6 +22,7 @@ Py4GW_injection_log.txt
 .codex
 .backups
 /.vs/
+/demo_diagnostics
 
 # 1. Ignore ALL .ini files in Settings and subfolders
 Settings/**/*.ini
@@ -51,6 +52,21 @@ Widgets/Data/InventoryModelIds/**
 Widgets/Data/InventoryModHash/**
 Widgets/Data/InventoryModelFileIds/**
 json/**
+# JsonFactory seeds a new jailed document from json/Defaults. These are
+# distributable defaults, not user runtime state. Keep only the migration
+# defaults below; unrelated local seed files remain private runtime state.
+!json/Defaults/
+json/Defaults/*
+!json/Defaults/Widgets/
+json/Defaults/Widgets/*
+!json/Defaults/Widgets/Guild Wars/
+json/Defaults/Widgets/Guild Wars/*
+!json/Defaults/Widgets/Guild Wars/Items & Loot/
+json/Defaults/Widgets/Guild Wars/Items & Loot/*
+!json/Defaults/Widgets/Guild Wars/Items & Loot/LootEx/
+!json/Defaults/Widgets/Guild Wars/Items & Loot/LootEx/**
+!json/Defaults/Widgets/Guild Wars/Items & Loot/MerchantRules/
+!json/Defaults/Widgets/Guild Wars/Items & Loot/MerchantRules/**
 # Modular recipes are repository-owned distributable content, not per-account
 # JsonFactory state. Keep the rest of the runtime JSON jail ignored.
 !json/modular/
@@ -261,3 +277,4 @@ Py4GW_Reforged_Launcher/*.exe
 # so CLI sessions can read them directly (they have no access to that memory
 # store) -- not meant for the eventual PR to Apo, just internal working notes
 Py4GW_Reforged_Launcher/dev_notes/
+Py4GW.dll
