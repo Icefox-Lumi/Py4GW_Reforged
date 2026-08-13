@@ -95,7 +95,7 @@ def register_function(fn: LaunchFunction) -> None:
 # reimported on reload (see LaunchBar._boot). A provider that is absent or raises is skipped, so the
 # base catalog always comes up.
 _EXTERNAL_PROVIDERS: tuple[str, ...] = (
-    "HeroAI.command_api:register_launch_functions",
+    "Py4GWCoreLib.HeroAI.command_api:register_launch_functions",
     "Py4GWCoreLib.py4gwcorelib_src.map_overlay.launch_functions:register_launch_functions",
 )
 
