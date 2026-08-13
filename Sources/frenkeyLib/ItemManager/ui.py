@@ -607,7 +607,7 @@ class UI:
         self._armor_upgrade_quote_cache_profession: Profession | None = None
         self._armor_upgrade_quote_cache_processed_item_ids: set[int] = set()
         self._armor_upgrade_quote_cache: dict[Any, TraderQuote] = {}
-        self.texture_path = os.path.join(PySystem.Console.get_projects_path(), "Textures")
+        self.texture_path = os.path.join(PySystem.Console.get_projects_path(), "Assets", "Textures")
 
         self.weapon_upgrade_textures : dict[ItemType, UpgradeTexture] = {
                 ItemType.Axe : UpgradeTexture(

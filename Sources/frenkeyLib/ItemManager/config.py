@@ -23,7 +23,7 @@ class Config:
         self.main_ini_key = ""
         self.floating_ini_key = ""
         
-        self.icon_path = os.path.join(PySystem.Console.get_projects_path(), "Textures", "Module_Icons", "item_manager.png")
+        self.icon_path = os.path.join(PySystem.Console.get_projects_path(), "Assets", "Textures", "Module_Icons", "item_manager.png")
         
         pass
     

@@ -15,7 +15,7 @@ from Sources.frenkeyLib.ItemManager.config import Config
 from Sources.frenkeyLib.ItemManager.ui import UI
 
 MODULE_NAME = "Item Manager"
-MODULE_ICON = "Textures\\Module_Icons\\item_manager.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\item_manager.png"
 
 MODULE_CONFIG = Config()
 MODULE_UI : UI | None = None
