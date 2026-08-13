@@ -64,6 +64,9 @@ class ColorizeSettings:
         raw = raw if isinstance(raw, dict) else {}
         stored_rarities = raw.get("rarities", {})
         stored_colors = raw.get("colors", {})
+        default_rarities = {
+            "White": False, "Blue": True, "Green": True, "Purple": True, "Gold": True,
+        }
         return ColorizeSettings(
             enabled=bool(raw.get("enabled", False)),
             imgui_frame=bool(raw.get("imgui_frame", True)),
@@ -71,8 +74,8 @@ class ColorizeSettings:
             native_frame=bool(raw.get("native_frame", False)),
             native_outline=bool(raw.get("native_outline", False)),
             context_menu_toggle=bool(raw.get("context_menu_toggle", True)),
-            rarities={name: bool(stored_rarities.get(name, False)) for name in RARITIES}
-            if isinstance(stored_rarities, dict) else {},
+            rarities={name: bool(stored_rarities.get(name, default_rarities[name])) for name in RARITIES}
+            if isinstance(stored_rarities, dict) else dict(default_rarities),
             colors={name: _color(stored_colors.get(name), DEFAULT_COLORS[name]) for name in RARITIES}
             if isinstance(stored_colors, dict) else dict(DEFAULT_COLORS),
         )
