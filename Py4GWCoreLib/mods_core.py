@@ -166,6 +166,12 @@ def _build_upgrade_names() -> dict[int, str]:
 _UPGRADE_NAME: dict[int, str] = _build_upgrade_names()
 
 
+_GENERIC_RUNE_CARRIER_NAME: dict[int, str] = {
+    int(upgrade_id): ItemUpgradeId(int(upgrade_id)).name
+    for upgrade_id in ItemUpgrade.UpgradeRune.upgrade_ids
+}
+
+
 @dataclass
 class DecodedMod:
     """One decoded modifier word off an item."""
@@ -265,6 +271,11 @@ def upgrades_on(item_id: int) -> list[tuple[str, int]]:
             if slot is not None:
                 out.append((name, slot))
     return out
+
+
+def known_upgrades() -> list[tuple[str, int]]:
+    """Every Reforged-known upgrade as a stable name and its physical slot."""
+    return sorted(mods_upgrades.UPGRADE_SLOT.items())
 
 
 def slot_of_upgrade(name: str) -> Optional[int]:
@@ -468,7 +479,7 @@ def raw_dump(item_id: int) -> list[str]:
     out: list[str] = []
     for dm in decode_item(item_id):
         if dm.upgrade_id:   # a barcode carrier word
-            nm = _UPGRADE_NAME.get(dm.upgrade_id)
+            nm = _UPGRADE_NAME.get(dm.upgrade_id) or _GENERIC_RUNE_CARRIER_NAME.get(dm.upgrade_id)
             tag = ("upgrade: %s" % nm) if nm else ("upgrade: ?UNKNOWN (uid=0x%X)" % dm.upgrade_id)
         else:
             rendered = render_mod(item_id, dm)
