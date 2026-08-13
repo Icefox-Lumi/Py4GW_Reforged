@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-import PySystem
+from Py4GWCoreLib.py4gwcorelib_src.Console import Console
 import PyImGui
 
 from Py4GWCoreLib import IconsFontAwesome5, ImGui

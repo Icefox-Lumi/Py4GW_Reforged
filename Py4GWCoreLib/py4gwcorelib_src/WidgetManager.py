@@ -409,7 +409,10 @@ class Widget:
         try:
             spec.loader.exec_module(module)
         except Exception as e:
-            del sys.modules[unique_name]
+            # A widget may remove its own entry from sys.modules during import
+            # (e.g. Utils.ClearSubModules matching its unique_name). Pop instead
+            # of del so cleanup never raises KeyError and masks the real error.
+            sys.modules.pop(unique_name, None)
             self.disable()
             PySystem.Console.Log("WidgetManager", f"Failed to load widget module '{self.folder_script_name}': {e}", PySystem.Console.MessageType.Error)
             return False

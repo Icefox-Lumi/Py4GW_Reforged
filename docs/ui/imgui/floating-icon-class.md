@@ -1,296 +1,88 @@
 # FloatingIcon Class
 
-> Current-source note (reviewed 2026-08-04): the active class is
-> `ImGui.FloatingIcon` in `Py4GWCoreLib/ImGui_src/ImGuisrc.py`, commonly reached
-> through `from Py4GWCoreLib import ImGui` or
-> `from Py4GWCoreLib.ImGui import ImGui`. This document retains historical
-> `ImGui_Legacy` terminology in examples and descriptions. The current
-> implementation persists through `Settings`; references to `IniManager` below
-> are historical and must not be copied into new code without verification.
+Status: current source reference; live injected-client acceptance remains feature-specific
+Scope: `ImGui.FloatingIcon` runtime toggle and window-geometry ownership
+Authority: `Py4GWCoreLib/ImGui_src/ImGuisrc.py`
 
-## Purpose
+`ImGui.FloatingIcon` is a small draggable icon that toggles a callback. The
+historical `ImGui_Legacy` name sometimes remains in callers and older records;
+do not use that name as evidence for a persistence API.
 
-`ImGui_Legacy.FloatingIcon` is a small self-contained UI controller that displays a draggable floating icon and uses that icon as an on/off switch for a callable.
+## Ownership
 
-Its job is not to be a generic window manager. Its job is to:
+The helper owns only current-frame icon behavior:
 
-- draw a floating icon
-- let the user drag it around
-- detect click versus drag
-- toggle an internal enabled/visible state
-- persist that functional toggle state across reloads
-- call a supplied callback only while the toggle state is enabled
+- icon drawing, drag detection, and click-versus-drag behavior;
+- the current `visible` toggle state and optional callback;
+- the public `position` observed after the icon window begins.
 
-The class lives in [Py4GWCoreLib/ImGui_src/ImGuisrc.py]
+The consumer owns feature persistence policy. There are two supported modes:
 
-## What The Class Owns
+| Mode | `persist_window_state` | Geometry owner |
+|---|---:|---|
+| Default compatibility mode | `True` | Native ImGui, keyed by the unique icon window name. |
+| Reforged feature-owned mode | `False` | The consuming feature's jailed `Settings` document. |
 
-`FloatingIcon` owns the following runtime behavior:
+The default preserves existing callers. A feature that needs account-scoped or
+otherwise explicit geometry must opt out. In that mode the helper adds
+`NoSavedSettings`; it does not create a second persistence document.
 
-- `position`
-- dragging behavior
-- click-to-toggle behavior
-- internal `visible` state
-- tooltip behavior
-- calling `draw_callback()` only when enabled
+## Constructor
 
-It also owns the persistence of its functional toggle state through:
+Important parameters:
 
-- `toggle_ini_key`
-- `toggle_section`
-- `toggle_var_name`
-- `toggle_default`
+- `icon_path`, `button_size`, `idle_icon_scale`, `hover_icon_scale`: render inputs.
+- `start_pos`: first in-memory position before any caller restoration.
+- `window_id`, `window_name`: unique ImGui identity; callers must not collide.
+- `visible`, `on_toggle`, `draw_callback`: session toggle and controlled body.
+- `toggle_ini_key`, `toggle_section`, `toggle_var_name`, `toggle_default`:
+  optional account-`Settings` route for the functional toggle only.
+- `persist_window_state`: `True` by default. Pass `False` for caller-owned
+  geometry persistence.
 
-This persistence is used only for the toggle state that decides whether the callback is executed.
+## Functional-toggle persistence
 
-## What The Class Does Not Need To Own Conceptually
+When `toggle_ini_key` and `toggle_var_name` are set, `load_visibility()` and
+`save_visibility()` use `Settings(toggle_ini_key, "account")`. Native Settings
+owns binding and autosave. A caller without those fields keeps visibility as
+session state; it must not create a separate visibility owner merely because
+the icon happens to be visible.
 
-Texture, button sizing, margins, and hover scale are appearance inputs, not the core functional identity of the class.
+## Feature-owned geometry pattern
 
-The class exposes those values as properties because it needs them to render itself, but the caller is free to decide:
+For `persist_window_state=False`:
 
-- where those values come from
-- where they are stored
-- whether they are configurable in a setup window
+1. Construct the icon with a stable ID and `persist_window_state=False`.
+2. Wait until the feature's account `Settings` document reports ready.
+3. Read its saved `x`/`y` once and call `reposition_to((x, y))`.
+4. Call `floating_button.draw()` each frame.
+5. After draw, save the changed public `floating_button.position` through that
+   same document. Native Settings debounces the write.
 
-For example, a caller may choose to load and save:
+Do not read `imgui.ini`, create a raw INI path, or use `ini_key` as a
+configuration route. `draw(ini_key="")` retains its argument solely for
+compatibility; current `ImGui.Begin` ignores it.
 
-- `icon_path`
-- `button_size`
-- `idle_icon_scale`
-- `hover_icon_scale`
-
-from its own INI file.
-
-## Constructor Parameters
-
-Current constructor fields:
-
-- `icon_path`: texture to draw
-- `button_size`: base size of the icon button
-- `idle_icon_scale`: icon scale when not hovered
-- `hover_icon_scale`: icon scale when hovered
-- `start_pos`: initial position before window config is restored
-- `window_id`: unique id used for the hitbox
-- `window_name`: ImGui_Legacy window name for the floating button window
-- `tooltip_visible`: tooltip shown when currently enabled
-- `tooltip_hidden`: tooltip shown when currently disabled
-- `drag_threshold`: distance before motion is treated as drag instead of click
-- `visible`: internal toggle state controlling whether the callback executes
-- `toggle_ini_key`: INI handler key used to persist the toggle state
-- `toggle_section`: INI section for the toggle bool
-- `toggle_var_name`: INI variable name for the toggle bool
-- `toggle_default`: default toggle value if no persisted value exists
-- `on_toggle`: optional callback invoked when the internal toggle changes
-- `draw_callback`: callable executed only while the icon is enabled
-
-## Core Methods
-
-### `load_visibility()`
-
-Loads the internal `visible` flag from `IniManager`.
-
-Behavior:
-
-- registers the boolean variable through `_ensure_visibility_var()`
-- calls `IniManager().load_once(toggle_ini_key)`
-- reads the persisted bool with `IniManager().get(...)`
-- stores the result in `self.visible`
-
-This is the functional persistence path for the class.
-
-### `save_visibility()`
-
-Writes the internal `visible` flag to `IniManager`.
-
-Behavior:
-
-- ensures the variable definition exists
-- writes `self.visible` with `IniManager().set(...)`
-- flushes it with `IniManager().save_vars(...)`
-
-### `set_visible(value, persist=False, invoke_callback=False)`
-
-Central helper for changing the toggle state.
-
-Behavior:
-
-- no-ops if the value is unchanged
-- updates `self.visible`
-- optionally persists the new value
-- optionally invokes `on_toggle`
-
-### `sync_begin_with_close(open_)`
-
-Helper for callers whose driven window can also be closed from a normal ImGui_Legacy close button.
-
-If the controlled window is closed externally, the caller can push that new state back into `FloatingIcon` by calling this method.
-
-This keeps the floating icon's internal toggle state synchronized with a driven window that supports close behavior.
-
-### `draw(ini_key)`
-
-This is the main runtime method.
-
-Behavior:
-
-1. Loads toggle state once if needed.
-2. Creates a small floating ImGui_Legacy window for the icon.
-3. Lets `ImGui_Legacy.Begin` and `ImGui_Legacy.End` persist the floating window position, size, and collapsed state through the supplied `ini_key`.
-4. Draws the icon texture.
-5. Uses an invisible button as the interactive hitbox.
-6. Distinguishes drag from click using `drag_threshold`.
-7. Toggles `self.visible` on click and persists that toggle state.
-8. Calls `draw_callback()` only if `self.visible` is `True`.
-
-Important distinction:
-
-- `toggle_ini_key` persists the functional on/off state
-- `ini_key` in `draw()` persists the floating button window itself through `ImGui_Legacy.Begin/End`
-
-## Persistence Model
-
-There are two different persistence concerns involved when using `FloatingIcon`.
-
-### 1. Functional toggle persistence
-
-Owned by `FloatingIcon`.
-
-This controls whether the callback should execute after reload.
-
-Stored through:
-
-- `toggle_ini_key`
-- `toggle_section`
-- `toggle_var_name`
-
-### 2. Floating window persistence
-
-Handled by the normal ImGui_Legacy window wrapper and `IniManager` window config flow.
-
-This controls:
-
-- floating button window position
-- floating button window size
-- collapsed state
-
-Stored through:
-
-- the `ini_key` passed to `draw()`
-
-This comes from `ImGui_Legacy.Begin` / `ImGui_Legacy.End`, not from `save_visibility()`.
-
-## How Drag And Click Work
-
-The icon is rendered inside a small floating window. After drawing the image, the class places an invisible button over the icon area.
-
-It then uses:
-
-- `PyImGui.get_mouse_drag_delta(...)`
-- `PyImGui.is_mouse_dragging(...)`
-- `drag_threshold`
-
-to determine whether the user is dragging or just clicking.
-
-Rules:
-
-- if movement exceeds the threshold, the interaction is treated as drag
-- while dragging, the floating window position is updated
-- on mouse release without drag, the class toggles `visible`
-
-This is what makes the control usable as both a draggable floating button and a toggle.
-
-## Caller Responsibilities
-
-The caller is expected to provide the integration around the class.
-
-The caller must decide:
-
-- what callback should be controlled
-- what INI key should store the floating button window position
-- what INI key and variable should store the functional toggle state
-- whether appearance values should be loaded and saved externally
-
-In practice, a caller usually needs to do these things:
-
-### 1. Construct the icon
-
-Provide:
-
-- icon texture
-- tooltips
-- callback to execute when enabled
-- visibility persistence target
-
-### 2. Provide a window-config INI key to `draw()`
-
-The caller must pass an `ini_key` to `draw()` for the floating icon window itself.
-
-That key is what lets `ImGui_Legacy.Begin/End` restore and persist:
-
-- floating icon position
-- floating icon size
-- collapsed state
-
-### 3. Optionally own appearance persistence
-
-If the caller wants to expose a setup window later, the caller should load and save appearance inputs itself, for example:
-
-- `icon_path`
-- `button_size`
-- `idle_icon_scale`
-- `hover_icon_scale`
-
-The caller can write those values directly into the `FloatingIcon` instance before calling `draw()`.
-
-### 4. Sync closeable driven windows if needed
-
-If the callback draws a normal closeable window and that window can be closed independently, the caller should push the resulting close state back into the icon through:
-
-- `sync_begin_with_close(open_)`
-
-This keeps the floating icon's internal toggle state consistent with the controlled window.
-
-## Minimal Usage Pattern
+## Minimal example
 
 ```python
-floating_button = ImGui_Legacy.FloatingIcon(
-    icon_path="my_icon.png",
-    window_name="My Floating Button",
-    tooltip_visible="Hide UI",
-    tooltip_hidden="Show UI",
-    toggle_ini_key=my_toggle_ini_key,
-    toggle_var_name="show_main_window",
-    toggle_default=True,
-    draw_callback=lambda: draw_my_window(),
+floating_button = ImGui.FloatingIcon(
+    icon_path=icon_path,
+    window_id="##my_feature_icon",
+    window_name="My Feature Toggle",
+    visible=True,
+    draw_callback=draw_feature_window,
+    persist_window_state=False,
 )
 
-# Caller-managed style loading, if desired
-floating_button.icon_path = loaded_icon_path
-floating_button.button_size = loaded_button_size
-floating_button.idle_icon_scale = loaded_idle_scale
-floating_button.hover_icon_scale = loaded_hover_scale
+# Once Settings("Widgets/MyFeature.ini", "account") is ready:
+floating_button.reposition_to((saved_x, saved_y))
 
-# Runtime draw
-floating_button.draw(my_floating_window_ini_key)
+# Per frame:
+floating_button.draw()
+saved_x, saved_y = floating_button.position
 ```
 
-## Design Summary
-
-`FloatingIcon` is best understood as a floating toggle controller for code execution.
-
-It owns:
-
-- its drag behavior
-- its internal on/off state
-- persistence of that on/off state
-- the decision to call or not call the supplied callback
-
-The caller owns:
-
-- styling decisions
-- optional appearance persistence
-- setup UI
-- broader application behavior around the controlled window
-
-That separation keeps the class focused on its actual purpose while still making it easy for callers to customize how the icon looks.
+The caller must still use its normal close-hand-off if the controlled window
+can close independently. `sync_begin_with_close(open_)` updates the icon's
+toggle state; it does not manage the consuming window's persistence.

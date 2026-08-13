@@ -17,7 +17,6 @@ import importlib
 
 from Sources.frenkeyLib.LootEx.models import ModifierInfo, Rune, WeaponMod
 from Py4GWCoreLib import Item, UIManager
-from Py4GWCoreLib.mods_types import ModifierIdentifier as CoreModifierIdentifier
 import Py4GWCoreLib
 from Py4GWCoreLib.ItemArray import ItemArray
 from Py4GWCoreLib.Py4GWcorelib import ConsoleLog, Utils
@@ -102,7 +101,14 @@ class Util:
             (as an `Attribute` object) and the requirement level (as an integer) 
             if the item has a requirement. Returns `None` if no requirements are found.
         """
-        return Item.Properties.GetRequirement(item_id)
+        _, attribute_id, requirement = GLOBAL_CACHE.Item.Mods.GetModifierValues(
+            item_id, ModifierIdentifier.Requirement)
+
+        if attribute_id == None or requirement == None:
+            return Attribute.None_, 0
+
+        attribute = Attribute(attribute_id)
+        return attribute, requirement
 
     @staticmethod
     def GetItemDamage(item_id: int) -> tuple[int, int]:
@@ -118,12 +124,22 @@ class Util:
             Optional[tuple[int, int]]: A tuple containing the minimum and maximum damage
             values, or None if no damage values are available.
         """
-        minimum, maximum = Item.Properties.GetDamage(item_id)
-        if minimum or maximum:
-            return minimum, maximum
+        _, max_damage, min_damage = Item.Mods.GetModifierValues(
+            item_id, ModifierIdentifier.Damage)
 
-        _attribute, requirement = Item.Properties.GetRequirement(item_id)
-        return (-1, -1) if requirement else (0, 0)
+        if max_damage == None and min_damage == None:
+            _, attribute_id, requirement = GLOBAL_CACHE.Item.Mods.GetModifierValues(
+                item_id, ModifierIdentifier.Requirement)
+
+            if attribute_id == None or requirement == None:
+                _, max_damage, min_damage = Item.Mods.GetModifierValues(
+                    item_id, ModifierIdentifier.Damage_NoReq)
+
+                return min_damage if min_damage else 0, max_damage if max_damage else 0
+
+            return -1, -1
+
+        return min_damage if min_damage else 0, max_damage if max_damage else 0
 
     @staticmethod
     def GetItemDamageType(item_id: int) -> Optional[DamageType]:
@@ -137,8 +153,9 @@ class Util:
             Optional[DamageType]: The damage type of the item if it exists, 
             otherwise None.
         """
-        damage_type = Item.Mods.GetSubtype(item_id, CoreModifierIdentifier.DamageTypeProperty)
-        return damage_type if isinstance(damage_type, DamageType) else None
+        _, damage_type_id, _ = Item.Mods.GetModifierValues(
+            item_id, ModifierIdentifier.DamageType)
+        return DamageType(damage_type_id) if damage_type_id else None
 
     @staticmethod
     def GetShieldArmor(item_id: int) -> Optional[tuple[int, int]]:
@@ -151,9 +168,12 @@ class Util:
         Returns:
             Optional[int]: The armor value of the shield if it exists, otherwise None.
         """
-        armor_at_or_above_requirement, armor_below_requirement = Item.Properties.GetShieldArmor(item_id)
-        if not armor_at_or_above_requirement and not armor_below_requirement:
+        _, armor_at_or_above_requirement, armor_below_requirement = Item.Mods.GetModifierValues(
+            item_id, ModifierIdentifier.ShieldArmor)
+
+        if armor_at_or_above_requirement == None or armor_below_requirement == None:
             return None
+
         return armor_at_or_above_requirement, armor_below_requirement
 
     @staticmethod
@@ -549,8 +569,10 @@ class Util:
         Returns:
             Optional[ItemType]: The target item type if found, otherwise None.
         """
-        target_item_type = Item.Mods.GetSubtype(item_id, CoreModifierIdentifier.TargetItemType)
-        return target_item_type if isinstance(target_item_type, ItemType) else None
+        _, value, _ = Item.Mods.GetModifierValues(
+            item_id, ModifierIdentifier.TargetItemType)
+
+        return ItemType(value) if value else None
 
     @staticmethod
     def reformat_string(item_name: str) -> str:
@@ -693,12 +715,10 @@ class Util:
         if GLOBAL_CACHE.Item.GetModelID(item_id) == ModelID.Vial_Of_Dye:
             # ConsoleLog("LootEx", f"Item ID: {item_id} is a dye item.")
             
-            dye_info = GLOBAL_CACHE.Item.Dye.GetInfo(item_id)
+            color_id = GLOBAL_CACHE.Item.GetDyeColor(item_id)
 
-            if dye_info is not None:
-                color_id = dye_info.dye1.ToInt() if dye_info.dye1 else -1
-                color = DyeColor(color_id) if color_id != -1 else None
-                return color if color is not None else DyeColor.NoColor
+            if color_id:
+                return DyeColor(color_id)
 
         return DyeColor.NoColor
     
@@ -743,8 +763,8 @@ class Util:
             slots = [0] * bag_sizes[bag_enum]
             
             for item in bag.GetItems():
-                if 0 <= item.slot < bag_sizes[bag_enum]:
-                    slots[item.slot] = item.item_id
+                if 0 <= item.slot < bag_sizes[bag_enum]:  # type: ignore[attr-defined]
+                    slots[item.slot] = item.item_id  # type: ignore[attr-defined]
                     
                     
             inventory.extend(slots)

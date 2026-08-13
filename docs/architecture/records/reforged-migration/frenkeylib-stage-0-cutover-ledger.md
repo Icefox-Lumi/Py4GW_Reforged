@@ -1,12 +1,14 @@
 # FrenkeyLib Stage 0 Cutover Ledger
 
-Status: proposed; source-audited on 2026-08-10
+Status: historical rejected migration ledger; superseded by
+`frenkeylib-migration-failure-and-rollback-record.md`
 Scope: live-source inventory for the FrenkeyLib and Mark modifier-consumer
 migration. Deprecated inventory control is an explicit exclusion.
 Authority: current Python source, `Item.Mods`, the layered migration plan, and
 the current decoder parity report. Legacy source is behavioural reference only.
 
-Related plan: `frenkeylib-layered-migration-plan.md`.
+Related current plan: `frenkeylib-complete-cutover-plan.md`.
+The layered plan remains the detailed historical execution journal.
 
 ## Recorded migration boundary
 
@@ -32,36 +34,68 @@ MerchantRules policy remain outside this first cutover.
 
 | Current root or dependency | Evidence | Stage 0 disposition |
 |---|---|---|
-| `Widgets/Guild Wars/Items & Loot/TeamInventoryViewer.py` | Source cutover on 2026-08-10 removed Mark parser imports, `ModDatabase`, `parse_modifiers`, raw modifier reads, and the unused raw-modifier hash cache. | Retained read-only consumer. It derives its display names from `Item.Mods.GetUpgradeInSlot`. |
-| `Widgets/Guild Wars/Items & Loot/MerchantRules.py` | Imports `ModDatabase` and `parse_modifiers`; source audit found every parser/catalogue path belongs to its inventory policy. | Explicitly quarantined inventory graph. There is no retained non-inventory parser consumer to migrate; removal waits for the native System Settings replacement or formal retirement. |
-| `Widgets/Guild Wars/PartyQuestLog.py` | Direct FrenkeyLib widget root. | Retained non-inventory feature slice; no direct modifier-read evidence in this pass. |
-| `Widgets/Guild Wars/MultiBoxing.py` | Direct FrenkeyLib widget root. | Retained non-inventory feature slice; no direct modifier-read evidence in this pass. |
-| `Widgets/Automation/Bots/Runners/Sulfurous Runner.py` | Direct FrenkeyLib widget root. | Retained non-inventory feature slice; no direct modifier-read evidence in this pass. |
-| `Widgets/Automation/Bots/Miscellaneous/Polymock.py` | Direct FrenkeyLib widget root. | Retained non-inventory feature slice; no direct modifier-read evidence in this pass. |
-| `Sources/frenkeyLib/Core/{gui,utility}.py` | Transitive imports from retained Polymock UI. | Active ImGui texture presentation and pure string/path helpers only. They do not read item modifiers, own inventory state, or persist feature data. The texture existence probe concerns bundled static assets, not user persistence. |
+| `Widgets/Guild Wars/Items & Loot/TeamInventoryViewer.py` | Source cutover removed Mark parser imports, `ModDatabase`, `parse_modifiers`, raw modifier reads, and the unused raw-modifier hash cache. | Retained read-only consumer. It uses `Item.Mods.Inspect(item_id).upgrades` for conservative base-name cleanup and public slot reads for detailed row labels. |
+| `Widgets/Guild Wars/Items & Loot/MerchantRules.py` | Its Mark parser import, `MOD_DB` catalog load, private raw armor parser, and legacy `runes.json` picker/model-catalog loads have been removed. It consumes `Item.Mods.Inspect`, `GetKnownUpgradeFacts`, and `NormalizeUpgradeIdentifier` for modifier and upgrade facts. Account JsonFactory documents own profiles; account `Settings("Widgets/Guild Wars/Items & Loot/MerchantRules/MerchantRules.ini")` owns main-window geometry, and account `Settings("Widgets/Guild Wars/Items & Loot/MerchantRules/MerchantRulesFloating.ini")` owns floating-icon geometry. The floating icon owns only session visibility. | Retained inventory widget is a Reforged consumer; its future execution-policy replacement remains separate from this item-mod cutover. |
+| `Widgets/Guild Wars/PartyQuestLog.py` | Direct FrenkeyLib widget root. | Retained non-inventory feature slice. Its log and configuration UI are direct PyImGui consumers; account Settings own personal state after a non-overwriting one-time import from the former global/widget-config documents. |
+| `Widgets/Guild Wars/MultiBoxing.py` | Direct FrenkeyLib widget root. | Retained non-inventory feature slice. Its shared policy, account ordering, and stable-ID layout records remain global; its Configure window geometry is account Settings with a one-time non-overwriting import from the old global keys. Layout display names never form document paths. |
+| `Widgets/Automation/Bots/Runners/Sulfurous Runner.py` | Direct FrenkeyLib widget root. | Retained non-inventory feature slice. Its configuration and tooltip are direct PyImGui; account Settings own personal state after a non-overwriting one-time import from the former global/widget-config documents. Map-overlay/path rendering stays with the existing overlay owner. |
+| `Widgets/Automation/Bots/Miscellaneous/Polymock.py` | Direct FrenkeyLib widget root. | Retained non-inventory feature slice. Widget UI is direct PyImGui with account `Settings("Widgets/Automation/Bots/Miscellaneous/Polymock.ini")` for main-window geometry after one non-overwriting import from the former global value; WidgetManager remains the open owner. The active texture helper is used only for piece-image rendering. No direct modifier-read evidence in this pass. |
+| `Widgets/Guild Wars/Items & Loot/LootEx.py` | Explicit WidgetManager entry added on 2026-08-11 after source and history confirmed that `LootEx/gui.py` was never a runnable script. | Source-cutover-complete jailed presentation surface. Account `Settings` owns geometry and page state; account `JsonFactory` owns only Factory-profile selection and conversion audit. Reforged Loot Filter Factory owns all rule/profile records and matching. LootEx provides selection, read-only display, explicit item-ID preview, catalogue status, and conversion UI while avoiding the legacy GUI, raw catalogue loaders, and inventory, merchant, salvage, or storage handlers. Its explicit converter is conservative: a legacy predicate with a missing Reforged fact creates no active rule and records its rejection rather than broadening the match. Live account-bind, seeded-catalogue readback, and window restore acceptance remain required. |
+| `Sources/frenkeyLib/Core/` | No retained root imports the package after Polymock's direct PyImGui label cutover. | Historical facade and legacy executor support evidence. It is not an active migrated dependency; the boundary verifier rejects any attempt to reattach it from a retained consumer. |
 | `Sources/frenkeyLib/Core/encoded_names.py` | Imported only by `ItemHandling/Items/item_collecting.py`. | Excluded with the snapshot collector. Its current missing `PyGameThread` static import is not a retained Polymock/Core failure and must not pull inventory collection back into this migration. |
 | `Sources/frenkeyLib/Py4GWLibrary/library.py` | No current importer outside its own module; its configuration is read and written through `Settings.find`. | Dormant shared UI helper. No persistence migration is needed unless a supported current launchpad adopts it. |
 | `Sources/frenkeyLib/Drafts/` | Historical widget-manager and library scripts create their own old INI directories; no current importer was found. | Not a retained feature. Document as historical code; do not migrate its persistence or UI surface. |
 | `Py4GWCoreLib/py4gwcorelib_src/AutoInventoryHandler.py` | Imports `ItemSnapshot` at line 137 and `BTNodes` at lines 338 and 361. | Explicitly excluded and later deprecated. No migration work may repair this coupling or use it as a compatibility path. |
-| `Widgets/Guild Wars/Items & Loot/InventoryPlus.py` | Directly constructs `AutoInventoryHandler` for identify and salvage flows. | Explicitly excluded. The native System Settings ID cutover must replace this public execution root before the handler can be retired. |
+| `Widgets/Guild Wars/Items & Loot/InventoryPlus.py` | Manual identify and salvage submit explicit requests to System Settings. | It no longer imports, constructs, configures, or schedules `AutoInventoryHandler`; automatic-mode controls and blacklist persistence were removed. Its separately dynamic `Xunlaimanager.py` storage-sort bridge remains an Inventory+/System Settings retirement concern, not a Frenkey migration dependency. |
 | `Sources/frenkeyLib/LootEx/inventory_handling.py` | Defines `LootExAutoInventoryHandler`, `InventoryHandler`, and replaces the core handler instance. | Explicitly excluded. It is evidence of the old competing inventory owner, not a base to port. |
+| `Sources/frenkeyLib/LootEx/messaging.py` | The standard `Widgets/System/Messaging.py` dispatcher reserves `SharedCommandType.LootEx` as an explicit no-op; source importers of the legacy receiver are inside the historical LootEx graph. | Explicitly excluded. The retained LootEx widget neither sends nor receives this command, so no legacy messaging protocol is part of its migration. The shared enum/comment marks it as reserved legacy protocol rather than a current private receiver. |
 | `Sources/frenkeyLib/ItemHandling/{BTNodes,Handlers,Items/item_snapshot.py}` | Snapshot and behavior-tree paths drive inventory decisions and actions. | Explicitly excluded. Do not migrate, test for parity, or retain as a dependency of a migrated consumer. |
 
-The four direct Frenkey widget roots are source-reachability evidence, not proof
+The direct Frenkey widget roots are source-reachability evidence, not proof
 that every transitive module is live in a particular injected-client session.
 Existing runtime diagnostics are consulted only for a reported feature concern;
 they are not a migration prerequisite.
+
+## 2026-08-11 retained-surface certification
+
+The four retained feature packages have complete Python-file parity with their
+legacy counterparts: MultiBoxing (7 files), PartyQuestLog (4), Polymock (4),
+and SulfurousRunner (6). Current source contains no legacy UI facade,
+raw-persistence operation, raw modifier reader, parser/catalog owner, or
+deprecated inventory-handler import in those packages or their four widget
+roots.
+
+`Py4GWCoreLib/py4gwcorelib_src/AutoInventoryHandler.py` remains the sole
+external importer of Frenkey `ItemHandling`. It is explicitly quarantined for
+the later retirement work; it is neither a retained Frenkey feature nor a
+compatibility dependency of the migrated surface. No code in this migration
+ports, restores, or extends it.
+
+`python -m py_compile` and focused Pyright over all retained package modules
+and the four widget roots completed with zero
+diagnostics. MerchantRules remains a separate legacy inventory-policy widget;
+its full-file Pyright run reported 541 diagnostics on 2026-08-11. This remains
+a separately tracked legacy baseline; the Mark facade is the only one of these
+two files with a clean focused Pyright result.
+
+On 2026-08-12, the current retained surface was rechecked together:
+MultiBoxing, PartyQuestLog, SulfurousRunner, Polymock, the Mark presentation
+facade, TeamInventoryViewer, and the active LootEx widget/profile/catalogue/
+converter modules. `python -m py_compile` completed for every listed module
+and strict Pyright reported zero errors and warnings. This is source-level
+evidence only; JsonFactory first-bind defaults, account conversion, and LootEx
+geometry/collapse/close behaviour still require an injected Guild Wars client.
 
 ## Item-mod call ledger
 
 | ID | Current source and evidence | Question currently answered | Required owner after cutover | Disposition and removal condition |
 |---|---|---|---|---|
-| M-01 | `Sources/marks_sources/mods_parser.py`: `ModDatabase`, JSON loading, `Rune`, `WeaponMod`, and `parse_modifiers`. | Decode raw triples into named rune/weapon-mod results, slots, and max status. | `Item.Mods.GetUpgrades`, slot methods, `IsMaxed`, `GetValues`, `GetSubtype`, and `GetDescriptions` as the caller's concrete question requires. | No retained non-inventory caller requires a Mark presentation result after M-02. Its sole production importer is the excluded Merchant inventory path (M-03), so do not redesign it as a second consumer. Retire it with that owner or refit only a newly retained non-inventory caller. |
-| M-02 | `TeamInventoryViewer.py`. | Show prefix, suffix, and inherent names for a supplied item ID. | `Item.Mods.GetUpgradeInSlot`. | Source cutover complete. The viewer no longer imports Mark parser/catalog code or reads raw modifiers; it asks the public prefix, suffix, and inherent slots directly. |
-| M-03 | `MerchantRules.py:_parse_exact_armor_upgrade_state` at line 4981 and `_get_cached_inventory_modifiers` at line 15764; both use raw triples and the rune catalogue. | Infer upgrade identity and inventory/salvage-oriented state from raw triples and a rune catalogue. | Public `Item.Mods` only for any retained non-inventory display or criterion. | Split. A retained non-inventory question is a Stage 2 consumer cutover. Bag scanning, cached raw triples, exact carrier signatures, salvage, and storage decisions are excluded for the later native owner; no replacement is created here. |
+| M-01 | `Sources/marks_sources/mods_parser.py`: former `ModDatabase`, JSON loading, `Rune`, `WeaponMod`, and `parse_modifiers`. | Provide display-oriented named upgrade facts for a supplied item ID. | `Item.Mods.Inspect`, `GetKnownUpgradeFacts`, `NormalizeUpgradeIdentifier`, and slot reads. | Source cutover complete on 2026-08-11. The module is a thin typed `Item.Mods` facade; it accepts no raw triples and owns no catalogue, parser, formula, or match verdict. Its dormant historical JSON files are not loaded by retained source. |
+| M-02 | `TeamInventoryViewer.py`. | Show prefix, suffix, and inherent names in detailed rows; remove only proven modifier-name edges from a supplied rendered name. | `Item.Mods.GetUpgradeInSlot` for detailed rows and `Item.Mods.Inspect(item_id).upgrades` for conservative cleanup. | Source cutover complete. The viewer no longer imports Mark parser/catalog code or reads raw modifiers. Decoded facts prove a removable prefix, insignia, inherent edge, suffix, or rune edge; unproven text remains unchanged. |
+| M-03 | `MerchantRules.py` modifier and armor-upgrade paths. | Classify applied upgrades and support UI rule selection and salvage revalidation. | `Item.Mods.Inspect`, `GetKnownUpgradeFacts`, `NormalizeUpgradeIdentifier`, and `HasUpgrade`. | Source cutover complete: no Mark parser/catalog import, `runes.json` load, raw triple comparison, or exact-signature helper remains. The picker and saved-target normalization consume typed Reforged upgrade identities. Legacy persisted weapon variants now constrain public item type and public `Item.Mods.HasUpgrade` slot/threshold facts together; their target-type metadata no longer has a divergent protection versus salvage interpretation. Merchant retains only downstream action policy. |
 | F-01 | `LootEx/utility.py:104-171,572`. | Interpret requirement, damage, damage type, shield armor, and values from raw modifier argument positions. | `Item.Properties` for generic item facts and typed `Item.Mods.GetSubtype` for modifier facts. | Source cutover complete on 2026-08-10: no runtime `GetModifierValues` use remains in this utility. `Item.Properties.GetShieldArmor` was added as the narrow owner gap for its paired shield value. |
-| F-02 | `LootEx/data_collection.py:55`; `LootEx/cache.py`; `LootEx/models.py:1709-1813`. | Build a local modifier-information model from raw modifiers, item type, model ID, and inscribability. | `Item.Mods` plus public item facts; no local modifier-information authority. | Stage 3, but only for retained non-inventory presentation or rule work. Delete or reduce `ItemModifiersInformation` rather than preserving a second decoded model. |
-| F-03 | `LootEx/models.py`, `data.py`, `weaponmods.py`, `weapon_rule.py`, and `filter.py`. | Catalogued rune/weapon-mod identities, roll ranges, and local raw-triple matches. | Named upgrades, slots, max status, direction-aware thresholds, and descriptions from `Item.Mods`. | Stage 3. Retire item-mod catalog and matching ownership after the last retained consumer is repointed. Static non-mod feature data needs a separate owner audit. |
+| F-02 | `LootEx/data_collection.py`, `LootEx/cache.py`, and `LootEx/models.py:ItemModifiersInformation`. | Build a local modifier-information model from raw modifiers, item type, model ID, and inscribability. | `Item.Mods` plus public item facts; no local modifier-information authority. | 2026-08-11 reachability audit: all callers are inside LootEx's deprecated inventory handler, automatic handlers, trading/salvage flow, or its inventory UI. There is no retained non-inventory caller to repoint. Retire this graph with the deprecated inventory owner; do not migrate it as a compatibility layer. |
+| F-03 | `LootEx/models.py`, `data.py`, `weaponmods.py`, `weapon_rule.py`, and `filter.py`. | Catalogued rune/weapon-mod identities, roll ranges, and local raw-triple matches. | Named upgrades, slots, max status, direction-aware thresholds, and descriptions from `Item.Mods`. | 2026-08-11 reachability audit: this catalogue/matching graph is only consumed by the same deprecated LootEx inventory graph. Retire it with that owner. Static non-mod feature data needs a separate owner audit. |
 | F-04 | `ItemHandling/GlobalConfigs/Rule.py:275-278`. | Compare named upgrades and a rune target type; it reaches `Item.Mods` but first obtains an `ItemSnapshot`. | Public `Item.Mods.GetSubtype` and `GetUpgrades` for a supplied item ID. | Do not port the snapshot/control-flow path. Reuse these calls only if a future non-inventory consumer has the same question. |
 | F-05 | `ItemHandling/Items/item_snapshot.py:217-226`. | Cache raw modifiers, upgrades, and subtype as part of inventory control. | None in this migration. | Excluded. The later native owner supplies the item ID and reads public facts directly. |
 
@@ -94,11 +128,37 @@ On 2026-08-10, focused production searches over the retained roots
 `BTNodes`. The same roots contain no `open(...)`, `json.load`, `json.dump`,
 `configparser`, directory-creation, or existence-probe persistence path.
 
-The only remaining production importer of Mark's raw parser is
-`MerchantRules.py`. Its parser-driven questions are inventory/salvage-oriented
-and remain deferred with the explicitly excluded inventory owner. A broad text
-search also found only comments and labels referring to LootEx outside that
-excluded graph; it found no retained import.
+No production consumer imports a Mark raw parser. A broad text search found no
+retained parser/catalog import outside `Sources/marks_sources/mods_parser.py`;
+that module is now an `Item.Mods`-only presentation facade rather than an
+active authority.
+
+On 2026-08-11, the remaining MerchantRules raw-modifier residue was removed:
+raw triples, raw-word identifier constants, raw base-stat extraction, and
+weapon-mod target parsing no longer exist in the widget. Its live item path
+uses typed `Item.Mods.Inspect` effect facts and named upgrade facts only.
+
+On 2026-08-12, the legacy persisted weapon-variant compatibility records were
+audited. They carry a Reforged upgrade identity, a public item-type constraint,
+and a physical slot. Merchant now applies the item type before asking
+`Item.Mods.GetMatchingUpgrades` for the upgrade/slot/threshold verdict and the
+typed fact required by its existing presentation/action context. This removes
+the private tuple matcher, but it does not complete the rule-owner cutover:
+the persisted `WeaponMod*Rule` predicate schema remains a required Factory
+migration package. It must become a Factory rule/profile reference before
+Merchant can be certified as a pure Reforged rules consumer.
+
+Later on 2026-08-12, the next owner cutover landed: Merchant profile loading,
+ordinary profile saves, backup restore writes, and cross-account profile writes
+route old sell-protection and salvage-target upgrade records through the Factory
+migration owner. Weapon variants and armor rune/insignia identities become
+stable global Factory-rule IDs; an unsupported record disables its affected
+destructive rule and records its source fingerprint/reason. A global Factory
+bind delay leaves the stored profile untouched for retry while its in-memory
+action rule stays disabled. Factory references, once present, are the live
+sell/salvage verdict; `Item.Mods` provides typed slot context only after that
+verdict. The legacy editor controls are read-only conversion evidence, not a
+second authoring or matching path.
 
 ## Stage 0 completion and remaining evidence
 
@@ -112,6 +172,27 @@ Completed in this source pass:
 No further Stage 1 input is required unless a consumer or the parity report
 identifies a concrete missing public capability. Record that capability as an
 `Item.Mods` owner gap; do not add a FrenkeyLib or Mark workaround.
+
+## Retained persistence reachability audit
+
+The current source audit records these retained feature roots and persistence
+owners. Personal behaviour and window state are account-scoped unless the
+feature has an explicit multibox/shared-machine reason to be global:
+
+| Retained feature | Reachable root | Persistence owner | Disposition |
+|---|---|---|---|
+| Party Quest Log | `Widgets/Guild Wars/PartyQuestLog.py` (`main`, `configure`) | Account `Settings("Widgets/Guild Wars/PartyQuestLog.ini")` | Migrated. The previous global and `Widgets/Config` values transfer once only into missing account keys; no feature file I/O remains. Its quest-log and configuration-window geometry use separate scalar sections with `NoSavedSettings`; WidgetManager owns configuration visibility. |
+| MultiBoxing | `Widgets/Guild Wars/MultiBoxing.py` | Global `Settings` for deliberately shared policy/account ordering; account `Settings` view for Configure window geometry; one global `JsonFactory("MultiBoxing/Layouts.json")` repository for layouts | Migrated. Stable layout IDs and display names share one document; the initial load imports old jailed name-path records only from the prior index, rejects path-shaped names, and peer clients reload the same owner before merging. The personal window rectangle imports once from missing global legacy keys without overwriting account values. |
+| Sulfurous Runner | `Widgets/Automation/Bots/Runners/Sulfurous Runner.py` | Account `Settings("Widgets/Automation/Bots/Runners/Sulfurous Runner.ini")` | Migrated. The previous global and `Widgets/Config` values transfer once only when absent; malformed persisted colours fall back to safe defaults instead of failing widget startup. |
+| Polymock | `Widgets/Automation/Bots/Miscellaneous/Polymock.py` | Account `Settings("Widgets/Automation/Bots/Miscellaneous/Polymock.ini")` | Migrated. Prior global window geometry transfers once without replacing an existing account value; WidgetManager owns visibility. |
+| Team Inventory Viewer | `Widgets/Guild Wars/Items & Loot/TeamInventoryViewer.py` | Global `JsonFactory` documents for deliberately shared account/inventory records; account `Settings("Widgets/Guild Wars/Items & Loot/TeamInventoryViewer.ini")` for main-window geometry | Migrated persistence split. The shared cache remains structured JsonFactory data; personal position, size, and collapse state transfer once from global Settings and no longer use Dear ImGui's INI persistence. |
+| LootEx | `Widgets/Guild Wars/Items & Loot/LootEx.py` | Account `Settings` for geometry/page state; account `JsonFactory` for Factory-profile selection and conversion audit; named global JsonFactory catalogues | Retained presentation consumer. Factory profiles/rules and verdicts remain Factory-owned; static catalogues are jail-seeded and never read from source files at runtime. |
+| Merchant Rules | `Widgets/Guild Wars/Items & Loot/MerchantRules.py` (`main`) | Account `Settings` for main-window and floating-icon geometry; account/global JsonFactory profile documents as defined by the existing profile owner | Retained consumer. The floating icon owns visibility only; account profiles are local, while explicitly shared profiles remain global and require the global merge/reload acceptance gate. |
+
+The remaining direct `open`, `json.load`, `json.dump`, and catalog paths are
+under `LootEx`, `ItemHandling`, or `Drafts`. `LootEx` and `ItemHandling` are
+the deprecated inventory graph; `Drafts` is not a reachable feature root. They
+must not be copied into a retained feature while their retirement is pending.
 
 ## Stage 1 decoder evidence
 
@@ -136,8 +217,9 @@ They are consulted only when their output identifies a concrete owner gap.
 reported two existing `reportAttributeAccessIssue` diagnostics at lines 241 and
 261, where `GetItemIdFromModelID` and `GetItemByAgentID` access `item.item_id`
 on a value typed as `dict[str, Any]`. Both are outside `Item.Mods`; no
-`Item.Mods` diagnostic was reported. This is a recorded baseline, not a passed
-strict-Pyright result.
+`Item.Mods` diagnostic was reported. That historical baseline is superseded:
+on 2026-08-12, `pyright.cmd Py4GWCoreLib\\Item.py` completed with zero
+diagnostics after the current Item owner changes.
 
 ### Current parity result
 
@@ -175,8 +257,8 @@ Pyright on `mods_core.py` passed with zero diagnostics.
   raw modifier reads, parser/catalog symbols, and `AutoInventoryHandler`
   coupling.
 - Inspected the current public `Item.Mods` methods in `Py4GWCoreLib/Item.py`.
-- Ran focused Pyright as recorded above; its two non-mod baseline diagnostics
-  remain unresolved and no source files were changed to suppress them.
+- Ran focused Pyright as recorded above. The historical two-diagnostic
+  baseline is superseded by the 2026-08-12 zero-diagnostic `Item.py` run.
 
 The Stage 1 owner addition changes only raw diagnostics.
 
@@ -197,6 +279,16 @@ parenthetical. No raw fallback is allowed.
 
 `python -m py_compile` and focused strict Pyright on the widget completed with
 zero diagnostics.
+
+On 2026-08-12, its final copied modifier display catalogue was removed as
+well. Base-name cleanup now accepts the supplied item ID and uses only
+`Item.Mods.Inspect(item_id).upgrades`: exact decoded prefix/insignia/inherent
+facts may remove a leading name edge, while suffix/rune facts may remove a
+trailing edge. If inspection is unavailable or the rendered name does not
+match a decoded fact, the name is preserved unchanged. This deliberately
+replaces guessing with a harmless conservative result. The focused Team
+Inventory verifier covers prefix/suffix, possessive insignia, rune suffix, and
+unavailable-decoder behavior and rejects reintroduction of the local catalogue.
 
 ## Stage 3 LootEx utility source cutover
 
@@ -232,8 +324,8 @@ does not delete them prematurely.
 
 The 2026-08-10 retirement scan established these required replacement points:
 
-1. `InventoryPlus` must stop constructing `AutoInventoryHandler` for identify
-   and salvage before that handler is deprecated.
+1. `InventoryPlus` must stop invoking `AutoInventoryHandler` for its manual
+   identify and salvage commands before that handler is deprecated.
 2. LootEx must stop assigning its `LootExAutoInventoryHandler` into the core
    singleton before its inventory module can be detached.
 3. The System Settings inventory controller now provides explicit native
@@ -247,24 +339,99 @@ The 2026-08-10 retirement scan established these required replacement points:
 
 On 2026-08-11, `system_settings/inventory` gained the first native execution
 contract. `InventorySettingsController.request_identify(item_ids)`,
-`request_salvage(item_id)`, and `request_store(item_id)` accept an explicit
-current inventory item ID and route only through native `PyInventory` calls.
-Identify advances after polling the public identified state; a materials-salvage
-confirmation requires a separate explicit request. The System Settings UI adds
-manual controls, but does not make a rule decision or run on inventory change.
+`request_salvage_batch(item_ids, salvage_kit_id=None)`, and
+`request_store(item_id)` accept explicit current inventory IDs and route only
+through native `PyInventory` calls. Identify advances after polling the public
+identified state. Salvage advances only after an item is consumed or its stack
+quantity decreases; a materials-salvage confirmation requires a separate
+explicit request. The System Settings UI accepts a temporary comma/space
+separated item-ID list and does not enumerate unidentified candidates. The
+controller therefore executes supplied IDs but does not make a rule decision,
+write operation settings, or run on inventory change.
 
-The manual identify helpers in `InventoryPlus.py` now submit their selected
-rarity candidates to `request_identify`; the widget no longer calls
-`AutoInventoryHandler().IdentifyItems`. Its automatic salvage, storage, and
-handler configuration remain legacy work until their replacement policy can
-consume public Reforged verdicts without duplicating that authority.
+The manual identify and salvage helpers in `InventoryPlus.py` now submit their
+selected explicit item IDs (and an optional selected salvage kit) to System
+Settings; the widget no longer calls `AutoInventoryHandler().IdentifyItems` or
+`AutoInventoryHandler().SalvageItems`. The old direct salvage coroutine,
+including automatic dialog handling and retired transaction helpers, was
+removed rather than retained as a fallback. InventoryPlus also no longer
+imports, instantiates, configures, or schedules the deprecated automatic
+handler; future policy work belongs under Reforged ownership.
 
-`botting_src/helpers_src/Items.py::auto_identify_items` also now submits the
-current candidates to the System Settings controller and yields until that
-controller observes completion. It no longer disables, invokes, then restores
-the deprecated handler singleton. Salvage, deposit, and combined botting
+`botting_src/helpers_src/Items.py::auto_identify_items` selects its own current
+candidates through the existing botting routine, submits those explicit IDs to
+the System Settings controller, and yields until that controller observes
+completion. It no longer disables, invokes, then restores the deprecated
+handler singleton. Salvage, deposit, and combined botting
 commands remain deferred because their legacy behavior carries selection and
 confirmation policy that has not yet been moved to the Reforged owner.
+
+LootEx `InventoryHandler.Start()` and `Stop()` no longer assign either
+`MerchantHandler._instance` or `AutoInventoryHandler._instance`. The legacy
+graph can still start and stop its own quarantined work, but it cannot replace
+the Reforged singleton owners. This is an ownership cut, not an attempt to
+migrate its inventory policy.
+
+## LootEx runtime entry-point recovery
+
+Runtime evidence on 2026-08-11 showed that selecting
+`Sources/frenkeyLib/LootEx/gui.py` fails with "No main()/update()/draw()
+function found." Legacy history confirms that `gui.py` has only `class UI` in
+both revisions where LootEx entered the repository; no tracked LootEx-named
+widget, module callback, or Frenkey launcher exists. The existing
+`Py4GW_widget_manager.py` is the authoritative in-client launcher and only
+discovers Python files inside marked `Widgets/` folders.
+
+`Widgets/Guild Wars/Items & Loot/LootEx.py` is therefore the explicit entry
+point. It supplies `configure()` for WidgetManager and `main()` for direct
+selection. Its recovered surface is deliberately limited to jailed profile
+configuration: it reads window geometry through account-scoped `Settings`,
+reads Factory-profile selection through account-scoped `JsonFactory`, and
+saves the selected character/profile mapping without calling
+`Settings.SetProfile()`, which still starts the quarantined legacy handlers.
+The Reforged Loot Filter Factory owns all profile/rule authoring and matching;
+LootEx renders those records read-only and previews an explicit item ID. It
+does not scan bags.
+
+The historical `gui.py` is not a live entry point. It depends on raw source
+catalogues and exposes legacy inventory controls, so importing it would merely
+reconnect the ownership paths that this migration removes. It remains evidence
+for later presentation work; it is not a configuration surface to preserve.
+
+`python -m py_compile` and focused Pyright passed for the entry point. Full-file
+Pyright over the historical `gui.py` reports 93 pre-existing legacy diagnostics,
+mostly PyImGui call-shape errors. Live injected-client rendering of the new
+entry point remains unverified.
+
+## Mark parser next owner gap
+
+`Widgets/Guild Wars/Items & Loot/MerchantRules.py` no longer imports
+`Sources.marks_sources.mods_parser` or loads its `MOD_DB` catalog. Weapon and
+loose-rune classification use `Item.Mods.Inspect`; the widget's picker catalog
+uses `GetKnownUpgradeFacts`, with stable generic identities rather than
+parser-defined item-type variants or variable ranges. Armor snapshots, target
+selection, component reservation, and extraction revalidation now use the same
+typed Reforged identities. The decoder is not the gap: Reforged already decodes
+the live modifier words. The owner surface supplies stable upgrade identity,
+slot, subtype, and directional threshold metadata without exporting raw triples
+or parser-owned catalog identifiers. That owner surface now exists:
+`Item.Mods.Inspect(item_id)` returns immutable effect and installed-upgrade
+facts; `GetKnownUpgradeFacts()` supplies the stable Reforged catalog; and
+`NormalizeUpgradeIdentifier()` resolves an old display-style persisted name to
+its stable Reforged identity.
+
+Merchant Rules does not route through the raw `Item.Mods.GetModifiers`
+compatibility reader. The old private raw helper was deleted during this
+cutover. Merchant Rules consumes the typed result and must not add another
+decoder, JSON catalog, or execution owner.
+
+On 2026-08-11, the remaining `runes.json` merchant-buy and model-enrichment
+loaders were removed as well. The rule picker is now built directly from
+`GetKnownUpgradeFacts`; it has one explicit "All Reforged upgrades" group
+rather than catalogue-invented profession, price, rarity, or model metadata.
+Live trader stock is matched through its item IDs and typed Reforged upgrade
+identities. `NormalizeUpgradeIdentifier` retains saved display-style targets
+without restoring the legacy catalogue.
 
 No `Gw` or `Gw64` process was available during this scan, so the migrated
 viewer and feature smoke checks remain deferred.
