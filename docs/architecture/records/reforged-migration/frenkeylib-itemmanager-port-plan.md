@@ -325,3 +325,20 @@ Second round (user-reported ImGui/console notes, 2026-08-13):
   `Assets/Textures/Items` preferred when present; dye and missing-texture
   paths point at `Assets/Textures/Dyes` and
   `Assets/Textures/missing_texture.png`.
+
+ItemManager consumer wiring (2026-08-13):
+
+- Fixed the live crash where bag entries arrived as `SimpleNamespace` instead
+  of dicts (`item_snapshot.py`, `items_collector.py` now accept both shapes).
+- `InventoryBT` no longer uses the legacy `BT.Items.*` catalog. It dispatches
+  to `BTNodes.*`, with local batch shims for salvage and trader selling.
+- Added a persisted "Auto-run Item Actions" toggle to the ItemManager window;
+  when on it ticks the active Inventory Processing config about every 250 ms.
+- Restored the legacy synchronous bag-sort planner as
+  `Sources/frenkeyLib/ItemHandling/bag_sort.py` (`GetBagSortPlan`,
+  `GetPlannedBagLayout`, `BuildSortBagsNode`), which powers the sorting
+  preview, the Sort Selected action, and InventoryBT auto-sort maintenance.
+  `BTNodes.Bags.SortBags` remains unused by this consumer because its
+  provisional default order ignores the configured sort groups.
+- Known remaining drift: `BTNodes` has no `XunlaiStorage`/`Collector` catalog
+  equivalents, but the ItemManager consumer does not call them.

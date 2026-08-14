@@ -11,7 +11,7 @@ from Py4GWCoreLib.enums_src.GameData_enums import Attribute, Profession
 from Py4GWCoreLib.enums_src.Item_enums import INVENTORY_BAGS, NICK_CYCLE_COUNT, STORAGE_BAGS, Bags, ItemType
 from Py4GWCoreLib.enums_src.Region_enums import ServerLanguage
 from Sources.frenkeyLib.item_data.ItemData import ItemData
-from Sources.frenkeyLib.item_data.item_snapshot import ItemSnapshot
+from Sources.frenkeyLib.item_data.item_snapshot import ItemSnapshot, entry_value
 from Py4GWCoreLib.native_src.internals import string_table
 from Py4GWCoreLib.py4gwcorelib_src.Timer import ThrottledTimer
 from Sources.frenkeyLib.Core.data_dict import DataDict
@@ -119,9 +119,10 @@ class ItemCollector(BaseCollector, DataDict[ItemType, ModelIdDict]):
                 bag_snapshot[slot] = None
 
             for entry in inventory_bag.GetItems():
-                slot = entry.get("slot", -1)
-                py_item = PyItem.PyItem(entry["item_id"])
-                bag_snapshot[slot] = ItemSnapshot.from_item_id(entry["item_id"], py_item)
+                item_id = entry_value(entry, "item_id")
+                slot = entry_value(entry, "slot", -1)
+                py_item = PyItem.PyItem(item_id)
+                bag_snapshot[slot] = ItemSnapshot.from_item_id(item_id, py_item)
 
             snapshot[bag] = bag_snapshot
 

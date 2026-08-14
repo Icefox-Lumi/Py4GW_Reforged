@@ -524,15 +524,20 @@ class SortingConfig:
         )
         self.slot_groups: list[SlotGroupConfig] = []
 
-    def reload_from_file(self, file_path: str) -> None:
-        if not os.path.isfile(file_path):
+    def reload_from_document(self, document, profile_key: str | None = None) -> None:
+        if document is None:
             self.reset_to_defaults()
             return
 
-        with open(file_path, 'r', encoding='utf-8') as file:
-            json_data = json.load(file)
-
+        path = "config" if profile_key is None else f"profiles/{profile_key}"
+        json_data = document.get_json(path, {})
         self.load_dict(json_data if isinstance(json_data, dict) else {})
+
+    def save_to_document(self, document, profile_key: str | None = None) -> None:
+        if document is None:
+            return
+        path = "config" if profile_key is None else f"profiles/{profile_key}"
+        document.set_json(path, self.to_dict())
 
     def get_groups_for_bag(self, bag: Bags) -> list[SlotGroupConfig]:
         return [
@@ -596,8 +601,3 @@ class SortingConfig:
                 group.is_default = False
                 self.slot_groups.append(group)
 
-    @classmethod
-    def Load(cls: type[Self], file_path: str) -> Self:
-        instance = cls()
-        instance.reload_from_file(file_path)
-        return instance
