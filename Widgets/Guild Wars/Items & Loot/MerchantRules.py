@@ -71,23 +71,23 @@ from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_CHOICE_KIND_VARIANT
 from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_CHOICE_SEPARATOR
 from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_GENERIC_KEY_PREFIX
 from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_VARIANT_KEY_PREFIX
-from Sources.icefox.MerchantRules.catalog import _build_catalog_alias_labels as _catalog_build_catalog_alias_labels
-from Sources.icefox.MerchantRules.catalog import _get_catalog_entry_priority as _catalog_get_catalog_entry_priority
-from Sources.icefox.MerchantRules.catalog import _humanize_model_id_enum_name
-from Sources.icefox.MerchantRules.catalog import _get_rune_profession_label
-from Sources.icefox.MerchantRules.catalog import _get_weapon_mod_type_name
-from Sources.icefox.MerchantRules.catalog import _humanize_weapon_mod_component_kind
-from Sources.icefox.MerchantRules.catalog import _is_expandable_weapon_mod_type
-from Sources.icefox.MerchantRules.catalog import _make_weapon_mod_identifier_choice_key
-from Sources.icefox.MerchantRules.catalog import _make_weapon_mod_variant_choice_key
-from Sources.icefox.MerchantRules.catalog import _iter_item_handling_catalog_entries as _catalog_iter_item_handling_catalog_entries
-from Sources.icefox.MerchantRules.catalog import _iter_model_id_members as _iter_model_id_enum_members
-from Sources.icefox.MerchantRules.catalog import _normalize_catalog_search_text
-from Sources.icefox.MerchantRules.catalog import _normalize_weapon_mod_component_kind
-from Sources.icefox.MerchantRules.catalog import _normalize_weapon_mod_target_item_type
-from Sources.icefox.MerchantRules.catalog import _normalize_weapon_mod_variant_parts
-from Sources.icefox.MerchantRules.catalog import _resolve_rune_description_template as _catalog_resolve_rune_description_template
-from Sources.icefox.MerchantRules.catalog import _format_weapon_mod_variant_label
+from Sources.icefox.MerchantRules.catalog import build_catalog_alias_labels as _catalog_build_catalog_alias_labels
+from Sources.icefox.MerchantRules.catalog import get_catalog_entry_priority as _catalog_get_catalog_entry_priority
+from Sources.icefox.MerchantRules.catalog import humanize_model_id_enum_name as _humanize_model_id_enum_name
+from Sources.icefox.MerchantRules.catalog import get_rune_profession_label as _get_rune_profession_label
+from Sources.icefox.MerchantRules.catalog import get_weapon_mod_type_name as _get_weapon_mod_type_name
+from Sources.icefox.MerchantRules.catalog import humanize_weapon_mod_component_kind as _humanize_weapon_mod_component_kind
+from Sources.icefox.MerchantRules.catalog import is_expandable_weapon_mod_type as _is_expandable_weapon_mod_type
+from Sources.icefox.MerchantRules.catalog import make_weapon_mod_identifier_choice_key as _make_weapon_mod_identifier_choice_key
+from Sources.icefox.MerchantRules.catalog import make_weapon_mod_variant_choice_key as _make_weapon_mod_variant_choice_key
+from Sources.icefox.MerchantRules.catalog import iter_item_handling_catalog_entries as _catalog_iter_item_handling_catalog_entries
+from Sources.icefox.MerchantRules.catalog import iter_model_id_members as _iter_model_id_enum_members
+from Sources.icefox.MerchantRules.catalog import normalize_catalog_search_text as _normalize_catalog_search_text
+from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_component_kind as _normalize_weapon_mod_component_kind
+from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_target_item_type as _normalize_weapon_mod_target_item_type
+from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_variant_parts as _normalize_weapon_mod_variant_parts
+from Sources.icefox.MerchantRules.catalog import resolve_rune_description_template as _catalog_resolve_rune_description_template
+from Sources.icefox.MerchantRules.catalog import format_weapon_mod_variant_label as _format_weapon_mod_variant_label
 
 
 _build_catalog_alias_labels = _catalog_build_catalog_alias_labels
@@ -11548,7 +11548,7 @@ class MerchantRulesWidget:
         extra: dict[str, object] | None = None,
     ):
         result = CatalogLoadResult(catalog_by_model_id=self.catalog_by_model_id)
-        CatalogLoader._register_catalog_entry(
+        CatalogLoader.register_catalog_entry(
             result,
             model_id,
             name,
@@ -12122,7 +12122,7 @@ class MerchantRulesWidget:
 
     def _rebuild_rune_exact_display_lookup(self) -> None:
         result = CatalogLoadResult(rune_buy_entries=self.rune_buy_entries)
-        CatalogLoader._rebuild_rune_exact_display_lookup(result)
+        CatalogLoader.rebuild_rune_exact_display_lookup(result)
         self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
 
     def _get_rune_tooltip_text(self, identifier: str) -> str:
