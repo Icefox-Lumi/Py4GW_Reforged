@@ -32,16 +32,19 @@ class RuleConfig(list[Rule.BaseRule]):
         self.clear()
         self.reset()
 
-    def reload_from_file(self, file_path: str) -> None:
+    def reload_from_document(self, document, profile_key: str | None = None) -> None:
         '''
-        Reloads the current singleton instance in place from the provided file path.
+        Reloads the current singleton instance in place from the provided document.
         '''
-        if not os.path.isfile(file_path):
+        if document is None:
             self.reset_to_defaults()
             return
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            json_data = json.load(f)
+        path = "config" if profile_key is None else f"profiles/{profile_key}"
+        json_data = document.get_json(path, None)
+        if json_data is None:
+            self.reset_to_defaults()
+            return
 
         loaded = type(self).from_json(json_data)
         if loaded is not self:
@@ -387,29 +390,12 @@ class RuleConfig(list[Rule.BaseRule]):
     #endregion Json Serialization
     
     #region Loading and Saving
-    def Save(self, file_path: str):
+    def save_to_document(self, document, profile_key: str | None = None) -> None:
         '''
-        Saves the config to a JSON file at the specified file path.
+        Saves the config into the provided JsonFactory document.
         '''
-        directory = os.path.dirname(file_path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(self.to_json_format(), f, indent=4, ensure_ascii=False)
-            
-    @classmethod
-    def Load(cls: type[Self], file_path: str) -> Self:
-        '''
-        Loads the config from a JSON file at the specified file path and returns a new instance of the config with the loaded rules.
-        '''
-        if not os.path.isfile(file_path):
-            instance = cls()
-            instance.reset_to_defaults()
-            return instance
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            json_data = json.load(f)
-            
-        return cls.from_json(json_data)
+        if document is None:
+            return
+        path = "config" if profile_key is None else f"profiles/{profile_key}"
+        document.set_json(path, self.to_json_format())
     #endregion Loading and Saving

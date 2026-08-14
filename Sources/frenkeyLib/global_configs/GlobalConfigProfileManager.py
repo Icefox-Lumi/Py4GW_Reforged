@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import os
 import re
-import stat
-import shutil
-from typing import Any
+from typing import Any, Optional
 from typing import ClassVar
 
 import Py4GW
@@ -13,6 +10,7 @@ from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.enums_src.Multiboxing_enums import ReloadType
 from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
+from Py4GWCoreLib.py4gwcorelib_src.JsonFactory import JsonFactory
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 
 
@@ -49,10 +47,6 @@ class GlobalConfigProfileManager:
             return
 
         self._initialized = True
-        self._projects_path = PySystem.Console.get_projects_path()
-        self._settings_root = os.path.join(self._projects_path, 'Settings')
-        self._shared_config_path = os.path.join(self._settings_root, 'Global', 'Item & Inventory', 'Configs')
-        self._custom_profiles_root = os.path.join(self._shared_config_path, 'Profiles')
         self._ini_path = 'Item & Inventory'
         self._ini_filename = 'ItemManager.ini'
         self._ini_key: str = ''
@@ -64,10 +58,6 @@ class GlobalConfigProfileManager:
         self._sync_in_progress = False
         self._last_loaded_signatures: dict[str, tuple[str, str, str]] = {}
         self._sync_classes_by_config_type: dict[str, type[Any]] | None = None
-
-        os.makedirs(self._shared_config_path, exist_ok=True)
-        os.makedirs(self._custom_profiles_root, exist_ok=True)
-        self._ensure_profile_directories()
 
     def _get_sync_classes_by_config_type(self) -> dict[str, type[Any]]:
         if self._sync_classes_by_config_type is not None:
@@ -116,22 +106,37 @@ class GlobalConfigProfileManager:
     def get_storage_key(cls, config_type: str) -> str:
         return cls.normalize_config_type(config_type).lower()
 
-    def _ensure_profile_directories(self) -> None:
-        for config_type in self._CONFIG_TYPES:
-            os.makedirs(os.path.join(self._custom_profiles_root, config_type), exist_ok=True)
-
-    def _get_config_profiles_root(self, config_type: str) -> str:
+    def _shared_document(self, config_type: str) -> JsonFactory:
         normalized_config_type = self.normalize_config_type(config_type)
-        return os.path.join(self._custom_profiles_root, normalized_config_type)
+        key = self.get_storage_key(normalized_config_type)
+        return JsonFactory(f"Item & Inventory/Configs/{key}_shared.json", "global")
+
+    def _profiles_document(self, config_type: str) -> JsonFactory:
+        normalized_config_type = self.normalize_config_type(config_type)
+        key = self.get_storage_key(normalized_config_type)
+        return JsonFactory(f"Item & Inventory/Configs/{key}_profiles.json", "account")
+
+    def get_profile_document(self, config_type: str, profile_name: str) -> JsonFactory:
+        normalized_config_type = self.normalize_config_type(config_type)
+        if profile_name.upper() == self.SHARED_PROFILE_NAME or profile_name == '':
+            return self._shared_document(normalized_config_type)
+        return self._profiles_document(normalized_config_type)
+
+    def get_active_config_document(self, config_type: str) -> JsonFactory:
+        normalized_config_type = self.normalize_config_type(config_type)
+        return self.get_profile_document(normalized_config_type, self._active_profile_names[normalized_config_type])
+
+    def get_active_profile_key(self, config_type: str) -> Optional[str]:
+        normalized_config_type = self.normalize_config_type(config_type)
+        profile_name = self._active_profile_names[normalized_config_type]
+        return None if profile_name.upper() == self.SHARED_PROFILE_NAME else profile_name
+
+    @staticmethod
+    def _profile_path(profile_name: str) -> str:
+        return f"profiles/{profile_name}"
 
     def _get_profile_storage_key(self, character_name: str, config_type: str) -> str:
         return f'{self._get_character_storage_key(character_name)}::{self.normalize_config_type(config_type)}'
-
-    def _get_profile_file_path(self, profile_name: str, config_type: str) -> str:
-        return os.path.join(
-            self.get_profile_folder(config_type, profile_name),
-            f'{self.get_storage_key(config_type)}.json',
-        )
 
     def _replace_profile_assignments(self, config_type: str, old_profile_name: str, new_profile_name: str) -> None:
         normalized_config_type = self.normalize_config_type(config_type)
@@ -154,31 +159,15 @@ class GlobalConfigProfileManager:
 
             settings.set(section_name, option_name, normalized_new_name)
 
-    @staticmethod
-    def _remove_tree(path: str) -> None:
-        def onerror(func, failing_path, exc_info):
-            try:
-                os.chmod(failing_path, stat.S_IWRITE)
-            except OSError:
-                pass
-            func(failing_path)
-
-        shutil.rmtree(path, onerror=onerror)
-
     def list_profiles(self, config_type: str) -> list[str]:
         normalized_config_type = self.normalize_config_type(config_type)
         profiles = [self.SHARED_PROFILE_NAME]
-        profiles_root = self._get_config_profiles_root(normalized_config_type)
-
-        if os.path.isdir(profiles_root):
-            for entry in sorted(os.listdir(profiles_root), key=str.lower):
-                full_path = os.path.join(profiles_root, entry)
-                if not os.path.isdir(full_path):
-                    continue
-                if entry.upper() == self.SHARED_PROFILE_NAME:
-                    continue
-                profiles.append(entry)
-
+        try:
+            stored_profiles = self._profiles_document(normalized_config_type).get_json("profiles", {})
+        except Exception:
+            stored_profiles = {}
+        if isinstance(stored_profiles, dict):
+            profiles.extend(sorted(stored_profiles.keys(), key=str.lower))
         return profiles
 
     def profile_exists(self, config_type: str, profile_name: str) -> bool:
@@ -188,26 +177,7 @@ class GlobalConfigProfileManager:
             return False
         if normalized.upper() == self.SHARED_PROFILE_NAME:
             return True
-        return os.path.isdir(os.path.join(self._get_config_profiles_root(normalized_config_type), normalized))
-
-    def get_profile_folder(self, config_type: str, profile_name: str) -> str:
-        normalized_config_type = self.normalize_config_type(config_type)
-        normalized = self.sanitize_profile_name(profile_name)
-        if normalized.upper() == self.SHARED_PROFILE_NAME or normalized == '':
-            return self._shared_config_path
-
-        return os.path.join(self._get_config_profiles_root(normalized_config_type), normalized)
-
-    def get_active_config_folder(self, config_type: str) -> str:
-        normalized_config_type = self.normalize_config_type(config_type)
-        return self.get_profile_folder(normalized_config_type, self._active_profile_names[normalized_config_type])
-
-    def get_active_config_file_path(self, config_type: str) -> str:
-        normalized_config_type = self.normalize_config_type(config_type)
-        return os.path.join(
-            self.get_active_config_folder(normalized_config_type),
-            f'{self.get_storage_key(normalized_config_type)}.json',
-        )
+        return self._profiles_document(normalized_config_type).has(self._profile_path(normalized))
 
     def get_current_character(self) -> str:
         return self._current_character
@@ -215,10 +185,6 @@ class GlobalConfigProfileManager:
     def get_active_profile_name(self, config_type: str) -> str:
         normalized_config_type = self.normalize_config_type(config_type)
         return self._active_profile_names[normalized_config_type]
-
-    def ensure_active_config_folder(self, config_type: str) -> None:
-        normalized_config_type = self.normalize_config_type(config_type)
-        os.makedirs(self.get_active_config_folder(normalized_config_type), exist_ok=True)
 
     def _read_selected_profile_name(self, character_name: str, config_type: str) -> str:
         normalized_config_type = self.normalize_config_type(config_type)
@@ -289,16 +255,17 @@ class GlobalConfigProfileManager:
 
             for config_type, config_class in self._get_sync_classes_by_config_type().items():
                 profile_name = self._active_profile_names[config_type]
-                file_path = self.get_active_config_file_path(config_type)
-                signature = (self._current_character, profile_name, file_path)
+                document = self.get_active_config_document(config_type)
+                profile_key = self.get_active_profile_key(config_type)
+                signature = (self._current_character, profile_name, document.name)
 
                 if not force and self._last_loaded_signatures.get(config_type) == signature:
                     continue
 
                 config_instance = config_class()
-                reload_from_file = getattr(config_instance, 'reload_from_file', None)
-                if callable(reload_from_file):
-                    reload_from_file(file_path)
+                reload_from_document = getattr(config_instance, 'reload_from_document', None)
+                if callable(reload_from_document):
+                    reload_from_document(document, profile_key)
                 self._last_loaded_signatures[config_type] = signature
                 reloaded_any_config = True
 
@@ -322,7 +289,6 @@ class GlobalConfigProfileManager:
 
         self._write_selected_profile_name(self._current_character, normalized_config_type, normalized)
         self._active_profile_names[normalized_config_type] = normalized
-        self.ensure_active_config_folder(normalized_config_type)
         return True
 
     def delete_profile(self, config_type: str, profile_name: str) -> bool:
@@ -331,8 +297,8 @@ class GlobalConfigProfileManager:
         if normalized_profile_name == '' or normalized_profile_name.upper() == self.SHARED_PROFILE_NAME:
             return False
 
-        profile_folder = self.get_profile_folder(normalized_config_type, normalized_profile_name)
-        if not os.path.isdir(profile_folder):
+        document = self._profiles_document(normalized_config_type)
+        if not document.has(self._profile_path(normalized_profile_name)):
             return False
 
         if self._active_profile_names.get(normalized_config_type) == normalized_profile_name:
@@ -342,9 +308,8 @@ class GlobalConfigProfileManager:
                 self.SHARED_PROFILE_NAME,
             )
             self._active_profile_names[normalized_config_type] = self.SHARED_PROFILE_NAME
-            self.ensure_active_config_folder(normalized_config_type)
 
-        self._remove_tree(profile_folder)
+        document.delete(self._profile_path(normalized_profile_name))
 
         return True
 
@@ -367,18 +332,17 @@ class GlobalConfigProfileManager:
         if profile_exists and not overwrite_existing:
             return normalized
 
-        target_folder = self.get_profile_folder(normalized_config_type, normalized)
-        os.makedirs(target_folder, exist_ok=True)
-
-        target_file_path = self._get_profile_file_path(normalized, normalized_config_type)
+        document = self._profiles_document(normalized_config_type)
+        target_path = self._profile_path(normalized)
         if source_profile_name:
-            source_file_path = self._get_profile_file_path(source_profile_name, normalized_config_type)
-            if os.path.isfile(source_file_path):
-                shutil.copy2(source_file_path, target_file_path)
-            elif overwrite_existing and os.path.isfile(target_file_path):
-                os.remove(target_file_path)
-        elif overwrite_existing and os.path.isfile(target_file_path):
-            os.remove(target_file_path)
+            source_profile = self.sanitize_profile_name(source_profile_name)
+            if source_profile.upper() == self.SHARED_PROFILE_NAME:
+                payload = self._shared_document(normalized_config_type).get_json("config", None)
+            else:
+                payload = document.get_json(self._profile_path(source_profile), None)
+            document.set_json(target_path, payload if payload is not None else {})
+        else:
+            document.set_json(target_path, {})
 
         return normalized
 
@@ -393,13 +357,18 @@ class GlobalConfigProfileManager:
         if not self.profile_exists(normalized_config_type, normalized_source_name):
             return None
 
-        target_folder = self.get_profile_folder(normalized_config_type, normalized_target_name)
-        os.makedirs(target_folder, exist_ok=True)
+        if normalized_source_name.upper() == self.SHARED_PROFILE_NAME:
+            payload = self._shared_document(normalized_config_type).get_json("config", None)
+        else:
+            payload = self._profiles_document(normalized_config_type).get_json(
+                self._profile_path(normalized_source_name),
+                None,
+            )
 
-        source_file_path = self._get_profile_file_path(normalized_source_name, normalized_config_type)
-        target_file_path = self._get_profile_file_path(normalized_target_name, normalized_config_type)
-        if os.path.isfile(source_file_path):
-            shutil.copy2(source_file_path, target_file_path)
+        self._profiles_document(normalized_config_type).set_json(
+            self._profile_path(normalized_target_name),
+            payload if payload is not None else {},
+        )
 
         return normalized_target_name
 
@@ -419,9 +388,10 @@ class GlobalConfigProfileManager:
         if normalized_new_name == normalized_old_name:
             return normalized_new_name
 
-        source_folder = self.get_profile_folder(normalized_config_type, normalized_old_name)
-        target_folder = self.get_profile_folder(normalized_config_type, normalized_new_name)
-        os.replace(source_folder, target_folder)
+        document = self._profiles_document(normalized_config_type)
+        payload = document.get_json(self._profile_path(normalized_old_name), None)
+        document.set_json(self._profile_path(normalized_new_name), payload if payload is not None else {})
+        document.delete(self._profile_path(normalized_old_name))
         self._replace_profile_assignments(normalized_config_type, normalized_old_name, normalized_new_name)
 
         if self._active_profile_names.get(normalized_config_type) == normalized_old_name:

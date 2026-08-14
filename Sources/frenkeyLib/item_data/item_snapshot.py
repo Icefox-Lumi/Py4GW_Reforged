@@ -1,5 +1,5 @@
 
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 import PyInventory
 from PyItem import DyeInfo, ItemModifier, PyItem
@@ -24,6 +24,13 @@ class _UnsetType:
 _UNSET = _UnsetType()
 
 
+def entry_value(entry, key: str, default=None) -> Any:
+    """Read a PyInventory bag entry, which may arrive as a dict or a SimpleNamespace."""
+    if isinstance(entry, dict):
+        return entry.get(key, default)
+    return getattr(entry, key, default)
+
+
 def get_item_bag(item_id: int, item_instance: Optional[PyItem] = None) -> Bags:
     item = item_instance if item_instance and item_instance.item_id == item_id else Item.item_instance(item_id) if item_id > 0 else None
 
@@ -39,7 +46,7 @@ def get_item_bag(item_id: int, item_instance: Optional[PyItem] = None) -> Bags:
 
     for bag in bags_to_check:
         inventory_bag = PyInventory.Bag(bag.value, bag.name)
-        if any(entry.get("item_id") == item_id for entry in inventory_bag.GetItems()):
+        if any(entry_value(entry, "item_id") == item_id for entry in inventory_bag.GetItems()):
             return bag
 
     return Bags.NoBag
@@ -435,9 +442,10 @@ class ItemSnapshot:
             bag_snapshot[slot] = None
 
         for entry in inventory_bag.GetItems():
-            slot = entry.get("slot", -1)  # real slot of the item
-            py_item = PyItem(entry["item_id"])
-            bag_snapshot[slot] = ItemSnapshot.from_item_id(entry["item_id"], py_item, bag)
+            item_id = entry_value(entry, "item_id")
+            slot = entry_value(entry, "slot", -1)  # real slot of the item
+            py_item = PyItem(item_id)
+            bag_snapshot[slot] = ItemSnapshot.from_item_id(item_id, py_item, bag)
 
         return bag_snapshot
     

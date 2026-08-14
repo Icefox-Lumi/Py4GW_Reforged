@@ -70,7 +70,8 @@ from Py4GWCoreLib.native_src.internals.encoded_strings import GWEncoded
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color, ColorPalette
 from Py4GWCoreLib.py4gwcorelib_src.Timer import ThrottledTimer
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
-from Py4GWCoreLib.routines_src.BehaviourTrees import BT
+from Sources.frenkeyLib.ItemHandling.BTNodes import BTNodes
+from Sources.frenkeyLib.ItemHandling.bag_sort import BagSortPlanner
 from Sources.frenkeyLib.global_configs.BuyConfig import BuyConfig, BuyConfigEntry
 from Sources.frenkeyLib.global_configs.CraftingConfig import CraftingConfig
 from Sources.frenkeyLib.global_configs.InventoryConfig import InventoryConfig
@@ -168,7 +169,8 @@ class ConfigInfo(Generic[TConfig]):
         config: TConfig,
         name: str,
         description: str,
-        folder_path: str | Callable[[], str],
+        document_path: Callable[[], Any],
+        profile_key_path: Callable[[], str | None] | None = None,
         storage_key: str | None = None,
         tabs: list["ConfigInfo[Any]"] | None = None,
         on_save: Callable[["ConfigInfo[Any]"], None] | None = None,
@@ -176,7 +178,8 @@ class ConfigInfo(Generic[TConfig]):
         self.config = config
         self.name = name
         self.description = description
-        self.folder_path = folder_path
+        self.document_path = document_path
+        self.profile_key_path = profile_key_path
         self.storage_key = storage_key or self.config.__class__.__name__.lower()
         self.tabs = tabs or []
         self.selected_tab_index = 0
@@ -187,9 +190,14 @@ class ConfigInfo(Generic[TConfig]):
         return self.config.__class__.__name__
 
     @property
-    def file_path(self) -> str:
-        folder_path = self.folder_path() if callable(self.folder_path) else self.folder_path
-        return os.path.join(folder_path, f"{self.storage_key}.json")
+    def document(self):
+        return self.document_path()
+
+    @property
+    def profile_key(self) -> str | None:
+        if self.profile_key_path is None:
+            return None
+        return self.profile_key_path()
 
     def save(self):
         if self.tabs:
@@ -198,46 +206,25 @@ class ConfigInfo(Generic[TConfig]):
             return
 
         if isinstance(self.config, RuleConfig):
-            self.config.Save(self.file_path)
+            self.config.save_to_document(self.document, self.profile_key)
             if self.on_save is not None:
                 self.on_save(self)
             return
 
         if isinstance(self.config, BuyConfig):
-            directory = os.path.dirname(self.file_path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-
-            json_data = self.config.to_dict()
-
-            with open(self.file_path, 'w', encoding='utf-8') as file:
-                json.dump(json_data, file, indent=4, ensure_ascii=False)
-
-            # configured_entries = sum(1 for entry in self.config.get_entries() if entry.quantity > 0)
+            self.config.save_to_document(self.document, self.profile_key)
             if self.on_save is not None:
                 self.on_save(self)
             return
 
         if isinstance(self.config, CraftingConfig):
-            directory = os.path.dirname(self.file_path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-
-            with open(self.file_path, 'w', encoding='utf-8') as file:
-                json.dump(self.config.to_dict(), file, indent=4, ensure_ascii=False)
-
+            self.config.save_to_document(self.document, self.profile_key)
             if self.on_save is not None:
                 self.on_save(self)
             return
 
         if isinstance(self.config, SortingConfig):
-            directory = os.path.dirname(self.file_path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-
-            with open(self.file_path, 'w', encoding='utf-8') as file:
-                json.dump(self.config.to_dict(), file, indent=4, ensure_ascii=False)
-
+            self.config.save_to_document(self.document, self.profile_key)
             if self.on_save is not None:
                 self.on_save(self)
             return
@@ -251,30 +238,30 @@ class ConfigInfo(Generic[TConfig]):
             return
 
         if isinstance(self.config, RuleConfig):
-            self.config.reload_from_file(self.file_path)
-            PySystem.Console.Log("Item Manager", f"Loaded config for {self.name} from {self.file_path} with {len(self.config)} rules.", PySystem.Console.MessageType.Info)
+            self.config.reload_from_document(self.document, self.profile_key)
+            PySystem.Console.Log("Item Manager", f"Loaded config for {self.name} with {len(self.config)} rules.", PySystem.Console.MessageType.Info)
             return
 
         if isinstance(self.config, BuyConfig):
-            self.config.reload_from_file(self.file_path)
+            self.config.reload_from_document(self.document, self.profile_key)
             configured_entries = sum(1 for entry in self.config.get_entries() if entry.quantity > 0)
-            PySystem.Console.Log("Item Manager", f"Loaded config for {self.name} from {self.file_path} with {configured_entries} configured consumables.", PySystem.Console.MessageType.Info)
+            PySystem.Console.Log("Item Manager", f"Loaded config for {self.name} with {configured_entries} configured consumables.", PySystem.Console.MessageType.Info)
             return
 
         if isinstance(self.config, CraftingConfig):
-            self.config.reload_from_file(self.file_path)
+            self.config.reload_from_document(self.document, self.profile_key)
             PySystem.Console.Log(
                 "Item Manager",
-                f"Loaded config for {self.name} from {self.file_path} with {len(self.config.selected_recipe_keys)} selected recipes.",
+                f"Loaded config for {self.name} with {len(self.config.selected_recipe_keys)} selected recipes.",
                 PySystem.Console.MessageType.Info,
             )
             return
 
         if isinstance(self.config, SortingConfig):
-            self.config.reload_from_file(self.file_path)
+            self.config.reload_from_document(self.document, self.profile_key)
             PySystem.Console.Log(
                 "Item Manager",
-                f"Loaded config for {self.name} from {self.file_path} with {len(self.config.slot_groups)} slot groups.",
+                f"Loaded config for {self.name} with {len(self.config.slot_groups)} slot groups.",
                 PySystem.Console.MessageType.Info,
             )
             return
@@ -490,6 +477,12 @@ class UI:
         self._manual_inventory_tick_repeat_timer: ThrottledTimer = ThrottledTimer(125)
         self._manual_inventory_tick_status: str = ''
         self.sorting_preview_throttle : ThrottledTimer = ThrottledTimer(1000)
+        self.auto_tick_enabled: bool = False
+        self.auto_tick_timer: ThrottledTimer = ThrottledTimer(250)
+        self._auto_inventory_bt: InventoryBT | None = None
+        self._auto_inventory_bt_config_id: int | None = None
+        self._auto_tick_status: str = ''
+        self._load_auto_tick_setting()
         self.sorting_preview_plan: Optional[BagSortPlan] = None
         self._sorting_preview_cache_key: tuple[tuple[int, ...], str] | None = None
         self._sorting_preview_plan_tree = None
@@ -501,35 +494,40 @@ class UI:
                 BuyConfig(),
                 "Merchant Buying",
                 "Configure how many kits, keys and lockpicks to keep in stock",
-                lambda: self.profile_manager.get_active_config_folder('BuyConfig'),
+                lambda: self.profile_manager.get_active_config_document('BuyConfig'),
+                lambda: self.profile_manager.get_active_profile_key('BuyConfig'),
                 on_save=self._handle_config_saved,
             ),
             ConfigInfo(
                 LootConfig(),
                 "Loot Filtering",
                 "Configure which items to pick up and which to ignore",
-                lambda: self.profile_manager.get_active_config_folder('LootConfig'),
+                lambda: self.profile_manager.get_active_config_document('LootConfig'),
+                lambda: self.profile_manager.get_active_profile_key('LootConfig'),
                 on_save=self._handle_config_saved,
             ),
             ConfigInfo(
                 InventoryConfig(),
                 "Inventory Processing",
                 "Configure how to process items (Stash, Salvage, Extract Upgrades, Sell, ...)",
-                lambda: self.profile_manager.get_active_config_folder('InventoryConfig'),
+                lambda: self.profile_manager.get_active_config_document('InventoryConfig'),
+                lambda: self.profile_manager.get_active_profile_key('InventoryConfig'),
                 on_save=self._handle_config_saved,
             ),
             ConfigInfo(
                 SortingConfig(),
                 "Xunlai- & Bag-Sorting",
                 "Configure slot groups and sort policies for inventory bags and Xunlai storage tabs",
-                lambda: self.profile_manager.get_active_config_folder('SortingConfig'),
+                lambda: self.profile_manager.get_active_config_document('SortingConfig'),
+                lambda: self.profile_manager.get_active_profile_key('SortingConfig'),
                 on_save=self._handle_config_saved,
             ),
             # ConfigInfo(
             #     CraftingConfig(),
             #     "Crafting",
             #     "Configure crafting settings",
-            #     lambda: self.profile_manager.get_active_config_folder('CraftingConfig'),
+            #     lambda: self.profile_manager.get_active_config_document('CraftingConfig'),
+            #     lambda: self.profile_manager.get_active_profile_key('CraftingConfig'),
             #     on_save=self._handle_config_saved,
             # ),
         ]
@@ -1994,6 +1992,14 @@ class UI:
         self.floating_button.sync_begin_with_close(open_)
 
         if expanded:
+            auto_enabled = ImGui.checkbox("Auto-run Item Actions##auto_tick", self.auto_tick_enabled)
+            if auto_enabled != self.auto_tick_enabled:
+                self._set_auto_tick_enabled(auto_enabled)
+            if self.auto_tick_enabled and self._auto_tick_status:
+                PyImGui.same_line(0, 8)
+                ImGui.text_colored(self._auto_tick_status, UI.SUBTLE_TEXT_COLOR.color_tuple, font_size=12)
+            ImGui.separator()
+
             if self.queue_data_refresh_on_main_window_open:
                 from Sources.frenkeyLib.DataCollector.collectors.items_collector import ITEMS
                 
@@ -2046,6 +2052,10 @@ class UI:
         
         if not self.floating_button.visible:
             self.queue_data_refresh_on_main_window_open = True
+
+        if self.auto_tick_enabled and self.auto_tick_timer.IsExpired():
+            self._tick_auto_inventory()
+            self.auto_tick_timer.Reset()
 
     def _get_active_config_info(self, config_info: ConfigInfo | None = None) -> ConfigInfo | None:
         return config_info or self.config
@@ -2111,7 +2121,7 @@ class UI:
         return (
             self.profile_manager.get_current_character(),
             self.profile_manager.get_active_profile_name(config_type),
-            self.profile_manager.get_active_config_file_path(config_type),
+            self.profile_manager.get_active_config_document(config_type).name,
         )
 
     def _update_profile_context_signatures(self) -> None:
@@ -2167,6 +2177,56 @@ class UI:
         self._manual_inventory_tick_repeat_timer.Reset()
         self._invalidate_inventory_preview_cache()
 
+    def _load_auto_tick_setting(self) -> None:
+        try:
+            from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
+
+            cfg = Settings(self.module_config.main_ini_key, "account")
+            self.auto_tick_enabled = cfg.get_bool("AutoTick", "enabled", False)
+        except Exception:
+            self.auto_tick_enabled = False
+
+    def _set_auto_tick_enabled(self, enabled: bool) -> None:
+        if self.auto_tick_enabled == enabled:
+            return
+        self.auto_tick_enabled = enabled
+        try:
+            from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
+
+            Settings(self.module_config.main_ini_key, "account").set("AutoTick", "enabled", enabled)
+        except Exception:
+            pass
+        PySystem.Console.Log(
+            "Item Manager",
+            f"Automatic item processing {'enabled' if enabled else 'disabled'}.",
+            PySystem.Console.MessageType.Info,
+        )
+
+    def _get_active_inventory_config(self) -> Optional[InventoryConfig]:
+        for config_info in self.configs:
+            if isinstance(config_info.config, InventoryConfig):
+                return config_info.config
+        return None
+
+    def _get_auto_inventory_bt(self, config: InventoryConfig) -> InventoryBT:
+        config_id = id(config)
+        if self._auto_inventory_bt is None or self._auto_inventory_bt_config_id != config_id:
+            self._auto_inventory_bt = InventoryBT(config)
+            self._auto_inventory_bt_config_id = config_id
+        return self._auto_inventory_bt
+
+    def _tick_auto_inventory(self) -> None:
+        config = self._get_active_inventory_config()
+        if config is None:
+            self._auto_tick_status = 'No Inventory Processing config loaded.'
+            return
+        try:
+            state = self._get_auto_inventory_bt(config).tick()
+            self._auto_tick_status = f'Auto tick: {state.name}'
+        except Exception as exc:
+            self._auto_tick_status = f'Auto tick error: {type(exc).__name__}: {exc!r}'
+            PySystem.Console.Log("Item Manager", self._auto_tick_status, PySystem.Console.MessageType.Error)
+
     @staticmethod
     def _build_sorting_preview_cache_key(config: SortingConfig, bags: list[Bags]) -> tuple[tuple[int, ...], str]:
         normalized_bags = tuple(sorted((int(bag.value) for bag in bags)))
@@ -2189,7 +2249,6 @@ class UI:
         self.profile_manager.refresh(force=True)
         
         if self.profile_manager.set_profile_for_current_character(target_config.config_type, profile_name):
-            self.profile_manager.ensure_active_config_folder(target_config.config_type)
             self._profile_context_refresh_timer.Reset()
             self._reload_all_configs()
             self.config = target_config
@@ -4017,13 +4076,13 @@ class UI:
         return changed
 
     def _execute_bag_sort(self, bags: list[Bags]) -> None:
-        action_node = BT.Items.Bags.SortBags(bags)
+        action_node = BagSortPlanner.BuildSortBagsNode(bags)
         action_node.tick()
         self._invalidate_inventory_preview_cache()
         self.preview_throttle.Reset()
 
     def _execute_bag_compact(self, bags: list[Bags]) -> None:
-        action_node = BT.Items.Bags.CompactBags(bags)
+        action_node = BTNodes.Bags.CompactBags(bags)  # type: ignore[arg-type]
         action_node.tick()
         self._invalidate_inventory_preview_cache()
         self.preview_throttle.Reset()
@@ -4630,29 +4689,18 @@ class UI:
 
         cache_key = self._build_sorting_preview_cache_key(config, self.sorting_preview_selected_bags)
         needs_rebuild = self._sorting_preview_cache_key != cache_key or self.sorting_preview_throttle.IsExpired()
-        if self._sorting_preview_plan_tree is None and (self.sorting_preview_plan is None or needs_rebuild):
+        if self.sorting_preview_plan is None or needs_rebuild:
             self._sorting_preview_cache_key = cache_key
-            self._sorting_preview_plan_tree = BT.Items.Bags.CreateBagSortPlanTree(self.sorting_preview_selected_bags)
-            self._sorting_preview_plan_status = 'Starting sorting preview...'
-            self._sorting_preview_plan_error = ''
-            self.sorting_preview_throttle.Reset()
-
-        if self._sorting_preview_plan_tree is not None:
-            planner_state = BT.NodeState.RUNNING
             try:
-                planner_state = self._sorting_preview_plan_tree.tick()
+                self.sorting_preview_plan = BagSortPlanner.GetBagSortPlan(
+                    self.sorting_preview_selected_bags,
+                    config,
+                )
+                self._sorting_preview_plan_error = ''
             except Exception as exc:
-                planner_state = BT.NodeState.FAILURE
+                self.sorting_preview_plan = None
                 self._sorting_preview_plan_error = f'{type(exc).__name__}: {exc!r}'
-
-            self._sorting_preview_plan_status = getattr(self._sorting_preview_plan_tree, 'progress_text', self._sorting_preview_plan_status)
-            self._sorting_preview_plan_error = getattr(self._sorting_preview_plan_tree, 'error_text', self._sorting_preview_plan_error)
-
-            if planner_state == BT.NodeState.SUCCESS:
-                self.sorting_preview_plan = cast(Optional[BagSortPlan], getattr(self._sorting_preview_plan_tree, 'plan_result', None))
-                self._sorting_preview_plan_tree = None
-            elif planner_state == BT.NodeState.FAILURE:
-                self._sorting_preview_plan_tree = None
+            self.sorting_preview_throttle.Reset()
 
         plan = self.sorting_preview_plan
         if plan is None:

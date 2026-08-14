@@ -40,15 +40,20 @@ class CraftingConfig():
         self.selected_recipe_keys: list[str] = []
         self.allow_shopping: bool = False
 
-    def reload_from_file(self, file_path: str) -> None:
-        if not os.path.isfile(file_path):
+    def reload_from_document(self, document, profile_key: str | None = None) -> None:
+        if document is None:
             self.reset_to_defaults()
             return
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            json_data = json.load(f)
-
+        path = "config" if profile_key is None else f"profiles/{profile_key}"
+        json_data = document.get_json(path, {})
         self.load_dict(json_data if isinstance(json_data, dict) else {})
+
+    def save_to_document(self, document, profile_key: str | None = None) -> None:
+        if document is None:
+            return
+        path = "config" if profile_key is None else f"profiles/{profile_key}"
+        document.set_json(path, self.to_dict())
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,11 +75,3 @@ class CraftingConfig():
         self.allow_shopping = bool(data.get('allow_shopping', False))
         
     
-    @classmethod
-    def Load(cls: type[Self], file_path: str) -> Self:
-        '''
-        Loads the config from a JSON file at the specified file path and returns a new instance of the config with the loaded rules.
-        '''
-        instance = cls()
-        instance.reload_from_file(file_path)
-        return instance

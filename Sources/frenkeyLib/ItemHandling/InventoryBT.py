@@ -12,7 +12,8 @@ from Py4GWCoreLib.enums_src.Item_enums import INVENTORY_BAGS, STORAGE_BAGS, Bags
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
 from Py4GWCoreLib.py4gwcorelib_src.FrameCache import frame_cache
-from Py4GWCoreLib.routines_src.BehaviourTrees import BT
+from Sources.frenkeyLib.ItemHandling.BTNodes import BTNodes
+from Sources.frenkeyLib.ItemHandling.bag_sort import BagSortPlanner
 from Sources.frenkeyLib.global_configs.InventoryConfig import InventoryConfig
 from Sources.frenkeyLib.global_configs.Rule import ExtractUpgradeRule, BaseRule
 from Sources.frenkeyLib.item_data.item_snapshot import ItemSnapshot
@@ -150,7 +151,7 @@ class InventoryBT:
                     if cls._should_defer_sorting(node.blackboard):
                         return BehaviorTree.NodeState.RUNNING
 
-                    action_node = BT.Items.Bags.SortBags(INVENTORY_BAGS)
+                    action_node = BagSortPlanner.BuildSortBagsNode(INVENTORY_BAGS)
                     PySystem.Console.Log(
                         "InventoryBT",
                         "Dispatching inventory sort maintenance.",
@@ -189,7 +190,7 @@ class InventoryBT:
                 if cls._should_defer_sorting(node.blackboard):
                     return BehaviorTree.NodeState.RUNNING
 
-                action_node = BT.Items.Bags.SortBags(INVENTORY_BAGS)
+                action_node = BagSortPlanner.BuildSortBagsNode(INVENTORY_BAGS)
                 PySystem.Console.Log(
                     "InventoryBT",
                     "Dispatching inventory sort maintenance after blocked item actions.",
@@ -240,7 +241,7 @@ class InventoryBT:
                     continue
             
             if action == ItemAction.Stash:
-                depositable_item_ids = BT.Items.Items.GetDepositableItemIds([item_id], log_plans=False)
+                depositable_item_ids = cls._get_depositable_item_ids([item_id])
                 if item_id not in depositable_item_ids:
                     continue
 
@@ -274,7 +275,7 @@ class InventoryBT:
             )
 
         if action == ItemAction.Stash:
-            depositable_item_ids = BT.Items.Items.GetDepositableItemIds([item.id], log_plans=False)
+            depositable_item_ids = cls._get_depositable_item_ids([item.id])
             if item.id not in depositable_item_ids:
                 return InventoryPreviewEntry(
                     item=item,
@@ -375,7 +376,7 @@ class InventoryBT:
     @classmethod
     def _needs_inventory_sorting(cls) -> bool:
         snapshot = ItemSnapshot.get_bags_snapshot(INVENTORY_BAGS)
-        planned_layout = BT.Items.Bags.GetPlannedBagLayout(INVENTORY_BAGS)
+        planned_layout = BagSortPlanner.GetPlannedBagLayout(INVENTORY_BAGS)
 
         for bag in INVENTORY_BAGS:
             current_bag = snapshot.get(bag, {})
@@ -430,70 +431,66 @@ class InventoryBT:
                 unidentified_item_ids = cls._get_unidentified_inventory_item_ids(valid_item_ids)
                 if not unidentified_item_ids:
                     return None, []
-                return BT.Items.Items.IdentifyItems(unidentified_item_ids), unidentified_item_ids
+                return BTNodes.Items.IdentifyItems(unidentified_item_ids), unidentified_item_ids
             
             case ItemAction.Use:
-                return BT.Items.Items.UseItems(valid_item_ids), valid_item_ids
+                return BTNodes.Items.UseItems(valid_item_ids), valid_item_ids
             
             case ItemAction.Drop:
                 if Map.IsExplorable():
-                    return BT.Items.Items.DropItems(valid_item_ids), valid_item_ids
+                    return BTNodes.Items.DropItems(valid_item_ids), valid_item_ids
             
             case ItemAction.Destroy:
-                return BT.Items.Items.DestroyItems(valid_item_ids), valid_item_ids
+                return BTNodes.Items.DestroyItems(valid_item_ids), valid_item_ids
             
             case ItemAction.Stash:
                 if Map.IsOutpost() or Map.IsGuildHall():
-                    instructions = BT.Items.Items.GetTransferInstructions(
+                    instructions = BTNodes.Items.GetTransferInstructions(
                         valid_item_ids,
-                        STORAGE_BAGS,
+                        STORAGE_BAGS,  # type: ignore[arg-type]
                         fill_materials_first=True,
                     )
-                    depositable_item_ids = BT.Items.Items._get_planned_transfer_item_ids(instructions) if instructions else []
+                    depositable_item_ids = cls._planned_transfer_item_ids(instructions)
                     if depositable_item_ids:
-                        return BT.Items.Items.DepositItems(
+                        return BTNodes.Items.DepositItems(
                             depositable_item_ids,
-                            target=STORAGE_BAGS,
+                            target=STORAGE_BAGS,  # type: ignore[arg-type]
                             fill_materials_first=True,
-                            precomputed_instructions=instructions,
                         ), depositable_item_ids
             
             case ItemAction.Sell_To_Merchant:
                 if MerchantWindow.IsOpen():
-                    return BT.Items.Merchant.SellItems(valid_item_ids), valid_item_ids
+                    return BTNodes.Merchant.SellItems(valid_item_ids), valid_item_ids
                 
             case ItemAction.Sell_To_Trader:
                 if TraderWindow.IsOpen():
                     sell_requests, active_item_ids = cls._build_trader_sell_requests(valid_item_ids)
                     if sell_requests:
-                        return BT.Items.Trader.SellItems(sell_requests), active_item_ids
+                        return cls._build_trader_sell_items_node(sell_requests), active_item_ids
             
             case ItemAction.Salvage_Common_Materials:
                 salvageable_item_ids = cls._get_salvageable_inventory_item_ids(valid_item_ids)
                 if salvageable_item_ids:
-                    return BT.Items.Items.SalvageItems(
-                        [(item_id, SalvageMode.LesserCraftingMaterials, None) for item_id in salvageable_item_ids],
+                    return cls._build_salvage_items_node(
+                        salvageable_item_ids,
+                        SalvageMode.LesserCraftingMaterials,
                         allow_expert_for_common_materials=True,
-                        restock_salvage_kits=MerchantWindow.IsOpen(),
-                        debug_enabled=True,
                     ), salvageable_item_ids
                     
             case ItemAction.Salvage_Rare_Materials:
                 salvageable_item_ids = cls._get_salvageable_inventory_item_ids(valid_item_ids)
                 if salvageable_item_ids:
-                    return BT.Items.Items.SalvageItems(
-                        [(item_id, SalvageMode.RareCraftingMaterials, None) for item_id in salvageable_item_ids],
-                        restock_salvage_kits=MerchantWindow.IsOpen(),
-                        debug_enabled=True,
+                    return cls._build_salvage_items_node(
+                        salvageable_item_ids,
+                        SalvageMode.RareCraftingMaterials,
                     ), salvageable_item_ids
                 
             case ItemAction.ExtractUpgrade:
                 item_id, salvage_mode = cls._get_first_extractable_item(config, valid_item_ids, blackboard)
                 if item_id is not None and salvage_mode is not None:
-                    return BT.Items.Items.SalvageItem(
+                    return BTNodes.Items.SalvageItem(
                         item_id,
                         salvage_mode=salvage_mode,
-                        restock_salvage_kits=MerchantWindow.IsOpen(),
                         state_key=f"inventory_bt_extract_{item_id}",
                         debug_enabled=True,
                     ), [item_id]
@@ -502,6 +499,79 @@ class InventoryBT:
                 return None, []
 
         return None, []
+
+    @staticmethod
+    def _planned_transfer_item_ids(instructions) -> list[int]:
+        """Collect planned item ids from a BTNodes transfer-instruction tree."""
+        planned_item_ids: list[int] = []
+        if not instructions:
+            return planned_item_ids
+        for bag_instructions in instructions.values():
+            for destination in bag_instructions.values():
+                for item, _quantity in getattr(destination, "items", []) or []:
+                    planned_item_ids.append(item.id)
+        return planned_item_ids
+
+    @classmethod
+    def _get_depositable_item_ids(cls, item_ids: list[int]) -> list[int]:
+        try:
+            instructions = BTNodes.Items.GetTransferInstructions(
+                list(item_ids),
+                STORAGE_BAGS,  # type: ignore[arg-type]
+                fill_materials_first=True,
+            )
+            return cls._planned_transfer_item_ids(instructions)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _build_salvage_items_node(
+        item_ids: list[int],
+        salvage_mode: SalvageMode,
+        allow_expert_for_common_materials: bool = False,
+    ) -> Optional[BehaviorTree.Node]:
+        children = [
+            BTNodes.Items.SalvageItem(
+                item_id,
+                salvage_mode=salvage_mode,
+                allow_expert_for_common_materials=allow_expert_for_common_materials,
+                state_key=f"inventory_bt_salvage_{item_id}",
+                debug_enabled=True,
+            )
+            for item_id in item_ids
+        ]
+        if not children:
+            return None
+        if len(children) == 1:
+            return children[0]
+        return BehaviorTree.SequenceNode(children, name="InventoryBT.SalvageBatch")
+
+    @staticmethod
+    def _isolate_trader_progress(child: BehaviorTree.Node) -> BehaviorTree.Node:
+        """Wrap a Trader.SellItem node so its shared blackboard progress key is
+        cleared before every tick, keeping sequential batch entries independent."""
+        def _run(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+            node.blackboard.pop("trader_sell_progress", None)
+            child.blackboard = node.blackboard
+            return child.tick()
+
+        return BehaviorTree.ActionNode(action_fn=_run, name=child.name)
+
+    @staticmethod
+    def _build_trader_sell_items_node(
+        sell_requests: list[tuple[int, int]],
+    ) -> Optional[BehaviorTree.Node]:
+        if not sell_requests:
+            return None
+        children = [
+            InventoryBT._isolate_trader_progress(
+                BTNodes.Trader.SellItem(item_id, quantity)
+            )
+            for item_id, quantity in sell_requests
+        ]
+        if len(children) == 1:
+            return children[0]
+        return BehaviorTree.SequenceNode(children, name="InventoryBT.TraderSellBatch")
 
     @staticmethod
     def _is_action_dispatchable(action: ItemAction) -> bool:
