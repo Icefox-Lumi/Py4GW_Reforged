@@ -9,7 +9,7 @@ Safety-sensitive operations fail closed when protections, required services, det
 salvage APIs, storage capacity, or preview consistency cannot be verified.
 """
 
-import json
+import math
 import os
 import re
 import time
@@ -19,7 +19,6 @@ from collections.abc import Callable
 from collections.abc import Iterable
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
-from urllib.parse import unquote
 from uuid import uuid4
 
 import PyImGui
@@ -65,6 +64,36 @@ from Sources.icefox.MerchantRules.profiles import ProfileSummary
 from Sources.icefox.MerchantRules.profiles import LoadedProfileProvenance
 from Sources.icefox.MerchantRules.profiles import SHARED_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import _normalize_shared_profile_display_name
+
+from Sources.icefox.MerchantRules.catalog import CatalogLoadResult
+from Sources.icefox.MerchantRules.catalog import CatalogLoader
+from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_CHOICE_KIND_GENERIC
+from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_CHOICE_KIND_VARIANT
+from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_CHOICE_SEPARATOR
+from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_GENERIC_KEY_PREFIX
+from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_VARIANT_KEY_PREFIX
+from Sources.icefox.MerchantRules.catalog import build_catalog_alias_labels as _catalog_build_catalog_alias_labels
+from Sources.icefox.MerchantRules.catalog import get_catalog_entry_priority as _catalog_get_catalog_entry_priority
+from Sources.icefox.MerchantRules.catalog import humanize_model_id_enum_name as _humanize_model_id_enum_name
+from Sources.icefox.MerchantRules.catalog import get_rune_profession_label as _get_rune_profession_label
+from Sources.icefox.MerchantRules.catalog import get_weapon_mod_type_name as _get_weapon_mod_type_name
+from Sources.icefox.MerchantRules.catalog import humanize_weapon_mod_component_kind as _humanize_weapon_mod_component_kind
+from Sources.icefox.MerchantRules.catalog import is_expandable_weapon_mod_type as _is_expandable_weapon_mod_type
+from Sources.icefox.MerchantRules.catalog import make_weapon_mod_identifier_choice_key as _make_weapon_mod_identifier_choice_key
+from Sources.icefox.MerchantRules.catalog import make_weapon_mod_variant_choice_key as _make_weapon_mod_variant_choice_key
+from Sources.icefox.MerchantRules.catalog import iter_item_handling_catalog_entries as _catalog_iter_item_handling_catalog_entries
+from Sources.icefox.MerchantRules.catalog import iter_model_id_members as _iter_model_id_enum_members
+from Sources.icefox.MerchantRules.catalog import normalize_catalog_search_text as _normalize_catalog_search_text
+from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_component_kind as _normalize_weapon_mod_component_kind
+from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_target_item_type as _normalize_weapon_mod_target_item_type
+from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_variant_parts as _normalize_weapon_mod_variant_parts
+from Sources.icefox.MerchantRules.catalog import resolve_rune_description_template as _catalog_resolve_rune_description_template
+from Sources.icefox.MerchantRules.catalog import format_weapon_mod_variant_label as _format_weapon_mod_variant_label
+
+
+_build_catalog_alias_labels = _catalog_build_catalog_alias_labels
+_iter_item_handling_catalog_entries = _catalog_iter_item_handling_catalog_entries
+_resolve_rune_description_template = _catalog_resolve_rune_description_template
 
 
 MODULE_NAME = "Merchant Rules"
@@ -508,7 +537,6 @@ MODIFIER_IDENTIFIER_ARMOR1 = 0x27B
 MODIFIER_IDENTIFIER_ARMOR2 = 0x23C
 MODIFIER_IDENTIFIER_ENERGY = 0x27C
 MODIFIER_IDENTIFIER_ENERGY2 = 0x22C
-MODIFIER_IDENTIFIER_RUNE_ATTRIBUTE = 8680
 MODIFIER_IDENTIFIER_RUNE_HEALTH_LOSS = 8408
 MODIFIER_IDENTIFIER_TOOLTIP_DESCRIPTION = int(ModifierIdentifier.TooltipDescription)
 MODIFIER_IDENTIFIER_UPGRADE = int(ModifierIdentifier.Upgrade)
@@ -1012,11 +1040,6 @@ XUNLAI_AGENT_MODEL_IDS: tuple[int, ...] = (220, 221, 3287)
 XUNLAI_CHEST_MODEL_ID = 5001
 RUNE_STANDALONE_KIND = "rune"
 WEAPON_MOD_STANDALONE_KIND = "weapon_mod"
-WEAPON_MOD_CHOICE_KIND_GENERIC = "generic"
-WEAPON_MOD_CHOICE_KIND_VARIANT = "variant"
-WEAPON_MOD_GENERIC_KEY_PREFIX = "identifier:"
-WEAPON_MOD_VARIANT_KEY_PREFIX = "variant:"
-WEAPON_MOD_CHOICE_SEPARATOR = "|"
 WEAPON_MOD_TARGET_ITEM_TYPE_MODIFIER_ID = 9656
 RARITY_OPTION_ORDER: tuple[tuple[str, str], ...] = (
     ("white", "White"),
@@ -1708,50 +1731,6 @@ MODEL_ID_ATTRIBUTE_FALLBACK_LABELS: dict[str, str] = {
 MODEL_ID_ATTRIBUTE_FALLBACK_SUFFIX_KEYS: tuple[str, ...] = tuple(
     sorted(MODEL_ID_ATTRIBUTE_FALLBACK_LABELS.keys(), key=len, reverse=True)
 )
-RUNE_ATTRIBUTE_LABELS: dict[int, str] = {
-    0: "Fast Casting",
-    1: "Illusion Magic",
-    2: "Domination Magic",
-    3: "Inspiration Magic",
-    4: "Blood Magic",
-    5: "Death Magic",
-    6: "Soul Reaping",
-    7: "Curses",
-    8: "Air Magic",
-    9: "Earth Magic",
-    10: "Fire Magic",
-    11: "Water Magic",
-    12: "Energy Storage",
-    13: "Healing Prayers",
-    14: "Smiting Prayers",
-    15: "Protection Prayers",
-    16: "Divine Favor",
-    17: "Strength",
-    18: "Axe Mastery",
-    19: "Hammer Mastery",
-    20: "Swordsmanship",
-    21: "Tactics",
-    22: "Beast Mastery",
-    23: "Expertise",
-    24: "Wilderness Survival",
-    25: "Marksmanship",
-    29: "Dagger Mastery",
-    30: "Deadly Arts",
-    31: "Shadow Arts",
-    32: "Communing",
-    33: "Restoration Magic",
-    34: "Channeling Magic",
-    35: "Critical Strikes",
-    36: "Spawning Power",
-    37: "Spear Mastery",
-    38: "Command",
-    39: "Motivation",
-    40: "Leadership",
-    41: "Scythe Mastery",
-    42: "Wind Prayers",
-    43: "Earth Prayers",
-    44: "Mysticism",
-}
 ARMOR_CATALOG_ITEM_TYPES: frozenset[str] = frozenset({
     "headpiece",
     "chestpiece",
@@ -3412,6 +3391,7 @@ class PlannedTraderSale:
     item_id: int
     model_id: int
     label: str
+    expected_rune_identifiers: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -3455,6 +3435,144 @@ class PlannedConsumableCraft:
     vendor_name: str
     coords: tuple[float, float]
     cleanup: PurchaseTargetCleanup = field(default_factory=PurchaseTargetCleanup)
+
+
+@dataclass(frozen=True)
+class MerchantServiceSelector:
+    """Authoritative map-specific identity and validation data for one service NPC."""
+
+    label: str
+    encoded_identity: tuple[int, ...]
+    model_id: int
+    expected_xy: tuple[float, float]
+    coordinate_tolerance: float = 75.0
+
+
+MERCHANT_RULES_MAP_SERVICE_SELECTORS: dict[
+    int,
+    dict[str, tuple[MerchantServiceSelector, ...]],
+] = {
+    EMBARK_BEACH_MAP_ID: {
+        MERCHANT_TYPE_MERCHANT: (
+            MerchantServiceSelector(
+                label="west",
+                encoded_identity=(2, 129, 173, 31, 237, 205, 243, 155, 255, 87, 0, 0),
+                model_id=3330,
+                expected_xy=(-2750.0, 731.0),
+            ),
+            MerchantServiceSelector(
+                label="north",
+                encoded_identity=(2, 129, 174, 31, 171, 160, 102, 166, 149, 27, 0, 0),
+                model_id=4775,
+                expected_xy=(2326.0, 3681.0),
+            ),
+            MerchantServiceSelector(
+                label="southwest",
+                encoded_identity=(2, 129, 172, 31, 139, 192, 228, 198, 113, 51, 0, 0),
+                model_id=2090,
+                expected_xy=(2158.0, -2006.0),
+            ),
+        ),
+        MERCHANT_TYPE_MATERIALS: (
+            MerchantServiceSelector(
+                label="west",
+                encoded_identity=(254, 109, 30, 235, 107, 191, 42, 41, 0, 0),
+                model_id=3340,
+                expected_xy=(-2561.0, 259.0),
+            ),
+            MerchantServiceSelector(
+                label="north",
+                encoded_identity=(1, 129, 88, 32, 99, 210, 77, 201, 205, 48, 0, 0),
+                model_id=4781,
+                expected_xy=(2406.0, 4190.0),
+            ),
+            MerchantServiceSelector(
+                label="southwest",
+                encoded_identity=(92, 45, 80, 202, 145, 215, 194, 67, 0, 0),
+                model_id=2071,
+                expected_xy=(2997.0, -2271.0),
+            ),
+        ),
+        MERCHANT_TYPE_RARE_MATERIALS: (
+            MerchantServiceSelector(
+                label="west",
+                encoded_identity=(255, 109, 135, 153, 184, 205, 30, 37, 0, 0),
+                model_id=3343,
+                expected_xy=(-2692.0, 198.0),
+            ),
+            MerchantServiceSelector(
+                label="north",
+                encoded_identity=(1, 129, 199, 45, 144, 183, 23, 138, 240, 116, 0, 0),
+                model_id=4784,
+                expected_xy=(2537.0, 4024.0),
+            ),
+            MerchantServiceSelector(
+                label="southwest",
+                encoded_identity=(93, 45, 63, 224, 133, 233, 124, 106, 0, 0),
+                model_id=2033,
+                expected_xy=(2928.0, -2452.0),
+            ),
+        ),
+        MERCHANT_TYPE_RUNE_TRADER: (
+            MerchantServiceSelector(
+                label="west",
+                encoded_identity=(2, 129, 124, 114, 238, 158, 123, 209, 57, 127, 0, 0),
+                model_id=5732,
+                expected_xy=(-2755.0, 1110.0),
+            ),
+            MerchantServiceSelector(
+                label="north",
+                encoded_identity=(1, 129, 160, 33, 49, 157, 17, 141, 9, 99, 0, 0),
+                model_id=5732,
+                expected_xy=(1755.0, 3822.0),
+            ),
+            MerchantServiceSelector(
+                label="southwest",
+                encoded_identity=(94, 45, 111, 230, 232, 194, 214, 12, 0, 0),
+                model_id=2035,
+                expected_xy=(1598.0, -1572.0),
+            ),
+        ),
+        MERCHANT_TYPE_SCROLL_TRADER: (
+            MerchantServiceSelector(
+                label="west",
+                encoded_identity=(1, 110, 147, 146, 148, 160, 13, 98, 0, 0),
+                model_id=3344,
+                expected_xy=(-2970.0, 8.0),
+            ),
+            MerchantServiceSelector(
+                label="north",
+                encoded_identity=(1, 129, 219, 63, 48, 212, 52, 142, 112, 113, 0, 0),
+                model_id=5453,
+                expected_xy=(1816.0, 3250.0),
+            ),
+            MerchantServiceSelector(
+                label="southwest",
+                encoded_identity=(137, 45, 47, 165, 126, 187, 122, 40, 0, 0),
+                model_id=2100,
+                expected_xy=(2556.0, -2853.0),
+            ),
+        ),
+    },
+    179: {
+        MERCHANT_TYPE_RUNE_TRADER: (
+            MerchantServiceSelector(
+                label="Isle of the Dead",
+                encoded_identity=(220, 12, 0, 0),
+                model_id=203,
+                expected_xy=(-3654.0, -2400.0),
+            ),
+        ),
+        MERCHANT_TYPE_SCROLL_TRADER: (
+            MerchantServiceSelector(
+                label="Isle of the Dead",
+                encoded_identity=(221, 12, 0, 0),
+                model_id=207,
+                expected_xy=(-4033.0, -3860.0),
+            ),
+        ),
+    },
+}
 
 
 @dataclass
@@ -3736,6 +3854,21 @@ def _get_rarity_options_for_rule(rule_kind: str) -> tuple[tuple[str, str], ...]:
     return RARITY_OPTION_ORDER
 
 
+def _get_catalog_entry_priority(
+    model_id: object,
+    item_type: object,
+    category: object = "",
+    sub_category: object = "",
+) -> int:
+    return _catalog_get_catalog_entry_priority(
+        model_id,
+        item_type,
+        category,
+        sub_category,
+        scroll_trader_stock_model_ids=frozenset(SCROLL_TRADER_STOCK_MODEL_IDS),
+    )
+
+
 def _safe_int(value: object, default: int = 0) -> int:
     try:
         if isinstance(value, str):
@@ -3753,68 +3886,6 @@ def _coerce_list(value: object) -> list[object]:
     if isinstance(value, tuple):
         return list(value)
     return []
-
-
-def _normalize_weapon_mod_target_item_type(raw_value: object) -> str:
-    if raw_value is None:
-        return ""
-    enum_name = str(getattr(raw_value, "name", "") or "").strip()
-    if enum_name:
-        return enum_name
-    if isinstance(raw_value, str):
-        candidate = raw_value.strip()
-        if not candidate:
-            return ""
-        if candidate in getattr(ItemType, "__members__", {}):
-            return candidate
-        try:
-            return ItemType(int(candidate, 0)).name
-        except Exception:
-            return candidate
-    try:
-        return ItemType(int(raw_value)).name
-    except Exception:
-        return str(raw_value or "").strip()
-
-
-def _normalize_weapon_mod_component_kind(raw_value: object) -> str:
-    return str(raw_value or "").strip()
-
-
-def _normalize_weapon_mod_variant_parts(
-    identifier: object,
-    target_item_type: object,
-    component_kind: object,
-) -> tuple[str, str, str]:
-    return (
-        str(identifier or "").strip(),
-        _normalize_weapon_mod_target_item_type(target_item_type),
-        _normalize_weapon_mod_component_kind(component_kind),
-    )
-
-
-def _make_weapon_mod_identifier_choice_key(identifier: object) -> str:
-    safe_identifier = str(identifier or "").strip()
-    return f"{WEAPON_MOD_GENERIC_KEY_PREFIX}{safe_identifier}" if safe_identifier else ""
-
-
-def _make_weapon_mod_variant_choice_key(
-    identifier: object,
-    target_item_type: object,
-    component_kind: object,
-) -> str:
-    safe_identifier, safe_target_item_type, safe_component_kind = _normalize_weapon_mod_variant_parts(
-        identifier,
-        target_item_type,
-        component_kind,
-    )
-    if not safe_identifier or not safe_target_item_type or not safe_component_kind:
-        return ""
-    return (
-        f"{WEAPON_MOD_VARIANT_KEY_PREFIX}{safe_identifier}"
-        f"{WEAPON_MOD_CHOICE_SEPARATOR}{safe_target_item_type}"
-        f"{WEAPON_MOD_CHOICE_SEPARATOR}{safe_component_kind}"
-    )
 
 
 def _parse_weapon_mod_choice_key(raw_key: object) -> tuple[str, str, str, str]:
@@ -3850,37 +3921,6 @@ def _weapon_mod_variant_rule_key(rule: object) -> tuple[str, str, str]:
 def _weapon_mod_variant_rule_choice_key(rule: object) -> str:
     identifier, target_item_type, component_kind = _weapon_mod_variant_rule_key(rule)
     return _make_weapon_mod_variant_choice_key(identifier, target_item_type, component_kind)
-
-
-def _humanize_weapon_mod_component_kind(component_kind: object) -> str:
-    safe_component_kind = _normalize_weapon_mod_component_kind(component_kind)
-    if not safe_component_kind:
-        return ""
-    return re.sub(r"(?<!^)(?=[A-Z])", " ", safe_component_kind).strip()
-
-
-def _get_weapon_mod_type_name(weapon_mod: object) -> str:
-    mod_type = getattr(weapon_mod, "mod_type", None)
-    return str(getattr(mod_type, "name", mod_type) or "").strip()
-
-
-def _is_expandable_weapon_mod_type(weapon_mod: object) -> bool:
-    return _get_weapon_mod_type_name(weapon_mod) in ("Prefix", "Suffix")
-
-
-def _format_weapon_mod_variant_label(weapon_mod: object, component_kind: object) -> str:
-    base_name = str(getattr(weapon_mod, "name", "") or getattr(weapon_mod, "identifier", "") or "").strip()
-    component_label = _humanize_weapon_mod_component_kind(component_kind)
-    if not base_name:
-        base_name = "Unknown Weapon Mod"
-    if not component_label:
-        return base_name
-    mod_type_name = _get_weapon_mod_type_name(weapon_mod)
-    if mod_type_name == "Prefix":
-        return f"{base_name} {component_label}"
-    if mod_type_name == "Suffix":
-        return f"{component_label} {base_name}"
-    return base_name
 
 
 def _normalize_weapon_mod_variant_rules(values: list[object]) -> list[WeaponModVariantRule]:
@@ -4194,23 +4234,6 @@ def _dedupe_weapon_item_type_ids(item_type_ids: list[object]) -> list[int]:
     return unique
 
 
-def _resolve_model_id_value(raw_value: object) -> int:
-    if isinstance(raw_value, str):
-        candidate = raw_value.strip()
-        if not candidate:
-            return 0
-        if candidate.startswith("ModelID."):
-            enum_name = candidate.split(".", 1)[1].strip()
-            enum_value = getattr(ModelID, enum_name, None)
-            if enum_value is not None:
-                try:
-                    return int(enum_value.value)
-                except Exception:
-                    return _safe_int(enum_value, 0)
-        return _safe_int(candidate, 0)
-    return _safe_int(raw_value, 0)
-
-
 def _parse_agent_selector_point(step: dict[str, object]) -> tuple[float, float] | None:
     point = step.get("point")
     if isinstance(point, (list, tuple)) and len(point) >= 2:
@@ -4284,6 +4307,71 @@ def _agent_encoded_name_matches(agent_id: int, encoded_names: object) -> bool:
         return any(agent_enc_tuple == tuple(int(value) for value in encoded_name) for encoded_name in encoded_names)
     except Exception:
         return False
+
+
+def _coerce_agent_xy(value: object) -> tuple[float, float] | None:
+    if not isinstance(value, (tuple, list)) or len(value) < 2:
+        return None
+    try:
+        x = float(value[0])
+        y = float(value[1])
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    return x, y
+
+
+def _get_agent_search_origin(agent_api: object) -> tuple[tuple[float, float] | None, str]:
+    """Prefer the live player agent and use the legacy position only when that API is absent."""
+
+    get_player_agent_id = getattr(Player, "GetAgentID", None)
+    get_agent_xy = getattr(agent_api, "GetXY", None)
+    if callable(get_player_agent_id) and callable(get_agent_xy):
+        try:
+            player_agent_id = max(0, _safe_int(get_player_agent_id(), 0))
+            if player_agent_id <= 0:
+                return None, "player agent unavailable"
+            fresh_xy = _coerce_agent_xy(get_agent_xy(player_agent_id))
+            if fresh_xy is None:
+                return None, "player agent coordinates unavailable"
+            return fresh_xy, "player agent"
+        except Exception:
+            # If the live-agent path exists but fails, an older Player.GetXY value may belong
+            # to the previous map instance. Fail closed instead of searching from stale data.
+            return None, "player agent coordinates unavailable"
+
+    try:
+        fallback_xy = _coerce_agent_xy(Player.GetXY())
+    except Exception:
+        fallback_xy = None
+    if fallback_xy is None:
+        return None, "player coordinates unavailable"
+    return fallback_xy, "Player.GetXY fallback"
+
+
+def _normalize_vendor_encoded_identity(raw_identity: object) -> tuple[int, ...] | None:
+    """Return exact encoded bytes without invoking any string decoder."""
+
+    if not isinstance(raw_identity, (bytes, bytearray, list, tuple)):
+        return None
+    try:
+        values = tuple(int(value) for value in raw_identity)
+    except (TypeError, ValueError):
+        return None
+    if any(value < 0 or value > 255 for value in values):
+        return None
+    return values
+
+
+def _named_agent_target_has_authoritative_identity(agent_kind: str, target_key: object) -> bool:
+    target = _get_named_agent_target_definition(agent_kind, target_key)
+    if target is None:
+        return False
+    if getattr(target, "encoded_names", ()):
+        return True
+    model_id = getattr(target, "model_id", None)
+    return model_id is not None and _safe_int(model_id, 0) > 0
 
 
 def _agent_named_target_display_matches(agent_id: int, named_target: object) -> bool:
@@ -4405,7 +4493,15 @@ def resolve_agent_xy_from_step(
             _log_agent_selector_failure(recipe_name, f"Unsupported agent resolver kind: {safe_agent_kind!r}")
         return None
 
-    px, py = Player.GetXY()
+    player_xy, player_xy_source = _get_agent_search_origin(Agent)
+    if player_xy is None:
+        if log_failures:
+            _log_agent_selector_failure(
+                recipe_name,
+                f"Could not resolve a safe player position at index {step_idx}: {player_xy_source}",
+            )
+        return None
+    px, py = player_xy
     agent_array = AgentArray.Filter.ByDistance(agent_array, (px, py), max_dist)
     agent_array = AgentArray.Sort.ByDistance(agent_array, (px, py))
     nearest = _parse_agent_selector_bool(safe_step.get("nearest", False), False)
@@ -4419,7 +4515,6 @@ def resolve_agent_xy_from_step(
             )
         return None
 
-    target_name_l = target_name.lower()
     exact_name = _parse_agent_selector_bool(safe_step.get("exact_name", False), False)
 
     def matches_agent(agent_id: int) -> bool:
@@ -4428,10 +4523,7 @@ def resolve_agent_xy_from_step(
                 return False
 
             if encoded_names and not _agent_encoded_name_matches(agent_id, encoded_names):
-                # Specific named selectors get a language-independent proper-name
-                # fallback.  This does not turn generic "Merchant" into a guess.
-                if not _agent_named_target_display_matches(agent_id, named_target):
-                    return False
+                return False
 
             if target_name:
                 agent_name = str(Agent.GetNameByID(agent_id) or "").strip()
@@ -4459,17 +4551,6 @@ def resolve_agent_xy_from_step(
     return None
 
 
-def _normalize_catalog_search_text(raw_value: object) -> str:
-    text = str(raw_value or "").strip().lower()
-    if not text:
-        return ""
-    text = unquote(text)
-    text = text.replace("_", " ")
-    text = re.sub(r"\.[a-z0-9]+$", "", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
 def _strip_item_display_markup(raw_value: object) -> str:
     text = str(raw_value or "").strip()
     if not text:
@@ -4481,177 +4562,6 @@ def _strip_item_display_markup(raw_value: object) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
-
-
-def _build_catalog_alias_labels(name: object, skin: object = "", wiki_url: object = "") -> dict[str, str]:
-    alias_labels: dict[str, str] = {}
-
-    def _add_alias(raw_alias: object, display_label: object = ""):
-        normalized = _normalize_catalog_search_text(raw_alias)
-        if not normalized:
-            return
-        display = str(display_label or raw_alias or "").strip()
-        if not display:
-            display = normalized.title()
-        alias_labels.setdefault(normalized, display)
-
-    safe_name = str(name or "").strip()
-    if safe_name:
-        _add_alias(safe_name, safe_name)
-
-    safe_skin = str(skin or "").strip()
-    if safe_skin:
-        skin_label = os.path.splitext(os.path.basename(safe_skin))[0].strip()
-        if skin_label:
-            _add_alias(skin_label, skin_label)
-
-    safe_wiki_url = str(wiki_url or "").strip()
-    if safe_wiki_url:
-        wiki_stem = safe_wiki_url.rsplit("/", 1)[-1].split("?", 1)[0].split("#", 1)[0].strip()
-        wiki_label = unquote(wiki_stem).replace("_", " ").strip()
-        if wiki_label:
-            _add_alias(wiki_label, wiki_label)
-
-    return alias_labels
-
-
-def _humanize_model_id_enum_name(raw_name: object) -> str:
-    text = str(raw_name or "").strip()
-    if not text:
-        return ""
-    text = text.replace("_", " ")
-    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)
-    text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def _get_mirrored_item_priority(item_type: object) -> int:
-    normalized_type = str(item_type or "").strip().lower()
-    if normalized_type in {
-        "axe",
-        "bow",
-        "daggers",
-        "hammer",
-        "offhand",
-        "scythe",
-        "shield",
-        "spear",
-        "staff",
-        "sword",
-        "wand",
-        "headpiece",
-        "chestpiece",
-        "gloves",
-        "leggings",
-        "boots",
-    }:
-        return 10
-    if normalized_type in {"rune_mod", "salvage"}:
-        return 20
-    return 30
-
-
-def _get_catalog_entry_priority(
-    model_id: object,
-    item_type: object,
-    category: object = "",
-    sub_category: object = "",
-) -> int:
-    priority = _get_mirrored_item_priority(item_type)
-    if not _is_scroll_trader_stock_model(model_id):
-        return priority
-
-    normalized_type = _normalize_catalog_search_text(item_type)
-    normalized_category = _normalize_catalog_search_text(category)
-    normalized_sub_category = _normalize_catalog_search_text(sub_category)
-    if (
-        normalized_type == "scroll"
-        or normalized_category == "scroll"
-        or normalized_sub_category.endswith("scroll")
-    ):
-        return min(priority, 15)
-    return priority
-
-
-MODEL_ID_FALLBACK_ITEM_TYPE_SUFFIXES: tuple[tuple[str, str], ...] = (
-    ("Daggers", "Daggers"),
-    ("Scythe", "Scythe"),
-    ("Shield", "Shield"),
-    ("Spear", "Spear"),
-    ("Staff", "Staff"),
-    ("Sword", "Sword"),
-    ("Hammer", "Hammer"),
-    ("Focus", "Offhand"),
-    ("Offhand", "Offhand"),
-    ("Icon", "Offhand"),
-    ("Prism", "Offhand"),
-    ("Wand", "Wand"),
-    ("Bow", "Bow"),
-    ("Axe", "Axe"),
-    ("Headpiece", "Headpiece"),
-    ("Chestpiece", "Chestpiece"),
-    ("Gloves", "Gloves"),
-    ("Leggings", "Leggings"),
-    ("Boots", "Boots"),
-    ("SalvageKit", "Salvage"),
-)
-
-
-def _infer_model_id_fallback_item_type(enum_names: list[str], display_name: str) -> str:
-    candidates = [display_name, *enum_names]
-    for candidate in candidates:
-        compact = re.sub(r"[^A-Za-z0-9]+", "", str(candidate or ""))
-        normalized = _normalize_catalog_search_text(_humanize_model_id_enum_name(candidate))
-        tokens = set(normalized.split())
-        for suffix, item_type in MODEL_ID_FALLBACK_ITEM_TYPE_SUFFIXES:
-            suffix_lower = suffix.lower()
-            if compact.lower().endswith(suffix_lower) or suffix_lower in tokens:
-                return item_type
-    return ""
-
-
-def _iter_model_id_enum_members() -> list[tuple[str, int]]:
-    members = getattr(ModelID, "__members__", None)
-    if isinstance(members, dict):
-        raw_members = list(members.items())
-    else:
-        raw_members = [
-            (name, getattr(ModelID, name))
-            for name in dir(ModelID)
-            if not name.startswith("_")
-        ]
-
-    resolved_members: list[tuple[str, int]] = []
-    for raw_name, raw_value in raw_members:
-        name = str(raw_name or "").strip()
-        if not name:
-            continue
-        try:
-            model_id = int(raw_value.value)
-        except Exception:
-            model_id = _safe_int(raw_value, 0)
-        if model_id > 0:
-            resolved_members.append((name, model_id))
-    return resolved_members
-
-
-def _iter_item_handling_catalog_entries(raw_catalog: object) -> list[dict[str, object]]:
-    entries: list[dict[str, object]] = []
-
-    def _walk(raw_value: object):
-        if isinstance(raw_value, dict):
-            if ("model_id" in raw_value or "ModelID" in raw_value) and ("name" in raw_value or "Name" in raw_value):
-                entries.append(raw_value)
-                return
-            for child_value in raw_value.values():
-                _walk(child_value)
-        elif isinstance(raw_value, list):
-            for child_value in raw_value:
-                _walk(child_value)
-
-    _walk(raw_catalog)
-    return entries
 
 
 def _is_common_crafting_material_model(model_id: object) -> bool:
@@ -5425,6 +5335,20 @@ def _normalize_rune_identifier(identifier: object) -> str:
     return str(identifier or "").strip()
 
 
+def _normalize_rune_identifier_tuple(identifiers: object) -> tuple[str, ...]:
+    if not isinstance(identifiers, (list, tuple, set, frozenset)):
+        return ()
+    return tuple(
+        sorted(
+            {
+                safe_identifier
+                for identifier in identifiers
+                if (safe_identifier := _normalize_rune_identifier(identifier))
+            }
+        )
+    )
+
+
 def _normalize_rune_trader_targets(raw_targets: object) -> list[RuneTraderTarget]:
     normalized: list[RuneTraderTarget] = []
     seen_identifiers: set[str] = set()
@@ -5956,76 +5880,6 @@ def _parse_stock_key(key: object) -> tuple[str, str]:
     if safe_key.startswith(STOCK_KEY_IDENTIFIER_PREFIX):
         return STOCK_KEY_IDENTIFIER_PREFIX, safe_key[len(STOCK_KEY_IDENTIFIER_PREFIX):]
     return "", safe_key
-
-
-def _normalize_rune_catalog_profession(value: object) -> str:
-    safe_value = str(value or "").strip()
-    return safe_value or "_None"
-
-
-def _get_rune_profession_label(value: object) -> str:
-    profession = _normalize_rune_catalog_profession(value)
-    return "Common" if profession == "_None" else profession
-
-
-def _get_rune_kind_label(mod_type: object) -> str:
-    return "Insignia" if str(mod_type or "").strip().lower() == "prefix" else "Rune"
-
-
-def _get_rune_kind_sort_key(mod_type: object) -> int:
-    return 0 if _get_rune_kind_label(mod_type) == "Insignia" else 1
-
-
-def _get_rune_modifier_value(modifier: object, field_name: str) -> object:
-    if not isinstance(modifier, dict):
-        return ""
-    normalized_field = str(field_name or "").strip().lower()
-    if normalized_field == "arg1":
-        return modifier.get("Arg1", "")
-    if normalized_field == "arg2":
-        return modifier.get("Arg2", "")
-    if normalized_field == "arg":
-        return modifier.get("Arg", "")
-    return ""
-
-
-def _resolve_rune_description_template(description: str, modifiers: object) -> str:
-    safe_description = str(description or "").strip()
-    if not safe_description or "{" not in safe_description:
-        return safe_description
-    if not isinstance(modifiers, list):
-        return safe_description
-
-    modifiers_by_identifier: dict[int, dict[str, object]] = {}
-    for modifier in modifiers:
-        if not isinstance(modifier, dict):
-            continue
-        modifier_identifier = _safe_int(modifier.get("Identifier", 0), 0)
-        if modifier_identifier:
-            modifiers_by_identifier[modifier_identifier] = modifier
-
-    def replace_placeholder(match: re.Match) -> str:
-        field_name = str(match.group(1) or "")
-        modifier_identifier = _safe_int(match.group(2), 0)
-        modifier = modifiers_by_identifier.get(modifier_identifier)
-        if modifier is None:
-            return str(match.group(0))
-
-        value = _get_rune_modifier_value(modifier, field_name)
-        if modifier_identifier == MODIFIER_IDENTIFIER_RUNE_ATTRIBUTE and field_name.lower() == "arg1":
-            attribute_id = _safe_int(value, 0)
-            return RUNE_ATTRIBUTE_LABELS.get(attribute_id, f"Attribute {attribute_id}")
-        try:
-            return str(int(value))
-        except Exception:
-            return str(value or match.group(0))
-
-    return re.sub(r"\{(arg1|arg2|arg)\[(\d+)\]\}", replace_placeholder, safe_description)
-
-
-def _get_rune_rarity_sort_key(rarity: object) -> int:
-    rarity_order = {"blue": 0, "purple": 1, "gold": 2}
-    return rarity_order.get(str(rarity or "").strip().lower(), 99)
 
 
 def _sell_rule_can_include_material_storage(rule: SellRule) -> bool:
@@ -11680,148 +11534,36 @@ class MerchantRulesWidget:
         self.sell_weapon_mod_search_cache.clear()
         self.sell_rune_search_cache.clear()
 
+    def _get_catalog_loader(self) -> CatalogLoader:
+        return CatalogLoader(
+            catalog_path=CATALOG_PATH,
+            drop_data_path=DROP_DATA_PATH,
+            item_handling_path=ITEM_HANDLING_ITEMS_CATALOG_PATH,
+            runes_catalog_path=RUNES_CATALOG_PATH,
+            mod_db=MOD_DB,
+            mod_db_load_error=MOD_DB_LOAD_ERROR,
+            model_id_members=_iter_model_id_enum_members,
+            armor_upgrade_identity=_get_armor_upgrade_catalog_identity,
+            scroll_trader_stock_model_ids=frozenset(SCROLL_TRADER_STOCK_MODEL_IDS),
+        )
+
     def _load_modifier_catalogs(self):
-        self.weapon_mod_entries = []
-        self.rune_entries = []
-        self.armor_upgrade_entries = []
-        self.weapon_mod_names = {}
-        self.weapon_mod_generic_names = {}
-        self.weapon_mod_variant_names = {}
-        self.rune_names = {}
-
-        for identifier, weapon_mod in sorted(MOD_DB.weapon_mods.items(), key=lambda row: row[1].name.lower() or row[0].lower()):
-            display_name = str(weapon_mod.name or identifier).strip()
-            safe_identifier = str(identifier)
-            generic_label = (
-                f"{display_name} (all supported weapons)"
-                if _is_expandable_weapon_mod_type(weapon_mod)
-                else display_name
-            )
-            entry = {
-                "identifier": _make_weapon_mod_identifier_choice_key(safe_identifier),
-                "name": generic_label,
-                "base_identifier": safe_identifier,
-                "entry_kind": WEAPON_MOD_CHOICE_KIND_GENERIC,
-            }
-            self.weapon_mod_entries.append(entry)
-            self.weapon_mod_names[safe_identifier] = display_name
-            self.weapon_mod_generic_names[safe_identifier] = generic_label
-
-            if _is_expandable_weapon_mod_type(weapon_mod):
-                for target_item_type, component_kind in getattr(weapon_mod, "item_mods", {}).items():
-                    target_item_type_name = _normalize_weapon_mod_target_item_type(target_item_type)
-                    safe_component_kind = _normalize_weapon_mod_component_kind(component_kind)
-                    variant_key = _make_weapon_mod_variant_choice_key(
-                        safe_identifier,
-                        target_item_type_name,
-                        safe_component_kind,
-                    )
-                    if not variant_key:
-                        continue
-                    variant_label = _format_weapon_mod_variant_label(weapon_mod, safe_component_kind)
-                    self.weapon_mod_entries.append(
-                        {
-                            "identifier": variant_key,
-                            "name": variant_label,
-                            "base_identifier": safe_identifier,
-                            "entry_kind": WEAPON_MOD_CHOICE_KIND_VARIANT,
-                            "target_item_type": target_item_type_name,
-                            "component_kind": safe_component_kind,
-                        }
-                    )
-                    self.weapon_mod_variant_names[variant_key] = variant_label
-
-        for identifier, rune in sorted(MOD_DB.runes.items(), key=lambda row: row[1].name.lower() or row[0].lower()):
-            display_name = str(rune.name or identifier).strip()
-            entry = {"identifier": str(identifier), "name": display_name}
-            self.rune_entries.append(entry)
-            self.rune_names[str(identifier)] = display_name
-            armor_identity, _identity_error = _get_armor_upgrade_catalog_identity(identifier)
-            if armor_identity is not None:
-                self.armor_upgrade_entries.append(entry)
+        result = self._get_catalog_loader().load_modifier_catalogs()
+        self.weapon_mod_entries = result.weapon_mod_entries
+        self.rune_entries = result.rune_entries
+        self.armor_upgrade_entries = result.armor_upgrade_entries
+        self.weapon_mod_names = result.weapon_mod_names
+        self.weapon_mod_generic_names = result.weapon_mod_generic_names
+        self.weapon_mod_variant_names = result.weapon_mod_variant_names
+        self.rune_names = result.rune_names
 
     def _load_rune_buy_catalog(self):
-        self.rune_buy_entries = []
-        self.rune_buy_entries_by_identifier = {}
-        self.rune_buy_identifier_by_exact_label = {}
-        self.rune_buy_entries_by_profession = {}
-        self.rune_buy_professions = []
-
-        if not os.path.exists(RUNES_CATALOG_PATH):
-            raise FileNotFoundError(f"Rune catalog missing: {RUNES_CATALOG_PATH}")
-
-        with open(RUNES_CATALOG_PATH, "r", encoding="utf-8") as file:
-            raw_catalog = json.load(file)
-
-        if not isinstance(raw_catalog, dict):
-            raise ValueError("Rune catalog must be a JSON object.")
-
-        entries: list[dict[str, object]] = []
-        for raw_identifier, raw_entry in raw_catalog.items():
-            if not isinstance(raw_entry, dict):
-                continue
-            identifier = _normalize_rune_identifier(raw_entry.get("Identifier", raw_identifier))
-            if not identifier:
-                continue
-            names = raw_entry.get("Names", {})
-            if isinstance(names, dict):
-                display_name = str(names.get("English", identifier) or identifier).strip()
-            else:
-                display_name = identifier
-            profession = _normalize_rune_catalog_profession(raw_entry.get("Profession", "_None"))
-            rarity = str(raw_entry.get("Rarity", "") or "").strip()
-            mod_type = str(raw_entry.get("ModType", "") or "").strip()
-            vendor_value = max(0, _safe_int(raw_entry.get("VendorValue", 0), 0))
-            descriptions = raw_entry.get("Descriptions", {})
-            if isinstance(descriptions, dict):
-                english_description = str(descriptions.get("English", "") or "").strip()
-            else:
-                english_description = ""
-            english_description = _resolve_rune_description_template(english_description, raw_entry.get("Modifiers", []))
-            entry = {
-                "identifier": identifier,
-                "name": display_name,
-                "description": english_description,
-                "profession": profession,
-                "profession_label": _get_rune_profession_label(profession),
-                "rarity": rarity,
-                "mod_type": mod_type,
-                "kind_label": _get_rune_kind_label(mod_type),
-                "vendor_value": vendor_value,
-            }
-            entries.append(entry)
-
-        entries.sort(
-            key=lambda entry: (
-                str(entry.get("profession_label", "")).lower(),
-                _get_rune_kind_sort_key(entry.get("mod_type", "")),
-                _get_rune_rarity_sort_key(entry.get("rarity", "")),
-                str(entry.get("name", "")).lower(),
-                str(entry.get("identifier", "")).lower(),
-            )
-        )
-        grouped_entries: dict[str, list[dict[str, object]]] = {}
-        for entry in entries:
-            profession = str(entry.get("profession", "_None") or "_None")
-            grouped_entries.setdefault(profession, []).append(entry)
-
-        profession_order = sorted(
-            grouped_entries.keys(),
-            key=lambda profession: (
-                0 if profession == "_None" else 1,
-                _get_rune_profession_label(profession).lower(),
-            ),
-        )
-
-        self.rune_buy_entries = entries
-        self.rune_buy_entries_by_identifier = {
-            str(entry.get("identifier", "")).strip(): entry
-            for entry in entries
-            if str(entry.get("identifier", "")).strip()
-        }
-        self._rebuild_rune_exact_display_lookup()
-        self.rune_buy_entries_by_profession = grouped_entries
-        self.rune_buy_professions = profession_order
+        result = self._get_catalog_loader().load_rune_buy_catalog()
+        self.rune_buy_entries = result.rune_buy_entries
+        self.rune_buy_entries_by_identifier = result.rune_buy_entries_by_identifier
+        self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
+        self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
+        self.rune_buy_professions = result.rune_buy_professions
 
     def _debug_log(self, message: str):
         if not self.debug_logging:
@@ -11841,7 +11583,7 @@ class MerchantRulesWidget:
             return str(coords)
 
     def _get_catalog_alias_group_count(self) -> int:
-        return sum(1 for model_ids in self.catalog_alias_to_model_ids.values() if len(model_ids) > 1)
+        return CatalogLoader.get_catalog_alias_group_count(self.catalog_alias_to_model_ids)
 
     def _get_catalog_summary_text(self) -> str:
         final_models = int(self.catalog_stats.get("final_models", len(self.catalog_by_model_id)) or 0)
@@ -12028,29 +11770,17 @@ class MerchantRulesWidget:
         priority: int = 100,
         extra: dict[str, object] | None = None,
     ):
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        safe_name = str(name or "").strip()
-        if safe_model_id <= 0 or not safe_name:
-            return
-
-        current = self.catalog_by_model_id.get(safe_model_id)
-        if current is not None and int(current.get("priority", 999)) <= priority:
-            return
-
-        entry: dict[str, object] = {
-            "model_id": safe_model_id,
-            "name": safe_name,
-            "item_type": str(item_type or "").strip(),
-            "material_type": str(material_type or "").strip(),
-            "source": source,
-            "priority": int(priority),
-        }
-        if extra:
-            for key, value in extra.items():
-                if value not in (None, ""):
-                    entry[key] = value
-
-        self.catalog_by_model_id[safe_model_id] = entry
+        result = CatalogLoadResult(catalog_by_model_id=self.catalog_by_model_id)
+        CatalogLoader.register_catalog_entry(
+            result,
+            model_id,
+            name,
+            item_type,
+            material_type,
+            source,
+            priority,
+            extra,
+        )
 
     def _load_catalog_group(
         self,
@@ -12060,280 +11790,31 @@ class MerchantRulesWidget:
         default_item_type: str = "",
         default_material_type: str = "",
     ) -> list[dict[str, object]]:
-        loaded_entries: list[dict[str, object]] = []
-        for entry in entries:
-            model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
-            if model_id <= 0:
-                continue
-
-            loaded_entry = {
-                "model_id": model_id,
-                "name": str(entry.get("name", "") or f"Model {model_id}"),
-                "item_type": str(entry.get("item_type", default_item_type) or default_item_type),
-                "material_type": str(entry.get("material_type", default_material_type) or default_material_type),
-            }
-            if "default_target" in entry:
-                loaded_entry["default_target"] = max(0, _safe_int(entry.get("default_target", 0), 0))
-
-            self._register_catalog_entry(
-                model_id=model_id,
-                name=str(loaded_entry["name"]),
-                item_type=str(loaded_entry["item_type"]),
-                material_type=str(loaded_entry["material_type"]),
-                source=source,
-                priority=priority,
-                extra={"default_target": loaded_entry.get("default_target", 0)},
-            )
-            loaded_entries.append(loaded_entry)
-        return loaded_entries
+        return self._get_catalog_loader().load_catalog_group(
+            self.catalog_by_model_id,
+            entries,
+            source,
+            priority,
+            default_item_type,
+            default_material_type,
+        )
 
     def _load_drop_data_catalog(self) -> int:
-        if not os.path.exists(DROP_DATA_PATH):
-            return 0
-
-        with open(DROP_DATA_PATH, "r", encoding="utf-8") as file:
-            rows = json.load(file)
-
-        loaded_count = 0
-        for row in rows:
-            model_id = _resolve_model_id_value(row.get("model_id", 0))
-            name = str(row.get("name", "")).strip()
-            if model_id <= 0 or not name:
-                continue
-            self._register_catalog_entry(
-                model_id=model_id,
-                name=name,
-                item_type=str(row.get("group", "")).strip(),
-                material_type=str(row.get("subgroup", "")).strip(),
-                source="modelid_drop_data",
-                priority=50,
-            )
-            loaded_count += 1
-        return loaded_count
+        return self._get_catalog_loader().load_drop_data_catalog(self.catalog_by_model_id)
 
     def _load_item_handling_catalog(self) -> int:
-        if not os.path.exists(ITEM_HANDLING_ITEMS_CATALOG_PATH):
-            return 0
-
-        with open(ITEM_HANDLING_ITEMS_CATALOG_PATH, "r", encoding="utf-8") as file:
-            raw_catalog = json.load(file)
-
-        loaded_count = 0
-        for entry in _iter_item_handling_catalog_entries(raw_catalog):
-            model_id = _resolve_model_id_value(entry.get("model_id", entry.get("ModelID", 0)))
-            name = str(entry.get("name") or entry.get("Name") or "").strip()
-            if model_id <= 0 or not name:
-                continue
-
-            item_type = str(entry.get("item_type") or entry.get("ItemType") or "").strip()
-            skin = str(entry.get("skin") or entry.get("Skin") or "").strip()
-            wiki_url = str(entry.get("wiki_url") or entry.get("WikiURL") or "").strip()
-            category = str(entry.get("category") or "").strip()
-            sub_category = str(entry.get("sub_category") or "").strip()
-            raw_attributes = entry.get("attributes", [])
-            attributes = (
-                [str(attribute).strip() for attribute in raw_attributes if str(attribute or "").strip()]
-                if isinstance(raw_attributes, list)
-                else []
-            )
-            alias_labels = _build_catalog_alias_labels(name, skin, wiki_url)
-
-            extra: dict[str, object] = {
-                "alias_labels": alias_labels,
-                "attributes": attributes,
-            }
-            if skin:
-                extra["skin"] = skin
-            if wiki_url:
-                extra["wiki_url"] = wiki_url
-            if category:
-                extra["category"] = category
-            if sub_category:
-                extra["sub_category"] = sub_category
-
-            self._register_catalog_entry(
-                model_id=model_id,
-                name=name,
-                item_type=item_type,
-                source="item_handling_items_catalog",
-                priority=_get_catalog_entry_priority(model_id, item_type, category, sub_category),
-                extra=extra,
-            )
-            loaded_count += 1
-        return loaded_count
+        return self._get_catalog_loader().load_item_handling_catalog(self.catalog_by_model_id)
 
     def _load_rune_model_catalog(self) -> int:
-        if not os.path.exists(RUNES_CATALOG_PATH):
-            return 0
-
-        with open(RUNES_CATALOG_PATH, "r", encoding="utf-8") as file:
-            raw_catalog = json.load(file)
-
-        if not isinstance(raw_catalog, dict):
-            return 0
-
-        grouped_entries: dict[int, tuple[set[str], set[str]]] = {}
-        for raw_identifier, raw_entry in raw_catalog.items():
-            if not isinstance(raw_entry, dict):
-                continue
-            model_id = max(0, _safe_int(raw_entry.get("ModelId", 0), 0))
-            if model_id <= 0:
-                continue
-
-            names = raw_entry.get("Names", {})
-            if isinstance(names, dict):
-                display_name = str(names.get("English", "") or "").strip()
-            else:
-                display_name = ""
-            if not display_name:
-                display_name = str(raw_entry.get("Identifier", raw_identifier) or "").strip()
-            if not display_name:
-                continue
-
-            mod_type = str(raw_entry.get("ModType", "") or "").strip()
-            normalized_name = _normalize_catalog_search_text(display_name)
-            if mod_type == "Prefix" or "insignia" in normalized_name:
-                kind = "insignia"
-            elif mod_type == "Suffix" or "rune" in normalized_name:
-                kind = "rune"
-            else:
-                kind = ""
-
-            names_for_model, kinds_for_model = grouped_entries.setdefault(model_id, (set(), set()))
-            names_for_model.add(display_name)
-            if kind:
-                kinds_for_model.add(kind)
-
-        loaded_count = 0
-        for model_id, (names_for_model, kinds_for_model) in grouped_entries.items():
-            names = sorted(str(name) for name in names_for_model if str(name or "").strip())
-            kinds = sorted(str(kind) for kind in kinds_for_model if str(kind or "").strip())
-            if not names:
-                continue
-
-            if len(names) == 1:
-                display_name = names[0]
-            elif kinds == ["insignia"]:
-                display_name = "Insignia"
-            elif kinds == ["rune"]:
-                display_name = "Rune"
-            else:
-                display_name = "Rune / Insignia"
-
-            alias_labels = _build_catalog_alias_labels(display_name)
-            for name in names:
-                alias_labels.update(_build_catalog_alias_labels(name))
-
-            extra: dict[str, object] = {
-                "alias_labels": alias_labels,
-                "rune_model_kinds": kinds,
-                "rune_model_names": names,
-            }
-            current = self.catalog_by_model_id.get(model_id)
-            if current is None:
-                self._register_catalog_entry(
-                    model_id=model_id,
-                    name=display_name,
-                    item_type="Rune_Mod",
-                    source="runes_catalog",
-                    priority=18,
-                    extra=extra,
-                )
-            else:
-                if not str(current.get("item_type", "") or "").strip():
-                    current["item_type"] = "Rune_Mod"
-                current_kinds = [
-                    str(kind)
-                    for kind in current.get("rune_model_kinds", [])
-                    if str(kind or "").strip()
-                ]
-                merged_kinds = sorted(set(current_kinds) | set(kinds))
-                if merged_kinds:
-                    current["rune_model_kinds"] = merged_kinds
-
-                current_names = [
-                    str(name)
-                    for name in current.get("rune_model_names", [])
-                    if str(name or "").strip()
-                ]
-                merged_names = sorted(set(current_names) | set(names))
-                if merged_names:
-                    current["rune_model_names"] = merged_names
-
-                current_alias_labels = current.get("alias_labels", {})
-                if not isinstance(current_alias_labels, dict):
-                    current_alias_labels = {}
-                current_alias_labels.update(alias_labels)
-                current["alias_labels"] = current_alias_labels
-            loaded_count += 1
-
-        return loaded_count
+        return self._get_catalog_loader().load_rune_model_catalog(self.catalog_by_model_id)
 
     def _load_model_id_fallback_catalog(self) -> int:
-        enum_names_by_model_id: dict[int, list[str]] = {}
-        for enum_name, model_id in _iter_model_id_enum_members():
-            if model_id <= 0:
-                continue
-            names = enum_names_by_model_id.setdefault(model_id, [])
-            if enum_name not in names:
-                names.append(enum_name)
-
-        loaded_count = 0
-        for model_id, enum_names in enum_names_by_model_id.items():
-            if model_id in self.catalog_by_model_id:
-                continue
-            if not enum_names:
-                continue
-
-            display_name = _humanize_model_id_enum_name(enum_names[0]) or f"Model {model_id}"
-            alias_labels = _build_catalog_alias_labels(display_name)
-            for enum_name in enum_names:
-                raw_name = str(enum_name or "").strip()
-                if not raw_name:
-                    continue
-                alias_labels.setdefault(_normalize_catalog_search_text(raw_name), raw_name)
-                humanized_name = _humanize_model_id_enum_name(raw_name)
-                if humanized_name:
-                    alias_labels.setdefault(_normalize_catalog_search_text(humanized_name), humanized_name)
-
-            self._register_catalog_entry(
-                model_id=model_id,
-                name=display_name,
-                item_type=_infer_model_id_fallback_item_type(enum_names, display_name),
-                source="modelid_enum_fallback",
-                priority=90,
-                extra={
-                    "alias_labels": alias_labels,
-                    "enum_names": list(enum_names),
-                },
-            )
-            loaded_count += 1
-        return loaded_count
+        return self._get_catalog_loader().load_model_id_fallback_catalog(self.catalog_by_model_id)
 
     def _rebuild_catalog_alias_index(self):
-        self.catalog_alias_to_model_ids = {}
-        self.catalog_alias_display_names = {}
-
-        for model_id, entry in self.catalog_by_model_id.items():
-            alias_labels = entry.get("alias_labels", {})
-            normalized_alias_labels: dict[str, str] = {}
-            if isinstance(alias_labels, dict):
-                for raw_alias, display_name in alias_labels.items():
-                    normalized_alias = _normalize_catalog_search_text(raw_alias)
-                    if normalized_alias:
-                        normalized_alias_labels[normalized_alias] = str(display_name or "").strip() or normalized_alias.title()
-
-            name = str(entry.get("name", "")).strip()
-            normalized_name = _normalize_catalog_search_text(name)
-            if normalized_name and normalized_name not in normalized_alias_labels:
-                normalized_alias_labels[normalized_name] = name
-
-            entry["alias_labels"] = normalized_alias_labels
-            for normalized_alias, display_name in normalized_alias_labels.items():
-                alias_model_ids = self.catalog_alias_to_model_ids.setdefault(normalized_alias, [])
-                if model_id not in alias_model_ids:
-                    alias_model_ids.append(model_id)
-                self.catalog_alias_display_names.setdefault(normalized_alias, display_name)
+        aliases, display_names = self._get_catalog_loader().rebuild_catalog_alias_index(self.catalog_by_model_id)
+        self.catalog_alias_to_model_ids = aliases
+        self.catalog_alias_display_names = display_names
 
     def _load_catalog(self):
         self.catalog_by_model_id = {}
@@ -12344,99 +11825,30 @@ class MerchantRulesWidget:
         self.catalog_rare_materials = []
         self.catalog_stats = {}
         self.catalog_load_error = ""
-        load_errors: list[str] = []
-        common_entries: list[dict[str, object]] = []
-        rare_entries: list[dict[str, object]] = []
-        merchant_entries: list[dict[str, object]] = []
-        item_handling_items_count = 0
-        rune_model_catalog_count = 0
-        drop_data_count = 0
-        model_id_fallback_count = 0
-        item_handling_present = os.path.exists(ITEM_HANDLING_ITEMS_CATALOG_PATH)
 
-        try:
-            with open(CATALOG_PATH, "r", encoding="utf-8") as file:
-                raw_catalog = json.load(file)
-
-            materials = raw_catalog.get("materials", {})
-            merchant_items = raw_catalog.get("merchant_items", {})
-
-            common_entries = self._load_catalog_group(
-                entries=list(materials.get("common", [])),
-                source="merchant_rules_catalog.common",
-                priority=0,
-                default_item_type="material",
-                default_material_type="common",
-            )
-            rare_entries = self._load_catalog_group(
-                entries=list(materials.get("rare", [])),
-                source="merchant_rules_catalog.rare",
-                priority=0,
-                default_item_type="material",
-                default_material_type="rare",
-            )
-            merchant_entries = self._load_catalog_group(
-                entries=list(merchant_items.get("essentials", [])),
-                source="merchant_rules_catalog.essentials",
-                priority=0,
-            )
-
-            self.catalog_common_material_ids = _dedupe_model_ids([int(entry["model_id"]) for entry in common_entries])
-            self.catalog_rare_materials = rare_entries
-            self.catalog_merchant_essentials = merchant_entries
-        except Exception as exc:
-            load_errors.append(f"Catalog load failed: {exc}")
-
-        try:
-            item_handling_items_count = self._load_item_handling_catalog()
-        except Exception as exc:
-            load_errors.append(f"ItemHandling item catalog load failed: {exc}")
-
-        try:
-            drop_data_count = self._load_drop_data_catalog()
-        except Exception as exc:
-            load_errors.append(f"Drop-data name load failed: {exc}")
-
-        try:
-            self._load_modifier_catalogs()
-        except Exception as exc:
-            load_errors.append(f"Modifier data load failed: {exc}")
-
-        try:
-            self._load_rune_buy_catalog()
-        except Exception as exc:
-            load_errors.append(f"Rune buy catalog load failed: {exc}")
-
-        try:
-            rune_model_catalog_count = self._load_rune_model_catalog()
-        except Exception as exc:
-            load_errors.append(f"Rune model catalog load failed: {exc}")
-
-        if MOD_DB_LOAD_ERROR:
-            load_errors.append(MOD_DB_LOAD_ERROR)
-
-        try:
-            model_id_fallback_count = self._load_model_id_fallback_catalog()
-        except Exception as exc:
-            load_errors.append(f"ModelID fallback catalog load failed: {exc}")
-
-        self._rebuild_catalog_alias_index()
-        self.catalog_stats = {
-            "curated_common": len(common_entries),
-            "curated_rare": len(rare_entries),
-            "curated_essentials": len(merchant_entries),
-            "curated_total": len(common_entries) + len(rare_entries) + len(merchant_entries),
-            "item_handling_present": item_handling_present,
-            "item_handling_items": item_handling_items_count,
-            "rune_models": rune_model_catalog_count,
-            "drop_data": drop_data_count,
-            "modelid_fallback_items": model_id_fallback_count,
-            "final_models": len(self.catalog_by_model_id),
-            "alias_groups": self._get_catalog_alias_group_count(),
-        }
+        result: CatalogLoadResult = self._get_catalog_loader().load()
+        self.catalog_by_model_id = result.catalog_by_model_id
+        self.catalog_alias_to_model_ids = result.catalog_alias_to_model_ids
+        self.catalog_alias_display_names = result.catalog_alias_display_names
+        self.catalog_common_material_ids = result.catalog_common_material_ids
+        self.catalog_merchant_essentials = result.catalog_merchant_essentials
+        self.catalog_rare_materials = result.catalog_rare_materials
+        self.catalog_stats = result.catalog_stats
+        self.catalog_load_error = result.catalog_load_error
+        self.weapon_mod_entries = result.weapon_mod_entries
+        self.rune_entries = result.rune_entries
+        self.armor_upgrade_entries = result.armor_upgrade_entries
+        self.weapon_mod_names = result.weapon_mod_names
+        self.weapon_mod_generic_names = result.weapon_mod_generic_names
+        self.weapon_mod_variant_names = result.weapon_mod_variant_names
+        self.rune_names = result.rune_names
+        self.rune_buy_entries = result.rune_buy_entries
+        self.rune_buy_entries_by_identifier = result.rune_buy_entries_by_identifier
+        self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
+        self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
+        self.rune_buy_professions = result.rune_buy_professions
         self.catalog_loaded = True
-        if load_errors:
-            self.catalog_load_error = " | ".join(load_errors)
+        if self.catalog_load_error:
             ConsoleLog(MODULE_NAME, self.catalog_load_error, Console.MessageType.Warning)
 
     def _load_outpost_entries(self):
@@ -12811,12 +12223,46 @@ class MerchantRulesWidget:
             return 0
         return model_id
 
+    def _get_runtime_label_model_ids(self, label: object) -> set[int]:
+        plain_label = _strip_item_display_markup(str(label or "")).strip()
+        if not plain_label:
+            return set()
+        candidate_labels = [plain_label]
+        without_quantity = re.sub(r"^\d+\s+", "", plain_label).strip()
+        if without_quantity and without_quantity != plain_label:
+            candidate_labels.append(without_quantity)
+
+        matching_model_ids: set[int] = set()
+        for candidate_label in candidate_labels:
+            normalized_name = _normalize_catalog_search_text(candidate_label)
+            matching_model_ids.update(
+                max(0, _safe_int(model_id, 0))
+                for model_id in self.catalog_alias_to_model_ids.get(normalized_name, [])
+                if max(0, _safe_int(model_id, 0)) > 0
+            )
+        return matching_model_ids
+
+    def _runtime_item_label_contradicts_model(self, label: object, model_id: int) -> bool:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        plain_label = _strip_item_display_markup(str(label or "")).strip()
+        if safe_model_id <= 0 or not plain_label:
+            return False
+
+        generic_match = re.fullmatch(r"Model\s+(\d+)", plain_label, flags=re.IGNORECASE)
+        if generic_match is not None:
+            return max(0, _safe_int(generic_match.group(1), 0)) != safe_model_id
+
+        matching_model_ids = self._get_runtime_label_model_ids(plain_label)
+        return bool(matching_model_ids and safe_model_id not in matching_model_ids)
+
     def _format_preview_item_label(self, entry: ExecutionPlanEntry) -> str:
         stored_label = str(getattr(entry, "label", "") or "").strip()
         explicit_model_id = max(0, _safe_int(getattr(entry, "model_id", 0), 0))
         model_id = explicit_model_id if explicit_model_id > 0 else self._extract_preview_label_model_id(stored_label)
         if model_id <= 0:
             return stored_label
+        if self._runtime_item_label_contradicts_model(stored_label, model_id):
+            stored_label = ""
 
         catalog_name = str(self._get_model_name(model_id) or "").strip()
         label_without_model = stored_label
@@ -12932,24 +12378,9 @@ class MerchantRulesWidget:
         return self.rune_buy_entries_by_identifier.get(safe_identifier)
 
     def _rebuild_rune_exact_display_lookup(self) -> None:
-        identifiers_by_label: dict[str, set[str]] = {}
-        for entry in self.rune_buy_entries:
-            identifier = str(entry.get("identifier", "") or "").strip()
-            if not identifier:
-                continue
-            for label in (
-                str(entry.get("name", "") or "").strip(),
-                identifier,
-            ):
-                normalized_label = _normalize_catalog_search_text(label)
-                if normalized_label:
-                    identifiers_by_label.setdefault(normalized_label, set()).add(identifier)
-
-        self.rune_buy_identifier_by_exact_label = {
-            label: next(iter(identifiers))
-            for label, identifiers in identifiers_by_label.items()
-            if len(identifiers) == 1
-        }
+        result = CatalogLoadResult(rune_buy_entries=self.rune_buy_entries)
+        CatalogLoader.rebuild_rune_exact_display_lookup(result)
+        self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
 
     def _get_rune_tooltip_text(self, identifier: str) -> str:
         entry = self._get_rune_buy_entry(identifier)
@@ -15257,15 +14688,16 @@ class MerchantRulesWidget:
     def _resolve_rune_trader_coords(self, map_id: int, *, log_failures: bool = True) -> tuple[float, float] | None:
         selector_name = str(SUPPORTED_MAP_RUNE_TRADER_SELECTORS.get(int(map_id), "") or "").strip()
         return self._resolve_service_coords(
+            map_id=map_id,
+            service_type=MERCHANT_TYPE_RUNE_TRADER,
             selector_name=selector_name,
-            name_query=RUNE_TRADER_NAME_QUERY,
             log_failures=log_failures,
         )
 
-    def _get_scroll_trader_lookup(self) -> tuple[str, str]:
+    def _get_scroll_trader_lookup(self) -> str:
         if Map.IsGuildHall():
-            return "scroll_trader", SCROLL_TRADER_NAME_QUERY
-        return "rare_scroll_trader", RARE_SCROLL_TRADER_NAME_QUERY
+            return "scroll_trader"
+        return "rare_scroll_trader"
 
     def _get_scroll_trader_service_label(self) -> str:
         return "Scroll Trader" if Map.IsGuildHall() else "Rare Scroll Trader"
@@ -15277,53 +14709,258 @@ class MerchantRulesWidget:
         *,
         log_failures: bool = True,
     ) -> tuple[float, float] | None:
-        selector_key, name_query = self._get_scroll_trader_lookup()
+        selector_key = self._get_scroll_trader_lookup()
         selector_name = str(SUPPORTED_MAP_SCROLL_TRADER_SELECTORS.get(int(map_id), "") or "").strip()
         if not selector_name and selector_data:
             selector_name = str(selector_data.get(selector_key, "") or "").strip()
         return self._resolve_service_coords(
+            map_id=map_id,
+            service_type=MERCHANT_TYPE_SCROLL_TRADER,
             selector_name=selector_name,
-            name_query=name_query,
             log_failures=log_failures,
         )
+
+    def _resolve_map_specific_service_coords(
+        self,
+        *,
+        map_id: int,
+        service_type: str,
+        selectors: tuple[MerchantServiceSelector, ...],
+        log_failures: bool,
+    ) -> tuple[float, float] | None:
+        safe_map_id = max(0, _safe_int(map_id, 0))
+        service_label = MERCHANT_TYPE_LABELS.get(service_type, service_type)
+        current_map_id = max(0, _safe_int(Map.GetMapID(), 0))
+        if safe_map_id <= 0 or current_map_id != safe_map_id:
+            if log_failures:
+                _log_agent_selector_failure(
+                    MODULE_NAME,
+                    f"Map-specific {service_label} selector rejected: current map {current_map_id} "
+                    f"does not match required map {safe_map_id}.",
+                )
+            return None
+
+        try:
+            from Py4GWCoreLib import Agent
+            from Py4GWCoreLib import AgentArray
+        except Exception as exc:
+            if log_failures:
+                _log_agent_selector_failure(
+                    MODULE_NAME,
+                    f"Map-specific {service_label} selector APIs are unavailable: {exc}",
+                )
+            return None
+
+        player_xy, player_xy_source = _get_agent_search_origin(Agent)
+        if player_xy is None:
+            if log_failures:
+                _log_agent_selector_failure(
+                    MODULE_NAME,
+                    f"Map-specific {service_label} selector rejected: {player_xy_source}.",
+                )
+            return None
+
+        try:
+            npc_agent_ids = tuple(
+                dict.fromkeys(
+                    safe_agent_id
+                    for agent_id in AgentArray.GetNPCMinipetArray()
+                    if (safe_agent_id := max(0, _safe_int(agent_id, 0))) > 0
+                )
+            )
+        except Exception as exc:
+            if log_failures:
+                _log_agent_selector_failure(
+                    MODULE_NAME,
+                    f"Map-specific {service_label} selector could not read the NPC array: {exc}",
+                )
+            return None
+
+        encoded_identity_by_agent: dict[int, tuple[int, ...] | None] = {}
+        model_id_by_agent: dict[int, int] = {}
+        xy_by_agent: dict[int, tuple[float, float] | None] = {}
+
+        def get_encoded_identity(agent_id: int) -> tuple[int, ...] | None:
+            if agent_id not in encoded_identity_by_agent:
+                try:
+                    raw_identity = Agent.GetEncNameByID(agent_id)
+                except Exception:
+                    raw_identity = None
+                encoded_identity_by_agent[agent_id] = _normalize_vendor_encoded_identity(raw_identity)
+            return encoded_identity_by_agent[agent_id]
+
+        def get_model_id(agent_id: int) -> int:
+            if agent_id not in model_id_by_agent:
+                try:
+                    model_id_by_agent[agent_id] = max(0, _safe_int(Agent.GetModelID(agent_id), 0))
+                except Exception:
+                    model_id_by_agent[agent_id] = 0
+            return model_id_by_agent[agent_id]
+
+        def get_agent_xy(agent_id: int) -> tuple[float, float] | None:
+            if agent_id not in xy_by_agent:
+                try:
+                    xy_by_agent[agent_id] = _coerce_agent_xy(Agent.GetXY(agent_id))
+                except Exception:
+                    xy_by_agent[agent_id] = None
+            return xy_by_agent[agent_id]
+
+        candidates: list[tuple[float, str, tuple[float, float]]] = []
+        failure_details: list[str] = []
+        collision_details: list[str] = []
+        for selector in selectors:
+            expected_identity = _normalize_vendor_encoded_identity(selector.encoded_identity)
+            expected_xy = _coerce_agent_xy(selector.expected_xy)
+            expected_model_id = max(0, _safe_int(selector.model_id, 0))
+            try:
+                coordinate_tolerance = float(selector.coordinate_tolerance)
+            except (TypeError, ValueError):
+                coordinate_tolerance = 0.0
+            if (
+                not expected_identity
+                or expected_xy is None
+                or expected_model_id <= 0
+                or not math.isfinite(coordinate_tolerance)
+                or coordinate_tolerance <= 0.0
+            ):
+                failure_details.append(f"{selector.label}: invalid selector definition")
+                continue
+
+            encoded_matches = [
+                agent_id
+                for agent_id in npc_agent_ids
+                if get_encoded_identity(agent_id) == expected_identity
+            ]
+            if not encoded_matches:
+                failure_details.append(f"{selector.label}: encoded identity mismatch")
+                continue
+
+            model_matches = [
+                agent_id
+                for agent_id in encoded_matches
+                if get_model_id(agent_id) == expected_model_id
+            ]
+            if not model_matches:
+                failure_details.append(f"{selector.label}: model mismatch")
+                continue
+
+            complete_matches: list[tuple[int, tuple[float, float]]] = []
+            for agent_id in model_matches:
+                agent_xy = get_agent_xy(agent_id)
+                if agent_xy is None or math.dist(agent_xy, expected_xy) > coordinate_tolerance:
+                    continue
+                complete_matches.append((agent_id, agent_xy))
+            if not complete_matches:
+                failure_details.append(f"{selector.label}: coordinate mismatch")
+                continue
+            if len(complete_matches) > 1:
+                collision_detail = (
+                    f"{selector.label}: unexpected multiple-match collision "
+                    f"({len(complete_matches)} NPCs)"
+                )
+                failure_details.append(collision_detail)
+                collision_details.append(collision_detail)
+                continue
+
+            _agent_id, agent_xy = complete_matches[0]
+            distance_from_player = math.dist(player_xy, agent_xy)
+            if distance_from_player > OUTPOST_SERVICE_SEARCH_MAX_DIST:
+                failure_details.append(f"{selector.label}: outside the service search range")
+                continue
+            candidates.append((distance_from_player, str(selector.label), agent_xy))
+
+        if candidates:
+            if collision_details:
+                self._debug_log(
+                    f"Map-specific {service_label} selector collision detail: "
+                    f"{'; '.join(collision_details)}"
+                )
+            candidates.sort(key=lambda candidate: (candidate[0], candidate[1].casefold(), candidate[2]))
+            return candidates[0][2]
+
+        if log_failures:
+            detail_text = "; ".join(failure_details) if failure_details else "no selector definitions"
+            _log_agent_selector_failure(
+                MODULE_NAME,
+                f"Map-specific {service_label} selectors did not resolve on map {safe_map_id}: "
+                f"{detail_text}.",
+            )
+        return None
 
     def _resolve_service_coords(
         self,
         *,
+        map_id: int = 0,
+        service_type: str = "",
         selector_name: str = "",
-        name_query: str = "",
         model_id: int = 0,
         log_failures: bool = True,
     ) -> tuple[float, float] | None:
-        lookup_steps: list[dict[str, object]] = []
+        safe_map_id = max(0, _safe_int(map_id, 0))
+        safe_service_type = str(service_type or "").strip()
+        map_specific_selectors = MERCHANT_RULES_MAP_SERVICE_SELECTORS.get(safe_map_id, {}).get(
+            safe_service_type,
+            (),
+        )
+        if map_specific_selectors:
+            return self._resolve_map_specific_service_coords(
+                map_id=safe_map_id,
+                service_type=safe_service_type,
+                selectors=map_specific_selectors,
+                log_failures=log_failures,
+            )
+
         safe_selector_name = str(selector_name or "").strip()
-        safe_name_query = str(name_query or "").strip()
         safe_model_id = max(0, _safe_int(model_id, 0))
-
-        # A runtime-confirmed model ID is the strongest language-independent
-        # lookup, so try it before encoded/name selectors.
-        if safe_model_id > 0:
-            lookup_steps.append({"model_id": safe_model_id})
-        if safe_selector_name:
-            lookup_steps.append({"npc": safe_selector_name})
-        if safe_name_query:
-            lookup_steps.append({"target": safe_name_query})
-        if not lookup_steps:
-            return None
-
-        last_lookup_index = len(lookup_steps) - 1
-        for lookup_index, step in enumerate(lookup_steps):
-            coords = resolve_agent_xy_from_step(
-                step,
+        if safe_selector_name and _named_agent_target_has_authoritative_identity("npc", safe_selector_name):
+            return resolve_agent_xy_from_step(
+                {"npc": safe_selector_name},
                 recipe_name=MODULE_NAME,
-                step_idx=lookup_index,
+                step_idx=0,
                 agent_kind="npc",
                 default_max_dist=OUTPOST_SERVICE_SEARCH_MAX_DIST,
-                log_failures=bool(log_failures and lookup_index == last_lookup_index),
+                log_failures=log_failures,
             )
-            if coords is not None:
-                return coords
+        if safe_model_id > 0:
+            return resolve_agent_xy_from_step(
+                {"model_id": safe_model_id},
+                recipe_name=MODULE_NAME,
+                step_idx=0,
+                agent_kind="npc",
+                default_max_dist=OUTPOST_SERVICE_SEARCH_MAX_DIST,
+                log_failures=log_failures,
+            )
+        if not safe_selector_name:
+            return None
+        if log_failures:
+            _log_agent_selector_failure(
+                MODULE_NAME,
+                f"Service selector {safe_selector_name!r} has no encoded name or model ID; resolution was skipped.",
+            )
         return None
+
+    def _get_service_resolution_diagnostics(self) -> str:
+        """Read positional counts without requesting or decoding any NPC names."""
+
+        try:
+            from Py4GWCoreLib import Agent
+            from Py4GWCoreLib import AgentArray
+
+            player_xy, source = _get_agent_search_origin(Agent)
+            npc_ids = list(AgentArray.GetNPCMinipetArray() or [])
+            if player_xy is None:
+                return f"player=unavailable source={source} total_npcs={len(npc_ids)} in_range_npcs=unavailable"
+            in_range_ids = AgentArray.Filter.ByDistance(
+                npc_ids,
+                player_xy,
+                OUTPOST_SERVICE_SEARCH_MAX_DIST,
+            )
+            return (
+                f"player=({player_xy[0]:.1f}, {player_xy[1]:.1f}) source={source} "
+                f"total_npcs={len(npc_ids)} in_range_npcs={len(in_range_ids)}"
+            )
+        except Exception as exc:
+            return f"player/NPC diagnostics unavailable: {type(exc).__name__}"
 
     def _resolve_storage_access_coords(self) -> tuple[float, float] | None:
         if not Map.IsMapReady():
@@ -15596,100 +15233,90 @@ class MerchantRulesWidget:
 
         map_id = current_map_id
         selector_data = SUPPORTED_MAP_NPC_SELECTORS.get(map_id) or {}
-        required_services = self._get_required_service_types()
         model_overrides = SUPPORTED_MAP_SERVICE_MODEL_IDS.get(map_id, {})
 
         selector_keys = {
-            MERCHANT_TYPE_MERCHANT: ("merchant", MERCHANT_NAME_QUERY),
-            MERCHANT_TYPE_MATERIALS: ("materials", MATERIAL_TRADER_NAME_QUERY),
-            MERCHANT_TYPE_RARE_MATERIALS: ("rare_materials", RARE_MATERIAL_TRADER_NAME_QUERY),
+            MERCHANT_TYPE_MERCHANT: "merchant",
+            MERCHANT_TYPE_MATERIALS: "materials",
+            MERCHANT_TYPE_RARE_MATERIALS: "rare_materials",
         }
 
-        for merchant_type, (selector_key, name_query) in selector_keys.items():
-            if merchant_type not in required_services:
-                continue
+        for merchant_type, selector_key in selector_keys.items():
             selector_name = selector_data.get(selector_key) or DEFAULT_NPC_SELECTORS.get(selector_key)
+            model_id = max(0, _safe_int(model_overrides.get(merchant_type, 0), 0))
+            has_map_specific_selector = bool(
+                MERCHANT_RULES_MAP_SERVICE_SELECTORS.get(map_id, {}).get(merchant_type)
+            )
+            if not selector_name and not has_map_specific_selector and model_id <= 0:
+                continue
             coords[merchant_type] = self._resolve_service_coords(
+                map_id=map_id,
+                service_type=merchant_type,
                 selector_name=str(selector_name or ""),
-                name_query=name_query,
-                model_id=max(0, _safe_int(model_overrides.get(merchant_type, 0), 0)),
+                model_id=model_id,
                 log_failures=not passive,
             )
 
-        if MERCHANT_TYPE_RUNE_TRADER in required_services:
-            coords[MERCHANT_TYPE_RUNE_TRADER] = self._resolve_rune_trader_coords(
-                map_id,
-                log_failures=not passive,
-            )
-
-        if MERCHANT_TYPE_SCROLL_TRADER in required_services:
-            coords[MERCHANT_TYPE_SCROLL_TRADER] = self._resolve_scroll_trader_coords(
-                map_id,
-                selector_data,
-                log_failures=not passive,
-            )
-
-        required_vendor_services = {
-            service_type
-            for service_type in required_services
-            if service_type != MERCHANT_TYPE_CONSUMABLE_CRAFTER
-        }
-        required_count = len(required_services)
-        resolved_required_count = sum(
-            1
-            for service_type in required_services
-            if coords.get(service_type) is not None
+        coords[MERCHANT_TYPE_RUNE_TRADER] = self._resolve_rune_trader_coords(map_id, log_failures=not passive)
+        coords[MERCHANT_TYPE_SCROLL_TRADER] = self._resolve_scroll_trader_coords(
+            map_id,
+            selector_data,
+            log_failures=bool(not passive and self._has_enabled_scroll_trader_buy_rules()),
         )
 
+        resolved_services = [
+            MERCHANT_TYPE_LABELS.get(service_type, service_type)
+            for service_type, service_coords in coords.items()
+            if service_coords is not None
+        ]
+        unresolved_services = [
+            MERCHANT_TYPE_LABELS.get(service_type, service_type)
+            for service_type, service_coords in coords.items()
+            if service_coords is None
+        ]
+        resolved_count = len(resolved_services)
         location_label = "Guild Hall" if Map.IsGuildHall() else "Outpost"
-        base_message = (
-            f"{location_label} ready: {Map.GetMapName(map_id)} ({map_id}). Using specific merchant selectors."
+        has_merchant_rules_map_selectors = bool(MERCHANT_RULES_MAP_SERVICE_SELECTORS.get(map_id))
+        selector_mode_label = (
+            "verified trader locations"
+            if has_merchant_rules_map_selectors
+            else "location-specific trader information"
             if map_id in SUPPORTED_MAP_NPC_SELECTORS
-            else f"{location_label} ready: {Map.GetMapName(map_id)} ({map_id}). Using generic merchant selectors."
+            else "default trader information"
         )
-
-        if required_count <= 0:
-            supported_map = True
-            reason = f"{base_message} No merchant/trader service is required by the enabled rules."
-        elif resolved_required_count <= 0:
-            supported_map = False
-            reason = f"{base_message} None of the required merchant/trader services could be resolved."
-        elif resolved_required_count < required_count:
-            supported_map = True
-            reason = (
-                f"{base_message} Partial required-service resolution succeeded "
-                f"({resolved_required_count}/{required_count})."
-            )
-        else:
-            supported_map = True
-            reason = f"{base_message} All required merchant/trader services resolved."
+        base_message = (
+            f"{location_label} ready: {Map.GetMapName(map_id)} ({map_id}). "
+            f"Using {selector_mode_label}."
+        )
+        supported_map = resolved_count > 0
+        resolved_text = ", ".join(resolved_services) if resolved_services else "none"
+        unresolved_text = ", ".join(unresolved_services) if unresolved_services else "none"
+        reason = f"{base_message} Resolved services: {resolved_text}. Unresolved services: {unresolved_text}."
 
         resolved_context = (supported_map, reason, coords)
-
-        # Do not permanently cache transient failures.  Agent arrays can be empty
-        # for a short time after an outpost load; caching that state made later
-        # Execute calls reuse stale None coordinates forever.
-        all_required_resolved = resolved_required_count >= required_count
-        if all_required_resolved:
-            self.cached_context_map_id = current_map_id
-            self.cached_supported_context = resolved_context
-        else:
-            self.cached_context_map_id = -1
-            self.cached_supported_context = None
-
-        selector_mode = "specific" if map_id in SUPPORTED_MAP_NPC_SELECTORS else "generic"
+        self.cached_context_map_id = current_map_id
+        self.cached_supported_context = resolved_context
+        selector_mode = (
+            "merchant_rules_specific"
+            if has_merchant_rules_map_selectors
+            else "specific"
+            if map_id in SUPPORTED_MAP_NPC_SELECTORS
+            else "generic"
+        )
         self._debug_log(
             f"Context resolved: map={Map.GetMapName(map_id)} ({map_id}) selector_mode={selector_mode} "
-            f"required={sorted(required_services)} supported={supported_map} "
+            f"supported={supported_map} {self._get_service_resolution_diagnostics()} "
+            f"resolved_services={resolved_text} unresolved_services={unresolved_text} "
             f"merchant={self._format_debug_coords(coords[MERCHANT_TYPE_MERCHANT])} "
             f"materials={self._format_debug_coords(coords[MERCHANT_TYPE_MATERIALS])} "
             f"rune={self._format_debug_coords(coords[MERCHANT_TYPE_RUNE_TRADER])} "
             f"scroll={self._format_debug_coords(coords[MERCHANT_TYPE_SCROLL_TRADER])} "
-            f"rare={self._format_debug_coords(coords[MERCHANT_TYPE_RARE_MATERIALS])}"
+            f"rare={self._format_debug_coords(coords[MERCHANT_TYPE_RARE_MATERIALS])} "
+            f"consumable={self._format_debug_coords(coords[MERCHANT_TYPE_CONSUMABLE_CRAFTER])}"
         )
-        if not all_required_resolved:
+        if not supported_map or resolved_count < len(coords):
             self._debug_log(f"Context detail: {reason}")
-        return resolved_context
+        return self.cached_supported_context
 
     def _get_projected_supported_context(self, target_outpost_id: int) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
         safe_outpost_id = max(0, _safe_int(target_outpost_id, 0))
@@ -16118,7 +15745,12 @@ class MerchantRulesWidget:
         )
         return parsed_state
 
-    def _build_inventory_item_info(self, item_id: int) -> InventoryItemInfo | None:
+    def _build_inventory_item_info(
+        self,
+        item_id: int,
+        *,
+        include_runtime_name: bool = True,
+    ) -> InventoryItemInfo | None:
         """Read and normalize one live inventory item for rule matching.
 
         Missing native data or parsing failures return ``None`` so callers cannot plan from a
@@ -16145,10 +15777,15 @@ class MerchantRulesWidget:
                 is_weapon_like=is_weapon_like,
                 is_armor_piece=is_armor_piece,
             )
+            runtime_name = (
+                str(GLOBAL_CACHE.Item.GetName(safe_item_id) or f"Model {model_id}")
+                if include_runtime_name
+                else f"Model {model_id}"
+            )
             return InventoryItemInfo(
                 item_id=safe_item_id,
                 model_id=model_id,
-                name=str(GLOBAL_CACHE.Item.GetName(safe_item_id) or f"Model {model_id}"),
+                name=runtime_name,
                 quantity=quantity,
                 value=value,
                 item_type_id=int(item_type_id),
@@ -16656,13 +16293,7 @@ class MerchantRulesWidget:
         generic_model_name = f"model {safe_model_id}".casefold() if safe_model_id > 0 else ""
 
         if plain_name and plain_name.casefold() != generic_model_name:
-            normalized_name = _normalize_catalog_search_text(plain_name)
-            matching_model_ids = [
-                int(model_id)
-                for model_id in self.catalog_alias_to_model_ids.get(normalized_name, [])
-                if max(0, _safe_int(model_id, 0)) > 0
-            ]
-            if not matching_model_ids or safe_model_id in matching_model_ids:
+            if not self._runtime_item_label_contradicts_model(plain_name, safe_model_id):
                 return raw_name
 
         if safe_model_id > 0:
@@ -17953,7 +17584,8 @@ class MerchantRulesWidget:
                     PlannedTraderSale(
                         item_id=item.item_id,
                         model_id=item.model_id,
-                        label=item.name,
+                        label=self._format_inventory_item_log_label(item),
+                        expected_rune_identifiers=_normalize_rune_identifier_tuple(item.rune_identifiers),
                     )
                 )
             else:
@@ -18129,7 +17761,8 @@ class MerchantRulesWidget:
                     PlannedTraderSale(
                         item_id=item.item_id,
                         model_id=item.model_id,
-                        label=item.name,
+                        label=target_label,
+                        expected_rune_identifiers=_normalize_rune_identifier_tuple(item.rune_identifiers),
                     )
                 )
                 plan.entries.append(
@@ -19315,7 +18948,7 @@ class MerchantRulesWidget:
                     merchant_type=merchant_type,
                     item_id=item.item_id,
                     model_id=item.model_id,
-                    label=item.name,
+                    label=self._format_inventory_item_log_label(item),
                     batches_to_sell=batches_to_sell,
                     quantity_to_sell=sell_quantity,
                     batch_size=batch_size,
@@ -21518,7 +21151,8 @@ class MerchantRulesWidget:
                                     PlannedTraderSale(
                                         item_id=item.item_id,
                                         model_id=item.model_id,
-                                        label=item.name,
+                                        label=self._format_inventory_item_log_label(item),
+                                        expected_rune_identifiers=_normalize_rune_identifier_tuple(item.rune_identifiers),
                                     )
                                 )
                                 plan.entries.append(
@@ -23133,6 +22767,164 @@ class MerchantRulesWidget:
         )
         return outcome
 
+    def _reacquire_planned_sale_item(
+        self,
+        planned_item_id: int,
+    ) -> tuple[InventoryItemInfo | None, str]:
+        safe_item_id = max(0, _safe_int(planned_item_id, 0))
+        if safe_item_id <= 0:
+            return None, "the planned item ID is invalid"
+        try:
+            inventory_item_ids = {int(item_id) for item_id in self._get_inventory_item_ids()}
+        except Exception:
+            return None, "the current inventory could not be read"
+        if safe_item_id not in inventory_item_ids:
+            return None, "the planned item is no longer in the inventory"
+
+        item = self._build_inventory_item_info(safe_item_id, include_runtime_name=False)
+        if item is None:
+            return None, "the planned item could not be read"
+        if int(item.item_id) != safe_item_id:
+            return None, "the current item ID no longer matches the planned item"
+        return item, ""
+
+    def _validate_planned_material_sale_identity(
+        self,
+        sale: PlannedMaterialSale,
+        required_quantity: int,
+    ) -> tuple[InventoryItemInfo | None, str]:
+        item, reason = self._reacquire_planned_sale_item(sale.item_id)
+        if item is None:
+            return None, reason
+
+        planned_model_id = max(0, _safe_int(sale.model_id, 0))
+        if planned_model_id <= 0 or int(item.model_id) != planned_model_id:
+            return None, "the current model ID no longer matches the planned material"
+        if int(item.quantity) < max(1, int(required_quantity)):
+            return None, "the current stack quantity is no longer sufficient for the planned sale"
+        if not bool(item.is_material):
+            return None, "the current item is no longer classified as a material"
+        current_merchant_type = self._get_material_merchant_type_by_model(int(item.model_id))
+        if current_merchant_type != str(sale.merchant_type or ""):
+            return None, "the current material trader destination no longer matches the plan"
+        return item, ""
+
+    def _validate_planned_trader_sale_identity(
+        self,
+        sale: PlannedTraderSale,
+    ) -> tuple[InventoryItemInfo | None, str]:
+        item, reason = self._reacquire_planned_sale_item(sale.item_id)
+        if item is None:
+            return None, reason
+
+        planned_model_id = max(0, _safe_int(sale.model_id, 0))
+        if planned_model_id <= 0 or int(item.model_id) != planned_model_id:
+            return None, "the current model ID no longer matches the planned rune or insignia"
+        if int(item.quantity) < 1:
+            return None, "the rune or insignia is no longer available"
+        if str(item.standalone_kind or "") != RUNE_STANDALONE_KIND:
+            return None, "the current item is no longer a standalone rune or insignia"
+
+        expected_identifiers = _normalize_rune_identifier_tuple(sale.expected_rune_identifiers)
+        if not expected_identifiers:
+            return None, "the plan has no exact rune or insignia modifier identity"
+        current_identifiers = _normalize_rune_identifier_tuple(item.rune_identifiers)
+        if current_identifiers != expected_identifiers:
+            return None, "the exact rune or insignia modifier identity changed after Preview"
+        return item, ""
+
+    def _wait_for_planned_sale_completion(
+        self,
+        sale: PlannedMaterialSale | PlannedTraderSale,
+        expected_quantity: int,
+        *,
+        timeout_ms: int = 350,
+        step_ms: int = 10,
+    ):
+        """Confirm one sale from fresh inventory membership, identity, and exact quantity."""
+
+        safe_item_id = max(0, _safe_int(sale.item_id, 0))
+        safe_model_id = max(0, _safe_int(sale.model_id, 0))
+        safe_expected_quantity = max(0, _safe_int(expected_quantity, 0))
+        safe_timeout_ms = max(0, _safe_int(timeout_ms, 0))
+        safe_step_ms = max(1, _safe_int(step_ms, 1))
+        elapsed_ms = 0
+        last_quantity: int | None = None
+        last_reason = "the expected inventory quantity was not observed"
+        if safe_item_id <= 0 or safe_model_id <= 0:
+            return False, True, "the planned sale identity is invalid"
+
+        while True:
+            try:
+                inventory_item_ids = {int(item_id) for item_id in self._get_inventory_item_ids()}
+            except Exception:
+                inventory_item_ids = None
+                last_reason = "the current inventory could not be read"
+
+            if inventory_item_ids is not None:
+                if safe_item_id not in inventory_item_ids:
+                    if safe_expected_quantity == 0:
+                        return True, False, ""
+                    last_reason = (
+                        f"the planned item disappeared while {safe_expected_quantity} unit(s) "
+                        "were expected to remain"
+                    )
+                else:
+                    item = self._build_inventory_item_info(safe_item_id, include_runtime_name=False)
+                    if item is None:
+                        return False, True, "the current item could not be read after the sale"
+                    if int(item.item_id) != safe_item_id:
+                        return False, True, "the current item ID no longer matches the planned item"
+                    if safe_model_id <= 0 or int(item.model_id) != safe_model_id:
+                        return False, True, "the current model ID no longer matches the planned item"
+
+                    if isinstance(sale, PlannedMaterialSale):
+                        if not bool(item.is_material):
+                            return False, True, "the current item is no longer classified as a material"
+                        current_merchant_type = self._get_material_merchant_type_by_model(int(item.model_id))
+                        if current_merchant_type != str(sale.merchant_type or ""):
+                            return False, True, "the current material trader destination no longer matches the plan"
+                    else:
+                        if str(item.standalone_kind or "") != RUNE_STANDALONE_KIND:
+                            return False, True, "the current item is no longer a standalone rune or insignia"
+                        expected_identifiers = _normalize_rune_identifier_tuple(sale.expected_rune_identifiers)
+                        current_identifiers = _normalize_rune_identifier_tuple(item.rune_identifiers)
+                        if not expected_identifiers or current_identifiers != expected_identifiers:
+                            return False, True, "the exact rune or insignia modifier identity changed after the sale"
+
+                    last_quantity = max(0, int(item.quantity))
+                    if last_quantity == safe_expected_quantity:
+                        return True, False, ""
+                    last_reason = (
+                        f"expected {safe_expected_quantity} unit(s) after the sale, "
+                        f"but observed {last_quantity}"
+                    )
+
+            if elapsed_ms >= safe_timeout_ms:
+                return False, False, last_reason
+            wait_ms = min(safe_step_ms, safe_timeout_ms - elapsed_ms)
+            if wait_ms <= 0:
+                return False, False, last_reason
+            yield from Routines.Yield.wait(wait_ms)
+            elapsed_ms += wait_ms
+
+    def _report_sale_identity_abort(
+        self,
+        phase_label: str,
+        item_id: int,
+        model_id: int,
+        reason: str,
+    ) -> None:
+        safe_label = self._format_model_label_short(max(0, _safe_int(model_id, 0)))
+        ConsoleLog(
+            MODULE_NAME,
+            f"{phase_label} skipped {safe_label}: {reason}.",
+            Console.MessageType.Warning,
+        )
+        self._debug_log(
+            f"{phase_label} identity check failed: item_id={int(item_id)} model_id={int(model_id)} reason={reason}."
+        )
+
     def _sell_planned_materials(
         self,
         coords: tuple[float, float],
@@ -23172,10 +22964,22 @@ class MerchantRulesWidget:
             return outcome
 
         for sale in material_sales:
-            for _ in range(max(0, int(sale.batches_to_sell))):
-                previous_quantity = int(GLOBAL_CACHE.Item.Properties.GetQuantity(sale.item_id))
-                if previous_quantity < sale.batch_size:
-                    outcome.depleted += 1
+            planned_batches = max(0, int(sale.batches_to_sell))
+            for batch_index in range(planned_batches):
+                remaining_batches = planned_batches - batch_index
+                required_quantity = remaining_batches * max(1, int(sale.batch_size))
+                live_item, identity_failure = self._validate_planned_material_sale_identity(
+                    sale,
+                    required_quantity,
+                )
+                if live_item is None:
+                    outcome.unavailable += remaining_batches
+                    self._report_sale_identity_abort(
+                        phase_label,
+                        sale.item_id,
+                        sale.model_id,
+                        identity_failure,
+                    )
                     break
 
                 quoted_value = yield from Routines.Yield.Merchant._wait_for_quote(  # pylint: disable=protected-access
@@ -23188,21 +22992,54 @@ class MerchantRulesWidget:
                     outcome.quote_failures += 1
                     break
 
+                live_item, identity_failure = self._validate_planned_material_sale_identity(
+                    sale,
+                    required_quantity,
+                )
+                if live_item is None:
+                    outcome.unavailable += remaining_batches
+                    self._report_sale_identity_abort(
+                        phase_label,
+                        sale.item_id,
+                        sale.model_id,
+                        identity_failure,
+                    )
+                    break
+                previous_quantity = int(live_item.quantity)
                 GLOBAL_CACHE.Trading.Trader.SellItem(sale.item_id, quoted_value)
-                updated_quantity = yield from Routines.Yield.Merchant._wait_for_stack_quantity_drop(  # pylint: disable=protected-access
-                    sale.item_id,
-                    previous_quantity,
+                expected_quantity = max(0, previous_quantity - max(1, int(sale.batch_size)))
+                (
+                    completed,
+                    post_sale_identity_failure,
+                    completion_reason,
+                ) = yield from self._wait_for_planned_sale_completion(
+                    sale,
+                    expected_quantity,
                     timeout_ms=350,
                     step_ms=10,
                 )
-                if updated_quantity >= previous_quantity:
+                if post_sale_identity_failure:
+                    outcome.unavailable += remaining_batches
+                    self._report_sale_identity_abort(
+                        phase_label,
+                        sale.item_id,
+                        sale.model_id,
+                        completion_reason,
+                    )
+                    break
+                if not completed:
                     outcome.timeout_failures += 1
+                    self._debug_log(
+                        f"{phase_label} completion check failed: item_id={sale.item_id} "
+                        f"expected_quantity={expected_quantity} reason={completion_reason}."
+                    )
                     break
                 outcome.completed += 1
                 yield from Routines.Yield.wait(40)
         self._debug_log(
             f"{phase_label}: completed={outcome.completed}/{outcome.attempted} quote_failures={outcome.quote_failures} "
-            f"quantity_failures={outcome.timeout_failures} depleted={outcome.depleted} load_failures={outcome.load_failures}"
+            f"quantity_failures={outcome.timeout_failures} depleted={outcome.depleted} "
+            f"identity_failures={outcome.unavailable} load_failures={outcome.load_failures}"
         )
         return outcome
 
@@ -23242,9 +23079,15 @@ class MerchantRulesWidget:
             return outcome
 
         for sale in trader_sales:
-            previous_quantity = int(GLOBAL_CACHE.Item.Properties.GetQuantity(sale.item_id))
-            if previous_quantity <= 0:
-                outcome.depleted += 1
+            live_item, identity_failure = self._validate_planned_trader_sale_identity(sale)
+            if live_item is None:
+                outcome.unavailable += 1
+                self._report_sale_identity_abort(
+                    phase_label,
+                    sale.item_id,
+                    sale.model_id,
+                    identity_failure,
+                )
                 continue
 
             quoted_value = yield from Routines.Yield.Merchant._wait_for_quote(  # pylint: disable=protected-access
@@ -23257,21 +23100,51 @@ class MerchantRulesWidget:
                 outcome.quote_failures += 1
                 continue
 
+            live_item, identity_failure = self._validate_planned_trader_sale_identity(sale)
+            if live_item is None:
+                outcome.unavailable += 1
+                self._report_sale_identity_abort(
+                    phase_label,
+                    sale.item_id,
+                    sale.model_id,
+                    identity_failure,
+                )
+                continue
+            previous_quantity = int(live_item.quantity)
             GLOBAL_CACHE.Trading.Trader.SellItem(sale.item_id, quoted_value)
-            updated_quantity = yield from Routines.Yield.Merchant._wait_for_stack_quantity_drop(  # pylint: disable=protected-access
-                sale.item_id,
-                previous_quantity,
+            expected_quantity = max(0, previous_quantity - 1)
+            (
+                completed,
+                post_sale_identity_failure,
+                completion_reason,
+            ) = yield from self._wait_for_planned_sale_completion(
+                sale,
+                expected_quantity,
                 timeout_ms=350,
                 step_ms=10,
             )
-            if updated_quantity >= previous_quantity:
+            if post_sale_identity_failure:
+                outcome.unavailable += 1
+                self._report_sale_identity_abort(
+                    phase_label,
+                    sale.item_id,
+                    sale.model_id,
+                    completion_reason,
+                )
+                continue
+            if not completed:
                 outcome.timeout_failures += 1
+                self._debug_log(
+                    f"{phase_label} completion check failed: item_id={sale.item_id} "
+                    f"expected_quantity={expected_quantity} reason={completion_reason}."
+                )
                 continue
             outcome.completed += 1
             yield from Routines.Yield.wait(40)
         self._debug_log(
             f"{phase_label}: completed={outcome.completed}/{outcome.attempted} quote_failures={outcome.quote_failures} "
-            f"quantity_failures={outcome.timeout_failures} depleted={outcome.depleted} load_failures={outcome.load_failures}"
+            f"quantity_failures={outcome.timeout_failures} depleted={outcome.depleted} "
+            f"identity_failures={outcome.unavailable} load_failures={outcome.load_failures}"
         )
         return outcome
 
