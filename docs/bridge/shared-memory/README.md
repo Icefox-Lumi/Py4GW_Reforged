@@ -6,11 +6,12 @@ consumers and the Reforged Native C++ writer.
 
 ## Authority and status
 
-- `multibox-shmem-cpp-writer-plan.md` defines the locked migration scope and
-  the byte/layout and ownership invariants.
 - `multibox-shmem-cpp-writer-postmortem.md` records the resolved layout bug,
   root cause, and corrective evidence. Read it before changing the layout.
-- Both documents report the migration as implemented and working; verify live
+- `../../archive/bridge/shared-memory/multibox-shmem-cpp-writer-plan.md` preserves the locked migration
+  scope and the byte/layout invariants as implemented; note its layout table
+  predates the postmortem correction.
+- Both records report the migration as implemented and working; verify live
   behavior and the current native/Python sources before extending it.
 - Coordination regions such as `Inbox`, `Intents`, and `HeroAIOptions` remain
   Python-written according to the migration record; do not infer that the C++
@@ -22,14 +23,15 @@ consumers and the Reforged Native C++ writer.
   `Py4GWCoreLib/GlobalCache/` and its `shared_memory_src/` support modules.
 - Native writer ownership is in the Reforged Native sibling project under its
   multibox module; inspect that source for ABI and layout changes.
-- `docs/bridge/mcp/mcp-bridge.md` covers bridge/MCP integration, not the byte-level shared
-  memory migration itself.
+- `docs/bridge/mcp/mcp-bridge.md` covers bridge/MCP integration, not the
+  byte-level shared memory migration itself.
 
 ## Review order
 
-1. Read the plan and postmortem together.
-2. Compare Python structures with the native mirror and verify `sizeof`/layout
-   invariants.
+1. Read the postmortem and the archived plan together.
+2. Compare Python structures with the native mirror and verify
+   `sizeof`/layout invariants.
 3. Check map-load zeroing, account identity, slot liveness, and coordination
    ownership.
-4. Run focused shared-memory/runtime checks before claiming integration success.
+4. Run focused shared-memory/runtime checks before claiming integration
+   success.

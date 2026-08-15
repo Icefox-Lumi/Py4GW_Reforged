@@ -6,4 +6,4 @@ their status says otherwise.
 
 - `redesign/` contains the active redesign record set.
 - `plans/` contains proposed migrations for Inventory+ and related item-management behavior.
-- `redesign/archive/` preserves prior designs, audits, and derived data.
+- `../../archive/loot/redesign/` preserves prior designs, audits, and derived data.

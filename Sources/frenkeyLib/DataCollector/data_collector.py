@@ -1,34 +1,11 @@
-import os
-from typing import Callable
-
-import Py4GW
 import PySystem
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from Py4GWCoreLib.py4gwcorelib_src.Timer import ThrottledTimer
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
 from Sources.frenkeyLib.DataCollector.collectors.base_collectors import BaseCollector
-from Sources.frenkeyLib.DataCollector.collectors.allies_collector import ALLIES
-from Sources.frenkeyLib.DataCollector.collectors.armorers_collector import ARMORERS
-from Sources.frenkeyLib.DataCollector.collectors.artisans_collector import ARTISANS
-from Sources.frenkeyLib.DataCollector.collectors.chest_collector import CHESTS
-from Sources.frenkeyLib.DataCollector.collectors.collectors_collector import COLLECTORS
-from Sources.frenkeyLib.DataCollector.collectors.consumable_crafters_collector import CONSUMABLE_CRAFTERS
-from Sources.frenkeyLib.DataCollector.collectors.foes_collector import FOES
 from Sources.frenkeyLib.DataCollector.collectors.items_collector import ITEMS
-from Sources.frenkeyLib.DataCollector.collectors.merchant_collector import MERCHANTS
-from Sources.frenkeyLib.DataCollector.collectors.trader_collector import TRADERS
-from Sources.frenkeyLib.DataCollector.collectors.weaponsmith_collector import WEAPONSMITHS
 from Sources.frenkeyLib.DataCollector.config import DataCollectorConfig
 
-
-def get_path_providers(file_name : str) -> tuple[Callable[..., str], Callable[..., str]]:        
-    def local_path_provider() -> str:
-        return os.path.join(PySystem.Console.get_projects_path(), "Settings", "Global", "Widgets", "Data Collector", file_name)
-
-    def default_path_provider() -> str:
-        return os.path.join(PySystem.Console.get_projects_path(), "Sources", "frenkeyLib", "data", file_name)
-
-    return local_path_provider, default_path_provider
 
 class DataCollectorRuntime:
     def __init__(self, module_name: str, module_icon: str):
@@ -36,6 +13,10 @@ class DataCollectorRuntime:
         self.module_icon = module_icon
         self.config = DataCollectorConfig()
         self.run_throttle = ThrottledTimer(250)
+        # Only the item catalog is wired into the runtime. The other legacy
+        # collectors (allies, armorers, artisans, chests, collectors,
+        # consumable crafters, foes, merchants, traders, weaponsmiths) are
+        # dormant: their modules remain importable but are not driven here.
         self.collectors : dict[str, BaseCollector] = {
             # 'Allies': ALLIES,
             # 'Armorers': ARMORERS,

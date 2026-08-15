@@ -294,7 +294,7 @@ After the UI Elements Universe Discovery project, 11 FrameProc addresses are con
 
 **Procedure used**: For each control, the WASM FrameProc was identified by searching WASM for the source file path string (e.g., `"UiCtlDropMenu.cpp"`), then the same string was searched in the EXE and its xref identified the EXE function. Standard Direction B (WASM symbol → EXE address) procedure.
 
-**CRITICAL**: Tier 2 controls (Dropdown, Slider, EditableText, ProgressBar, Tabs, MultiLineTextLabel, GroupHeader) had Phase 3 Create functions implemented but ALL crashed the client. The address mappings are verified correct — the C++ implementation needs rework. DO NOT reuse the Phase 3 C++ code as-is. Full catalog at `docs/ui/research/ui-controls-catalog.md`.
+**CRITICAL**: Tier 2 controls (Dropdown, Slider, EditableText, ProgressBar, Tabs, MultiLineTextLabel, GroupHeader) had Phase 3 Create functions implemented but ALL crashed the client. The address mappings are verified correct — the C++ implementation needs rework. DO NOT reuse the Phase 3 C++ code as-is. Full catalog at `docs/archive/ui/research/ui-controls-catalog.md`.
 
 ---
 

@@ -30,7 +30,7 @@ lets a per-item HIDE override a broad rarity highlight. Living-AGENT rules now a
 honor alpha the same way (fade via 0x01-0xFE, hide via 0x00) - a second hook on
 CCharAgent::GetTextData applies it to the name tag, while the resolver still colors
 the target/consider ring.
-See docs/ui/name-tag-colors/reverse-engineering.md and
+See docs/archive/ui/name-tag-colors/reverse-engineering.md and
 docs/game-client/research/item_gadget_recolor_reverse_engineering.md.
 """
 

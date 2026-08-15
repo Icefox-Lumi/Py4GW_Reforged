@@ -4,7 +4,7 @@ A practical guide for turning an approved **HTML mockup** into a working **Py4GW
 plus the hard-won gotchas from the Launch Bar build. Read this before starting a new
 mockup-driven feature; it will save you the same debugging loop.
 
-Companion docs: `../launch_bar/launch-bar-im-gui-implementation-plan.md` (a worked example of the plan format),
+Companion docs: `../../archive/ui/launch-bar/launch-bar-im-gui-implementation-plan.md` (a worked example of the plan format),
 and the binding stubs at `stubs/PyImGui.pyi` (useful but **not fully trustworthy** — see §4).
 
 ---

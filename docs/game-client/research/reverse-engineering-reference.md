@@ -793,8 +793,8 @@ The resolution logic was consolidated into shared helpers in `py_ui.h`:
 All hardcoded address comments in `py_ui.h` were removed. All missing bindings added to `stubs/PyUIManager.pyi`.
 
 ### Complete investigation in:
-- `docs/ui/research/title-rendering-research.md` — all 11 failed approaches + working solution
-- `docs/ui/research/native-gw-window-creation-investigation.md` — window creation pipeline
+- `docs/archive/ui/research/title-rendering-research.md` — all 11 failed approaches + working solution
+- `docs/archive/ui/research/native-gw-window-creation-investigation.md` — window creation pipeline
 
 ---
 
@@ -974,27 +974,27 @@ All files in `docs/game-client/research/`:
 | `cpp-wasm-mapping.md` | Full procedure for CPP-to-WASM-to-EXE translation |
 | `gw-combat-ai-reverse-engineering.md` | Combat AI reverse engineering analysis |
 | `name-obfuscation-reverse-engineering.md` | Name-obfuscation subsystem reference: packet rewrite hook, timing behavior, capture workflow, unresolved surfaces, and the current friend/guild/comm split |
-| `native-gw-window-creation-investigation.md` | Window creation/proc RE investigation |
-| `native-ui-title-and-encoded-string-reference.md` | Native UI title and encoding reference |
+| `native-gw-window-creation-investigation.md` | Window creation/proc RE investigation (archived) |
+| `native-ui-title-and-encoded-string-reference.md` | Native UI title and encoding reference (archived) |
 | `inventory-slot-tint-reverse-engineering.md` | Confirmed `CItemImageFrame` background tint path, EXE hook target, and Reforged-Native implementation spec |
 | `rosetta-stone.txt` | GwA2 (AutoIt) to Py4GW function mapping |
-| `title-rendering-research.md` | Title rendering investigation and working solution (11 approaches) |
-| `ui-controls-catalog.md` | Complete UI controls catalog - 39 types, tiers, structs, addresses, and Phase 3 crash documentation (2026-06-05) |
+| `title-rendering-research.md` | Title rendering investigation and working solution (11 approaches) (archived) |
+| `ui-controls-catalog.md` | Complete UI controls catalog - 39 types, tiers, structs, addresses, and Phase 3 crash documentation (2026-06-05) (archived) |
 | `native-button-pipeline.md` | **Complete button pipeline specification** — rendering, type registry, click dispatch, OnFrameNotify, 2-path comparison, gap inventory. 2026-06-19. |
 | `window-creation-architecture.md` | CContainerFrame window creation architecture reference |
 
 Other project docs remain in `docs/`:
-- `architecture/conceptual_model/py4-gw-conceptual-model.md` - canonical architecture
-- `ui/widget_manager/widget-manager-and-catalog.md` - widget discovery metadata
-- `integration/bridge/mcp-bridge.md` - MCP bridge planning
-- `ui-controls-catalog.md` - Complete UI controls catalog (39 types, 2026-06-05)
+- `architecture/reference/py4-gw-conceptual-model.md` - canonical architecture
+- `ui/widget-manager/widget-manager-and-catalog.md` - widget discovery metadata
+- `bridge/mcp/mcp-bridge.md` - MCP bridge planning
+- `archive/ui/research/ui-controls-catalog.md` - Complete UI controls catalog (39 types, 2026-06-05)
 - Build, bot, AI, and UI-specific docs
 
 ---
 
 ## 14. UI Controls Catalog (2026-06-05)
 
-Complete universe discovery of all 39 Guild Wars engine UI control types. Full standalone reference: `docs/ui/research/ui-controls-catalog.md`. This section covers the essentials.
+Complete universe discovery of all 39 Guild Wars engine UI control types. Full standalone reference: `docs/archive/ui/research/ui-controls-catalog.md`. This section covers the essentials.
 
 ### Architecture: Three Registration Layers
 

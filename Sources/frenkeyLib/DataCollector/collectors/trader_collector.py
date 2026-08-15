@@ -4,13 +4,13 @@ from Py4GWCoreLib.AgentArray import AgentArray
 from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
-from Sources.frenkeyLib.DataCollector.collectors.base_collectors import BaseCollector, ListCollector
+from Sources.frenkeyLib.DataCollector.collectors.base_collectors import ListCollector
 from Sources.frenkeyLib.DataCollector.models import Trader, TraderType
 
 
 class TraderCollector(ListCollector[Trader]):
-    def __init__(self, get_local_path, get_default_path, *, version = '1.0', value_type = None, key_decoder = None, key_encoder = None):
-        super().__init__(get_local_path, get_default_path, version=version, value_type=value_type, key_decoder=key_decoder, key_encoder=key_encoder)
+    def __init__(self, document_name: str, *, version: str = '1.0', value_type=None):
+        super().__init__(document_name, version=version, value_type=value_type)
         self.map_traders : list[Trader] = []
         
     def _collect(self):        
@@ -58,4 +58,4 @@ class TraderCollector(ListCollector[Trader]):
         map_traders = [trader for trader in self if trader.map_id == self.current_map_id]
         self.map_traders.extend(map_traders)
 
-TRADERS = TraderCollector(*BaseCollector.get_path_providers("traders.json"))
+TRADERS = TraderCollector("Widgets/Data Collector/traders.json")

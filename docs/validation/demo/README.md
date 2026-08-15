@@ -1,39 +1,45 @@
 # Demo Replacement — Context & Analysis
 
-Context gathering for replacing the Py4GW demo/test widgets. These scripts exist to **exercise and validate the whole CPP Native backend** — the `Py*` bindings, the Python wrappers, and the datasource/context paths — from inside the live game client. Before designing a replacement we captured what the two existing demos are, what they cover, and where the gaps are.
+Context gathering for the Py4GW demo/test widgets. These scripts exist to
+**exercise and validate the whole CPP Native backend** — the `Py*` bindings,
+the Python wrappers, and the datasource/context paths — from inside the live
+game client.
 
-**Related backend project:** `C:\Users\Apo\Py4GW_Reforged_Native` (the C++ DLL that publishes the `Py*` modules).
+**Related backend project:** `C:\Users\Apo\Py4GW_Reforged_Native` (the C++
+DLL that publishes the `Py*` modules).
 
-> Status: **analysis / context only.** No replacement has been designed or built yet. See `gaps-and-considerations.md` §5 for the open design questions to settle first.
+> Status: **replacement built.** The build plan completed with 44 sections
+> registered (see `archive/build-plan.md`); the current build's surface and
+> the pending re-engineer proposal live in `research/`. The pre-build
+> analysis and inventory records are historical evidence preserved under
+> `archive/`.
 
-## The two subjects
+## Live references
 
-| Demo | Location | Shape | Coverage |
-|---|---|---|---|
-| **v1 (legacy)** | `Widgets/Coding/Py4GW_DEMO.py` (~2,780 lines, one file) | many floating windows, `GLOBAL_CACHE` + `ImGui_Legacy` | broad: 13 domains, shallow vs new backend |
-| **v2 (modular)** | `Py4GW DEMO 2.0.py` + `Sources/ApoSource/py4gw_demo_src/` | one window + sidebar nav, native `PyImGui`, context structs | narrow: Map/Agents/Pathing, deep + new surface |
+- [`contexts.md`](contexts.md) — native context structs ↔ `native_src/context`
+  ctypes readers, field inventories (18 contexts).
+- [`python-wrapper-api.md`](python-wrapper-api.md) — per-domain wrapper
+  getter/action surface (~620 getters / 240 actions, 25 wrappers).
+- [`research/`](research/README.md) — the current evidence base and the
+  pending re-engineer spec: original demo patterns (R1), binding-method
+  inventory (R2), wrapper casting (R3), current-shortcut audit (R4), and the
+  approval-gated `spec-reengineer.md`.
 
-## Documents
+## Archived analysis (historical evidence)
 
-**Context & analysis (start here):**
-1. [`demo-v1-legacy.md`](demo-v1-legacy.md) — v1 architecture and full per-section coverage inventory.
-2. [`demo-v2-modular.md`](demo-v2-modular.md) — v2 file layout, sidebar/router architecture, per-view coverage, and what it's missing vs v1.
-3. [`coverage-matrix.md`](coverage-matrix.md) — side-by-side domain matrix (v1 vs v2 vs backend); the work backlog.
-4. [`backend-surface.md`](backend-surface.md) — high-level backend inventory (wrappers, contexts, GLOBAL_CACHE, C++ `Py*` bindings, `GW/` managers).
-5. [`gaps-and-considerations.md`](gaps-and-considerations.md) — divergences, gaps, deprecation pressures, known defects, design questions.
-
-**Full inventories (the completeness checklists):**
-6. [`cpp-bindings-gameplay.md`](cpp-bindings-gameplay.md) — every GW gameplay `Py*` binding, per-method, getters vs actions (~430 methods, 23 modules).
-7. [`cpp-bindings-infra-io.md`](cpp-bindings-infra-io.md) — infra/IO/render bindings (17 modules); PyImGui high-level only (**deferred pass**).
-8. [`contexts.md`](contexts.md) — native context structs ↔ `native_src/context` ctypes readers, field inventories (18 contexts).
-9. [`python-reusable-scripts.md`](python-reusable-scripts.md) — existing frame/agent/event/config scripts to **harvest** code from, with a ranked shortlist.
-10. [`python-wrapper-api.md`](python-wrapper-api.md) — per-domain wrapper getter/action surface (~620 getters / 240 actions, 25 wrappers).
-
-**Plan:**
-11. [`build-plan.md`](build-plan.md) — **every module → a DEMO 2.0 section**, with data path, harvest source, and phased execution order.
-
-> Note: **PyImGui + its addons are a deferred, dedicated pass** (doc 07 has the high-level map only) — not part of the main build order.
+The pre-build analysis and plan are preserved under
+[`../../archive/validation/demo/`](../../archive/validation/demo/):
+v1/v2 inventories, the coverage matrix, backend and C++-binding inventories,
+reusable-script harvest list, the completed build plan, gaps analysis, and
+transitional debug notes. Read them for the history of how the replacement
+was scoped, not as a description of the current demo surface.
 
 ## One-paragraph summary
 
-DEMO v1 is a complete-but-legacy, monolithic "show every method and all data" widget built on `GLOBAL_CACHE` + `ImGui_Legacy`, covering all 13 gameplay domains but only shallowly against the new Reforged backend. DEMO v2 is an in-progress modular rewrite (proper `Sources/` package, single dockable sidebar window, native `PyImGui`, dataclass state) that exercises the *new* Reforged surface v1 never touched — `Map.MissionMap/MiniMap/WorldMap/Pregame/Pathing`, `MapProjection`, `native_src` ctypes context structs — but has only ported Map, Agents and Pathing, dropping ~10 domains. A replacement should adopt v2's shell and native-surface depth while restoring v1's breadth, and additionally cover the large set of `Py*` bindings **neither** demo touches (`PyTrade`, `PyCamera`, `PyDXOverlay`, `PyDialog`, `PyUIManager`, `PyTexture`, `PyGuild`, `PyFriendList`, `PyPacketSniffer`, `PyAgentEvents`, `PySettings`, and more).
+DEMO v1 was a complete-but-legacy, monolithic "show every method and all
+data" widget built on `GLOBAL_CACHE` + `ImGui_Legacy`, covering all 13
+gameplay domains but only shallowly against the Reforged backend. The
+replacement adopted v2's modular shell (`Sources/` package, sidebar window,
+native `PyImGui`, dataclass state) and completed a build covering all 23
+gameplay `Py*` modules and ~15 infra modules across 44 registered sections;
+the re-engineer spec in `research/` is the next, approval-gated step.

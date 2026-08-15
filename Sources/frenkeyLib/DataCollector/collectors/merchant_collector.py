@@ -6,13 +6,13 @@ from Py4GWCoreLib.UIManager import MerchantWindow
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
 
-from Sources.frenkeyLib.DataCollector.collectors.base_collectors import BaseCollector, ListCollector
+from Sources.frenkeyLib.DataCollector.collectors.base_collectors import ListCollector
 from Sources.frenkeyLib.DataCollector.models import Merchant
 
 
 class MerchantCollector(ListCollector[Merchant]):
-    def __init__(self, get_local_path, get_default_path, *, version = '1.0', value_type = None, key_decoder = None, key_encoder = None):
-        super().__init__(get_local_path, get_default_path, version=version, value_type=value_type, key_decoder=key_decoder, key_encoder=key_encoder)
+    def __init__(self, document_name: str, *, version: str = '1.0', value_type=None):
+        super().__init__(document_name, version=version, value_type=value_type)
         self.map_merchants : list[Merchant] = []
         
         
@@ -66,4 +66,4 @@ class MerchantCollector(ListCollector[Merchant]):
         map_merchants = [merchant for merchant in self if merchant.map_id == self.current_map_id]
         self.map_merchants.extend(map_merchants)
 
-MERCHANTS = MerchantCollector(*BaseCollector.get_path_providers("merchants.json"))
+MERCHANTS = MerchantCollector("Widgets/Data Collector/merchants.json")

@@ -171,7 +171,7 @@ The persistence policy is a project hard rule:
 - `docs/bridge/mcp/mcp-bridge.md` is the MCP-facing planning summary; use
   `py4gw_bridge/README.md` for daemon, injected client, CLI, and operator
   usage.
-- `docs/architecture/reference/py4-gw-model-features-detail.txt` is a derived quick-scan export, not a
+- `docs/archive/architecture/reference/py4-gw-model-features-detail.txt` is a derived quick-scan export, not a
   separate authority.
 - `docs/ui/widget-manager/widget-manager-and-catalog.md` is the high-value reference before
   changing widget discovery, metadata defaults, `WidgetHandler`, or
@@ -233,12 +233,12 @@ The persistence policy is a project hard rule:
 
 ### Additional RE references
 
-- `docs/ui/research/native-gw-window-creation-investigation.md` covers window creation;
-  and `docs/ui/research/native-ui-title-and-encoded-string-reference.md` covers title
+- `docs/archive/ui/research/native-gw-window-creation-investigation.md` covers window creation;
+  and `docs/archive/ui/research/native-ui-title-and-encoded-string-reference.md` covers title
   and encoded-string handling.
-- `docs/ui/name-tag-colors/feature-guide.md` is the historical usage guide for
+- `docs/archive/ui/name-tag-colors/feature-guide.md` is the historical usage guide for
   `PyAgentTagColor` (Python API, ARGB format, and in-client validation).
-  `docs/ui/name-tag-colors/reverse-engineering.md` records the native name-tag
+  `docs/archive/ui/name-tag-colors/reverse-engineering.md` records the native name-tag
   pipeline, `GetConsiderColor` resolver detour/ABI, allegiance-to-ARGB table,
   and item-rarity markup. The current Python surface is `AgentRecolor` /
   `PyAgentRecolor` under `Py4GWCoreLib/AgentRecolor.py`,

@@ -17,10 +17,12 @@ rollback.
   shimmed from the legacy branch onto the Reforged surfaces. Live-client load
   remains the outstanding acceptance gate.
 
-- `frenkeylib-boundary-compliance-plan.md` is the proposed next migration step:
+- `frenkeylib-boundary-compliance-plan.md` is the active migration step:
   remove all remaining shims and move every active FrenkeyLib flow onto its
   Reforged owner directly — `Settings` and `JsonFactory` for persistence, and
-  native ImGui persistence for window geometry and state.
+  native ImGui persistence for window geometry and state. Phase 1 (configs,
+  profiles, ItemData, DataCollector) is executed in the worktree; seeds, the
+  one-time data import, and live-client verification remain.
 
 - `session-01-intake.md` and `session-01-complete.md` record one migration
   session and its conclusions.

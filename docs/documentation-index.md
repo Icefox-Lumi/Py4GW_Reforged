@@ -9,6 +9,8 @@ runtime observation remain authoritative.
 
 ## Topics
 
+- [Archive](archive/README.md): the single home for retired documents,
+  indexed by topic and reason.
 - [Py4GW AI guidance](py4gw-ai/README.md): ApoBot instructions, skills, and
   agent-workflow context.
 - [Architecture](architecture/README.md): project model, decisions, and

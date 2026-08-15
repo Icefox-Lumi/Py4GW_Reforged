@@ -791,10 +791,10 @@ The framework implementation must include:
 Recommended documentation files:
 
 ```text
-docs/ui/launch-surface/launch-surface-framework-design.md
-docs/ui/launch-surface/launch-surface-user-manual.md
-docs/ui/launch-surface/launch-surface-provider-guide.md
-docs/ui/launch-surface/launch-surface-component-guide.md
+docs/archive/ui/launch-surface/launch-surface-framework-design.md
+docs/archive/ui/launch-surface/launch-surface-user-manual.md
+docs/archive/ui/launch-surface/launch-surface-provider-guide.md
+docs/archive/ui/launch-surface/launch-surface-component-guide.md
 ```
 
 ## 17. Implementation phases

@@ -1,6 +1,10 @@
 # FrenkeyLib Boundary Compliance Plan
 
-Status: proposed
+Status: in progress
+Progress: Phase 1 items 1-4 executed with the profile/config JsonFactory
+migration; item 5 (DataCollector + data_dict) executed on 2026-08-13. Phase 2
+item 1 (ImGuiIniReader removal) is done. Outstanding: `json/Defaults` seeds,
+the one-time data import, and live-client verification.
 Authority: `Py4GWCoreLib/py4gwcorelib_src/Settings.py`,
 `Py4GWCoreLib/py4gwcorelib_src/JsonFactory.py`, the current ported sources under
 `Sources/frenkeyLib`, and the surviving `reforged-migration` records
@@ -61,30 +65,26 @@ module persists position/size/collapsed into its own INI or JSON document.
 | `SulfurousRunner/settings.py` | migrated to the jailed `Settings` |
 | `ItemHandling/Rules/profile.py` | `JsonFactory("ItemHandling/Profiles/<name>.json")` |
 | `DataCollector/models.py:382` | `json.loads` on a stored string, not file I/O |
+| `DataCollector/collectors/*` | `JsonFactory("Widgets/Data Collector/<name>.json", "account")` |
+| `Core/data_dict.py` | pure serialization; no filesystem access remains |
 
-### Non-compliant: raw JSON file I/O
+### Resolved since the audit
 
-| Owner | Evidence | Target |
-|---|---|---|
-| `global_configs/GlobalConfigProfileManager.py` | builds `Settings/Global/Item & Inventory/Configs/...`, `os.makedirs`, path helpers | JsonFactory documents |
-| `global_configs/BuyConfig.py:65` | `json.load(f)` from a file path | JsonFactory |
-| `global_configs/CraftingConfig.py:49` | `json.load(f)` | JsonFactory |
-| `global_configs/RuleConfig.py:44,399,412` | `json.load/dump` on file paths | JsonFactory |
-| `global_configs/SortingConfig.py:533` | `json.load(file)` | JsonFactory |
-| `ItemManager/ui.py:214-240` | `open(self.file_path, "w")` + `json.dump` in `ConfigInfo.Save` | JsonFactory |
-| `ItemHandling/Items/ItemData.py:288,324` | `open(item_json_path)` + `json.load/dump` | JsonFactory account document |
+| Owner | Resolution |
+|---|---|
+| `global_configs/GlobalConfigProfileManager.py` | `JsonFactory("Item & Inventory/Configs/<key>_shared.json", "global")` and `..._profiles.json` (account); path helpers and `os`/`shutil` removed |
+| `global_configs/BuyConfig.py`, `CraftingConfig.py`, `RuleConfig.py`, `SortingConfig.py` | `reload_from_document`/`save_to_document(document, profile_key)` |
+| `ItemManager/ui.py` `ConfigInfo.Save`/load | calls the document surface; the `json.dumps` cache signature stays (pure serialization) |
+| `ItemHandling/Items/ItemData.py` | account `JsonFactory("ItemHandling/ItemData.json")`; the read-only repository `items.json` fallback remains (content read) |
+| `Core/data_dict.py` | stripped to pure serialization (`{version, data}` payload, `remove_none_values`); file locks, mtime refresh, atomic writes, and quarantine machinery removed |
+| `DataCollector/collectors/*` | `JsonFactory("Widgets/Data Collector/<name>.json", "account")`; the dormant collectors keep this wiring but were trimmed from `data_collector.py`'s runtime registry |
+| `Core/utility.py` `ImGuiIniReader` | removed; the dormant `LootEx` package is its only remaining importer |
 
-### Non-compliant: generic file loader
-
-| Owner | Evidence | Target |
-|---|---|---|
-| `Core/data_dict.py:533,585` | `DataList`/`DataDict` read payloads from filesystem paths | keep as pure serialization; callers supply JsonFactory-backed data or read-only content paths |
-
-### Non-compliant: ImGui window-persistence bypass
-
-| Owner | Evidence | Target |
-|---|---|---|
-| `Core/utility.py:54` | `ImGuiIniReader` parses `imgui.ini` directly | remove; no active caller after LootEx deletion |
+Capability deltas: the legacy mtime-based cross-client reload loop is gone (its
+ShMem broadcast was already hardwired off); `JsonFactory.reload()` is the
+escape hatch. The legacy global file tree `Settings/Global/Widgets/Data
+Collector/` is no longer read or written and is covered by the one-time import
+below.
 
 Stale `[Window config]` sections already present in runtime INIs are legacy
 artifacts with no current writer; no new code may produce them.
@@ -132,6 +132,25 @@ artifacts with no current writer; no new code may produce them.
    documents, then stop touching that filesystem tree. The import is a
    migration step, not a runtime shim.
 
+### Phase 1 execution record (2026-08-13)
+
+Items 1-4 landed with the profile/config migration; item 5 landed in the
+DataCollector pass. Decisions taken during item 5:
+
+- Collected data lives in account-scoped documents named
+  `Widgets/Data Collector/<file>.json`, one per legacy collector file,
+  preserving the legacy `{version, data}` payload shape.
+- The ten collectors not wired into `DataCollectorRuntime` stay importable but
+  were trimmed from the runtime registry and import list.
+- `Core/data_dict.py` keeps only serialization; document reads/writes happen
+  in `BaseCollector.load`/`try_save` through `JsonFactory` directly.
+- `BaseCollector` drops the mtime-based `refresh_from_disk_if_changed` loop;
+  `JsonFactory` dedups unchanged `set_json` calls, so there is no save loop.
+
+Item 6 (one-time import, now including the legacy
+`Settings/Global/Widgets/Data Collector/` tree) and the `json/Defaults` seed
+names remain open, along with the live-client gate.
+
 ## Phase 2: ImGui window-persistence compliance
 
 1. Remove `ImGuiIniReader` from `Core/utility.py`; nothing active imports it
@@ -158,10 +177,19 @@ artifacts with no current writer; no new code may produce them.
   through `imgui.ini`; open-state toggles survive through `Settings`.
 - `SHARED` edits survive across accounts; character edits stay per account.
 
+Offline verification run 2026-08-13: `compileall` over the changed files,
+strict Pyright over `Core/data_dict.py` and `DataCollector/` (0 errors), a
+headless round-trip test of the `{version, data}` payload and
+`remove_none_values`, and the grep gates. The remaining grep hits are the
+documented exclusions: dormant `LootEx`/`Drafts`/`ConfigExamples`, asset-path
+joins, and the read-only `ItemHandling/Items/ItemData.py` catalog fallback.
+Live-client verification of document bind/load/save remains outstanding.
+
 ## Risks and open questions
 
-- JsonFactory documents are self-throttled; remove any manual save loop the
-  current classes rely on.
+- ~~JsonFactory documents are self-throttled; remove any manual save loop the
+  current classes rely on.~~ Resolved: collectors only serialize when marked
+  dirty, and `set_json` dedups unchanged payloads.
 - Global documents take a cross-process lock; only `SHARED` should be global.
 - Account documents stage until the account anchor resolves; profile reads at
   boot must tolerate an unbound document.

@@ -8,7 +8,7 @@ This package is the from-scratch replacement for the presentation layer of the o
 - ``host`` / ``manager`` (added in later phases) — ImGui rendering and multi-bar
   coordination.
 
-See ``docs/ui/launch-bar/launch-bar-im-gui-implementation-plan.md`` for the historical plan. This pass
+See ``docs/archive/ui/launch-bar/launch-bar-im-gui-implementation-plan.md`` for the historical plan. This pass
 is UI/layout only: what a tile *executes* is intentionally out of scope.
 """
 

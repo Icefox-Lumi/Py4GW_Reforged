@@ -652,4 +652,4 @@ During Phase 3 of the UI Elements project, Create functions for 5 Tier 2 types (
 2. **Context struct initialization** — some types (like CtlSliderProc) allocate internal structs on msg 0x09 that may need pre-initialization
 3. **Call pattern differs** — the CreateUIComponent call pattern for these types may differ from what GWCA uses for Button/Checkbox/Scrollable/TextLabel
 
-**DO NOT reuse the Phase 3 C++ code as-is.** Full details in `docs/ui/research/ui-controls-catalog.md`.
+**DO NOT reuse the Phase 3 C++ code as-is.** Full details in `docs/archive/ui/research/ui-controls-catalog.md`.

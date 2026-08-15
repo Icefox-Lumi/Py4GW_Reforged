@@ -121,7 +121,7 @@ through `PopCloser`), NOT any ad-hoc container — all of which were tried and c
 | **`native-button-pipeline.md`** | ★ authoritative creation reference: master address/flag/status table, per-control recipes, the working-button pipeline, cross-cutting gotchas, the foundational model. |
 | `ui-controls-master-catalog.md` | The UI creation/dispatch **model** + **166 discovered control FrameProcs** (addresses/roles) + 120 deep per-control RE writeups (from two Ghidra swarms). |
 | `ui-elements-creation-recipes.md` | Per-control recipe deep-dives (root cause / recipe / fix). |
-| `ui-controls-catalog.md` | Per-type FrameProc inventory (addresses, struct layouts, assertion strings, tiers). |
+| `../../archive/ui/research/ui-controls-catalog.md` | Per-type FrameProc inventory (addresses, struct layouts, assertion strings, tiers). |
 | `reverse-engineering-reference.md` | Global address catalog incl. the "Native UI Control FrameProcs & Helpers" table. |
 | `ui-frame-system-mapping.md` | GWCA ↔ WASM ↔ EXE frame API mapping. |
 | **this file** | Honest handover: status, root causes, fixes-that-stuck, dead-ends, open problems. |

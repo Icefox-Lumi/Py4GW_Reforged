@@ -2,7 +2,7 @@
 
 In-client test harness for native agent name-tag coloring (`PyAgentRecolor`),
 which detours the game's own color resolver `AvCharGetConsiderColor`
-(EXE `FUN_007d9cf0`). RE reference: `docs/ui/name-tag-colors/reverse-engineering.md`.
+(EXE `FUN_007d9cf0`). RE reference: `docs/archive/ui/name-tag-colors/reverse-engineering.md`.
 
 ## Contents
 

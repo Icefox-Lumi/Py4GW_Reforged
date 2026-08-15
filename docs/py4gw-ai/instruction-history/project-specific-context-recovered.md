@@ -92,14 +92,14 @@ The only sanctioned non-class disk access: `Py4GWCoreLib/database_src/DBMgr.py` 
 - The `Py4GW.dll` this Python library loads is built by a **separate sibling C++ project, `Py4GW_Reforged_Native`** (`../Py4GW_Reforged_Native`) — a 32-bit injected DLL that embeds CPython (pybind11), hooks D3D9, and renders ImGui. It is a ground-up rework **replacing the legacy GWCA backend**, itself under parity migration (GWCA managers → `GW/<module>/`). Build there is CMake (`cmake -S . -B build -A Win32` / `vs2022-win32` presets) — no build command from this Python repo applies to it.
 - This Python library reaches the game via **two data paths**: the **bindings path** (`Py*` embedded modules, type-stubbed in `stubs/*.pyi`) and the **context path** (ctypes structs from shared memory, read by `Py4GWCoreLib/native_src/context/*.py`).
 - The library is being repointed from the legacy GWCA-era binding surface to the Reforged Native surface; session log in `docs/architecture/records/reforged-migration/`. Assume Reforged names in new code: `Py2DRenderer`→`PyDXOverlay`, `PyCombatEvents`→`PyAgentEvents`, `PyPointers` retired, `Py4GW.Console.*`→`PySystem.Console.*`, `Py4GW.Game.*`→`PySystem`/`PyGameThread`, `Point2D/3D`→`Vec2f/Vec3f`, `PyScanCodeKeystroke`→`PyKeyHandler`. Reforged `Py*` classes favor getter methods + module-level functions over legacy data fields.
-- `Py4GWCoreLib.ImGui` is the single ImGui wrapper — the class previously called `ImGui_Legacy`, restored to its original name. The from-scratch `ImGuiRuntime` facade rebuild was abandoned and deleted (its specs under `docs/ui/imgui/im-gui-facade-migration-plan.md` are dead).
+- `Py4GWCoreLib.ImGui` is the single ImGui wrapper — the class previously called `ImGui_Legacy`, restored to its original name. The from-scratch `ImGuiRuntime` facade rebuild was abandoned and deleted (its specs under `docs/archive/ui/imgui/im-gui-facade-migration-plan.md` are dead).
 
 ## Docs Hierarchy
 
 - `docs/architecture/reference/py4-gw-conceptual-model.md` is the canonical architecture/source-of-truth document for project layers and terminology.
 - `docs/bridge/mcp/mcp-bridge.md` is the MCP-facing bridge planning summary; use it for bridge/MCP modeling, not as the primary architecture source.
 - `py4gw_bridge/README.md` is the operator/runtime usage reference for daemon + injected bridge client + CLI.
-- `docs/architecture/reference/py4-gw-model-features-detail.txt` is a derived plain-text export for quick scanning, not a separate authority.
+- `docs/archive/architecture/reference/py4-gw-model-features-detail.txt` is a derived plain-text export for quick scanning, not a separate authority.
 - `docs/ui/widget-manager/widget-manager-and-catalog.md` is the highest-value reference before changing widget discovery, widget metadata defaults, `WidgetHandler`, or `WidgetCatalog` behavior.
 
 ## RE (Reverse Engineering) — `docs/game-client/research/`
@@ -110,10 +110,10 @@ The only sanctioned non-class disk access: `Py4GWCoreLib/database_src/DBMgr.py` 
 - `docs/game-client/research/cpp-wasm-mapping.md` — the full CPP↔WASM↔EXE translation procedure with worked examples and pitfall notes.
 - `docs/game-client/research/rosetta-stone.txt` — GwA2 (AutoIt) to Py4GW function mapping reference.
 - `docs/game-client/research/gw-combat-ai-reverse-engineering.md` — combat AI RE analysis.
-- `docs/ui/research/native-gw-window-creation-investigation.md` — window proc creation RE.
-- `docs/ui/research/native-ui-title-and-encoded-string-reference.md` — UI title and encoding reference.
-- `docs/ui/name-tag-colors/feature-guide.md` — historical feature/usage guide for `PyAgentTagColor`; current source uses the expanded `PyAgentRecolor` surface.
-- `docs/ui/name-tag-colors/reverse-engineering.md` — preserved RE record for the agent/item name-tag pipeline and historical detour; verify current native/module names before relying on it. In-client test harness: `tests/name_tag_color/name_tag_color_test.py`.
+- `docs/archive/ui/research/native-gw-window-creation-investigation.md` — window proc creation RE.
+- `docs/archive/ui/research/native-ui-title-and-encoded-string-reference.md` — UI title and encoding reference.
+- `docs/archive/ui/name-tag-colors/feature-guide.md` — historical feature/usage guide for `PyAgentTagColor`; current source uses the expanded `PyAgentRecolor` surface.
+- `docs/archive/ui/name-tag-colors/reverse-engineering.md` — preserved RE record for the agent/item name-tag pipeline and historical detour; verify current native/module names before relying on it. In-client test harness: `tests/name_tag_color/name_tag_color_test.py`.
 
 ### RE Tool Locations
 

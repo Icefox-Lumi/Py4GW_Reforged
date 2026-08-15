@@ -7,13 +7,13 @@ from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.UIManager import CollectorWindow
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
-from Sources.frenkeyLib.DataCollector.collectors.base_collectors import BaseCollector, ListCollector
+from Sources.frenkeyLib.DataCollector.collectors.base_collectors import ListCollector
 from Sources.frenkeyLib.DataCollector.models import Collector
 
 
 class CollectorsCollector(ListCollector[Collector]):
-    def __init__(self, get_local_path, get_default_path, *, version = '1.0', value_type = None, key_decoder = None, key_encoder = None):
-        super().__init__(get_local_path, get_default_path, version=version, value_type=value_type, key_decoder=key_decoder, key_encoder=key_encoder)
+    def __init__(self, document_name: str, *, version: str = '1.0', value_type=None):
+        super().__init__(document_name, version=version, value_type=value_type)
         self.map_collectors : list[Collector] = []
         self.unrevealed_map_collectors : list[Collector] = []
         
@@ -76,4 +76,4 @@ class CollectorsCollector(ListCollector[Collector]):
         
 
 
-COLLECTORS = CollectorsCollector(*BaseCollector.get_path_providers("collectors.json"))
+COLLECTORS = CollectorsCollector("Widgets/Data Collector/collectors.json")

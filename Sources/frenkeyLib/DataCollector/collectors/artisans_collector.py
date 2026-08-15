@@ -5,13 +5,13 @@ from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.UIManager import CrafterWindow
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
-from Sources.frenkeyLib.DataCollector.collectors.base_collectors import BaseCollector, ListCollector
+from Sources.frenkeyLib.DataCollector.collectors.base_collectors import ListCollector
 from Sources.frenkeyLib.DataCollector.models import Artisan
 
 
 class ArtisanCollector(ListCollector[Artisan]):
-    def __init__(self, get_local_path, get_default_path, *, version = '1.0', value_type = None, key_decoder = None, key_encoder = None):
-        super().__init__(get_local_path, get_default_path, version=version, value_type=value_type, key_decoder=key_decoder, key_encoder=key_encoder)
+    def __init__(self, document_name: str, *, version: str = '1.0', value_type=None):
+        super().__init__(document_name, version=version, value_type=value_type)
         self.map_artisans : list[Artisan] = []
         self.unrevealed_map_artisans : list[Artisan] = []
         
@@ -74,4 +74,4 @@ class ArtisanCollector(ListCollector[Artisan]):
         self.unrevealed_map_artisans.extend([artisan for artisan in map_artisans if artisan.position == (0.0, 0.0) or artisan.map_id == 0 or artisan.model_id == 0])
         
         
-ARTISANS = ArtisanCollector(*BaseCollector.get_path_providers("artisans.json"))
+ARTISANS = ArtisanCollector("Widgets/Data Collector/artisans.json")

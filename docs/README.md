@@ -24,6 +24,7 @@ provenance, and maintenance rules.
 | Work on loot behavior or its redesign | `loot/redesign/` |
 | Validate the demo replacement | `validation/demo/` |
 | Work with Py4GW AI guidance or agent workflows | `py4gw-ai/` |
+| Review or permanently delete retired material | `archive/README.md` |
 
 ## Specialized Records
 
@@ -53,6 +54,8 @@ behavior from an unlabelled plan or a file name.
 - Read a directory `README.md` before opening a large record in that directory.
 - Keep subsystem knowledge in its owning topic folder; use the root only for
   navigation.
+- Retired material lives in one place: `archive/`, mirroring its original
+  topic path. See `archive/README.md` before assuming a doc is current.
 - Do not store datasets, export tables, or generated catalogs here. Put them
   with the tool or runtime owner; the document records their provenance and
   refresh procedure in prose.

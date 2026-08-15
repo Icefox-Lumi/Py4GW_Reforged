@@ -20,7 +20,7 @@ def tooltip():
     PyImGui.text("Live API reference AND access/debug test tool for the Py4GW backend.")
     PyImGui.text("Each panel shows data and probes every binding/getter for access.")
     PyImGui.spacing()
-    PyImGui.text_colored("Coverage grows per docs/validation/demo/build-plan.md", (0.6, 0.6, 0.65, 1.0))
+    PyImGui.text_colored("Coverage grows per docs/archive/validation/demo/build-plan.md", (0.6, 0.6, 0.65, 1.0))
     PyImGui.bullet_text("Green OK = binding resolved; Red ERR = raised")
     PyImGui.bullet_text("Action buttons test mutate/send bindings live")
     PyImGui.spacing()

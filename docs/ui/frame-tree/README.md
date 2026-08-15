@@ -21,7 +21,7 @@ ownership model while `docs/game-client/research/` records native/UI evidence.
   WASM, EXE, and historical GWCA layers.
 - `docs/ui/research/native-ui-controls-handover.md` — current native control creation
   findings and known limitations.
-- `docs/ui/research/native-gw-window-creation-investigation.md` — native window/container
+- `docs/archive/ui/research/native-gw-window-creation-investigation.md` — native window/container
   creation evidence.
 - `docs/ui/research/ui-controls-master-catalog.md` — decompiler-verified control and
   message-dispatch catalog.

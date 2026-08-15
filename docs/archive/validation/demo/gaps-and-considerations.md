@@ -25,7 +25,7 @@ A replacement has to pick one coherent model. v2's shell is the better base; v1 
 
 ## 3. Deprecation pressures that must be resolved before/while porting
 
-- **`ImGui_Legacy` is being retired** (see `docs/ui/imgui/im-gui-facade-migration-plan.md`). v1 is built entirely on it; v2 still leaks it (`agent_demo.py`, `tooltip()`). The replacement should target the new `Py4GWCoreLib.ImGui` facade with **no bridging** to legacy (project hard rule).
+- **`ImGui_Legacy` is being retired** (see `docs/archive/ui/imgui/im-gui-facade-migration-plan.md`). v1 is built entirely on it; v2 still leaks it (`agent_demo.py`, `tooltip()`). The replacement should target the new `Py4GWCoreLib.ImGui` facade with **no bridging** to legacy (project hard rule).
 - **Binding renames already applied** (per CLAUDE.md): `Py2DRenderer→PyDXOverlay`, `PyCombatEvents→PyAgentEvents`, `PyPointers` retired, `Py4GW.Console.*→PySystem.Console.*`, `Py4GW.Game.*→PySystem`/`PyGameThread`, `PyOverlay` `Point2D/3D→Vec2f/Vec3f`, `PyKeystroke` `PyScanCodeKeystroke→PyKeyHandler`. v1 uses several old spellings indirectly; anything ported forward must use the Reforged names.
 - **Getter-method style:** Reforged `Py*` favor `PyAgent().GetPos()` / module-level `PyAgent.get_agent_enc_name(id)` over legacy data-field access. v2 already follows this; v1 does not everywhere.
 

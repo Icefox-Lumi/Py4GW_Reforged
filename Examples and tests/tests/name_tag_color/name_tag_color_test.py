@@ -8,7 +8,7 @@ resolver FUN_007f02e0), gadgets (CGadgetAgent::GetTextData FUN_007f9950), and
 ground items with rich filters (CItemAgent::GetTextData FUN_007fa6a0). This
 harness covers agent validation plus quick gadget/item recolor sections; the
 Py4GW DEMO 2.0 "Agent Recolor" tab is the full rich tester. See
-docs/ui/name-tag-colors/reverse-engineering.md and
+docs/archive/ui/name-tag-colors/reverse-engineering.md and
 docs/game-client/research/item_gadget_recolor_reverse_engineering.md.
 
 Workflow:

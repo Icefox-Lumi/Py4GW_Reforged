@@ -437,7 +437,7 @@ Runtime slide: `0x00EB6880 - 0x00851180 = 0x00665600` (EXE loaded at non-standar
 
 ### ⚠️ REGRESSION (2026-05-31 — Old)
 
-**An unauthorized `git checkout` reverted all uncommitted working-tree changes for py_ui.h**, losing the proven mouse-fix code. The functions were reconstructed from documentation but had incorrect byte patterns (stale Ghidra data) and wrong line numbers for FindAssertion. See `docs/ui/research/title-rendering-research.md` for full regression details.
+**An unauthorized `git checkout` reverted all uncommitted working-tree changes for py_ui.h**, losing the proven mouse-fix code. The functions were reconstructed from documentation but had incorrect byte patterns (stale Ghidra data) and wrong line numbers for FindAssertion. See `docs/archive/ui/research/title-rendering-research.md` for full regression details.
 
 ### Working (Before Regression — 2026-05-30)
 1. **`CreateContainerWindow()`** (existing GWCA) creates a bare `CContainerFrame` with no content, no chrome — cold-startable with no state dependencies.
@@ -454,7 +454,7 @@ Runtime slide: `0x00EB6880 - 0x00851180 = 0x00665600` (EXE loaded at non-standar
 3. Calls `PerFrameInvalidate(frame_id, 0xFFFFFFFF)` → sets all paint mask bits + dirty list enqueue
 4. CRProc msg 0x08 renders the title ✅
 
-See `docs/ui/research/title-rendering-research.md` for the complete investigation and all 11 failed approaches.
+See `docs/archive/ui/research/title-rendering-research.md` for the complete investigation and all 11 failed approaches.
 
 ### Title Rendering Pipeline (2026-05-31 Findings)
 

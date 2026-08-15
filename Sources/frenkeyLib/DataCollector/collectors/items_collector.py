@@ -56,8 +56,7 @@ class ModelIdDict(dict[int, ItemData]):
     
 class ItemCollector(BaseCollector, DataDict[ItemType, ModelIdDict]):
     def __init__(self,
-        get_local_path: Callable[..., str],
-        get_default_path: Callable[..., str],
+        document_name: str,
         *,
         version: str = '1.0',
         value_type: Optional[type[T_SERIALIZABLE_VALUE]] = None,
@@ -67,8 +66,7 @@ class ItemCollector(BaseCollector, DataDict[ItemType, ModelIdDict]):
         resolved_key_decoder = key_decoder or (lambda key: ItemType[key] if key in ItemType.__members__ else ItemType.Unknown)
         resolved_key_encoder = key_encoder or (lambda key: key.name if isinstance(key, ItemType) else str(key))
         super().__init__(
-            get_local_path,
-            get_default_path,
+            document_name,
             version=version,
             value_type=value_type,
             key_decoder=resolved_key_decoder,
@@ -299,4 +297,4 @@ class ItemCollector(BaseCollector, DataDict[ItemType, ModelIdDict]):
         self.Nick_Items = {item.nick_index: item for item in self.all_items if item.nick_index is not None}
         self.Nick_Cycle = [self.Nick_Items[index] for index in range(1, NICK_CYCLE_COUNT + 1) if index in self.Nick_Items]
     
-ITEMS = ItemCollector(*BaseCollector.get_path_providers("items.json"))
+ITEMS = ItemCollector("Widgets/Data Collector/items.json")

@@ -6,7 +6,7 @@
 > against Gw.exe build 06-14-2026 (program "/Gw.exe (06-14)") and Gw.wasm (named symbols).
 > **166 distinct UI control FrameProcs discovered**; **120 deep-cataloged** (40 in §3 + 80 in §4).
 > Companion docs: native-button-pipeline.md (authoritative creation recipes + master address table),
-> ui-controls-catalog.md, reverse-engineering-reference.md.
+> ../../archive/ui/research/ui-controls-catalog.md, reverse-engineering-reference.md.
 
 ## 1. UI Creation & Message-Dispatch Model (decompiler-verified)
 

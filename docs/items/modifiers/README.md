@@ -35,16 +35,16 @@ meaning.**
 |------|--------|
 | [`raw-modifier-layer.md`](raw-modifier-layer.md) | The C++ `ItemModifier` struct, exact bit layout, the `PyItem` binding surface, the **two different identifier conventions**, and the fact that the whole surface is **read-only**. |
 | [`encoded-strings.md`](encoded-strings.md) | How encoded name/tooltip strings are sourced and decoded (`string_table.py`), and the inverse byte-*builder* (`encoded_strings.py` / `GWEncoded`). |
-| [`current-python-system.md`](current-python-system.md) | The current `Py4GWCoreLib/item_mods_src/` system end-to-end: decode → parse → properties → upgrades. The **9,694-line** `upgrades.py` hierarchy. |
+| [`../../archive/items/modifiers/current-python-system.md`](../../archive/items/modifiers/current-python-system.md) | Historical: the removed `Py4GWCoreLib/item_mods_src/` system end-to-end: decode → parse → properties → upgrades. The **9,694-line** `upgrades.py` hierarchy. |
 | [`frenkeylib-reference.md`](frenkeylib-reference.md) | The frenkeyLib `LootEx` **data-driven** model (JSON tables, generic matching) — the "adequate" reference — plus `marks_sources/mods_parser.py`. |
-| [`comparison-and-painpoints.md`](comparison-and-painpoints.md) | Side-by-side of the two philosophies, the identifier-convention trap, what makes today's handling cumbersome, and the open gaps. |
+| [`../../archive/items/modifiers/comparison-and-painpoints.md`](../../archive/items/modifiers/comparison-and-painpoints.md) | Historical: side-by-side of the two philosophies, the identifier-convention trap, what made the old handling cumbersome, and the open gaps that the shipped `Item.Mods` API resolved. |
 | [`game-mod-engine-re.md`](game-mod-engine-re.md) | RE findings: the game's `CNameComposer`/`ProcessCodes` mod engine, the dumpable `Const*` label tables + per-`EItemType` table, and the plan to generate structured mod data from the client instead of a JSON. |
 | [`game-mod-table.md`](game-mod-table.md) | The game's authoritative 390-entry mod table (`ConstItemPvp` unlock defs), struct layout, verified decodes, dumped to `tools/game_mod_table.py`. |
 | [`native-name-binding.md`](native-name-binding.md) | Native binding (`PyItem.get_pvp_unlock_name_enc`) that names all 390 mods via the game's own composer — verified working; `game-mod-table-named.txt`. |
 | [`item-catalogs.md`](item-catalogs.md) | **The whole universe** — the eight static item catalogs, their accessors, addresses, counts, and remaining passes. Tool-owned extraction data lives beside the debug widget, not in docs. |
 | [`item-mods-api.md`](item-mods-api.md) | **The deliverable** — the `Item.Mods` filter API (self-contained, replaces `Customization.Modifiers`), the game-derived `VALUE_ARG` table + `ModId` constants, the 310-mod master list, and the in-client validator. |
 | [`frenkeylib-consumer-contract-audit.md`](frenkeylib-consumer-contract-audit.md) | **Proposed migration contract** — makes Reforged the sole mod/rule authority; maps FrenkeyLib and Mark parser needs to public APIs, records owner gaps, and forbids raw-catalog fallback. |
-| [`mod-system-research.md`](mod-system-research.md) | **Dedicated research + proposed enum design** — reconciles frenkey's JSON model, our `item_mods_src`, and `Examples/itemcompare.py` against live items: two-tier model, the identifier-convention trap, the empirical per-identifier formula (stable 60/62), the complete catalog-FK map, base-vs-upgrade unification, composite reconstruction, and the ER-style all-enum `ModDef` design (item's `list[int]` → FK match → formula → typed data). |
+| [`../../archive/items/modifiers/mod-system-research.md`](../../archive/items/modifiers/mod-system-research.md) | Historical research + the earlier proposed enum design, superseded by the shipped `Item.Mods` API and `item-mods-design.md`. |
 | [`item-mods-design.md`](item-mods-design.md) | **The agreed design** (supersedes 11's shape) — `Item.Mods` as a nested subclass replacing `Customization`: the two-axis model (effect-id vs named-upgrade + slots), declarative facts + one reader, the static `HasMod(item_id, mod, *values)` API with positional type-routed values, **exact-or-better direction-aware** matching, slots for salvage, dye split out to `Item.Dye`, data provenance, and the Customization→Properties/Mods/Dye migration table. |
 
 ## Where everything lives (quick map)
@@ -55,7 +55,7 @@ meaning.**
 - `src/GW/item/item_bindings.cpp:212-488` — `PyItem` binding (`modifiers` list, enc-name getters, flags).
 - `stubs/PyItem.pyi` — the type-stub surface the Python side consumes.
 
-**Python — current system, `Py4GWCoreLib/item_mods_src/`**
+**Python — former system, `Py4GWCoreLib/item_mods_src/` (removed; replaced by the game-derived `Item.Mods` layer)**
 - `decoded_modifier.py` — raw 32-bit word → `DecodedModifier`.
 - `types.py` (1,231 lines) — `ModifierIdentifier` (~90), `ItemUpgradeId` (~400), `ItemUpgrade` tables.
 - `item_modifier_parser.py` — the orchestrator.

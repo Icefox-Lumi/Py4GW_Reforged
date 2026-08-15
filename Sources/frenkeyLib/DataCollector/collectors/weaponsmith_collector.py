@@ -5,14 +5,14 @@ from Py4GWCoreLib.Map import Map
 from Py4GWCoreLib.UIManager import CrafterWindow
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
-from Sources.frenkeyLib.DataCollector.collectors.base_collectors import BaseCollector, ListCollector
+from Sources.frenkeyLib.DataCollector.collectors.base_collectors import ListCollector
 from Sources.frenkeyLib.DataCollector.models import Weaponsmith
 
 
     
 class WeaponsmithCollector(ListCollector[Weaponsmith]):
-    def __init__(self, get_local_path, get_default_path, *, version = '1.0', value_type = None, key_decoder = None, key_encoder = None):
-        super().__init__(get_local_path, get_default_path, version=version, value_type=value_type, key_decoder=key_decoder, key_encoder=key_encoder)
+    def __init__(self, document_name: str, *, version: str = '1.0', value_type=None):
+        super().__init__(document_name, version=version, value_type=value_type)
         self.map_weaponsmiths : list[Weaponsmith] = []
         self.unrevealed_map_weaponsmiths : list[Weaponsmith] = []
         
@@ -73,4 +73,4 @@ class WeaponsmithCollector(ListCollector[Weaponsmith]):
         self.map_weaponsmiths.extend(map_weaponsmiths)
         self.unrevealed_map_weaponsmiths.extend([weaponsmith for weaponsmith in map_weaponsmiths if weaponsmith.position == (0.0, 0.0) or weaponsmith.map_id == 0 or weaponsmith.model_id == 0])
     
-WEAPONSMITHS = WeaponsmithCollector(*BaseCollector.get_path_providers("weaponsmiths.json"))
+WEAPONSMITHS = WeaponsmithCollector("Widgets/Data Collector/weaponsmiths.json")

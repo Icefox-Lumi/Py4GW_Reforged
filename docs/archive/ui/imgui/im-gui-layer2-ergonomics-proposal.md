@@ -2,7 +2,7 @@
 
 > **Status:** Exploratory. No code written. Parked mid-discussion to switch focus.
 > **Owner context:** builds on the *completed* new-facade migration
-> (`docs/ui/imgui/im-gui-facade-migration-plan.md` + `docs/ui/imgui/im-gui-implementation-correction-instructions.md`).
+> (`docs/archive/ui/imgui/im-gui-facade-migration-plan.md` + `docs/archive/ui/imgui/im-gui-implementation-correction-instructions.md`).
 > This is a proposed **additive** layer, NOT a rewrite.
 
 ## Goal

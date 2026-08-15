@@ -8,7 +8,7 @@ Last updated: 2026-07-01 | EXE Build: 06-14-2026 | Project: native-ui-controls
 > button pipeline and now covers the full toolkit (button, checkbox, radio, hyperlink/text-button,
 > edit, progress, tabs, slider, group header) plus teardown. Every address/flag/message below is
 > Ghidra-verified against `Gw.exe` build **06-14-2026** (program `/Gw.exe (06-14)`) unless noted.
-> Companion docs: `ui-controls-catalog.md` (per-type FrameProc catalog), `ui-elements-creation-recipes.md`
+> Companion docs: `../../archive/ui/research/ui-controls-catalog.md` (per-type FrameProc catalog), `ui-elements-creation-recipes.md`
 > (recipe-per-control), `ui-frame-system-mapping.md` (GWCA↔WASM↔EXE frame API), `reverse-engineering-reference.md`
 > (global address catalog).
 >

@@ -11,8 +11,8 @@
 > For the current API, follow **doc 10** (it matches the code). This doc remains the rationale.
 
 > This is the **settled design** for the mod read/filter subsystem, distilled from the whole
-> design conversation. It supersedes the exploratory shape in `mod-system-research.md`
-> (research) and `mod_defs_sketch.py` (an early sketch that predates the final API). Where a
+> design conversation. It supersedes the exploratory shape in `../../archive/items/modifiers/mod-system-research.md`
+> (research) and `../../archive/items/modifiers/mod_defs_sketch.py` (an early sketch that predates the final API). Where a
 > point still needs the user's final word it is marked **[pending]**.
 
 `Item.Mods` is the subsystem that reads an item's modifier words and answers questions about

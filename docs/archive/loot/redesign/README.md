@@ -19,4 +19,4 @@ was reverted.
 **What to ignore here:** `index.md`, `loot-redesign.md`, `structure-and-build.md` as design
 authorities. They contain proposals, structures and build orders that are superseded.
 
-The new work lives in the parent folder.
+The new work lives in `../../../loot/redesign/`.

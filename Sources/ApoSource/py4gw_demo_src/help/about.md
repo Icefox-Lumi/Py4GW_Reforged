@@ -20,7 +20,7 @@ see at a glance which getters resolve and which raise.
 
 ## Notes
 
-- Coverage grows per `docs/validation/demo/build-plan.md`.
+- Coverage grows per `docs/archive/validation/demo/build-plan.md`.
 - This window is built entirely from `ImGui.SidebarWindow` — see
   `Py4GWCoreLib/ImGui_src/SidebarWindow.py`.
 

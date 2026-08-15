@@ -151,7 +151,7 @@ redesign, and making it opportunistically would be a rewrite of the single large
 **Status:** open — **needs a migration**, plus a scope decision on the parts worth migrating.
 **Severance audit:** `docs/architecture/records/reforged-migration/frenkeylib-severance-audit.md` — 168 real pyright
 errors, the per-file breakdown, and a tiered migration scope. **Read that first; PF-3 is the summary.**
-**See also:** `docs/items/modifiers/frenkeylib-reference.md` and `comparison-and-painpoints.md`
+**See also:** `docs/items/modifiers/frenkeylib-reference.md` and `docs/archive/items/modifiers/comparison-and-painpoints.md`
 document the mod-model half.
 
 ### The headline

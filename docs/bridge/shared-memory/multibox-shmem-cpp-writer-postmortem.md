@@ -5,7 +5,7 @@ the Python `AllAccounts` layout, Python maps and reads it every frame, and the
 multibox shared memory functions correctly. This document records what broke, why
 it took so long to find, and the fix, so the mistake is not repeated.
 
-Companion design doc: `multibox-shmem-cpp-writer-plan.md`.
+Companion design doc: `../../archive/bridge/shared-memory/multibox-shmem-cpp-writer-plan.md`.
 
 ---
 

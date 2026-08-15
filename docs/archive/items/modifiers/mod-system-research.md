@@ -213,7 +213,7 @@ The `ModDef` table is **generated once**, not hand-typed:
 - **base-stat formulas** (requirement/damage/armor/energy/type) → from `item_mods_src/
   upgrade_parser.py` (already RE'd) + live-item confirmation.
 - **catalog FK per identifier** → from the complete map in A5 (three references agree).
-- **names** → the game's own composer (the 294-entry `game-mod-table-named.txt`) for upgrades;
+- **names** → the game's own composer (the 294-entry `../../../items/modifiers/tools/game-mod-table-named.txt`) for upgrades;
   `ModifierIdentifier` for base stats.
 
 Frenkey/`item_mods_src` are the **reference data source**; the structure is our Pythonic ER
