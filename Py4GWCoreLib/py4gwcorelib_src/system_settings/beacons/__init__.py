@@ -4,7 +4,7 @@ It owns the effect, the presets, their storage and their editor. **Recolor & Bea
 that feature picks a preset to use, it does not host this editor and does not own these presets.
 
 The rule, now applied twice: an authoring surface stands on its own; a feature consumes what it
-produces. Neither feature owns filters, profiles, beacon effects or presets.
+produces. Neither feature owns filters, filter sets, beacon effects or presets.
 
 A script may **consume** a preset; it may never author one. Presets are definitions, so -- unlike the
 two feature configurations -- there is no live copy here for a script to dirty.

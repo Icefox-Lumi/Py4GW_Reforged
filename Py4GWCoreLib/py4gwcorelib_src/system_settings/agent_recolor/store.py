@@ -1,12 +1,12 @@
-"""Agent Recolor persistence — a GLOBAL shareable rule list + a PER-ACCOUNT toggle.
+"""Agent Recolor persistence — a GLOBAL shareable agent-rule list + a PER-ACCOUNT toggle.
 
 Two scopes on one document (``Widgets/System/Agent Recolor.ini``):
 
-* **global** — the ordered rule list, stored as JSON in a single key so it round-trips
-  cleanly and is trivially shareable/exportable. Rules are intricate; a single machine-wide
+* **global** — the ordered agent-rule list, stored as JSON in a single key so it round-trips
+  cleanly and is trivially shareable/exportable. Agent rules are intricate; a single machine-wide
   set avoids replicating them per account (nothing is hardcoded — the file *is* the config).
 * **account** — the master on/off plus per-category (agents/gadgets) gates. The *feature*
-  is opted into per account even though the rules are shared.
+  is opted into per account even though the agent rules are shared.
 
 ``Settings`` is imported lazily (import-safe offline) and self-throttled — we only get/set.
 """
@@ -38,36 +38,36 @@ def _account():
         return None
 
 
-# ── global rule list ───────────────────────────────────────────────────────────────────────
-def load_rules() -> "List[model.Rule]":
+# ── global agent-rule list ──────────────────────────────────────────────────────────────────
+def load_agent_rules() -> "List[model.AgentRule]":
     s = _global()
     if s is None:
         return []
-    return rules_from_json(s.get_str("rules", "list", ""))
+    return agent_rules_from_json(s.get_str("rules", "list", ""))
 
 
-def save_rules(rules: "List[model.Rule]") -> None:
+def save_agent_rules(rules: "List[model.AgentRule]") -> None:
     s = _global()
     if s is not None:
-        s.set("rules", "list", rules_to_json(rules))
+        s.set("rules", "list", agent_rules_to_json(rules))
 
 
-def rules_to_json(rules: "List[model.Rule]") -> str:
+def agent_rules_to_json(rules: "List[model.AgentRule]") -> str:
     return json.dumps([r.to_dict() for r in rules])
 
 
-def rules_from_json(raw: str) -> "List[model.Rule]":
+def agent_rules_from_json(raw: str) -> "List[model.AgentRule]":
     try:
         data = json.loads(raw) if raw else []
     except Exception:
         return []
     if not isinstance(data, list):
         return []
-    out: "List[model.Rule]" = []
+    out: "List[model.AgentRule]" = []
     for item in data:
         if isinstance(item, dict):
             try:
-                out.append(model.Rule.from_dict(item))
+                out.append(model.AgentRule.from_dict(item))
             except Exception:
                 continue
     return out

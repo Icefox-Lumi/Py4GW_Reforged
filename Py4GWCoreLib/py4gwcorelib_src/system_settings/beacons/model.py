@@ -202,7 +202,7 @@ def make_emitter(name: str, **overrides) -> Emitter:
 
 @dataclass
 class BeaconPreset:
-    """A named, complete beacon. Global -- shared across accounts, like filters and profiles."""
+    """A named, complete beacon. Global -- shared across accounts, like filters and filter sets."""
 
     name: str = "Beacon"
     params: dict = field(default_factory=lambda: dict(BEACON_DEFAULTS))

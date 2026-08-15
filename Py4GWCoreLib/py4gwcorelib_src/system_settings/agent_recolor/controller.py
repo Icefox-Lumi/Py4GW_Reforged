@@ -1,15 +1,15 @@
 """Agent Recolor controller — the process-wide singleton + the data-phase engine.
 
-Owns the (global, shareable) rule list and the (per-account) master/category toggles, and
+Owns the (global, shareable) agent-rule list and the (per-account) master/category toggles, and
 drives the native ``PyAgentRecolor`` module. When the account master toggle is on it registers
 a profiled callback on ``PyCallback.Phase.Data`` (after the agent-array snapshot is refreshed in
-PreUpdate, before draw): each pass it filters the ``AgentArray`` class by the enabled rules,
-builds the full ``[(agent_id, argb)]`` set, and hands it to the native bulk setter in one call.
-The native detours then recolor the tags reactively on every redraw — no polling of our own.
+PreUpdate, before draw): each pass it filters the ``AgentArray`` class by the enabled agent
+rules, builds the full ``[(agent_id, argb)]`` set, and hands it to the native bulk setter in one
+call. The native detours then recolor the tags reactively on every redraw — no polling of our own.
 
-Rules are read live from ``self._rules`` each pass, so edits take effect on the next frame with
-no re-registration. ``Agent`` / ``AgentArray`` / ``PyCallback`` are imported lazily so this module
-stays import-safe offline.
+Agent rules are read live from ``self._rules`` each pass, so edits take effect on the next frame
+with no re-registration. ``Agent`` / ``AgentArray`` / ``PyCallback`` are imported lazily so this
+module stays import-safe offline.
 """
 
 import uuid
@@ -37,7 +37,7 @@ def _log(msg: str) -> None:
 
 class AgentRecolorController:
     def __init__(self) -> None:
-        self._rules: "List[model.Rule]" = store.load_rules()
+        self._rules: "List[model.AgentRule]" = store.load_agent_rules()
         toggles = store.load_toggles()
         self._master: bool = bool(toggles.get("enabled", False))
         self._agents_on: bool = bool(toggles.get("agents_on", True))
@@ -49,7 +49,7 @@ class AgentRecolorController:
 
     # ── queries ──────────────────────────────────────────────────────────────────────────
     @property
-    def rules(self) -> "List[model.Rule]":
+    def agent_rules(self) -> "List[model.AgentRule]":
         return self._rules
 
     @property
@@ -64,7 +64,7 @@ class AgentRecolorController:
     def gadgets_on(self) -> bool:
         return self._gadgets_on
 
-    def rules_for_scope(self, scope: str) -> "List[model.Rule]":
+    def agent_rules_for_scope(self, scope: str) -> "List[model.AgentRule]":
         return [r for r in self._rules if r.scope == scope]
 
     # ── boot / native application ────────────────────────────────────────────────────────
@@ -105,36 +105,36 @@ class AgentRecolorController:
         AgentRecolor.EnableGadgets(self._gadgets_on)
         self._last_gadgets = {}
 
-    # ── rule mutations (persist; the live pass picks them up next frame) ──────────────────
-    def new_rule(self, scope: str) -> "model.Rule":
-        rule = model.Rule(id=uuid.uuid4().hex, name="New rule", scope=scope)
+    # ── agent-rule mutations (persist; the live pass picks them up next frame) ────────────
+    def new_agent_rule(self, scope: str) -> "model.AgentRule":
+        rule = model.AgentRule(id=uuid.uuid4().hex, name="New agent rule", scope=scope)
         self._rules.append(rule)
-        store.save_rules(self._rules)
+        store.save_agent_rules(self._rules)
         return rule
 
-    def update_rule(self, rule: "model.Rule") -> None:
+    def update_agent_rule(self, rule: "model.AgentRule") -> None:
         for i, r in enumerate(self._rules):
             if r.id == rule.id:
                 self._rules[i] = rule
                 break
-        store.save_rules(self._rules)
+        store.save_agent_rules(self._rules)
 
-    def remove_rule(self, rule_id: str) -> None:
+    def remove_agent_rule(self, rule_id: str) -> None:
         self._rules = [r for r in self._rules if r.id != rule_id]
-        store.save_rules(self._rules)
+        store.save_agent_rules(self._rules)
 
-    def duplicate_rule(self, rule_id: str) -> None:
+    def duplicate_agent_rule(self, rule_id: str) -> None:
         for i, r in enumerate(self._rules):
             if r.id == rule_id:
-                clone = model.Rule.from_dict(r.to_dict())
+                clone = model.AgentRule.from_dict(r.to_dict())
                 clone.id = uuid.uuid4().hex
                 clone.name = "%s (copy)" % r.name
                 self._rules.insert(i + 1, clone)
                 break
-        store.save_rules(self._rules)
+        store.save_agent_rules(self._rules)
 
-    def move_rule(self, rule_id: str, delta: int) -> None:
-        """Shift a rule up (delta<0) or down (delta>0) in priority order."""
+    def move_agent_rule(self, rule_id: str, delta: int) -> None:
+        """Shift an agent rule up (delta<0) or down (delta>0) in priority order."""
         idx = next((i for i, r in enumerate(self._rules) if r.id == rule_id), -1)
         if idx < 0:
             return
@@ -142,26 +142,26 @@ class AgentRecolorController:
         if new_idx == idx:
             return
         self._rules.insert(new_idx, self._rules.pop(idx))
-        store.save_rules(self._rules)
+        store.save_agent_rules(self._rules)
 
-    def clear_rules(self) -> None:
+    def clear_agent_rules(self) -> None:
         self._rules = []
-        store.save_rules(self._rules)
+        store.save_agent_rules(self._rules)
 
-    # ── import / export (shareable rule sets) ────────────────────────────────────────────
+    # ── import / export (shareable agent-rule sets) ───────────────────────────────────────
     def export_json(self) -> str:
-        return store.rules_to_json(self._rules)
+        return store.agent_rules_to_json(self._rules)
 
     def import_json(self, raw: str, replace: bool = True) -> int:
-        """Load rules from a JSON string. Returns the number imported (0 on parse failure)."""
-        imported = store.rules_from_json(raw)
+        """Load agent rules from a JSON string. Returns the number imported (0 on parse failure)."""
+        imported = store.agent_rules_from_json(raw)
         if not imported:
             return 0
-        # Fresh ids to avoid collisions with existing rules.
+        # Fresh ids to avoid collisions with existing agent rules.
         for r in imported:
             r.id = uuid.uuid4().hex
         self._rules = imported if replace else (self._rules + imported)
-        store.save_rules(self._rules)
+        store.save_agent_rules(self._rules)
         return len(imported)
 
     # ── the data-phase callback ──────────────────────────────────────────────────────────
@@ -253,7 +253,7 @@ class AgentRecolorController:
 
     # ── candidate arrays ─────────────────────────────────────────────────────────────────
     @staticmethod
-    def _agent_base_ids(rule: "model.Rule") -> "List[int]":
+    def _agent_base_ids(rule: "model.AgentRule") -> "List[int]":
         """The array to scan for a rule: the pre-bucketed allegiance array when the rule pins one
         (free allegiance match — the buckets are computed natively), else the full agent array."""
         from Py4GWCoreLib.AgentArray import AgentArray
@@ -273,7 +273,7 @@ class AgentRecolorController:
 
     # ── matching (allegiance already handled by base selection) ──────────────────────────
     @staticmethod
-    def _agent_matches(rule: "model.Rule", aid: int, Agent) -> bool:
+    def _agent_matches(rule: "model.AgentRule", aid: int, Agent) -> bool:
         try:
             if rule.agent_id is not None and aid != rule.agent_id:
                 return False
@@ -313,7 +313,7 @@ class AgentRecolorController:
             return False
 
     @staticmethod
-    def _gadget_matches(rule: "model.Rule", gid: int, Agent) -> bool:
+    def _gadget_matches(rule: "model.AgentRule", gid: int, Agent) -> bool:
         try:
             if rule.agent_id is not None and gid != rule.agent_id:
                 return False
@@ -325,7 +325,7 @@ class AgentRecolorController:
             return False
 
     # ── live preview for the rule builder ────────────────────────────────────────────────
-    def count_matches(self, rule: "model.Rule") -> int:
+    def count_matches(self, rule: "model.AgentRule") -> int:
         try:
             from Py4GWCoreLib.Agent import Agent
 

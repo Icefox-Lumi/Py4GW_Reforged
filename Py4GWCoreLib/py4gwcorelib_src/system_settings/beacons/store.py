@@ -1,6 +1,6 @@
 """Beacon preset storage -- global, and always containing the base beacon.
 
-**Presets are global**, shared across accounts, exactly like filters and profiles: a beacon authored
+**Presets are global**, shared across accounts, exactly like filters and filter sets: a beacon authored
 once is available everywhere. Which preset a feature *uses* is a selection, and belongs to that
 feature's per-account settings -- not here.
 

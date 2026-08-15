@@ -4,7 +4,7 @@ It answers **what is wanted** and nothing else. It never walks to an item, targe
 decides *when* looting is appropriate; consumers own all of that.
 
 **Resolution.** The blacklist is an absolute veto, evaluated first, because its whole job is to
-inhibit every other rule. Everything else is a **HAS-ANY** -- the positive rules are not ranked
+inhibit every other filter. Everything else is a **HAS-ANY** -- the positive rules are not ranked
 against each other::
 
     blacklisted           -> never
@@ -15,7 +15,7 @@ against each other::
 writes only live, and **never persists** -- there is no path from live to a writer.
 
 **Consumers, never evaluators.** A script hands over *values* -- a model id, an item id. It may not
-hand over anything that decides, and it may not create structure (profiles, sets of filters). That is
+hand over anything that decides, and it may not create structure (filter sets). That is
 what stops the library being used as a proxy for a script's own ruling.
 """
 
@@ -56,8 +56,8 @@ class LootFilters:
     def _initialise(self) -> None:
         self.persisted: LootConfig = store.load()
         self.live: LootConfig = self.persisted.copy()
-        self._rules = factory_store.load_rules()
-        self._profiles = factory_store.load_profiles()
+        self._filters = factory_store.load_filters()
+        self._filter_sets = factory_store.load_filter_sets()
         self._nicholas = NicholasCache()
         self._map_id: int | None = None
         self._registered = False
@@ -72,21 +72,21 @@ class LootFilters:
         self._nicholas.invalidate()
 
     def reload_factory(self) -> None:
-        """The Factory's filters or profiles changed."""
-        self._rules = factory_store.load_rules()
-        self._profiles = factory_store.load_profiles()
+        """The Factory's filters or filter sets changed."""
+        self._filters = factory_store.load_filters()
+        self._filter_sets = factory_store.load_filter_sets()
 
     def save(self) -> None:
-        """Persist global policy plus this account's selected profile. NEVER called with live."""
+        """Persist global policy plus the selected filter set id. NEVER called with live."""
         store.save(self.persisted)
 
     def active_filters(self):
-        """The filters the running profile names, in its order."""
-        profile = factory_store.profile_by_name(self._profiles, self.live.profile)
-        return factory_store.rules_in_profile(self._rules, profile)
+        """The filters the running filter set names, in its order."""
+        filter_set = factory_store.filter_set_by_id(self._filter_sets, self.live.filter_set_id)
+        return factory_store.filters_in_set(self._filters, filter_set)
 
-    def profiles(self):
-        return list(self._profiles)
+    def filter_sets(self):
+        return list(self._filter_sets)
 
     # ------------------------------------------------------------------ live state
 
@@ -137,11 +137,11 @@ class LootFilters:
         """"I could not get this one." Suppression is simply a blacklist entry, live-only."""
         self.live.blacklist_item_ids.add(int(agent_id))
 
-    def use_profile(self, name: str) -> bool:
-        """Switch the running profile. Live-only: the user's saved choice is untouched."""
-        if not factory_store.profile_by_name(self._profiles, name):
+    def use_filter_set(self, filter_set_id: str) -> bool:
+        """Switch the running filter set, by id. Live-only: the user's saved choice is untouched."""
+        if not factory_store.filter_set_by_id(self._filter_sets, filter_set_id):
             return False
-        self.live.profile = name
+        self.live.filter_set_id = filter_set_id
         return True
 
     def set_rarity(self, name: str, value: bool) -> None:
@@ -177,7 +177,7 @@ class LootFilters:
             return False
 
     def _type_vetoed(self, item_id: int) -> bool:
-        """Whether this item's TYPE is vetoed. Checked with the blacklist, before any positive rule."""
+        """Whether this item's TYPE is vetoed. Checked with the blacklist, before any positive filter."""
         if not self.live.blacklist_item_types:
             return False
         from Py4GWCoreLib.Item import Item
@@ -272,7 +272,7 @@ class LootFilters:
         if self._type_vetoed(item_id):
             return False
 
-        # -- HAS-ANY: no rule outranks another --
+        # -- HAS-ANY: no filter outranks another --
         if agent_id in config.added_item_ids:
             return True
         # A script's addition is explicit, so it matches on the id as given. A HAND LIST entry is
@@ -351,7 +351,7 @@ class LootFilters:
         config = self.live
         lines.append("-- the live configuration --")
         lines.append("  master enabled             %s" % config.enabled)
-        lines.append("  profile                    %s" % (config.profile or "(none)"))
+        lines.append("  filter set                 %s" % (config.filter_set_id or "(none)"))
         lines.append("  rarities                   white=%s blue=%s purple=%s gold=%s green=%s coins=%s"
                      % (config.loot_whites, config.loot_blues, config.loot_purples,
                         config.loot_golds, config.loot_greens, config.loot_gold_coins))
@@ -394,7 +394,7 @@ class LootFilters:
         agent_id, model_id = int(agent_id), int(model_id)
         out: list[tuple[str, bool]] = []
 
-        # State the two exclusions that happen BEFORE any rule is consulted, so nothing is
+        # State the two exclusions that happen BEFORE any filter is consulted, so nothing is
         # silently removed from consideration.
         try:
             from Py4GWCoreLib.Agent import Agent
@@ -472,8 +472,8 @@ class LootFilters:
                             bool(getattr(config, attribute))))
                 break
 
-        for rule in self.active_filters():
-            out.append(("filter '%s'" % rule.name, matcher.matches(rule, item_id, model_id)))
+        for f in self.active_filters():
+            out.append(("filter '%s'" % f.name, matcher.matches(f, item_id, model_id)))
         return out
 
     # ------------------------------------------------------------------ the query surface

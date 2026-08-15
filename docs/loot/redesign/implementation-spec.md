@@ -1,5 +1,13 @@
 # Implementation specification — the *how*
 
+> **Terminology superseded (2026-08-13).** The settled vocabulary is recorded in
+> `filter-structure.md` (this folder): **evaluation → filter → filter set**,
+> with no profile layer. This document predates that contract: where it says
+> "profile" it means what the contract calls a **filter set**, and its "each
+> filter *is* a recolour or a beacon" outcome placement is being moved off the
+> filter into the feature's own store. The hows below remain valid
+> implementation history; the names do not.
+
 `class.md` says **what** the system does. It is sound and owner-approved. It is not enough to build
 from, and that is why two implementations failed: every gap in the *how* became a decision taken at the
 keyboard, by me, silently.

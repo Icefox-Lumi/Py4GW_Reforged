@@ -1,10 +1,10 @@
 """Agent Recolor UI — one tabbed 'Agent Recolor' section for the Agents group.
 
-Tabs: Agents (rule list + editor for living-agent rules), Gadgets (gadget rules), and
+Tabs: Agents (agent-rule list + editor for living-agent rules), Gadgets (gadget rules), and
 Status (per-account master/category toggles, native diagnostics, share import/export). Each
-rule renders as a collapsing header (name · swatch · live match count) whose body is the full
-criteria editor. All state lives in the controller; only transient text-input buffers are kept
-here (immediate-mode has no memory of its own).
+agent rule renders as a collapsing header (name · swatch · live match count) whose body is the
+full criteria editor. All state lives in the controller; only transient text-input buffers are
+kept here (immediate-mode has no memory of its own).
 """
 
 import PyImGui
@@ -85,7 +85,7 @@ def _opt_to_text(v) -> str:
 
 
 # ── the criteria editor for one rule ───────────────────────────────────────────────────────
-def _draw_rule_editor(controller: "AgentRecolorController", rule: "model.Rule") -> None:
+def _draw_agent_rule_editor(controller: "AgentRecolorController", rule: "model.AgentRule") -> None:
     before = rule.to_dict()
     is_agent = rule.scope == model.SCOPE_AGENT
     rid = rule.id
@@ -184,10 +184,10 @@ def _draw_rule_editor(controller: "AgentRecolorController", rule: "model.Rule") 
     # match count + persist
     PyImGui.text_colored("Matches now: %d" % controller.count_matches(rule), _OK)
     if rule.to_dict() != before:
-        controller.update_rule(rule)
+        controller.update_agent_rule(rule)
 
 
-def _grab_target(rule: "model.Rule") -> None:
+def _grab_target(rule: "model.AgentRule") -> None:
     """Fill this rule's fields from the current target so users don't hand-type ids."""
     try:
         from Py4GWCoreLib.Player import Player
@@ -211,15 +211,15 @@ def _grab_target(rule: "model.Rule") -> None:
 
 
 # ── rule list for a scope ───────────────────────────────────────────────────────────────────
-def _swatch_prefix(rule: "model.Rule") -> str:
+def _swatch_prefix(rule: "model.AgentRule") -> str:
     tag = {model.MODE_SOLID: "#", model.MODE_FADE: "~", model.MODE_HIDE: "x"}.get(rule.mode, "#")
     return "[%s%06X]" % (tag, rule.color_rgb & 0xFFFFFF)
 
 
-def _draw_rule_list(controller: "AgentRecolorController", scope: str) -> None:
+def _draw_agent_rule_list(controller: "AgentRecolorController", scope: str) -> None:
     scope_name = "agent" if scope == model.SCOPE_AGENT else "gadget"
     if PyImGui.button("+ New %s rule" % scope_name):
-        controller.new_rule(scope)
+        controller.new_agent_rule(scope)
     PyImGui.same_line(0, 8)
     PyImGui.text_colored("First enabled rule that matches wins (top = highest priority).", _MUTED)
 
@@ -227,7 +227,7 @@ def _draw_rule_list(controller: "AgentRecolorController", scope: str) -> None:
         _draw_presets(controller)
 
     PyImGui.separator()
-    rules = controller.rules_for_scope(scope)
+    rules = controller.agent_rules_for_scope(scope)
     if not rules:
         PyImGui.text_colored("No rules yet — add one above.", _MUTED)
         return
@@ -254,44 +254,44 @@ def _draw_rule_list(controller: "AgentRecolorController", scope: str) -> None:
             if PyImGui.small_button("Remove##rm_%s" % rule.id):
                 remove_id = rule.id
             rule.enabled = PyImGui.checkbox("Enabled##en_%s" % rule.id, rule.enabled)
-            _draw_rule_editor(controller, rule)
+            _draw_agent_rule_editor(controller, rule)
             PyImGui.separator()
 
     # apply structural changes after the loop (never mutate the list mid-iteration)
     if move is not None:
-        controller.move_rule(move[0], move[1])
+        controller.move_agent_rule(move[0], move[1])
     if dup_id:
-        controller.duplicate_rule(dup_id)
+        controller.duplicate_agent_rule(dup_id)
     if remove_id:
-        controller.remove_rule(remove_id)
+        controller.remove_agent_rule(remove_id)
 
 
 def _draw_presets(controller: "AgentRecolorController") -> None:
     PyImGui.text_colored("Quick presets:", _MUTED)
     PyImGui.same_line(0, 6)
     if PyImGui.small_button("Enemies red"):
-        r = controller.new_rule(model.SCOPE_AGENT)
+        r = controller.new_agent_rule(model.SCOPE_AGENT)
         r.name, r.allegiance, r.color_rgb = "Enemies red", 3, 0xFF0000
-        controller.update_rule(r)
+        controller.update_agent_rule(r)
     PyImGui.same_line(0, 6)
     if PyImGui.small_button("Bosses gold"):
-        r = controller.new_rule(model.SCOPE_AGENT)
+        r = controller.new_agent_rule(model.SCOPE_AGENT)
         r.name, r.kinds, r.color_rgb = "Bosses gold", ["boss"], 0xFFD24F
-        controller.update_rule(r)
+        controller.update_agent_rule(r)
     PyImGui.same_line(0, 6)
     if PyImGui.small_button("Fade allies"):
-        r = controller.new_rule(model.SCOPE_AGENT)
+        r = controller.new_agent_rule(model.SCOPE_AGENT)
         r.name, r.allegiance, r.mode, r.color_rgb, r.alpha = "Fade allies", 1, model.MODE_FADE, 0xFFFFFF, 0x40
-        controller.update_rule(r)
+        controller.update_agent_rule(r)
 
 
 # ── tabs ─────────────────────────────────────────────────────────────────────────────────────
 def _draw_agents(controller: "AgentRecolorController") -> None:
-    _draw_rule_list(controller, model.SCOPE_AGENT)
+    _draw_agent_rule_list(controller, model.SCOPE_AGENT)
 
 
 def _draw_gadgets(controller: "AgentRecolorController") -> None:
-    _draw_rule_list(controller, model.SCOPE_GADGET)
+    _draw_agent_rule_list(controller, model.SCOPE_GADGET)
 
 
 def _draw_status(controller: "AgentRecolorController") -> None:
@@ -328,18 +328,18 @@ def _draw_status(controller: "AgentRecolorController") -> None:
         PyImGui.text("gadget calls/hits:%s / %s" % (d.get("gadget_calls_seen"), d.get("gadget_rule_hits")))
 
     PyImGui.separator()
-    PyImGui.text_colored("Share rules (global list)", _MUTED)
+    PyImGui.text_colored("Share agent rules (global list)", _MUTED)
     if PyImGui.button("Export -> box"):
         _ui.import_text = controller.export_json()
-        _ui.status_note = "Exported %d rules." % len(controller.rules)
+        _ui.status_note = "Exported %d agent rules." % len(controller.agent_rules)
     PyImGui.same_line(0, 6)
     if PyImGui.button("Import (replace)"):
         n = controller.import_json(_ui.import_text, replace=True)
-        _ui.status_note = "Imported %d rules (replace)." % n if n else "Import failed (bad JSON)."
+        _ui.status_note = "Imported %d agent rules (replace)." % n if n else "Import failed (bad JSON)."
     PyImGui.same_line(0, 6)
     if PyImGui.button("Import (append)"):
         n = controller.import_json(_ui.import_text, replace=False)
-        _ui.status_note = "Imported %d rules (append)." % n if n else "Import failed (bad JSON)."
+        _ui.status_note = "Imported %d agent rules (append)." % n if n else "Import failed (bad JSON)."
     _ui.import_text = PyImGui.input_text_multiline("##ar_share", _ui.import_text, (0.0, 120.0))
     if _ui.status_note:
         PyImGui.text_colored(_ui.status_note, _ACCENT)
