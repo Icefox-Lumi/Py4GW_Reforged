@@ -16,9 +16,11 @@ import time
 import traceback
 from collections import Counter
 from collections.abc import Callable
+from collections.abc import Generator
 from collections.abc import Iterable
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
+from typing import cast
 from uuid import uuid4
 
 import PyImGui
@@ -123,6 +125,7 @@ INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
 PROFILE_VERSION = 36
+MERCHANT_RULES_OWNED_ACTION_QUEUES = frozenset({"ACTION", "IDENTIFY", "SALVAGE"})
 # Live and private rule profiles remain account-scoped. Shared profiles use one
 # global document whose per-key journal writes merge safely across multibox clients.
 DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Data")
@@ -556,6 +559,182 @@ ARMOR_UPGRADE_HOLDING_NAMES = frozenset({
 ARMOR_UPGRADE_SOURCE_KIND = "armor"
 WEAPON_UPGRADE_SOURCE_KIND = "weapon"
 ATTRIBUTE_NONE_REAL_VALUE = 45
+
+
+class _MerchantRulesOwnedQueueCallback:
+    """Track one Merchant Rules callback until it runs or is discarded."""
+
+    __slots__ = ("_callback", "_pending", "_release", "_generation", "_is_generation_current", "__name__")
+
+    def __init__(
+        self,
+        callback: Callable,
+        release: Callable[[], None],
+        *,
+        generation: int | None = None,
+        is_generation_current: Callable[[int], bool] | None = None,
+    ):
+        self._callback = callback
+        self._release = release
+        self._pending = True
+        self._generation = generation
+        self._is_generation_current = is_generation_current
+        self.__name__ = str(getattr(callback, "__name__", callback.__class__.__name__))
+
+    def release(self) -> None:
+        if not self._pending:
+            return
+        self._pending = False
+        release = self._release
+        self._release = None
+        if callable(release):
+            release()
+
+    def __call__(self, *args, **kwargs):
+        if (
+            self._generation is not None
+            and callable(self._is_generation_current)
+            and not self._is_generation_current(self._generation)
+        ):
+            self.release()
+            return None
+        try:
+            return self._callback(*args, **kwargs)
+        finally:
+            self.release()
+
+    def __del__(self):
+        try:
+            self.release()
+        except Exception:
+            pass
+
+
+class _MerchantRulesOwnedGenerator:
+    """Iterator with explicit close-time release for one Merchant Rules operation."""
+
+    __slots__ = (
+        "_owner",
+        "_generator",
+        "_generation",
+        "_release",
+        "_capture_actions",
+        "_reset_flags",
+        "_reset_values_before_start",
+        "_started",
+        "_finished",
+    )
+
+    def __init__(
+        self,
+        owner,
+        generator,
+        generation: int,
+        release: Callable[[], None],
+        *,
+        capture_actions: bool,
+        reset_flags: tuple[str, ...] = (),
+        reset_values_before_start: tuple[tuple[str, object], ...] = (),
+    ):
+        self._owner = owner
+        self._generator = generator
+        self._generation = int(generation)
+        self._release = release
+        self._capture_actions = bool(capture_actions)
+        self._reset_flags = tuple(str(flag_name) for flag_name in reset_flags if str(flag_name))
+        self._reset_values_before_start = tuple(
+            (str(field_name), value)
+            for field_name, value in reset_values_before_start
+            if str(field_name)
+        )
+        self._started = False
+        self._finished = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._finished:
+            raise StopIteration
+        if not self._owner._merchant_rules_is_generation_current(self._generation):
+            self.close()
+            raise StopIteration
+
+        self._started = True
+        try:
+            if self._capture_actions:
+                yielded_value = self._owner._advance_merchant_rules_owned_generator(
+                    self._generator,
+                    self._generation,
+                )
+            else:
+                previous_generation = self._owner._merchant_rules_active_generation
+                self._owner._merchant_rules_active_generation = self._generation
+                try:
+                    yielded_value = next(self._generator)
+                finally:
+                    self._owner._merchant_rules_active_generation = previous_generation
+        except StopIteration as stop:
+            self._finish()
+            raise stop
+        except BaseException:
+            self.close()
+            raise
+
+        if not self._owner._merchant_rules_is_generation_current(self._generation):
+            self.close()
+            raise StopIteration
+        return yielded_value
+
+    def close(self) -> None:
+        if self._finished:
+            return
+        try:
+            if self._started:
+                self._owner._close_merchant_rules_generator(
+                    self._generator,
+                    self._generation,
+                    capture_actions=self._capture_actions,
+                )
+            else:
+                close = getattr(self._generator, "close", None)
+                if callable(close):
+                    close()
+        finally:
+            self._finish()
+
+    def _finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        release = self._release
+        self._release = None
+        try:
+            if callable(release):
+                release()
+        finally:
+            owner = self._owner
+            reset_flags = self._reset_flags
+            self._reset_flags = ()
+            for flag_name in reset_flags:
+                try:
+                    setattr(owner, flag_name, False)
+                except Exception:
+                    pass
+            reset_values = self._reset_values_before_start
+            self._reset_values_before_start = ()
+            if not self._started:
+                for field_name, value in reset_values:
+                    try:
+                        setattr(owner, field_name, value)
+                    except Exception:
+                        pass
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)
@@ -6504,6 +6683,14 @@ class MerchantRulesWidget:
         self.salvage_running = False
         self.auto_cleanup_running = False
         self.manual_vendor_running = False
+        self.merchant_rules_owned_work_count = 0
+        self.merchant_rules_owned_action_count = 0
+        self.merchant_rules_remote_dispatch_count = 0
+        self.merchant_rules_profile_generation = 0
+        self._merchant_rules_generation_account_key = ""
+        self._merchant_rules_active_generation: int | None = None
+        self.pending_multibox_profile_reload: tuple[str, str, str] | None = None
+        self._merchant_rules_staged_multibox_reload_requests: set[tuple[str, str, str]] = set()
         self.execute_reservation_scope_active = False
         self.execute_reserved_item_ids: set[int] = set()
         self.destroy_auto_enabled = False
@@ -6627,6 +6814,7 @@ class MerchantRulesWidget:
         self.multibox_statuses: dict[str, MultiboxAccountStatus] = {}
         self.multibox_active_request_id = ""
         self.multibox_active_action = ""
+        self.multibox_active_profile_generation: int | None = None
         self.multibox_pending_accounts: list[str] = []
         self.multibox_running_email = ""
         self.multibox_running_started_at_ms = 0
@@ -6837,6 +7025,9 @@ class MerchantRulesWidget:
         if self.icon_xunlai_open_running:
             self.status_message = "Opening Xunlai..."
             return
+        if self._merchant_rules_has_pending_or_active_work():
+            self.status_message = "Wait for Merchant Rules to finish its current work."
+            return
         if self._is_storage_open():
             self.status_message = "Xunlai is already open."
             return
@@ -6846,7 +7037,10 @@ class MerchantRulesWidget:
 
         self.icon_xunlai_open_running = True
         self.status_message = "Opening Xunlai..."
-        GLOBAL_CACHE.Coroutines.append(self._open_xunlai_from_icon())
+        self._queue_merchant_rules_owned_work(
+            self._open_xunlai_from_icon(),
+            reset_flags=("icon_xunlai_open_running",),
+        )
 
     def _open_xunlai_from_icon(self):
         try:
@@ -6948,6 +7142,8 @@ class MerchantRulesWidget:
     def _get_open_xunlai_block_reason(self) -> str:
         if self.icon_xunlai_open_running:
             return "Opening Xunlai..."
+        if self._merchant_rules_has_pending_or_active_work():
+            return "Merchant Rules is already busy."
         if self._is_storage_open():
             return ""
         if not Map.IsMapReady():
@@ -7029,7 +7225,7 @@ class MerchantRulesWidget:
                 storage_scan_reason = self._get_storage_scan_block_reason()
                 if self._draw_quick_action_button("Open Xunlai and Refresh Preview", storage_scan_reason):
                     self._show_preview_plan_window()
-                    GLOBAL_CACHE.Coroutines.append(self._open_xunlai_and_scan_preview())
+                    self._queue_merchant_rules_owned_work(self._open_xunlai_and_scan_preview())
                     self._close_quick_actions_menu()
 
             PyImGui.separator()
@@ -8484,17 +8680,7 @@ class MerchantRulesWidget:
         return f"{INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX}:{_normalize_rarity_key(rarity_key) or 'all'}"
 
     def _inventory_shortcut_runtime_block_reason(self) -> str:
-        if (
-            self.execution_running
-            or self.travel_preview_running
-            or self.identify_running
-            or self.instant_destroy_running
-            or self.salvage_running
-            or self.storage_scan_running
-            or self.auto_cleanup_running
-            or self.manual_vendor_running
-            or self.inventory_shortcuts_live_action_running
-        ):
+        if self._merchant_rules_has_pending_or_active_work():
             return "Merchant Rules is already busy."
         if not Map.IsMapReady():
             return "Wait for the current map to finish loading."
@@ -8503,6 +8689,10 @@ class MerchantRulesWidget:
     def _queue_inventory_shortcut_live_deposit(self, item: InventoryItemInfo) -> bool:
         if self.inventory_shortcuts_live_action_running:
             self.status_message = "A right-click inventory action is already running."
+            return False
+        block_reason = self._inventory_shortcut_runtime_block_reason()
+        if block_reason:
+            self.status_message = block_reason
             return False
         item_id = max(0, _safe_int(getattr(item, "item_id", 0), 0))
         model_id = max(0, _safe_int(getattr(item, "model_id", 0), 0))
@@ -8515,8 +8705,9 @@ class MerchantRulesWidget:
         self.inventory_shortcuts_live_action_running = True
         self.status_message = f"Depositing {item_label}..."
         try:
-            GLOBAL_CACHE.Coroutines.append(
-                self._run_inventory_shortcut_live_deposit(item_id, model_id, quantity, item_label)
+            self._queue_merchant_rules_owned_work(
+                self._run_inventory_shortcut_live_deposit(item_id, model_id, quantity, item_label),
+                reset_flags=("inventory_shortcuts_live_action_running",),
             )
             return True
         except Exception as exc:
@@ -8610,8 +8801,9 @@ class MerchantRulesWidget:
         self.inventory_shortcuts_live_action_running = True
         self.status_message = f"Depositing all matching {item_name} stacks..."
         try:
-            GLOBAL_CACHE.Coroutines.append(
-                self._run_inventory_shortcut_live_deposit_all_matching(item_id, model_id, item_name)
+            self._queue_merchant_rules_owned_work(
+                self._run_inventory_shortcut_live_deposit_all_matching(item_id, model_id, item_name),
+                reset_flags=("inventory_shortcuts_live_action_running",),
             )
             return True
         except Exception as exc:
@@ -8769,8 +8961,9 @@ class MerchantRulesWidget:
         self.inventory_shortcuts_live_action_running = True
         self.status_message = f"Withdrawing {item_name} from Xunlai panes..."
         try:
-            GLOBAL_CACHE.Coroutines.append(
-                self._run_inventory_shortcut_live_xunlai_pane_withdraw(item_id, model_id, item_name)
+            self._queue_merchant_rules_owned_work(
+                self._run_inventory_shortcut_live_xunlai_pane_withdraw(item_id, model_id, item_name),
+                reset_flags=("inventory_shortcuts_live_action_running",),
             )
             return True
         except Exception as exc:
@@ -8886,8 +9079,9 @@ class MerchantRulesWidget:
         self.inventory_shortcuts_live_action_running = True
         self.status_message = f"Withdrawing {item_name} from Material Storage..."
         try:
-            GLOBAL_CACHE.Coroutines.append(
-                self._run_inventory_shortcut_live_material_storage_withdraw(item_id, model_id, item_name)
+            self._queue_merchant_rules_owned_work(
+                self._run_inventory_shortcut_live_material_storage_withdraw(item_id, model_id, item_name),
+                reset_flags=("inventory_shortcuts_live_action_running",),
             )
             return True
         except Exception as exc:
@@ -9027,8 +9221,9 @@ class MerchantRulesWidget:
         self.inventory_shortcuts_live_action_running = True
         self.status_message = f"Withdrawing {item_name} from Xunlai panes and Material Storage..."
         try:
-            GLOBAL_CACHE.Coroutines.append(
-                self._run_inventory_shortcut_live_both_withdraw(item_id, model_id, item_name)
+            self._queue_merchant_rules_owned_work(
+                self._run_inventory_shortcut_live_both_withdraw(item_id, model_id, item_name),
+                reset_flags=("inventory_shortcuts_live_action_running",),
             )
             return True
         except Exception as exc:
@@ -9242,8 +9437,9 @@ class MerchantRulesWidget:
             f"Inventory shortcut Material Storage count refresh queued: model_id={model_id} name={item_name}"
         )
         try:
-            GLOBAL_CACHE.Coroutines.append(
-                self._run_inventory_shortcut_live_material_storage_count_refresh(item_id, model_id, item_name)
+            self._queue_merchant_rules_owned_work(
+                self._run_inventory_shortcut_live_material_storage_count_refresh(item_id, model_id, item_name),
+                reset_flags=("inventory_shortcuts_live_action_running",),
             )
             return True
         except Exception as exc:
@@ -9322,8 +9518,9 @@ class MerchantRulesWidget:
         self.inventory_shortcuts_live_action_running = True
         self.status_message = f"Destroying {item_label}..."
         try:
-            GLOBAL_CACHE.Coroutines.append(
-                self._run_inventory_shortcut_live_destroy(item_id, model_id, quantity, item_label)
+            self._queue_merchant_rules_owned_work(
+                self._run_inventory_shortcut_live_destroy(item_id, model_id, quantity, item_label),
+                reset_flags=("inventory_shortcuts_live_action_running",),
             )
             return True
         except Exception as exc:
@@ -9443,7 +9640,7 @@ class MerchantRulesWidget:
         self.identify_running = True
         self.status_message = f"{subject}: queued with clicked ID kit."
         try:
-            GLOBAL_CACHE.Coroutines.append(
+            self._queue_merchant_rules_owned_work(
                 self._run_identify_pass(
                     running_already_marked=True,
                     mark_preview_dirty=True,
@@ -9451,7 +9648,8 @@ class MerchantRulesWidget:
                     rarity_keys=rarity_keys,
                     preferred_id_kit_id=validated_kit_id,
                     preferred_id_kit_model_id=kit_model_id,
-                )
+                ),
+                reset_flags=("identify_running",),
             )
             return True
         except Exception as exc:
@@ -9497,7 +9695,7 @@ class MerchantRulesWidget:
             Console.MessageType.Info,
         )
         try:
-            GLOBAL_CACHE.Coroutines.append(
+            self._queue_merchant_rules_owned_work(
                 self._run_salvage_pass(
                     running_already_marked=True,
                     summary_subject=subject,
@@ -9505,7 +9703,8 @@ class MerchantRulesWidget:
                     preferred_salvage_kit_id=validated_kit_id,
                     preferred_salvage_kit_model_id=kit_model_id,
                     explicit_salvage_request=True,
-                )
+                ),
+                reset_flags=("salvage_running",),
             )
             return True
         except Exception as exc:
@@ -9837,8 +10036,394 @@ class MerchantRulesWidget:
         self._clear_inventory_shortcut_xunlai_display_cache()
         self._set_main_window_visible(False, expand_on_show=True)
 
+    def _merchant_rules_is_generation_current(self, generation: int | None = None) -> bool:
+        if generation is None:
+            generation = self._merchant_rules_active_generation
+        if generation is not None and int(generation) != int(self.merchant_rules_profile_generation):
+            return False
+        if self.initialized and str(self.account_key or "").strip():
+            try:
+                if self._get_account_key() != self.account_key:
+                    return False
+            except Exception:
+                return False
+        return True
+
+    def _merchant_rules_operation_generation(self) -> int:
+        active_generation = self._merchant_rules_active_generation
+        if active_generation is not None:
+            return int(active_generation)
+        return int(self.merchant_rules_profile_generation)
+
+    def _release_merchant_rules_owned_work(self) -> None:
+        self.merchant_rules_owned_work_count = max(0, int(self.merchant_rules_owned_work_count) - 1)
+
+    def _release_merchant_rules_owned_action(self) -> None:
+        self.merchant_rules_owned_action_count = max(0, int(self.merchant_rules_owned_action_count) - 1)
+
+    def _track_merchant_rules_owned_action(
+        self,
+        callback: Callable,
+        *,
+        generation: int | None = None,
+    ) -> _MerchantRulesOwnedQueueCallback:
+        self.merchant_rules_owned_action_count = max(0, int(self.merchant_rules_owned_action_count)) + 1
+        try:
+            captured_generation = self._merchant_rules_operation_generation() if generation is None else int(generation)
+            return _MerchantRulesOwnedQueueCallback(
+                callback,
+                self._release_merchant_rules_owned_action,
+                generation=captured_generation,
+                is_generation_current=self._merchant_rules_is_generation_current,
+            )
+        except BaseException:
+            self._release_merchant_rules_owned_action()
+            raise
+
+    def _begin_merchant_rules_action_capture(self, generation: int | None = None):
+        """Capture only Merchant Rules action submissions made during one generator tick."""
+
+        try:
+            manager = ActionQueueManager()
+        except Exception:
+            return None
+
+        captures: list[tuple[str, bool, object]] = []
+        manager_attributes = getattr(manager, "__dict__", {})
+
+        def install_capture(method_name: str, *, delayed: bool = False):
+            original = getattr(manager, method_name, None)
+            if not callable(original):
+                return
+            had_instance_override = bool(method_name in manager_attributes)
+            previous_instance_value = manager_attributes.get(method_name)
+
+            if delayed:
+
+                def captured_delayed(queue_name, delay, callback, *args, **kwargs):
+                    if str(queue_name or "").upper() not in MERCHANT_RULES_OWNED_ACTION_QUEUES:
+                        return original(queue_name, delay, callback, *args, **kwargs)
+                    owned_callback = self._track_merchant_rules_owned_action(
+                        callback,
+                        generation=generation,
+                    )
+                    try:
+                        return original(queue_name, delay, owned_callback, *args, **kwargs)
+                    except BaseException:
+                        owned_callback.release()
+                        raise
+
+                captured = captured_delayed
+            else:
+
+                def captured_immediate(queue_name, callback, *args, **kwargs):
+                    if str(queue_name or "").upper() not in MERCHANT_RULES_OWNED_ACTION_QUEUES:
+                        return original(queue_name, callback, *args, **kwargs)
+                    owned_callback = self._track_merchant_rules_owned_action(
+                        callback,
+                        generation=generation,
+                    )
+                    try:
+                        return original(queue_name, owned_callback, *args, **kwargs)
+                    except BaseException:
+                        owned_callback.release()
+                        raise
+
+                captured = captured_immediate
+
+            try:
+                setattr(manager, method_name, captured)
+            except Exception:
+                return
+            captures.append((method_name, had_instance_override, previous_instance_value))
+
+        install_capture("AddAction")
+        install_capture("AddActionWithDelay", delayed=True)
+        return manager, captures
+
+    def _end_merchant_rules_action_capture(self, capture) -> None:
+        if capture is None:
+            return
+        manager, captures = capture
+        for method_name, had_instance_override, previous_instance_value in reversed(captures):
+            try:
+                if had_instance_override:
+                    setattr(manager, method_name, previous_instance_value)
+                else:
+                    delattr(manager, method_name)
+            except Exception:
+                pass
+
+    def _close_merchant_rules_generator(
+        self,
+        generator,
+        generation: int | None = None,
+        *,
+        capture_actions: bool = True,
+    ) -> None:
+        close = getattr(generator, "close", None)
+        if not callable(close):
+            return
+        previous_generation = self._merchant_rules_active_generation
+        self._merchant_rules_active_generation = generation
+        capture = self._begin_merchant_rules_action_capture(generation) if capture_actions else None
+        try:
+            close()
+        except RuntimeError:
+            pass
+        finally:
+            self._end_merchant_rules_action_capture(capture)
+            self._merchant_rules_active_generation = previous_generation
+
+    def _advance_merchant_rules_owned_generator(self, generator, generation: int):
+        capture = self._begin_merchant_rules_action_capture(generation)
+        previous_generation = self._merchant_rules_active_generation
+        self._merchant_rules_active_generation = generation
+        try:
+            return next(generator)
+        finally:
+            self._end_merchant_rules_action_capture(capture)
+            self._merchant_rules_active_generation = previous_generation
+
+    def _track_merchant_rules_owned_work(
+        self,
+        generator,
+        *,
+        reset_flags: tuple[str, ...] = (),
+        reset_values_before_start: tuple[tuple[str, object], ...] = (),
+    ):
+        generation = self._merchant_rules_operation_generation()
+        self.merchant_rules_owned_work_count = max(0, int(self.merchant_rules_owned_work_count)) + 1
+        try:
+            return _MerchantRulesOwnedGenerator(
+                self,
+                generator,
+                generation,
+                self._release_merchant_rules_owned_work,
+                capture_actions=True,
+                reset_flags=reset_flags,
+                reset_values_before_start=reset_values_before_start,
+            )
+        except BaseException:
+            close = getattr(generator, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except BaseException:
+                    pass
+            self._release_merchant_rules_owned_work()
+            raise
+
+    def _queue_merchant_rules_owned_work(
+        self,
+        generator,
+        *,
+        reset_flags: tuple[str, ...] = (),
+        reset_values_before_start: tuple[tuple[str, object], ...] = (),
+    ):
+        try:
+            owned_generator = self._track_merchant_rules_owned_work(
+                generator,
+                reset_flags=reset_flags,
+                reset_values_before_start=reset_values_before_start,
+            )
+        except BaseException:
+            for flag_name in reset_flags:
+                setattr(self, flag_name, False)
+            for field_name, value in reset_values_before_start:
+                setattr(self, field_name, value)
+            raise
+        try:
+            GLOBAL_CACHE.Coroutines.append(cast(Generator[object, None, None], owned_generator))
+        except BaseException:
+            try:
+                owned_generator.close()
+            except BaseException:
+                pass
+            finally:
+                for flag_name in reset_flags:
+                    setattr(self, flag_name, False)
+                for field_name, value in reset_values_before_start:
+                    setattr(self, field_name, value)
+            raise
+        return owned_generator
+
+    def _release_merchant_rules_remote_dispatch(self) -> None:
+        self.merchant_rules_remote_dispatch_count = max(0, int(self.merchant_rules_remote_dispatch_count) - 1)
+
+    def _get_staged_multibox_reload_request_key(self, message) -> tuple[str, str, str]:
+        extra0, _extra1, _extra2, _extra3 = self._extract_multibox_message_extra_data(message)
+        return (
+            str(extra0 or "").strip(),
+            str(getattr(message, "SenderEmail", "") or "").strip(),
+            str(getattr(message, "ReceiverEmail", "") or Player.GetAccountEmail() or "").strip(),
+        )
+
+    def _stage_multibox_profile_reload(self, request_key: tuple[str, str, str]) -> None:
+        normalized_key: tuple[str, str, str] = (
+            str(request_key[0] or "").strip(),
+            str(request_key[1] or "").strip(),
+            str(request_key[2] or "").strip(),
+        )
+        self._merchant_rules_staged_multibox_reload_requests.add(normalized_key)
+        self.pending_multibox_profile_reload = normalized_key
+
+    def _release_staged_multibox_profile_reload(self, request_key: tuple[str, str, str]) -> None:
+        normalized_key: tuple[str, str, str] = (
+            str(request_key[0] or "").strip(),
+            str(request_key[1] or "").strip(),
+            str(request_key[2] or "").strip(),
+        )
+        was_staged = normalized_key in self._merchant_rules_staged_multibox_reload_requests
+        self._merchant_rules_staged_multibox_reload_requests.discard(normalized_key)
+        if was_staged and self.pending_multibox_profile_reload == normalized_key:
+            self.pending_multibox_profile_reload = None
+
+    def track_merchant_rules_remote_dispatch(self, message, generator):
+        opcode = self._get_multibox_message_opcode(message)
+        if opcode == MERCHANT_RULES_OPCODE_RELOAD_PROFILE:
+            if not self.initialized:
+                self._ensure_initialized()
+            request_key = self._get_staged_multibox_reload_request_key(message)
+            self._stage_multibox_profile_reload(request_key)
+            generation = self._merchant_rules_operation_generation()
+            try:
+                return _MerchantRulesOwnedGenerator(
+                    self,
+                    generator,
+                    generation,
+                    lambda: self._release_staged_multibox_profile_reload(request_key),
+                    capture_actions=False,
+                )
+            except BaseException:
+                self._release_staged_multibox_profile_reload(request_key)
+                close = getattr(generator, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except BaseException:
+                        pass
+                raise
+        if opcode not in (MERCHANT_RULES_OPCODE_PREVIEW, MERCHANT_RULES_OPCODE_EXECUTE):
+            return generator
+        if not self.initialized:
+            self._ensure_initialized()
+        generation = self._merchant_rules_operation_generation()
+        self.merchant_rules_remote_dispatch_count = max(0, int(self.merchant_rules_remote_dispatch_count)) + 1
+        try:
+            return _MerchantRulesOwnedGenerator(
+                self,
+                generator,
+                generation,
+                self._release_merchant_rules_remote_dispatch,
+                capture_actions=False,
+            )
+        except BaseException:
+            close = getattr(generator, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except BaseException:
+                    pass
+            self._release_merchant_rules_remote_dispatch()
+            raise
+
+    def _merchant_rules_has_pending_or_active_work(
+        self,
+        *,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> bool:
+        return bool(
+            int(self.merchant_rules_owned_work_count) > 0
+            or int(self.merchant_rules_owned_action_count) > 0
+            or (include_remote_dispatch and int(self.merchant_rules_remote_dispatch_count) > 0)
+            or self.execution_running
+            or self.travel_preview_running
+            or self.identify_running
+            or self.instant_destroy_running
+            or self.salvage_running
+            or self.storage_scan_running
+            or self.auto_cleanup_running
+            or self.manual_vendor_running
+            or self.icon_xunlai_open_running
+            or self.inventory_shortcuts_live_action_running
+            or self._is_multibox_batch_running()
+            or bool(self.multibox_pending_accounts)
+            or bool(self.multibox_running_email)
+            or (include_pending_reload and self.pending_multibox_profile_reload is not None)
+            or (
+                self.pending_multibox_profile_reload is not None
+                and self.pending_multibox_profile_reload in self._merchant_rules_staged_multibox_reload_requests
+            )
+        )
+
+    def _get_profile_application_block_message(self, action: str) -> str:
+        if not self._merchant_rules_has_pending_or_active_work():
+            return ""
+        return f"Wait for Merchant Rules to finish its current work before {action}."
+
+    def _apply_multibox_profile_reload(self, *, preserve_workspace_state: bool = False):
+        if self._merchant_rules_has_pending_or_active_work():
+            return False
+        self._clear_loaded_profile_provenance("multibox synchronization")
+        try:
+            return self.reload_profile_from_disk(
+                status_message="Merchant Rules live config reloaded by multibox sync.",
+                preserve_window_geometry=bool(preserve_workspace_state),
+            )
+        except TypeError as exc:
+            if "preserve_window_geometry" not in str(exc):
+                raise
+            return self.reload_profile_from_disk(
+                status_message="Merchant Rules live config reloaded by multibox sync.",
+                preserve_workspace_state=bool(preserve_workspace_state),
+            )
+
+    def _request_multibox_profile_reload(
+        self,
+        *,
+        request_id: str = "",
+        sender_email: str = "",
+        receiver_email: str = "",
+    ) -> bool:
+        if self._merchant_rules_has_pending_or_active_work():
+            self.pending_multibox_profile_reload = (
+                str(request_id or ""),
+                str(sender_email or ""),
+                str(receiver_email or ""),
+            )
+            return False
+        self.pending_multibox_profile_reload = None
+        return bool(self._apply_multibox_profile_reload(preserve_workspace_state=False))
+
+    def _apply_pending_multibox_profile_reload_if_idle(self) -> bool:
+        pending_reload = self.pending_multibox_profile_reload
+        if pending_reload is None or self._merchant_rules_has_pending_or_active_work(include_pending_reload=False):
+            return False
+        if pending_reload in self._merchant_rules_staged_multibox_reload_requests:
+            return False
+
+        self.pending_multibox_profile_reload = None
+        request_id, sender_email, receiver_email = pending_reload
+        try:
+            applied = bool(self._apply_multibox_profile_reload(preserve_workspace_state=True))
+            if applied:
+                self._debug_log(
+                    "Deferred Merchant Rules multibox profile reload applied: "
+                    f"sender={sender_email or '<missing>'} receiver={receiver_email or '<missing>'} "
+                    f"request_id={request_id or '<missing>'}"
+                )
+            return applied
+        except Exception as exc:
+            self.profile_warning = f"Merchant Rules could not load the synced profile: {exc}"
+            self.status_message = self.profile_warning
+            ConsoleLog(MODULE_NAME, self.profile_warning, Console.MessageType.Error)
+            return False
+
     def _tick_runtime(self):
         self._ensure_initialized()
+        self._apply_pending_multibox_profile_reload_if_idle()
         if self.inventory_shortcuts_material_storage_count_cache_captured_at_ms > 0 and not self._is_storage_open():
             self._clear_inventory_shortcut_material_storage_count_cache("storage closed")
         self._advance_multibox_batch()
@@ -10948,6 +11533,8 @@ class MerchantRulesWidget:
         scope: str,
         expected_fingerprint: str = "",
     ):
+        if self._get_profile_application_block_message("loading another profile"):
+            return False
         self._ensure_initialized()
         selected_profile = self._get_selected_profile(scope)
         if selected_profile is None:
@@ -11285,6 +11872,9 @@ class MerchantRulesWidget:
     def _restore_profile_from_backup(self) -> bool:
         """Restore the account-scoped last-known-good JsonFactory profile."""
 
+        if self._get_profile_application_block_message("restoring the backup"):
+            return False
+
         try:
             normalized_payload = self._get_backup_payload()
         except Exception as exc:
@@ -11353,6 +11943,11 @@ class MerchantRulesWidget:
         profile loads.
         """
 
+        self.merchant_rules_profile_generation = max(
+            0,
+            int(self.merchant_rules_profile_generation),
+        ) + 1
+        self._merchant_rules_generation_account_key = self._get_account_key()
         safe_profile_display_name = str(profile_display_name or "").strip()
         if safe_profile_display_name:
             self.active_profile_display_name = safe_profile_display_name
@@ -11415,11 +12010,16 @@ class MerchantRulesWidget:
         *,
         status_message: str = "Merchant Rules live config reloaded from disk.",
         preserve_workspace_state: bool = False,
+        preserve_window_geometry: bool | None = None,
         profile_display_name: str = "",
         log_profile_load_summary: bool = True,
     ):
         """Reload the active profile and optionally preserve workspace state."""
 
+        if self._get_profile_application_block_message("reloading the active profile"):
+            return False
+        if preserve_window_geometry is not None:
+            preserve_workspace_state = bool(preserve_window_geometry)
         workspace_snapshot = self.active_workspace if preserve_workspace_state else ""
         rules_workspace_snapshot = self.active_rules_workspace if preserve_workspace_state else ""
         self._ensure_initialized()
@@ -11445,6 +12045,15 @@ class MerchantRulesWidget:
         current_account = self._get_account_key()
         account_changed = current_account != self.account_key
         if account_changed:
+            if self._merchant_rules_generation_account_key != current_account:
+                self.merchant_rules_profile_generation = max(
+                    0,
+                    int(self.merchant_rules_profile_generation),
+                ) + 1
+                self._merchant_rules_generation_account_key = current_account
+            if self._merchant_rules_has_pending_or_active_work():
+                self._debug_log("Deferred account profile application until Merchant Rules work is idle.")
+                return
             self.account_key = current_account
             self.profile_entries_loaded[PROFILE_SCOPE_ACCOUNT] = False
 
@@ -11453,6 +12062,9 @@ class MerchantRulesWidget:
                 self._refresh_profile_entries(scope)
 
         if not self.initialized or account_changed:
+            if self._merchant_rules_has_pending_or_active_work():
+                self._debug_log("Deferred initial or account profile application until Merchant Rules work is idle.")
+                return
             self.config_path = self._live_config_doc().resolved_path()
             self._load_profile()
             self._load_loaded_profile_provenance()
@@ -11688,29 +12300,60 @@ class MerchantRulesWidget:
         return True
 
     def _queue_execute_now(self):
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         self.execute_drift_requires_confirmation = False
-        GLOBAL_CACHE.Coroutines.append(self._execute_now())
+        self._queue_merchant_rules_owned_work(self._execute_now())
 
     def _queue_execute_here(self):
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         self.execute_drift_requires_confirmation = False
-        GLOBAL_CACHE.Coroutines.append(self._execute_now(local_only=True))
+        self._queue_merchant_rules_owned_work(self._execute_now(local_only=True))
 
-    def _queue_cleanup_now(self, *, auto_triggered: bool = False):
+    def _queue_cleanup_now(
+        self,
+        *,
+        auto_triggered: bool = False,
+        reset_values_before_start: tuple[tuple[str, object], ...] = (),
+    ):
         if self.auto_cleanup_running:
             return
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         self.auto_cleanup_running = True
-        GLOBAL_CACHE.Coroutines.append(self._execute_cleanup_now(auto_triggered=auto_triggered))
+        if auto_triggered and not reset_values_before_start:
+            reset_values_before_start = (
+                ("auto_cleanup_zone_attempted", False),
+                ("auto_cleanup_zone_token", ""),
+            )
+        self._queue_merchant_rules_owned_work(
+            self._execute_cleanup_now(auto_triggered=auto_triggered),
+            reset_flags=("auto_cleanup_running",),
+            reset_values_before_start=reset_values_before_start,
+        )
 
-    def _queue_identify_now(self, *, auto_triggered: bool = False):
+    def _queue_identify_now(
+        self,
+        *,
+        auto_triggered: bool = False,
+        reset_values_before_start: tuple[tuple[str, object], ...] = (),
+    ):
         if self.identify_running:
             return
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         self.identify_running = True
-        GLOBAL_CACHE.Coroutines.append(
+        if auto_triggered and not reset_values_before_start:
+            reset_values_before_start = (("identify_rescan_requested", True),)
+        self._queue_merchant_rules_owned_work(
             self._run_identify_pass(
                 auto_triggered=auto_triggered,
                 running_already_marked=True,
                 summary_subject="Auto Identify" if auto_triggered else "Identify",
-            )
+            ),
+            reset_flags=("identify_running",),
+            reset_values_before_start=reset_values_before_start,
         )
 
     def _request_execute_now(self):
@@ -15096,6 +15739,9 @@ class MerchantRulesWidget:
     def _save_profile(self) -> bool:
         """Persist through JsonFactory while retaining a last-known-good account backup."""
 
+        if not self._merchant_rules_is_generation_current():
+            self._debug_log("Skipped a stale Merchant Rules profile save.")
+            return False
         payload = self._build_profile_payload()
         if self.profile_write_blocked:
             self.profile_warning = (
@@ -17841,6 +18487,11 @@ class MerchantRulesWidget:
         return ""
 
     def _apply_after_purchase_cleanup(self, cleanup: PurchaseTargetCleanup, *, label: str = "") -> bool:
+        if not self._merchant_rules_is_generation_current():
+            self._debug_log(
+                f"Skipped stale after-purchase cleanup for {label or getattr(cleanup, 'target_key', '')}."
+            )
+            return False
         action = _normalize_after_purchase_action(getattr(cleanup, "after_purchase", AFTER_PURCHASE_KEEP))
         if action == AFTER_PURCHASE_KEEP:
             return False
@@ -25265,6 +25916,8 @@ class MerchantRulesWidget:
     def _update_manual_vendor_runtime(self):
         if not Map.IsMapReady():
             return
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         if not self._manual_vendor_settings_enabled():
             self.manual_vendor_handled_signature = ""
             return
@@ -25284,12 +25937,18 @@ class MerchantRulesWidget:
 
         self.manual_vendor_handled_signature = context.signature
         self.manual_vendor_running = True
-        GLOBAL_CACHE.Coroutines.append(
-            self._run_manual_vendor_pass(
-                context,
-                running_already_marked=True,
+        try:
+            self._queue_merchant_rules_owned_work(
+                self._run_manual_vendor_pass(
+                    context,
+                    running_already_marked=True,
+                ),
+                reset_flags=("manual_vendor_running",),
+                reset_values_before_start=(("manual_vendor_handled_signature", ""),),
             )
-        )
+        except Exception:
+            self.manual_vendor_handled_signature = ""
+            raise
 
     def _execute_consumable_crafter_multi_stop_route(self):
         self.execution_running = True
@@ -26107,6 +26766,8 @@ class MerchantRulesWidget:
     def _update_auto_cleanup_runtime(self):
         if not Map.IsMapReady():
             return
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         if not self.auto_cleanup_on_outpost_entry or not self._has_cleanup_sources():
             return
         if not (Map.IsOutpost() or Map.IsGuildHall()):
@@ -26381,6 +27042,8 @@ class MerchantRulesWidget:
     def _update_identify_runtime(self):
         if not Map.IsMapReady():
             return
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         if (
             self.execution_running
             or self.travel_preview_running
@@ -26445,11 +27108,24 @@ class MerchantRulesWidget:
                 parts.append(f"Skipped {count} {reason}.")
         return " ".join(parts)
 
-    def _queue_salvage_now(self, *, auto_triggered: bool = False):
+    def _queue_salvage_now(
+        self,
+        *,
+        auto_triggered: bool = False,
+        reset_values_before_start: tuple[tuple[str, object], ...] = (),
+    ):
         if self.salvage_running:
             return
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         self.salvage_running = True
-        GLOBAL_CACHE.Coroutines.append(self._run_salvage_pass(auto_triggered=auto_triggered, running_already_marked=True))
+        if auto_triggered and not reset_values_before_start:
+            reset_values_before_start = (("salvage_rescan_requested", True),)
+        self._queue_merchant_rules_owned_work(
+            self._run_salvage_pass(auto_triggered=auto_triggered, running_already_marked=True),
+            reset_flags=("salvage_running",),
+            reset_values_before_start=reset_values_before_start,
+        )
 
     def _get_exact_upgrade_salvage_bridge(self) -> _MerchantRulesExactUpgradeSalvageBridge:
         bridge = getattr(self, "_exact_upgrade_salvage_bridge", None)
@@ -27536,6 +28212,8 @@ class MerchantRulesWidget:
     def _update_salvage_runtime(self):
         if not Map.IsMapReady():
             return
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         if (
             self.execution_running
             or self.travel_preview_running
@@ -27691,7 +28369,9 @@ class MerchantRulesWidget:
         )
 
     def _queue_destroy_now(self):
-        GLOBAL_CACHE.Coroutines.append(
+        if self._merchant_rules_has_pending_or_active_work():
+            return
+        self._queue_merchant_rules_owned_work(
             self._run_destroy_pass(
                 require_auto_enabled=False,
                 summary_subject="Run Destroy Now",
@@ -27701,6 +28381,8 @@ class MerchantRulesWidget:
 
     def _update_instant_destroy_runtime(self):
         if not Map.IsMapReady():
+            return
+        if self._merchant_rules_has_pending_or_active_work():
             return
         if (
             self.execution_running
@@ -27729,7 +28411,10 @@ class MerchantRulesWidget:
 
         self.instant_destroy_rescan_requested = False
         self.instant_destroy_poll_timer.Reset()
-        GLOBAL_CACHE.Coroutines.append(self._run_instant_destroy_pass())
+        self._queue_merchant_rules_owned_work(
+            self._run_instant_destroy_pass(),
+            reset_values_before_start=(("instant_destroy_rescan_requested", True),),
+        )
 
     def _push_active_button_style(self, color: tuple[float, float, float, float]):
         base = (max(color[0] - 0.06, 0.0), max(color[1] - 0.10, 0.0), max(color[2] - 0.06, 0.0), 0.46)
@@ -27779,7 +28464,22 @@ class MerchantRulesWidget:
         PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, active)
         PyImGui.push_style_color(PyImGui.ImGuiCol.Text, text)
 
-    def _draw_confirm_destructive_button(self, label: str, *, small: bool = False) -> bool:
+    def _draw_confirm_destructive_button(
+        self,
+        label: str,
+        *,
+        small: bool = False,
+        disabled_reason: str = "",
+    ) -> bool:
+        if disabled_reason:
+            PyImGui.begin_disabled(True)
+            if small:
+                PyImGui.small_button(label)
+            else:
+                PyImGui.button(label)
+            PyImGui.end_disabled()
+            self._draw_hover_tooltip(disabled_reason)
+            return False
         now_ms = int(time.time() * 1000)
         if self.pending_destructive_button_expires_at_ms <= now_ms:
             self._clear_pending_destructive_button()
@@ -27812,8 +28512,19 @@ class MerchantRulesWidget:
         *,
         small: bool = False,
         shared_affects_all_accounts: bool = True,
+        disabled_reason: str = "",
     ) -> tuple[bool, str]:
         """Two-step confirmation bound to the exact selected profile version."""
+
+        if disabled_reason:
+            PyImGui.begin_disabled(True)
+            if small:
+                PyImGui.small_button(label)
+            else:
+                PyImGui.button(label)
+            PyImGui.end_disabled()
+            self._draw_hover_tooltip(disabled_reason)
+            return False, ""
 
         now_ms = int(time.time() * 1000)
         if self.pending_destructive_button_expires_at_ms <= now_ms:
@@ -28636,9 +29347,11 @@ class MerchantRulesWidget:
                 UI_COLOR_SECONDARY_TEXT,
             )
 
-        PyImGui.begin_disabled(not backup_exists)
+        restore_block_message = self._get_profile_application_block_message("restoring the backup")
+        PyImGui.begin_disabled(not backup_exists or bool(restore_block_message))
         restore_clicked = self._draw_confirm_destructive_button(
-            "Restore Last Backup##merchant_rules_restore_backup"
+            "Restore Last Backup##merchant_rules_restore_backup",
+            disabled_reason=restore_block_message,
         )
         PyImGui.end_disabled()
         PyImGui.same_line(0, 8)
@@ -29187,7 +29900,7 @@ class MerchantRulesWidget:
     def _get_action_block_reason(self, action: str) -> str:
         """Return the centralized runtime, preview, travel, and confirmation gate for an action."""
 
-        busy = self.execution_running or self.travel_preview_running or self.identify_running or self.instant_destroy_running or self.salvage_running or self.storage_scan_running or self.auto_cleanup_running or self.manual_vendor_running
+        busy = self._merchant_rules_has_pending_or_active_work()
         if action == "preview":
             return "Merchant Rules is already busy." if busy else ""
         if action == "travel_preview":
@@ -29489,11 +30202,14 @@ class MerchantRulesWidget:
         status instead of treating the batch as an all-or-nothing operation.
         """
 
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         selected_emails = self._get_selected_multibox_emails()
         if not selected_emails:
             return
         self.multibox_active_action = "sync"
         self.multibox_active_request_id = self._next_multibox_request_id("sync")
+        self.multibox_active_profile_generation = int(self.merchant_rules_profile_generation)
         self._clear_multibox_batch_runtime()
         payload = self._build_profile_payload()
         for account_email in selected_emails:
@@ -29544,11 +30260,14 @@ class MerchantRulesWidget:
     def _start_multibox_batch(self, action: str, opcode: int):
         """Create a request-scoped preview or execute batch for selected active followers."""
 
+        if self._merchant_rules_has_pending_or_active_work():
+            return
         selected_emails = self._get_selected_multibox_emails()
         if not selected_emails:
             return
         self.multibox_active_action = str(action or "").strip() or "preview"
         self.multibox_active_request_id = self._next_multibox_request_id(self.multibox_active_action)
+        self.multibox_active_profile_generation = int(self.merchant_rules_profile_generation)
         self._clear_multibox_batch_runtime()
         include_protected_flag = "1" if self.destroy_include_protected_items else "0"
         instant_destroy_flag = "1" if self._is_destroy_auto_enabled() else "0"
@@ -29644,6 +30363,15 @@ class MerchantRulesWidget:
         """
 
         if self.multibox_active_action not in ("preview", "execute"):
+            return
+        if (
+            self.multibox_active_profile_generation is not None
+            and int(self.multibox_active_profile_generation) != int(self.merchant_rules_profile_generation)
+        ):
+            self._debug_log(
+                "Discarded stale Merchant Rules multibox batch after a profile generation change."
+            )
+            self._clear_multibox_batch_runtime()
             return
         current_time_ms = int(time.time() * 1000)
         if self.multibox_active_action == "execute" and self.multibox_running_email:
@@ -29904,6 +30632,8 @@ class MerchantRulesWidget:
             return "Xunlai Deposits is already running."
         if self.manual_vendor_running:
             return "Merchant Rules manual merchant automation is already running."
+        if self._merchant_rules_has_pending_or_active_work(include_remote_dispatch=False):
+            return "Merchant Rules owned work is already running."
         if not Map.IsMapReady():
             return "Current map is still loading."
         return ""
@@ -30009,6 +30739,13 @@ class MerchantRulesWidget:
         return True
 
     def handle_shared_multibox_message(self, message):
+        generator = self._handle_shared_multibox_message(message)
+        opcode = self._get_multibox_message_opcode(message)
+        if opcode in (MERCHANT_RULES_OPCODE_PREVIEW, MERCHANT_RULES_OPCODE_EXECUTE):
+            return self._track_merchant_rules_owned_work(generator)
+        return generator
+
+    def _handle_shared_multibox_message(self, message):
         """Handle a follower command while restoring temporary destructive and HeroAI state.
 
         The generator validates receiver and opcode data, applies request-scoped execution flags,
@@ -30054,9 +30791,15 @@ class MerchantRulesWidget:
             return
 
         if opcode == MERCHANT_RULES_OPCODE_RELOAD_PROFILE:
-            self._clear_loaded_profile_provenance("multibox synchronization")
-            self.reload_profile_from_disk(
-                status_message="Merchant Rules live config reloaded by multibox sync.",
+            request_key = (request_id, sender_email, receiver_email)
+            if request_key in self._merchant_rules_staged_multibox_reload_requests:
+                self._merchant_rules_staged_multibox_reload_requests.discard(request_key)
+                if self.pending_multibox_profile_reload != request_key:
+                    return
+            self._request_multibox_profile_reload(
+                request_id=request_id,
+                sender_email=sender_email,
+                receiver_email=receiver_email,
             )
             return
 
@@ -30319,6 +31062,16 @@ class MerchantRulesWidget:
                 f"Ignored Merchant Rules multibox result from {normalized_email}: request_id={request_id} current={self.multibox_active_request_id}"
             )
             return False
+        if (
+            self.multibox_active_profile_generation is not None
+            and int(self.multibox_active_profile_generation) != int(self.merchant_rules_profile_generation)
+        ):
+            self._debug_log(
+                f"Ignored stale Merchant Rules multibox result from {normalized_email}: "
+                f"request_id={request_id} generation={self.multibox_active_profile_generation} "
+                f"current_generation={self.merchant_rules_profile_generation}"
+            )
+            return False
 
         current_time_ms = int(time.time() * 1000)
         if opcode == MERCHANT_RULES_OPCODE_STATUS_RESULT:
@@ -30440,17 +31193,23 @@ class MerchantRulesWidget:
                 PyImGui.end_table()
         PyImGui.end_child()
 
-        batch_running = self._is_multibox_batch_running()
+        multibox_block_message = self._get_profile_application_block_message(
+            "starting another multibox operation"
+        )
         no_selection = not selected_emails
-        PyImGui.begin_disabled(no_selection or batch_running)
-        sync_clicked = self._draw_confirm_destructive_button("Sync Rules To Selected##merchant_rules_multibox_sync_selected")
+        multibox_disabled = no_selection or bool(multibox_block_message)
+        PyImGui.begin_disabled(multibox_disabled)
+        sync_clicked = self._draw_confirm_destructive_button(
+            "Sync Rules To Selected##merchant_rules_multibox_sync_selected",
+            disabled_reason=multibox_block_message,
+        )
         PyImGui.end_disabled()
         PyImGui.same_line(0, 8)
-        PyImGui.begin_disabled(no_selection or batch_running)
+        PyImGui.begin_disabled(multibox_disabled)
         preview_clicked = PyImGui.button("Preview Selected")
         PyImGui.end_disabled()
         PyImGui.same_line(0, 8)
-        PyImGui.begin_disabled(no_selection or batch_running)
+        PyImGui.begin_disabled(multibox_disabled)
         execute_clicked = PyImGui.button("Execute Selected")
         PyImGui.end_disabled()
 
@@ -30468,6 +31227,7 @@ class MerchantRulesWidget:
         )
         error_count = sum(1 for status in selected_statuses if status is not None and status.state == "error")
 
+        batch_running = self._is_multibox_batch_running()
         if batch_running and self.multibox_active_action == "preview":
             self._draw_secondary_text(
                 f"Remote preview progress: {running_count} running | {finished_count} finished | {error_count} issue(s)."
@@ -37167,7 +37927,7 @@ class MerchantRulesWidget:
         if compare_clicked:
             self._compare_current_inventory_against_preview()
         if storage_scan_clicked:
-            GLOBAL_CACHE.Coroutines.append(self._open_xunlai_and_scan_preview())
+            self._queue_merchant_rules_owned_work(self._open_xunlai_and_scan_preview())
         if re_preview_clicked:
             self._scan_preview()
             self._select_default_preview_plan_workspace()
@@ -38251,13 +39011,15 @@ class MerchantRulesWidget:
         self._draw_hover_tooltip(
             "Use the selected profile as this account's current Merchant Rules settings."
         )
-        PyImGui.begin_disabled(selected_profile is None)
+        load_block_message = self._get_profile_application_block_message("loading another profile")
+        PyImGui.begin_disabled(selected_profile is None or bool(load_block_message))
         if selected_profile is not None:
             load_clicked, load_fingerprint = self._draw_confirm_profile_action_button(
                 f"Load Selected##merchant_rules_{scope_id}_profile_load",
                 "load",
                 selected_profile,
                 shared_affects_all_accounts=False,
+                disabled_reason=load_block_message,
             )
         else:
             PyImGui.button(f"Load Selected##merchant_rules_{scope_id}_profile_load")
