@@ -36721,6 +36721,9 @@ class MerchantRulesWidget:
         self._draw_secondary_text(
             "Salvage uses per-rule choices. Protection, customized-item, unidentified non-white, and live salvage checks always run first."
         )
+        self._draw_secondary_text(
+            "Salvage rules are evaluated top to bottom. The first matching rule wins. Move Up/Down changes priority."
+        )
 
         run_salvage_reason = self._get_action_block_reason("salvage")
         ready_rule_count = self._draw_salvage_status_badges(settings)
@@ -36761,6 +36764,9 @@ class MerchantRulesWidget:
             self.rule_ui_structure_changed = True
             self._refresh_rule_ui_caches()
             changed = True
+        self._draw_hover_tooltip(
+            "Rules are checked top to bottom. The first matching rule wins. Use Move Up/Down to change priority."
+        )
 
         if not settings.rules:
             self._draw_secondary_text("No salvage rules yet.")

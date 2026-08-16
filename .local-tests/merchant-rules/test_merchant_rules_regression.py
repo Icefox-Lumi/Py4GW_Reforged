@@ -6558,6 +6558,199 @@ def _common_material_target_fixture(module, widget, *, model_id: int = 35, outpu
     )
 
 
+def _make_salvage_priority_rule(module, item, *, salvage_option: str, name: str, target_common_material: bool = False):
+    return module.SalvageRule(
+        enabled=True,
+        model_ids=[int(item.model_id)],
+        target_common_material_model_ids=[925] if target_common_material else [],
+        salvage_option=salvage_option,
+        name=name,
+    )
+
+
+def _test_salvage_specific_upgrade_above_materials_wins(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    specific_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+        name="Specific upgrade first",
+    )
+    materials_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Materials second",
+        target_common_material=True,
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[specific_rule, materials_rule])
+
+    _expect(widget._get_salvage_rule_filter_reason(specific_rule, item), "The Specific upgrade rule should match the priority fixture.")
+    _expect(widget._get_salvage_rule_filter_reason(materials_rule, item), "The Materials rule should match the priority fixture.")
+    match = widget._get_matching_salvage_rule(item)
+
+    _expect(match is not None and match[0] == 0, "The first matching Specific upgrade rule should win over Materials.")
+    _expect(
+        match is not None and match[1].name == "Specific upgrade first" and match[1].salvage_option == module.SALVAGE_OPTION_AUTO_UPGRADE,
+        "Specific upgrade should be the selected mode when its rule is first.",
+    )
+
+
+def _test_salvage_materials_above_specific_upgrade_wins(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    materials_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Materials first",
+        target_common_material=True,
+    )
+    specific_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+        name="Specific upgrade second",
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[materials_rule, specific_rule])
+
+    _expect(widget._get_salvage_rule_filter_reason(materials_rule, item), "The Materials rule should match the priority fixture.")
+    _expect(widget._get_salvage_rule_filter_reason(specific_rule, item), "The Specific upgrade rule should match the priority fixture.")
+    match = widget._get_matching_salvage_rule(item)
+
+    _expect(match is not None and match[0] == 0, "The first matching Materials rule should win over Specific upgrade.")
+    _expect(
+        match is not None and match[1].name == "Materials first" and match[1].salvage_option == module.SALVAGE_OPTION_MATERIALS,
+        "Materials should be the selected mode when its rule is first.",
+    )
+
+
+def _test_two_matching_materials_rules_use_first_rule(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    first_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Materials first",
+        target_common_material=True,
+    )
+    second_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Materials second",
+        target_common_material=True,
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[first_rule, second_rule])
+
+    match = widget._get_matching_salvage_rule(item)
+
+    _expect(match is not None and match[0] == 0, "The first of two matching Materials rules should win.")
+    _expect(match is not None and match[1].name == "Materials first", "The first Materials rule should own the match.")
+
+
+def _test_two_matching_specific_upgrade_rules_use_first_rule(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    first_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+        name="Specific upgrade first",
+    )
+    second_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+        name="Specific upgrade second",
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[first_rule, second_rule])
+
+    match = widget._get_matching_salvage_rule(item)
+
+    _expect(match is not None and match[0] == 0, "The first of two matching Specific upgrade rules should win.")
+    _expect(match is not None and match[1].name == "Specific upgrade first", "The first Specific upgrade rule should own the match.")
+
+
+def _test_salvage_rule_reordering_changes_selected_rule(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    materials_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Materials rule",
+        target_common_material=True,
+    )
+    specific_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+        name="Specific upgrade rule",
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[materials_rule, specific_rule])
+
+    initial_match = widget._get_matching_salvage_rule(item)
+    _expect(initial_match is not None and initial_match[1].name == "Materials rule", "The initial top rule should be selected.")
+    _expect(widget._move_rule_entry(widget.salvage_settings.rules, 1, -1), "Moving the lower rule up should change rule order.")
+
+    reordered_match = widget._get_matching_salvage_rule(item)
+    serialized_rules = module._serialize_salvage_settings(widget.salvage_settings)["rules"]
+    _expect(
+        reordered_match is not None and reordered_match[1].name == "Specific upgrade rule",
+        "Reordering the rules should change the selected Salvage rule.",
+    )
+    _expect(
+        [entry["name"] for entry in serialized_rules] == ["Specific upgrade rule", "Materials rule"],
+        "Reordering should also change persisted Salvage rule order.",
+    )
+
+
+def _test_blocked_first_salvage_rule_does_not_fall_through(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    blocked_specific_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+        name="Blocked Specific upgrade",
+    )
+    later_materials_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Later Materials",
+        target_common_material=True,
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[blocked_specific_rule, later_materials_rule])
+    widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 1
+
+    _expect(
+        widget._get_salvage_candidate_block_reason(
+            item,
+            [],
+            salvage_rule=later_materials_rule,
+            require_salvage_kit=True,
+            salvage_kit_id=1,
+        )
+        == "",
+        "The later Materials rule should be executable if it were considered.",
+    )
+    candidates, blocked_counts = widget._collect_salvage_candidates(
+        [item],
+        [],
+        require_salvage_kit=True,
+    )
+
+    _expect(not candidates, "A blocked first Salvage rule must not fall through to a later rule.")
+    _expect(
+        blocked_counts.get("specific upgrade salvage not executable") == 1,
+        "The blocked first Specific upgrade rule should explain why no candidate was selected.",
+    )
+
+
 def _test_common_material_targeting_known_possible_any_and_empty(module) -> None:
     widget = _make_widget(module)
     item = _common_material_target_fixture(module, widget)
@@ -23877,6 +24070,30 @@ def main() -> int:
             ),
             ("manual_vendor_exact_rune_sell_runs_at_rune_trader", lambda: _test_manual_vendor_exact_rune_sell_runs_at_rune_trader(module)),
             ("salvage_candidate_evaluation_precedence", lambda: _test_salvage_candidate_evaluation_precedence(module)),
+            (
+                "salvage_specific_upgrade_above_materials_wins",
+                lambda: _test_salvage_specific_upgrade_above_materials_wins(module),
+            ),
+            (
+                "salvage_materials_above_specific_upgrade_wins",
+                lambda: _test_salvage_materials_above_specific_upgrade_wins(module),
+            ),
+            (
+                "two_matching_materials_rules_use_first_rule",
+                lambda: _test_two_matching_materials_rules_use_first_rule(module),
+            ),
+            (
+                "two_matching_specific_upgrade_rules_use_first_rule",
+                lambda: _test_two_matching_specific_upgrade_rules_use_first_rule(module),
+            ),
+            (
+                "salvage_rule_reordering_changes_selected_rule",
+                lambda: _test_salvage_rule_reordering_changes_selected_rule(module),
+            ),
+            (
+                "blocked_first_salvage_rule_does_not_fall_through",
+                lambda: _test_blocked_first_salvage_rule_does_not_fall_through(module),
+            ),
             (
                 "manual_salvage_request_ignores_plain_sell_priority",
                 lambda: _test_manual_salvage_request_ignores_plain_sell_priority(module),
