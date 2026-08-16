@@ -27,7 +27,7 @@ from .NicholasFarms import (
 
 MODULE_NAME = "Nicholas Farm Base"
 
-_PREPARED_KEY = "__nicholas_manager_prepared"
+_PREPARED_ATTR = "_nicholas_manager_prepared_farm_key"
 _PORTAL_READY_KEY = "__nicholas_manager_portal_ready"
 
 _INVENTORY_QUERY_TIMEOUT_MS = 10_000
@@ -78,26 +78,93 @@ def _range_for_farm(farm: FarmDefinition) -> float:
     return Range.Earshot.value
 
 
-def prepare_farm(tree_getter: Callable[[], BottingTree], farm: FarmDefinition) -> BehaviorTree:
+def reset_prepare_session(tree: BottingTree) -> None:
     """
-    One-time setup per manual Start:
+    Forget the one-time farm preparation state.
+
+    This is deliberately stored on the BottingTree instance instead of its
+    blackboard. BottingTree.Start() -> Reset() clears the blackboard when a
+    named planner step is restarted, which previously caused the next planner
+    pass to kick/rebuild the multibox party again.
+
+    The tree instance itself survives planner restarts, so this attribute
+    remains valid until the user actually stops the bot.
+    """
+    setattr(tree, _PREPARED_ATTR, "")
+
+
+def _is_prepare_session_ready(
+    tree: BottingTree,
+    farm: FarmDefinition,
+) -> bool:
+    return str(getattr(tree, _PREPARED_ATTR, "") or "") == str(farm.key)
+
+
+def _prepared_session_check(
+    tree: BottingTree,
+    farm: FarmDefinition,
+) -> BehaviorTree:
+    def _check(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if _is_prepare_session_ready(tree, farm):
+            return BehaviorTree.NodeState.SUCCESS
+        return BehaviorTree.NodeState.FAILURE
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Farm Party Already Prepared",
+            action_fn=_check,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _mark_prepare_session_ready(
+    tree: BottingTree,
+    farm: FarmDefinition,
+) -> BehaviorTree:
+    def _mark(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        setattr(tree, _PREPARED_ATTR, str(farm.key))
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Remember Farm Party Preparation",
+            action_fn=_mark,
+            aftercast_ms=0,
+        )
+    )
+
+
+def prepare_farm(
+    tree_getter: Callable[[], BottingTree],
+    farm: FarmDefinition,
+) -> BehaviorTree:
+    """
+    One-time setup per MANUAL Start:
 
       MerchantRules OFF on all accounts
       -> aggressive multibox HeroAI
       -> leave current party
-      -> travel to farm outpost
+      -> RANDOM travel to farm outpost
       -> create multibox party
       -> Normal Mode
 
-    The blackboard flag survives planner repeats, so the party is not rebuilt
-    after each farm run.
+    IMPORTANT:
+    The prepared state is stored on the BottingTree instance, not in the
+    blackboard. Named-step recovery may call BottingTree.Start(), whose Reset()
+    clears the blackboard. The tree attribute survives that internal restart,
+    so a normal farm run returns to the outpost and continues with its outpost
+    path / MoveAndExitMap without kicking and rebuilding the party.
+
+    The Manager clears this session attribute only while the farm tree is
+    genuinely stopped, so the next manual Start performs a fresh setup.
     """
     tree = tree_getter()
 
     return BT.Selector(
         name="Prepare Farm",
         children=[
-            BT.HasBlackboardValue(_PREPARED_KEY, log=False),
+            _prepared_session_check(tree, farm),
             BT.Sequence(
                 name="Initial Farm Setup",
                 children=[
@@ -124,11 +191,7 @@ def prepare_farm(tree_getter: Callable[[], BottingTree], farm: FarmDefinition) -
                         hard_mode=False,
                         log=False,
                     ),
-                    BT.SaveBlackboardValue(
-                        _PREPARED_KEY,
-                        True,
-                        log=False,
-                    ),
+                    _mark_prepare_session_ready(tree, farm),
                 ],
             ),
         ],

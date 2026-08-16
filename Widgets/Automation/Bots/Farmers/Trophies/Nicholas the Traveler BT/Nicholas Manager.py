@@ -136,6 +136,7 @@ from _modules.NicholasFarmBase import (
     build_execution_steps,
     check_target_item_count,
     configure_tree,
+    reset_prepare_session,
 )
 from _modules.NicholasFarms import FARMS, FarmDefinition
 
@@ -595,6 +596,7 @@ def _draw_about_tab() -> None:
     PyImGui.text(f"Registered farms: {len(FARMS)}")
     PyImGui.text(f"Nicholas exchange routes: {sum(1 for farm in FARMS if farm.exchange_available)}")
     PyImGui.text("One shared engine handles setup, counting, farming and resets.")
+    PyImGui.text("Party setup runs once per manual Start and survives step recovery.")
     PyImGui.text("Farm target is calculated automatically from the configured gift-account count.")
     PyImGui.text("MerchantRules is disabled once on every active account.")
     PyImGui.text("No account isolation.")
@@ -702,6 +704,17 @@ def main() -> None:
         _initialized = True
 
     tree = ensure_botting_tree()
+
+    # The one-time party setup must survive BottingTree named-step restarts,
+    # but it must NOT survive a real user Stop -> Start cycle.
+    #
+    # While stopped, continuously clear the session marker. The Start button is
+    # handled by the BottingTree UI later in this frame; on the next frame the
+    # tree is already started, so the marker is left intact and Initial Farm
+    # Setup runs exactly once for that manual Start.
+    if not tree.IsStarted():
+        reset_prepare_session(tree)
+
     tree.tick()
 
     ex_tree = ensure_exchange_tree()
