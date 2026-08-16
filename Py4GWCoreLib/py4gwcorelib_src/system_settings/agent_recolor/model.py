@@ -1,10 +1,10 @@
-"""Agent Recolor model — the rule taxonomy (pure data).
+"""Agent Recolor model — the agent-rule taxonomy (pure data).
 
 NO PyImGui, NO Settings, NO native calls. It only *describes* a color rule and the
 vocabulary of criteria the engine can filter agents/gadgets by, plus (de)serialization
 so the whole rule list round-trips as JSON (global, shareable, nothing hardcoded).
 
-A ``Rule`` is an ordered, named, toggleable unit: a set of OPTIONAL criteria (all set
+A ``AgentRule`` is an ordered, named, toggleable unit: a set of OPTIONAL criteria (all set
 ones AND'd; unset = ignored) plus an action (color + mode). The engine walks the rules
 in list order and the first enabled rule that matches an agent wins (like the item
 precedence chain in the native module).
@@ -61,12 +61,14 @@ STATE_PREDICATE = {
 STATE_KEYS = ("targeted", "attacking", "casting", "moving", "alive", "dead")
 
 
+# Renamed from ``Rule`` (see docs/loot/redesign/filter-structure.md): the contract retires the
+# bare word from the shared vocabulary; the agent-scoped prefix keeps the domain meaning.
 @dataclass
-class Rule:
-    """One color rule. Unset criteria (None / empty) are ignored when matching."""
+class AgentRule:
+    """One agent/gadget color rule. Unset criteria (None / empty) are ignored when matching."""
 
     id: str                          # stable id (for UI selection / removal)
-    name: str = "New rule"           # user-facing label
+    name: str = "New agent rule"       # user-facing label
     enabled: bool = True
     scope: str = SCOPE_AGENT         # SCOPE_AGENT | SCOPE_GADGET
 
@@ -114,7 +116,7 @@ class Rule:
         }
 
     @staticmethod
-    def from_dict(data: dict) -> "Rule":
+    def from_dict(data: dict) -> "AgentRule":
         def _int_list(v) -> "List[int]":
             return [int(x) for x in v] if isinstance(v, (list, tuple)) else []
 
@@ -131,9 +133,9 @@ class Rule:
             return str(v) if isinstance(v, str) and v != "" else None
 
         scope = data.get("scope", SCOPE_AGENT)
-        return Rule(
+        return AgentRule(
             id=str(data.get("id", "")),
-            name=str(data.get("name", "Rule")),
+            name=str(data.get("name", "New agent rule")),
             enabled=bool(data.get("enabled", True)),
             scope=scope if scope in (SCOPE_AGENT, SCOPE_GADGET) else SCOPE_AGENT,
             color_rgb=int(data.get("color_rgb", 0xFF0000)) & 0xFFFFFF,

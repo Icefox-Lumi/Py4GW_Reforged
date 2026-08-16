@@ -23,18 +23,18 @@ def _draw_title_on_map_load(controller: TitleOnMapLoadController) -> None:
     PyImGui.text_colored("Supported maps", _MUTED)
     PyImGui.separator()
 
-    for rule in model.TITLE_MAP_RULES:
+    for entry in model.TITLE_MAP_ENTRIES:
         header = "%s (%d maps)###title_maps_%s" % (
-            rule.title_name,
-            len(rule.map_names),
-            int(rule.title_id),
+            entry.title_name,
+            len(entry.map_names),
+            int(entry.title_id),
         )
         if not PyImGui.collapsing_header(header):
             continue
-        for map_name in rule.map_names:
+        for map_name in entry.map_names:
             PyImGui.bullet_text(map_name)
-        if rule.map_ids:
-            PyImGui.text_colored("Alternate map IDs: %s" % ", ".join(str(map_id) for map_id in rule.map_ids), _MUTED)
+        if entry.map_ids:
+            PyImGui.text_colored("Alternate map IDs: %s" % ", ".join(str(map_id) for map_id in entry.map_ids), _MUTED)
 
 
 def add_sections(win, group) -> None:

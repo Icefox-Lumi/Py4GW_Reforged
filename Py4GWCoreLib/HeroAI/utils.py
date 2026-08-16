@@ -1,10 +1,24 @@
+import ctypes
 from typing import Optional
 from Py4GWCoreLib import GLOBAL_CACHE, Allegiance, Overlay, Map, Agent
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
+from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct, HeroAIOptionStruct
 from .constants import MAX_NUM_PLAYERS
 from .targeting import *
 from .cache_data import CacheData
 from Py4GWCoreLib.py4gwcorelib_src.FrameCache import frame_cache
+
+
+def detached_hero_ai_options(options: HeroAIOptionStruct) -> HeroAIOptionStruct:
+    """Return a private copy of a shared-memory HeroAIOptionStruct.
+
+    Shared-memory structs are live views over the C++-owned buffer: when an
+    account's slot index changes, the bytes behind a cached view can be
+    repurposed by another account. Detached copies keep "last valid options"
+    stable across slot bounces.
+    """
+    return HeroAIOptionStruct.from_buffer_copy(
+        ctypes.string_at(ctypes.addressof(options), ctypes.sizeof(HeroAIOptionStruct))
+    )
 
 def _account_key(account: AccountStruct):
     return (account.AccountEmail, int(account.AgentData.AgentID))

@@ -11,6 +11,17 @@ class PartyCache():
         self.accounts : dict[int, AccountStruct] = {}
         self.options : dict[int, HeroAIOptionStruct] = {}
         
+        # Last valid options per account email. Stored as DETACHED copies because
+        # shared-memory structs are live views: when the C++ writer moves an
+        # account to a different slot index, the bytes behind a cached view can
+        # be repurposed by another account. These copies are the recovery source
+        # when options temporarily disappear from shared memory.
+        self.last_valid_options : dict[str, HeroAIOptionStruct] = {}
+        
+        # Emails that already logged the "no options" fallback this session, so a
+        # flapping slot cannot spam the console every frame.
+        self._missing_options_logged : set[str] = set()
+        
         self.party_id = 0
         
     def __iter__(self):
@@ -33,11 +44,14 @@ class PartyCache():
     def reset(self):
         """ Reset the party cache. """
         self.accounts.clear()
+        self.options.clear()
         self.party_id = 0
+        # last_valid_options survives resets on purpose: it is the recovery data
+        # that keeps accounts enabled across temporary shared-memory gaps.
         
     def update(self):
         """ Update the party cache from shared memory. """
-        from .utils import SameMapOrPartyAsAccount
+        from .utils import SameMapOrPartyAsAccount, detached_hero_ai_options
         from Py4GWCoreLib.Party import Party
         if not Party.IsPartyLoaded():
             self.reset()
@@ -50,11 +64,30 @@ class PartyCache():
         
         for acc in shmem_accounts:
             if acc.IsSlotActive and SameMapOrPartyAsAccount(acc):
-                self.accounts[acc.AgentData.AgentID] = acc
+                agent_id = acc.AgentData.AgentID
+                email = acc.AccountEmail
                 
-                options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(acc.AccountEmail)
+                self.accounts[agent_id] = acc
+                
+                options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(email)
                 
                 if options is None:
-                    ConsoleLog("PartyCache", f"Account {acc.AccountEmail} has no HeroAI options in shared memory, creating default options.")
-                    
-                self.options[acc.AgentData.AgentID] = options if options is not None else HeroAIOptionStruct()
+                    # Temporary shared-memory gap (slot bounce, region recreation,
+                    # heartbeat flicker). Reuse the last valid options so the
+                    # account keeps Following/Combat/Targeting/Looting/skills as
+                    # they were instead of being downgraded to an all-zero struct,
+                    # which silently disables every HeroAI subsystem.
+                    options = self.last_valid_options.get(email)
+                    if options is None:
+                        if email not in self._missing_options_logged:
+                            self._missing_options_logged.add(email)
+                            ConsoleLog("PartyCache", f"Account {email} has no HeroAI options in shared memory, using enabled defaults.")
+                        options = HeroAIOptionStruct()
+                        options.reset()
+                    self.options[agent_id] = options
+                    continue
+                
+                self._missing_options_logged.discard(email)
+                options_copy = detached_hero_ai_options(options)
+                self.last_valid_options[email] = options_copy
+                self.options[agent_id] = options_copy

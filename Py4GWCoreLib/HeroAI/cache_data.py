@@ -144,6 +144,9 @@ class CacheData:
     def __init__(self, throttle_time=75):
         if not self._initialized:
             self.account_email = ""
+            self._shmem_options_valid = False
+            self._last_options_slot = -1
+            self._options_published = False
             self.ini_key : str = ""
             self.formation_window_ini_key : str = ""
             self.flagging_window_ini_key : str = ""
@@ -194,6 +197,36 @@ class CacheData:
         
     def reset(self):
         self.data.reset()   
+        
+    def _republish_options_if_slot_changed(self):
+        """Re-anchor this account's HeroAI options to its current shared-memory slot.
+
+        HeroAIOptions live at the same index as the account slot. When the C++
+        writer moves this account to a new slot (expired-slot reclaim, claim
+        race), the old index keeps stale options and the new index holds
+        leftovers from its previous occupant. Detecting the index change and
+        republishing our last valid options re-anchors them without any
+        cross-account write. The first successful resolution also publishes
+        once, which covers a freshly recreated shared-memory region.
+        """
+        if not self.account_email or not self._shmem_options_valid:
+            return
+
+        try:
+            slot_index = GLOBAL_CACHE.ShMem.GetSlotByEmail(self.account_email)
+        except Exception:
+            return
+
+        if slot_index == -1:
+            # Slot not visible yet (or this frame); force a republish when it
+            # comes back so a bounce cannot leave options orphaned.
+            self._last_options_slot = -1
+            return
+
+        if slot_index != self._last_options_slot or not self._options_published:
+            self._last_options_slot = slot_index
+            GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(self.account_email, self.account_options)
+            self._options_published = True
         
     def InAggro(self, enemy_array, aggro_range = Range.Earshot.value):
         bl = EnemyBlacklist()
@@ -258,15 +291,24 @@ class CacheData:
                 self.party.update()
                 
                 self.account_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(self.account_email) or self.account_data
-                self.account_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(self.account_email) or self.account_options
+
+                from .utils import SameMapOrPartyAsAccount, detached_hero_ai_options
+
+                shmem_account_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(self.account_email)
+                if shmem_account_options is not None:
+                    # Detach: the shmem struct is a live view. If this account's
+                    # slot index later changes (C++ slot churn), the cached view
+                    # would silently start showing another account's options.
+                    self.account_options = detached_hero_ai_options(shmem_account_options)
+                    self._shmem_options_valid = True
+
+                self._republish_options_if_slot_changed()
                 self.data.party_position = int(self.account_data.AgentPartyData.PartyPosition)
                 self.data.is_leader = bool(
                     getattr(self.account_data.AgentPartyData, "IsPartyLeader", False)
                     or Player.GetAgentID() == GLOBAL_CACHE.Party.GetPartyLeaderID()
                 )
                 
-                from .utils import SameMapOrPartyAsAccount
-
                 self.data.party_in_aggro = False
                 self.data.leader_in_aggro = False
                 for account in self.party:

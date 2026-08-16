@@ -1,6 +1,6 @@
 """Loot persistence split by lifetime: global policy and session-only live state.
 
-The global Loot Policy, including the selected Factory profile, is shared by every account.
+The global Loot Policy, including the selected Factory filter set, is shared by every account.
 ``LootFilters.live`` remains in memory and is never written here.
 """
 
@@ -15,6 +15,15 @@ _POLICY_SELECTIONS = "Widgets/System/LootFiltersSelections.json"
 
 _QA_SEPARATOR = "|"
 DEFAULT_QUICK_ACCESS: tuple[str, ...] = ("Rarities", "Materials", "Dyes", "Nicholas")
+
+
+def _log(message: str) -> None:
+    try:
+        from Py4GWCoreLib.Py4GWcorelib import ConsoleLog
+
+        ConsoleLog("Loot Filters", message)
+    except Exception:
+        pass
 
 
 def _settings(scope: str):
@@ -40,7 +49,9 @@ def _load_policy(settings, doc) -> LootConfig:
     if settings is not None:
         config.enabled = settings.get_bool("general", "enabled", True)
         config.respect_loot_lock = settings.get_bool("general", "respect_loot_lock", True)
-        config.profile = settings.get_str("general", "profile", "")
+        # The persisted key has always been ``general/profile`` and it stays: only the VALUE
+        # moved from a filter-set NAME to its id. Names are still read and adopted by load().
+        config.filter_set_id = settings.get_str("general", "profile", "")
         for key in ("white", "blue", "purple", "gold", "green", "gold_coins"):
             config.set_rarity(key, settings.get_bool("rarity", key, False))
     if doc is not None:
@@ -67,7 +78,7 @@ def _save_policy(config: LootConfig, settings, doc) -> None:
     if settings is not None:
         settings.set("general", "enabled", bool(config.enabled))
         settings.set("general", "respect_loot_lock", bool(config.respect_loot_lock))
-        settings.set("general", "profile", str(config.profile))
+        settings.set("general", "profile", str(config.filter_set_id))
         for key in ("white", "blue", "purple", "gold", "green", "gold_coins"):
             settings.set("rarity", key, bool(config.rarity_enabled(key)))
     if doc is not None:
@@ -85,7 +96,7 @@ def _has_configured_policy(config: LootConfig) -> bool:
     return bool(
         not config.enabled
         or not config.respect_loot_lock
-        or config.profile
+        or config.filter_set_id
         or config.loot_whites
         or config.loot_blues
         or config.loot_purples
@@ -124,11 +135,39 @@ def _migrate_account_policy(policy_settings, policy_doc) -> None:
     policy_settings.set("migration", "from_account", True)
 
 
+def _resolve_filter_set(config: LootConfig, settings) -> None:
+    """Adopt a legacy filter-set NAME into its id, in place, once and silently.
+
+    The key does not move: ``general/profile`` still holds the selection, only
+    the VALUE changes from a name to the set's id -- which is what makes a
+    rename survive. A stored id is kept; a stored name is resolved and written
+    back as its id (idempotent: the value being an id is its own migration
+    state); a value matching no set falls back to none **in memory** -- the
+    document is not rewritten, so a transiently unreadable filter pool cannot
+    destroy a valid selection. The console message appears at most once per
+    load.
+    """
+    if not config.filter_set_id:
+        return
+    from ..loot_filter_factory import store as factory_store
+
+    stored = config.filter_set_id
+    selection, message = factory_store.resolve_filter_set_selection(
+        stored, factory_store.load_filter_sets())
+    config.filter_set_id = selection
+    if message:
+        _log(message)
+    if selection and selection != stored and settings is not None:
+        settings.set("general", "profile", selection)
+
+
 def load() -> LootConfig:
     """Load the global loot policy, copying one legacy account policy when needed."""
     policy_settings, policy_doc = _settings("global"), _json("global")
     _migrate_account_policy(policy_settings, policy_doc)
-    return _load_policy(policy_settings, policy_doc)
+    config = _load_policy(policy_settings, policy_doc)
+    _resolve_filter_set(config, policy_settings)
+    return config
 
 
 def save(config: LootConfig) -> None:

@@ -6,8 +6,8 @@ That includes which surfaces the quick access shows and which layout each one us
 The live-state label appears **here as well as in the quick access** -- both surfaces must say when
 what you are looking at is not what is running.
 
-Authoring filters and profiles is **not** here: that is the Loot Filter Factory's own surface. This
-feature only *selects* a profile.
+Authoring filters and filter sets is **not** here: that is the Loot Filter Factory's own surface. This
+feature only *selects* a filter set.
 """
 
 import PyImGui
@@ -76,21 +76,23 @@ def draw_general(loot: LootFilters) -> None:
                        "them anyway. It used to be hard-coded on and invisible.")
 
     PyImGui.separator()
-    PyImGui.text("Profile")
-    PyImGui.text_colored("Profiles are made in the Loot Filter Factory. One runs at a time.", GRAY)
-    names = ["(none)"] + [p.name for p in loot.profiles()]
-    current = names.index(loot.persisted.profile) if loot.persisted.profile in names else 0
-    picked = PyImGui.combo("##lf_profile", current, names)
+    PyImGui.text("Filter set")
+    PyImGui.text_colored("Filter sets are made in the Loot Filter Factory. One runs at a time.", GRAY)
+    sets = loot.filter_sets()
+    names = ["(none)"] + [fs.name for fs in sets]
+    current = next((index + 1 for index, fs in enumerate(sets)
+                    if fs.id == loot.persisted.filter_set_id), 0)
+    picked = PyImGui.combo("##lf_fset", current, names)
     if picked != current:
-        chosen = "" if picked == 0 else names[picked]
-        loot.persisted.profile = chosen
-        loot.live.profile = chosen
+        chosen = "" if picked == 0 else sets[picked - 1].id
+        loot.persisted.filter_set_id = chosen
+        loot.live.filter_set_id = chosen
         loot.save()
 
     active = loot.active_filters()
     PyImGui.text_colored("%d filter(s) active" % len(active), GRAY)
-    for rule in active:
-        PyImGui.text_colored("  - %s" % rule.name, GRAY)
+    for f in active:
+        PyImGui.text_colored("  - %s" % f.name, GRAY)
 
 
 def _draw_verdict(loot: LootFilters, agent_id: int, item_id: int, source: str) -> None:
@@ -157,7 +159,7 @@ def draw_debug(loot: LootFilters) -> None:
     if PyImGui.collapsing_header("Live configuration###dbg_cfg"):
         PyImGui.text_colored("master switch: %s" % ("ON" if config.enabled else "OFF"),
                              GOOD if config.enabled else WARN)
-        PyImGui.text("profile: %s" % (config.profile or "(none)"))
+        PyImGui.text("filter set: %s" % (config.filter_set_id or "(none)"))
         PyImGui.text("rarities: " + "  ".join(
             "%s=%s" % (label, "on" if config.rarity_enabled(key) else "off")
             for key, label in surfaces.RARITY_KEYS))
@@ -470,10 +472,10 @@ def draw_quick_access(loot: LootFilters) -> None:
     PyImGui.separator()
     PyImGui.text("Filters shown in the quick access")
     PyImGui.text_colored("Filters come from the Loot Filter Factory.", GRAY)
-    for rule in loot.active_filters():
-        PyImGui.text_colored("  - %s" % rule.name, GRAY)
+    for f in loot.active_filters():
+        PyImGui.text_colored("  - %s" % f.name, GRAY)
     if not loot.active_filters():
-        PyImGui.text_colored("  (no profile selected, or it has no filters)", GRAY)
+        PyImGui.text_colored("  (no filter set selected, or it has no filters)", GRAY)
 
 
 def add_sections(win, group) -> None:

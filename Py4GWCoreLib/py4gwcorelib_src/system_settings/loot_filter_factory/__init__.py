@@ -1,39 +1,45 @@
-"""The Loot Filter Factory -- filters and profiles, owned by neither feature.
+"""The Loot Filter Factory -- filters and filter sets, owned by neither feature.
 
 Loot Filters and Recolor & Beacons are standalone: neither imports the other, and neither owns the
-filters or profiles they both use. Those live here, and both features **consume** them.
+filters or filter sets they both use. Those live here, and both features **consume** them.
 
-* :mod:`model` -- ``Rule`` (a composite resolver, criteria only) and ``Profile`` (a named set of filters).
+* :mod:`model` -- ``Filter`` (a composite resolver, criteria only) and ``FilterSet`` (a named group of
+  filters for one feature).
 * :mod:`matcher` -- all evaluation, including the per-criterion breakdown the live preview shows.
 * :mod:`upgrades` -- the five slot-based upgrade lists a user picks from, by name.
-* :mod:`store` -- the global filter and profile store, with short sequential ids.
+* :mod:`store` -- the global filter and filter set store, with short sequential ids.
 
 The authoring UI is this module's too, and stands on its own: a consumer selects, it never hosts the
 authoring surface.
 
-**Not to be confused with ``item_filters``** -- that name is reserved for the full-fledged mod filter
-class and must not be used for this.
+**Vocabulary (settled).** evaluation → filter → filter set; see
+`docs/loot/redesign/filter-structure.md`. The word "rule" is retired.
 """
 
 from .matcher import any_match
 from .matcher import evaluate
 from .matcher import matches
-from .matcher import matching_rules
+from .matcher import matching_filters
 from .model import MATCH_ALL
 from .model import MATCH_ANY
-from .model import Profile
-from .model import Rule
-from .store import by_id
-from .store import load_profiles
-from .store import load_rules
-from .store import next_id
-from .store import profile_by_name
-from .store import rules_in_profile
-from .store import save_profiles
-from .store import save_rules
+from .model import Filter
+from .model import FilterSet
+from .store import filter_by_id
+from .store import filter_set_by_id
+from .store import filter_set_by_name
+from .store import filters_in_set
+from .store import legacy_mark_entries
+from .store import load_filter_sets
+from .store import load_filters
+from .store import next_filter_id
+from .store import next_filter_set_id
+from .store import resolve_filter_set_selection
+from .store import save_filter_sets
+from .store import save_filters
 
 __all__ = [
-    "MATCH_ALL", "MATCH_ANY", "Profile", "Rule", "any_match", "by_id", "evaluate", "load_profiles",
-    "load_rules", "matches", "matching_rules", "next_id", "profile_by_name", "rules_in_profile",
-    "save_profiles", "save_rules",
+    "MATCH_ALL", "MATCH_ANY", "Filter", "FilterSet", "any_match", "evaluate", "filter_by_id",
+    "filter_set_by_id", "filter_set_by_name", "filters_in_set", "legacy_mark_entries",
+    "load_filter_sets", "load_filters", "matches", "matching_filters", "next_filter_id",
+    "next_filter_set_id", "resolve_filter_set_selection", "save_filter_sets", "save_filters",
 ]

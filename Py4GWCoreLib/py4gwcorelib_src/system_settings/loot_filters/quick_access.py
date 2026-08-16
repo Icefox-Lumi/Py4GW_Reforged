@@ -155,9 +155,9 @@ def draw() -> None:
         active = loot.active_filters()
         if active:
             if PyImGui.collapsing_header("Filters  (%d)###qa_filters" % len(active)):
-                PyImGui.text_colored("From the profile in use. Edited in System Settings.", GRAY)
-                for rule in active:
-                    PyImGui.text_colored("  - %s" % rule.name, GRAY)
+                PyImGui.text_colored("From the filter set in use. Edited in System Settings.", GRAY)
+                for f in active:
+                    PyImGui.text_colored("  - %s" % f.name, GRAY)
 
         _draw_live_label(loot)
     PyImGui.end()

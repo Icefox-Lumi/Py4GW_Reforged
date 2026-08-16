@@ -72,8 +72,9 @@ class LootConfig:
     respect_loot_lock: bool = True
     blacklist_item_ids: set[int] = field(default_factory=set)  # session-only
 
-    #: The account-local selected global Factory profile. All other persisted policy is global.
-    profile: str = ""
+    #: The selected Factory filter set, by its stable id. Lives in the global policy document;
+    #: a legacy selection stored as a NAME migrates to the id once, at load.
+    filter_set_id: str = ""
 
     def copy(self) -> "LootConfig":
         """A fully independent copy -- seeds live from persisted, and resets it back."""
@@ -92,7 +93,7 @@ class LootConfig:
             blacklist_item_types=set(self.blacklist_item_types),
             respect_loot_lock=self.respect_loot_lock,
             blacklist_item_ids=set(self.blacklist_item_ids),
-            profile=self.profile,
+            filter_set_id=self.filter_set_id,
         )
 
     def clear_session_ids(self) -> bool:
@@ -151,6 +152,7 @@ class LootConfig:
             out.append("drops suppressed this session: %d" % len(self.blacklist_item_ids))
         if self.nicholas != other.nicholas:
             out.append("Nicholas weeks: %d (saved: %d)" % (len(self.nicholas), len(other.nicholas)))
-        if self.profile != other.profile:
-            out.append("profile: %s (saved: %s)" % (self.profile or "(none)", other.profile or "(none)"))
+        if self.filter_set_id != other.filter_set_id:
+            out.append("filter set: %s (saved: %s)" % (self.filter_set_id or "(none)",
+                                                      other.filter_set_id or "(none)"))
         return out

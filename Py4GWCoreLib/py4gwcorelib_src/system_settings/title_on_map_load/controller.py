@@ -106,9 +106,9 @@ class TitleOnMapLoadController:
         except Exception:
             pass
 
-        for rule in model.TITLE_MAP_RULES:
-            if map_name in rule.map_names or map_id in rule.map_ids:
-                return rule.title_id
+        for entry in model.TITLE_MAP_ENTRIES:
+            if map_name in entry.map_names or map_id in entry.map_ids:
+                return entry.title_id
         return None
 
     def _reset_for_unready_map(self) -> None:
