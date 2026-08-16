@@ -22606,6 +22606,178 @@ def _test_jsonfactory_legacy_suffix_profile_isolation(module) -> None:
         )
 
 
+def _test_jsonfactory_unreadable_profile_console_deduplication(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    shared_scope = module.PROFILE_SCOPE_SHARED
+    account_scope = module.PROFILE_SCOPE_ACCOUNT
+    shared_doc = _saved_profiles_doc(module, shared_scope)
+    account_doc = _saved_profiles_doc(module, account_scope)
+    valid_before = widget._build_shared_profile_wrapper(
+        "Valid Before",
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[1]),
+    )
+    valid_after = widget._build_shared_profile_wrapper(
+        "Valid After",
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[3]),
+    )
+
+    def _build_unreadable_profile(name: str, favorite_outpost_id: int) -> dict[str, object]:
+        wrapper = json.loads(json.dumps(valid_before))
+        wrapper["name"] = name
+        wrapper["payload"]["favorite_outpost_ids"] = [favorite_outpost_id]
+        wrapper["payload"]["salvage_settings"] = {
+            "rules": [{"enabled": True, "salvage_option": "  SaLvAgE SuFfIx  "}],
+        }
+        return wrapper
+
+    unreadable = _build_unreadable_profile("Unreadable", 2)
+    shared_doc.set_json("valid_before", valid_before)
+    shared_doc.set_json("legacy_suffix", unreadable)
+    shared_doc.set_json("valid_after", valid_after)
+    _expect(shared_doc.save(), "The unreadable-profile deduplication fixture should persist its shared document.")
+    unreadable_before_refresh = json.loads(json.dumps(unreadable))
+    captured_logs: list[tuple[object, ...]] = []
+    original_console_log = module.ConsoleLog
+
+    def _capture_console_log(*args, **_kwargs) -> None:
+        captured_logs.append(tuple(args))
+
+    def _failure_logs() -> list[tuple[object, ...]]:
+        return [
+            log
+            for log in captured_logs
+            if len(log) > 1 and "Could not read" in str(log[1])
+        ]
+
+    try:
+        module.ConsoleLog = _capture_console_log
+        _expect(
+            widget._refresh_profile_entries(shared_scope, reload_document=True),
+            "The initial unreadable-profile scan should complete.",
+        )
+        initial_failure_logs = _failure_logs()
+        _expect(
+            len(initial_failure_logs) == 1 and "legacy_suffix" in str(initial_failure_logs[0][1]),
+            "The first unreadable shared profile scan should log exactly one keyed failure.",
+        )
+        _expect(
+            {entry.key for entry in widget.profile_entries[shared_scope]} == {"valid_before", "valid_after"},
+            "Valid shared neighbors should remain readable when one profile is invalid.",
+        )
+        _expect(
+            "could not be read" in widget.saved_profile_scan_warnings[shared_scope].lower()
+            and shared_scope in widget.saved_profile_failure_signatures
+            and "legacy_suffix" in widget.saved_profile_failure_signatures[shared_scope],
+            "The shared UI warning and keyed failure state should both be retained.",
+        )
+        _expect(
+            shared_doc.get_json("legacy_suffix", {}) == unreadable_before_refresh,
+            "The first unreadable profile scan must not rewrite its raw wrapper.",
+        )
+
+        widget._refresh_profile_entries(shared_scope, reload_document=True)
+        _expect(
+            len(_failure_logs()) == 1,
+            "An unchanged unreadable profile should not repeat its console error.",
+        )
+
+        changed_raw = json.loads(json.dumps(unreadable))
+        changed_raw["payload"]["favorite_outpost_ids"] = [99]
+        shared_doc.set_json("legacy_suffix", changed_raw)
+        _expect(shared_doc.save(), "The changed-raw unreadable profile fixture should persist.")
+        widget._refresh_profile_entries(shared_scope, reload_document=True)
+        changed_raw_logs = _failure_logs()
+        _expect(
+            len(changed_raw_logs) == 2
+            and str(changed_raw_logs[1][1]) == str(changed_raw_logs[0][1]),
+            "A changed unreadable wrapper should log once even when its error text is unchanged.",
+        )
+        _expect(
+            shared_doc.get_json("legacy_suffix", {}) == changed_raw,
+            "A changed unreadable profile must remain raw and unmodified.",
+        )
+
+        original_loader = widget._load_profile_summary_from_key
+
+        def _raise_changed_failure(scope: str, profile_key: str, raw_payload: object):
+            if scope == shared_scope and profile_key == "legacy_suffix":
+                raise ValueError("Synthetic changed profile failure.")
+            return original_loader(scope, profile_key, raw_payload)
+
+        widget._load_profile_summary_from_key = _raise_changed_failure
+        widget._refresh_profile_entries(shared_scope, reload_document=True)
+        changed_error_logs = _failure_logs()
+        _expect(
+            len(changed_error_logs) == 3
+            and str(changed_error_logs[2][1]) != str(changed_error_logs[1][1]),
+            "A changed unreadable error chain should log once when raw content is unchanged.",
+        )
+        new_unreadable = _build_unreadable_profile("New Unreadable", 4)
+        shared_doc.set_json("new_unreadable", new_unreadable)
+        _expect(shared_doc.save(), "The new unreadable-profile fixture should persist.")
+        widget._refresh_profile_entries(shared_scope, reload_document=True)
+        _expect(
+            len(_failure_logs()) == 4,
+            "A newly unreadable shared key should log while the unchanged key stays quiet.",
+        )
+        widget._load_profile_summary_from_key = original_loader
+
+        account_unreadable = _build_unreadable_profile("Account Unreadable", 5)
+        account_doc.set_json("legacy_suffix", account_unreadable)
+        _expect(account_doc.save(), "The account unreadable-profile fixture should persist.")
+        widget._refresh_profile_entries(account_scope, reload_document=True)
+        _expect(
+            len(_failure_logs()) == 5,
+            "The same unreadable key in the other scope should log independently.",
+        )
+        widget._refresh_profile_entries(account_scope, reload_document=True)
+        _expect(
+            len(_failure_logs()) == 5,
+            "An unchanged account-scope unreadable profile should not repeat its console error.",
+        )
+        _expect(
+            account_doc.get_json("legacy_suffix", {}) == account_unreadable,
+            "The account unreadable profile must remain raw and unmodified.",
+        )
+
+        fixed = widget._build_shared_profile_wrapper(
+            "Fixed Shared",
+            payload=_minimal_profile_payload(module, favorite_outpost_ids=[6]),
+        )
+        shared_doc.set_json("legacy_suffix", fixed)
+        _expect(shared_doc.save(), "The repaired shared profile fixture should persist.")
+        widget._refresh_profile_entries(shared_scope, reload_document=True)
+        _expect(
+            len(_failure_logs()) == 5
+            and "legacy_suffix" not in widget.saved_profile_failure_signatures[shared_scope]
+            and {entry.key for entry in widget.profile_entries[shared_scope]}
+            == {"valid_before", "legacy_suffix", "valid_after"},
+            "Repairing one shared profile should clear only that key's failure and retain valid entries.",
+        )
+
+        shared_doc.delete("new_unreadable")
+        _expect(shared_doc.save(), "The deleted unreadable-profile fixture should persist.")
+        widget._refresh_profile_entries(shared_scope, reload_document=True)
+        _expect(
+            len(_failure_logs()) == 5
+            and widget.saved_profile_scan_warnings[shared_scope] == ""
+            and "new_unreadable" not in widget.saved_profile_failure_signatures[shared_scope],
+            "Deleting the last unreadable shared key should clear its warning and cache entry.",
+        )
+
+        shared_doc.set_json("new_unreadable", new_unreadable)
+        _expect(shared_doc.save(), "The reappearing unreadable-profile fixture should persist.")
+        widget._refresh_profile_entries(shared_scope, reload_document=True)
+        _expect(
+            len(_failure_logs()) == 6
+            and "new_unreadable" in widget.saved_profile_failure_signatures[shared_scope],
+            "A reappearing unreadable shared key should log again after deletion.",
+        )
+    finally:
+        module.ConsoleLog = original_console_log
+
+
 def _test_jsonfactory_shared_profile_stale_write_protection(module) -> None:
     _reset_jsonfactory_persistence_fixture(module)
     widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
@@ -24012,6 +24184,10 @@ def main() -> int:
             (
                 "jsonfactory_legacy_suffix_profile_isolation",
                 lambda: _test_jsonfactory_legacy_suffix_profile_isolation(module),
+            ),
+            (
+                "jsonfactory_unreadable_profile_console_deduplication",
+                lambda: _test_jsonfactory_unreadable_profile_console_deduplication(module),
             ),
             (
                 "jsonfactory_shared_profile_stale_write_protection",

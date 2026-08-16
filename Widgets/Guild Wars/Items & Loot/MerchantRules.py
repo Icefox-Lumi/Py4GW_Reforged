@@ -6796,6 +6796,10 @@ class MerchantRulesWidget:
             scope: ""
             for scope in PROFILE_SCOPES
         }
+        self.saved_profile_failure_signatures: dict[str, dict[str, tuple[str, str]]] = {
+            scope: {}
+            for scope in PROFILE_SCOPES
+        }
         self.profile_entries_loaded: dict[str, bool] = {
             scope: False
             for scope in PROFILE_SCOPES
@@ -11261,6 +11265,18 @@ class MerchantRulesWidget:
             current = current.__cause__
         return " <- ".join(details)
 
+    def _get_saved_profile_raw_fingerprint(self, raw_payload: object) -> str:
+        if isinstance(raw_payload, dict):
+            try:
+                return self._saved_profile_wrapper_fingerprint(raw_payload)
+            except Exception:
+                pass
+        try:
+            raw_text = f"{type(raw_payload).__name__}:{raw_payload!r}"
+        except Exception:
+            raw_text = type(raw_payload).__name__
+        return md5(raw_text.encode("utf-8", errors="backslashreplace")).hexdigest()
+
     def _get_profile_by_identity(
         self,
         identity: ProfileIdentity | None,
@@ -11413,26 +11429,37 @@ class MerchantRulesWidget:
 
         entries: list[ProfileSummary] = []
         load_failures: list[str] = []
+        previous_failure_signatures = self.saved_profile_failure_signatures[scope]
+        current_failure_signatures: dict[str, tuple[str, str]] = {}
 
         for profile_key in doc.keys(""):
             safe_key = str(profile_key)
+            raw_payload: object = None
             try:
+                raw_payload = doc.get_json(safe_key, {})
                 summary = self._load_profile_summary_from_key(
                     scope,
                     safe_key,
-                    doc.get_json(safe_key, {}),
+                    raw_payload,
                 )
                 entries.append(summary)
             except Exception as exc:
-                load_failures.append(self._get_saved_profile_read_error_text(exc))
-                ConsoleLog(
-                    MODULE_NAME,
-                    (
-                        f"Could not read [{self._profile_scope_badge(scope)}] saved profile "
-                        f"key {safe_key!r}: {self._format_exception_chain_for_log(exc)}"
-                    ),
-                    Console.MessageType.Warning,
+                failure_text = self._format_exception_chain_for_log(exc)
+                failure_signature = (
+                    self._get_saved_profile_raw_fingerprint(raw_payload),
+                    failure_text,
                 )
+                current_failure_signatures[safe_key] = failure_signature
+                load_failures.append(self._get_saved_profile_read_error_text(exc))
+                if previous_failure_signatures.get(safe_key) != failure_signature:
+                    ConsoleLog(
+                        MODULE_NAME,
+                        (
+                            f"Could not read [{self._profile_scope_badge(scope)}] saved profile "
+                            f"key {safe_key!r}: {failure_text}"
+                        ),
+                        Console.MessageType.Warning,
+                    )
 
         entries.sort(
             key=lambda entry: (
@@ -11442,6 +11469,7 @@ class MerchantRulesWidget:
         )
         self.profile_entries[scope] = entries
         self.profile_entries_loaded[scope] = True
+        self.saved_profile_failure_signatures[scope] = current_failure_signatures
 
         if load_failures:
             preview = " | ".join(load_failures[:3])
