@@ -44,6 +44,51 @@ def _find_manager_modules_directory() -> str:
             "Nicholas the Traveler",
             "_modules",
         ),
+        os.path.join(
+            projects_root,
+            "Widgets",
+            "Automation",
+            "Bots",
+            "Farmers",
+            "Nicholas the Traveler",
+            "_modules",
+        ),
+        os.path.join(
+            projects_root,
+            "Widgets",
+            "Automation",
+            "Bots",
+            "Farmers",
+            "Nicholas",
+            "_modules",
+        ),
+
+        # Backward-compatible fallbacks for older installations.
+        os.path.join(
+            projects_root,
+            "Widgets",
+            "Automation",
+            "Bots",
+            "Farmers",
+            "Trophies",
+            "Nicholas the Traveler",
+        ),
+        os.path.join(
+            projects_root,
+            "Widgets",
+            "Automation",
+            "Bots",
+            "Farmers",
+            "Nicholas the Traveler",
+        ),
+        os.path.join(
+            projects_root,
+            "Widgets",
+            "Automation",
+            "Bots",
+            "Farmers",
+            "Nicholas",
+        ),
     )
 
     for directory in preferred_directories:
@@ -118,6 +163,7 @@ Features:
 • Direct, two-map, portal-loop, challenge, dialog and Fissure of Woe farm flows
 • Per-farm information for the quantity required to obtain 5 Gifts of the Traveler
 • Optional travel and exchange route to Nicholas when legacy route data is available
+• Automatic multibox collector conversion for supported indirect Nicholas items
 • MerchantRules is disabled on all active accounts during the current crash-isolation workflow
 • Shared setup, resign/reset safety and inventory-query logic instead of duplicated code in every farm
 
@@ -417,9 +463,23 @@ def _draw_config_tab() -> None:
         PyImGui.text(
             f"Collector conversion: {farm.name} -> {farm.collector_item_name}"
         )
-        PyImGui.text(
-            "Complete the collector conversion before running the Nicholas exchange."
-        )
+
+        if farm.collector_mode in ("town", "inline"):
+            PyImGui.text(
+                f"Automatic conversion: {farm.collector_exchange_rate} "
+                f"{farm.name} -> 1 {farm.collector_item_name}"
+            )
+            PyImGui.text(
+                "The conversion is performed independently on every active account."
+            )
+        else:
+            PyImGui.text(
+                "Manual collector conversion required before the Nicholas exchange."
+            )
+            PyImGui.text(
+                "BubbleTea's AutoIt source does not provide a reliable Yajide route."
+            )
+
         PyImGui.text(
             f"Nicholas requests: {farm.nicholas_item_name}"
         )
@@ -493,8 +553,11 @@ def _draw_about_tab() -> None:
 
 
 def tooltip():
-    PyImGui.set_next_window_size((600, 0))
+    # Keep the tooltip compact enough for the Widget Catalog while forcing
+    # long bullets/credits to wrap inside the window instead of overflowing.
+    PyImGui.set_next_window_size((580, 0))
     PyImGui.begin_tooltip()
+    PyImGui.push_text_wrap_pos(550)
 
     # Title
     title_color = Color(255, 200, 100, 255)
@@ -510,56 +573,51 @@ def tooltip():
     ImGui.pop_font()
 
     PyImGui.spacing()
-    PyImGui.spacing()
     PyImGui.separator()
     PyImGui.spacing()
 
     # Description
     PyImGui.text_wrapped(
-        "A multibox BottingTree manager for Nicholas the Traveler. "
-        "Choose the trophy you want to farm and the manager handles the shared "
-        "party setup, farming loop, combined item count and the supported route "
-        "to Nicholas for the final exchange."
+        "Multibox BottingTree manager for Nicholas the Traveler. "
+        "Select a trophy farm and the manager handles party setup, farming, "
+        "combined item counting and supported Nicholas exchange routes."
     )
     PyImGui.spacing()
 
     # Features
     PyImGui.text_colored("Features:", title_color.to_tuple_normalized())
     PyImGui.bullet_text(
-        f"{len(FARMS)} Nicholas trophy farms available from one manager."
+        f"{len(FARMS)} Nicholas trophy farms in one manager."
     )
     PyImGui.bullet_text(
-        "Tracks the selected trophy count across the whole active multibox party."
+        "Combined trophy count across the active multibox party."
     )
     PyImGui.bullet_text(
-        "Supports direct farms, multi-map routes, portal loops, challenge entry, "
-        "dialog entry and Fissure of Woe routes."
+        "Direct, multi-map, portal-loop, challenge, dialog and FoW farm flows."
     )
     PyImGui.bullet_text(
-        "Displays the amount required to obtain all 5 Gifts of the Traveler."
+        "Shows the amount required for all 5 Gifts of the Traveler."
     )
     PyImGui.bullet_text(
-        f"{sum(1 for farm in FARMS if farm.exchange_available)} Nicholas exchange "
-        "routes are currently available."
+        "Automatic multibox conversion for supported collector-backed trophies."
     )
     PyImGui.bullet_text(
-        "Shared setup and reset logic avoids duplicating the same BottingTree code "
-        "inside every farm."
+        f"{sum(1 for farm in FARMS if farm.exchange_available)} Nicholas exchange routes available."
     )
     PyImGui.spacing()
 
     # Credits
     PyImGui.text_colored("Credits:", title_color.to_tuple_normalized())
     PyImGui.bullet_text(
-        "Farm paths and Nicholas exchange paths: BubbleTea - migrated/adapted "
+        "Farm and Nicholas exchange paths: BubbleTea - migrated/adapted "
         "from his original AutoIt Nicholas the Traveler scripts."
     )
     PyImGui.bullet_text(
-        "Py4GW BottingTree manager and multibox integration: Sky."
+        "BottingTree manager and multibox integration: Sky."
     )
 
+    PyImGui.pop_text_wrap_pos()
     PyImGui.end_tooltip()
-
 
 
 def main() -> None:

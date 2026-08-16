@@ -762,8 +762,6 @@ def RestoreHeroAISnapshot(account_email: str):
     for skill_index in range(SHMEM_MAX_NUMBER_OF_SKILLS):
         hero_ai_options.Skills[skill_index] = bool(last_state.Skills[skill_index])
 
-    GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account_email, hero_ai_options)
-
 
 _HERO_AI_SUSPENDING_COMMANDS = {
     SharedCommandType.PixelStack,
@@ -849,10 +847,6 @@ def DisableHeroAIOptions(account_email: str):
     hero_ai_options.Looting = False
     hero_ai_options.Targeting = False
     hero_ai_options.Combat = False
-    for skill_index in range(SHMEM_MAX_NUMBER_OF_SKILLS):
-        hero_ai_options.Skills[skill_index] = False
-
-    GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account_email, hero_ai_options)
 
 
 
@@ -866,10 +860,6 @@ def EnableHeroAIOptions(account_email: str):
     hero_ai_options.Looting = True
     hero_ai_options.Targeting = True
     hero_ai_options.Combat = True
-    for skill_index in range(SHMEM_MAX_NUMBER_OF_SKILLS):
-        hero_ai_options.Skills[skill_index] = True
-
-    GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account_email, hero_ai_options)
 
 
 
@@ -3262,6 +3252,183 @@ def EquipItem(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
 # endregion
 
+
+# region CollectorExchange
+def CollectorExchange(index: int, message: SharedMessageStruct):
+    """
+    Perform a collector exchange locally on the receiving Guild Wars client.
+
+    Params:
+      0 = output model id
+      1 = input/trade model id
+      2 = input quantity required per exchange
+      3 = desired output count
+
+    The collector window must already be open on this client.
+    """
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+
+    try:
+        output_model_id = int(message.Params[0])
+        input_model_id = int(message.Params[1])
+        exchange_rate = max(1, int(message.Params[2]))
+        target_output_count = max(1, int(message.Params[3]))
+
+        label = _extra_data(message)[0].strip() or str(input_model_id)
+
+        def _model_count(model_id: int) -> int:
+            try:
+                return int(GLOBAL_CACHE.Inventory.GetModelCount(int(model_id)) or 0)
+            except Exception:
+                return 0
+
+        def _find_offered_item_id() -> int:
+            try:
+                offered = GLOBAL_CACHE.Trading.Collector.GetOfferedItems() or []
+            except Exception:
+                offered = []
+
+            for item_id in offered:
+                try:
+                    if int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) == output_model_id:
+                        return int(item_id)
+                except Exception:
+                    continue
+            return 0
+
+        def _build_trade_items(required: int) -> tuple[list[int], list[int]]:
+            remaining = max(0, int(required))
+            item_ids: list[int] = []
+            quantities: list[int] = []
+
+            for item_id in GLOBAL_CACHE.Inventory.GetAllInventoryItemIds():
+                item_id = int(item_id or 0)
+                if item_id <= 0:
+                    continue
+
+                try:
+                    if int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) != input_model_id:
+                        continue
+                    quantity = int(
+                        GLOBAL_CACHE.Item.Properties.GetQuantity(item_id)
+                        or 1
+                    )
+                except Exception:
+                    continue
+
+                if quantity <= 0:
+                    continue
+
+                take = min(quantity, remaining)
+                if take > 0:
+                    item_ids.append(item_id)
+                    quantities.append(take)
+                    remaining -= take
+
+                if remaining <= 0:
+                    break
+
+            if remaining > 0:
+                return [], []
+
+            return item_ids, quantities
+
+        current_output = _model_count(output_model_id)
+        if current_output >= target_output_count:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    f"CollectorExchange [{label}]: already has "
+                    f"{current_output}/{target_output_count} converted item(s)."
+                ),
+                Console.MessageType.Info,
+                False,
+            )
+            return
+
+        # Give the collector panel a moment to populate its offered items.
+        offered_item_id = 0
+        waited_ms = 0
+        while offered_item_id <= 0 and waited_ms < 5_000:
+            offered_item_id = _find_offered_item_id()
+            if offered_item_id > 0:
+                break
+            yield from Routines.Yield.wait(100)
+            waited_ms += 100
+
+        if offered_item_id <= 0:
+            ConsoleLog(
+                MODULE_NAME,
+                f"CollectorExchange [{label}]: collector offer was not found.",
+                Console.MessageType.Warning,
+                False,
+            )
+            return
+
+        exchanges_done = 0
+
+        while _model_count(output_model_id) < target_output_count:
+            trade_ids, trade_quantities = _build_trade_items(exchange_rate)
+            if not trade_ids:
+                break
+
+            GLOBAL_CACHE.Trading.Collector.ExchangeItem(
+                offered_item_id,
+                0,
+                trade_ids,
+                trade_quantities,
+            )
+
+            elapsed_ms = 0
+            while (
+                not GLOBAL_CACHE.Trading.IsTransactionComplete()
+                and elapsed_ms < 5_000
+            ):
+                yield from Routines.Yield.wait(100)
+                elapsed_ms += 100
+
+            if elapsed_ms >= 5_000:
+                ConsoleLog(
+                    MODULE_NAME,
+                    f"CollectorExchange [{label}]: transaction timed out.",
+                    Console.MessageType.Warning,
+                    False,
+                )
+                break
+
+            exchanges_done += 1
+            yield from Routines.Yield.wait(250)
+
+        final_output = _model_count(output_model_id)
+        remaining_input = _model_count(input_model_id)
+
+        ConsoleLog(
+            MODULE_NAME,
+            (
+                f"CollectorExchange [{label}]: exchanged {exchanges_done} time(s); "
+                f"output={final_output}/{target_output_count}, "
+                f"remaining input={remaining_input}."
+            ),
+            (
+                Console.MessageType.Success
+                if final_output >= target_output_count
+                else Console.MessageType.Warning
+            ),
+            False,
+        )
+
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f"CollectorExchange failed: {exc}",
+            Console.MessageType.Error,
+            False,
+        )
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+# endregion
+
+
 # region ProcessMessages
 def ProcessMessages():
     account_email = Player.GetAccountEmail()
@@ -3391,6 +3558,8 @@ def ProcessMessages():
             GLOBAL_CACHE.Coroutines.append(InventoryQuery(index, message))
         case SharedCommandType.EquipItem:
             GLOBAL_CACHE.Coroutines.append(EquipItem(index, message))
+        case SharedCommandType.CollectorExchange:
+            GLOBAL_CACHE.Coroutines.append(CollectorExchange(index, message))
         case SharedCommandType.LootEx:
             # privately Handled Command, by frenkey
             pass

@@ -47,6 +47,21 @@ class FarmDefinition:
     collector_item_name: str = ""
     collector_item_model_id: int = 0
 
+    # Collector conversion metadata.
+    #
+    # collector_mode:
+    #   ""       = no conversion
+    #   "town"   = travel to a collector outpost before the Nicholas route
+    #   "inline" = collector is encountered during exchange_actions
+    #   "manual" = source data has no reliable collector position
+    collector_mode: str = ""
+    collector_exchange_rate: int = 0
+    collector_target_count: int = 5
+    collector_town_map_id: int = 0
+    collector_route: tuple[tuple[float, float], ...] = ()
+    collector_position: tuple[float, float] | None = None
+    collector_insert_after: int = -1
+
     exchange_town_map_id: int = 0
     exchange_actions: tuple[ExchangeAction, ...] = ()
     nicholas_position: tuple[float, float] | None = None
@@ -264,6 +279,11 @@ FARMS: tuple[FarmDefinition, ...] = (
         items_for_5_gifts=25,
         collector_item_name='Herring',
         collector_item_model_id=26502,
+        collector_mode='inline',
+        collector_exchange_rate=5,
+        collector_target_count=5,
+        collector_position=(-6861.66, -5516.60),
+        collector_insert_after=9,
         exchange_town_map_id=73,
         exchange_actions=(('move', (-20876.71, 10018.21), 0),
  ('move', (-19018.29, 12312.81), 0),
@@ -536,6 +556,12 @@ FARMS: tuple[FarmDefinition, ...] = (
         items_for_5_gifts=5,
         collector_item_name='Drake Kabob',
         collector_item_model_id=17060,
+        collector_mode='town',
+        collector_exchange_rate=1,
+        collector_target_count=5,
+        collector_town_map_id=381,
+        collector_route=((-1842.29, -1978.15), (-1384.67, -3398.68), (2645.91, -2516.20)),
+        collector_position=(2645.91, -2516.20),
         exchange_town_map_id=489,
         exchange_actions=(('move', (-1671.59, -1016.73), 0),
  ('move', (-4040.15, -2225.07), 0),
@@ -2081,6 +2107,10 @@ FARMS: tuple[FarmDefinition, ...] = (
         items_for_5_gifts=15,
         collector_item_name='Mandragor Root Cake',
         collector_item_model_id=19170,
+        collector_mode='manual',
+        collector_exchange_rate=3,
+        collector_target_count=5,
+        collector_town_map_id=381,
         exchange_town_map_id=381,
         exchange_actions=(('move', (-1842.29, -1978.15), 0),
  ('move', (-1157.77, -3666.01), 0),
@@ -3108,6 +3138,11 @@ FARMS: tuple[FarmDefinition, ...] = (
         items_for_5_gifts=25,
         collector_item_name='Bottle of Vabbian Wine',
         collector_item_model_id=19173,
+        collector_mode='inline',
+        collector_exchange_rate=5,
+        collector_target_count=5,
+        collector_position=(-3312.10, -13233.55),
+        collector_insert_after=17,
         exchange_town_map_id=407,
         exchange_actions=(('move', (-3180.07, 2090.62), 0),
  ('move', (-4499.44, 1026.86), 0),
@@ -3409,6 +3444,12 @@ FARMS: tuple[FarmDefinition, ...] = (
         items_for_5_gifts=10,
         collector_item_name='Bowl of Skalefin Soup',
         collector_item_model_id=17061,
+        collector_mode='town',
+        collector_exchange_rate=2,
+        collector_target_count=5,
+        collector_town_map_id=502,
+        collector_route=((-1210.12, 1909.96), (-1623.95, 3903.22)),
+        collector_position=(-1623.95, 3903.22),
         exchange_town_map_id=502,
         exchange_actions=(('move', (-1210.12, 1909.96), 0),
  ('move', (-2185.73, 2366.58), 0),

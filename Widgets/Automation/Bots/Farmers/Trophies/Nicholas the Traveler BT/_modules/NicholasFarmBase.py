@@ -546,6 +546,267 @@ def enter_fow(farm: FarmDefinition) -> BehaviorTree:
 
 
 
+
+def _message_ref_is_active(
+    sender_email: str,
+    receiver_email: str,
+    message_index: int,
+    command: SharedCommandType,
+) -> bool:
+    if int(message_index) < 0:
+        return False
+
+    try:
+        message = GLOBAL_CACHE.ShMem.GetInbox(int(message_index))
+    except Exception:
+        return False
+
+    return bool(
+        getattr(message, "Active", False)
+        and str(getattr(message, "ReceiverEmail", "") or "") == str(receiver_email or "")
+        and str(getattr(message, "SenderEmail", "") or "") == str(sender_email or "")
+        and int(getattr(message, "Command", -1)) == int(command.value)
+    )
+
+
+def interact_current_target_all_accounts(
+    *,
+    timeout_ms: int = 10_000,
+) -> BehaviorTree:
+    """
+    Interact with the leader's current target on every active multibox client.
+
+    Agent IDs are shared by clients in the same map instance. The interaction
+    itself is executed by Messaging on each client so HeroAI is suspended and
+    restored locally around the NPC interaction.
+    """
+    state: dict[str, object] = {
+        "sent": False,
+        "sender": "",
+        "refs": [],
+        "started_at": 0.0,
+    }
+
+    def _reset() -> None:
+        state["sent"] = False
+        state["sender"] = ""
+        state["refs"] = []
+        state["started_at"] = 0.0
+
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if not bool(state["sent"]):
+            sender_email = str(Player.GetAccountEmail() or "").strip()
+            target_id = int(Player.GetTargetID() or 0)
+
+            if not sender_email or target_id <= 0:
+                _reset()
+                return BehaviorTree.NodeState.FAILURE
+
+            try:
+                accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False)
+            except TypeError:
+                accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
+            except Exception:
+                accounts = []
+
+            refs: list[tuple[str, int]] = []
+            seen: set[str] = set()
+
+            for account in accounts or []:
+                receiver_email = str(
+                    getattr(account, "AccountEmail", "") or ""
+                ).strip()
+
+                if not receiver_email or receiver_email in seen:
+                    continue
+
+                seen.add(receiver_email)
+
+                message_index = int(
+                    GLOBAL_CACHE.ShMem.SendMessage(
+                        sender_email,
+                        receiver_email,
+                        SharedCommandType.InteractWithTarget,
+                        (float(target_id), 0.0, 0.0, 0.0),
+                        ("Nicholas collector", "", "", ""),
+                    )
+                )
+                refs.append((receiver_email, message_index))
+
+            if sender_email not in seen:
+                message_index = int(
+                    GLOBAL_CACHE.ShMem.SendMessage(
+                        sender_email,
+                        sender_email,
+                        SharedCommandType.InteractWithTarget,
+                        (float(target_id), 0.0, 0.0, 0.0),
+                        ("Nicholas collector", "", "", ""),
+                    )
+                )
+                refs.append((sender_email, message_index))
+
+            state["sent"] = True
+            state["sender"] = sender_email
+            state["refs"] = refs
+            state["started_at"] = time.monotonic()
+            return BehaviorTree.NodeState.RUNNING
+
+        sender_email = str(state["sender"])
+        refs = list(state["refs"])
+
+        active = any(
+            _message_ref_is_active(
+                sender_email,
+                receiver_email,
+                message_index,
+                SharedCommandType.InteractWithTarget,
+            )
+            for receiver_email, message_index in refs
+        )
+
+        if not active:
+            _reset()
+            return BehaviorTree.NodeState.SUCCESS
+
+        elapsed_ms = (
+            time.monotonic() - float(state["started_at"])
+        ) * 1000.0
+
+        if elapsed_ms >= max(0, int(timeout_ms)):
+            PySystem.Console.Log(
+                MODULE_NAME,
+                "Timed out while opening the collector on all accounts.",
+                PySystem.Console.MessageType.Warning,
+            )
+            _reset()
+            return BehaviorTree.NodeState.FAILURE
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Interact Collector All Accounts",
+            action_fn=_tick,
+            aftercast_ms=100,
+        )
+    )
+
+
+def exchange_collector_all_accounts(
+    farm: FarmDefinition,
+) -> BehaviorTree:
+    """
+    Ask Messaging on every client to perform its own local collector trades.
+
+    The collector window must already be open on each account.
+    Each client stops once it owns collector_target_count output items or can
+    no longer pay the exchange rate.
+    """
+    return BTShared.SendAndWait(
+        command=SharedCommandType.CollectorExchange,
+        params=(
+            float(farm.collector_item_model_id),
+            float(farm.model_id),
+            float(farm.collector_exchange_rate),
+            float(farm.collector_target_count),
+        ),
+        extra_data=(
+            farm.name,
+            farm.collector_item_name,
+            "",
+            "",
+        ),
+        include_self=True,
+        refs_blackboard_key="__nicholas_collector_exchange_refs",
+        timeout_ms=30_000,
+        poll_interval_ms=100,
+        log=True,
+        aftercast_ms=100,
+    )
+
+
+def build_collector_conversion(
+    farm: FarmDefinition,
+    *,
+    include_town_travel: bool,
+) -> BehaviorTree:
+    """
+    Build the shared conversion step for one collector-backed Nicholas farm.
+    """
+    if not farm.requires_collector_conversion:
+        return BT.Succeeder(name="NoCollectorConversion")
+
+    if farm.collector_mode == "manual":
+        return BT.LogMessage(
+            message=(
+                f"{farm.name} requires {farm.collector_item_name}, but the "
+                "BubbleTea AutoIt source does not provide a reliable automated "
+                "route to this collector. Convert the items manually first."
+            ),
+            module_name=MODULE_NAME,
+        )
+
+    if farm.collector_mode not in ("town", "inline"):
+        return BT.LogMessage(
+            message=f"Unsupported collector mode for {farm.name}: {farm.collector_mode}",
+            module_name=MODULE_NAME,
+        )
+
+    if farm.collector_position is None:
+        return BT.LogMessage(
+            message=f"Collector position is missing for {farm.name}.",
+            module_name=MODULE_NAME,
+        )
+
+    children: list[BehaviorTree | BehaviorTree.Node] = []
+
+    if include_town_travel and farm.collector_mode == "town":
+        children.extend(
+            [
+                BT.Travel(
+                    target_map_id=farm.collector_town_map_id,
+                    random_travel=False,
+                    log=True,
+                ),
+                BT.SetHardMode(
+                    hard_mode=False,
+                    log=False,
+                ),
+            ]
+        )
+
+        if farm.collector_route:
+            children.append(
+                BT.Move(
+                    farm.collector_route,
+                    pause_on_combat=False,
+                    flag_heroes_to_waypoint=False,
+                    log=False,
+                )
+            )
+
+    children.extend(
+        [
+            BT.TargetNearest(
+                farm.collector_position[0],
+                farm.collector_position[1],
+                target_distance=1320.0,
+                log=True,
+            ),
+            interact_current_target_all_accounts(),
+            BT.Wait(1_000),
+            exchange_collector_all_accounts(farm),
+            BT.Wait(750),
+        ]
+    )
+
+    return BT.Sequence(
+        name=f"Convert {farm.name} To {farm.collector_item_name}",
+        children=children,
+    )
+
+
+
 def build_nicholas_exchange(farm: FarmDefinition) -> BehaviorTree:
     """
     Travel to Nicholas and exchange the selected weekly item on all accounts.
@@ -565,16 +826,41 @@ def build_nicholas_exchange(farm: FarmDefinition) -> BehaviorTree:
 
     children: list[BehaviorTree | BehaviorTree.Node] = [
         disable_merchant_rules_all_accounts(),
-        BT.Travel(
-            target_map_id=farm.exchange_town_map_id,
-            random_travel=False,
-            log=True,
-        ),
-        BT.SetHardMode(
-            hard_mode=False,
-            log=False,
-        ),
     ]
+
+    if farm.collector_mode == "town":
+        children.append(
+            build_collector_conversion(
+                farm,
+                include_town_travel=True,
+            )
+        )
+
+    if farm.collector_mode == "manual":
+        children.append(
+            BT.LogMessage(
+                message=(
+                    f"Manual collector conversion required for {farm.name} -> "
+                    f"{farm.collector_item_name}. The Nicholas route will continue; "
+                    "make sure each account already has the converted items."
+                ),
+                module_name=MODULE_NAME,
+            )
+        )
+
+    children.extend(
+        [
+            BT.Travel(
+                target_map_id=farm.exchange_town_map_id,
+                random_travel=False,
+                log=True,
+            ),
+            BT.SetHardMode(
+                hard_mode=False,
+                log=False,
+            ),
+        ]
+    )
 
     pending_kind = ""
     pending_points: list[tuple[float, float]] = []
@@ -613,12 +899,25 @@ def build_nicholas_exchange(farm: FarmDefinition) -> BehaviorTree:
         pending_kind = ""
         pending_points = []
 
-    for kind, point, target_map_id in farm.exchange_actions:
+    for action_index, (kind, point, target_map_id) in enumerate(farm.exchange_actions):
         if kind in ("move", "aggro"):
             if pending_kind and pending_kind != kind:
                 flush_pending()
             pending_kind = kind
             pending_points.append(point)
+
+            if (
+                farm.collector_mode == "inline"
+                and action_index == farm.collector_insert_after
+            ):
+                flush_pending()
+                children.append(
+                    build_collector_conversion(
+                        farm,
+                        include_town_travel=False,
+                    )
+                )
+
             continue
 
         flush_pending()
