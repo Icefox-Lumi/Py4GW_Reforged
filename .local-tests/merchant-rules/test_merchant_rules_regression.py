@@ -6532,6 +6532,261 @@ def _test_manual_salvage_request_ignores_plain_sell_priority(module) -> None:
     _expect(captured_manual_rules[-1] is None, "Normal salvage passes should not use the right-click selection rule.")
 
 
+def _common_material_target_fixture(module, widget, *, model_id: int = 35, outputs: tuple[int, ...] = (925, 940)):
+    widget.catalog_by_model_id.update(
+        {
+            925: {"model_id": 925, "name": "Bolt of Cloth", "material_type": "common"},
+            940: {"model_id": 940, "name": "Steel Ingot", "material_type": "common"},
+            946: {"model_id": 946, "name": "Wood Plank", "material_type": "common"},
+            926: {"model_id": 926, "name": "Bolt of Linen", "material_type": "rare"},
+        }
+    )
+    widget.common_salvage_model_ids_by_item_key = {
+        (int(module.ItemType.Salvage), int(model_id)): tuple(int(output) for output in outputs),
+    }
+    return _make_item(
+        module,
+        item_id=350,
+        model_id=model_id,
+        name="Typed Salvage Fixture",
+        rarity="Gold",
+        identified=True,
+        salvageable=True,
+        is_weapon_like=True,
+        item_type_id=int(module.ItemType.Salvage),
+        item_type_name="Salvage",
+    )
+
+
+def _test_common_material_targeting_known_possible_any_and_empty(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget)
+    targeted_rule = module.SalvageRule(
+        enabled=True,
+        model_ids=[item.model_id],
+        target_common_material_model_ids=[946, 925],
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+    )
+
+    reason = widget._get_salvage_rule_filter_reason(targeted_rule, item)
+    _expect(
+        reason == "selected model Model 35; Known possible common salvage: Bolt of Cloth",
+        "A selected common material should match the exact typed salvage record and describe possibility, not certainty.",
+    )
+    _expect(
+        widget._get_salvage_candidate_block_reason(item, [], salvage_rule=targeted_rule, require_salvage_kit=True, salvage_kit_id=1) == "",
+        "The execution eligibility path should accept the same known-possible common-material match as Preview.",
+    )
+
+    unrelated_rule = replace(targeted_rule, target_common_material_model_ids=[946])
+    _expect(
+        widget._get_salvage_rule_filter_reason(unrelated_rule, item) == "",
+        "A known item with only unrelated selected common materials must not match.",
+    )
+
+    empty_rule = replace(targeted_rule, target_common_material_model_ids=[])
+    widget.common_salvage_model_ids_by_item_key = {}
+    _expect(
+        widget._get_salvage_rule_filter_reason(empty_rule, item) == "selected model Model 35",
+        "An empty target list must preserve the existing Materials model selector behavior without salvage data.",
+    )
+
+
+def _test_common_material_targeting_unknown_and_later_rule_fallthrough(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    targeted_rule = module.SalvageRule(
+        enabled=True,
+        model_ids=[item.model_id],
+        target_common_material_model_ids=[925],
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+    )
+    later_rule = module.SalvageRule(
+        enabled=True,
+        model_ids=[item.model_id],
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+    )
+
+    widget.common_salvage_model_ids_by_item_key = {}
+    widget.salvage_settings = _salvage_settings(module, rules=[targeted_rule, later_rule])
+    matches = widget._get_matching_salvage_rule(item)
+    _expect(matches is not None and matches[0] == 1, "Unknown targeted output data must fall through to a later ordinary salvage rule.")
+    _expect(
+        widget._get_common_material_target_match(targeted_rule, item)
+        == (False, "Skipped: salvage output data unavailable"),
+        "Unknown typed output data should use the concise unavailable-data wording without becoming a match.",
+    )
+
+    rare_only_item = replace(item, model_id=36)
+    widget.common_salvage_model_ids_by_item_key = {
+        (int(module.ItemType.Salvage), 36): (926,),
+    }
+    _expect(
+        widget._get_salvage_rule_filter_reason(replace(targeted_rule, model_ids=[36]), rare_only_item) == "",
+        "Rare-only output data must not satisfy common-material targeting.",
+    )
+
+    invalid_type_item = replace(item, item_type_id=int(module.ItemType.Unknown))
+    _expect(
+        widget._get_salvage_rule_filter_reason(targeted_rule, invalid_type_item) == "",
+        "Invalid or untyped live item types must not fall back to model-only salvage matching.",
+    )
+
+
+def _test_common_material_targeting_typed_collision_and_existing_filters(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget)
+    targeted_rule = module.SalvageRule(
+        enabled=True,
+        target_common_material_model_ids=[925],
+        rarities={"gold": True},
+        categories={module.SALVAGE_CATEGORY_WEAPONS: True},
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+    )
+
+    _expect(
+        widget._get_salvage_rule_filter_reason(targeted_rule, item).startswith("selected rarity Gold and category Weapons;"),
+        "Known-possible output targeting should combine with existing rarity and category selectors.",
+    )
+    _expect(
+        widget._get_salvage_rule_filter_reason(targeted_rule, replace(item, rarity="Blue")) == "",
+        "A matching output must not bypass an active rarity selector.",
+    )
+    _expect(
+        widget._get_salvage_rule_filter_reason(targeted_rule, replace(item, is_weapon_like=False, is_armor_piece=True)) == "",
+        "A matching output must not bypass an active category selector.",
+    )
+
+    duplicate_model_item = replace(item, item_type_id=int(module.ItemType.Bag), item_type_name="Bag")
+    _expect(
+        widget._get_salvage_rule_filter_reason(targeted_rule, duplicate_model_item) == "",
+        "A duplicate ModelID with a different ItemType must not reuse the salvage record.",
+    )
+
+    protected_sell_rule = module._normalize_sell_rule(
+        module.SellRule(
+            enabled=True,
+            kind=module.SELL_KIND_WEAPONS,
+            rarities=_rarity_flags("gold"),
+            blacklist_model_ids=[item.model_id],
+        )
+    )
+    _expect(
+        widget._get_salvage_candidate_block_reason(
+            item,
+            [(0, protected_sell_rule)],
+            salvage_rule=targeted_rule,
+            require_salvage_kit=True,
+            salvage_kit_id=1,
+        ).startswith("protected:"),
+        "Existing protection checks must remain ahead of common-material targeting.",
+    )
+    _expect(
+        widget._get_salvage_candidate_block_reason(
+            replace(item, is_customized=True),
+            [],
+            salvage_rule=targeted_rule,
+            require_salvage_kit=True,
+            salvage_kit_id=1,
+        ).startswith("customized:"),
+        "Customized-item protection must remain intact for targeted salvage.",
+    )
+    _expect(
+        widget._get_salvage_candidate_block_reason(
+            replace(item, identified=False),
+            [],
+            salvage_rule=targeted_rule,
+            require_salvage_kit=True,
+            salvage_kit_id=1,
+        ).startswith("unidentified non-white:"),
+        "Unidentified-item handling must remain intact for targeted salvage.",
+    )
+    _expect(
+        widget._get_salvage_candidate_block_reason(
+            item,
+            [],
+            salvage_rule=targeted_rule,
+            require_salvage_kit=True,
+            salvage_kit_id=0,
+        ) == "no normal salvage kit",
+        "Missing-kit behavior must remain intact for targeted salvage.",
+    )
+
+
+def _test_common_material_targeting_profile_and_specific_upgrade_compatibility(module) -> None:
+    old_rule = module._normalize_salvage_rule(
+        {
+            "enabled": True,
+            "model_ids": [35],
+            "salvage_option": module.SALVAGE_OPTION_MATERIALS,
+        }
+    )
+    _expect(old_rule is not None and old_rule.target_common_material_model_ids == [], "Old salvage profiles must default to no common-material targets.")
+    old_payload = module._serialize_salvage_rule(old_rule)
+    _expect("target_common_material_model_ids" not in old_payload, "Old rules must not gain a synthetic material target during serialization.")
+
+    normalized_rule = module._normalize_salvage_rule(
+        {
+            "enabled": True,
+            "target_common_material_model_ids": [925, 926, "not-an-id"],
+            "salvage_option": module.SALVAGE_OPTION_MATERIALS,
+        }
+    )
+    _expect(
+        normalized_rule is not None and normalized_rule.target_common_material_model_ids == [925],
+        "Only current common crafting material model IDs should be accepted as targets.",
+    )
+
+    specific_rule = module._normalize_salvage_rule(
+        {
+            "enabled": True,
+            "model_ids": [35],
+            "target_common_material_model_ids": [925],
+            "salvage_option": module.SALVAGE_OPTION_AUTO_UPGRADE,
+        }
+    )
+    _expect(specific_rule is not None, "Specific upgrade rules with future/foreign fields should still normalize.")
+    _expect(
+        module._serialize_salvage_rule(specific_rule).get("target_common_material_model_ids") == [925],
+        "Specific upgrade serialization should preserve, but not interpret, the additive unrelated field.",
+    )
+
+
+def _test_common_material_targeting_revalidates_item_type_drift(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    rule = module.SalvageRule(
+        enabled=True,
+        target_common_material_model_ids=[925],
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+    )
+    transaction = module._MerchantRulesMaterialsSalvageTransaction(
+        item_id=item.item_id,
+        model_id=item.model_id,
+        item_type_id=item.item_type_id,
+        starting_quantity=item.quantity,
+        kit_id=77,
+        kit_model_id=int(module.ModelID.Salvage_Kit.value),
+        selected_option=module.SALVAGE_OPTION_MATERIALS,
+        rule_index=0,
+        rule=rule,
+        mode="manual",
+        original_protection_rules=(),
+        started=True,
+        materials_authorized=True,
+    )
+    live_item = {"value": item}
+    widget._build_inventory_item_info = lambda _item_id: live_item["value"]
+    widget.salvage_settings = _salvage_settings(module, rules=[rule])
+
+    valid, reason = widget._revalidate_materials_salvage_confirmation(transaction)
+    _expect(valid and not reason, "Preview-matched targeted salvage should pass the normal Materials revalidation predicate.")
+
+    live_item["value"] = replace(item, item_type_id=int(module.ItemType.Bag), item_type_name="Bag")
+    valid, reason = widget._revalidate_materials_salvage_confirmation(transaction)
+    _expect(not valid and reason == "target item type changed before Materials confirmation", "Live ItemType drift must fail targeted salvage safely.")
+
+
 def _test_stackable_salvage_rule_drains_same_stack(module) -> None:
     widget = _make_widget(module)
     rule = module.SalvageRule(
@@ -18610,6 +18865,85 @@ def _test_catalog_loader_result_is_fresh_and_preserves_load_order(module) -> Non
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _test_catalog_loader_indexes_typed_common_salvage_separately(module) -> None:
+    root = SCRIPT_DIR / "_merchant_rules_regression_tmp" / "catalog_common_salvage_contract"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        catalog_path = root / "catalog.json"
+        drop_data_path = root / "drop.json"
+        item_handling_path = root / "items.json"
+        runes_path = root / "runes.json"
+        catalog_path.write_text(
+            json.dumps(
+                {
+                    "materials": {
+                        "common": [{"model_id": 925, "name": "Bolt of Cloth"}],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        drop_data_path.write_text("[]", encoding="utf-8")
+        item_handling_path.write_text(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "model_id": 35,
+                            "name": "Salvage Robe",
+                            "item_type": "Salvage",
+                            "common_salvage": {"Cloth": {"model_id": 925}},
+                        },
+                        {
+                            "model_id": 35,
+                            "name": "Bag Collision",
+                            "item_type": "Bag",
+                            "common_salvage": {"Bone": {"model_id": 921}},
+                        },
+                        {
+                            "model_id": 36,
+                            "name": "Untyped Collision",
+                            "common_salvage": {"Cloth": {"model_id": 925}},
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        runes_path.write_text("{}", encoding="utf-8")
+
+        loader = module.CatalogLoader(
+            catalog_path=str(catalog_path),
+            drop_data_path=str(drop_data_path),
+            item_handling_path=str(item_handling_path),
+            runes_catalog_path=str(runes_path),
+            mod_db=types.SimpleNamespace(weapon_mods={}, runes={}),
+            mod_db_load_error="",
+            model_id_members=lambda: [],
+            armor_upgrade_identity=lambda _identifier: (None, ""),
+            scroll_trader_stock_model_ids=frozenset(),
+        )
+        result = loader.load()
+        typed_lookup = result.common_salvage_model_ids_by_item_key
+        _expect(
+            typed_lookup[(int(module.ItemType.Salvage), 35)] == (925,),
+            "Typed salvage output should index the Salvage row by (ItemType, ModelID).",
+        )
+        _expect(
+            typed_lookup[(int(module.ItemType.Bag), 35)] == (921,),
+            "Duplicate ModelIDs with another typed row must retain their own salvage data.",
+        )
+        _expect(
+            (int(module.ItemType.Salvage), 35) not in result.catalog_by_model_id,
+            "Typed salvage keys must remain separate from the generic model-only catalog.",
+        )
+        _expect((int(module.ItemType.Salvage), 36) not in typed_lookup, "Untyped salvage rows must remain unavailable.")
+        _expect(result.catalog_by_model_id[35]["model_id"] == 35, "The generic catalog must remain model-ID keyed and usable.")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_catalog_loader_behavior_contract_matrix(module) -> None:
     root = SCRIPT_DIR / "_merchant_rules_regression_tmp" / "catalog_behavior_contract"
     shutil.rmtree(root, ignore_errors=True)
@@ -18839,6 +19173,10 @@ def _test_item_handling_catalog_migration_loads_primary_catalog_and_modelid_fall
         _expect(
             int(widget.catalog_stats.get("item_handling_items", 0)) > 3600,
             "Merchant Rules should load the broader ItemHandling catalog as the primary searchable catalog.",
+        )
+        _expect(
+            widget.common_salvage_model_ids_by_item_key.get((int(module.ItemType.Salvage), 35)) == (925,),
+            "Merchant Rules should load typed common-salvage outputs without reducing them to model-only metadata.",
         )
 
         fellblade_entry = widget.catalog_by_model_id.get(400, {})
@@ -23343,6 +23681,26 @@ def main() -> int:
                 "salvage_option_combo_selects_public_choices",
                 lambda: _test_salvage_option_combo_selects_public_choices(module),
             ),
+            (
+                "common_material_targeting_known_possible_any_and_empty",
+                lambda: _test_common_material_targeting_known_possible_any_and_empty(module),
+            ),
+            (
+                "common_material_targeting_unknown_and_later_rule_fallthrough",
+                lambda: _test_common_material_targeting_unknown_and_later_rule_fallthrough(module),
+            ),
+            (
+                "common_material_targeting_typed_collision_and_existing_filters",
+                lambda: _test_common_material_targeting_typed_collision_and_existing_filters(module),
+            ),
+            (
+                "common_material_targeting_profile_and_specific_upgrade_compatibility",
+                lambda: _test_common_material_targeting_profile_and_specific_upgrade_compatibility(module),
+            ),
+            (
+                "common_material_targeting_revalidates_item_type_drift",
+                lambda: _test_common_material_targeting_revalidates_item_type_drift(module),
+            ),
             ("manual_vendor_profile_defaults_and_roundtrip", lambda: _test_manual_vendor_profile_defaults_and_roundtrip(module, temp_root)),
             (
                 "helper_tooltips_profile_defaults_and_roundtrip",
@@ -24216,6 +24574,10 @@ def main() -> int:
         ]
 
         catalog_contract_tests = [
+            (
+                "catalog_loader_indexes_typed_common_salvage_separately",
+                lambda: _test_catalog_loader_indexes_typed_common_salvage_separately(module),
+            ),
             (
                 "catalog_loader_result_is_fresh_and_preserves_load_order",
                 lambda: _test_catalog_loader_result_is_fresh_and_preserves_load_order(module),

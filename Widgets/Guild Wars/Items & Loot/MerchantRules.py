@@ -124,7 +124,7 @@ INVENTORY_SHORTCUT_LIVE_ACTION_REFRESH_MATERIAL_STORAGE_COUNT = "refresh_materia
 INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
-PROFILE_VERSION = 36
+PROFILE_VERSION = 37
 MERCHANT_RULES_OWNED_ACTION_QUEUES = frozenset({"ACTION", "IDENTIFY", "SALVAGE"})
 # Live and private rule profiles remain account-scoped. Shared profiles use one
 # global document whose per-key journal writes merge safely across multibox clients.
@@ -1708,6 +1708,10 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
             "runes.json Rune and Insignia identifiers."
         ),
     },
+    "salvage_common_material_targets": {
+        "short": "Known possible common materials recorded for the item.",
+        "long": "The catalog records possible common salvage outputs; it cannot guarantee which material the game will return.",
+    },
     "cleanup_auto_entry": {
         "short": "Runs Xunlai Deposits once after entering an outpost or Guild Hall.",
         "long": (
@@ -2125,6 +2129,7 @@ class SalvageRule:
 
     enabled: bool = True
     model_ids: list[int] = field(default_factory=list)
+    target_common_material_model_ids: list[int] = field(default_factory=list)
     rarities: dict[str, bool] = field(default_factory=dict)
     categories: dict[str, bool] = field(default_factory=dict)
     target_weapon_mod_identifiers: list[str] = field(default_factory=list)
@@ -2580,6 +2585,7 @@ class _MerchantRulesMaterialsSalvageTransaction:
 
     item_id: int
     model_id: int
+    item_type_id: int
     starting_quantity: int
     kit_id: int
     kit_model_id: int
@@ -6396,6 +6402,16 @@ def _normalize_salvage_rule_mode(raw_option: object) -> str:
     )
 
 
+def _normalize_common_material_model_ids(raw_model_ids: object) -> list[int]:
+    return [
+        model_id
+        for model_id in _dedupe_model_ids(
+            [_safe_int(value, 0) for value in _coerce_list(raw_model_ids)]
+        )
+        if model_id in COMMON_CRAFTING_MATERIAL_MODEL_IDS
+    ]
+
+
 def _resolve_salvage_operation(raw_option: object) -> str:
     safe_option = _normalize_salvage_operation(raw_option)
     if safe_option == SALVAGE_OPTION_DEFAULT:
@@ -6478,6 +6494,13 @@ def _salvage_rule_has_upgrade_targets(rule: object) -> bool:
 def _salvage_rule_has_selectors(rule: SalvageRule) -> bool:
     return bool(
         _dedupe_model_ids(getattr(rule, "model_ids", []))
+        or (
+            _resolve_salvage_operation(getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT))
+            == SALVAGE_OPTION_MATERIALS
+            and _normalize_common_material_model_ids(
+                getattr(rule, "target_common_material_model_ids", [])
+            )
+        )
         or any(bool(value) for value in _normalize_salvage_rarity_flags(getattr(rule, "rarities", {})).values())
         or any(bool(value) for value in _normalize_salvage_category_flags(getattr(rule, "categories", {})).values())
         or _salvage_rule_has_upgrade_targets(rule)
@@ -6491,6 +6514,9 @@ def _normalize_salvage_rule(raw_rule: object) -> SalvageRule | None:
         rule = SalvageRule(
             enabled=bool(raw_rule.enabled),
             model_ids=_dedupe_model_ids(raw_rule.model_ids),
+            target_common_material_model_ids=_normalize_common_material_model_ids(
+                getattr(raw_rule, "target_common_material_model_ids", [])
+            ),
             rarities=_normalize_salvage_rarity_flags(raw_rule.rarities),
             categories=_normalize_salvage_category_flags(raw_rule.categories),
             target_armor_upgrade_identifiers=_dedupe_identifiers(
@@ -6518,6 +6544,9 @@ def _normalize_salvage_rule(raw_rule: object) -> SalvageRule | None:
                 _safe_int(value, 0)
                 for value in _coerce_list(raw_rule.get("model_ids", []))
             ]),
+            target_common_material_model_ids=_normalize_common_material_model_ids(
+                raw_rule.get("target_common_material_model_ids", [])
+            ),
             rarities=_normalize_salvage_rarity_flags(raw_rule.get("rarities", {})),
             categories=_normalize_salvage_category_flags(raw_rule.get("categories", {})),
             target_armor_upgrade_identifiers=_dedupe_identifiers(
@@ -6660,6 +6689,8 @@ def _serialize_salvage_rule(rule: SalvageRule) -> dict[str, object]:
         "salvage_option": _normalize_salvage_rule_mode(normalized_rule.salvage_option),
         "name": _normalize_rule_name(normalized_rule.name),
     }
+    if normalized_rule.target_common_material_model_ids:
+        payload["target_common_material_model_ids"] = list(normalized_rule.target_common_material_model_ids)
     if normalized_rule.target_armor_upgrade_identifiers:
         payload["target_armor_upgrade_identifiers"] = list(normalized_rule.target_armor_upgrade_identifiers)
     if normalized_rule.target_weapon_mod_identifiers:
@@ -6900,6 +6931,7 @@ class MerchantRulesWidget:
         self.destroy_model_list_search_cache: dict[int, str] = {}
         self.salvage_model_search_cache: dict[int, str] = {}
         self.salvage_model_list_search_cache: dict[int, str] = {}
+        self.salvage_common_material_search_cache: dict[int, str] = {}
         self.salvage_weapon_mod_search_cache: dict[int, str] = {}
         self.salvage_armor_upgrade_search_cache: dict[int, str] = {}
         self.sell_model_text_cache: dict[int, str] = {}
@@ -6941,6 +6973,7 @@ class MerchantRulesWidget:
         self.catalog_by_model_id: dict[int, dict[str, object]] = {}
         self.catalog_alias_to_model_ids: dict[str, list[int]] = {}
         self.catalog_alias_display_names: dict[str, str] = {}
+        self.common_salvage_model_ids_by_item_key: dict[tuple[int, int], tuple[int, ...]] = {}
         self.catalog_common_material_ids: list[int] = []
         self.catalog_merchant_essentials: list[dict[str, object]] = []
         self.catalog_rare_materials: list[dict[str, object]] = []
@@ -10625,7 +10658,7 @@ class MerchantRulesWidget:
             return False
         return True
     def _build_profile_payload(self) -> dict[str, object]:
-        """Serialize current settings into a normalized profile-v36 payload."""
+        """Serialize current settings into a normalized profile-v37 payload."""
 
         payload = {
             "version": PROFILE_VERSION,
@@ -12333,6 +12366,7 @@ class MerchantRulesWidget:
         self.destroy_model_list_search_cache.clear()
         self.salvage_model_search_cache.clear()
         self.salvage_model_list_search_cache.clear()
+        self.salvage_common_material_search_cache.clear()
         self.salvage_weapon_mod_search_cache.clear()
         self.salvage_armor_upgrade_search_cache.clear()
         self.sell_model_search_cache.clear()
@@ -12591,6 +12625,7 @@ class MerchantRulesWidget:
         self.catalog_by_model_id = {}
         self.catalog_alias_to_model_ids = {}
         self.catalog_alias_display_names = {}
+        self.common_salvage_model_ids_by_item_key = {}
         self.catalog_common_material_ids = []
         self.catalog_merchant_essentials = []
         self.catalog_rare_materials = []
@@ -12663,6 +12698,7 @@ class MerchantRulesWidget:
         self.catalog_by_model_id = {}
         self.catalog_alias_to_model_ids = {}
         self.catalog_alias_display_names = {}
+        self.common_salvage_model_ids_by_item_key = {}
         self.catalog_common_material_ids = []
         self.catalog_merchant_essentials = []
         self.catalog_rare_materials = []
@@ -12673,6 +12709,7 @@ class MerchantRulesWidget:
         self.catalog_by_model_id = result.catalog_by_model_id
         self.catalog_alias_to_model_ids = result.catalog_alias_to_model_ids
         self.catalog_alias_display_names = result.catalog_alias_display_names
+        self.common_salvage_model_ids_by_item_key = result.common_salvage_model_ids_by_item_key
         self.catalog_common_material_ids = result.catalog_common_material_ids
         self.catalog_merchant_essentials = result.catalog_merchant_essentials
         self.catalog_rare_materials = result.catalog_rare_materials
@@ -14278,6 +14315,16 @@ class MerchantRulesWidget:
         rule.model_ids = next_model_ids
         return True
 
+    def _set_salvage_rule_common_material_model_ids(self, rule: SalvageRule, model_ids: list[int]) -> bool:
+        next_model_ids = _normalize_common_material_model_ids(model_ids)
+        current_model_ids = _normalize_common_material_model_ids(
+            getattr(rule, "target_common_material_model_ids", [])
+        )
+        if next_model_ids == current_model_ids:
+            return False
+        rule.target_common_material_model_ids = next_model_ids
+        return True
+
     def _set_salvage_rule_armor_upgrade_identifiers(
         self,
         rule: SalvageRule,
@@ -14888,13 +14935,25 @@ class MerchantRulesWidget:
         PyImGui.end_child()
         return picked_model_id, visible_model_ids
 
-    def _draw_common_material_search_results(self, child_id: str, query: str) -> tuple[int, list[int]]:
+    def _draw_common_material_search_results(
+        self,
+        child_id: str,
+        query: str,
+        existing_model_ids: set[int] | None = None,
+        existing_badge_label: str = "",
+    ) -> tuple[int, list[int]]:
         normalized_query = str(query or "").strip()
         if not normalized_query:
             return 0, []
 
         results = self._search_common_material_catalog(normalized_query)
         visible_model_ids = _collect_model_ids_from_catalog_entries(results)
+        existing_ids = {
+            max(0, _safe_int(model_id, 0))
+            for model_id in (existing_model_ids or set())
+            if max(0, _safe_int(model_id, 0)) > 0
+        }
+        badge_label = str(existing_badge_label or "").strip()
         picked_model_id = 0
         child_height = 110 if len(results) > 4 else 80
         if PyImGui.begin_child(child_id, (0, child_height), True, PyImGui.WindowFlags.NoFlag):
@@ -14907,6 +14966,17 @@ class MerchantRulesWidget:
                     label = self._format_model_label(model_id)
                     if material_type:
                         label = f"{label} [{material_type}]"
+                    if badge_label and model_id in existing_ids:
+                        PyImGui.text_colored(
+                            label,
+                            self._get_item_name_text_color(
+                                model_id,
+                                category_hint=ITEM_NAME_CATEGORY_MATERIAL,
+                            ),
+                        )
+                        PyImGui.same_line(0, 8)
+                        self._draw_inline_badge(badge_label, UI_COLOR_MUTED)
+                        continue
                     if self._draw_colored_selectable(
                         label,
                         self._get_item_name_text_color(
@@ -17899,36 +17969,79 @@ class MerchantRulesWidget:
             f"rule is configured for {_get_salvage_option_label(safe_selected_option)}"
         )
 
+    def _get_common_material_target_match(
+        self,
+        rule: SalvageRule,
+        item: InventoryItemInfo,
+    ) -> tuple[bool, str]:
+        target_model_ids = _normalize_common_material_model_ids(
+            getattr(rule, "target_common_material_model_ids", [])
+        )
+        if not target_model_ids:
+            return True, ""
+        if _resolve_salvage_operation(getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT)) != SALVAGE_OPTION_MATERIALS:
+            return True, ""
+
+        item_key = (
+            max(0, _safe_int(getattr(item, "item_type_id", 0), 0)),
+            max(0, _safe_int(getattr(item, "model_id", 0), 0)),
+        )
+        possible_outputs = self.common_salvage_model_ids_by_item_key.get(item_key)
+        if not possible_outputs:
+            return False, "Skipped: salvage output data unavailable"
+
+        possible_output_ids = set(int(model_id) for model_id in possible_outputs)
+        matched_model_ids = [model_id for model_id in target_model_ids if model_id in possible_output_ids]
+        if not matched_model_ids:
+            return False, ""
+
+        labels = [self._get_model_name(model_id) or f"Model {model_id}" for model_id in matched_model_ids]
+        return True, f"Known possible common salvage: {self._format_compact_list(labels, limit=3)}"
+
     def _get_salvage_rule_filter_reason(self, rule: SalvageRule, item: InventoryItemInfo) -> str:
         normalized_rule = _normalize_salvage_rule(rule)
         if normalized_rule is None or not bool(normalized_rule.enabled):
             return ""
+
+        base_reason = ""
         if int(item.model_id) in set(int(model_id) for model_id in normalized_rule.model_ids):
-            return f"selected model {self._format_model_label(int(item.model_id))}"
+            base_reason = f"selected model {self._format_model_label(int(item.model_id))}"
+        else:
+            upgrade_target_reason = self._get_salvage_rule_upgrade_target_reason(normalized_rule, item)
+            if upgrade_target_reason:
+                base_reason = upgrade_target_reason
+            else:
+                rarity_key = _normalize_rarity_key(str(item.rarity or ""))
+                category_key = self._get_salvage_category_key_for_item(item)
+                rarity_filter_active = any(bool(value) for value in normalized_rule.rarities.values())
+                category_filter_active = any(bool(value) for value in normalized_rule.categories.values())
+                rarity_matches = bool(normalized_rule.rarities.get(rarity_key, False))
+                category_matches = bool(normalized_rule.categories.get(category_key, False))
+                if rarity_filter_active and not rarity_matches:
+                    return ""
+                if category_filter_active and not category_matches:
+                    return ""
+                if rarity_filter_active or category_filter_active:
+                    reason_parts: list[str] = []
+                    if rarity_filter_active:
+                        reason_parts.append(f"rarity {str(item.rarity or rarity_key).strip() or rarity_key}")
+                    if category_filter_active:
+                        reason_parts.append(f"category {self._get_salvage_category_label(category_key)}")
+                    base_reason = f"selected {' and '.join(reason_parts)}"
 
-        upgrade_target_reason = self._get_salvage_rule_upgrade_target_reason(normalized_rule, item)
-        if upgrade_target_reason:
-            return upgrade_target_reason
+        target_model_ids = _normalize_common_material_model_ids(
+            getattr(normalized_rule, "target_common_material_model_ids", [])
+        )
+        if target_model_ids and _resolve_salvage_operation(normalized_rule.salvage_option) == SALVAGE_OPTION_MATERIALS:
+            if not base_reason:
+                base_reason = "selected common material output"
+            target_matches, target_reason = self._get_common_material_target_match(normalized_rule, item)
+            if not target_matches:
+                return ""
+            if target_reason:
+                return f"{base_reason}; {target_reason}"
 
-        rarity_key = _normalize_rarity_key(str(item.rarity or ""))
-        category_key = self._get_salvage_category_key_for_item(item)
-        rarity_filter_active = any(bool(value) for value in normalized_rule.rarities.values())
-        category_filter_active = any(bool(value) for value in normalized_rule.categories.values())
-        rarity_matches = bool(normalized_rule.rarities.get(rarity_key, False))
-        category_matches = bool(normalized_rule.categories.get(category_key, False))
-        if rarity_filter_active and not rarity_matches:
-            return ""
-        if category_filter_active and not category_matches:
-            return ""
-        if rarity_filter_active or category_filter_active:
-            reason_parts: list[str] = []
-            if rarity_filter_active:
-                reason_parts.append(f"rarity {str(item.rarity or rarity_key).strip() or rarity_key}")
-            if category_filter_active:
-                reason_parts.append(f"category {self._get_salvage_category_label(category_key)}")
-            return f"selected {' and '.join(reason_parts)}"
-
-        return ""
+        return base_reason
 
     def _collect_enabled_salvage_rules(self) -> list[tuple[int, SalvageRule]]:
         settings = _normalize_salvage_settings(self.salvage_settings)
@@ -27580,6 +27693,8 @@ class MerchantRulesWidget:
             return False, "target item left inventory before Materials confirmation"
         if int(live_item.model_id) != int(transaction.model_id):
             return False, "target item model changed before Materials confirmation"
+        if int(live_item.item_type_id) != int(transaction.item_type_id):
+            return False, "target item type changed before Materials confirmation"
         if max(0, int(live_item.quantity)) != max(0, int(transaction.starting_quantity)):
             return False, "target item quantity changed before Materials confirmation"
 
@@ -28010,6 +28125,7 @@ class MerchantRulesWidget:
             materials_transaction = _MerchantRulesMaterialsSalvageTransaction(
                 item_id=int(item_id),
                 model_id=int(live_item.model_id),
+                item_type_id=int(live_item.item_type_id),
                 starting_quantity=int(starting_quantity),
                 kit_id=int(salvage_kit_id),
                 kit_model_id=int(salvage_kit_model_id),
@@ -36007,6 +36123,10 @@ class MerchantRulesWidget:
         if category_labels:
             selector_parts.append(f"Categories: {', '.join(category_labels)}")
 
+        common_material_target_ids = _normalize_common_material_model_ids(
+            getattr(normalized_rule, "target_common_material_model_ids", [])
+        )
+
         option_label = _get_salvage_option_label(normalized_rule.salvage_option)
         selected_option = _resolve_salvage_operation(normalized_rule.salvage_option)
         is_auto_upgrade_option = _is_auto_exact_upgrade_salvage_option(normalized_rule.salvage_option)
@@ -36019,6 +36139,10 @@ class MerchantRulesWidget:
                 selector_parts.append(f"Rarities: {', '.join(rarity_labels)}")
             if category_labels:
                 selector_parts.append(f"Categories: {', '.join(category_labels)}")
+            if common_material_target_ids:
+                selector_parts.append(
+                    f"Known possible common outputs: {len(common_material_target_ids)}"
+                )
             if upgrade_target_count > 0:
                 selector_parts.append("upgrade targets ignored")
             if not selector_parts:
@@ -36348,6 +36472,70 @@ class MerchantRulesWidget:
 
         return changed
 
+    def _draw_salvage_common_material_target_editor(self, index: int, rule: SalvageRule) -> bool:
+        changed = False
+        target_model_ids = _normalize_common_material_model_ids(
+            getattr(rule, "target_common_material_model_ids", [])
+        )
+        self._draw_subsection_heading("Known Possible Common Materials")
+        self._draw_subsection_label(f"Selected Materials: {len(target_model_ids)}")
+        self._draw_helper_tooltip("salvage_common_material_targets")
+        self._draw_secondary_text(
+            "Items match when any selected material is recorded as a possible common salvage output.",
+            wrapped=False,
+        )
+
+        removed_model_id = self._draw_selected_model_ids(
+            "salvage_common_materials",
+            index,
+            target_model_ids,
+        )
+        if removed_model_id > 0:
+            changed = self._set_salvage_rule_common_material_model_ids(
+                rule,
+                [model_id for model_id in target_model_ids if int(model_id) != int(removed_model_id)],
+            ) or changed
+
+        if self._draw_confirm_destructive_button(
+            f"Clear Common Material Targets##merchant_rules_salvage_common_material_clear_{index}"
+        ):
+            changed = self._set_salvage_rule_common_material_model_ids(rule, []) or changed
+
+        search_text = self.salvage_common_material_search_cache.get(index, "")
+        updated_search_text = PyImGui.input_text(
+            f"Search possible common outputs##merchant_rules_salvage_common_material_search_{index}",
+            search_text,
+        )
+        self.salvage_common_material_search_cache[index] = updated_search_text
+        self._draw_hover_tooltip(
+            "Search the current catalog of common crafting materials. These are known possible outputs, not guarantees."
+        )
+
+        selected_ids = set(target_model_ids)
+        picked_model_id, visible_model_ids = self._draw_common_material_search_results(
+            f"merchant_rules_salvage_common_material_results_{index}",
+            updated_search_text,
+            existing_model_ids=selected_ids,
+            existing_badge_label="Already selected",
+        )
+        addable_model_ids = [model_id for model_id in visible_model_ids if model_id not in selected_ids]
+        if self._draw_add_all_matches_button(
+            f"merchant_rules_salvage_common_material_add_all_{index}",
+            len(visible_model_ids),
+            len(addable_model_ids),
+        ):
+            changed = self._set_salvage_rule_common_material_model_ids(
+                rule,
+                target_model_ids + addable_model_ids,
+            ) or changed
+        if picked_model_id > 0:
+            changed = self._set_salvage_rule_common_material_model_ids(
+                rule,
+                target_model_ids + [picked_model_id],
+            ) or changed
+            self.salvage_common_material_search_cache[index] = self._get_model_name(picked_model_id) or str(picked_model_id)
+        return changed
+
     def _draw_salvage_rule_editor(self, index: int, rule: SalvageRule, settings: SalvageSettings) -> bool:
         changed = False
         summary_text, ready = self._get_salvage_rule_summary(rule)
@@ -36402,6 +36590,10 @@ class MerchantRulesWidget:
         changed = self._draw_salvage_category_toggles(rule, f"rule_{index}") or changed
         if bool(rule.categories.get(SALVAGE_CATEGORY_OTHER, False)):
             self._draw_warning_text("Other Items may include unexpected salvageable item types. Keep it off unless testing specific drops.")
+
+        if _resolve_salvage_operation(rule.salvage_option) == SALVAGE_OPTION_MATERIALS:
+            PyImGui.separator()
+            changed = self._draw_salvage_common_material_target_editor(index, rule) or changed
 
         PyImGui.separator()
         self._draw_subsection_heading("Specific Upgrade Targets")

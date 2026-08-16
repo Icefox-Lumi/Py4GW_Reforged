@@ -190,6 +190,62 @@ def _iter_item_handling_catalog_entries(raw_catalog: object) -> list[dict[str, o
     return entries
 
 
+def _resolve_item_type_id(raw_value: object) -> int | None:
+    """Resolve one current ItemType value without falling back to an untyped model lookup."""
+
+    if isinstance(raw_value, ItemType):
+        item_type = raw_value
+    elif isinstance(raw_value, str):
+        candidate = raw_value.strip()
+        if not candidate:
+            return None
+        if candidate.startswith("ItemType."):
+            candidate = candidate.split(".", 1)[1].strip()
+        item_type = next(
+            (
+                enum_value
+                for enum_name, enum_value in ItemType.__members__.items()
+                if enum_name.casefold() == candidate.casefold()
+            ),
+            None,
+        )
+        if item_type is None:
+            try:
+                item_type = ItemType(int(candidate, 0))
+            except (TypeError, ValueError):
+                return None
+    else:
+        try:
+            item_type = ItemType(_safe_int(raw_value, -1))
+        except ValueError:
+            return None
+
+    if item_type == ItemType.Unknown:
+        return None
+    return int(item_type)
+
+
+def _get_common_salvage_model_ids(raw_entry: dict[str, object]) -> tuple[int, ...] | None:
+    """Read only valid common-salvage output model IDs from one typed ItemHandling row."""
+
+    raw_salvage = raw_entry.get("common_salvage")
+    if not isinstance(raw_salvage, dict):
+        return None
+
+    output_model_ids: list[int] = []
+    for raw_output in raw_salvage.values():
+        if not isinstance(raw_output, dict):
+            continue
+        output_model_id = _resolve_model_id_value(
+            raw_output.get("model_id", raw_output.get("ModelID", 0))
+        )
+        if output_model_id > 0 and output_model_id not in output_model_ids:
+            output_model_ids.append(output_model_id)
+    if not output_model_ids:
+        return None
+    return tuple(output_model_ids)
+
+
 def _get_rune_profession_label(value: object) -> str:
     profession = _normalize_rune_catalog_profession(value)
     return 'Common' if profession == '_None' else profession
@@ -401,6 +457,8 @@ class _CatalogIndexLoader:
         *,
         priority_resolver: Callable[[object, object, object, object], int] | None = None,
         source: str = 'item_handling_items_catalog',
+        common_salvage_model_ids_by_item_key: dict[tuple[int, int], tuple[int, ...]] | None = None,
+        common_salvage_ambiguous_item_keys: set[tuple[int, int]] | None = None,
     ) -> int:
         loaded_count = 0
         resolve_priority = priority_resolver or self.item_priority_resolver
@@ -421,6 +479,20 @@ class _CatalogIndexLoader:
                 if isinstance(raw_attributes, list)
                 else []
             )
+
+            if common_salvage_model_ids_by_item_key is not None:
+                item_type_id = _resolve_item_type_id(item_type)
+                common_salvage_model_ids = _get_common_salvage_model_ids(entry)
+                if item_type_id is not None and common_salvage_model_ids:
+                    item_key = (int(item_type_id), int(model_id))
+                    if common_salvage_ambiguous_item_keys is None or item_key not in common_salvage_ambiguous_item_keys:
+                        existing_outputs = common_salvage_model_ids_by_item_key.get(item_key)
+                        if existing_outputs is None:
+                            common_salvage_model_ids_by_item_key[item_key] = common_salvage_model_ids
+                        elif existing_outputs != common_salvage_model_ids:
+                            common_salvage_model_ids_by_item_key.pop(item_key, None)
+                            if common_salvage_ambiguous_item_keys is not None:
+                                common_salvage_ambiguous_item_keys.add(item_key)
 
             extra: dict[str, object] = {
                 'alias_labels': _build_catalog_alias_labels(name, skin, wiki_url),
@@ -784,6 +856,8 @@ def _format_weapon_mod_variant_label(weapon_mod: object, component_kind: object)
 @dataclass
 class CatalogLoadResult(_CatalogIndexResult):
     catalog_common_material_ids: list[int] = field(default_factory=list)
+    common_salvage_model_ids_by_item_key: dict[tuple[int, int], tuple[int, ...]] = field(default_factory=dict)
+    common_salvage_ambiguous_item_keys: set[tuple[int, int]] = field(default_factory=set)
     catalog_merchant_essentials: list[dict[str, object]] = field(default_factory=list)
     catalog_rare_materials: list[dict[str, object]] = field(default_factory=list)
     catalog_stats: dict[str, int | bool] = field(default_factory=dict)
@@ -928,6 +1002,8 @@ class MerchantRulesCatalogLoader:
             'curated_total': len(common_entries) + len(rare_entries) + len(merchant_entries),
             'item_handling_present': item_handling_present,
             'item_handling_items': item_handling_items_count,
+            'common_salvage_typed_items': len(result.common_salvage_model_ids_by_item_key),
+            'common_salvage_ambiguous_items': len(result.common_salvage_ambiguous_item_keys),
             'rune_models': rune_model_catalog_count,
             'drop_data': drop_data_count,
             'modelid_fallback_items': model_id_fallback_count,
@@ -1054,6 +1130,8 @@ class MerchantRulesCatalogLoader:
                     scroll_trader_stock_model_ids=self.scroll_trader_stock_model_ids,
                 )
             ),
+            common_salvage_model_ids_by_item_key=result.common_salvage_model_ids_by_item_key,
+            common_salvage_ambiguous_item_keys=result.common_salvage_ambiguous_item_keys,
         )
 
     def _load_rune_model_catalog(self, result: CatalogLoadResult) -> int:
