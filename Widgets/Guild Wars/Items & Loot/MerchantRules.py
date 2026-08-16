@@ -2363,6 +2363,7 @@ class ArmorUpgradeIdentity:
     semantic_kind: str
     option: str
     signature: tuple[tuple[int, int, int], ...]
+    generic_carrier_upgrade_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -5051,6 +5052,23 @@ def _get_armor_upgrade_catalog_identity(identifier: object) -> tuple[ArmorUpgrad
     if not signature:
         return None, f"{name} has an empty catalog signature"
 
+    generic_carrier_upgrade_id: int | None = None
+    if (
+        semantic_kind == "Rune"
+        and safe_identifier.casefold() != SUPERIOR_SPAWNING_RUNE_CATALOG_IDENTIFIER.casefold()
+        and name.casefold() != SUPERIOR_SPAWNING_RUNE_CATALOG_IDENTIFIER.casefold()
+        and not any(
+            _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_UPGRADE
+            for triple in signature
+        )
+    ):
+        generic_carrier_upgrade_id, carrier_error = _get_armor_rune_generic_carrier_upgrade_id(
+            safe_identifier,
+            name,
+        )
+        if carrier_error:
+            return None, carrier_error
+
     return (
         ArmorUpgradeIdentity(
             identifier=safe_identifier,
@@ -5058,6 +5076,7 @@ def _get_armor_upgrade_catalog_identity(identifier: object) -> tuple[ArmorUpgrad
             semantic_kind=semantic_kind,
             option=option,
             signature=tuple(signature),
+            generic_carrier_upgrade_id=generic_carrier_upgrade_id,
         ),
         "",
     )
@@ -5069,6 +5088,20 @@ def _is_tooltip_description_modifier(triple: tuple[int, int, int]) -> bool:
 
 def _get_modifier_upgrade_id(triple: tuple[int, int, int]) -> int:
     return (int(triple[1]) << 8) | int(triple[2])
+
+
+def _get_armor_upgrade_generic_carrier_triples(
+    raw_modifiers: tuple[tuple[int, int, int], ...],
+    upgrade_id: int | None,
+) -> tuple[tuple[int, int, int], ...]:
+    if upgrade_id is None:
+        return ()
+    return tuple(
+        triple
+        for triple in raw_modifiers
+        if _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_UPGRADE
+        and _get_modifier_upgrade_id(triple) == int(upgrade_id)
+    )
 
 
 def _is_armor_upgrade_carrier_triple(triple: tuple[int, int, int]) -> bool:
@@ -5097,6 +5130,66 @@ def _has_superior_ritualist_rune_carrier(
 def _normalize_shared_upgrade_name(value: object) -> str:
     without_profession_suffix = re.sub(r"\[[^\]]+\]", "", str(value or ""))
     return re.sub(r"[^a-z0-9]+", "", without_profession_suffix.casefold())
+
+
+def _iter_item_upgrade_metadata_members() -> tuple[tuple[str, object], ...]:
+    members = getattr(ItemUpgrade, "__members__", None)
+    if members is not None and callable(getattr(members, "items", None)):
+        return tuple((str(name), member) for name, member in members.items())
+    return tuple(
+        (name, getattr(ItemUpgrade, name))
+        for name in dir(ItemUpgrade)
+        if not name.startswith("_")
+        and name not in {"UpgradeRune", "AppliesToRune"}
+        and getattr(ItemUpgrade, name, None) is not None
+    )
+
+
+def _get_armor_rune_generic_carrier_upgrade_id(
+    identifier: str,
+    name: str,
+) -> tuple[int | None, str]:
+    """Resolve a class Rune's generic armor carrier from existing upgrade metadata."""
+
+    normalized_candidates = {
+        _normalize_shared_upgrade_name(identifier),
+        _normalize_shared_upgrade_name(name),
+    }
+    normalized_candidates.discard("")
+    metadata_matches: dict[str, object] = {}
+    for metadata_name, metadata_member in _iter_item_upgrade_metadata_members():
+        if _normalize_shared_upgrade_name(metadata_name) in normalized_candidates:
+            metadata_matches[metadata_name] = metadata_member
+
+    normalized_name = _normalize_shared_upgrade_name(name)
+    if not metadata_matches:
+        if "runeof" in normalized_name and not normalized_name.startswith("runeof"):
+            return None, f"{name} has no exact ItemUpgrade Rune metadata"
+        return None, ""
+    if len(metadata_matches) != 1:
+        return None, f"{name} has ambiguous exact ItemUpgrade Rune metadata"
+
+    metadata_name = next(iter(metadata_matches))
+    rune_of_index = metadata_name.find("RuneOf")
+    if rune_of_index <= 0:
+        return None, f"{name} has no class Rune carrier metadata"
+    profession = metadata_name[:rune_of_index]
+    effect_name = metadata_name[rune_of_index + len("RuneOf"):]
+    tiers = tuple(tier for tier in ("Minor", "Major", "Superior") if effect_name.startswith(tier))
+    if len(tiers) != 1:
+        return None, f"{name} has no unique Rune tier in ItemUpgrade metadata"
+
+    generic_name = f"{tiers[0]}{profession}Rune"
+    generic_member = getattr(ItemUpgradeId, generic_name, None)
+    if generic_member is None:
+        return None, f"{name} has no ItemUpgradeId.{generic_name} carrier metadata"
+    try:
+        generic_carrier_upgrade_id = int(generic_member)
+    except (TypeError, ValueError):
+        return None, f"{name} has a malformed ItemUpgradeId.{generic_name} carrier"
+    if generic_carrier_upgrade_id not in ARMOR_UPGRADE_RUNE_CARRIER_IDS:
+        return None, f"{name} has an unsupported ItemUpgradeId.{generic_name} carrier"
+    return generic_carrier_upgrade_id, ""
 
 
 def _shared_upgrades_corroborate_named_suffix(
@@ -5225,6 +5318,25 @@ def _parse_exact_armor_upgrade_state(
                     upgrades=tuple(upgrades),
                     error=f"{identity.name} shares a signature carrier with another armor upgrade",
                 )
+        generic_carrier_triples = _get_armor_upgrade_generic_carrier_triples(
+            safe_raw_modifiers,
+            identity.generic_carrier_upgrade_id,
+        )
+        if identity.generic_carrier_upgrade_id is not None:
+            if len(generic_carrier_triples) != 1:
+                return ArmorUpgradeParseState(
+                    upgrades=tuple(upgrades),
+                    error=(
+                        f"{identity.name} does not have exactly one authoritative generic Rune carrier "
+                        f"for ItemUpgradeId {identity.generic_carrier_upgrade_id}"
+                    ),
+                )
+            generic_carrier = generic_carrier_triples[0]
+            if consumed_carriers[generic_carrier] > 0:
+                return ArmorUpgradeParseState(
+                    upgrades=tuple(upgrades),
+                    error=f"{identity.name} shares a signature carrier with another armor upgrade",
+                )
         if identity.identifier in seen_identifiers:
             return ArmorUpgradeParseState(
                 upgrades=tuple(upgrades),
@@ -5239,6 +5351,8 @@ def _parse_exact_armor_upgrade_state(
         seen_identifiers.add(identity.identifier)
         seen_options.add(identity.option)
         consumed_carriers.update(identity.signature)
+        if generic_carrier_triples:
+            consumed_carriers[generic_carrier_triples[0]] += 1
         upgrades.append(identity)
 
     superior_ritualist_carrier_positions = [
@@ -5357,13 +5471,24 @@ def _parse_exact_armor_upgrade_state(
 def _armor_upgrade_signature_is_exactly_present(
     raw_modifiers: tuple[tuple[int, int, int], ...],
     identity: ArmorUpgradeIdentity,
+    *,
+    require_generic_carrier: bool = False,
 ) -> bool:
     """Recognize an exact selected target even when another armor identity forces a safe block."""
 
-    return bool(
+    if not bool(
         identity.signature
         and all(raw_modifiers.count(triple) == 1 for triple in identity.signature)
-    )
+    ):
+        return False
+    if not require_generic_carrier or identity.generic_carrier_upgrade_id is None:
+        return True
+    return len(
+        _get_armor_upgrade_generic_carrier_triples(
+            raw_modifiers,
+            identity.generic_carrier_upgrade_id,
+        )
+    ) == 1
 
 
 def _get_armor_upgrade_post_extraction_error(
@@ -5398,10 +5523,35 @@ def _get_armor_upgrade_post_extraction_error(
         if current_counts[triple] != 0:
             return "selected armor upgrade signature remains after confirmation"
 
+    expected_target_carriers = _get_armor_upgrade_generic_carrier_triples(
+        expected.raw_modifiers,
+        target.generic_carrier_upgrade_id,
+    )
+    if target.generic_carrier_upgrade_id is not None:
+        if len(expected_target_carriers) != 1:
+            return "captured selected generic Rune carrier is not singular"
+        current_target_carriers = _get_armor_upgrade_generic_carrier_triples(
+            current.raw_modifiers,
+            target.generic_carrier_upgrade_id,
+        )
+        if current_target_carriers:
+            return "selected generic Rune carrier remains after confirmation"
+
     for upgrade in expected_remaining:
         for triple in upgrade.signature:
             if expected_counts[triple] != 1 or current_counts[triple] != 1:
                 return "unselected armor upgrade signature count changed after extraction"
+        expected_upgrade_carriers = _get_armor_upgrade_generic_carrier_triples(
+            expected.raw_modifiers,
+            upgrade.generic_carrier_upgrade_id,
+        )
+        if upgrade.generic_carrier_upgrade_id is not None:
+            current_upgrade_carriers = _get_armor_upgrade_generic_carrier_triples(
+                current.raw_modifiers,
+                upgrade.generic_carrier_upgrade_id,
+            )
+            if len(expected_upgrade_carriers) != 1 or current_upgrade_carriers != expected_upgrade_carriers:
+                return "unselected generic Rune carrier identity changed after extraction"
 
     for linkage in expected.linkages:
         expected_carrier_count = expected_counts[linkage.carrier]
@@ -17575,9 +17725,10 @@ class MerchantRulesWidget:
                 identity, _identity_error = _get_armor_upgrade_catalog_identity(identifier)
                 if identity is None:
                     continue
-                target_signature_present = bool(
-                    identity.signature
-                    and all(triple in raw_modifiers for triple in identity.signature)
+                target_signature_present = _armor_upgrade_signature_is_exactly_present(
+                    raw_modifiers,
+                    identity,
+                    require_generic_carrier=True,
                 )
                 alternate_minor_vigor_present = bool(
                     identity.signature == ((9224, 0, 0x00FF),)
