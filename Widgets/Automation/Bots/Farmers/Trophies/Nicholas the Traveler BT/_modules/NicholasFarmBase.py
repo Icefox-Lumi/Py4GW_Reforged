@@ -400,29 +400,94 @@ def farm_path(farm: FarmDefinition) -> BehaviorTree:
     )
 
 
-def resign_and_return(farm: FarmDefinition) -> BehaviorTree:
+def return_to_outpost_if_needed(farm: FarmDefinition) -> BehaviorTree:
     """
-    Reset a normal farm instance.
+    Finish a farm run safely.
 
-    The pre-resign and post-load waits are intentionally centralized here so
-    every resign-based farm uses the same item/transition safety policy.
+    Some Nicholas farms naturally return to their starting outpost while
+    others remain in an explorable instance. Avoid sending /resign blindly:
+
+      - already at the configured starting outpost -> succeed immediately;
+      - otherwise wait for combat to settle, resign the multibox party and
+        wait for the starting outpost to load.
+
+    This keeps natural-return farms clean while still resetting every farm
+    that remains in an explorable area.
     """
-    return BT.Sequence(
-        name="Resign And Return",
+    return BT.Selector(
+        name="Return To Outpost",
         children=[
+            BT.Sequence(
+                name="Return To Outpost - Already There",
+                children=[
+                    BT.IsCurrentMap(
+                        map_id=farm.outpost_map_id,
+                        log=False,
+                    ),
+                    BT.Succeeder("StartingOutpostAlreadyLoaded"),
+                ],
+            ),
+            BT.Sequence(
+                name="Return To Outpost - Resign",
+                children=[
+                    BT.WaitUntilOutOfCombat(
+                        range=Range.Earshot.value,
+                        timeout_ms=60_000,
+                    ),
+                    BT.Wait(3_000),
+                    BT.Resign(
+                        wait_for_map_load=True,
+                        target_map_id=farm.outpost_map_id,
+                        multi_account=True,
+                        timeout_ms=60_000,
+                        log=True,
+                    ),
+                    BT.Wait(3_000),
+                ],
+            ),
+        ],
+    )
+
+
+def reset_portal_loop_with_fallback(farm: FarmDefinition) -> BehaviorTree:
+    """
+    Reset a portal-loop farm.
+
+    The portal remains the normal reset method so the expensive initial transit
+    path is not replayed every run. If the portal transition fails, fall back to
+    a multibox resign to the starting outpost and clear the portal-ready flag so
+    the next planner loop rebuilds the initial portal route correctly.
+    """
+    portal_reset = _map_transition_node(
+        name="Reset Via Portal",
+        from_map_id=farm.farm_map_id,
+        target_map_id=farm.reset_map_id,
+        point=farm.portal_back,
+        timeout_ms=60_000,
+        before_children=(
             BT.WaitUntilOutOfCombat(
                 range=Range.Earshot.value,
                 timeout_ms=60_000,
             ),
             BT.Wait(3_000),
-            BT.Resign(
-                wait_for_map_load=True,
-                target_map_id=farm.outpost_map_id,
-                multi_account=True,
-                timeout_ms=60_000,
-                log=True,
+        ),
+        after_children=(BT.Wait(3_000),),
+    )
+
+    return BT.Selector(
+        name="Reset Via Portal",
+        children=[
+            portal_reset,
+            BT.Sequence(
+                name="Reset Via Portal - Resign Fallback",
+                children=[
+                    return_to_outpost_if_needed(farm),
+                    BT.ClearBlackboardValue(
+                        _PORTAL_READY_KEY,
+                        log=True,
+                    ),
+                ],
             ),
-            BT.Wait(3_000),
         ],
     )
 
@@ -1556,7 +1621,7 @@ def build_execution_steps(
         )
 
         steps.append(
-            ("Resign And Return", lambda: resign_and_return(farm))
+            ("Return To Outpost", lambda: return_to_outpost_if_needed(farm))
         )
 
     elif farm.flow == FLOW_TWO_MAP:
@@ -1613,7 +1678,7 @@ def build_execution_steps(
         )
 
         steps.append(
-            ("Resign And Return", lambda: resign_and_return(farm))
+            ("Return To Outpost", lambda: return_to_outpost_if_needed(farm))
         )
 
     elif farm.flow == FLOW_PORTAL_LOOP:
@@ -1694,21 +1759,7 @@ def build_execution_steps(
         steps.append(
             (
                 "Reset Via Portal",
-                lambda: _map_transition_node(
-                    name="Reset Via Portal",
-                    from_map_id=farm.farm_map_id,
-                    target_map_id=farm.reset_map_id,
-                    point=farm.portal_back,
-                    timeout_ms=60_000,
-                    before_children=(
-                        BT.WaitUntilOutOfCombat(
-                            range=Range.Earshot.value,
-                            timeout_ms=60_000,
-                        ),
-                        BT.Wait(3_000),
-                    ),
-                    after_children=(BT.Wait(3_000),),
-                ),
+                lambda: reset_portal_loop_with_fallback(farm),
             )
         )
 
@@ -1751,7 +1802,7 @@ def build_execution_steps(
         )
 
         steps.append(
-            ("Resign And Return", lambda: resign_and_return(farm))
+            ("Return To Outpost", lambda: return_to_outpost_if_needed(farm))
         )
 
     elif farm.flow == FLOW_DIALOG:
@@ -1809,7 +1860,7 @@ def build_execution_steps(
         )
 
         steps.append(
-            ("Resign And Return", lambda: resign_and_return(farm))
+            ("Return To Outpost", lambda: return_to_outpost_if_needed(farm))
         )
 
     elif farm.flow == FLOW_FOW:
@@ -1889,7 +1940,7 @@ def build_execution_steps(
         )
 
         steps.append(
-            ("Resign And Return", lambda: resign_and_return(farm))
+            ("Return To Outpost", lambda: return_to_outpost_if_needed(farm))
         )
 
     else:

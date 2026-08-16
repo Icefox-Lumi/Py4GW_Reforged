@@ -7,7 +7,7 @@ import sys
 import PyImGui
 import PySystem
 
-from Py4GWCoreLib import ImGui, get_texture_for_model
+from Py4GWCoreLib import ImGui, Map, get_texture_for_model
 from Py4GWCoreLib.BottingTree import BottingTree
 from Py4GWCoreLib.ImGui_src.types import Alignment
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color
@@ -161,6 +161,7 @@ Features:
 • Selectable Nicholas farm registry with shared BottingTree runtime
 • Combined target-item counting across the active multibox party
 • Direct, two-map, portal-loop, challenge, dialog and Fissure of Woe farm flows
+• Displays the required starting outpost and Map ID for the selected farm
 • Automatic farming target calculated from the number of accounts that should receive all 5 Gifts
 • Optional travel and exchange route to Nicholas when legacy route data is available
 • Automatic multibox collector conversion for supported indirect Nicholas items
@@ -379,6 +380,20 @@ def ensure_botting_tree() -> BottingTree:
     return botting_tree
 
 
+def _starting_outpost_name(farm: FarmDefinition) -> str:
+    """Resolve the required starting outpost name from its MapID."""
+    try:
+        name = str(Map.GetMapName(int(farm.outpost_map_id)) or "").strip()
+    except Exception:
+        name = ""
+
+    if not name or name == "Unknown Map ID":
+        return f"Unknown outpost (Map ID {farm.outpost_map_id})"
+
+    return name
+
+
+
 def _flow_label(farm: FarmDefinition) -> str:
     labels = {
         "direct": "Direct farm + Resign",
@@ -397,6 +412,10 @@ def _draw_manager_main_summary() -> None:
     target = _target_for_farm(farm)
 
     PyImGui.text(f"Farm: {farm.name}")
+    PyImGui.text(
+        f"Starting outpost: {_starting_outpost_name(farm)} "
+        f"(Map ID {farm.outpost_map_id})"
+    )
     PyImGui.text(f"Gift accounts: {gift_accounts}")
     PyImGui.text(f"Combined count: {_last_total_count} / {target}")
     PyImGui.text("MerchantRules: OFF on all accounts after Start")
@@ -449,6 +468,11 @@ def _draw_config_tab() -> None:
         farm = new_farm
         tree = ensure_botting_tree()
         ex_tree = ensure_exchange_tree()
+
+    PyImGui.spacing()
+    PyImGui.text("Required starting outpost")
+    PyImGui.text(_starting_outpost_name(farm))
+    PyImGui.text(f"Map ID: {farm.outpost_map_id}")
 
     PyImGui.separator()
 
@@ -632,7 +656,13 @@ def tooltip():
         "Direct, multi-map, portal-loop, challenge, dialog and FoW farm flows."
     )
     PyImGui.bullet_text(
+        "Shows the required starting outpost for the selected farm."
+    )
+    PyImGui.bullet_text(
         "Each route waypoint is its own recovery step, with map-aware zone transitions."
+    )
+    PyImGui.bullet_text(
+        "Farm resets resign only when needed; portal loops keep a resign fallback."
     )
     PyImGui.bullet_text(
         "Calculates the farming target automatically from the number of gift accounts."
