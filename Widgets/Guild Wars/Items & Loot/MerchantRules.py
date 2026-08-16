@@ -398,18 +398,27 @@ SALVAGE_OPTION_AUTO_UPGRADE = "auto_upgrade"
 SALVAGE_OPTION_PREFIX = "prefix"
 SALVAGE_OPTION_SUFFIX = "suffix"
 SALVAGE_OPTION_INSCRIPTION = "inscription"
-SALVAGE_OPTION_ORDER: tuple[tuple[str, str], ...] = (
-    (SALVAGE_OPTION_DEFAULT, "Default (legacy behavior)"),
+# Rule modes are the only values accepted from persisted SalvageRule records.
+# Prefix/suffix/inscription remain internal extraction-operation tokens used by
+# the current Specific upgrade resolver and execution path.
+SALVAGE_RULE_MODE_ORDER: tuple[tuple[str, str], ...] = (
+    (SALVAGE_OPTION_MATERIALS, "Materials"),
+    (SALVAGE_OPTION_AUTO_UPGRADE, "Specific upgrade"),
+)
+SALVAGE_RULE_MODE_VALUES: frozenset[str] = frozenset(
+    option for option, _label in SALVAGE_RULE_MODE_ORDER
+)
+SALVAGE_OPERATION_ORDER: tuple[tuple[str, str], ...] = (
     (SALVAGE_OPTION_MATERIALS, "Salvage materials"),
     (SALVAGE_OPTION_AUTO_UPGRADE, "Specific upgrade"),
     (SALVAGE_OPTION_PREFIX, "Salvage prefix"),
     (SALVAGE_OPTION_SUFFIX, "Salvage suffix"),
     (SALVAGE_OPTION_INSCRIPTION, "Salvage inscription"),
 )
-SALVAGE_OPTION_DROPDOWN_ORDER: tuple[tuple[str, str], ...] = (
-    (SALVAGE_OPTION_MATERIALS, "Materials"),
-    (SALVAGE_OPTION_AUTO_UPGRADE, "Specific upgrade"),
+SALVAGE_OPERATION_VALUES: frozenset[str] = frozenset(
+    option for option, _label in SALVAGE_OPERATION_ORDER
 )
+SALVAGE_OPTION_DROPDOWN_ORDER: tuple[tuple[str, str], ...] = SALVAGE_RULE_MODE_ORDER
 SALVAGE_UPGRADE_OPTIONS: frozenset[str] = frozenset({
     SALVAGE_OPTION_PREFIX,
     SALVAGE_OPTION_SUFFIX,
@@ -6197,7 +6206,7 @@ def _normalize_destroy_rules(rules: list[DestroyRule]) -> list[DestroyRule]:
     return [_normalize_destroy_rule(rule) for rule in rules]
 
 
-def _normalize_salvage_option(raw_option: object) -> str:
+def _canonicalize_salvage_option(raw_option: object) -> str:
     safe_option = str(raw_option or "").strip().lower()
     aliases = {
         "": SALVAGE_OPTION_MATERIALS,
@@ -6219,36 +6228,49 @@ def _normalize_salvage_option(raw_option: object) -> str:
         "inscription": SALVAGE_OPTION_INSCRIPTION,
         "salvage inscription": SALVAGE_OPTION_INSCRIPTION,
     }
-    safe_option = aliases.get(safe_option, safe_option)
-    valid_options = {option for option, _label in SALVAGE_OPTION_ORDER}
-    return safe_option if safe_option in valid_options else SALVAGE_OPTION_MATERIALS
+    return aliases.get(safe_option, safe_option)
+
+
+def _normalize_salvage_operation(raw_option: object) -> str:
+    safe_option = _canonicalize_salvage_option(raw_option)
+    return safe_option if safe_option in SALVAGE_OPERATION_VALUES else SALVAGE_OPTION_MATERIALS
+
+
+def _normalize_salvage_rule_mode(raw_option: object) -> str:
+    safe_option = _canonicalize_salvage_option(raw_option)
+    if safe_option in SALVAGE_RULE_MODE_VALUES:
+        return safe_option
+    raise ValueError(
+        f"Unsupported Merchant Rules persisted Salvage rule mode {str(raw_option or '').strip()!r}. "
+        "Use Materials or Specific upgrade."
+    )
 
 
 def _resolve_salvage_operation(raw_option: object) -> str:
-    safe_option = _normalize_salvage_option(raw_option)
+    safe_option = _normalize_salvage_operation(raw_option)
     if safe_option == SALVAGE_OPTION_DEFAULT:
         return SALVAGE_OPTION_MATERIALS
     return safe_option
 
 
 def _get_salvage_option_label(raw_option: object) -> str:
-    safe_option = _normalize_salvage_option(raw_option)
-    for option, label in SALVAGE_OPTION_ORDER:
+    safe_option = _normalize_salvage_operation(raw_option)
+    for option, label in SALVAGE_OPERATION_ORDER:
         if option == safe_option:
             return label
     return "Salvage materials"
 
 
 def _get_salvage_option_dropdown_label(raw_option: object) -> str:
-    safe_option = _normalize_salvage_option(raw_option)
+    safe_option = _normalize_salvage_rule_mode(raw_option)
     for option, label in SALVAGE_OPTION_DROPDOWN_ORDER:
         if option == safe_option:
             return label
-    return f"Legacy: {_get_salvage_option_label(safe_option)}"
+    raise ValueError(f"Unsupported Merchant Rules persisted Salvage rule mode {safe_option!r}.")
 
 
 def _is_auto_exact_upgrade_salvage_option(raw_option: object) -> bool:
-    return _normalize_salvage_option(raw_option) == SALVAGE_OPTION_AUTO_UPGRADE
+    return _normalize_salvage_operation(raw_option) == SALVAGE_OPTION_AUTO_UPGRADE
 
 
 def _get_salvage_rule_upgrade_target_count(rule: object) -> int:
@@ -6336,7 +6358,7 @@ def _normalize_salvage_rule(raw_rule: object) -> SalvageRule | None:
             target_weapon_mod_variant_thresholds=_normalize_weapon_mod_variant_threshold_rules(
                 _coerce_list(getattr(raw_rule, "target_weapon_mod_variant_thresholds", []))
             ),
-            salvage_option=_normalize_salvage_option(raw_rule.salvage_option),
+            salvage_option=_normalize_salvage_rule_mode(raw_rule.salvage_option),
             name=_normalize_rule_name(getattr(raw_rule, "name", "")),
         )
     elif isinstance(raw_rule, dict):
@@ -6363,7 +6385,7 @@ def _normalize_salvage_rule(raw_rule: object) -> SalvageRule | None:
             target_weapon_mod_variant_thresholds=_normalize_weapon_mod_variant_threshold_rules(
                 _coerce_list(raw_rule.get("target_weapon_mod_variant_thresholds", []))
             ),
-            salvage_option=_normalize_salvage_option(raw_rule.get("salvage_option", SALVAGE_OPTION_DEFAULT)),
+            salvage_option=_normalize_salvage_rule_mode(raw_rule.get("salvage_option", SALVAGE_OPTION_DEFAULT)),
             name=_normalize_rule_name(raw_rule.get("name", "")),
         )
     else:
@@ -6485,7 +6507,7 @@ def _serialize_salvage_rule(rule: SalvageRule) -> dict[str, object]:
         "model_ids": list(normalized_rule.model_ids),
         "rarities": dict(normalized_rule.rarities),
         "categories": dict(normalized_rule.categories),
-        "salvage_option": _normalize_salvage_option(normalized_rule.salvage_option),
+        "salvage_option": _normalize_salvage_rule_mode(normalized_rule.salvage_option),
         "name": _normalize_rule_name(normalized_rule.name),
     }
     if normalized_rule.target_armor_upgrade_identifiers:
@@ -17897,7 +17919,9 @@ class MerchantRulesWidget:
             selection_reason = rule_match[2] if rule_match is not None else ""
         if not selection_reason:
             return "not selected by salvage settings"
-        raw_selected_option = getattr(selected_rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
+        raw_selected_option = _normalize_salvage_rule_mode(
+            getattr(selected_rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
+        )
         armor_target_matches = (
             self._get_salvage_rule_armor_upgrade_target_matches(selected_rule, item)
             if selected_rule is not None
@@ -18036,7 +18060,9 @@ class MerchantRulesWidget:
                 continue
             salvage_kit_id = 0
             if salvage_rule is not None:
-                salvage_option = getattr(salvage_rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
+                salvage_option = _normalize_salvage_rule_mode(
+                    getattr(salvage_rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
+                )
                 if max(0, _safe_int(preferred_salvage_kit_id, 0)) > 0:
                     salvage_kit_id = self._get_salvage_kit_id_for_option(
                         salvage_option,
@@ -27604,7 +27630,7 @@ class MerchantRulesWidget:
                 self._debug_log(skip_message)
             return "blocked"
 
-        configured_option = _normalize_salvage_option(rule.salvage_option)
+        configured_option = _normalize_salvage_rule_mode(rule.salvage_option)
         selected_option = _resolve_salvage_operation(configured_option)
         auto_slot_resolution = SalvageUpgradeSlotResolution()
         if _is_auto_exact_upgrade_salvage_option(configured_option):
@@ -27897,7 +27923,9 @@ class MerchantRulesWidget:
         rule = _normalize_salvage_rule(getattr(candidate, "rule", None))
         if rule is None:
             return False
-        configured_option = _normalize_salvage_option(getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT))
+        configured_option = _normalize_salvage_rule_mode(
+            getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
+        )
         if _is_auto_exact_upgrade_salvage_option(configured_option):
             return False
         return _resolve_salvage_operation(configured_option) not in SALVAGE_UPGRADE_OPTIONS
@@ -35822,8 +35850,6 @@ class MerchantRulesWidget:
             return f"{option_label} | Choose at least one specific upgrade target.", False
         if upgrade_target_count > 0:
             selector_parts.append(f"specific upgrades {upgrade_target_count}")
-            if selected_option not in SALVAGE_UPGRADE_OPTIONS and not is_auto_upgrade_option:
-                option_label = f"{option_label} (specific-upgrade targets require prefix/suffix/inscription)"
         if (
             (selected_option in SALVAGE_UPGRADE_OPTIONS or is_auto_upgrade_option)
             and not self._has_salvage_upgrade_support_for_rule(normalized_rule)
@@ -35864,7 +35890,9 @@ class MerchantRulesWidget:
         return ready_rule_count
 
     def _draw_salvage_option_combo(self, index: int, rule: SalvageRule) -> bool:
-        current_option = _normalize_salvage_option(getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT))
+        current_option = _normalize_salvage_rule_mode(
+            getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
+        )
         preview_label = _get_salvage_option_dropdown_label(current_option)
         combo_flags = getattr(getattr(PyImGui, "ImGuiComboFlags", None), "NoFlag", 0)
         selectable_flags = getattr(getattr(PyImGui, "SelectableFlags", None), "NoFlag", 0)
@@ -35948,8 +35976,7 @@ class MerchantRulesWidget:
             and target_entry_count > 0
         ):
             self._draw_colored_text(
-                "Specific-upgrade targets require prefix, suffix, or inscription salvage. "
-                "Run Salvage skips these targets while this rule uses default/material salvage.",
+                "Specific-upgrade targets are ignored while this rule uses Materials.",
                 UI_COLOR_WARNING_SOFT,
             )
         elif (
@@ -36173,17 +36200,12 @@ class MerchantRulesWidget:
 
         self._draw_section_heading("Basic")
         changed = self._draw_salvage_option_combo(index, rule) or changed
-        configured_option = _normalize_salvage_option(rule.salvage_option)
-        selected_option = _resolve_salvage_operation(rule.salvage_option)
         is_auto_upgrade_option = _is_auto_exact_upgrade_salvage_option(rule.salvage_option)
-        if selected_option in SALVAGE_UPGRADE_OPTIONS or is_auto_upgrade_option:
+        if is_auto_upgrade_option:
             if self._has_salvage_upgrade_support_for_rule(rule):
-                if is_auto_upgrade_option:
-                    self._draw_secondary_text(
-                        "Infers prefix, suffix, or inscription from the matched specific upgrade target."
-                    )
-                else:
-                    self._draw_secondary_text("Uses a Perfect, Expert, or Superior Salvage Kit when available.")
+                self._draw_secondary_text(
+                    "Infers prefix, suffix, or inscription from the matched specific upgrade target."
+                )
             else:
                 self._draw_secondary_text(
                     "Prefix, suffix, and inscription extraction require deterministic slot targeting. "
