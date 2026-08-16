@@ -646,6 +646,7 @@ class BTAgents:
         multi_account: bool = False,
         include_self: bool = True,
         log: bool = False,
+        suspend_hero_ai: bool = True,
     ) -> BehaviorTree:
         """
         Build a tree that finds a gadget by its internal gadget id, moves to it,
@@ -655,6 +656,12 @@ class BTAgents:
         accounts in the same map instance are then processed one at a time. The
         node waits for each shared-memory interaction command to finish before
         dispatching the next one.
+
+        By default, the local account temporarily suspends HeroAI while it is
+        performing the gadget interaction. This prevents combat/targeting/skill
+        logic from interrupting braziers, locks, levers, chests, and similar
+        scripted interactions. The exact previous HeroAI state is restored as
+        soon as the local interaction finishes, including per-skill toggles.
 
         Meta:
         Expose: true
@@ -689,6 +696,9 @@ class BTAgents:
 
             settle_until: float
 
+            hero_ai_snapshot: dict[str, Any] | None
+            hero_ai_suspended: bool
+
         resolved_search_point: Vec2f | None = None
 
         if pos is not None:
@@ -718,9 +728,140 @@ class BTAgents:
             "remote_command_deadline": 0.0,
 
             "settle_until": 0.0,
+
+            "hero_ai_snapshot": None,
+            "hero_ai_suspended": False,
         }
 
+        def _snapshot_and_suspend_local_hero_ai() -> None:
+            if not suspend_hero_ai or state["hero_ai_suspended"]:
+                return
+
+            account_email = str(Player.GetAccountEmail() or "").strip()
+            if not account_email:
+                return
+
+            try:
+                options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(
+                    account_email
+                )
+            except Exception:
+                options = None
+
+            if options is None:
+                return
+
+            try:
+                skills = getattr(options, "Skills", None)
+                skill_snapshot = (
+                    [bool(skills[index]) for index in range(len(skills))]
+                    if skills is not None
+                    else []
+                )
+
+                state["hero_ai_snapshot"] = {
+                    "account_email": account_email,
+                    "Following": bool(getattr(options, "Following", False)),
+                    "Avoidance": bool(getattr(options, "Avoidance", False)),
+                    "Looting": bool(getattr(options, "Looting", False)),
+                    "Targeting": bool(getattr(options, "Targeting", False)),
+                    "Combat": bool(getattr(options, "Combat", False)),
+                    "Skills": skill_snapshot,
+                }
+
+                # Stop every HeroAI action source that can steal control from a
+                # scripted gadget interaction. Remote InteractWithTarget already
+                # suspends HeroAI; this gives the local/leader account equivalent
+                # protection.
+                for option_name in (
+                    "Following",
+                    "Avoidance",
+                    "Looting",
+                    "Targeting",
+                    "Combat",
+                ):
+                    if hasattr(options, option_name):
+                        setattr(options, option_name, False)
+
+                if skills is not None:
+                    for index in range(len(skills)):
+                        skills[index] = False
+
+                GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(
+                    account_email,
+                    options,
+                )
+                state["hero_ai_suspended"] = True
+
+                _log(
+                    "MoveAndInteractWithGadgetByID",
+                    "Temporarily suspended local HeroAI for gadget interaction.",
+                    log=log,
+                )
+            except Exception:
+                state["hero_ai_snapshot"] = None
+                state["hero_ai_suspended"] = False
+
+        def _restore_local_hero_ai() -> None:
+            if not state["hero_ai_suspended"]:
+                state["hero_ai_snapshot"] = None
+                return
+
+            snapshot = state["hero_ai_snapshot"]
+            state["hero_ai_suspended"] = False
+            state["hero_ai_snapshot"] = None
+
+            if not snapshot:
+                return
+
+            account_email = str(snapshot.get("account_email", "") or "").strip()
+            if not account_email:
+                return
+
+            try:
+                options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(
+                    account_email
+                )
+                if options is None:
+                    return
+
+                for option_name in (
+                    "Following",
+                    "Avoidance",
+                    "Looting",
+                    "Targeting",
+                    "Combat",
+                ):
+                    if hasattr(options, option_name):
+                        setattr(
+                            options,
+                            option_name,
+                            bool(snapshot.get(option_name, False)),
+                        )
+
+                skills = getattr(options, "Skills", None)
+                skill_snapshot = list(snapshot.get("Skills", []) or [])
+                if skills is not None:
+                    for index in range(min(len(skills), len(skill_snapshot))):
+                        skills[index] = bool(skill_snapshot[index])
+
+                GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(
+                    account_email,
+                    options,
+                )
+
+                _log(
+                    "MoveAndInteractWithGadgetByID",
+                    "Restored local HeroAI state after gadget interaction.",
+                    log=log,
+                )
+            except Exception:
+                # Interaction completion must never fail solely because HeroAI
+                # state restoration could not be written back.
+                pass
+
         def _reset() -> None:
+            _restore_local_hero_ai()
             state["phase"] = "find"
             state["started_at"] = 0.0
 
@@ -739,6 +880,9 @@ class BTAgents:
             state["remote_command_deadline"] = 0.0
 
             state["settle_until"] = 0.0
+
+            state["hero_ai_snapshot"] = None
+            state["hero_ai_suspended"] = False
 
         def _stop_local_player() -> None:
             try:
@@ -1194,8 +1338,10 @@ class BTAgents:
                 ):
                     if phase in (
                         "local_move",
+                        "local_suspend",
                         "local_interact",
                     ):
+                        _restore_local_hero_ai()
                         state["phase"] = "prepare_accounts"
 
                     return BehaviorTree.NodeState.RUNNING
@@ -1258,15 +1404,28 @@ class BTAgents:
                     return BehaviorTree.NodeState.RUNNING
 
                 _stop_local_player()
+                _snapshot_and_suspend_local_hero_ai()
+
+                state["phase"] = (
+                    "local_suspend"
+                )
+                state["next_action_at"] = (
+                    now + 0.100
+                    if state["hero_ai_suspended"]
+                    else now
+                )
+
+                return BehaviorTree.NodeState.RUNNING
+
+            if phase == "local_suspend":
+                if now < state["next_action_at"]:
+                    return BehaviorTree.NodeState.RUNNING
+
                 Player.ChangeTarget(
                     target_agent_id
                 )
-
-                state["phase"] = (
-                    "local_interact"
-                )
+                state["phase"] = "local_interact"
                 state["next_action_at"] = 0.0
-
                 return BehaviorTree.NodeState.RUNNING
 
             if phase == "local_interact":
@@ -1307,6 +1466,7 @@ class BTAgents:
 
                     return BehaviorTree.NodeState.RUNNING
 
+                _restore_local_hero_ai()
                 state["phase"] = (
                     "prepare_accounts"
                 )

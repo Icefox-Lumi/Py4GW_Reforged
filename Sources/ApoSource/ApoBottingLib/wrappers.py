@@ -1351,8 +1351,13 @@ def MoveAndInteractWithGadget(
     log: bool = False,
     ignore_destination_npcs: bool = False,
     ignore_destination_gadgets: bool = True,
+    suspend_hero_ai: bool = True,
 ) -> BehaviorTree:
-    """Move to a gadget while still avoiding destination-side NPCs by default."""
+    """Move to a gadget while still avoiding destination-side NPCs by default.
+
+    HeroAI is temporarily suspended on the local account during the actual
+    interaction by default, then restored to its exact previous state.
+    """
 
     def _build(resolved_pause: bool) -> BehaviorTree:
         interaction_tree = RoutinesBT.Agents.MoveAndInteractWithGadget(
@@ -1367,6 +1372,7 @@ def MoveAndInteractWithGadget(
             multi_account=multi_account,
             include_self=include_self,
             log=log,
+            suspend_hero_ai=suspend_hero_ai,
         )
 
         if pos is None:

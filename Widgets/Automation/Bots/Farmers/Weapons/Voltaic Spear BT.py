@@ -577,7 +577,7 @@ def ensure_botting_tree() -> BottingTree:
             routine_name='VoltaicSpearSequence',
             repeat=True,
             multi_account=False,
-            isolation_enabled=True,
+            isolation_enabled=False,
             pause_on_combat=True,
             configure_fn=lambda tree: tree.Config.ConfigureUpkeep(
                 looting_enabled=_auto_loot,
