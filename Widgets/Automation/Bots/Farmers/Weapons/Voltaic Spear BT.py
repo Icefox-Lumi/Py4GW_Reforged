@@ -22,11 +22,12 @@ from Sources.ApoSource.ApoBottingLib import wrappers as BT
 
 TEXTURE = os.path.join(
     PySystem.Console.get_projects_path(),
+    "Assets",
     "Textures",
     "Module_Icons",
     "Voltaicspear.png",
 )
-MODULE_ICON = "Textures\\Module_Icons\\Voltaicspear.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Voltaicspear.png"
 
 MODULE_NAME = 'Voltaic Spear BT'
 INI_PATH = 'Widgets/Automation/Bots/Farmers/Weapons/Voltaic Spear BT'

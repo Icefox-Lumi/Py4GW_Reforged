@@ -6,8 +6,10 @@ import time
 from Py4GWCoreLib.Listeners import Listeners
 import PySystem
 from Py4GWCoreLib.BottingTree import BottingTree
+from Py4GWCoreLib.ImGui_src.types import Alignment
+from Py4GWCoreLib.py4gwcorelib_src.Color import Color
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from Py4GWCoreLib import Agent, GLOBAL_CACHE, AgentArray, Player, SharedCommandType, Inventory
+from Py4GWCoreLib import Agent, GLOBAL_CACHE, AgentArray, Player, SharedCommandType, Inventory, ImGui
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
 from Py4GWCoreLib.native_src.internals.types import Vec2f
@@ -18,6 +20,7 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.items import BTItems
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import get_inventory_count, reset_inventory_count, get_inventory_state, reset_inventory_state
+import PyImGui
 
 
 PathPoint = Vec2f | tuple[float, float] | tuple[int, int]
@@ -29,6 +32,25 @@ PathPoint = Vec2f | tuple[float, float] | tuple[int, int]
 # region Script metadata
 
 MODULE_NAME = "Shards of Orr BT"
+MODULE_CATEGORY = "Automation"
+MODULE_TAGS = [
+    "Shards of Orr",
+    "Dungeon",
+    "BDS",
+]
+MODULE_ALIASES = [
+    "SoO",
+    "Shards",
+    "Shards of Orr",
+]
+MODULE_DESCRIPTION = """Fully automated multibox BottingTree run for Shards of Orr.
+
+The bot handles the Lost Souls quest, dungeon travel, all three dungeon levels,
+torch and brazier mechanics, Fendi, the final chest, reward collection and the
+next-run setup. It also includes configurable consumables, inventory
+maintenance and multibox statistics.
+"""
+
 INI_PATH = "Widgets/Automation/Bots/Missions/Dungeons/Shards of Orr BT"
 INI_FILENAME = "Shards_of_Orr_BT.ini"
 
@@ -87,10 +109,10 @@ INVENTORY_SNAPSHOT_SETTLE_MS = 2_000
 INVENTORY_TRAVEL_TIMEOUT_MS = 60_000
 INVENTORY_MERCHANT_TIMEOUT_MS = 240_000
 
-TEXTURE = os.path.join(PySystem.Console.get_projects_path(), 'Textures', 'Module_Icons', 'BDS.png')
+TEXTURE = os.path.join(PySystem.Console.get_projects_path(), 'Assets', 'Textures', 'Module_Icons', 'BDS.png')
 
 
-MODULE_ICON = "Textures\\Module_Icons\\BDS.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\BDS.png"
 
 # endregion
 
@@ -3357,6 +3379,70 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
     ]
 
 # endregion
+
+
+
+def tooltip():
+    PyImGui.set_next_window_size((600, 0))
+    PyImGui.begin_tooltip()
+
+    # Title
+    title_color = Color(255, 200, 100, 255)
+    ImGui.image(MODULE_ICON, (32, 32))
+    PyImGui.same_line(0, 10)
+    ImGui.push_font("Regular", 20)
+    ImGui.text_aligned(
+        MODULE_NAME,
+        alignment=Alignment.MidLeft,
+        color=title_color.color_tuple,
+        height=32,
+    )
+    ImGui.pop_font()
+
+    PyImGui.spacing()
+    PyImGui.spacing()
+    PyImGui.separator()
+    PyImGui.spacing()
+
+    # Description
+    PyImGui.text_wrapped(
+        "A complete multibox BottingTree automation for Shards of Orr. "
+        "The run starts from Vlox's Falls, handles the Lost Souls quest and "
+        "progresses through all three dungeon levels before defeating Fendi, "
+        "opening the final chest and preparing the party for the next run."
+    )
+    PyImGui.spacing()
+
+    # Features
+    PyImGui.text_colored("Features:", title_color.to_tuple_normalized())
+    PyImGui.bullet_text(
+        "Automates the complete Level 1, Level 2 and Level 3 dungeon route."
+    )
+    PyImGui.bullet_text(
+        "Handles dungeon doors, blessings, torches, braziers and the Fendi encounter."
+    )
+    PyImGui.bullet_text(
+        "Supports multibox party control, shared dialogs and synchronized dungeon progression."
+    )
+    PyImGui.bullet_text(
+        "Configurable Normal/Hard Mode, consets, personal consumables and summoning stones."
+    )
+    PyImGui.bullet_text(
+        "Multibox inventory maintenance can trigger MerchantRules when an active account "
+        "falls below the configured thresholds."
+    )
+    PyImGui.bullet_text(
+        "Tracks run times, floor times and selected final-chest drops across accounts."
+    )
+    PyImGui.spacing()
+
+    # Credits
+    PyImGui.text_colored("Credits:", title_color.to_tuple_normalized())
+    PyImGui.bullet_text("Shards of Orr BottingTree implementation: Sky.")
+    PyImGui.bullet_text("Built on Py4GW and the BottingTree framework by Apo and contributors.")
+
+    PyImGui.end_tooltip()
+
 
 
 def main() -> None:

@@ -27,11 +27,12 @@ from Sources.ApoSource.ApoBottingLib import wrappers as BT
 
 TEXTURE = os.path.join(
     PySystem.Console.get_projects_path(),
+    "Assets",
     "Textures",
     "Module_Icons",
     "Ministerial Commendations BT.png",
 )
-MODULE_ICON = "Textures\\Module_Icons\\Ministerial Commendations BT.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Ministerial Commendations BT.png"
 
 MODULE_NAME = 'Ministerial Commendations BT'
 INI_PATH = 'Widgets/Automation/Bots/Farmers/Trophies/Ministerial Commendations BT'

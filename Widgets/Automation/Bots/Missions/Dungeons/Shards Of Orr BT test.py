@@ -29,9 +29,9 @@ PathPoint = Vec2f | tuple[float, float] | tuple[int, int]
 
 # region Script metadata
 
-MODULE_NAME = "Shards of Orr BT"
-INI_PATH = "Widgets/Automation/Bots/Missions/Dungeons/Shards of Orr BT"
-INI_FILENAME = "Shards_of_Orr_BT.ini"
+MODULE_NAME = "Shards of Orr BT Test Geyser"
+INI_PATH = "Widgets/Automation/Bots/Missions/Dungeons/Shards of Orr BT test"
+INI_FILENAME = "Shards_of_Orr_BT_Test_Geyser.ini"
 
 
 # endregion
