@@ -160,8 +160,9 @@ MODULE_DESCRIPTION = """Multibox BottingTree manager for Nicholas the Traveler.
 Features:
 • Selectable Nicholas farm registry with shared BottingTree runtime
 • Combined target-item counting across the active multibox party
-• Direct, two-map, portal-loop, challenge, dialog and Fissure of Woe farm flows
+• Direct, two-map, portal-loop, multi-map route-loop, challenge, dialog and Fissure of Woe farm flows
 • Displays the required starting outpost and Map ID for the selected farm
+• Uses a random district when travelling to the selected farm outpost on initial setup
 • Automatic farming target calculated from the number of accounts that should receive all 5 Gifts
 • Optional travel and exchange route to Nicholas when legacy route data is available
 • Automatic multibox collector conversion for supported indirect Nicholas items
@@ -653,10 +654,13 @@ def tooltip():
         "One setting defines how many accounts should receive all 5 weekly Gifts."
     )
     PyImGui.bullet_text(
-        "Direct, multi-map, portal-loop, challenge, dialog and FoW farm flows."
+        "Direct, multi-map, complex portal-loop, challenge, dialog and FoW farm flows."
     )
     PyImGui.bullet_text(
         "Shows the required starting outpost for the selected farm."
+    )
+    PyImGui.bullet_text(
+        "Initial farm travel uses a random district, matching the Shards-style setup."
     )
     PyImGui.bullet_text(
         "Each route waypoint is its own recovery step, with map-aware zone transitions."

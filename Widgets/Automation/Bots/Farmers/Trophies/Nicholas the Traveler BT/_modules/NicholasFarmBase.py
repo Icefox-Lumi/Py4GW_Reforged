@@ -19,6 +19,7 @@ from .NicholasFarms import (
     FLOW_DIRECT,
     FLOW_FOW,
     FLOW_PORTAL_LOOP,
+    FLOW_ROUTE_LOOP,
     FLOW_TWO_MAP,
     FarmDefinition,
 )
@@ -111,7 +112,7 @@ def prepare_farm(tree_getter: Callable[[], BottingTree], farm: FarmDefinition) -
                     BT.LeaveParty(),
                     BT.Travel(
                         target_map_id=farm.outpost_map_id,
-                        random_travel=False,
+                        random_travel=True,
                         log=True,
                     ),
                     BT.CreateParty(
@@ -1190,6 +1191,170 @@ def _future_exchange_maps(
 
 
 
+
+def _future_farm_route_maps(
+    actions: tuple[tuple[str, int, tuple[float, float], int, int], ...],
+    action_index: int,
+    current_map_id: int,
+) -> tuple[int, ...]:
+    """Return later unique map IDs after a granular farm-route action."""
+    result: list[int] = []
+    seen: set[int] = {int(current_map_id)}
+
+    for kind, expected_map_id, _point, target_map_id, _dialog_id in actions[action_index + 1:]:
+        for map_id in (
+            int(expected_map_id),
+            int(target_map_id) if kind == "exit" else 0,
+        ):
+            if map_id <= 0 or map_id in seen:
+                continue
+            seen.add(map_id)
+            result.append(map_id)
+
+    return tuple(result)
+
+
+def _route_loop_action_steps(
+    farm: FarmDefinition,
+    *,
+    prefix: str,
+    actions: tuple[tuple[str, int, tuple[float, float], int, int], ...],
+    blackboard_skip_key: str = "",
+    reset_fallback: bool = False,
+) -> list[tuple[str, Callable[[], BehaviorTree]]]:
+    """
+    Expand a complex source route into one planner step per action.
+
+    Supports old AutoIt farms that cross several maps, revisit maps through
+    portals, or require an NPC dialog during setup.
+    """
+    steps: list[tuple[str, Callable[[], BehaviorTree]]] = []
+
+    for index, action in enumerate(actions, start=1):
+        kind, expected_map_id, point, target_map_id, dialog_id = action
+        expected_map_id = int(expected_map_id)
+        target_map_id = int(target_map_id)
+        dialog_id = int(dialog_id)
+
+        later_maps = _future_farm_route_maps(
+            actions,
+            index - 1,
+            expected_map_id,
+        )
+
+        accepted_later_maps = tuple(
+            dict.fromkeys(
+                (*later_maps, farm.outpost_map_id)
+                if reset_fallback
+                else later_maps
+            )
+        )
+
+        name = f"{prefix} - {index:02d} {kind.title()}"
+
+        def _build(
+            kind=kind,
+            expected_map_id=expected_map_id,
+            point=point,
+            target_map_id=target_map_id,
+            dialog_id=dialog_id,
+            accepted_later_maps=accepted_later_maps,
+            name=name,
+        ) -> BehaviorTree:
+            if kind == "move":
+                node = _map_guarded_node(
+                    name=name,
+                    map_id=expected_map_id,
+                    child=BT.Move(
+                        point,
+                        pause_on_combat=False,
+                        tolerance=175.0,
+                        flag_heroes_to_waypoint=False,
+                        log=False,
+                    ),
+                    skip_if_in_maps=accepted_later_maps,
+                )
+
+            elif kind == "aggro":
+                node = _map_guarded_node(
+                    name=name,
+                    map_id=expected_map_id,
+                    child=BT.VanquishNode(
+                        [point],
+                        name=name,
+                        clear_area_radius=Range.Earshot.value,
+                        pause_on_combat=True,
+                        flag_heroes_to_waypoint=False,
+                        move_tolerance=175.0,
+                        log=False,
+                    ),
+                    skip_if_in_maps=accepted_later_maps,
+                )
+
+            elif kind == "dialog":
+                node = _map_guarded_node(
+                    name=name,
+                    map_id=expected_map_id,
+                    child=BT.MoveAndDialog(
+                        point,
+                        dialog_id=dialog_id,
+                        pause_on_combat=False,
+                        log=True,
+                        multi_account=False,
+                    ),
+                    skip_if_in_maps=accepted_later_maps,
+                )
+
+            elif kind == "exit":
+                transition = _map_transition_node(
+                    name=name,
+                    from_map_id=expected_map_id,
+                    target_map_id=target_map_id,
+                    point=point,
+                    timeout_ms=60_000,
+                    skip_if_in_maps=accepted_later_maps,
+                    after_children=(BT.Wait(2_000),),
+                )
+
+                if reset_fallback:
+                    node = BT.Selector(
+                        name=name,
+                        children=[
+                            transition,
+                            BT.Sequence(
+                                name=f"{name} - Resign Fallback",
+                                children=[
+                                    return_to_outpost_if_needed(farm),
+                                    BT.ClearBlackboardValue(
+                                        _PORTAL_READY_KEY,
+                                        log=True,
+                                    ),
+                                ],
+                            ),
+                        ],
+                    )
+                else:
+                    node = transition
+
+            else:
+                raise ValueError(
+                    f"Unsupported farm route action '{kind}' for {farm.name}."
+                )
+
+            if blackboard_skip_key:
+                node = _blackboard_guarded_node(
+                    name=name,
+                    blackboard_key=blackboard_skip_key,
+                    child=node,
+                )
+
+            return node
+
+        steps.append((name, _build))
+
+    return steps
+
+
 def build_nicholas_exchange(farm: FarmDefinition) -> BehaviorTree:
     """
     Travel to Nicholas and exchange the selected weekly item on all accounts.
@@ -1595,6 +1760,18 @@ def build_execution_steps(
     clear_radius = _range_for_farm(farm)
 
     if farm.flow == FLOW_DIRECT:
+        steps.extend(
+            _movement_point_steps(
+                "Outpost Path",
+                farm.outpost_map_id,
+                farm.outpost_path,
+                pause_on_combat=False,
+                tolerance=175.0,
+                flag_heroes_to_waypoint=False,
+                skip_if_in_maps=(farm.farm_map_id,),
+            )
+        )
+
         steps.append(
             (
                 "Go Out",
@@ -1625,6 +1802,18 @@ def build_execution_steps(
         )
 
     elif farm.flow == FLOW_TWO_MAP:
+        steps.extend(
+            _movement_point_steps(
+                "Outpost Path",
+                farm.outpost_map_id,
+                farm.outpost_path,
+                pause_on_combat=False,
+                tolerance=175.0,
+                flag_heroes_to_waypoint=False,
+                skip_if_in_maps=(farm.transit_map_id, farm.farm_map_id),
+            )
+        )
+
         steps.append(
             (
                 "Go Out",
@@ -1683,6 +1872,19 @@ def build_execution_steps(
 
     elif farm.flow == FLOW_PORTAL_LOOP:
         # First trip only: outpost -> reset map -> long transit path.
+        steps.extend(
+            _movement_point_steps(
+                "Prepare Farm Portal - Outpost",
+                farm.outpost_map_id,
+                farm.outpost_path,
+                pause_on_combat=False,
+                tolerance=175.0,
+                flag_heroes_to_waypoint=False,
+                skip_if_in_maps=(farm.reset_map_id, farm.farm_map_id),
+                blackboard_skip_key=_PORTAL_READY_KEY,
+            )
+        )
+
         steps.append(
             (
                 "Prepare Farm Portal - Go Out",
@@ -1760,6 +1962,53 @@ def build_execution_steps(
             (
                 "Reset Via Portal",
                 lambda: reset_portal_loop_with_fallback(farm),
+            )
+        )
+
+    elif farm.flow == FLOW_ROUTE_LOOP:
+        steps.extend(
+            _route_loop_action_steps(
+                farm,
+                prefix="Prepare Farm Route",
+                actions=farm.setup_actions,
+                blackboard_skip_key=_PORTAL_READY_KEY,
+                reset_fallback=False,
+            )
+        )
+
+        steps.append(
+            (
+                "Prepare Farm Route - Ready",
+                lambda: _blackboard_guarded_node(
+                    name="Prepare Farm Route - Ready",
+                    blackboard_key=_PORTAL_READY_KEY,
+                    child=BT.SaveBlackboardValue(
+                        _PORTAL_READY_KEY,
+                        True,
+                        log=False,
+                    ),
+                ),
+            )
+        )
+
+        steps.extend(
+            _vanquish_point_steps(
+                "Farm Path",
+                farm.farm_map_id,
+                farm.farm_path,
+                clear_area_radius=clear_radius,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+            )
+        )
+
+        steps.extend(
+            _route_loop_action_steps(
+                farm,
+                prefix="Reset Farm Route",
+                actions=farm.reset_actions,
+                reset_fallback=True,
             )
         )
 
