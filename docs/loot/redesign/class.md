@@ -1,5 +1,13 @@
 # The Loot Class — design
 
+> **Terminology superseded (2026-08-13).** The settled vocabulary is recorded in
+> `filter-structure.md` (this folder): **evaluation → filter → filter set**,
+> with no profile layer. This document predates that contract: where it says
+> "profile" it means what the contract calls a **filter set**, and its "each
+> marking filter *is* a recolour or a beacon" decision is being moved off the
+> filter into the feature's own store. The design decisions below remain
+> owner-confirmed history; the names do not.
+
 Built fresh, guided by the owner. Nothing enters this document unless the owner has stated it or
 explicitly confirmed it. Prior material is in `legacy/` and is **not** a source of decisions.
 

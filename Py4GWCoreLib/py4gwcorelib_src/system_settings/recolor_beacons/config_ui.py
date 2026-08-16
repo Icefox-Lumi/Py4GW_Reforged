@@ -1,7 +1,7 @@
-"""Recolor & Beacons settings -- selects a profile, and sets each filter's outcome.
+"""Recolor & Beacons settings -- selects a filter set, and sets each filter's outcome.
 
-**It authors no filters.** Filters and profiles are the Loot Filter Factory's; beacon presets are the
-Beacons module's. This surface selects which profile runs and says, for each filter in it, what
+**It authors no filters.** Filters and filter sets are the Loot Filter Factory's; beacon presets are the
+Beacons module's. This surface selects which filter set runs and says, for each filter in it, what
 highlighting it performs.
 
 **There is no live quick access here** -- that window is for looting options only. So the live-state
@@ -11,8 +11,8 @@ label lives *only* in this surface, which makes it the single place a script's c
 import PyImGui
 
 from ....ImGui import ImGui
-from ..loot_filter_factory import store as factory_store
 from .controller import RecolorBeacons
+from .model import MarkOutcome
 
 #: `text_disabled` renders too dim to read; a mid gray keeps secondary text legible.
 GRAY = (0.66, 0.67, 0.70, 1.0)
@@ -39,14 +39,12 @@ def _live_banner(mark: RecolorBeacons) -> None:
     PyImGui.separator()
 
 
-def _save_rule(mark: RecolorBeacons, rule, **changes):
-    """Rewrite one filter in the Factory's store. The outcome lives ON the filter."""
+def _save_outcome(mark: RecolorBeacons, filter_id: str, outcome: MarkOutcome, **changes) -> MarkOutcome:
+    """Edit one filter's outcome in THIS feature's account store. Filters are never rewritten."""
     from dataclasses import replace
 
-    updated = replace(rule, **changes)
-    rules = [updated if r.id == rule.id else r for r in factory_store.load_rules()]
-    factory_store.save_rules(rules)
-    mark.reload_factory()
+    updated = replace(outcome, **changes)
+    mark.set_outcome(filter_id, updated)
     return updated
 
 
@@ -65,16 +63,18 @@ def draw_general() -> None:
                        "depends on the other.")
 
     PyImGui.separator()
-    PyImGui.text("Profile")
-    PyImGui.text_colored("Profiles are made in the Loot Filter Factory. This feature runs its own, "
+    PyImGui.text("Filter set")
+    PyImGui.text_colored("Filter sets are made in the Loot Filter Factory. This feature runs its own, "
                          "independently of the one Loot Filters runs.", GRAY)
-    names = ["(none)"] + [p.name for p in mark.profiles()]
-    current = names.index(mark.persisted.profile) if mark.persisted.profile in names else 0
-    picked = PyImGui.combo("##rb_profile", current, names)
+    sets = mark.filter_sets()
+    names = ["(none)"] + [fs.name for fs in sets]
+    current = next((index + 1 for index, fs in enumerate(sets)
+                    if fs.id == mark.persisted.filter_set_id), 0)
+    picked = PyImGui.combo("##rb_fset", current, names)
     if picked != current:
-        chosen = "" if picked == 0 else names[picked]
-        mark.persisted.profile = chosen
-        mark.live.profile = chosen
+        chosen = "" if picked == 0 else sets[picked - 1].id
+        mark.persisted.filter_set_id = chosen
+        mark.live.filter_set_id = chosen
         mark.save()
 
     PyImGui.separator()
@@ -91,63 +91,70 @@ def draw_general() -> None:
     PyImGui.text_colored("%d marking filter(s)  -  %d item(s) recoloured  -  %d beacon(s), "
                          "%d particle(s)" % (status["filters"], status["recoloured"],
                                              status["beacons"], status["particles"]), GRAY)
-    if not mark.persisted.profile:
-        PyImGui.text_colored("No profile selected -- nothing is being marked.", WARN)
+    if not mark.persisted.filter_set_id:
+        PyImGui.text_colored("No filter set selected -- nothing is being marked.", WARN)
 
 
 def draw_outcomes() -> None:
-    """Each filter in the running profile, and what it does. The outcome is part of the filter."""
+    """Each filter in the running filter set, and what it does for THIS account.
+
+    The outcome lives here, in this feature's per-account store -- a filter itself carries
+    criteria only. The same filter can mark differently on another account.
+    """
     mark = RecolorBeacons()
     _live_banner(mark)
 
-    rules = mark.active_filters()
-    if not rules:
-        PyImGui.text_colored("No profile selected, or it holds no enabled filters.", GRAY)
-        PyImGui.text_colored("Filters and profiles are authored in the Loot Filter Factory.", GRAY)
+    filters = mark.active_filters()
+    if not filters:
+        PyImGui.text_colored("No filter set selected, or it holds no enabled filters.", GRAY)
+        PyImGui.text_colored("Filters and filter sets are authored in the Loot Filter Factory.", GRAY)
         return
 
     PyImGui.text_colored("A filter may recolour, beacon, both, or neither.", GRAY)
-    PyImGui.text_colored("The profile's order settles only what cannot hold two values: when several "
+    PyImGui.text_colored("The filter set's order settles only what cannot hold two values: when several "
                          "filters match one drop, the topmost supplies the colour and the preset. "
                          "Reorder them in the Factory.", GRAY)
     PyImGui.separator()
 
     preset_names = ["(base)"] + [p.name for p in mark.presets()]
-    for position, rule in enumerate(rules):
-        marks = "recolour" if rule.mark_recolor else ""
-        if rule.mark_blank:
+    for position, filter in enumerate(filters):
+        outcome = mark.outcome_of(filter.id)
+        marks = "recolour" if outcome.recolor else ""
+        if outcome.blank:
             marks = "BLANK"
-        if rule.mark_beacon:
+        if outcome.beacon:
             marks = (marks + " + beacon") if marks else "beacon"
-        header = "%d. %s  %s###rb_rule_%s" % (position + 1, rule.name,
-                                              "(%s)" % marks if marks else "(no marking)", rule.id)
+        header = "%d. %s  %s###rb_filter_%s" % (position + 1, filter.name,
+                                              "(%s)" % marks if marks else "(no marking)", filter.id)
         if not PyImGui.collapsing_header(header):
             continue
 
-        recolor = rule.mark_recolor
-        if PyImGui.checkbox("Recolour this##rb_rc_%s" % rule.id, recolor) != recolor:
-            rule = _save_rule(mark, rule, mark_recolor=not recolor)
-        if rule.mark_recolor:
-            colour = list(rule.mark_color)
-            picked = list(PyImGui.color_edit4("Label colour##rb_col_%s" % rule.id, colour))
+        recolor = outcome.recolor
+        if PyImGui.checkbox("Recolour this##rb_rc_%s" % filter.id, recolor) != recolor:
+            outcome = _save_outcome(mark, filter.id, outcome, recolor=not recolor)
+        if outcome.recolor:
+            colour = list(outcome.color)
+            picked = list(PyImGui.color_edit4("Label colour##rb_col_%s" % filter.id, colour))
             if picked != colour:
-                rule = _save_rule(mark, rule, mark_color=(picked[0], picked[1], picked[2], picked[3]))
+                outcome = _save_outcome(mark, filter.id, outcome,
+                                        color=(picked[0], picked[1], picked[2], picked[3]))
 
-        blank = rule.mark_blank
-        if PyImGui.checkbox("BLANK - hide it from the labels##rb_bl_%s" % rule.id, blank) != blank:
-            rule = _save_rule(mark, rule, mark_blank=not blank)
+        blank = outcome.blank
+        if PyImGui.checkbox("BLANK - hide it from the labels##rb_bl_%s" % filter.id, blank) != blank:
+            outcome = _save_outcome(mark, filter.id, outcome, blank=not blank)
         ImGui.show_tooltip("A fully transparent label: the drop disappears from view. Visual only -- "
                            "it does not change whether the item is wanted. Beats a colour when both "
                            "are asked for.")
 
-        beacon = rule.mark_beacon
-        if PyImGui.checkbox("Beacon this##rb_bc_%s" % rule.id, beacon) != beacon:
-            rule = _save_rule(mark, rule, mark_beacon=not beacon)
-        if rule.mark_beacon:
-            current = preset_names.index(rule.mark_preset) if rule.mark_preset in preset_names else 0
-            chosen = PyImGui.combo("Preset##rb_ps_%s" % rule.id, current, preset_names)
+        beacon = outcome.beacon
+        if PyImGui.checkbox("Beacon this##rb_bc_%s" % filter.id, beacon) != beacon:
+            outcome = _save_outcome(mark, filter.id, outcome, beacon=not beacon)
+        if outcome.beacon:
+            current = preset_names.index(outcome.preset) if outcome.preset in preset_names else 0
+            chosen = PyImGui.combo("Preset##rb_ps_%s" % filter.id, current, preset_names)
             if chosen != current:
-                _save_rule(mark, rule, mark_preset="" if chosen == 0 else preset_names[chosen])
+                _save_outcome(mark, filter.id, outcome,
+                              preset="" if chosen == 0 else preset_names[chosen])
             ImGui.show_tooltip("Presets are authored in the Beacons section.")
 
 

@@ -84,10 +84,15 @@ class _Items:
 
     @_yield_step(label="UseLootProfile", counter_key="USE_LOOT_PROFILE")
     def use_loot_profile(self, name:str) -> Generator[Any, Any, None]:
-        """Switch the running profile. Live-only: the user's saved choice is untouched."""
+        """Switch the running filter set, by its NAME (resolved to the set's id). Live-only: the
+        user's saved choice is untouched."""
         from ...Routines import Routines
+        from ...py4gwcorelib_src.system_settings.loot_filter_factory import store as factory_store
         from ...py4gwcorelib_src.system_settings.loot_filters import LootFilters
-        LootFilters().use_profile(name)
+        feature = LootFilters()
+        filter_set = factory_store.filter_set_by_name(feature.filter_sets(), name)
+        if filter_set is not None:
+            feature.use_filter_set(filter_set.id)
         yield from Routines.Yield.wait(100)
 
     @_yield_step(label="ResetLootConfig", counter_key="RESET_LOOT_CONFIG")

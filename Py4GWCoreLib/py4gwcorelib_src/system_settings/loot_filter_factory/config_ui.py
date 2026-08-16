@@ -1,13 +1,13 @@
 """The Loot Filter Factory's authoring surface.
 
 **This stands on its own.** It is not embedded in Loot Filters or in Recolor & Beacons -- a consumer
-*selects*, it never hosts the authoring UI. Both features simply inherit the filters and profiles
+*selects*, it never hosts the authoring UI. Both features simply inherit the filters and filter sets
 made here.
 
 The criteria editor copies the **Item Mods Playground**
 (`Widgets/Coding/Debug/Py4GW/Item Mods Playground.py:206-280`), which is the existing working example
 of filtering items by mods: slot-based upgrade combos with `(any)` first, a requirement *at most*, a
-max-damage checkbox, one **ALL / ANY** radio for the whole rule, and a live verdict with a
+max-damage checkbox, one **ALL / ANY** radio for the whole filter, and a live verdict with a
 per-criterion breakdown.
 
 Id entry copies **Inventory+**'s two-pane picker
@@ -24,48 +24,48 @@ from . import store
 from .matcher import evaluate
 from .model import MATCH_ALL
 from .model import MATCH_ANY
-from .model import Profile
-from .model import Rule
+from .model import Filter
+from .model import FilterSet
 
 #: `text_disabled` renders too dim to read; a mid gray keeps secondary text legible.
 GRAY = (0.66, 0.67, 0.70, 1.0)
 WARN = (0.79, 0.63, 0.29, 1.0)
 
 _state: dict = {
-    "rules": None, "profiles": None,
+    "filters": None, "filter_sets": None,
     "search": {}, "search_mode": {}, "open_picker": {},
-    "new_profile": "",
+    "new_filter_set": "",
 }
 
 
 # ---------------------------------------------------------------- cached state
 
 
-def rules() -> list[Rule]:
-    if _state["rules"] is None:
-        _state["rules"] = store.load_rules()
-    return _state["rules"]
+def filters() -> list[Filter]:
+    if _state["filters"] is None:
+        _state["filters"] = store.load_filters()
+    return _state["filters"]
 
 
-def profiles() -> list[Profile]:
-    if _state["profiles"] is None:
-        _state["profiles"] = store.load_profiles()
-    return _state["profiles"]
+def filter_sets() -> list[FilterSet]:
+    if _state["filter_sets"] is None:
+        _state["filter_sets"] = store.load_filter_sets()
+    return _state["filter_sets"]
 
 
 def reload() -> None:
     """Drop the caches so the next draw re-reads the store."""
-    _state["rules"] = None
-    _state["profiles"] = None
+    _state["filters"] = None
+    _state["filter_sets"] = None
 
 
-def _commit_rules() -> None:
-    store.save_rules(rules())
+def _commit_filters() -> None:
+    store.save_filters(filters())
     _notify()
 
 
-def _commit_profiles() -> None:
-    store.save_profiles(profiles())
+def _commit_filter_sets() -> None:
+    store.save_filter_sets(filter_sets())
     _notify()
 
 
@@ -77,8 +77,8 @@ def _notify() -> None:
     * the module is not loaded -- fine, there is nothing to refresh;
     * the module is loaded but the name is wrong -- a bug, and a silent one. It shipped exactly
       once: this named ``Marking`` where the class is ``RecolorBeacons``, so every refresh raised
-      ``AttributeError`` into a bare ``except`` and Recolor & Beacons kept a stale profile list
-      forever -- deleted profiles still listed, new ones missing.
+      ``AttributeError`` into a bare ``except`` and Recolor & Beacons kept a stale filter set list
+      forever -- deleted filter sets still listed, new ones missing.
 
     So a missing attribute is reported, never swallowed.
     """
@@ -309,21 +309,21 @@ def _damage_type_source() -> list[tuple[str, int]]:
         return []
 
 
-def _draw_criteria(rule: Rule, index: int) -> Rule | None:
-    """Returns a replacement rule when something changed, else None."""
-    rid = rule.id
+def _draw_criteria(filter: Filter, index: int) -> Filter | None:
+    """Returns a replacement filter when something changed, else None."""
+    fid = filter.id
     changed = False
     values = {
-        "item_types": rule.item_types, "model_ids": rule.model_ids,
-        "dye_colors": rule.dye_colors, "salvages_into": rule.salvages_into,
-        "name_contains": rule.name_contains,
+        "item_types": filter.item_types, "model_ids": filter.model_ids,
+        "dye_colors": filter.dye_colors, "salvages_into": filter.salvages_into,
+        "name_contains": filter.name_contains,
     }
 
     modes = [MATCH_ALL, MATCH_ANY]
-    current_mode = modes.index(rule.mode) if rule.mode in modes else 0
-    picked_mode = PyImGui.radio_button("Match ALL (AND)##m_%s" % rid, current_mode, 0)
+    current_mode = modes.index(filter.mode) if filter.mode in modes else 0
+    picked_mode = PyImGui.radio_button("Match ALL (AND)##m_%s" % fid, current_mode, 0)
     PyImGui.same_line(0, 8)
-    picked_mode = PyImGui.radio_button("Match ANY (OR)##m2_%s" % rid, picked_mode, 1)
+    picked_mode = PyImGui.radio_button("Match ANY (OR)##m2_%s" % fid, picked_mode, 1)
     if picked_mode != current_mode:
         changed = True
     PyImGui.text_colored("Only the conditions you set are used. A filter with none matches nothing.", GRAY)
@@ -335,84 +335,84 @@ def _draw_criteria(rule: Rule, index: int) -> Rule | None:
         ("model_ids", "Models", _model_source()),
     ):
         count = len(values[key])
-        if PyImGui.collapsing_header("%s  (%d)###%s_%s" % (label, count, key, rid)):
+        if PyImGui.collapsing_header("%s  (%d)###%s_%s" % (label, count, key, fid)):
             if key == "item_types":
                 # Grouped, because the grouping IS the taxonomy. The flat searchable picker
                 # follows underneath for reaching one specific type by name.
                 PyImGui.text_colored("Pick whole groups, or search for one type below.", GRAY)
-                values[key] = _item_type_groups("%s_%s" % (key, rid), values[key])
+                values[key] = _item_type_groups("%s_%s" % (key, fid), values[key])
                 PyImGui.separator()
             if key == "model_ids":
                 # BOTH paths, because they answer different needs -- the curated catalog you
                 # browse, and the flat enum you search.
                 PyImGui.text_colored("Browse the catalog, or search every model id below.", GRAY)
-                values[key] = _curated_grid("%s_%s" % (key, rid), values[key])
+                values[key] = _curated_grid("%s_%s" % (key, fid), values[key])
                 PyImGui.separator()
-            picked = _two_pane_picker("%s_%s" % (key, rid), label.lower(), source, values[key])
+            picked = _two_pane_picker("%s_%s" % (key, fid), label.lower(), source, values[key])
             if picked != values[key]:
                 values[key] = picked
                 changed = True
-            elif key in ("model_ids", "item_types") and values[key] != getattr(rule, key):
+            elif key in ("model_ids", "item_types") and values[key] != getattr(filter, key):
                 changed = True   # the grid changed it even though the picker did not
 
     # -- rarity: composable, unlike the global toggles in Loot Filters --
-    rarities = rule.rarities
-    if PyImGui.collapsing_header("Rarity  (%d)###rar_%s" % (len(rarities), rid)):
+    rarities = filter.rarities
+    if PyImGui.collapsing_header("Rarity  (%d)###rar_%s" % (len(rarities), fid)):
         PyImGui.text_colored("Any of the ticked ones. Combine with anything else -- this is what "
                              "makes 'gold weapons at req 9' or 'beacon every green' possible.", GRAY)
         for index, label in enumerate(("White", "Blue", "Purple", "Gold", "Green")):
             on = index in rarities
-            if PyImGui.checkbox("%s##rar_%s_%d" % (label, rid, index), on) != on:
+            if PyImGui.checkbox("%s##rar_%s_%d" % (label, fid, index), on) != on:
                 rarities = (rarities + (index,)) if not on                     else tuple(v for v in rarities if v != index)
                 changed = True
 
     # -- name: the ONLY subject that takes `contains` --
-    count = len(rule.name_contains)
-    if PyImGui.collapsing_header("Name contains  (%d)###name_%s" % (count, rid)):
+    count = len(filter.name_contains)
+    if PyImGui.collapsing_header("Name contains  (%d)###name_%s" % (count, fid)):
         PyImGui.text_colored("Substring, case-insensitive. Any one matching is enough.", GRAY)
-        for position, part in enumerate(rule.name_contains):
-            if PyImGui.small_button("remove##nm_%s_%d" % (rid, position)):
-                values["name_contains"] = tuple(p for i, p in enumerate(rule.name_contains)
+        for position, part in enumerate(filter.name_contains):
+            if PyImGui.small_button("remove##nm_%s_%d" % (fid, position)):
+                values["name_contains"] = tuple(p for i, p in enumerate(filter.name_contains)
                                                 if i != position)
                 changed = True
             PyImGui.same_line(0, 6)
             PyImGui.text(part)
-        typed = PyImGui.input_text("##nm_new_%s" % rid, _state.get("name_entry_%s" % rid, ""))
-        _state["name_entry_%s" % rid] = typed
+        typed = PyImGui.input_text("##nm_new_%s" % fid, _state.get("name_entry_%s" % fid, ""))
+        _state["name_entry_%s" % fid] = typed
         PyImGui.same_line(0, 4)
-        if PyImGui.button("Add##nm_add_%s" % rid) and typed.strip():
+        if PyImGui.button("Add##nm_add_%s" % fid) and typed.strip():
             if typed.strip() not in values["name_contains"]:
                 values["name_contains"] = values["name_contains"] + (typed.strip(),)
                 changed = True
-            _state["name_entry_%s" % rid] = ""
+            _state["name_entry_%s" % fid] = ""
 
     # -- numeric criteria, match-or-better --
-    has_req = rule.max_requirement is not None
-    want_req = PyImGui.checkbox("Requirement at most##rq_%s" % rid, has_req)
-    max_req = rule.max_requirement
+    has_req = filter.max_requirement is not None
+    want_req = PyImGui.checkbox("Requirement at most##rq_%s" % fid, has_req)
+    max_req = filter.max_requirement
     if want_req != has_req:
         max_req = 9 if want_req else None
         changed = True
     if want_req:
         PyImGui.same_line(0, 6)
         PyImGui.push_item_width(120)
-        typed = PyImGui.slider_int("##rqv_%s" % rid, int(max_req or 9), 0, 13)
+        typed = PyImGui.slider_int("##rqv_%s" % fid, int(max_req or 9), 0, 13)
         PyImGui.pop_item_width()
         if typed != (max_req or 9):
             max_req = typed
             changed = True
         ImGui.show_tooltip("Match-or-better: a requirement at or below this passes. Lower is better.")
 
-    has_value = rule.min_value is not None
-    want_value = PyImGui.checkbox("Worth at least##v_%s" % rid, has_value)
-    min_value = rule.min_value
+    has_value = filter.min_value is not None
+    want_value = PyImGui.checkbox("Worth at least##v_%s" % fid, has_value)
+    min_value = filter.min_value
     if want_value != has_value:
         min_value = 100 if want_value else None
         changed = True
     if want_value:
         PyImGui.same_line(0, 6)
         PyImGui.push_item_width(120)
-        typed = PyImGui.input_int("##vv_%s" % rid, int(min_value or 0))
+        typed = PyImGui.input_int("##vv_%s" % fid, int(min_value or 0))
         PyImGui.pop_item_width()
         if typed != (min_value or 0):
             min_value = max(0, typed)
@@ -428,7 +428,7 @@ def _draw_criteria(rule: Rule, index: int) -> Rule | None:
     PyImGui.separator()
     PyImGui.text_colored("Mods. A drop is unidentified, so these are all it shows.", GRAY)
 
-    req_attribute = rule.requirement_attribute
+    req_attribute = filter.requirement_attribute
     if want_req:
         attributes = _attribute_source()
         names = ["(any attribute)"] + [display for display, _v in attributes]
@@ -437,21 +437,21 @@ def _draw_criteria(rule: Rule, index: int) -> Rule | None:
             if value == req_attribute:
                 current = index + 1
                 break
-        chosen = PyImGui.combo("in attribute##rqa_%s" % rid, current, names)
+        chosen = PyImGui.combo("in attribute##rqa_%s" % fid, current, names)
         if chosen != current:
             req_attribute = None if chosen == 0 else attributes[chosen - 1][1]
             changed = True
 
-    has_damage = rule.min_damage is not None
-    want_damage = PyImGui.checkbox("Damage at least##dmg_%s" % rid, has_damage)
-    min_damage = rule.min_damage
+    has_damage = filter.min_damage is not None
+    want_damage = PyImGui.checkbox("Damage at least##dmg_%s" % fid, has_damage)
+    min_damage = filter.min_damage
     if want_damage != has_damage:
         min_damage = 10 if want_damage else None
         changed = True
     if want_damage:
         PyImGui.same_line(0, 6)
         PyImGui.push_item_width(120)
-        typed = PyImGui.slider_int("##dmgv_%s" % rid, int(min_damage or 10), 1, 100)
+        typed = PyImGui.slider_int("##dmgv_%s" % fid, int(min_damage or 10), 1, 100)
         PyImGui.pop_item_width()
         if typed != (min_damage or 10):
             min_damage = typed
@@ -460,30 +460,28 @@ def _draw_criteria(rule: Rule, index: int) -> Rule | None:
                            "match-or-better. It is what replaced the old max-damage checkbox, which "
                            "collapsed the range into a yes/no.")
 
-    damage_types = rule.damage_types
+    damage_types = filter.damage_types
     count = len(damage_types)
-    if PyImGui.collapsing_header("Damage type  (%d)###dt_%s" % (count, rid)):
+    if PyImGui.collapsing_header("Damage type  (%d)###dt_%s" % (count, fid)):
         for display, value in _damage_type_source():
             on = value in damage_types
-            if PyImGui.checkbox("%s##dt_%s_%d" % (display, rid, value), on) != on:
+            if PyImGui.checkbox("%s##dt_%s_%d" % (display, fid, value), on) != on:
                 damage_types = (damage_types + (value,)) if not on                     else tuple(v for v in damage_types if v != value)
                 changed = True
 
     if not changed:
         return None
-    return Rule(
-        id=rule.id, name=rule.name, enabled=rule.enabled, mode=modes[picked_mode],
+    return Filter(
+        id=filter.id, name=filter.name, enabled=filter.enabled, mode=modes[picked_mode],
         item_types=values["item_types"], model_ids=values["model_ids"],
         name_contains=values["name_contains"], rarities=rarities,
         dye_colors=values["dye_colors"], salvages_into=values["salvages_into"],
         max_requirement=max_req, requirement_attribute=req_attribute,
         min_value=min_value, min_damage=min_damage, damage_types=damage_types,
-        mark_recolor=rule.mark_recolor, mark_color=rule.mark_color, mark_blank=rule.mark_blank,
-        mark_beacon=rule.mark_beacon, mark_preset=rule.mark_preset,
     )
 
 
-def _draw_preview(rule: Rule) -> None:
+def _draw_preview(filter: Filter) -> None:
     """Live verdict against the current target, with the per-criterion breakdown.
 
     This calls the same ``evaluate`` the features use, so the preview cannot disagree with behaviour.
@@ -508,11 +506,11 @@ def _draw_preview(rule: Rule) -> None:
         PyImGui.text_colored("The current target is not a ground item.", GRAY)
         return
 
-    verdict, breakdown = evaluate(rule, item_id)
+    verdict, breakdown = evaluate(filter, item_id)
     PyImGui.text_colored("ITEM MATCHES" if verdict else "ITEM DOES NOT MATCH",
                          (0.45, 0.8, 0.45, 1.0) if verdict else (0.85, 0.4, 0.4, 1.0))
     PyImGui.same_line(0, 8)
-    PyImGui.text_colored("(%s of %d conditions)" % ("all" if rule.mode == MATCH_ALL else "any",
+    PyImGui.text_colored("(%s of %d conditions)" % ("all" if filter.mode == MATCH_ALL else "any",
                                                     len(breakdown)), GRAY)
     for label, passed in breakdown:
         PyImGui.text_colored(("  [x] " if passed else "  [ ] ") + label,
@@ -523,11 +521,11 @@ def _draw_preview(rule: Rule) -> None:
 
 
 def draw_filters() -> None:
-    current = rules()
+    current = filters()
 
     if PyImGui.button("New filter##lff_new"):
-        current.append(Rule(id=store.next_id(current), name="Filter %d" % (len(current) + 1)))
-        _commit_rules()
+        current.append(Filter(id=store.next_filter_id(current), name="Filter %d" % (len(current) + 1)))
+        _commit_filters()
     PyImGui.same_line(0, 8)
     PyImGui.text_colored("%d filter(s)" % len(current), GRAY)
     PyImGui.separator()
@@ -536,112 +534,115 @@ def draw_filters() -> None:
         PyImGui.text_colored("None yet. Create one above.", GRAY)
         return
 
-    for index, rule in enumerate(list(current)):
-        enabled = PyImGui.checkbox("##en_%s" % rule.id, rule.enabled)
-        if enabled != rule.enabled:
-            current[index] = rule.with_enabled(enabled)
-            _commit_rules()
+    for index, filter in enumerate(list(current)):
+        enabled = PyImGui.checkbox("##en_%s" % filter.id, filter.enabled)
+        if enabled != filter.enabled:
+            current[index] = filter.with_enabled(enabled)
+            _commit_filters()
             continue
         PyImGui.same_line(0, 6)
         # ###id: the label carries the name and position, both of which change.
-        if not PyImGui.collapsing_header("%d. %s###hdr_%s" % (index + 1, rule.name, rule.id)):
+        if not PyImGui.collapsing_header("%d. %s###hdr_%s" % (index + 1, filter.name, filter.id)):
             continue
 
-        typed = PyImGui.input_text("Name##nm_%s" % rule.id, rule.name)
-        if typed != rule.name and typed.strip():
-            current[index] = rule.renamed(typed.strip())
-            _commit_rules()
+        typed = PyImGui.input_text("Name##nm_%s" % filter.id, filter.name)
+        if typed != filter.name and typed.strip():
+            current[index] = filter.renamed(typed.strip())
+            _commit_filters()
             continue
 
-        replacement = _draw_criteria(rule, index)
+        replacement = _draw_criteria(filter, index)
         if replacement is not None:
             current[index] = replacement
-            _commit_rules()
+            _commit_filters()
 
-        if rule.is_empty():
+        if filter.is_empty():
             PyImGui.text_colored("No conditions set - this filter matches nothing.", WARN)
 
         PyImGui.separator()
-        _draw_preview(rule)
+        _draw_preview(filter)
         PyImGui.separator()
 
-        if PyImGui.small_button("Duplicate##dup_%s" % rule.id):
-            copy = Rule.from_dict(rule.to_dict())
-            current.insert(index + 1, Rule.from_dict({**copy.to_dict(),
-                                                      "id": store.next_id(current),
-                                                      "name": rule.name + " (copy)"}))
-            _commit_rules()
+        if PyImGui.small_button("Duplicate##dup_%s" % filter.id):
+            copy = Filter.from_dict(filter.to_dict())
+            current.insert(index + 1, Filter.from_dict({**copy.to_dict(),
+                                                       "id": store.next_filter_id(current),
+                                                       "name": filter.name + " (copy)"}))
+            _commit_filters()
             return
         PyImGui.same_line(0, 6)
-        if index > 0 and PyImGui.small_button("Move up##up_%s" % rule.id):
+        if index > 0 and PyImGui.small_button("Move up##up_%s" % filter.id):
             current[index - 1], current[index] = current[index], current[index - 1]
-            _commit_rules()
+            _commit_filters()
             return
         PyImGui.same_line(0, 6)
-        if PyImGui.small_button("Delete##del_%s" % rule.id):
+        if PyImGui.small_button("Delete##del_%s" % filter.id):
             current.pop(index)
-            _commit_rules()
+            _commit_filters()
             return
 
 
-def draw_profiles() -> None:
-    current = profiles()
-    all_rules = rules()
+def draw_filter_sets() -> None:
+    current = filter_sets()
+    all_filters = filters()
 
     PyImGui.text_wrapped(
-        "A profile is a named set of filters - \"Caster\", \"Ranger\", \"Melee\". Profiles are shared "
-        "across accounts; each feature runs one at a time."
+        "A filter set is a named group of filters for one feature - \"Caster\", \"Ranger\", \"Melee\". "
+        "Filter sets are shared across accounts; each feature runs one at a time."
     )
     PyImGui.separator()
 
     PyImGui.push_item_width(160)
-    _state["new_profile"] = PyImGui.input_text("##lff_newprof", _state["new_profile"])
+    _state["new_filter_set"] = PyImGui.input_text("##lff_newset", _state["new_filter_set"])
     PyImGui.pop_item_width()
     PyImGui.same_line(0, 6)
-    if PyImGui.button("New profile##lff_addprof"):
-        name = _state["new_profile"].strip()
-        if name and not store.profile_by_name(current, name):
-            current.append(Profile(name=name))
-            _state["new_profile"] = ""
-            _commit_profiles()
+    if PyImGui.button("New filter set##lff_addset"):
+        name = _state["new_filter_set"].strip()
+        if name and not store.filter_set_by_name(current, name):
+            current.append(FilterSet(id=store.next_filter_set_id(current), name=name))
+            _state["new_filter_set"] = ""
+            _commit_filter_sets()
     PyImGui.separator()
 
     if not current:
-        PyImGui.text_colored("No profiles yet.", GRAY)
+        PyImGui.text_colored("No filter sets yet.", GRAY)
         return
 
-    for index, profile in enumerate(list(current)):
-        if not PyImGui.collapsing_header("%s  (%d)###prof_%s" % (profile.name,
-                                                                 len(profile.filter_ids), profile.name)):
+    for index, filter_set in enumerate(list(current)):
+        if not PyImGui.collapsing_header("%s  (%d)###set_%s" % (filter_set.name,
+                                                                len(filter_set.filter_ids),
+                                                                filter_set.id)):
             continue
-        typed = PyImGui.input_text("Name##pnm_%s" % profile.name, profile.name)
-        if typed != profile.name and typed.strip():
-            current[index] = Profile(name=typed.strip(), filter_ids=profile.filter_ids)
-            _commit_profiles()
+        typed = PyImGui.input_text("Name##snm_%s" % filter_set.id, filter_set.name)
+        if typed != filter_set.name and typed.strip():
+            current[index] = FilterSet(id=filter_set.id, name=typed.strip(),
+                                       filter_ids=filter_set.filter_ids)
+            _commit_filter_sets()
             return
 
-        PyImGui.text_colored("Filters in this profile", GRAY)
-        chosen = profile.filter_ids
-        for rule in all_rules:
-            on = rule.id in chosen
-            if PyImGui.checkbox("%s##pf_%s_%s" % (rule.name, profile.name, rule.id), on) != on:
-                chosen = tuple(i for i in chosen if i != rule.id) if on else chosen + (rule.id,)
-                current[index] = Profile(name=profile.name, filter_ids=chosen)
-                _commit_profiles()
+        PyImGui.text_colored("Filters in this filter set", GRAY)
+        chosen = filter_set.filter_ids
+        for filter in all_filters:
+            on = filter.id in chosen
+            if PyImGui.checkbox("%s##sf_%s_%s" % (filter.name, filter_set.id, filter.id), on) != on:
+                chosen = tuple(i for i in chosen if i != filter.id) if on else chosen + (filter.id,)
+                current[index] = FilterSet(id=filter_set.id, name=filter_set.name, filter_ids=chosen)
+                _commit_filter_sets()
                 return
-        if not all_rules:
+        if not all_filters:
             PyImGui.text_colored("Create a filter first.", GRAY)
 
-        if PyImGui.small_button("Duplicate##pdup_%s" % profile.name):
-            name = profile.name + " (copy)"
-            if not store.profile_by_name(current, name):
-                current.insert(index + 1, Profile(name=name, filter_ids=profile.filter_ids))
-                _commit_profiles()
+        if PyImGui.small_button("Duplicate##sdup_%s" % filter_set.id):
+            name = filter_set.name + " (copy)"
+            if not store.filter_set_by_name(current, name):
+                current.insert(index + 1, FilterSet(id=store.next_filter_set_id(current),
+                                                   name=name, filter_ids=filter_set.filter_ids))
+                _commit_filter_sets()
                 return
         PyImGui.same_line(0, 6)
-        if PyImGui.small_button("Delete##pdel_%s" % profile.name):
+        if PyImGui.small_button("Delete##sdel_%s" % filter_set.id):
             current.pop(index)
-            _commit_profiles()
+            _commit_filter_sets()
             return
 
 
@@ -661,5 +662,5 @@ def add_sections(win, group) -> None:
     """Add the Loot Filter Factory section. Its own surface; embedded in no feature."""
     win.add_section(group, "Loot Filter Factory")
     win.add_tab("Loot Filter Factory", "Filters", draw_filters)
-    win.add_tab("Loot Filter Factory", "Profiles", draw_profiles)
+    win.add_tab("Loot Filter Factory", "Filter Sets", draw_filter_sets)
     win.add_tab("Loot Filter Factory", "Unresolved", draw_defects)

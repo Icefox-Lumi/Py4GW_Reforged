@@ -24,6 +24,12 @@ rollback.
   profiles, ItemData, DataCollector) is executed in the worktree; seeds, the
   one-time data import, and live-client verification remain.
 
+- The native filter-domain contract (evaluation → filter → filter set, no
+  profile layer) lives in `docs/loot/redesign/filter-structure.md` — it
+  belongs to the `Item.Mods` side, not to this folder. FrenkeyLib's own mod
+  handling is a separate legacy domain that migrates onto `Item.Mods`
+  eventually.
+
 - `session-01-intake.md` and `session-01-complete.md` record one migration
   session and its conclusions.
 - `frenkeylib-severance-audit.md` records dependency and compatibility findings.

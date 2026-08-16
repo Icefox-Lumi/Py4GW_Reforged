@@ -180,6 +180,7 @@ The persistence policy is a project hard rule:
   Reforged-Native migration.
 - Read subsystem handovers before changes in their area, including
   `FOLLOW_REFACTOR_HANDOVER.md`, `DBMGR_HANDOVER.md`,
+  `SYSTEM_SETTINGS_HANDOVER.md`,
   `ui/widget-manager/widget-manager-and-catalog.md`, `automation/behavior-trees/bottingtree-and-bt-routines-guide.md`,
   `heroai-combat-handover.md`, and `settings_database_cache_model.md`.
 - The documentation index at `docs/documentation-index.md` is a navigation aid;

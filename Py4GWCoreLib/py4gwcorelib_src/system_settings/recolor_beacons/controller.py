@@ -5,8 +5,8 @@ that is Loot Filters, and the two are independent -- neither can be switched off
 section and neither needs the other to be on.
 
 **One feature, two expressions.** Recolour and beacon are the same act of highlighting. A filter may
-do either, both, or neither; the two are independent checkboxes on the filter, not a variant of one
-setting.
+do either, both, or neither; the two are independent flags on the filter's **outcome**, which this
+account owns -- the filter itself carries criteria only.
 
 **Delivery is ONE bulk call.** The class resolves everything itself -- all matching, all conflict
 resolution -- and hands over one already-decided colour per agent
@@ -14,7 +14,7 @@ resolution -- and hands over one already-decided colour per agent
 That is why the per-kind item setters stay unexposed: a second matching path would be a competing
 authority.
 
-**Resolution.** Filters resolve independently, and the profile's order settles only what cannot hold
+**Resolution.** Filters resolve independently, and the filter set's order settles only what cannot hold
 two values at once::
 
     is it wanted?            -> not this feature's question
@@ -37,6 +37,7 @@ from ..loot_filter_factory import matcher
 from ..loot_filter_factory import store as factory_store
 from . import store
 from .model import MarkConfig
+from .model import MarkOutcome
 
 _CB_DATA = "recolor_beacons"
 _CB_DRAW = "recolor_beacons_draw"
@@ -76,8 +77,9 @@ class RecolorBeacons:
     def _initialise(self) -> None:
         self.persisted: MarkConfig = store.load()
         self.live: MarkConfig = self.persisted.copy()
-        self._rules = factory_store.load_rules()
-        self._profiles = factory_store.load_profiles()
+        self._filters = factory_store.load_filters()
+        self._filter_sets = factory_store.load_filter_sets()
+        self._outcomes = store.load_outcomes()
         self._presets: list = []
         self._presets_loaded = False
         self._map_id: int | None = None
@@ -93,26 +95,40 @@ class RecolorBeacons:
         self.reload_factory()
 
     def reload_factory(self) -> None:
-        """The Factory's filters or profiles changed, or a beacon preset did."""
-        self._rules = factory_store.load_rules()
-        self._profiles = factory_store.load_profiles()
+        """The Factory's filters or filter sets changed, or a beacon preset did."""
+        self._filters = factory_store.load_filters()
+        self._filter_sets = factory_store.load_filter_sets()
         self._presets_loaded = False
+
+    def reload_outcomes(self) -> None:
+        """The outcome store changed (an edit in this feature's Outcomes tab)."""
+        self._outcomes = store.load_outcomes()
 
     def save(self) -> None:
         """Persist the user's configuration. NEVER called with live."""
         store.save(self.persisted)
 
-    def profiles(self):
-        return list(self._profiles)
+    def filter_sets(self):
+        return list(self._filter_sets)
 
     def active_filters(self):
-        """The filters the running profile names, **in its order** -- which is what resolves colour."""
-        profile = factory_store.profile_by_name(self._profiles, self.live.profile)
-        return [rule for rule in factory_store.rules_in_profile(self._rules, profile) if rule.enabled]
+        """The filters the running filter set names, **in its order** -- which is what resolves colour."""
+        filter_set = factory_store.filter_set_by_id(self._filter_sets, self.live.filter_set_id)
+        return [f for f in factory_store.filters_in_set(self._filters, filter_set) if f.enabled]
+
+    def outcome_of(self, filter_id: str) -> MarkOutcome:
+        """This account's outcome for one filter; a fresh, marking-nothing outcome when absent."""
+        return self._outcomes.get(str(filter_id)) or MarkOutcome()
 
     def marking_filters(self):
-        """Only those that actually mark. A filter that marks nothing is not worth evaluating."""
-        return [rule for rule in self.active_filters() if rule.marks()]
+        """Only those with a stored outcome that marks. Evaluating the rest cannot change the screen."""
+        return [f for f in self.active_filters() if self._outcomes.get(f.id) is not None
+                and self._outcomes[f.id].marks()]
+
+    def set_outcome(self, filter_id: str, outcome: MarkOutcome) -> None:
+        """Edit one filter's outcome for this account. Settings-UI only: persisted immediately."""
+        self._outcomes[str(filter_id)] = outcome
+        store.save_outcomes(self._outcomes)
 
     def presets(self):
         if not self._presets_loaded:
@@ -148,18 +164,19 @@ class RecolorBeacons:
 
     # ------------------------------------------------------------------ what a script may do
     #
-    # Consumers only, and live-only. A script may switch the feature off or change which profile
-    # runs; it may never author a filter, a profile or a preset, and nothing it does reaches disk.
+    # Consumers only, and live-only. A script may switch the feature off or change which filter
+    # set runs; it may never author a filter, a filter set, an outcome or a preset, and nothing
+    # it does reaches disk.
 
     def set_enabled(self, value: bool) -> None:
         self.live.enabled = bool(value)
         if not self.live.enabled:
             self._clear_output()
 
-    def use_profile(self, name: str) -> bool:
-        if not factory_store.profile_by_name(self._profiles, name):
+    def use_filter_set(self, filter_set_id: str) -> bool:
+        if not factory_store.filter_set_by_id(self._filter_sets, filter_set_id):
             return False
-        self.live.profile = name
+        self.live.filter_set_id = filter_set_id
         return True
 
     # ------------------------------------------------------------------ resolution
@@ -174,15 +191,16 @@ class RecolorBeacons:
         colour: int | None = None
         preset: str | None = None
         blank = False
-        for rule in self.marking_filters():
-            if not matcher.matches(rule, item_id, model_id):
+        for f in self.marking_filters():
+            if not matcher.matches(f, item_id, model_id):
                 continue
-            if rule.mark_blank:
+            outcome = self._outcomes[f.id]
+            if outcome.blank:
                 blank = True
-            if rule.mark_recolor and colour is None:
-                colour = _argb(rule.mark_color)
-            if rule.mark_beacon and preset is None:
-                preset = rule.mark_preset or ""
+            if outcome.recolor and colour is None:
+                colour = _argb(outcome.color)
+            if outcome.beacon and preset is None:
+                preset = outcome.preset or ""
         if blank:
             return BLANK_ARGB, preset
         return colour, preset
@@ -346,7 +364,7 @@ class RecolorBeacons:
     # ------------------------------------------------------------------ diagnostics
 
     def status(self) -> dict:
-        return {"enabled": self.live.enabled, "profile": self.live.profile,
+        return {"enabled": self.live.enabled, "filter_set_id": self.live.filter_set_id,
                 "filters": len(self.marking_filters()), "recoloured": len(self._pushed),
                 "beacons": self._beacon_count,
                 "particles": beacon_effect.renderer().live_particles()}

@@ -6,6 +6,10 @@
 > `len(Attribute)` constant (43 vs 46) that made the buffer too small — and the fix
 > are recorded in `multibox-shmem-cpp-writer-postmortem.md`. Read that before
 > touching the layout again.
+>
+> Follow-up landed: the atomic claim this plan reserved for C++ is implemented, plus
+> the slot-stability fixes for the HeroAI options regression. See
+> `docs/architecture/records/reforged-migration/multibox-slot-stability-fix.md`.
 
 ## Intent
 

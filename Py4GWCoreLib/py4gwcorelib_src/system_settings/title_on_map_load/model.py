@@ -7,7 +7,7 @@ from Py4GWCoreLib.enums_src.Title_enums import TITLE_NAME
 
 
 @dataclass(frozen=True)
-class TitleMapRule:
+class TitleMapEntry:
     """A title and the map names/IDs that select it."""
 
     title_id: TitleID
@@ -24,8 +24,10 @@ class TitleOnMapLoadConfig:
     enabled: bool = True
 
 
-TITLE_MAP_RULES: tuple[TitleMapRule, ...] = (
-    TitleMapRule(
+# Renamed from ``TITLE_MAP_RULES`` (see docs/loot/redesign/filter-structure.md): the contract
+# retires the word "rule" from the shared vocabulary.
+TITLE_MAP_ENTRIES: tuple[TitleMapEntry, ...] = (
+    TitleMapEntry(
         TitleID.Asuran,
         (
             "Alcazia Tangle", "Arbor Bay", "Gadd's Encampment", "Magus Stones", "Rata Sum", "Riven Earth",
@@ -35,7 +37,7 @@ TITLE_MAP_RULES: tuple[TitleMapRule, ...] = (
             "The Elusive Golemancer (Level 2)", "The Elusive Golemancer (Level 3)",
         ),
     ),
-    TitleMapRule(
+    TitleMapEntry(
         TitleID.Deldrimor,
         (
             "A Gate Too Far (Level 1)", "A Gate Too Far (Level 2)", "A Gate Too Far (Level 3)",
@@ -46,7 +48,7 @@ TITLE_MAP_RULES: tuple[TitleMapRule, ...] = (
         ),
         (617, 618, 619),
     ),
-    TitleMapRule(
+    TitleMapEntry(
         TitleID.Norn,
         (
             "Attack of the Nornbear", "Bjora Marches", "Boreal Station", "Cold as Ice", "Curse of the Nornbear",
@@ -55,7 +57,7 @@ TITLE_MAP_RULES: tuple[TitleMapRule, ...] = (
             "The Norn Fighting Tournament", "Varajar Fells",
         ),
     ),
-    TitleMapRule(
+    TitleMapEntry(
         TitleID.Ebon_Vanguard,
         (
             "Against the Charr", "Ascalon City", "Assault on the Stronghold", "Blood Washes Blood",
@@ -69,7 +71,7 @@ TITLE_MAP_RULES: tuple[TitleMapRule, ...] = (
             "Warband of Brothers (Level 3)",
         ),
     ),
-    TitleMapRule(
+    TitleMapEntry(
         TitleID.Lightbringer,
         (
             "Abaddon's Gate", "Basalt Grotto", "Bone Palace", "Crystal Overlook", "Depths of Madness",
