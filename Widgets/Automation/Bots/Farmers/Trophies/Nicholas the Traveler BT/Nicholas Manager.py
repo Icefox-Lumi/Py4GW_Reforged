@@ -161,7 +161,7 @@ Features:
 • Selectable Nicholas farm registry with shared BottingTree runtime
 • Combined target-item counting across the active multibox party
 • Direct, two-map, portal-loop, challenge, dialog and Fissure of Woe farm flows
-• Per-farm information for the quantity required to obtain 5 Gifts of the Traveler
+• Automatic farming target calculated from the number of accounts that should receive all 5 Gifts
 • Optional travel and exchange route to Nicholas when legacy route data is available
 • Automatic multibox collector conversion for supported indirect Nicholas items
 • MerchantRules is disabled on all active accounts during the current crash-isolation workflow
@@ -190,28 +190,42 @@ _last_account_counts: dict[str, int] = {}
 _last_account_labels: dict[str, str] = {}
 
 
-def _safe_target_key(farm: FarmDefinition) -> str:
-    return f"Target_{farm.key}"
-
-
-def _get_target(farm: FarmDefinition) -> int:
+def _get_gift_account_count() -> int:
+    """
+    Number of accounts for which the user wants the full weekly allocation
+    of 5 Gifts of the Traveler.
+    """
     return max(
         1,
         int(
             _settings.get_int(
-                "Targets",
-                _safe_target_key(farm),
-                int(farm.default_target),
+                "Config",
+                "GiftAccounts",
+                4,
             )
         ),
     )
 
 
-def _set_target(farm: FarmDefinition, value: int) -> None:
+def _set_gift_account_count(value: int) -> None:
     _settings.set(
-        "Targets",
-        _safe_target_key(farm),
+        "Config",
+        "GiftAccounts",
         max(1, int(value)),
+    )
+
+
+def _target_for_farm(farm: FarmDefinition) -> int:
+    """
+    Combined farming target for the selected Nicholas trophy.
+
+    items_for_5_gifts is the amount required for ONE account to obtain all
+    5 weekly Gifts. The manager multiplies it by the configured account count.
+    """
+    return max(
+        1,
+        int(farm.items_for_5_gifts)
+        * _get_gift_account_count(),
     )
 
 
@@ -279,7 +293,7 @@ def _stop_active_tree() -> None:
 def _count_factory(farm: FarmDefinition):
     return lambda: check_target_item_count(
         farm=farm,
-        target_getter=lambda: _get_target(farm),
+        target_getter=lambda: _target_for_farm(farm),
         result_callback=_record_count_result,
         stop_callback=_stop_active_tree,
     )
@@ -377,9 +391,11 @@ def _flow_label(farm: FarmDefinition) -> str:
 
 def _draw_manager_main_summary() -> None:
     farm = selected_farm()
-    target = _get_target(farm)
+    gift_accounts = _get_gift_account_count()
+    target = _target_for_farm(farm)
 
     PyImGui.text(f"Farm: {farm.name}")
+    PyImGui.text(f"Gift accounts: {gift_accounts}")
     PyImGui.text(f"Combined count: {_last_total_count} / {target}")
     PyImGui.text("MerchantRules: OFF on all accounts after Start")
 
@@ -434,21 +450,35 @@ def _draw_config_tab() -> None:
 
     PyImGui.separator()
 
-    target = _get_target(farm)
-    new_target = max(
+    gift_accounts = _get_gift_account_count()
+    new_gift_accounts = max(
         1,
         int(
             PyImGui.input_int(
-                "Target Item Count",
-                int(target),
+                "Accounts to receive 5 Gifts",
+                int(gift_accounts),
             )
         ),
     )
 
-    if new_target != target:
-        _set_target(farm, new_target)
-        target = new_target
+    if new_gift_accounts != gift_accounts:
+        _set_gift_account_count(new_gift_accounts)
+        gift_accounts = new_gift_accounts
 
+    target = _target_for_farm(farm)
+
+    PyImGui.spacing()
+    PyImGui.text("Calculated farming target")
+    PyImGui.text(
+        f"{farm.items_for_5_gifts} {farm.name}"
+        f"{'' if farm.items_for_5_gifts == 1 else 's'} per account"
+    )
+    PyImGui.text(
+        f"{gift_accounts} account"
+        f"{'' if gift_accounts == 1 else 's'} x {farm.items_for_5_gifts} "
+        f"= {target} {farm.name}"
+        f"{'' if target == 1 else 's'}"
+    )
     PyImGui.text(f"Current total: {_last_total_count} / {target}")
 
     PyImGui.separator()
@@ -456,7 +486,7 @@ def _draw_config_tab() -> None:
     PyImGui.text(
         f"{farm.items_for_5_gifts} {farm.name}"
         f"{'' if farm.items_for_5_gifts == 1 else 's'}"
-        " required for 5 Gifts of the Traveler."
+        " required per account for all 5 Gifts of the Traveler."
     )
 
     if farm.requires_collector_conversion:
@@ -538,6 +568,7 @@ def _draw_about_tab() -> None:
     PyImGui.text(f"Registered farms: {len(FARMS)}")
     PyImGui.text(f"Nicholas exchange routes: {sum(1 for farm in FARMS if farm.exchange_available)}")
     PyImGui.text("One shared engine handles setup, counting, farming and resets.")
+    PyImGui.text("Farm target is calculated automatically from the configured gift-account count.")
     PyImGui.text("MerchantRules is disabled once on every active account.")
     PyImGui.text("No account isolation.")
     PyImGui.text("Auto inventory handler is disabled while the bot runs.")
@@ -593,10 +624,13 @@ def tooltip():
         "Combined trophy count across the active multibox party."
     )
     PyImGui.bullet_text(
+        "One setting defines how many accounts should receive all 5 weekly Gifts."
+    )
+    PyImGui.bullet_text(
         "Direct, multi-map, portal-loop, challenge, dialog and FoW farm flows."
     )
     PyImGui.bullet_text(
-        "Shows the amount required for all 5 Gifts of the Traveler."
+        "Calculates the farming target automatically from the number of gift accounts."
     )
     PyImGui.bullet_text(
         "Automatic multibox conversion for supported collector-backed trophies."

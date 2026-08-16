@@ -61,3 +61,23 @@ The Nicholas Manager tooltip now:
 - pushes a 550 px text wrap position,
 - uses shorter feature/credit labels,
 - prevents long bullet_text lines from overflowing the tooltip window.
+
+v1.4.2 - Gift account based target
+----------------------------------
+The manual per-farm "Target Item Count" setting has been removed.
+
+Config now uses one global setting:
+
+    Accounts to receive 5 Gifts
+
+The farming target is calculated automatically:
+
+    target = farm.items_for_5_gifts * gift_account_count
+
+Example with Forgotten Seal:
+    10 seals are required per account for all 5 Gifts.
+    4 gift accounts -> target = 40 Forgotten Seals.
+
+The combined multibox inventory counter is compared against this calculated
+target. Changing the selected farm automatically recalculates the target using
+that farm's Nicholas set requirement.
