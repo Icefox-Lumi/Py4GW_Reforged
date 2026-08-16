@@ -165,6 +165,8 @@ Features:
 • Optional travel and exchange route to Nicholas when legacy route data is available
 • Automatic multibox collector conversion for supported indirect Nicholas items
 • MerchantRules is disabled on all active accounts during the current crash-isolation workflow
+• One planner step per route waypoint for precise movement-failure recovery
+• Map-aware zone transitions prevent old-map waypoints from replaying after zoning
 • Shared setup, resign/reset safety and inventory-query logic instead of duplicated code in every farm
 
 Credits:
@@ -628,6 +630,9 @@ def tooltip():
     )
     PyImGui.bullet_text(
         "Direct, multi-map, portal-loop, challenge, dialog and FoW farm flows."
+    )
+    PyImGui.bullet_text(
+        "Each route waypoint is its own recovery step, with map-aware zone transitions."
     )
     PyImGui.bullet_text(
         "Calculates the farming target automatically from the number of gift accounts."

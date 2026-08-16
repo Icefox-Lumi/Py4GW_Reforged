@@ -807,6 +807,324 @@ def build_collector_conversion(
 
 
 
+
+def _map_guarded_node(
+    *,
+    name: str,
+    map_id: int,
+    child: BehaviorTree,
+    skip_if_in_maps: tuple[int, ...] = (),
+) -> BehaviorTree:
+    """
+    Shards-of-Orr style map guard.
+
+    Run the child only on its expected map. If a later map is already loaded,
+    treat the step as already passed. This is important around portals: a
+    movement point close to a portal can zone before the planner advances.
+    """
+    branches: list[BehaviorTree] = [
+        BT.Sequence(
+            name=f"{name} - Active Map",
+            children=[
+                BT.IsCurrentMap(map_id=int(map_id), log=False),
+                child,
+            ],
+        )
+    ]
+
+    seen: set[int] = {int(map_id)}
+    for later_map_id in skip_if_in_maps:
+        later_map_id = int(later_map_id)
+        if later_map_id <= 0 or later_map_id in seen:
+            continue
+        seen.add(later_map_id)
+
+        branches.append(
+            BT.Sequence(
+                name=f"{name} - Later Map {later_map_id}",
+                children=[
+                    BT.IsCurrentMap(map_id=later_map_id, log=False),
+                    BT.Succeeder(f"{name}AlreadyPassed"),
+                ],
+            )
+        )
+
+    if len(branches) == 1:
+        return branches[0]
+
+    return BT.Selector(
+        name=name,
+        children=branches,
+    )
+
+
+def _blackboard_guarded_node(
+    *,
+    name: str,
+    blackboard_key: str,
+    child: BehaviorTree,
+) -> BehaviorTree:
+    """Skip a one-time planner step once its blackboard flag is set."""
+    return BT.Selector(
+        name=name,
+        children=[
+            BT.HasBlackboardValue(blackboard_key, log=False),
+            child,
+        ],
+    )
+
+
+def _movement_point_steps(
+    prefix: str,
+    map_id: int,
+    points: tuple[tuple[float, float], ...] | list[tuple[float, float]],
+    *,
+    pause_on_combat: bool,
+    tolerance: float = 175.0,
+    flag_heroes_to_waypoint: bool = False,
+    skip_if_in_maps: tuple[int, ...] = (),
+    blackboard_skip_key: str = "",
+) -> list[tuple[str, Callable[[], BehaviorTree]]]:
+    """Create one planner step per movement waypoint."""
+    steps: list[tuple[str, Callable[[], BehaviorTree]]] = []
+
+    for index, point in enumerate(points, start=1):
+        name = f"{prefix} - Point {index:02d}"
+
+        def _build(
+            point=point,
+            name=name,
+        ) -> BehaviorTree:
+            node = _map_guarded_node(
+                name=name,
+                map_id=int(map_id),
+                child=BT.Move(
+                    point,
+                    pause_on_combat=pause_on_combat,
+                    tolerance=tolerance,
+                    flag_heroes_to_waypoint=flag_heroes_to_waypoint,
+                    log=False,
+                ),
+                skip_if_in_maps=tuple(skip_if_in_maps),
+            )
+
+            if blackboard_skip_key:
+                node = _blackboard_guarded_node(
+                    name=name,
+                    blackboard_key=blackboard_skip_key,
+                    child=node,
+                )
+
+            return node
+
+        steps.append((name, _build))
+
+    return steps
+
+
+def _vanquish_point_steps(
+    prefix: str,
+    map_id: int,
+    points: tuple[tuple[float, float], ...] | list[tuple[float, float]],
+    *,
+    clear_area_radius: float,
+    pause_on_combat: bool = True,
+    flag_heroes_to_waypoint: bool = False,
+    move_tolerance: float = 175.0,
+    skip_if_in_maps: tuple[int, ...] = (),
+    blackboard_skip_key: str = "",
+) -> list[tuple[str, Callable[[], BehaviorTree]]]:
+    """Create one planner step per combat/farm waypoint."""
+    steps: list[tuple[str, Callable[[], BehaviorTree]]] = []
+
+    for index, point in enumerate(points, start=1):
+        name = f"{prefix} - Point {index:02d}"
+
+        def _build(
+            point=point,
+            name=name,
+        ) -> BehaviorTree:
+            node = _map_guarded_node(
+                name=name,
+                map_id=int(map_id),
+                child=BT.VanquishNode(
+                    [point],
+                    name=name,
+                    clear_area_radius=clear_area_radius,
+                    pause_on_combat=pause_on_combat,
+                    flag_heroes_to_waypoint=flag_heroes_to_waypoint,
+                    move_tolerance=move_tolerance,
+                    log=False,
+                ),
+                skip_if_in_maps=tuple(skip_if_in_maps),
+            )
+
+            if blackboard_skip_key:
+                node = _blackboard_guarded_node(
+                    name=name,
+                    blackboard_key=blackboard_skip_key,
+                    child=node,
+                )
+
+            return node
+
+        steps.append((name, _build))
+
+    return steps
+
+
+def _map_transition_node(
+    *,
+    name: str,
+    from_map_id: int,
+    target_map_id: int,
+    point: tuple[float, float],
+    timeout_ms: int,
+    skip_if_in_maps: tuple[int, ...] = (),
+    blackboard_skip_key: str = "",
+    before_children: tuple[BehaviorTree, ...] = (),
+    after_children: tuple[BehaviorTree, ...] = (),
+) -> BehaviorTree:
+    """
+    Map-aware transition step.
+
+    If the destination (or a later map) is already loaded when this planner
+    step is retried, the transition is accepted as already completed.
+    """
+    branches: list[BehaviorTree] = []
+
+    accepted_maps: list[int] = [int(target_map_id)]
+    accepted_maps.extend(int(map_id) for map_id in skip_if_in_maps)
+
+    seen: set[int] = set()
+    for accepted_map_id in accepted_maps:
+        if accepted_map_id <= 0 or accepted_map_id in seen:
+            continue
+        seen.add(accepted_map_id)
+
+        branches.append(
+            BT.Sequence(
+                name=f"{name} - Already In {accepted_map_id}",
+                children=[
+                    BT.IsCurrentMap(map_id=accepted_map_id, log=False),
+                    BT.Succeeder(f"{name}AlreadyPassed"),
+                ],
+            )
+        )
+
+    transition_children: list[BehaviorTree] = [
+        BT.IsCurrentMap(map_id=int(from_map_id), log=False),
+    ]
+    transition_children.extend(before_children)
+    transition_children.append(
+        BT.MoveAndExitMap(
+            point,
+            target_map_id=int(target_map_id),
+            timeout_ms=int(timeout_ms),
+            log=True,
+        )
+    )
+    transition_children.extend(after_children)
+
+    branches.append(
+        BT.Sequence(
+            name=f"{name} - Transition",
+            children=transition_children,
+        )
+    )
+
+    node: BehaviorTree = BT.Selector(
+        name=name,
+        children=branches,
+    )
+
+    if blackboard_skip_key:
+        node = _blackboard_guarded_node(
+            name=name,
+            blackboard_key=blackboard_skip_key,
+            child=node,
+        )
+
+    return node
+
+
+def _travel_to_map_node(
+    *,
+    name: str,
+    map_id: int,
+) -> BehaviorTree:
+    """Travel only when the requested outpost is not already loaded."""
+    return BT.Selector(
+        name=name,
+        children=[
+            BT.Sequence(
+                name=f"{name} - Already There",
+                children=[
+                    BT.IsCurrentMap(map_id=int(map_id), log=False),
+                    BT.Succeeder(f"{name}AlreadyThere"),
+                ],
+            ),
+            BT.Travel(
+                target_map_id=int(map_id),
+                random_travel=False,
+                log=True,
+            ),
+        ],
+    )
+
+
+def _collector_exchange_step(farm: FarmDefinition) -> BehaviorTree:
+    """Collector interaction only; collector travel waypoints are planner steps."""
+    if farm.collector_position is None:
+        return BT.LogMessage(
+            message=f"Collector position is missing for {farm.name}.",
+            module_name=MODULE_NAME,
+        )
+
+    return BT.Sequence(
+        name=f"Convert {farm.name} To {farm.collector_item_name}",
+        children=[
+            BT.TargetNearest(
+                farm.collector_position[0],
+                farm.collector_position[1],
+                target_distance=1320.0,
+                log=True,
+            ),
+            interact_current_target_all_accounts(),
+            BT.Wait(1_000),
+            exchange_collector_all_accounts(farm),
+            BT.Wait(750),
+        ],
+    )
+
+
+def _future_exchange_maps(
+    actions: tuple[tuple[str, tuple[float, float], int], ...],
+    action_index: int,
+    current_map_id: int,
+) -> tuple[int, ...]:
+    """
+    Return later map IDs reachable after one exchange action.
+
+    Used by point guards so a retry does not attempt an old-map waypoint after
+    the character has already crossed one or more portals.
+    """
+    result: list[int] = []
+    seen: set[int] = {int(current_map_id)}
+
+    for kind, _point, target_map_id in actions[action_index + 1:]:
+        if kind != "exit":
+            continue
+        target_map_id = int(target_map_id)
+        if target_map_id <= 0 or target_map_id in seen:
+            continue
+        seen.add(target_map_id)
+        result.append(target_map_id)
+
+    return tuple(result)
+
+
+
 def build_nicholas_exchange(farm: FarmDefinition) -> BehaviorTree:
     """
     Travel to Nicholas and exchange the selected weekly item on all accounts.
@@ -973,12 +1291,220 @@ def build_nicholas_exchange(farm: FarmDefinition) -> BehaviorTree:
 def build_exchange_steps(
     farm: FarmDefinition,
 ) -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    return [
+    """
+    Build the Nicholas exchange as granular planner steps.
+
+    Every route waypoint is a separate step. Zone changes remain explicit
+    MoveAndExitMap steps and every route point is guarded by the map on which it
+    belongs.
+    """
+    if not farm.exchange_available:
+        return [
+            (
+                "Nicholas Exchange Unavailable",
+                lambda: BT.LogMessage(
+                    message=f"No legacy Nicholas exchange route is available for {farm.name}.",
+                    module_name=MODULE_NAME,
+                ),
+            ),
+        ]
+
+    steps: list[tuple[str, Callable[[], BehaviorTree]]] = [
         (
-            "Travel And Exchange With Nicholas",
-            lambda: build_nicholas_exchange(farm),
+            "Disable MerchantRules",
+            disable_merchant_rules_all_accounts,
         ),
     ]
+
+    # Collector conversion before the Nicholas route.
+    if farm.collector_mode == "town":
+        steps.append(
+            (
+                "Travel To Collector",
+                lambda: _travel_to_map_node(
+                    name="Travel To Collector",
+                    map_id=farm.collector_town_map_id,
+                ),
+            )
+        )
+
+        steps.extend(
+            _movement_point_steps(
+                "Collector Route",
+                farm.collector_town_map_id,
+                farm.collector_route,
+                pause_on_combat=False,
+                tolerance=175.0,
+                flag_heroes_to_waypoint=False,
+            )
+        )
+
+        steps.append(
+            (
+                f"Collector Exchange - {farm.collector_item_name}",
+                lambda: _map_guarded_node(
+                    name=f"Collector Exchange - {farm.collector_item_name}",
+                    map_id=farm.collector_town_map_id,
+                    child=_collector_exchange_step(farm),
+                ),
+            )
+        )
+
+    elif farm.collector_mode == "manual":
+        steps.append(
+            (
+                "Manual Collector Conversion Required",
+                lambda: BT.LogMessage(
+                    message=(
+                        f"Manual collector conversion required for {farm.name} -> "
+                        f"{farm.collector_item_name}. Make sure every account already "
+                        "has the converted items before continuing."
+                    ),
+                    module_name=MODULE_NAME,
+                ),
+            )
+        )
+
+    steps.append(
+        (
+            "Travel To Nicholas Route",
+            lambda: _travel_to_map_node(
+                name="Travel To Nicholas Route",
+                map_id=farm.exchange_town_map_id,
+            ),
+        )
+    )
+
+    current_map_id = int(farm.exchange_town_map_id)
+    route_point_number = 0
+    zone_number = 0
+
+    for action_index, (kind, point, target_map_id) in enumerate(farm.exchange_actions):
+        later_maps = _future_exchange_maps(
+            farm.exchange_actions,
+            action_index,
+            current_map_id,
+        )
+
+        if kind in ("move", "aggro"):
+            route_point_number += 1
+            name = f"Nicholas Route - Point {route_point_number:02d}"
+
+            if kind == "aggro":
+                steps.extend(
+                    _vanquish_point_steps(
+                        "Nicholas Route",
+                        current_map_id,
+                        (point,),
+                        clear_area_radius=Range.Earshot.value,
+                        pause_on_combat=True,
+                        flag_heroes_to_waypoint=False,
+                        move_tolerance=175.0,
+                        skip_if_in_maps=later_maps,
+                    )
+                )
+                # Rename the generated single-point step with global route number.
+                generated_name, generated_factory = steps.pop()
+                steps.append((name, generated_factory))
+            else:
+                steps.extend(
+                    _movement_point_steps(
+                        "Nicholas Route",
+                        current_map_id,
+                        (point,),
+                        pause_on_combat=False,
+                        tolerance=175.0,
+                        flag_heroes_to_waypoint=False,
+                        skip_if_in_maps=later_maps,
+                    )
+                )
+                generated_name, generated_factory = steps.pop()
+                steps.append((name, generated_factory))
+
+            if (
+                farm.collector_mode == "inline"
+                and action_index == farm.collector_insert_after
+            ):
+                collector_name = f"Collector Exchange - {farm.collector_item_name}"
+                collector_map_id = int(current_map_id)
+                steps.append(
+                    (
+                        collector_name,
+                        lambda collector_name=collector_name, collector_map_id=collector_map_id: _map_guarded_node(
+                            name=collector_name,
+                            map_id=collector_map_id,
+                            child=_collector_exchange_step(farm),
+                        ),
+                    )
+                )
+
+            continue
+
+        if kind == "exit":
+            zone_number += 1
+            from_map_id = int(current_map_id)
+            next_map_id = int(target_map_id)
+            name = f"Nicholas Route - Zone {zone_number:02d} ({from_map_id} -> {next_map_id})"
+
+            steps.append(
+                (
+                    name,
+                    lambda name=name, from_map_id=from_map_id, next_map_id=next_map_id, point=point, later_maps=later_maps: _map_transition_node(
+                        name=name,
+                        from_map_id=from_map_id,
+                        target_map_id=next_map_id,
+                        point=point,
+                        timeout_ms=60_000,
+                        skip_if_in_maps=later_maps,
+                        after_children=(BT.Wait(3_000),),
+                    ),
+                )
+            )
+
+            current_map_id = next_map_id
+            continue
+
+        raise ValueError(
+            f"Unsupported Nicholas exchange action '{kind}' for {farm.name}."
+        )
+
+    final_map_id = int(current_map_id)
+    steps.append(
+        (
+            "Exchange With Nicholas",
+            lambda final_map_id=final_map_id: _map_guarded_node(
+                name="Exchange With Nicholas",
+                map_id=final_map_id,
+                child=BT.Sequence(
+                    name=f"Exchange {farm.nicholas_item_name} With Nicholas",
+                    children=[
+                        BT.WaitUntilOutOfCombat(
+                            range=Range.Earshot.value,
+                            timeout_ms=60_000,
+                        ),
+                        BT.Wait(1_500),
+                        BT.TargetNearestAndSendDialog(
+                            farm.nicholas_position,
+                            dialog_id=0x85,
+                            target_distance=Range.Nearby.value,
+                            log=True,
+                            multi_account=True,
+                        ),
+                        BT.Wait(1_000),
+                        BT.SendDialog(
+                            dialog_id=0x86,
+                            log=True,
+                            multi_account=True,
+                        ),
+                        BT.Wait(1_500),
+                    ],
+                ),
+            ),
+        )
+    )
+
+    return steps
+
 
 def build_execution_steps(
     *,
@@ -987,141 +1513,387 @@ def build_execution_steps(
     count_node_factory: Callable[[], BehaviorTree],
 ) -> list[tuple[str, Callable[[], BehaviorTree]]]:
     """
-    Build the planner for the selected farm from its small FarmDefinition.
+    Build a Shards-of-Orr style granular planner.
 
-    This is the core of the manager architecture: 76 farms share this engine;
-    only their data and structural entry/reset type differ.
+    Every path waypoint is its own planner step. If movement fails, BottingTree
+    recovery therefore retries only that waypoint instead of replaying the whole
+    route.
+
+    Zone transitions are NEVER flattened into path points. They remain explicit
+    map-aware steps between the waypoint groups belonging to each map.
     """
     steps: list[tuple[str, Callable[[], BehaviorTree]]] = [
         ("Prepare Farm", lambda: prepare_farm(tree_getter, farm)),
         ("Check Target Count", count_node_factory),
     ]
 
+    clear_radius = _range_for_farm(farm)
+
     if farm.flow == FLOW_DIRECT:
-        steps.extend(
-            [
-                (
-                    "Go Out",
-                    lambda: BT.MoveAndExitMap(
-                        farm.exit_point,
-                        target_map_id=farm.farm_map_id,
-                        timeout_ms=45_000,
-                        log=False,
-                    ),
+        steps.append(
+            (
+                "Go Out",
+                lambda: _map_transition_node(
+                    name="Go Out",
+                    from_map_id=farm.outpost_map_id,
+                    target_map_id=farm.farm_map_id,
+                    point=farm.exit_point,
+                    timeout_ms=45_000,
                 ),
-                ("Farm Path", lambda: farm_path(farm)),
-                ("Resign And Return", lambda: resign_and_return(farm)),
-            ]
+            )
+        )
+
+        steps.extend(
+            _vanquish_point_steps(
+                "Farm Path",
+                farm.farm_map_id,
+                farm.farm_path,
+                clear_area_radius=clear_radius,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+            )
+        )
+
+        steps.append(
+            ("Resign And Return", lambda: resign_and_return(farm))
         )
 
     elif farm.flow == FLOW_TWO_MAP:
+        steps.append(
+            (
+                "Go Out",
+                lambda: _map_transition_node(
+                    name="Go Out",
+                    from_map_id=farm.outpost_map_id,
+                    target_map_id=farm.transit_map_id,
+                    point=farm.exit_point,
+                    timeout_ms=45_000,
+                    skip_if_in_maps=(farm.farm_map_id,),
+                ),
+            )
+        )
+
         steps.extend(
-            [
-                (
-                    "Go Out",
-                    lambda: BT.MoveAndExitMap(
-                        farm.exit_point,
-                        target_map_id=farm.transit_map_id,
-                        timeout_ms=45_000,
-                        log=True,
-                    ),
+            _vanquish_point_steps(
+                "Transit Path",
+                farm.transit_map_id,
+                farm.transit_path,
+                clear_area_radius=Range.Earshot.value,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+                skip_if_in_maps=(farm.farm_map_id,),
+            )
+        )
+
+        steps.append(
+            (
+                "Enter Farm Map",
+                lambda: _map_transition_node(
+                    name="Enter Farm Map",
+                    from_map_id=farm.transit_map_id,
+                    target_map_id=farm.farm_map_id,
+                    point=farm.portal_to_farm,
+                    timeout_ms=60_000,
                 ),
-                (
-                    "Cross First Map",
-                    lambda: BT.VanquishNode(
-                        farm.transit_path,
-                        name="Cross First Map",
-                        clear_area_radius=Range.Earshot.value,
-                        pause_on_combat=True,
-                        flag_heroes_to_waypoint=False,
-                        move_tolerance=175.0,
-                        log=True,
-                    ),
-                ),
-                (
-                    "Enter Farm Map",
-                    lambda: BT.MoveAndExitMap(
-                        farm.portal_to_farm,
-                        target_map_id=farm.farm_map_id,
-                        timeout_ms=60_000,
-                        log=True,
-                    ),
-                ),
-                ("Farm Path", lambda: farm_path(farm)),
-                ("Resign And Return", lambda: resign_and_return(farm)),
-            ]
+            )
+        )
+
+        steps.extend(
+            _vanquish_point_steps(
+                "Farm Path",
+                farm.farm_map_id,
+                farm.farm_path,
+                clear_area_radius=clear_radius,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+            )
+        )
+
+        steps.append(
+            ("Resign And Return", lambda: resign_and_return(farm))
         )
 
     elif farm.flow == FLOW_PORTAL_LOOP:
+        # First trip only: outpost -> reset map -> long transit path.
+        steps.append(
+            (
+                "Prepare Farm Portal - Go Out",
+                lambda: _map_transition_node(
+                    name="Prepare Farm Portal - Go Out",
+                    from_map_id=farm.outpost_map_id,
+                    target_map_id=farm.reset_map_id,
+                    point=farm.exit_point,
+                    timeout_ms=45_000,
+                    skip_if_in_maps=(farm.farm_map_id,),
+                    blackboard_skip_key=_PORTAL_READY_KEY,
+                ),
+            )
+        )
+
         steps.extend(
-            [
-                ("Prepare Farm Portal", lambda: prepare_portal_once(farm)),
-                (
-                    "Enter Farm Map",
-                    lambda: BT.MoveAndExitMap(
-                        farm.portal_to_farm,
-                        target_map_id=farm.farm_map_id,
-                        timeout_ms=60_000,
-                        log=True,
+            _vanquish_point_steps(
+                "Prepare Farm Portal - Transit",
+                farm.reset_map_id,
+                farm.transit_path,
+                clear_area_radius=Range.Earshot.value,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+                skip_if_in_maps=(farm.farm_map_id,),
+                blackboard_skip_key=_PORTAL_READY_KEY,
+            )
+        )
+
+        steps.append(
+            (
+                "Prepare Farm Portal - Ready",
+                lambda: _blackboard_guarded_node(
+                    name="Prepare Farm Portal - Ready",
+                    blackboard_key=_PORTAL_READY_KEY,
+                    child=BT.SaveBlackboardValue(
+                        _PORTAL_READY_KEY,
+                        True,
+                        log=False,
                     ),
                 ),
-                ("Farm Path", lambda: farm_path(farm)),
-                ("Reset Via Portal", lambda: reset_via_portal(farm)),
-            ]
+            )
+        )
+
+        # This transition is repeated on every farm loop.
+        steps.append(
+            (
+                "Enter Farm Map",
+                lambda: _map_transition_node(
+                    name="Enter Farm Map",
+                    from_map_id=farm.reset_map_id,
+                    target_map_id=farm.farm_map_id,
+                    point=farm.portal_to_farm,
+                    timeout_ms=60_000,
+                ),
+            )
+        )
+
+        # If the final farm waypoint itself zones back through the reset portal,
+        # accept those waypoint steps as already passed.
+        steps.extend(
+            _vanquish_point_steps(
+                "Farm Path",
+                farm.farm_map_id,
+                farm.farm_path,
+                clear_area_radius=clear_radius,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+                skip_if_in_maps=(farm.reset_map_id,),
+            )
+        )
+
+        steps.append(
+            (
+                "Reset Via Portal",
+                lambda: _map_transition_node(
+                    name="Reset Via Portal",
+                    from_map_id=farm.farm_map_id,
+                    target_map_id=farm.reset_map_id,
+                    point=farm.portal_back,
+                    timeout_ms=60_000,
+                    before_children=(
+                        BT.WaitUntilOutOfCombat(
+                            range=Range.Earshot.value,
+                            timeout_ms=60_000,
+                        ),
+                        BT.Wait(3_000),
+                    ),
+                    after_children=(BT.Wait(3_000),),
+                ),
+            )
         )
 
     elif farm.flow == FLOW_CHALLENGE:
-        steps.extend(
-            [
-                (
-                    "Enter Challenge",
-                    lambda: BT.EnterChallenge(
-                        delay_ms=farm.challenge_delay_ms,
-                        target_map_id=farm.farm_map_id,
-                    ),
+        steps.append(
+            (
+                "Enter Challenge",
+                lambda: BT.Selector(
+                    name="Enter Challenge",
+                    children=[
+                        BT.Sequence(
+                            name="Enter Challenge - Already Loaded",
+                            children=[
+                                BT.IsCurrentMap(
+                                    map_id=farm.farm_map_id,
+                                    log=False,
+                                ),
+                                BT.Succeeder("ChallengeAlreadyLoaded"),
+                            ],
+                        ),
+                        BT.EnterChallenge(
+                            delay_ms=farm.challenge_delay_ms,
+                            target_map_id=farm.farm_map_id,
+                        ),
+                    ],
                 ),
-                ("Farm Path", lambda: farm_path(farm)),
-                ("Resign And Return", lambda: resign_and_return(farm)),
-            ]
+            )
+        )
+
+        steps.extend(
+            _vanquish_point_steps(
+                "Farm Path",
+                farm.farm_map_id,
+                farm.farm_path,
+                clear_area_radius=clear_radius,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+            )
+        )
+
+        steps.append(
+            ("Resign And Return", lambda: resign_and_return(farm))
         )
 
     elif farm.flow == FLOW_DIALOG:
-        steps.extend(
-            [
-                (
-                    "Enter Farm By Dialog",
-                    lambda: BT.Sequence(
-                        name="Enter Farm By Dialog",
-                        children=[
-                            BT.MoveAndDialog(
-                                farm.entry_position,
-                                dialog_id=farm.entry_dialog,
-                                pause_on_combat=False,
-                                log=True,
-                                multi_account=False,
-                            ),
-                            BT.WaitForMapLoad(
-                                map_id=farm.farm_map_id,
-                                timeout_ms=45_000,
-                            ),
-                        ],
-                    ),
+        steps.append(
+            (
+                "Enter Farm By Dialog",
+                lambda: BT.Selector(
+                    name="Enter Farm By Dialog",
+                    children=[
+                        BT.Sequence(
+                            name="Enter Farm By Dialog - Already Loaded",
+                            children=[
+                                BT.IsCurrentMap(
+                                    map_id=farm.farm_map_id,
+                                    log=False,
+                                ),
+                                BT.Succeeder("DialogFarmAlreadyLoaded"),
+                            ],
+                        ),
+                        BT.Sequence(
+                            name="Enter Farm By Dialog - Active",
+                            children=[
+                                BT.IsCurrentMap(
+                                    map_id=farm.outpost_map_id,
+                                    log=False,
+                                ),
+                                BT.MoveAndDialog(
+                                    farm.entry_position,
+                                    dialog_id=farm.entry_dialog,
+                                    pause_on_combat=False,
+                                    log=True,
+                                    multi_account=False,
+                                ),
+                                BT.WaitForMapLoad(
+                                    map_id=farm.farm_map_id,
+                                    timeout_ms=45_000,
+                                ),
+                            ],
+                        ),
+                    ],
                 ),
-                ("Farm Path", lambda: farm_path(farm)),
-                ("Resign And Return", lambda: resign_and_return(farm)),
-            ]
+            )
+        )
+
+        steps.extend(
+            _vanquish_point_steps(
+                "Farm Path",
+                farm.farm_map_id,
+                farm.farm_path,
+                clear_area_radius=clear_radius,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+            )
+        )
+
+        steps.append(
+            ("Resign And Return", lambda: resign_and_return(farm))
         )
 
     elif farm.flow == FLOW_FOW:
+        # Split the approach path before the actual /kneel + dialogs + zoning.
         steps.extend(
-            [
-                ("Enter Fissure Of Woe", lambda: enter_fow(farm)),
-                ("Farm Path", lambda: farm_path(farm)),
-                ("Resign And Return", lambda: resign_and_return(farm)),
-            ]
+            _movement_point_steps(
+                "Fissure Of Woe Approach",
+                farm.outpost_map_id,
+                farm.balthazar_approach,
+                pause_on_combat=False,
+                tolerance=175.0,
+                flag_heroes_to_waypoint=False,
+                skip_if_in_maps=(farm.farm_map_id,),
+            )
+        )
+
+        steps.append(
+            (
+                "Enter Fissure Of Woe",
+                lambda: BT.Selector(
+                    name="Enter Fissure Of Woe",
+                    children=[
+                        BT.Sequence(
+                            name="Enter Fissure Of Woe - Already Loaded",
+                            children=[
+                                BT.IsCurrentMap(
+                                    map_id=farm.farm_map_id,
+                                    log=False,
+                                ),
+                                BT.Succeeder("FoWAlreadyLoaded"),
+                            ],
+                        ),
+                        BT.Sequence(
+                            name="Enter Fissure Of Woe - Active",
+                            children=[
+                                BT.IsCurrentMap(
+                                    map_id=farm.outpost_map_id,
+                                    log=False,
+                                ),
+                                BT.SendChatCommand("kneel", log=True),
+                                wait_for_agent_model(
+                                    farm.balthazar_champion_model_id
+                                ),
+                                BT.TargetAgentByModelIDAndSendDialog(
+                                    farm.balthazar_champion_model_id,
+                                    dialog_id=0x85,
+                                    log=True,
+                                    multi_account=False,
+                                ),
+                                BT.Wait(500),
+                                BT.SendDialog(
+                                    dialog_id=0x86,
+                                    log=True,
+                                    multi_account=False,
+                                ),
+                                BT.WaitForMapLoad(
+                                    map_id=farm.farm_map_id,
+                                    timeout_ms=45_000,
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            )
+        )
+
+        steps.extend(
+            _vanquish_point_steps(
+                "Farm Path",
+                farm.farm_map_id,
+                farm.farm_path,
+                clear_area_radius=clear_radius,
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                move_tolerance=175.0,
+            )
+        )
+
+        steps.append(
+            ("Resign And Return", lambda: resign_and_return(farm))
         )
 
     else:
         raise ValueError(f"Unsupported Nicholas farm flow: {farm.flow}")
 
     return steps
+

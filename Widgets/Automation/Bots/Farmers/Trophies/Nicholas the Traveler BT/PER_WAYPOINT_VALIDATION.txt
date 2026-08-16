@@ -1,0 +1,23 @@
+Registered farms: 76
+Flow counts: {'challenge': 2, 'dialog': 1, 'direct': 63, 'fow': 1, 'portal_loop': 3, 'two_map': 6}
+Static compile errors: 0
+Farm data errors: 0
+
+Map-transition checks:
+- Mossy Mandible: flow=portal_loop, outpost=139, reset=44, farm=45
+- Mantid Pincer: flow=direct, outpost=250, farm=313
+
+- Per-waypoint movement helper present: True
+- Per-waypoint vanquish helper present: True
+- Map guard present: True
+- Explicit map transition helper: True
+- Old single Farm Path planner step removed: True
+- Two-map transition separated: True
+- Portal loop transition separated: True
+- Exchange route granular: True
+- Collector route granular: True
+- Mossy Mandible is portal loop: True
+- Mossy Mandible has reset/farm zones: True
+- Mantid Pincer data retained: True
+- BubbleTea credit retained: True
+- Gift-account target retained: True

@@ -81,3 +81,44 @@ Example with Forgotten Seal:
 The combined multibox inventory counter is compared against this calculated
 target. Changing the selected farm automatically recalculates the target using
 that farm's Nicholas set requirement.
+
+v1.4.3 - Per-waypoint planner recovery
+--------------------------------------
+All path arrays are now expanded into individual BottingTree planner steps,
+using the same principle as Shards of Orr.
+
+Example:
+    Farm Path - Point 01
+    Farm Path - Point 02
+    Farm Path - Point 03
+
+A movement failure on Point 03 therefore restarts Point 03 instead of replaying
+the whole FARM_PATH.
+
+MAP TRANSITIONS ARE KEPT SEPARATE.
+
+Two-map example:
+    Go Out                         (Outpost -> Transit map)
+    Transit Path - Point 01
+    Transit Path - Point 02
+    Enter Farm Map                (Transit map -> Farm map)
+    Farm Path - Point 01
+    Farm Path - Point 02
+
+Portal-loop example (Mossy Mandible / similar):
+    Prepare Farm Portal - Go Out
+    Prepare Farm Portal - Transit - Point XX
+    Prepare Farm Portal - Ready
+    Enter Farm Map
+    Farm Path - Point XX
+    Reset Via Portal
+
+Each waypoint is guarded by the MapID where it belongs. If a waypoint near a
+portal causes the game to zone before the planner advances, later-map guards
+accept the old-map waypoint as already passed.
+
+Nicholas exchange routes and collector routes are also granular:
+- one planner step per movement/combat waypoint,
+- one explicit step per map transition,
+- collector interaction/exchange as its own step,
+- final Nicholas interaction as its own step.
