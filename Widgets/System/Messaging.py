@@ -762,6 +762,8 @@ def RestoreHeroAISnapshot(account_email: str):
     for skill_index in range(SHMEM_MAX_NUMBER_OF_SKILLS):
         hero_ai_options.Skills[skill_index] = bool(last_state.Skills[skill_index])
 
+    GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account_email, hero_ai_options)
+
 
 _HERO_AI_SUSPENDING_COMMANDS = {
     SharedCommandType.PixelStack,
@@ -847,6 +849,10 @@ def DisableHeroAIOptions(account_email: str):
     hero_ai_options.Looting = False
     hero_ai_options.Targeting = False
     hero_ai_options.Combat = False
+    for skill_index in range(SHMEM_MAX_NUMBER_OF_SKILLS):
+        hero_ai_options.Skills[skill_index] = False
+
+    GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account_email, hero_ai_options)
 
 
 
@@ -860,6 +866,10 @@ def EnableHeroAIOptions(account_email: str):
     hero_ai_options.Looting = True
     hero_ai_options.Targeting = True
     hero_ai_options.Combat = True
+    for skill_index in range(SHMEM_MAX_NUMBER_OF_SKILLS):
+        hero_ai_options.Skills[skill_index] = True
+
+    GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account_email, hero_ai_options)
 
 
 
