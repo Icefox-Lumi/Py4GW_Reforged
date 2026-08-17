@@ -266,6 +266,176 @@ def selected_farm() -> FarmDefinition:
     return FARMS[max(0, min(int(_selected_index), len(FARMS) - 1))]
 
 
+
+# =============================================================================
+# Nicholas item texture resolver
+# =============================================================================
+#
+# Py4GWCoreLib.get_texture_for_model() builds one exact filename from the
+# canonical ModelID enum member. That is insufficient for some Nicholas items:
+#
+#   - several item IDs are Enum aliases whose canonical member has another name
+#     (e.g. Black Pearl 841 can resolve to MOSS_SPIDER);
+#   - several Item Models PNGs intentionally use a dummy / legacy numeric prefix
+#     (e.g. 987654321-Maguuma_Spider_Web.png).
+#
+# Nicholas Manager already knows BOTH the real farming model_id and the item
+# name, so resolve UI textures independently without ever changing the model_id
+# used for looting, inventory counting or farming logic.
+
+_ITEM_TEXTURE_INDEX_READY = False
+_ITEM_TEXTURES_BY_MODEL_ID: dict[int, tuple[str, ...]] = {}
+_ITEM_TEXTURES_BY_NAME: dict[str, tuple[str, ...]] = {}
+
+
+def _normalize_texture_name(value: str) -> str:
+    return "".join(
+        character.lower()
+        for character in str(value or "")
+        if character.isalnum()
+    )
+
+
+def _build_item_texture_index() -> None:
+    """Index Assets/Textures/Item Models once for the lifetime of the widget."""
+    global _ITEM_TEXTURE_INDEX_READY
+    global _ITEM_TEXTURES_BY_MODEL_ID
+    global _ITEM_TEXTURES_BY_NAME
+
+    if _ITEM_TEXTURE_INDEX_READY:
+        return
+
+    by_model_id: dict[int, list[str]] = {}
+    by_name: dict[str, list[str]] = {}
+
+    texture_dir = os.path.join(
+        os.path.abspath(PySystem.Console.get_projects_path()),
+        "Assets",
+        "Textures",
+        "Item Models",
+    )
+
+    try:
+        filenames = os.listdir(texture_dir)
+    except Exception:
+        filenames = []
+
+    for filename in filenames:
+        if not str(filename).lower().endswith(".png"):
+            continue
+
+        stem = os.path.splitext(str(filename))[0]
+        prefix, separator, item_name = stem.partition("-")
+        if not separator or not item_name:
+            continue
+
+        full_path = os.path.join(texture_dir, filename)
+
+        try:
+            numeric_prefix = int(prefix)
+        except (TypeError, ValueError):
+            numeric_prefix = None
+
+        if numeric_prefix is not None:
+            by_model_id.setdefault(numeric_prefix, []).append(full_path)
+
+        normalized_name = _normalize_texture_name(item_name)
+        if normalized_name:
+            by_name.setdefault(normalized_name, []).append(full_path)
+
+    _ITEM_TEXTURES_BY_MODEL_ID = {
+        model_id: tuple(sorted(paths))
+        for model_id, paths in by_model_id.items()
+    }
+    _ITEM_TEXTURES_BY_NAME = {
+        name: tuple(sorted(paths))
+        for name, paths in by_name.items()
+    }
+    _ITEM_TEXTURE_INDEX_READY = True
+
+
+def _farm_texture_name_keys(farm: FarmDefinition) -> tuple[str, ...]:
+    """Names that may identify the farmed trophy in Item Models."""
+    keys: list[str] = []
+
+    for raw_name in (
+        farm.nicholas_item_name,
+        farm.name,
+    ):
+        normalized = _normalize_texture_name(raw_name)
+        if normalized and normalized not in keys:
+            keys.append(normalized)
+
+    return tuple(keys)
+
+
+def _best_named_texture(
+    candidates: tuple[str, ...],
+    name_keys: tuple[str, ...],
+) -> str:
+    if not candidates:
+        return ""
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Prefer an exact normalized trophy-name match when several PNGs share
+    # the same numeric prefix.
+    for path in candidates:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        _prefix, _separator, item_name = stem.partition("-")
+        normalized = _normalize_texture_name(item_name)
+
+        if normalized in name_keys:
+            return path
+
+    # Then accept variants such as "..._(trophy)".
+    for path in candidates:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        _prefix, _separator, item_name = stem.partition("-")
+        normalized = _normalize_texture_name(item_name)
+
+        if any(
+            key and (key in normalized or normalized in key)
+            for key in name_keys
+        ):
+            return path
+
+    # Deterministic final choice when the numeric prefix itself is reliable.
+    return candidates[0]
+
+
+def _resolve_farm_texture(farm: FarmDefinition) -> str:
+    """
+    Resolve the selected farm icon from Assets/Textures/Item Models.
+
+    Resolution order:
+      1. PNG numeric prefix == farm.model_id;
+         if several exist, prefer the trophy name.
+      2. Exact normalized trophy-name match regardless of PNG numeric prefix.
+      3. Existing Py4GWCoreLib.get_texture_for_model() fallback.
+
+    This keeps the REAL farming model_id untouched. For example:
+        Maguuma Spider Web farm model_id = 234
+        displayed PNG = 987654321-Maguuma_Spider_Web.png
+    """
+    _build_item_texture_index()
+
+    model_id = int(farm.model_id)
+    name_keys = _farm_texture_name_keys(farm)
+
+    by_id = _ITEM_TEXTURES_BY_MODEL_ID.get(model_id, ())
+    if by_id:
+        return _best_named_texture(by_id, name_keys)
+
+    for key in name_keys:
+        by_name = _ITEM_TEXTURES_BY_NAME.get(key, ())
+        if by_name:
+            return _best_named_texture(by_name, name_keys)
+
+    return get_texture_for_model(model_id)
+
+
 def _record_count_result(
     total: int,
     counts: dict[str, int],
@@ -721,7 +891,7 @@ def main() -> None:
     ex_tree.tick()
 
     farm = selected_farm()
-    texture = get_texture_for_model(farm.model_id)
+    texture = _resolve_farm_texture(farm)
 
     tree.UI.draw_window(
         icon_path=texture,

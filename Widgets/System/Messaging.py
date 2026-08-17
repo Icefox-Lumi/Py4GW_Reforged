@@ -3429,6 +3429,62 @@ def CollectorExchange(index: int, message: SharedMessageStruct):
 # endregion
 
 
+# region AddModelToLootWhitelist
+def AddModelToLootWhitelist(index: int, message: SharedMessageStruct):
+    """
+    Add one model ID to the receiving client's LIVE loot whitelist.
+
+    Params:
+      0 = item model id
+
+    This intentionally uses LootFilters().add_model(), which changes the live
+    filter state only. It does not overwrite the user's persisted loot-filter
+    configuration and model additions survive map changes during the run.
+    """
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+
+    try:
+        model_id = int(message.Params[0])
+        label = _extra_data(message)[0].strip()
+
+        if model_id <= 0:
+            ConsoleLog(
+                MODULE_NAME,
+                "AddModelToLootWhitelist: invalid model_id.",
+                Console.MessageType.Warning,
+                False,
+            )
+            return
+
+        LootFilters().add_model(model_id)
+
+        ConsoleLog(
+            MODULE_NAME,
+            (
+                f"Added model {model_id}"
+                + (f" ({label})" if label else "")
+                + " to the live loot whitelist."
+            ),
+            Console.MessageType.Info,
+            False,
+        )
+
+        # Keep this routine as a coroutine so it is compatible with the
+        # Messaging dispatcher used by all other shared commands.
+        yield from Routines.Yield.wait(50)
+
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f"AddModelToLootWhitelist failed: {exc}",
+            Console.MessageType.Error,
+            False,
+        )
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+# endregion
+
+
 # region ProcessMessages
 def ProcessMessages():
     account_email = Player.GetAccountEmail()
@@ -3560,6 +3616,8 @@ def ProcessMessages():
             GLOBAL_CACHE.Coroutines.append(EquipItem(index, message))
         case SharedCommandType.CollectorExchange:
             GLOBAL_CACHE.Coroutines.append(CollectorExchange(index, message))
+        case SharedCommandType.AddModelToLootWhitelist:
+            GLOBAL_CACHE.Coroutines.append(AddModelToLootWhitelist(index, message))
         case SharedCommandType.LootEx:
             # privately Handled Command, by frenkey
             pass

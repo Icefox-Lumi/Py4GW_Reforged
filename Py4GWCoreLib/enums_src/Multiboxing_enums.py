@@ -81,6 +81,10 @@ class SharedCommandType(IntEnum):
     # Nicholas / generic collector exchange.
     # IMPORTANT: appended at the end so existing SharedCommandType values do not shift.
     CollectorExchange = auto()
+
+    # Generic live loot-filter extension for multibox bots.
+    # IMPORTANT: appended at the end so existing SharedCommandType values do not shift.
+    AddModelToLootWhitelist = auto()
     #endregion
 
 class ReloadType(IntEnum):

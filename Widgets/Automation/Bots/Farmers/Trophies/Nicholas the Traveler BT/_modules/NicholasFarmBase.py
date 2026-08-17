@@ -5,7 +5,7 @@ import time
 
 import PySystem
 
-from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, Player, SharedCommandType
+from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, Map, Player, SharedCommandType
 from Py4GWCoreLib.BottingTree import BottingTree
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
@@ -69,6 +69,171 @@ def disable_merchant_rules_all_accounts() -> BehaviorTree:
         poll_interval_ms=100,
         log=True,
         aftercast_ms=100,
+    )
+
+
+
+def whitelist_farm_item_all_accounts(farm: FarmDefinition) -> BehaviorTree:
+    """
+    Add the selected farm trophy model to the LIVE loot whitelist on every
+    active shared-memory account, including the leader.
+
+    This runs inside Initial Farm Setup, so it executes once per MANUAL Start
+    for the selected farm and is not repeated after resign/reset loops or
+    named-step recovery.
+    """
+    return BTShared.SendAndWait(
+        command=SharedCommandType.AddModelToLootWhitelist,
+        params=(float(farm.model_id), 0.0, 0.0, 0.0),
+        extra_data=(farm.name, "", "", ""),
+        include_self=True,
+        refs_blackboard_key="__nicholas_add_farm_model_whitelist_refs",
+        timeout_ms=10_000,
+        poll_interval_ms=100,
+        log=True,
+        aftercast_ms=100,
+    )
+
+
+
+
+def _challenge_instance_already_loaded(
+    farm: FarmDefinition,
+) -> BehaviorTree:
+    """
+    Immediate check for challenge/mission instances whose outpost and mission
+    may share the same MapID.
+
+    MapID alone is NOT sufficient:
+      Minotaur Horn: outpost 118, mission 118
+      Spiked Crest : outpost 19,  mission 19
+
+    The farm is considered loaded only when the expected MapID is active AND
+    the current instance is actually explorable.
+    """
+    def _check(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        try:
+            current_map_id = int(Map.GetMapID() or 0)
+            is_explorable = bool(Map.IsExplorable())
+        except Exception:
+            return BehaviorTree.NodeState.FAILURE
+
+        if current_map_id == int(farm.farm_map_id) and is_explorable:
+            return BehaviorTree.NodeState.SUCCESS
+
+        return BehaviorTree.NodeState.FAILURE
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=f"Challenge Instance Loaded - {farm.name}",
+            action_fn=_check,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _enter_challenge_and_wait_for_explorable(
+    farm: FarmDefinition,
+) -> BehaviorTree:
+    """
+    Enter a mission/challenge and wait for the INSTANCE TYPE to become
+    explorable.
+
+    Do not use BT.EnterChallenge(target_map_id=farm.farm_map_id) here when the
+    outpost and mission share one MapID: its final WaitForMapLoad(map_id) can
+    succeed while we are still standing in the outpost because the MapID
+    already matches.
+
+    Waiting for Map.IsExplorable() removes that ambiguity.
+    """
+    def _click_enter(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        try:
+            if not Map.IsOutpost():
+                # If recovery reaches this action after the zone has already
+                # changed, do not click Enter Challenge a second time.
+                if Map.IsExplorable():
+                    return BehaviorTree.NodeState.SUCCESS
+
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"Entering challenge for {farm.name}.",
+                PySystem.Console.MessageType.Info,
+            )
+            Map.EnterChallenge()
+            return BehaviorTree.NodeState.SUCCESS
+        except Exception as exc:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"Enter challenge failed for {farm.name}: {exc}",
+                PySystem.Console.MessageType.Error,
+            )
+            return BehaviorTree.NodeState.FAILURE
+
+    return BT.Sequence(
+        name=f"Enter Challenge - {farm.name}",
+        children=[
+            BehaviorTree(
+                BehaviorTree.ActionNode(
+                    name=f"Click Enter Challenge - {farm.name}",
+                    action_fn=_click_enter,
+                    aftercast_ms=100,
+                )
+            ),
+            BT.Wait(max(0, int(farm.challenge_delay_ms))),
+            BT.WaitUntilOnExplorable(timeout_ms=60_000),
+        ],
+    )
+
+
+def refresh_follower_heroai_after_instance_entry(
+    farm: FarmDefinition,
+) -> BehaviorTree:
+    """
+    Reinitialize the standard HeroAI widget on follower accounts after a
+    mission/challenge/special-instance map load.
+
+    BottingTree's headless HeroAI runs locally on the leader. In multibox mode,
+    followers are driven by the regular HeroAI widget. BottingTree normally
+    synchronizes that widget once when Headless HeroAI is enabled and caches
+    the requested state.
+
+    Some mission/challenge instance transitions can leave the follower widget
+    inactive after the new instance loads while the leader still considers the
+    previous "enabled" synchronization current. Toggling Headless HeroAI OFF
+    then ON fixes it because that sends DisableWidget -> EnableWidget again.
+
+    Reproduce that refresh only on FOLLOWERS:
+      Disable HeroAI -> short wait -> Enable HeroAI
+
+    The leader is excluded so its local regular HeroAI widget stays disabled
+    while BottingTree's headless HeroAI owns combat/movement control.
+    """
+    return BT.Sequence(
+        name=f"Refresh Follower HeroAI - {farm.name}",
+        children=[
+            BTShared.SendAndWait(
+                command=SharedCommandType.DisableWidget,
+                extra_data=("HeroAI", "", "", ""),
+                include_self=False,
+                refs_blackboard_key="__nicholas_refresh_follower_heroai_disable_refs",
+                timeout_ms=10_000,
+                poll_interval_ms=100,
+                log=True,
+                aftercast_ms=100,
+            ),
+            BT.Wait(250),
+            BTShared.SendAndWait(
+                command=SharedCommandType.EnableWidget,
+                extra_data=("HeroAI", "", "", ""),
+                include_self=False,
+                refs_blackboard_key="__nicholas_refresh_follower_heroai_enable_refs",
+                timeout_ms=10_000,
+                poll_interval_ms=100,
+                log=True,
+                aftercast_ms=100,
+            ),
+            BT.Wait(250),
+        ],
     )
 
 
@@ -143,6 +308,7 @@ def prepare_farm(
     One-time setup per MANUAL Start:
 
       MerchantRules OFF on all accounts
+      -> selected trophy model whitelisted on all accounts
       -> aggressive multibox HeroAI
       -> leave current party
       -> RANDOM travel to farm outpost
@@ -169,6 +335,7 @@ def prepare_farm(
                 name="Initial Farm Setup",
                 children=[
                     disable_merchant_rules_all_accounts(),
+                    whitelist_farm_item_all_accounts(farm),
                     tree.Config.Aggressive(
                         multi_account=True,
                         account_isolation=False,
@@ -2082,22 +2249,17 @@ def build_execution_steps(
                 lambda: BT.Selector(
                     name="Enter Challenge",
                     children=[
-                        BT.Sequence(
-                            name="Enter Challenge - Already Loaded",
-                            children=[
-                                BT.IsCurrentMap(
-                                    map_id=farm.farm_map_id,
-                                    log=False,
-                                ),
-                                BT.Succeeder("ChallengeAlreadyLoaded"),
-                            ],
-                        ),
-                        BT.EnterChallenge(
-                            delay_ms=farm.challenge_delay_ms,
-                            target_map_id=farm.farm_map_id,
-                        ),
+                        _challenge_instance_already_loaded(farm),
+                        _enter_challenge_and_wait_for_explorable(farm),
                     ],
                 ),
+            )
+        )
+
+        steps.append(
+            (
+                "Refresh HeroAI After Challenge Entry",
+                lambda: refresh_follower_heroai_after_instance_entry(farm),
             )
         )
 
@@ -2156,6 +2318,13 @@ def build_execution_steps(
                         ),
                     ],
                 ),
+            )
+        )
+
+        steps.append(
+            (
+                "Refresh HeroAI After Dialog Entry",
+                lambda: refresh_follower_heroai_after_instance_entry(farm),
             )
         )
 
@@ -2236,6 +2405,13 @@ def build_execution_steps(
                         ),
                     ],
                 ),
+            )
+        )
+
+        steps.append(
+            (
+                "Refresh HeroAI After FoW Entry",
+                lambda: refresh_follower_heroai_after_instance_entry(farm),
             )
         )
 
