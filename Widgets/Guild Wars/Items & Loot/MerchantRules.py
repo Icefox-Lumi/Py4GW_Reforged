@@ -2333,6 +2333,15 @@ class SalvageCandidate:
 
 
 @dataclass(frozen=True)
+class PlannedSpecificUpgradeSalvageOwner:
+    """Snapshot the Specific-upgrade rule that owns one final execution-plan item."""
+
+    model_id: int
+    rule_index: int
+    rule_snapshot: SalvageRule
+
+
+@dataclass(frozen=True)
 class SalvageUpgradeTargetMatch:
     label: str = ""
     required_option: str = ""
@@ -3858,6 +3867,7 @@ class PlanResult:
     identify_claimed_item_ids: list[int] = field(default_factory=list)
     identify_item_ids: list[int] = field(default_factory=list)
     salvage_item_ids: list[int] = field(default_factory=list)
+    salvage_specific_upgrade_owners: dict[int, PlannedSpecificUpgradeSalvageOwner] = field(default_factory=dict)
     destroy_actions: list[PlannedDestroyAction] = field(default_factory=list)
     destroy_item_ids: list[int] = field(default_factory=list)
     merchant_sell_item_ids: list[int] = field(default_factory=list)
@@ -16447,6 +16457,7 @@ class MerchantRulesWidget:
             identify_claimed_item_ids=list(destination_plan.identify_claimed_item_ids),
             identify_item_ids=list(destination_plan.identify_item_ids),
             salvage_item_ids=list(destination_plan.salvage_item_ids),
+            salvage_specific_upgrade_owners=dict(destination_plan.salvage_specific_upgrade_owners),
             destroy_actions=list(destination_plan.destroy_actions),
             destroy_item_ids=list(destination_plan.destroy_item_ids),
             merchant_sell_item_ids=list(destination_plan.merchant_sell_item_ids),
@@ -18003,18 +18014,35 @@ class MerchantRulesWidget:
         if normalized_rule is None or not bool(normalized_rule.enabled):
             return ""
 
+        is_targeted_specific_upgrade = (
+            _is_auto_exact_upgrade_salvage_option(normalized_rule.salvage_option)
+            and _salvage_rule_has_upgrade_targets(normalized_rule)
+        )
+        targeted_specific_upgrade_reason = (
+            self._get_salvage_rule_upgrade_target_reason(normalized_rule, item)
+            if is_targeted_specific_upgrade
+            else ""
+        )
+        if is_targeted_specific_upgrade and not targeted_specific_upgrade_reason:
+            return ""
+
+        rarity_filter_active = any(bool(value) for value in normalized_rule.rarities.values())
+        category_filter_active = any(bool(value) for value in normalized_rule.categories.values())
+        normal_selector_active = bool(normalized_rule.model_ids) or rarity_filter_active or category_filter_active
+        model_matches = int(item.model_id) in set(int(model_id) for model_id in normalized_rule.model_ids)
+
         base_reason = ""
-        if int(item.model_id) in set(int(model_id) for model_id in normalized_rule.model_ids):
+        if model_matches:
             base_reason = f"selected model {self._format_model_label(int(item.model_id))}"
         else:
-            upgrade_target_reason = self._get_salvage_rule_upgrade_target_reason(normalized_rule, item)
+            upgrade_target_reason = ""
+            if not is_targeted_specific_upgrade:
+                upgrade_target_reason = self._get_salvage_rule_upgrade_target_reason(normalized_rule, item)
             if upgrade_target_reason:
                 base_reason = upgrade_target_reason
             else:
                 rarity_key = _normalize_rarity_key(str(item.rarity or ""))
                 category_key = self._get_salvage_category_key_for_item(item)
-                rarity_filter_active = any(bool(value) for value in normalized_rule.rarities.values())
-                category_filter_active = any(bool(value) for value in normalized_rule.categories.values())
                 rarity_matches = bool(normalized_rule.rarities.get(rarity_key, False))
                 category_matches = bool(normalized_rule.categories.get(category_key, False))
                 if rarity_filter_active and not rarity_matches:
@@ -18028,6 +18056,12 @@ class MerchantRulesWidget:
                     if category_filter_active:
                         reason_parts.append(f"category {self._get_salvage_category_label(category_key)}")
                     base_reason = f"selected {' and '.join(reason_parts)}"
+
+        if is_targeted_specific_upgrade:
+            if not base_reason and normal_selector_active:
+                return ""
+            if not model_matches:
+                base_reason = targeted_specific_upgrade_reason
 
         target_model_ids = _normalize_common_material_model_ids(
             getattr(normalized_rule, "target_common_material_model_ids", [])
@@ -18063,6 +18097,30 @@ class MerchantRulesWidget:
             reason = self._get_salvage_rule_filter_reason(rule, item)
             if reason:
                 return rule_index, rule, reason
+        return None
+
+    def _get_planned_specific_upgrade_salvage_rule(
+        self,
+        owner: PlannedSpecificUpgradeSalvageOwner,
+    ) -> tuple[int, SalvageRule] | None:
+        """Resolve only the rule identity retained by the final live Execute plan."""
+
+        expected_rule = _normalize_salvage_rule(owner.rule_snapshot)
+        expected_rule_index = int(owner.rule_index)
+        if (
+            expected_rule is None
+            or expected_rule_index < 0
+            or not _is_auto_exact_upgrade_salvage_option(expected_rule.salvage_option)
+            or not _salvage_rule_has_upgrade_targets(expected_rule)
+        ):
+            return None
+
+        for current_rule_index, current_rule in self._collect_enabled_salvage_rules():
+            if int(current_rule_index) != expected_rule_index:
+                continue
+            if _normalize_salvage_rule(current_rule) != expected_rule:
+                return None
+            return int(current_rule_index), current_rule
         return None
 
     def _get_salvage_selection_reason(self, item: InventoryItemInfo) -> str:
@@ -18323,6 +18381,7 @@ class MerchantRulesWidget:
         preferred_salvage_kit_model_id: int = 0,
         include_not_selected_blocks: bool = False,
         manual_salvage_rule: SalvageRule | None = None,
+        planned_specific_upgrade_owners: dict[int, PlannedSpecificUpgradeSalvageOwner] | None = None,
     ) -> tuple[list[SalvageCandidate], dict[str, int]]:
         """Select salvage candidates by rule precedence and bucket every blocked reason."""
 
@@ -18333,7 +18392,49 @@ class MerchantRulesWidget:
             rule_index = -1
             salvage_rule: SalvageRule | None = None
             selection_reason = ""
-            if explicit_rule is not None:
+            planned_owner = (
+                planned_specific_upgrade_owners.get(int(item.item_id))
+                if explicit_rule is None and planned_specific_upgrade_owners is not None
+                else None
+            )
+            if planned_owner is not None:
+                if int(item.model_id) != int(planned_owner.model_id):
+                    owner_block_reason = "planned Specific upgrade item identity changed before execution"
+                    blocked_counts[owner_block_reason] = blocked_counts.get(owner_block_reason, 0) + 1
+                    self._debug_log(
+                        f"MR Salvage skipped {self._format_inventory_item_log_label(item)} ({item.item_id}): "
+                        f"{owner_block_reason}."
+                    )
+                    continue
+                planned_rule_match = self._get_planned_specific_upgrade_salvage_rule(planned_owner)
+                if planned_rule_match is None:
+                    owner_block_reason = "planned Specific upgrade owner changed before execution"
+                    blocked_counts[owner_block_reason] = blocked_counts.get(owner_block_reason, 0) + 1
+                    self._debug_log(
+                        f"MR Salvage skipped {self._format_inventory_item_log_label(item)} ({item.item_id}): "
+                        f"{owner_block_reason}."
+                    )
+                    continue
+                rule_index, salvage_rule = planned_rule_match
+                selection_reason = self._get_salvage_rule_filter_reason(salvage_rule, item)
+                if not selection_reason:
+                    owner_block_reason = self._get_salvage_candidate_block_reason(
+                        item,
+                        enabled_sell_rules,
+                        salvage_rule=salvage_rule,
+                        require_salvage_kit=False,
+                        mode=mode,
+                    )
+                    if owner_block_reason in {"", "not selected by salvage settings"}:
+                        owner_block_reason = "planned Specific upgrade owner no longer matches"
+                    bucket = self._get_salvage_block_bucket(owner_block_reason) or owner_block_reason
+                    blocked_counts[bucket] = blocked_counts.get(bucket, 0) + 1
+                    self._debug_log(
+                        f"MR Salvage skipped {self._format_inventory_item_log_label(item)} ({item.item_id}): "
+                        f"{owner_block_reason}."
+                    )
+                    continue
+            elif explicit_rule is not None:
                 explicit_reason = self._get_salvage_rule_filter_reason(explicit_rule, item)
                 if explicit_reason:
                     salvage_rule = explicit_rule
@@ -20467,6 +20568,16 @@ class MerchantRulesWidget:
             if item_id <= 0:
                 continue
             rule = _normalize_salvage_rule(candidate.rule) or SalvageRule()
+            if (
+                int(candidate.rule_index) >= 0
+                and _is_auto_exact_upgrade_salvage_option(rule.salvage_option)
+                and _salvage_rule_has_upgrade_targets(rule)
+            ):
+                plan.salvage_specific_upgrade_owners[item_id] = PlannedSpecificUpgradeSalvageOwner(
+                    model_id=int(item.model_id),
+                    rule_index=int(candidate.rule_index),
+                    rule_snapshot=_normalize_salvage_rule(rule) or SalvageRule(),
+                )
             rule_reference = (
                 self._format_salvage_rule_reference(int(candidate.rule_index), rule)
                 if int(candidate.rule_index) >= 0
@@ -26592,6 +26703,7 @@ class MerchantRulesWidget:
                 salvage_outcome = yield from self._run_salvage_pass(
                     summary_subject="Salvage during Execute",
                     planned_salvage_item_ids=set(plan.salvage_item_ids),
+                    planned_specific_upgrade_owners=plan.salvage_specific_upgrade_owners,
                 )
                 self.last_execution_phase_durations_ms["salvage"] = max(0.0, (time.perf_counter() - salvage_started_at) * 1000.0)
                 salvage_summary = self.last_salvage_summary or self._format_salvage_summary(
@@ -28382,6 +28494,7 @@ class MerchantRulesWidget:
         preferred_salvage_kit_model_id: int = 0,
         explicit_salvage_request: bool = False,
         planned_salvage_item_ids: set[int] | list[int] | tuple[int, ...] | None = None,
+        planned_specific_upgrade_owners: dict[int, PlannedSpecificUpgradeSalvageOwner] | None = None,
     ):
         """Run a bounded salvage pass with rule claims, kit checks, and stack-progress guards.
 
@@ -28420,6 +28533,12 @@ class MerchantRulesWidget:
                 for item_id in (planned_salvage_item_ids or [])
                 if max(0, _safe_int(item_id, 0)) > 0
             }
+            scoped_specific_upgrade_owners = {
+                int(item_id): owner
+                for item_id, owner in (planned_specific_upgrade_owners or {}).items()
+                if int(item_id) in scoped_item_ids
+            }
+            self._reserve_execute_item_ids(scoped_specific_upgrade_owners.keys())
             missing_scoped_item_count = 0
             if scoped_item_ids:
                 live_scoped_item_ids = {
@@ -28460,6 +28579,11 @@ class MerchantRulesWidget:
                 preferred_salvage_kit_model_id=preferred_salvage_kit_model_id,
                 include_not_selected_blocks=bool(explicit_salvage_request),
                 manual_salvage_rule=manual_salvage_rule,
+                planned_specific_upgrade_owners=(
+                    scoped_specific_upgrade_owners
+                    if scoped_specific_upgrade_owners
+                    else None
+                ),
             )
             if not candidates:
                 outcome = ExecutionPhaseOutcome(

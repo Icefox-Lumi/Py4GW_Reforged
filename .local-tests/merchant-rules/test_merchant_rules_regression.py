@@ -8078,6 +8078,18 @@ def _test_scoped_specific_upgrade_salvage_remains_one_pass(module) -> None:
 
 def _test_execute_now_runs_planned_salvage_before_merchant_phases(module) -> None:
     widget = _make_widget(module)
+    owner_rule = module._normalize_salvage_rule(
+        module.SalvageRule(
+            enabled=True,
+            salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+            target_weapon_mod_identifiers=["of Defense"],
+        )
+    )
+    planned_owner = module.PlannedSpecificUpgradeSalvageOwner(
+        model_id=123,
+        rule_index=0,
+        rule_snapshot=owner_rule,
+    )
     first_plan = module.PlanResult(
         entries=[
             module.ExecutionPlanEntry(
@@ -8093,6 +8105,7 @@ def _test_execute_now_runs_planned_salvage_before_merchant_phases(module) -> Non
         supported_map=False,
         supported_reason="Merchant support unavailable.",
         salvage_item_ids=[83503],
+        salvage_specific_upgrade_owners={83503: planned_owner},
         has_actions=True,
     )
     empty_plan = module.PlanResult(
@@ -8128,6 +8141,10 @@ def _test_execute_now_runs_planned_salvage_before_merchant_phases(module) -> Non
     _expect(
         set(salvage_calls[0].get("planned_salvage_item_ids") or set()) == {83503},
         "Execute should scope salvage to the rebuilt plan's executable salvage IDs.",
+    )
+    _expect(
+        salvage_calls[0].get("planned_specific_upgrade_owners") == first_plan.salvage_specific_upgrade_owners,
+        "Execute should pass the final live plan's Specific owner map into scoped Salvage.",
     )
     _expect(
         "Salvage during Execute processed 3 item(s)." in widget.last_execution_summary,
@@ -8592,6 +8609,491 @@ def _make_specific_suffix_item(module, *, item_id: int = 40):
             )
         ],
     )
+
+
+def _test_specific_upgrade_target_gate_preserves_normal_selector_semantics(module) -> None:
+    original_db = _install_weapon_mod_catalog_fixture(module)
+    try:
+        widget = _make_widget(module)
+        item = _make_specific_suffix_item(module)
+        target_only_rule = _make_specific_suffix_salvage_rule(module, module.SALVAGE_OPTION_AUTO_UPGRADE)
+
+        _expect(
+            widget._get_salvage_rule_filter_reason(target_only_rule, item),
+            "A target-only Specific upgrade rule should match when its exact target is present.",
+        )
+        absent_target_item = replace(item, weapon_mod_identifiers=[], weapon_mod_matches=[])
+        _expect(
+            not widget._get_salvage_rule_filter_reason(target_only_rule, absent_target_item),
+            "A target-only Specific upgrade rule should be a nonmatch when its exact target is absent.",
+        )
+
+        weapon_categories = {
+            key: key == module.SALVAGE_CATEGORY_WEAPONS
+            for key, _label in module.SALVAGE_CATEGORY_ORDER
+        }
+        armor_categories = {
+            key: key == module.SALVAGE_CATEGORY_ARMOR
+            for key, _label in module.SALVAGE_CATEGORY_ORDER
+        }
+        broad_rule = replace(
+            target_only_rule,
+            rarities=_rarity_flags("gold"),
+            categories=weapon_categories,
+        )
+        widget.salvage_settings = _salvage_settings(module, rules=[broad_rule])
+        broad_match = widget._get_matching_salvage_rule(item)
+        _expect(
+            broad_match is not None and broad_match[0] == 0,
+            "A present Specific target plus matching rarity/category selectors should genuinely match.",
+        )
+
+        rejected_rule = replace(
+            target_only_rule,
+            model_ids=[int(item.model_id) + 1],
+            rarities=_rarity_flags("purple"),
+            categories=armor_categories,
+        )
+        _expect(
+            not widget._get_salvage_rule_filter_reason(rejected_rule, item),
+            "A present Specific target must not bypass failed rarity/category selectors when no exact model matches.",
+        )
+
+        exact_model_rule = replace(
+            target_only_rule,
+            model_ids=[int(item.model_id)],
+            rarities=_rarity_flags("purple"),
+            categories=armor_categories,
+        )
+        exact_model_reason = widget._get_salvage_rule_filter_reason(exact_model_rule, item)
+        _expect(
+            exact_model_reason.startswith("selected model "),
+            "A present Specific target must preserve exact model precedence over rejecting rarity/category filters.",
+        )
+    finally:
+        module.MOD_DB = original_db
+
+
+def _test_specific_upgrade_target_absent_allows_later_targeted_materials(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    specific_rule = module._normalize_salvage_rule(
+        module.SalvageRule(
+            enabled=True,
+            model_ids=[int(item.model_id)],
+            salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+            target_weapon_mod_identifiers=["of Defense"],
+            name="Absent Specific target",
+        )
+    )
+    materials_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Later targeted Materials",
+        target_common_material=True,
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[specific_rule, materials_rule])
+
+    _expect(
+        not widget._get_salvage_rule_filter_reason(specific_rule, item),
+        "A configured Specific target that is absent must be a genuine nonmatch even when its model selector matches.",
+    )
+    match = widget._get_matching_salvage_rule(item)
+    _expect(
+        match is not None and match[0] == 1 and match[1].name == "Later targeted Materials",
+        "A later targeted Materials rule should win after a configured Specific target is absent.",
+    )
+
+
+def _test_specific_upgrade_match_owns_blocked_preview_and_execute(module) -> None:
+    original_db = _install_weapon_mod_catalog_fixture(module)
+    try:
+        widget = _make_widget(module)
+        item = _make_specific_suffix_item(module)
+        specific_rule = _make_specific_suffix_salvage_rule(module, module.SALVAGE_OPTION_AUTO_UPGRADE)
+        specific_rule.name = "Owned Specific upgrade"
+        later_materials_rule = module._normalize_salvage_rule(
+            module.SalvageRule(
+                enabled=True,
+                model_ids=[int(item.model_id)],
+                salvage_option=module.SALVAGE_OPTION_MATERIALS,
+                name="Later Materials",
+            )
+        )
+        widget.salvage_settings = _salvage_settings(module, rules=[specific_rule, later_materials_rule])
+        fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=False)
+        _install_fake_exact_salvage_bridge(widget, fake_bridge)
+        widget._get_salvage_kit_id_for_option = lambda _option: 777
+
+        match = widget._get_matching_salvage_rule(item)
+        _expect(
+            match is not None and match[0] == 0 and match[1].name == "Owned Specific upgrade",
+            "Preview selection should assign ownership to the genuinely matched Specific upgrade rule.",
+        )
+        _expect(
+            widget._get_salvage_rule_filter_reason(later_materials_rule, item),
+            "The later Materials rule should independently match the item for the no-fallthrough check.",
+        )
+
+        candidates, blocked_counts = widget._collect_salvage_candidates(
+            [item],
+            [],
+            require_salvage_kit=True,
+        )
+        _expect(not candidates, "Preview must fail closed when the owned Specific upgrade backend is unavailable.")
+        _expect(blocked_counts, "Preview should record the Specific upgrade safety block.")
+
+        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        status = _drain_generator_return(
+            widget._salvage_one_item_with_rule(
+                _make_salvage_candidate(module, item, specific_rule),
+                [],
+            )
+        )
+        _expect(status == "blocked", "Execute must fail closed on the same owned Specific upgrade safety block.")
+        _expect(fake_bridge.calls == [], "A blocked Specific upgrade must not execute or fall through to Materials.")
+    finally:
+        module.MOD_DB = original_db
+
+
+def _test_no_target_specific_salvage_preserves_narrow_block_and_no_reservation(module) -> None:
+    widget = _make_widget(module)
+    item = _common_material_target_fixture(module, widget, outputs=(925,))
+    no_target_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+        name="No-target Specific upgrade",
+    )
+    later_materials_rule = _make_salvage_priority_rule(
+        module,
+        item,
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Later Materials",
+        target_common_material=True,
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[no_target_rule, later_materials_rule])
+
+    _expect(
+        widget._get_salvage_rule_filter_reason(no_target_rule, item),
+        "A no-target Specific rule should retain its existing normal-selector Salvage match.",
+    )
+    block_reason = widget._get_salvage_candidate_block_reason(
+        item,
+        [],
+        salvage_rule=no_target_rule,
+        require_salvage_kit=False,
+    )
+    _expect(
+        block_reason == "specific upgrade salvage requires a matching specific upgrade target",
+        "A no-target Specific rule should retain its narrow Salvage-layer execution block.",
+    )
+    candidates, blocked_counts = widget._collect_salvage_candidates([item], [], require_salvage_kit=False)
+    _expect(not candidates and blocked_counts, "A blocked no-target Specific rule must continue to block later Salvage rules.")
+    _expect(
+        widget._get_specific_upgrade_salvage_reservation_reason(item) == "",
+        "A no-target Specific rule must not create a new global Salvage reservation.",
+    )
+    _expect(
+        widget._get_salvage_destroy_claim_reason(item, []) == "",
+        "A no-target Specific rule must not reserve the item from Destroy.",
+    )
+
+    widget.sell_rules = [
+        module._normalize_sell_rule(
+            module.SellRule(
+                enabled=True,
+                kind=module.SELL_KIND_WEAPONS,
+                rarities=_rarity_flags("gold"),
+            )
+        )
+    ]
+    widget._get_supported_context = lambda *, passive=False: (
+        True,
+        "Ready",
+        {module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+    )
+    widget._collect_inventory_items = lambda: [item]
+    plan = widget._build_plan()
+    _expect(
+        plan.merchant_sell_item_ids == [item.item_id],
+        "A no-target Specific rule must not reserve the item from a later Sell rule.",
+    )
+
+
+def _make_final_live_specific_owner_fixture(module, *, item_id: int = 40, include_later_materials: bool = False):
+    widget = _make_widget(module)
+    item = _make_specific_suffix_item(module, item_id=item_id)
+    specific_rule = _make_specific_suffix_salvage_rule(module, module.SALVAGE_OPTION_AUTO_UPGRADE)
+    rules = [specific_rule]
+    later_materials_rule = None
+    if include_later_materials:
+        later_materials_rule = module._normalize_salvage_rule(
+            module.SalvageRule(
+                enabled=True,
+                model_ids=[int(item.model_id)],
+                salvage_option=module.SALVAGE_OPTION_MATERIALS,
+                name="Later Materials",
+            )
+        )
+        rules.append(later_materials_rule)
+    widget.salvage_settings = _salvage_settings(module, rules=rules)
+    widget._get_supported_context = lambda *, passive=False: (
+        True,
+        "Ready",
+        {module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+    )
+    widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 777
+    widget._get_inventory_signature = lambda _items=None: ()
+    fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=True)
+    _install_fake_exact_salvage_bridge(widget, fake_bridge)
+    return widget, item, specific_rule, later_materials_rule, fake_bridge
+
+
+def _test_final_live_specific_owner_blocks_target_loss_and_replan(module) -> None:
+    original_db = _install_weapon_mod_catalog_fixture(module)
+    try:
+        widget, item, _specific_rule, later_materials_rule, fake_bridge = _make_final_live_specific_owner_fixture(
+            module,
+            include_later_materials=True,
+        )
+        live_item = item
+        widget._collect_inventory_items = lambda: [live_item]
+        final_plan = widget._build_plan()
+        owner = final_plan.salvage_specific_upgrade_owners.get(int(item.item_id))
+
+        _expect(final_plan.salvage_item_ids == [item.item_id], "The final live plan should select the Specific item for Salvage.")
+        _expect(owner is not None, "The final live plan should retain the Specific owner by item ID.")
+        _expect(
+            later_materials_rule is not None and widget._get_salvage_rule_filter_reason(later_materials_rule, item),
+            "The later Materials rule should independently match the item for the no-fallthrough check.",
+        )
+
+        live_item = replace(item, weapon_mod_identifiers=[], weapon_mod_matches=[])
+        _expect(
+            later_materials_rule is not None and widget._get_salvage_rule_filter_reason(later_materials_rule, live_item),
+            "The later Materials rule should match after the Specific target disappears.",
+        )
+        salvage_calls: list[str] = []
+
+        def _record_salvage_call(candidate, *_args, **_kwargs):
+            salvage_calls.append(str(candidate.rule.name))
+            if False:
+                yield None
+            return "processed"
+
+        widget._salvage_one_item_with_rule = _record_salvage_call
+        owned_scope = widget._begin_execute_reservation_scope()
+        try:
+            outcome = _drain_generator_return(
+                widget._run_salvage_pass(
+                    running_already_marked=True,
+                    planned_salvage_item_ids=set(final_plan.salvage_item_ids),
+                    planned_specific_upgrade_owners=final_plan.salvage_specific_upgrade_owners,
+                )
+            )
+            _expect(not salvage_calls, "A disappeared Specific target must not call the later Materials rule.")
+            _expect(outcome.unavailable == 1, "A disappeared Specific target must fail closed as unavailable.")
+            _expect(
+                int(item.item_id) in widget.execute_reserved_item_ids,
+                "A final-plan Specific owner must remain reserved through the Execute scope.",
+            )
+            _expect(not fake_bridge.calls, "A disappeared Specific target must not reach the exact-upgrade bridge.")
+
+            widget.sell_rules = [
+                module._normalize_sell_rule(
+                    module.SellRule(
+                        enabled=True,
+                        kind=module.SELL_KIND_EXPLICIT_MODELS,
+                        whitelist_targets=[module.WhitelistTarget(model_id=int(item.model_id), keep_count=0)],
+                    )
+                )
+            ]
+            widget.destroy_rules = [
+                module._normalize_destroy_rule(
+                    module.DestroyRule(
+                        enabled=True,
+                        kind=module.DESTROY_KIND_EXPLICIT_MODELS,
+                        model_ids=[int(item.model_id)],
+                    )
+                )
+            ]
+            replanned = widget._build_plan()
+            _expect(
+                int(item.item_id) not in replanned.merchant_sell_item_ids,
+                "A failed Specific owner must not be claimed by a later Sell replan.",
+            )
+            _expect(
+                int(item.item_id) not in replanned.destroy_item_ids
+                and not any(int(action.item_id) == int(item.item_id) for action in replanned.destroy_actions),
+                "A failed Specific owner must not be claimed by a later Destroy replan.",
+            )
+        finally:
+            widget._end_execute_reservation_scope(owned_scope)
+        _expect(
+            not widget.execute_reserved_item_ids,
+            "The failed Specific owner reservation must be cleared after Execute scope completion.",
+        )
+        _expect(
+            not widget.execute_reservation_scope_active,
+            "The Execute reservation scope must be inactive after completion.",
+        )
+        post_scope_plan = widget._build_plan()
+        _expect(
+            post_scope_plan.inventory_item_count == 1,
+            "An independent plan must see the item again after the temporary Execute reservation expires.",
+        )
+    finally:
+        module.MOD_DB = original_db
+
+
+def _test_final_live_specific_owner_unchanged_executes(module) -> None:
+    original_db = _install_weapon_mod_catalog_fixture(module)
+    try:
+        widget, item, _specific_rule, _later_materials_rule, fake_bridge = _make_final_live_specific_owner_fixture(module)
+        widget._collect_inventory_items = lambda: [item]
+        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        final_plan = widget._build_plan()
+
+        _expect(
+            int(item.item_id) in final_plan.salvage_specific_upgrade_owners,
+            "An executable final Specific plan should retain its owner.",
+        )
+        owned_scope = widget._begin_execute_reservation_scope()
+        try:
+            outcome = _drain_generator_return(
+                widget._run_salvage_pass(
+                    running_already_marked=True,
+                    planned_salvage_item_ids=set(final_plan.salvage_item_ids),
+                    planned_specific_upgrade_owners=final_plan.salvage_specific_upgrade_owners,
+                )
+            )
+        finally:
+            widget._end_execute_reservation_scope(owned_scope)
+
+        _expect(outcome.completed == 1, "An unchanged planned Specific owner should execute normally.")
+        _expect(len(fake_bridge.calls) == 1, "An unchanged planned Specific owner should call the exact-upgrade bridge once.")
+        _expect(
+            fake_bridge.calls[0]["option"] == module.SALVAGE_OPTION_SUFFIX,
+            "The unchanged planned owner should preserve suffix target resolution.",
+        )
+    finally:
+        module.MOD_DB = original_db
+
+
+def _test_final_live_specific_owner_rejects_rule_identity_drift(module) -> None:
+    original_db = _install_weapon_mod_catalog_fixture(module)
+    try:
+        for drift_kind in ("edit", "reorder"):
+            widget, item, specific_rule, later_materials_rule, _fake_bridge = _make_final_live_specific_owner_fixture(
+                module,
+                item_id=40 if drift_kind == "edit" else 41,
+                include_later_materials=True,
+            )
+            widget._collect_inventory_items = lambda: [item]
+            final_plan = widget._build_plan()
+            salvage_calls: list[str] = []
+
+            def _record_salvage_call(candidate, *_args, **_kwargs):
+                salvage_calls.append(str(candidate.rule.name))
+                if False:
+                    yield None
+                return "processed"
+
+            widget._salvage_one_item_with_rule = _record_salvage_call
+            if drift_kind == "edit":
+                widget.salvage_settings.rules[0] = module._normalize_salvage_rule(
+                    module.SalvageRule(
+                        enabled=True,
+                        salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+                        target_weapon_mod_identifiers=["of Defense"],
+                        name=specific_rule.name,
+                    )
+                )
+            else:
+                widget.salvage_settings.rules[:] = [later_materials_rule, specific_rule]
+
+            owned_scope = widget._begin_execute_reservation_scope()
+            try:
+                outcome = _drain_generator_return(
+                    widget._run_salvage_pass(
+                        running_already_marked=True,
+                        planned_salvage_item_ids=set(final_plan.salvage_item_ids),
+                        planned_specific_upgrade_owners=final_plan.salvage_specific_upgrade_owners,
+                    )
+                )
+            finally:
+                widget._end_execute_reservation_scope(owned_scope)
+
+            _expect(not salvage_calls, f"A planned Specific owner must not fall through after {drift_kind} drift.")
+            _expect(outcome.unavailable == 1, f"A planned Specific owner must block after {drift_kind} drift.")
+    finally:
+        module.MOD_DB = original_db
+
+
+def _test_final_live_specific_owner_preserves_live_identity_and_protection_checks(module) -> None:
+    original_db = _install_weapon_mod_catalog_fixture(module)
+    try:
+        cases = ("model", "missing", "protected")
+        for case in cases:
+            widget, item, _specific_rule, _later_materials_rule, fake_bridge = _make_final_live_specific_owner_fixture(
+                module,
+                item_id=50 + cases.index(case),
+            )
+            live_item = item
+            widget._collect_inventory_items = lambda: [live_item] if live_item is not None else []
+            widget._build_inventory_item_info = lambda item_id: (
+                live_item
+                if live_item is not None and int(item_id) == int(item.item_id)
+                else None
+            )
+            final_plan = widget._build_plan()
+            if case == "model":
+                live_item = replace(item, model_id=int(item.model_id) + 1)
+            elif case == "missing":
+                live_item = None
+            elif case == "protected":
+                widget.sell_rules = [
+                    module._normalize_sell_rule(
+                        module.SellRule(
+                            enabled=True,
+                            kind=module.SELL_KIND_WEAPONS,
+                            rarities=_rarity_flags("gold"),
+                            blacklist_model_ids=[int(item.model_id)],
+                        )
+                    )
+                ]
+
+            salvage_calls: list[str] = []
+
+            def _record_salvage_call(candidate, *_args, **_kwargs):
+                salvage_calls.append(str(candidate.rule.name))
+                if False:
+                    yield None
+                return "processed"
+
+            widget._salvage_one_item_with_rule = _record_salvage_call
+            owned_scope = widget._begin_execute_reservation_scope()
+            try:
+                outcome = _drain_generator_return(
+                    widget._run_salvage_pass(
+                        running_already_marked=True,
+                        planned_salvage_item_ids=set(final_plan.salvage_item_ids),
+                        planned_specific_upgrade_owners=final_plan.salvage_specific_upgrade_owners,
+                    )
+                )
+            finally:
+                widget._end_execute_reservation_scope(owned_scope)
+
+            _expect(not salvage_calls, f"A live {case} change must not execute the planned Specific owner.")
+            if case == "missing":
+                _expect(outcome.depleted == 1, "A missing planned Specific item should be reported as depleted.")
+            else:
+                _expect(outcome.unavailable == 1, f"A live {case} change should fail closed as unavailable.")
+            _expect(not fake_bridge.calls, f"A live {case} change must not reach the exact-upgrade bridge.")
+    finally:
+        module.MOD_DB = original_db
 
 
 def _make_specific_prefix_salvage_rule(module, salvage_option: str):
@@ -24093,6 +24595,38 @@ def main() -> int:
             (
                 "blocked_first_salvage_rule_does_not_fall_through",
                 lambda: _test_blocked_first_salvage_rule_does_not_fall_through(module),
+            ),
+            (
+                "specific_upgrade_target_gate_preserves_normal_selector_semantics",
+                lambda: _test_specific_upgrade_target_gate_preserves_normal_selector_semantics(module),
+            ),
+            (
+                "specific_upgrade_target_absent_allows_later_targeted_materials",
+                lambda: _test_specific_upgrade_target_absent_allows_later_targeted_materials(module),
+            ),
+            (
+                "specific_upgrade_match_owns_blocked_preview_and_execute",
+                lambda: _test_specific_upgrade_match_owns_blocked_preview_and_execute(module),
+            ),
+            (
+                "no_target_specific_salvage_preserves_narrow_block_and_no_reservation",
+                lambda: _test_no_target_specific_salvage_preserves_narrow_block_and_no_reservation(module),
+            ),
+            (
+                "final_live_specific_owner_blocks_target_loss_and_replan",
+                lambda: _test_final_live_specific_owner_blocks_target_loss_and_replan(module),
+            ),
+            (
+                "final_live_specific_owner_unchanged_executes",
+                lambda: _test_final_live_specific_owner_unchanged_executes(module),
+            ),
+            (
+                "final_live_specific_owner_rejects_rule_identity_drift",
+                lambda: _test_final_live_specific_owner_rejects_rule_identity_drift(module),
+            ),
+            (
+                "final_live_specific_owner_preserves_live_identity_and_protection_checks",
+                lambda: _test_final_live_specific_owner_preserves_live_identity_and_protection_checks(module),
             ),
             (
                 "manual_salvage_request_ignores_plain_sell_priority",
