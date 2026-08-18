@@ -225,6 +225,18 @@ def build_window(controller) -> "ImGui.SidebarWindow":
                                 (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
             continue
         if cat.key == "items":
+            # Keep the category's native listener sections visible alongside the
+            # custom Inventory Features sections. Previously this branch ended in
+            # `continue` before `cat.listeners` were rendered, which hid options
+            # such as "Skip gold/green sell confirmation" and
+            # "Auto-open locked chests" from System Settings.
+            for lsn in cat.listeners:
+                win.add_section(
+                    group,
+                    lsn.label,
+                    (lambda c=controller, ca=cat, ls=lsn: _draw_listener(c, ca, ls)),
+                )
+
             for label, module_path in (
                 ("Inventory Features", "Py4GWCoreLib.py4gwcorelib_src.system_settings.inventory.config_ui"),
             ):

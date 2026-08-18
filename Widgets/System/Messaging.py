@@ -59,6 +59,11 @@ _pcon_last_exec_ms_by_signature: dict[tuple[str, tuple[int, int, int, int]], int
 PCON_EXEC_DEDUP_MS = 500
 _pending_widget_enables: list[str] = []
 
+# Resign can currently be broadcast more than once by multibox wrappers during
+# the same transition. Only the first request should issue /resign on a client.
+_RESIGN_DEDUP_MS = 2_500
+_last_resign_ms_by_email: dict[str, int] = {}
+
 _MESSAGE_TYPE_OPTIONS = tuple(
     command for command in SharedCommandType if command is not SharedCommandType.NoCommand
 )
@@ -178,6 +183,28 @@ def get_inventory_count(sender_email: str, model_id_min: int, model_id_max: int)
 def reset_inventory_count(sender_email: str, model_id_min: int, model_id_max: int) -> None:
     _inventory_cache().pop(
         (sender_email, int(model_id_min), int(model_id_max)), None
+    )
+
+
+def _inventory_state_cache() -> dict:
+    cache = getattr(GLOBAL_CACHE, "_inventory_state_query_cache", None)
+    if cache is None:
+        cache = {}
+        GLOBAL_CACHE._inventory_state_query_cache = cache
+    return cache
+
+
+def get_inventory_state(sender_email: str, request_id: str):
+    """Return (occupied, capacity, id_kits, salvage_kits) for a completed query."""
+    return _inventory_state_cache().get(
+        (str(sender_email or "").strip(), str(request_id or "").strip())
+    )
+
+
+def reset_inventory_state(sender_email: str, request_id: str) -> None:
+    _inventory_state_cache().pop(
+        (str(sender_email or "").strip(), str(request_id or "").strip()),
+        None,
     )
 
 
@@ -907,11 +934,31 @@ def Resign(index: int, message: SharedMessageStruct):
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
 
-    # ConsoleLog(MODULE_NAME, f"Processing Resign message: {message}", Console.MessageType.Info)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
-    for i in range(2):
-        Player.SendChatCommand("resign")
-        yield from Routines.Yield.wait(100)
+
+    receiver_email = str(message.ReceiverEmail or "").strip()
+    now_ms = int(time.monotonic() * 1000.0)
+    last_ms = int(_last_resign_ms_by_email.get(receiver_email, 0) or 0)
+
+    # Multibox Resign can currently reach a follower twice in rapid succession
+    # (remote broadcast, then an include_self broadcast). Suppress the duplicate
+    # instead of issuing several /resign commands during the same map transition.
+    if last_ms > 0 and (now_ms - last_ms) < _RESIGN_DEDUP_MS:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        ConsoleLog(
+            MODULE_NAME,
+            f"Duplicate Resign ignored for {receiver_email or 'local client'} ({now_ms - last_ms} ms after previous request).",
+            Console.MessageType.Info,
+            False,
+        )
+        return
+
+    _last_resign_ms_by_email[receiver_email] = now_ms
+
+    # One received SharedCommandType.Resign -> one /resign command.
+    Player.SendChatCommand("resign")
+    yield from Routines.Yield.wait(100)
+
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
     ConsoleLog(MODULE_NAME, "Resign message processed and finished.", Console.MessageType.Info, False)
 # endregion
@@ -3060,21 +3107,42 @@ def WithdrawGold(index: int, message: SharedMessageStruct):
 
 # region InventoryQuery
 def InventoryQuery(index: int, message: SharedMessageStruct):
-    """Cross-account inventory count. extra0 modes:
-       report_inventory_count: count Params[0..1] range, reply to sender.
-       inventory_count_reply:  cache Params[2] under (sender, min, max).
+    """Cross-account inventory queries.
+
+    extra0 modes:
+      report_inventory_count:
+        Count Params[0..1] model range and reply to sender.
+      inventory_count_reply:
+        Cache Params[2] under (sender, min, max).
+
+      report_inventory_state:
+        Run the inventory-space check locally on the receiving client.
+        Request Params:
+          [0] regular Identification Kit model id
+          [1] Superior Identification Kit model id
+          [2] Expert Salvage Kit model id
+        Reply Params:
+          [0] occupied regular-inventory slots
+          [1] real regular-inventory capacity
+          [2] total ID kits
+          [3] total Expert Salvage Kits
+        ExtraData[1] carries a request id.
+
+      inventory_state_reply:
+        Cache the four reply values under (sender, request_id).
     """
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
-    extra0, _extra1, _extra2, _extra3 = _extra_data(message)
+    extra0, extra1, _extra2, _extra3 = _extra_data(message)
     mode = extra0.strip().lower()
 
     try:
         if mode == "report_inventory_count":
             try:
                 range_start = int(message.Params[0])
-                range_end   = int(message.Params[1])
+                range_end = int(message.Params[1])
             except (TypeError, ValueError):
                 range_start = range_end = 0
+
             if range_start > 0 and range_end >= range_start:
                 try:
                     count = sum(
@@ -3082,11 +3150,15 @@ def InventoryQuery(index: int, message: SharedMessageStruct):
                         for mid in range(range_start, range_end + 1)
                     )
                 except Exception as exc:
-                    ConsoleLog(MODULE_NAME, f"[InventoryQuery] GetModelCount failed for range {range_start}..{range_end}: {exc}", Console.MessageType.Error)
+                    ConsoleLog(
+                        MODULE_NAME,
+                        f"[InventoryQuery] GetModelCount failed for range {range_start}..{range_end}: {exc}",
+                        Console.MessageType.Error,
+                    )
                     count = -1
+
                 sender = str(message.SenderEmail or "").strip()
                 my_email_local = str(message.ReceiverEmail or "").strip()
-                # ExtraData[1] = own email -- escapes SendMessage dedup on same-count replies.
                 if sender:
                     GLOBAL_CACHE.ShMem.SendMessage(
                         my_email_local,
@@ -3099,16 +3171,81 @@ def InventoryQuery(index: int, message: SharedMessageStruct):
         elif mode == "inventory_count_reply":
             try:
                 range_start = int(message.Params[0])
-                range_end   = int(message.Params[1])
-                count       = int(message.Params[2])
+                range_end = int(message.Params[1])
+                count = int(message.Params[2])
             except (TypeError, ValueError):
                 range_start = range_end = 0
                 count = -1
+
             if range_start > 0 and range_end >= range_start:
                 key = (str(message.SenderEmail or ""), range_start, range_end)
                 _inventory_cache()[key] = count
+
+        elif mode == "report_inventory_state":
+            request_id = str(extra1 or "").strip()
+            try:
+                id_kit_model = int(message.Params[0])
+                superior_id_kit_model = int(message.Params[1])
+                salvage_kit_model = int(message.Params[2])
+
+                occupied, capacity = Inventory.GetInventorySpace()
+                occupied = int(occupied)
+                capacity = int(capacity)
+
+                id_kits = 0
+                for model_id in (id_kit_model, superior_id_kit_model):
+                    if model_id > 0:
+                        id_kits += int(GLOBAL_CACHE.Inventory.GetModelCount(model_id))
+
+                salvage_kits = (
+                    int(GLOBAL_CACHE.Inventory.GetModelCount(salvage_kit_model))
+                    if salvage_kit_model > 0
+                    else 0
+                )
+            except Exception as exc:
+                ConsoleLog(
+                    MODULE_NAME,
+                    f"[InventoryQuery] Local inventory-state query failed: {exc}",
+                    Console.MessageType.Error,
+                )
+                occupied = capacity = id_kits = salvage_kits = -1
+
+            sender = str(message.SenderEmail or "").strip()
+            my_email_local = str(message.ReceiverEmail or "").strip()
+            if sender:
+                GLOBAL_CACHE.ShMem.SendMessage(
+                    my_email_local,
+                    sender,
+                    SharedCommandType.InventoryQuery,
+                    (
+                        float(occupied),
+                        float(capacity),
+                        float(id_kits),
+                        float(salvage_kits),
+                    ),
+                    ("inventory_state_reply", request_id, my_email_local, ""),
+                )
+
+        elif mode == "inventory_state_reply":
+            request_id = str(extra1 or "").strip()
+            try:
+                occupied = int(message.Params[0])
+                capacity = int(message.Params[1])
+                id_kits = int(message.Params[2])
+                salvage_kits = int(message.Params[3])
+            except (TypeError, ValueError):
+                occupied = capacity = id_kits = salvage_kits = -1
+
+            sender_email = str(message.SenderEmail or "").strip()
+            _inventory_state_cache()[(sender_email, request_id)] = (
+                occupied,
+                capacity,
+                id_kits,
+                salvage_kits,
+            )
     finally:
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+
     yield
 
 # endregion
@@ -3141,6 +3278,239 @@ def EquipItem(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"EquipItem: equipped item_id {item_id} (model {model_id}).", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
 # endregion
+
+
+# region CollectorExchange
+def CollectorExchange(index: int, message: SharedMessageStruct):
+    """
+    Perform a collector exchange locally on the receiving Guild Wars client.
+
+    Params:
+      0 = output model id
+      1 = input/trade model id
+      2 = input quantity required per exchange
+      3 = desired output count
+
+    The collector window must already be open on this client.
+    """
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+
+    try:
+        output_model_id = int(message.Params[0])
+        input_model_id = int(message.Params[1])
+        exchange_rate = max(1, int(message.Params[2]))
+        target_output_count = max(1, int(message.Params[3]))
+
+        label = _extra_data(message)[0].strip() or str(input_model_id)
+
+        def _model_count(model_id: int) -> int:
+            try:
+                return int(GLOBAL_CACHE.Inventory.GetModelCount(int(model_id)) or 0)
+            except Exception:
+                return 0
+
+        def _find_offered_item_id() -> int:
+            try:
+                offered = GLOBAL_CACHE.Trading.Collector.GetOfferedItems() or []
+            except Exception:
+                offered = []
+
+            for item_id in offered:
+                try:
+                    if int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) == output_model_id:
+                        return int(item_id)
+                except Exception:
+                    continue
+            return 0
+
+        def _build_trade_items(required: int) -> tuple[list[int], list[int]]:
+            remaining = max(0, int(required))
+            item_ids: list[int] = []
+            quantities: list[int] = []
+
+            for item_id in GLOBAL_CACHE.Inventory.GetAllInventoryItemIds():
+                item_id = int(item_id or 0)
+                if item_id <= 0:
+                    continue
+
+                try:
+                    if int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) != input_model_id:
+                        continue
+                    quantity = int(
+                        GLOBAL_CACHE.Item.Properties.GetQuantity(item_id)
+                        or 1
+                    )
+                except Exception:
+                    continue
+
+                if quantity <= 0:
+                    continue
+
+                take = min(quantity, remaining)
+                if take > 0:
+                    item_ids.append(item_id)
+                    quantities.append(take)
+                    remaining -= take
+
+                if remaining <= 0:
+                    break
+
+            if remaining > 0:
+                return [], []
+
+            return item_ids, quantities
+
+        current_output = _model_count(output_model_id)
+        if current_output >= target_output_count:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    f"CollectorExchange [{label}]: already has "
+                    f"{current_output}/{target_output_count} converted item(s)."
+                ),
+                Console.MessageType.Info,
+                False,
+            )
+            return
+
+        # Give the collector panel a moment to populate its offered items.
+        offered_item_id = 0
+        waited_ms = 0
+        while offered_item_id <= 0 and waited_ms < 5_000:
+            offered_item_id = _find_offered_item_id()
+            if offered_item_id > 0:
+                break
+            yield from Routines.Yield.wait(100)
+            waited_ms += 100
+
+        if offered_item_id <= 0:
+            ConsoleLog(
+                MODULE_NAME,
+                f"CollectorExchange [{label}]: collector offer was not found.",
+                Console.MessageType.Warning,
+                False,
+            )
+            return
+
+        exchanges_done = 0
+
+        while _model_count(output_model_id) < target_output_count:
+            trade_ids, trade_quantities = _build_trade_items(exchange_rate)
+            if not trade_ids:
+                break
+
+            GLOBAL_CACHE.Trading.Collector.ExchangeItem(
+                offered_item_id,
+                0,
+                trade_ids,
+                trade_quantities,
+            )
+
+            elapsed_ms = 0
+            while (
+                not GLOBAL_CACHE.Trading.IsTransactionComplete()
+                and elapsed_ms < 5_000
+            ):
+                yield from Routines.Yield.wait(100)
+                elapsed_ms += 100
+
+            if elapsed_ms >= 5_000:
+                ConsoleLog(
+                    MODULE_NAME,
+                    f"CollectorExchange [{label}]: transaction timed out.",
+                    Console.MessageType.Warning,
+                    False,
+                )
+                break
+
+            exchanges_done += 1
+            yield from Routines.Yield.wait(250)
+
+        final_output = _model_count(output_model_id)
+        remaining_input = _model_count(input_model_id)
+
+        ConsoleLog(
+            MODULE_NAME,
+            (
+                f"CollectorExchange [{label}]: exchanged {exchanges_done} time(s); "
+                f"output={final_output}/{target_output_count}, "
+                f"remaining input={remaining_input}."
+            ),
+            (
+                Console.MessageType.Success
+                if final_output >= target_output_count
+                else Console.MessageType.Warning
+            ),
+            False,
+        )
+
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f"CollectorExchange failed: {exc}",
+            Console.MessageType.Error,
+            False,
+        )
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+# endregion
+
+
+# region AddModelToLootWhitelist
+def AddModelToLootWhitelist(index: int, message: SharedMessageStruct):
+    """
+    Add one model ID to the receiving client's LIVE loot whitelist.
+
+    Params:
+      0 = item model id
+
+    This intentionally uses LootFilters().add_model(), which changes the live
+    filter state only. It does not overwrite the user's persisted loot-filter
+    configuration and model additions survive map changes during the run.
+    """
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+
+    try:
+        model_id = int(message.Params[0])
+        label = _extra_data(message)[0].strip()
+
+        if model_id <= 0:
+            ConsoleLog(
+                MODULE_NAME,
+                "AddModelToLootWhitelist: invalid model_id.",
+                Console.MessageType.Warning,
+                False,
+            )
+            return
+
+        LootFilters().add_model(model_id)
+
+        ConsoleLog(
+            MODULE_NAME,
+            (
+                f"Added model {model_id}"
+                + (f" ({label})" if label else "")
+                + " to the live loot whitelist."
+            ),
+            Console.MessageType.Info,
+            False,
+        )
+
+        # Keep this routine as a coroutine so it is compatible with the
+        # Messaging dispatcher used by all other shared commands.
+        yield from Routines.Yield.wait(50)
+
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f"AddModelToLootWhitelist failed: {exc}",
+            Console.MessageType.Error,
+            False,
+        )
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+# endregion
+
 
 # region ProcessMessages
 def ProcessMessages():
@@ -3271,6 +3641,10 @@ def ProcessMessages():
             GLOBAL_CACHE.Coroutines.append(InventoryQuery(index, message))
         case SharedCommandType.EquipItem:
             GLOBAL_CACHE.Coroutines.append(EquipItem(index, message))
+        case SharedCommandType.CollectorExchange:
+            GLOBAL_CACHE.Coroutines.append(CollectorExchange(index, message))
+        case SharedCommandType.AddModelToLootWhitelist:
+            GLOBAL_CACHE.Coroutines.append(AddModelToLootWhitelist(index, message))
         case SharedCommandType.LootEx:
             # privately Handled Command, by frenkey
             pass

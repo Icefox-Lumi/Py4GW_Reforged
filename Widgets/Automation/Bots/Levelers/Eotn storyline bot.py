@@ -32,10 +32,11 @@ from Py4GWCoreLib.enums_src.Model_enums import ModelID
 
 
 
-MODULE_ICON = 'Textures\\Module_Icons\\eotn.png'
+MODULE_ICON = 'Assets\\Textures\\Module_Icons\\eotn.png'
 MODULE_NAME = "EotN Storyline BT"
 ICON_PATH = os.path.join(
     PySystem.Console.get_projects_path(),
+    "Assets",
     "Textures", 
     "Module_Icons",
     "eotn.png"
