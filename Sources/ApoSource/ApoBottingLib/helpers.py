@@ -126,20 +126,148 @@ def _wait_until_player_action_settles(
     )
 
 
-def _pause_heroai_for_action(action_tree: BehaviorTree) -> BehaviorTree:
+def _save_shared_heroai_state(guard_key: str) -> BehaviorTree:
+    """Snapshot and suspend the local account's shared HeroAI options."""
+
+    def _save(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+        from Py4GWCoreLib.Player import Player
+
+        account_email = str(Player.GetAccountEmail() or '').strip()
+        if not account_email:
+            node.blackboard[guard_key] = None
+            return BehaviorTree.NodeState.SUCCESS
+
+        try:
+            options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account_email)
+        except Exception:
+            options = None
+
+        if options is None:
+            node.blackboard[guard_key] = None
+            return BehaviorTree.NodeState.SUCCESS
+
+        skills = getattr(options, 'Skills', None)
+        skill_snapshot = (
+            [bool(skills[index]) for index in range(len(skills))]
+            if skills is not None
+            else []
+        )
+
+        node.blackboard[guard_key] = {
+            'account_email': account_email,
+            'Following': bool(getattr(options, 'Following', False)),
+            'Avoidance': bool(getattr(options, 'Avoidance', False)),
+            'Looting': bool(getattr(options, 'Looting', False)),
+            'Targeting': bool(getattr(options, 'Targeting', False)),
+            'Combat': bool(getattr(options, 'Combat', False)),
+            'Skills': skill_snapshot,
+        }
+
+        for option_name in ('Following', 'Avoidance', 'Looting', 'Targeting', 'Combat'):
+            if hasattr(options, option_name):
+                setattr(options, option_name, False)
+
+        if skills is not None:
+            for index in range(len(skills)):
+                skills[index] = False
+
+        try:
+            GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account_email, options)
+        except Exception:
+            pass
+
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name='SuspendSharedHeroAIOptions',
+            action_fn=_save,
+        )
+    )
+
+
+def _restore_shared_heroai_state(guard_key: str) -> BehaviorTree:
+    """Restore the exact local shared HeroAI state captured by the guard."""
+
+    def _restore(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+        snapshot = node.blackboard.pop(guard_key, None)
+        if not isinstance(snapshot, dict):
+            return BehaviorTree.NodeState.SUCCESS
+
+        account_email = str(snapshot.get('account_email', '') or '').strip()
+        if not account_email:
+            return BehaviorTree.NodeState.SUCCESS
+
+        try:
+            options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account_email)
+        except Exception:
+            options = None
+
+        if options is None:
+            return BehaviorTree.NodeState.SUCCESS
+
+        for option_name in ('Following', 'Avoidance', 'Looting', 'Targeting', 'Combat'):
+            if hasattr(options, option_name):
+                setattr(options, option_name, bool(snapshot.get(option_name, False)))
+
+        skills = getattr(options, 'Skills', None)
+        skill_snapshot = list(snapshot.get('Skills', []) or [])
+        if skills is not None:
+            for index in range(min(len(skills), len(skill_snapshot))):
+                skills[index] = bool(skill_snapshot[index])
+
+        try:
+            GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account_email, options)
+        except Exception:
+            pass
+
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name='RestoreSharedHeroAIOptions',
+            action_fn=_restore,
+        )
+    )
+
+
+def _pause_heroai_for_action(action_tree: BehaviorTree, suspend_shared_options: bool = False) -> BehaviorTree:
     global _heroai_pause_counter
     _heroai_pause_counter += 1
     name = f'HeroAIPausedAction_{_heroai_pause_counter}'
 
+    shared_guard_key = f'__apobottinglib_restore_shared_heroai_{name}'
+    suspend_shared = (
+        [_save_shared_heroai_state(shared_guard_key)]
+        if suspend_shared_options
+        else []
+    )
+    guarded_restore_shared = (
+        [_restore_shared_heroai_state(shared_guard_key)]
+        if suspend_shared_options
+        else []
+    )
+    failure_restore_shared = (
+        [_restore_shared_heroai_state(shared_guard_key)]
+        if suspend_shared_options
+        else []
+    )
+
     guarded_action = RoutinesBT.Composite.Sequence(
+        *suspend_shared,
         _save_headless_heroai_state(),
         action_tree,
         _wait_until_player_action_settles(),
+        *guarded_restore_shared,
         _restore_headless_heroai_state(),
         name=name,
     )
     restore_after_failure = RoutinesBT.Composite.Sequence(
         _wait_until_player_action_settles(),
+        *failure_restore_shared,
         _restore_headless_heroai_state(),
         BehaviorTree(BehaviorTree.FailerNode(name=f'{name}Failed')),
         name=f'{name}RestoreAfterFailure',
@@ -218,7 +346,7 @@ def _send_multibox_manual_dialog(dialog_id: int | str, log: bool = False, afterc
     return RoutinesBT.Shared.SendAndWait(
         command=SharedCommandType.SendManualDialog,
         params=(float(_coerce_dialog_int(dialog_id)), 0.0, 0.0, 0.0),
-        timeout_ms=5000,
+        timeout_ms=10000,
         poll_interval_ms=100,
         log=log,
         aftercast_ms=aftercast_ms,
@@ -245,7 +373,7 @@ def _send_multibox_dialog_to_target(
                     0.0,
                     0.0,
                 ),
-                timeout_ms=5000,
+                timeout_ms=10000,
                 poll_interval_ms=100,
                 log=log,
                 aftercast_ms=aftercast_ms,
@@ -272,7 +400,7 @@ def _send_multibox_take_dialog_with_target(
                     0.0,
                     0.0,
                 ),
-                timeout_ms=5000,
+                timeout_ms=10000,
                 poll_interval_ms=100,
                 log=log,
                 aftercast_ms=aftercast_ms,
@@ -308,7 +436,7 @@ def _send_multibox_get_blessing_with_target(
                     0.0,
                 ),
                 extra_data=('auto', buttons_csv, '', ''),
-                timeout_ms=5000,
+                timeout_ms=10000,
                 poll_interval_ms=100,
                 log=log,
                 aftercast_ms=aftercast_ms,

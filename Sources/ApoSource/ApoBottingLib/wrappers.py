@@ -441,7 +441,10 @@ def TargetAgentByModelID(modelID_or_encStr: int | str, log: bool = False) -> Beh
     return RoutinesBT.Agents.TargetAgentByModelID(modelID_or_encStr=modelID_or_encStr, log=log)
 
 def InteractTarget(log: bool = False) -> BehaviorTree:
-    return _pause_heroai_for_action(RoutinesBT.Player.InteractTarget(log=log))
+    return _pause_heroai_for_action(
+        RoutinesBT.Player.InteractTarget(log=log),
+        suspend_shared_options=True,
+    )
 
 def AutoDialog(buttons: int | list[int] = 0, log: bool = False, aftercast_ms: int = 200, multi_account: bool = False) -> BehaviorTree:
     if isinstance(buttons, int):
@@ -469,7 +472,8 @@ def AutoDialog(buttons: int | list[int] = 0, log: bool = False, aftercast_ms: in
                     for button in buttons
                 ],
                 name="AutoDialogSequence",
-            )
+            ),
+            suspend_shared_options=True,
         )
 
     if len(buttons) == 1:
@@ -478,7 +482,8 @@ def AutoDialog(buttons: int | list[int] = 0, log: bool = False, aftercast_ms: in
                 button_number=buttons[0],
                 log=log,
                 aftercast_ms=aftercast_ms,
-            )
+            ),
+            suspend_shared_options=True,
         )
 
     return _pause_heroai_for_action(
@@ -492,7 +497,8 @@ def AutoDialog(buttons: int | list[int] = 0, log: bool = False, aftercast_ms: in
                 for button in buttons
             ],
             name="AutoDialogSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -542,7 +548,8 @@ def InteractTargetAndAutoDialog(
             RoutinesBT.Composite.Sequence(
                 *steps,
                 name="InteractTargetAndAutoDialogSequence",
-            )
+            ),
+            suspend_shared_options=True,
         )
 
     return _pause_heroai_for_action(
@@ -557,7 +564,8 @@ def InteractTargetAndAutoDialog(
                 for button in buttons
             ],
             name="InteractTargetAndAutoDialogSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -570,7 +578,8 @@ def InteractTargetAndSendDialog(dialog_id: int | str, log: bool = False, multi_a
                 RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log),
                 _send_multibox_dialog_to_target(dialog_id=dialog_id, log=log),
                 name="InteractTargetAndSendDialogSequence",
-            )
+            ),
+            suspend_shared_options=True,
         )
 
     return _pause_heroai_for_action(
@@ -578,7 +587,8 @@ def InteractTargetAndSendDialog(dialog_id: int | str, log: bool = False, multi_a
             RoutinesBT.Player.InteractTarget(log=log),
             RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log),
             name="InteractTargetAndSendDialogSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -593,7 +603,8 @@ def TargetNearestAndInteract(
             RoutinesBT.Agents.TargetNearestNPCXY(x=point.x, y=point.y, distance=target_distance, log=log),
             RoutinesBT.Player.InteractTarget(log=log),
             name="TargetNearestAndInteractSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -647,7 +658,8 @@ def TargetNearestAndAutoDialog(
             RoutinesBT.Composite.Sequence(
                 *steps,
                 name="TargetNearestAndAutoDialogSequence",
-            )
+            ),
+            suspend_shared_options=True,
         )
 
     return _pause_heroai_for_action(
@@ -663,7 +675,8 @@ def TargetNearestAndAutoDialog(
                 for button in buttons
             ],
             name="TargetNearestAndAutoDialogSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -684,7 +697,8 @@ def TargetNearestAndSendDialog(
                 RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log),
                 _send_multibox_dialog_to_target(dialog_id=dialog_id, log=log),
                 name="TargetNearestAndSendDialogSequence",
-            )
+            ),
+            suspend_shared_options=True,
         )
 
     return _pause_heroai_for_action(
@@ -693,7 +707,8 @@ def TargetNearestAndSendDialog(
             RoutinesBT.Player.InteractTarget(log=log),
             RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log),
             name="TargetNearestAndSendDialogSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -708,7 +723,8 @@ def TargetNearestGadgetAndInteract(
             RoutinesBT.Agents.TargetNearestGadgetXY(x=point.x, y=point.y, distance=target_distance, log=log),
             RoutinesBT.Player.InteractTarget(log=log),
             name="TargetNearestGadgetAndInteractSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -718,7 +734,8 @@ def TargetAgentByModelIDAndInteract(modelID_or_encStr: int | str, log: bool = Fa
             RoutinesBT.Agents.TargetAgentByModelID(modelID_or_encStr=modelID_or_encStr, log=log),
             RoutinesBT.Player.InteractTarget(log=log),
             name="TargetAgentByModelIDAndInteractSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -770,7 +787,8 @@ def TargetAgentByModelIDAndAutoDialog(
             RoutinesBT.Composite.Sequence(
                 *steps,
                 name="TargetAgentByModelIDAndAutoDialogSequence",
-            )
+            ),
+            suspend_shared_options=True,
         )
 
     return _pause_heroai_for_action(
@@ -786,7 +804,8 @@ def TargetAgentByModelIDAndAutoDialog(
                 for button in buttons
             ],
             name="TargetAgentByModelIDAndAutoDialogSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 
@@ -805,7 +824,8 @@ def TargetAgentByModelIDAndSendDialog(
                 RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log),
                 _send_multibox_dialog_to_target(dialog_id=dialog_id, log=log),
                 name="TargetAgentByModelIDAndSendDialogSequence",
-            )
+            ),
+            suspend_shared_options=True,
         )
 
     return _pause_heroai_for_action(
@@ -814,7 +834,8 @@ def TargetAgentByModelIDAndSendDialog(
             RoutinesBT.Player.InteractTarget(log=log),
             RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log),
             name="TargetAgentByModelIDAndSendDialogSequence",
-        )
+        ),
+        suspend_shared_options=True,
     )
 
 def SendDialog(dialog_id: int | str, log: bool = False, multi_account: bool = False) -> BehaviorTree:
@@ -824,9 +845,13 @@ def SendDialog(dialog_id: int | str, log: bool = False, multi_account: bool = Fa
                 RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log),
                 _send_multibox_manual_dialog(dialog_id=dialog_id, log=log),
                 name="SendDialogMultibox",
-            )
+            ),
+            suspend_shared_options=True,
         )
-    return _pause_heroai_for_action(RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log))
+    return _pause_heroai_for_action(
+        RoutinesBT.Player.SendDialog(dialog_id=dialog_id, log=log),
+        suspend_shared_options=True,
+    )
 
 def DialogAtXY(
     pos: PointOrPath,
@@ -947,34 +972,40 @@ def TakeBlessing(
             MoveAndInteract(pos=pos, log=log),
             LogMessage(message='Obtaining blessing'),
             Wait(pre_dialog_wait_ms, log=log),
-            *(
-                [
-                    _capture_current_target(),
-                    RoutinesBT.Composite.Sequence(
-                        *[
-                            RoutinesBT.Player.SendAutomaticDialog(
-                                button_number=int(button),
-                                log=log,
-                            )
-                            for button in ([buttons] if isinstance(buttons, int) else list(buttons))
-                        ],
-                        _send_multibox_get_blessing_with_target(
-                            buttons=[buttons] if isinstance(buttons, int) else list(buttons),
-                            log=log,
-                        ),
-                        name='TakeBlessingMultiboxSequence',
+            _pause_heroai_for_action(
+                RoutinesBT.Composite.Sequence(
+                    *(
+                        [
+                            _capture_current_target(),
+                            RoutinesBT.Composite.Sequence(
+                                *[
+                                    RoutinesBT.Player.SendAutomaticDialog(
+                                        button_number=int(button),
+                                        log=log,
+                                    )
+                                    for button in ([buttons] if isinstance(buttons, int) else list(buttons))
+                                ],
+                                _send_multibox_get_blessing_with_target(
+                                    buttons=[buttons] if isinstance(buttons, int) else list(buttons),
+                                    log=log,
+                                ),
+                                name='TakeBlessingMultiboxSequence',
+                            ),
+                        ]
+                        if multi_account
+                        else [
+                            *[
+                                RoutinesBT.Player.SendAutomaticDialog(
+                                    button_number=int(button),
+                                    log=log,
+                                )
+                                for button in ([buttons] if isinstance(buttons, int) else list(buttons))
+                            ]
+                        ]
                     ),
-                ]
-                if multi_account
-                else [
-                    *[
-                        RoutinesBT.Player.SendAutomaticDialog(
-                            button_number=int(button),
-                            log=log,
-                        )
-                        for button in ([buttons] if isinstance(buttons, int) else list(buttons))
-                    ]
-                ]
+                    name='TakeBlessingDialogGuard',
+                ),
+                suspend_shared_options=True,
             ),
             Wait(post_dialog_wait_ms, log=log),
         ],
@@ -1351,8 +1382,13 @@ def MoveAndInteractWithGadget(
     log: bool = False,
     ignore_destination_npcs: bool = False,
     ignore_destination_gadgets: bool = True,
+    suspend_hero_ai: bool = True,
 ) -> BehaviorTree:
-    """Move to a gadget while still avoiding destination-side NPCs by default."""
+    """Move to a gadget while still avoiding destination-side NPCs by default.
+
+    HeroAI is temporarily suspended on the local account during the actual
+    interaction by default, then restored to its exact previous state.
+    """
 
     def _build(resolved_pause: bool) -> BehaviorTree:
         interaction_tree = RoutinesBT.Agents.MoveAndInteractWithGadget(
@@ -1367,6 +1403,7 @@ def MoveAndInteractWithGadget(
             multi_account=multi_account,
             include_self=include_self,
             log=log,
+            suspend_hero_ai=suspend_hero_ai,
         )
 
         if pos is None:

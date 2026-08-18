@@ -32,11 +32,12 @@ INI_FILENAME = "Frog_Scepter_BT.ini"
 
 TEXTURE = os.path.join(
     PySystem.Console.get_projects_path(),
+    "Assets",
     "Textures",
     "Module_Icons",
     "Frog Scepter.png",
 )
-MODULE_ICON = "Textures\\Module_Icons\\Frog Scepter.png"
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\Frog Scepter.png"
 
 # endregion
 
