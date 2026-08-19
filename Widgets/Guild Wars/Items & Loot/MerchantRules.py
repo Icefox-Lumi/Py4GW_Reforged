@@ -7069,6 +7069,23 @@ class MerchantRulesWidget:
         self.catalog_loaded = False
         self.catalog_load_error = ""
         self.catalog_by_model_id: dict[int, dict[str, object]] = {}
+        self._catalog_generation = 0
+        self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
+            None
+        )
+        self._cleanup_deposit_filter_targets_cache: list[CleanupTarget] = []
+        self._cleanup_targets_revision = 0
+        self._cleanup_target_display_cache_key: (
+            tuple[int, int, str, str, str] | None
+        ) = None
+        self._cleanup_target_display_cache: (
+            tuple[
+                list[CleanupTarget],
+                list[CleanupTarget],
+                list[CleanupTarget],
+            ]
+            | None
+        ) = None
         self.catalog_alias_to_model_ids: dict[str, list[int]] = {}
         self.catalog_alias_display_names: dict[str, str] = {}
         self.common_salvage_model_ids_by_item_key: dict[tuple[int, int], tuple[int, ...]] = {}
@@ -11078,6 +11095,7 @@ class MerchantRulesWidget:
     def _apply_profile_payload(self, payload: dict[str, object]):
         """Replace in-memory rules and settings from an already normalized profile payload."""
 
+        previous_cleanup_targets = self.cleanup_targets
         self.buy_rules = [
             BuyRule(
                 enabled=bool(entry.get("enabled", False)),
@@ -11201,6 +11219,9 @@ class MerchantRulesWidget:
         self.cleanup_blacklist_model_ids = _normalize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids)
         self.cleanup_protection_sources = _normalize_cleanup_protection_sources(self.cleanup_protection_sources)
         self.protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
+        if self.cleanup_targets != previous_cleanup_targets:
+            self._cleanup_targets_revision += 1
+        self._invalidate_cleanup_target_display_cache()
         self.outpost_search_text = ""
         self.cleanup_model_search_text = ""
         self.cleanup_target_list_search_text = ""
@@ -12774,6 +12795,14 @@ class MerchantRulesWidget:
         self.status_message = "Catalog reloaded."
         self._log_catalog_summary("Catalog reloaded")
 
+    def _invalidate_cleanup_deposit_filter_targets_cache(self) -> None:
+        self._cleanup_deposit_filter_targets_cache_key = None
+        self._cleanup_deposit_filter_targets_cache = []
+
+    def _invalidate_cleanup_target_display_cache(self) -> None:
+        self._cleanup_target_display_cache_key = None
+        self._cleanup_target_display_cache = None
+
     def _invalidate_supported_context_cache(self):
         self.cached_context_map_id = -1
         self.cached_supported_context = None
@@ -12867,6 +12896,9 @@ class MerchantRulesWidget:
         self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
         self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
         self.rune_buy_professions = result.rune_buy_professions
+        self._catalog_generation += 1
+        self._invalidate_cleanup_deposit_filter_targets_cache()
+        self._invalidate_cleanup_target_display_cache()
         self.catalog_loaded = True
         if self.catalog_load_error:
             ConsoleLog(MODULE_NAME, self.catalog_load_error, Console.MessageType.Warning)
@@ -13899,6 +13931,10 @@ class MerchantRulesWidget:
         if safe_category == DEPOSIT_FILTER_ALL:
             return []
         safe_subcategory = _normalize_deposit_filter_subcategory(safe_category, subcategory)
+        cache_key = (self._catalog_generation, safe_category, safe_subcategory)
+        if self._cleanup_deposit_filter_targets_cache_key == cache_key:
+            return self._cleanup_deposit_filter_targets_cache
+
         targets: list[CleanupTarget] = []
         seen_keys: set[tuple[int, str]] = set()
         for entry in self.catalog_by_model_id.values():
@@ -13920,7 +13956,77 @@ class MerchantRulesWidget:
                     continue
                 seen_keys.add(target_key)
                 targets.append(target)
-        return self._sort_targets_by_model_label_for_display(targets)
+        sorted_targets = cast(
+            list[CleanupTarget],
+            self._sort_targets_by_model_label_for_display(cast(list[object], targets)),
+        )
+        self._cleanup_deposit_filter_targets_cache_key = cache_key
+        self._cleanup_deposit_filter_targets_cache = sorted_targets
+        return sorted_targets
+
+    def _get_cleanup_target_display_state(
+        self,
+        category: object,
+        subcategory: object,
+        search_text: object,
+    ) -> tuple[list[CleanupTarget], list[CleanupTarget], list[CleanupTarget]]:
+        safe_category = _normalize_deposit_filter_category(category)
+        safe_subcategory = _normalize_deposit_filter_subcategory(
+            safe_category, subcategory
+        )
+        normalized_search_text = _normalize_catalog_search_text(search_text)
+        cache_key = (
+            self._cleanup_targets_revision,
+            self._catalog_generation,
+            safe_category,
+            safe_subcategory,
+            normalized_search_text,
+        )
+        if self._cleanup_target_display_cache_key == cache_key:
+            cached_state = self._cleanup_target_display_cache
+            if cached_state is not None:
+                return cached_state
+
+        normalized_targets = _normalize_cleanup_targets(self.cleanup_targets)
+        updated_targets = [
+            CleanupTarget(
+                model_id=int(target.model_id),
+                keep_on_character=max(0, int(target.keep_on_character)),
+                scope=_normalize_cleanup_target_scope(
+                    getattr(target, "scope", ""), target.model_id
+                ),
+            )
+            for target in normalized_targets
+        ]
+        display_targets = cast(
+            list[CleanupTarget],
+            self._sort_targets_by_model_label_for_display(
+                cast(list[object], updated_targets)
+            ),
+        )
+        if safe_category != DEPOSIT_FILTER_ALL:
+            display_targets = [
+                target
+                for target in display_targets
+                if self._cleanup_target_matches_deposit_filter(
+                    target,
+                    safe_category,
+                    safe_subcategory,
+                )
+            ]
+        if normalized_search_text:
+            display_targets = [
+                target
+                for target in display_targets
+                if self._model_id_matches_item_search_text(
+                    target.model_id, normalized_search_text
+                )
+            ]
+
+        cached_state = (normalized_targets, updated_targets, display_targets)
+        self._cleanup_target_display_cache_key = cache_key
+        self._cleanup_target_display_cache = cached_state
+        return cached_state
 
     def _search_protected_item_catalog(
         self,
@@ -13949,7 +14055,9 @@ class MerchantRulesWidget:
         subcategory: object,
         cleanup_targets: list[CleanupTarget],
     ) -> list[CleanupTarget]:
-        existing_target_keys = {_cleanup_target_key(target) for target in _normalize_cleanup_targets(cleanup_targets)}
+        existing_target_keys = {
+            _cleanup_target_key(target) for target in cleanup_targets
+        }
         return [
             target
             for target in self._get_cleanup_deposit_filter_targets(category, subcategory)
@@ -14513,6 +14621,8 @@ class MerchantRulesWidget:
         if normalized_targets == self.cleanup_targets:
             return False
         self.cleanup_targets = normalized_targets
+        self._cleanup_targets_revision += 1
+        self._invalidate_cleanup_target_display_cache()
         return True
 
     def _add_cleanup_target(
@@ -38019,7 +38129,7 @@ class MerchantRulesWidget:
         cleanup_changed = False
         automation_changed = False
         gold_automation_changed = False
-        cleanup_targets = _normalize_cleanup_targets(self.cleanup_targets)
+        cleanup_targets = self.cleanup_targets
         cleanup_blacklist_model_ids = _normalize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids)
         cleanup_sources = _normalize_cleanup_protection_sources(self.cleanup_protection_sources)
 
@@ -38157,34 +38267,18 @@ class MerchantRulesWidget:
             active_deposit_filter_category,
             self.cleanup_item_type_filter_subcategory,
         )
+        normalized_cleanup_target_search = _normalize_catalog_search_text(
+            self.cleanup_target_list_search_text
+        )
         deposit_filter_active = active_deposit_filter_category != DEPOSIT_FILTER_ALL
-        deposit_list_search_active = bool(_normalize_catalog_search_text(self.cleanup_target_list_search_text))
-
-        updated_targets = [
-            CleanupTarget(
-                model_id=int(target.model_id),
-                keep_on_character=max(0, int(target.keep_on_character)),
-                scope=_normalize_cleanup_target_scope(getattr(target, "scope", ""), target.model_id),
+        deposit_list_search_active = bool(normalized_cleanup_target_search)
+        cleanup_targets, updated_targets, display_targets = (
+            self._get_cleanup_target_display_state(
+                active_deposit_filter_category,
+                active_deposit_filter_subcategory,
+                normalized_cleanup_target_search,
             )
-            for target in cleanup_targets
-        ]
-        display_targets = self._sort_targets_by_model_label_for_display(updated_targets)
-        if deposit_filter_active:
-            display_targets = [
-                target
-                for target in display_targets
-                if self._cleanup_target_matches_deposit_filter(
-                    target,
-                    active_deposit_filter_category,
-                    active_deposit_filter_subcategory,
-                )
-            ]
-        if deposit_list_search_active:
-            display_targets = [
-                target
-                for target in display_targets
-                if self._model_id_matches_item_search_text(target.model_id, self.cleanup_target_list_search_text)
-            ]
+        )
         removed_cleanup_target_key: tuple[int, str] | None = None
         if display_targets:
             child_height = min(220, 58 + (32 * len(display_targets)))
@@ -38202,11 +38296,15 @@ class MerchantRulesWidget:
                     PyImGui.table_set_column_index(2)
                     PyImGui.text("Remove")
 
+                    row_height = 32.0
                     for target in display_targets:
                         target_key = _cleanup_target_key(target)
                         target_widget_key = f"{target_key[0]}_{target_key[1]}"
-                        PyImGui.table_next_row()
+                        PyImGui.table_next_row(0, row_height)
                         PyImGui.table_set_column_index(0)
+                        if not PyImGui.is_rect_visible((1, row_height)):
+                            PyImGui.dummy((1, row_height))
+                            continue
                         PyImGui.text_colored(
                             self._format_cleanup_target_label_short(target),
                             self._get_cleanup_target_item_name_text_color(target),
@@ -38248,19 +38346,12 @@ class MerchantRulesWidget:
         if updated_targets != cleanup_targets:
             if self._set_cleanup_targets(updated_targets):
                 cleanup_changed = True
-                cleanup_targets = _normalize_cleanup_targets(self.cleanup_targets)
+                cleanup_targets = self.cleanup_targets
 
         if deposit_filter_active or deposit_list_search_active:
-            shown_count = len([
-                target
-                for target in updated_targets
-                if self._cleanup_target_matches_deposit_filter(
-                    target,
-                    active_deposit_filter_category,
-                    active_deposit_filter_subcategory,
-                )
-                and self._model_id_matches_item_search_text(target.model_id, self.cleanup_target_list_search_text)
-            ])
+            shown_count = len(display_targets)
+            if removed_cleanup_target_key is not None:
+                shown_count = max(0, shown_count - 1)
             self._draw_secondary_text(
                 f"{shown_count} of {len(updated_targets)} deposit item(s) shown.",
                 wrapped=False,
@@ -38284,7 +38375,7 @@ class MerchantRulesWidget:
             next_targets.extend(addable_filtered_targets)
             if self._set_cleanup_targets(next_targets):
                 cleanup_changed = True
-                cleanup_targets = _normalize_cleanup_targets(self.cleanup_targets)
+                cleanup_targets = self.cleanup_targets
 
         updated_cleanup_search = PyImGui.input_text(
             "Search items to deposit##merchant_rules_cleanup_search",
@@ -38313,7 +38404,7 @@ class MerchantRulesWidget:
             next_targets.extend(addable_cleanup_targets)
             if self._set_cleanup_targets(next_targets):
                 cleanup_changed = True
-                cleanup_targets = _normalize_cleanup_targets(self.cleanup_targets)
+                cleanup_targets = self.cleanup_targets
 
         if picked_cleanup_target is not None:
             if self._add_cleanup_target(
@@ -38321,7 +38412,7 @@ class MerchantRulesWidget:
                 scope=picked_cleanup_target.scope,
             ):
                 cleanup_changed = True
-                cleanup_targets = _normalize_cleanup_targets(self.cleanup_targets)
+                cleanup_targets = self.cleanup_targets
             self.cleanup_model_search_text = (
                 self._get_model_name(picked_cleanup_target.model_id)
                 or str(picked_cleanup_target.model_id)
