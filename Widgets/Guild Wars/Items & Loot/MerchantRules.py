@@ -39,6 +39,8 @@ from Py4GWCoreLib import SharedCommandType
 from Py4GWCoreLib import ThrottledTimer
 from Py4GWCoreLib.FrameTree import Frame
 from Py4GWCoreLib.FrameTree import FrameId
+from Py4GWCoreLib.UIManager import MerchantWindow
+from Py4GWCoreLib.UIManager import TraderWindow
 from Py4GWCoreLib.enums_src.Item_enums import ItemType
 from Py4GWCoreLib.enums_src.Title_enums import TITLE_TIERS
 from Py4GWCoreLib.enums_src.Title_enums import TitleID
@@ -124,7 +126,7 @@ INVENTORY_SHORTCUT_LIVE_ACTION_REFRESH_MATERIAL_STORAGE_COUNT = "refresh_materia
 INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
-PROFILE_VERSION = 37
+PROFILE_VERSION = 38
 MERCHANT_RULES_OWNED_ACTION_QUEUES = frozenset({"ACTION", "IDENTIFY", "SALVAGE"})
 # Live and private rule profiles remain account-scoped. Shared profiles use one
 # global document whose per-key journal writes merge safely across multibox clients.
@@ -539,8 +541,34 @@ MATERIAL_STORAGE_BAG_ID = 6
 MATERIAL_STORAGE_BAG_NAME = "MaterialStorage"
 MATERIAL_STORAGE_MAX_STACK_SIZE = 250
 MAX_CHARACTER_GOLD = 100_000
+DEFAULT_TARGET_CARRIED_GOLD = 20_000
 GOLD_TOP_UP_TIMEOUT_MS = 2000
 GOLD_TOP_UP_STEP_MS = 50
+GOLD_BALANCE_SERVICE_TIMEOUT_MS = 3000
+GOLD_BALANCE_VERIFY_TIMEOUT_MS = 2000
+GOLD_BALANCE_STEP_MS = 50
+GOLD_SESSION_SETTLE_MS = 150
+GOLD_BALANCE_STATUS_DISABLED = "disabled"
+GOLD_BALANCE_STATUS_BLOCKED = "blocked"
+GOLD_BALANCE_STATUS_TARGET_MET = "target_met"
+GOLD_BALANCE_STATUS_EXACT = "exact"
+GOLD_BALANCE_STATUS_PARTIAL = "partial"
+GOLD_BALANCE_STATUS_NO_PROGRESS = "no_progress"
+GOLD_BALANCE_STATUS_UNAVAILABLE = "unavailable"
+GOLD_BALANCE_STATUS_INVALID = "invalid"
+GOLD_BALANCE_INVENTORY_PLUS_MESSAGE = (
+    "Turn off Inventory+ before using gold balancing. If it was already working, your final gold may differ from your target."
+)
+GOLD_BALANCE_UNAVAILABLE_MESSAGE = "Gold balancing is unavailable right now."
+GOLD_BALANCE_XUNLAI_UNAVAILABLE_MESSAGE = "Gold balancing is unavailable because Xunlai could not be found nearby."
+GOLD_BALANCE_NO_PROGRESS_MESSAGE = "Gold could not be moved."
+GOLD_BALANCE_STORAGE_EMPTY_MESSAGE = "Gold could not be moved because there is not enough gold in storage."
+GOLD_BALANCE_DEPOSIT_FAILURE_MESSAGE = "Gold could not be deposited right now."
+GOLD_BALANCE_WITHDRAW_FAILURE_MESSAGE = "Gold could not be withdrawn right now."
+GOLD_BALANCE_INVALID_MESSAGE = "Gold balancing stopped because the current gold amount changed."
+GOLD_BALANCE_QUEUE_FAILURE_MESSAGE = "Manual gold balancing could not start."
+GOLD_BALANCE_MANUAL_START_MESSAGE = "Balancing carried gold..."
+GOLD_BALANCE_DISABLED_ACTION_MESSAGE = "Enable Maintain carried gold before balancing."
 MAX_WEAPON_REQUIREMENT = 13
 MODIFIER_IDENTIFIER_ATTRIBUTE_REQUIREMENT = 0x279
 MODIFIER_IDENTIFIER_DAMAGE = 0x27A
@@ -1725,6 +1753,29 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
             "This stores matching configured items without running buy, sell, identify, salvage, or destroy "
             "actions."
         ),
+    },
+    "gold_balance_enabled": {
+        "short": "Keeps this character near the target amount of gold when the selected options run.",
+    },
+    "gold_balance_target": {
+        "short": (
+            "The amount of gold to keep on this character. Extra gold is deposited. "
+            "Missing gold is withdrawn if available."
+        ),
+    },
+    "gold_balance_on_outpost_entry": {
+        "short": "Balances gold once when you enter an outpost or Guild Hall with Xunlai access.",
+    },
+    "gold_balance_after_mr_trading": {
+        "short": "Balances gold once after Merchant Rules finishes its own buying or selling.",
+    },
+    "gold_balance_after_manual_session": {
+        "short": (
+            "Balances gold once after you close a merchant or trader window after buying or selling yourself."
+        ),
+    },
+    "gold_balance_manual_now": {
+        "short": "Balances your gold toward the target right now.",
     },
     "cleanup_keep_on_character": {
         "short": "How many of this deposit target to leave on your character.",
@@ -3972,6 +4023,22 @@ class GoldTopUpResult:
     reason: str = ""
 
 
+@dataclass
+class GoldBalanceResult:
+    """Report one bounded carried-gold balancing attempt."""
+
+    status: str
+    trigger: str = ""
+    target_gold: int = 0
+    carried_before: int = 0
+    storage_before: int = 0
+    carried_after: int = 0
+    storage_after: int = 0
+    requested: int = 0
+    moved: int = 0
+    reason: str = ""
+
+
 def _default_rarity_flags() -> dict[str, bool]:
     return {
         "white": True,
@@ -4081,6 +4148,10 @@ def _safe_int(value: object, default: int = 0) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _normalize_gold_target(value: object) -> int:
+    return min(MAX_CHARACTER_GOLD, max(0, _safe_int(value, 0)))
 
 
 def _coerce_list(value: object) -> list[object]:
@@ -6870,6 +6941,11 @@ class MerchantRulesWidget:
         self.cleanup_protection_sources: list[CleanupProtectionSource] = []
         self.protected_item_model_ids: list[int] = []
         self.auto_cleanup_on_outpost_entry = False
+        self.gold_balance_enabled = False
+        self.gold_balance_on_outpost_entry = False
+        self.gold_balance_after_mr_trading = False
+        self.gold_balance_after_manual_session = False
+        self.target_carried_gold = DEFAULT_TARGET_CARRIED_GOLD
         self.auto_sell_on_manual_vendor_interaction = False
         self.auto_buy_on_manual_vendor_interaction = False
         self.manual_vendor_auto_buy_categories = _default_manual_vendor_category_flags(
@@ -6899,6 +6975,7 @@ class MerchantRulesWidget:
         self.instant_destroy_running = False
         self.salvage_running = False
         self.auto_cleanup_running = False
+        self.gold_balance_running = False
         self.manual_vendor_running = False
         self.merchant_rules_owned_work_count = 0
         self.merchant_rules_owned_action_count = 0
@@ -6917,6 +6994,8 @@ class MerchantRulesWidget:
         self.last_error = ""
         self.last_execution_summary = ""
         self.last_manual_vendor_summary = ""
+        self.last_gold_balance_summary = ""
+        self.last_gold_balance_status = GOLD_BALANCE_STATUS_DISABLED
         self.last_identify_summary = ""
         self.last_instant_destroy_summary = ""
         self.last_salvage_summary = ""
@@ -6964,8 +7043,17 @@ class MerchantRulesWidget:
         self.map_instance_uptime_snapshot_ms = 0
         self.auto_cleanup_zone_attempted = False
         self.auto_cleanup_zone_token = ""
+        self.gold_entry_attempted = False
+        self.gold_entry_zone_token = ""
         self.manual_vendor_handled_signature = ""
         self.manual_vendor_cooldown_until_ms = 0
+        self.merchant_session_open = False
+        self.merchant_session_mr_owned = False
+        self.merchant_session_starting_gold: int | None = None
+        self.merchant_session_id = 0
+        self.manual_session_close_retry: tuple[int, int] | None = None
+        self.execution_currency_changing_work_completed = False
+        self.execution_completed_successfully = False
         self.inventory_modifier_cache: dict[int, InventoryModifierCacheEntry] = {}
         self.inventory_modifier_cache_hits = 0
         self.inventory_modifier_cache_misses = 0
@@ -10286,6 +10374,8 @@ class MerchantRulesWidget:
         *,
         generation: int | None = None,
     ) -> _MerchantRulesOwnedQueueCallback:
+        if self.merchant_session_open and (self.execution_running or self.manual_vendor_running):
+            self._mark_current_merchant_session_mr_owned()
         self.merchant_rules_owned_action_count = max(0, int(self.merchant_rules_owned_action_count)) + 1
         try:
             captured_generation = self._merchant_rules_operation_generation() if generation is None else int(generation)
@@ -10564,6 +10654,7 @@ class MerchantRulesWidget:
             or self.salvage_running
             or self.storage_scan_running
             or self.auto_cleanup_running
+            or self.gold_balance_running
             or self.manual_vendor_running
             or self.icon_xunlai_open_running
             or self.inventory_shortcuts_live_action_running
@@ -10646,9 +10737,11 @@ class MerchantRulesWidget:
         if self.inventory_shortcuts_material_storage_count_cache_captured_at_ms > 0 and not self._is_storage_open():
             self._clear_inventory_shortcut_material_storage_count_cache("storage closed")
         self._advance_multibox_batch()
+        self._update_manual_gold_session_runtime()
         self._update_manual_vendor_runtime()
         self._update_identify_runtime()
         self._update_auto_cleanup_runtime()
+        self._update_auto_gold_runtime()
         self._update_salvage_runtime()
         self._update_instant_destroy_runtime()
 
@@ -10668,11 +10761,16 @@ class MerchantRulesWidget:
             return False
         return True
     def _build_profile_payload(self) -> dict[str, object]:
-        """Serialize current settings into a normalized profile-v37 payload."""
+        """Serialize current settings into a normalized profile-v38 payload."""
 
         payload = {
             "version": PROFILE_VERSION,
             "auto_cleanup_on_outpost_entry": bool(self.auto_cleanup_on_outpost_entry),
+            "gold_balance_enabled": bool(self.gold_balance_enabled),
+            "gold_balance_on_outpost_entry": bool(self.gold_balance_on_outpost_entry),
+            "gold_balance_after_mr_trading": bool(self.gold_balance_after_mr_trading),
+            "gold_balance_after_manual_session": bool(self.gold_balance_after_manual_session),
+            "target_carried_gold": _normalize_gold_target(self.target_carried_gold),
             "auto_sell_on_manual_vendor_interaction": bool(self.auto_sell_on_manual_vendor_interaction),
             "auto_buy_on_manual_vendor_interaction": bool(self.auto_buy_on_manual_vendor_interaction),
             "manual_vendor_auto_buy_categories": _normalize_manual_vendor_category_flags(
@@ -10936,6 +11034,13 @@ class MerchantRulesWidget:
         return {
             "version": PROFILE_VERSION,
             "auto_cleanup_on_outpost_entry": bool(raw_payload.get("auto_cleanup_on_outpost_entry", False)),
+            "gold_balance_enabled": bool(raw_payload.get("gold_balance_enabled", False)),
+            "gold_balance_on_outpost_entry": bool(raw_payload.get("gold_balance_on_outpost_entry", False)),
+            "gold_balance_after_mr_trading": bool(raw_payload.get("gold_balance_after_mr_trading", False)),
+            "gold_balance_after_manual_session": bool(raw_payload.get("gold_balance_after_manual_session", False)),
+            "target_carried_gold": _normalize_gold_target(
+                raw_payload.get("target_carried_gold", DEFAULT_TARGET_CARRIED_GOLD)
+            ),
             "auto_sell_on_manual_vendor_interaction": bool(raw_payload.get("auto_sell_on_manual_vendor_interaction", False)),
             "auto_buy_on_manual_vendor_interaction": bool(raw_payload.get("auto_buy_on_manual_vendor_interaction", False)),
             "manual_vendor_auto_buy_categories": manual_vendor_auto_buy_categories,
@@ -11051,6 +11156,13 @@ class MerchantRulesWidget:
             _coerce_list(payload.get("protected_item_model_ids", []))
         )
         self.auto_cleanup_on_outpost_entry = bool(payload.get("auto_cleanup_on_outpost_entry", False))
+        self.gold_balance_enabled = bool(payload.get("gold_balance_enabled", False))
+        self.gold_balance_on_outpost_entry = bool(payload.get("gold_balance_on_outpost_entry", False))
+        self.gold_balance_after_mr_trading = bool(payload.get("gold_balance_after_mr_trading", False))
+        self.gold_balance_after_manual_session = bool(payload.get("gold_balance_after_manual_session", False))
+        self.target_carried_gold = _normalize_gold_target(
+            payload.get("target_carried_gold", DEFAULT_TARGET_CARRIED_GOLD)
+        )
         self.auto_sell_on_manual_vendor_interaction = bool(payload.get("auto_sell_on_manual_vendor_interaction", False))
         self.auto_buy_on_manual_vendor_interaction = bool(payload.get("auto_buy_on_manual_vendor_interaction", False))
         self.manual_vendor_auto_buy_categories = _normalize_manual_vendor_category_flags(
@@ -12205,11 +12317,16 @@ class MerchantRulesWidget:
         self.last_identify_summary = ""
         self.last_salvage_summary = ""
         self.last_manual_vendor_summary = ""
+        self.last_gold_balance_summary = ""
+        self.last_gold_balance_status = GOLD_BALANCE_STATUS_DISABLED
         self.destroy_instant_enabled = False
         self.destroy_include_protected_items = False
         self.auto_cleanup_running = False
         self.auto_cleanup_zone_attempted = False
         self.auto_cleanup_zone_token = ""
+        self.gold_balance_running = False
+        self.gold_entry_attempted = False
+        self.gold_entry_zone_token = ""
         self.cleanup_model_search_text = ""
         self.cleanup_target_list_search_text = ""
         self.cleanup_blacklist_search_text = ""
@@ -12235,6 +12352,13 @@ class MerchantRulesWidget:
         self.manual_vendor_running = False
         self.manual_vendor_handled_signature = ""
         self.manual_vendor_cooldown_until_ms = 0
+        self.merchant_session_open = False
+        self.merchant_session_mr_owned = False
+        self.merchant_session_starting_gold = None
+        self.merchant_session_id = 0
+        self.manual_session_close_retry = None
+        self.execution_currency_changing_work_completed = False
+        self.execution_completed_successfully = False
         self._clear_sell_protection_jump("runtime reset after profile load")
         self._clear_inventory_shortcut_material_storage_count_cache("runtime reset after profile load")
         self._clear_inventory_shortcut_xunlai_display_cache()
@@ -12342,6 +12466,12 @@ class MerchantRulesWidget:
             self._invalidate_supported_context_cache()
             self.auto_cleanup_zone_attempted = False
             self.auto_cleanup_zone_token = (
+                f"{current_map_id}:{current_instance_uptime_ms}"
+                if current_map_ready
+                else ""
+            )
+            self.gold_entry_attempted = False
+            self.gold_entry_zone_token = (
                 f"{current_map_id}:{current_instance_uptime_ms}"
                 if current_map_ready
                 else ""
@@ -15922,7 +16052,7 @@ class MerchantRulesWidget:
         return self._resolve_storage_access_coords() is not None
 
     def _load_profile(self):
-        """Load the account-scoped JsonFactory profile with fail-closed v36 safeguards."""
+        """Load the account-scoped JsonFactory profile with fail-closed v38 safeguards."""
 
         doc = self._live_config_doc()
         stored_payload = doc.get_json("", None)
@@ -15938,6 +16068,11 @@ class MerchantRulesWidget:
         default_payload = {
             "version": PROFILE_VERSION,
             "auto_cleanup_on_outpost_entry": False,
+            "gold_balance_enabled": False,
+            "gold_balance_on_outpost_entry": False,
+            "gold_balance_after_mr_trading": False,
+            "gold_balance_after_manual_session": False,
+            "target_carried_gold": DEFAULT_TARGET_CARRIED_GOLD,
             "auto_sell_on_manual_vendor_interaction": False,
             "auto_buy_on_manual_vendor_interaction": False,
             "manual_vendor_auto_buy_categories": _default_manual_vendor_category_flags(
@@ -22481,6 +22616,398 @@ class MerchantRulesWidget:
             return inv_widget
         return None
 
+    def _inventory_plus_is_enabled(self) -> bool:
+        try:
+            widget_handler = get_widget_handler()
+            inv_widget = widget_handler.get_widget_info("Inventory Plus")
+            if inv_widget is None:
+                inv_widget = widget_handler.get_widget_info("InventoryPlus")
+            if inv_widget is None:
+                return False
+            enabled = getattr(inv_widget, "enabled")
+            if not isinstance(enabled, bool):
+                return True
+            return enabled
+        except Exception:
+            return True
+
+    def _read_gold_snapshot(self) -> tuple[int, int] | None:
+        carried_gold = self._read_gold_amount("GetGoldOnCharacter")
+        storage_gold = self._read_gold_amount("GetGoldInStorage")
+        if carried_gold is None or storage_gold is None:
+            return None
+        return max(0, int(carried_gold)), max(0, int(storage_gold))
+
+    def _format_gold_target(self, gold_amount: int) -> str:
+        safe_amount = _normalize_gold_target(gold_amount)
+        if safe_amount % 1000 == 0:
+            return f"{safe_amount // 1000} platinum"
+        return f"{safe_amount} gold"
+
+    def _publish_gold_balance_result(self, result: GoldBalanceResult) -> None:
+        self.last_gold_balance_status = str(result.status)
+        target_label = self._format_gold_target(result.target_gold)
+        if result.reason:
+            self._debug_log(f"Gold balance internal detail: {result.reason}")
+        if result.status == GOLD_BALANCE_STATUS_BLOCKED:
+            summary = GOLD_BALANCE_INVENTORY_PLUS_MESSAGE
+        elif result.status == GOLD_BALANCE_STATUS_DISABLED:
+            summary = "Gold balancing is disabled."
+        elif result.status == GOLD_BALANCE_STATUS_TARGET_MET:
+            summary = f"Carried gold already matches the {target_label} target."
+        elif result.status == GOLD_BALANCE_STATUS_EXACT:
+            summary = f"Gold balance complete: carried gold is {target_label}."
+        elif result.status == GOLD_BALANCE_STATUS_PARTIAL:
+            summary = (
+                f"Gold moved {int(result.moved)} gold, but the {target_label} target was not reached."
+            )
+        elif result.status == GOLD_BALANCE_STATUS_NO_PROGRESS:
+            if result.reason == "storage does not contain enough gold":
+                summary = GOLD_BALANCE_STORAGE_EMPTY_MESSAGE
+            else:
+                summary = GOLD_BALANCE_NO_PROGRESS_MESSAGE
+        elif result.status == GOLD_BALANCE_STATUS_INVALID:
+            summary = GOLD_BALANCE_INVALID_MESSAGE
+        else:
+            unavailable_reason = str(result.reason or "")
+            if unavailable_reason == "Xunlai service was not found nearby":
+                summary = GOLD_BALANCE_XUNLAI_UNAVAILABLE_MESSAGE
+            elif unavailable_reason in {"gold deposit unavailable", "gold deposit failed"}:
+                summary = GOLD_BALANCE_DEPOSIT_FAILURE_MESSAGE
+            elif unavailable_reason in {"gold withdrawal unavailable", "gold withdrawal failed"}:
+                summary = GOLD_BALANCE_WITHDRAW_FAILURE_MESSAGE
+            else:
+                summary = GOLD_BALANCE_UNAVAILABLE_MESSAGE
+        self.last_gold_balance_summary = summary
+        self.status_message = summary
+        if result.status in {
+            GOLD_BALANCE_STATUS_BLOCKED,
+            GOLD_BALANCE_STATUS_INVALID,
+            GOLD_BALANCE_STATUS_UNAVAILABLE,
+        }:
+            self._debug_log(f"Gold balance skipped or stopped: {summary}")
+        else:
+            self._debug_log(f"Gold balance result: {summary}")
+
+    def _wait_for_gold_balance_service(self):
+        if self._has_local_storage_access():
+            return True
+
+        waited_ms = 0
+        while waited_ms < GOLD_BALANCE_SERVICE_TIMEOUT_MS:
+            yield from Routines.Yield.wait(GOLD_BALANCE_STEP_MS)
+            waited_ms += GOLD_BALANCE_STEP_MS
+            if self._has_local_storage_access():
+                return True
+        return bool(self._has_local_storage_access())
+
+    def _classify_gold_balance_snapshot(
+        self,
+        *,
+        trigger: str,
+        target_gold: int,
+        direction: str,
+        requested: int,
+        before: tuple[int, int],
+        after: tuple[int, int],
+    ) -> GoldBalanceResult:
+        carried_before, storage_before = before
+        carried_after, storage_after = after
+        if carried_before + storage_before != carried_after + storage_after:
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_INVALID,
+                trigger=trigger,
+                target_gold=target_gold,
+                carried_before=carried_before,
+                storage_before=storage_before,
+                carried_after=carried_after,
+                storage_after=storage_after,
+                requested=requested,
+                reason="combined gold changed unexpectedly",
+            )
+
+        carried_delta = carried_after - carried_before
+        if direction == "deposit":
+            if carried_delta > 0 or carried_after < target_gold:
+                return GoldBalanceResult(
+                    status=GOLD_BALANCE_STATUS_INVALID,
+                    trigger=trigger,
+                    target_gold=target_gold,
+                    carried_before=carried_before,
+                    storage_before=storage_before,
+                    carried_after=carried_after,
+                    storage_after=storage_after,
+                    requested=requested,
+                    moved=max(0, -carried_delta),
+                    reason="deposit moved beyond the requested target",
+                )
+            moved = max(0, -carried_delta)
+        else:
+            if carried_delta < 0 or carried_after > target_gold:
+                return GoldBalanceResult(
+                    status=GOLD_BALANCE_STATUS_INVALID,
+                    trigger=trigger,
+                    target_gold=target_gold,
+                    carried_before=carried_before,
+                    storage_before=storage_before,
+                    carried_after=carried_after,
+                    storage_after=storage_after,
+                    requested=requested,
+                    moved=max(0, carried_delta),
+                    reason="withdrawal moved beyond the requested target",
+                )
+            moved = max(0, carried_delta)
+
+        if carried_after == target_gold:
+            status = GOLD_BALANCE_STATUS_EXACT
+        elif moved > 0:
+            status = GOLD_BALANCE_STATUS_PARTIAL
+        else:
+            status = GOLD_BALANCE_STATUS_NO_PROGRESS
+        return GoldBalanceResult(
+            status=status,
+            trigger=trigger,
+            target_gold=target_gold,
+            carried_before=carried_before,
+            storage_before=storage_before,
+            carried_after=carried_after,
+            storage_after=storage_after,
+            requested=requested,
+            moved=moved,
+        )
+
+    def _wait_for_gold_balance_readback(
+        self,
+        *,
+        trigger: str,
+        target_gold: int,
+        direction: str,
+        requested: int,
+        before: tuple[int, int],
+    ):
+        waited_ms = 0
+        last_result: GoldBalanceResult | None = None
+        while waited_ms <= GOLD_BALANCE_VERIFY_TIMEOUT_MS:
+            after = self._read_gold_snapshot()
+            if after is None:
+                return GoldBalanceResult(
+                    status=GOLD_BALANCE_STATUS_INVALID,
+                    trigger=trigger,
+                    target_gold=target_gold,
+                    carried_before=before[0],
+                    storage_before=before[1],
+                    requested=requested,
+                    reason="gold read-back was unavailable",
+                )
+            last_result = self._classify_gold_balance_snapshot(
+                trigger=trigger,
+                target_gold=target_gold,
+                direction=direction,
+                requested=requested,
+                before=before,
+                after=after,
+            )
+            if last_result.status in {
+                GOLD_BALANCE_STATUS_EXACT,
+                GOLD_BALANCE_STATUS_INVALID,
+            }:
+                return last_result
+            if waited_ms >= GOLD_BALANCE_VERIFY_TIMEOUT_MS:
+                break
+            yield from Routines.Yield.wait(GOLD_BALANCE_STEP_MS)
+            waited_ms += GOLD_BALANCE_STEP_MS
+        return last_result or GoldBalanceResult(
+            status=GOLD_BALANCE_STATUS_INVALID,
+            trigger=trigger,
+            target_gold=target_gold,
+            carried_before=before[0],
+            storage_before=before[1],
+            requested=requested,
+            reason="gold read-back did not produce a result",
+        )
+
+    def _balance_carried_gold(self, trigger: str):
+        target_gold = _normalize_gold_target(self.target_carried_gold)
+        before = self._read_gold_snapshot()
+        if before is None:
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
+                trigger=trigger,
+                target_gold=target_gold,
+                reason="gold balances unavailable",
+            )
+
+        carried_gold, storage_gold = before
+        if carried_gold == target_gold:
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_TARGET_MET,
+                trigger=trigger,
+                target_gold=target_gold,
+                carried_before=carried_gold,
+                storage_before=storage_gold,
+                carried_after=carried_gold,
+                storage_after=storage_gold,
+            )
+
+        service_ready = yield from self._wait_for_gold_balance_service()
+        if not service_ready:
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
+                trigger=trigger,
+                target_gold=target_gold,
+                carried_before=carried_gold,
+                storage_before=storage_gold,
+                reason="Xunlai service was not found nearby",
+            )
+
+        live_before = self._read_gold_snapshot()
+        if live_before is None:
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_INVALID,
+                trigger=trigger,
+                target_gold=target_gold,
+                reason="gold read-back was unavailable before the transfer",
+            )
+        carried_gold, storage_gold = live_before
+        if carried_gold == target_gold:
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_TARGET_MET,
+                trigger=trigger,
+                target_gold=target_gold,
+                carried_before=carried_gold,
+                storage_before=storage_gold,
+                carried_after=carried_gold,
+                storage_after=storage_gold,
+            )
+
+        if carried_gold > target_gold:
+            direction = "deposit"
+            requested = carried_gold - target_gold
+            method_name = "DepositGold"
+        else:
+            direction = "withdraw"
+            requested = min(
+                target_gold - carried_gold,
+                max(0, storage_gold),
+                max(0, MAX_CHARACTER_GOLD - carried_gold),
+            )
+            method_name = "WithdrawGold"
+
+        if requested <= 0:
+            reason = (
+                "storage does not contain enough gold"
+                if direction == "withdraw"
+                else "the carried-gold difference was zero"
+            )
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_NO_PROGRESS,
+                trigger=trigger,
+                target_gold=target_gold,
+                carried_before=carried_gold,
+                storage_before=storage_gold,
+                carried_after=carried_gold,
+                storage_after=storage_gold,
+                reason=reason,
+            )
+
+        transfer = self._get_inventory_api_method(method_name)
+        if transfer is None:
+            self._debug_log(f"Gold balance transfer method unavailable: {method_name}")
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
+                trigger=trigger,
+                target_gold=target_gold,
+                carried_before=carried_gold,
+                storage_before=storage_gold,
+                requested=requested,
+                reason=f"gold {direction} unavailable",
+            )
+
+        try:
+            transfer(int(requested))
+        except Exception as exc:
+            self._debug_log(f"Gold balance transfer failed using {method_name}: {exc}")
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
+                trigger=trigger,
+                target_gold=target_gold,
+                carried_before=carried_gold,
+                storage_before=storage_gold,
+                requested=requested,
+                reason=f"gold {direction} failed",
+            )
+
+        yield from self._wait_for_action_queue_empty(
+            "ACTION",
+            timeout_ms=GOLD_BALANCE_VERIFY_TIMEOUT_MS,
+            step_ms=GOLD_BALANCE_STEP_MS,
+        )
+        return (yield from self._wait_for_gold_balance_readback(
+            trigger=trigger,
+            target_gold=target_gold,
+            direction=direction,
+            requested=requested,
+            before=live_before,
+        ))
+
+    def _run_gold_balance_trigger(self, trigger: str):
+        if not self.gold_balance_enabled:
+            result = GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_DISABLED,
+                trigger=trigger,
+                target_gold=_normalize_gold_target(self.target_carried_gold),
+            )
+            self._publish_gold_balance_result(result)
+            return result
+
+        if self._inventory_plus_is_enabled():
+            result = GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_BLOCKED,
+                trigger=trigger,
+                target_gold=_normalize_gold_target(self.target_carried_gold),
+                reason="Inventory+ is enabled",
+            )
+            self._publish_gold_balance_result(result)
+            return result
+
+        self.gold_balance_running = True
+        try:
+            result = yield from self._balance_carried_gold(trigger)
+        except Exception as exc:
+            result = GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
+                trigger=trigger,
+                target_gold=_normalize_gold_target(self.target_carried_gold),
+                reason="unexpected balance error",
+            )
+            ConsoleLog(MODULE_NAME, f"Gold balance error: {exc}", Console.MessageType.Error)
+        finally:
+            self.gold_balance_running = False
+        self._publish_gold_balance_result(result)
+        return result
+
+    def _queue_manual_gold_balance(self) -> bool:
+        if self._get_action_block_reason("gold_balance"):
+            return False
+        self.status_message = GOLD_BALANCE_MANUAL_START_MESSAGE
+        try:
+            self._queue_merchant_rules_owned_work(
+                self._run_gold_balance_trigger("manual Balance Gold Now")
+            )
+            return True
+        except Exception as exc:
+            self.status_message = GOLD_BALANCE_QUEUE_FAILURE_MESSAGE
+            self.last_error = GOLD_BALANCE_QUEUE_FAILURE_MESSAGE
+            ConsoleLog(MODULE_NAME, f"Manual gold balance queue error: {exc}", Console.MessageType.Error)
+            return False
+
+    def _record_execution_currency_change(self, *outcomes: object) -> None:
+        if any(
+            isinstance(outcome, ExecutionPhaseOutcome) and int(outcome.completed) > 0
+            for outcome in outcomes
+        ):
+            self.execution_currency_changing_work_completed = True
+
     def _wait_for_merchant_inventory(self, timeout_ms: int = 2500, step_ms: int = 10):
         waited = 0
         while waited < timeout_ms:
@@ -25752,13 +26279,97 @@ class MerchantRulesWidget:
             )
         return self._format_compact_list(modes, limit=4) or "none"
 
-    def _is_merchant_window_open(self) -> bool:
+    def _is_qualifying_merchant_session_open(self) -> bool:
         try:
-            return _MerchantRulesSalvageFrameGuard.is_frame_effectively_visible(
+            if not _MerchantRulesSalvageFrameGuard.is_frame_effectively_visible(
                 Frame(FrameId.Merchant)
-            )
+            ):
+                return False
+            return bool(MerchantWindow.IsOpen() or TraderWindow.IsOpen())
         except Exception:
             return False
+
+    def _mark_current_merchant_session_mr_owned(self) -> None:
+        if self.merchant_session_open:
+            self.merchant_session_mr_owned = True
+
+    def _run_manual_gold_session_close(self, session_id: int, starting_gold: int):
+        if self.merchant_session_open or int(self.merchant_session_id) != int(session_id):
+            return
+        yield from Routines.Yield.wait(GOLD_SESSION_SETTLE_MS)
+        if self.merchant_session_open or int(self.merchant_session_id) != int(session_id):
+            return
+        final_gold = self._read_gold_amount("GetGoldOnCharacter")
+        if final_gold is None:
+            return
+        if int(final_gold) == int(starting_gold):
+            self.last_gold_balance_summary = "Manual merchant trading did not change carried gold."
+            self.last_gold_balance_status = GOLD_BALANCE_STATUS_TARGET_MET
+            return
+        if not self.gold_balance_enabled or not self.gold_balance_after_manual_session:
+            return
+        self._debug_log(
+            f"Manual merchant session {int(session_id)} changed carried gold from "
+            f"{int(starting_gold)} to {int(final_gold)}."
+        )
+        yield from self._run_gold_balance_trigger("manual merchant session close")
+
+    def _update_manual_gold_session_runtime(self) -> None:
+        session_open = self._is_qualifying_merchant_session_open()
+        if session_open:
+            if not self.merchant_session_open:
+                self.manual_session_close_retry = None
+                self.merchant_session_open = True
+                self.merchant_session_mr_owned = False
+                self.merchant_session_starting_gold = self._read_gold_amount("GetGoldOnCharacter")
+                self.merchant_session_id += 1
+            if self.execution_running or self.manual_vendor_running:
+                self._mark_current_merchant_session_mr_owned()
+            return
+
+        if self.manual_session_close_retry is not None:
+            retry_session_id, retry_starting_gold = self.manual_session_close_retry
+            if not self.gold_balance_enabled or not self.gold_balance_after_manual_session:
+                self.manual_session_close_retry = None
+                return
+            self.manual_session_close_retry = None
+            try:
+                self._queue_merchant_rules_owned_work(
+                    self._run_manual_gold_session_close(retry_session_id, retry_starting_gold)
+                )
+            except Exception as exc:
+                self.manual_session_close_retry = (retry_session_id, retry_starting_gold)
+                self.status_message = GOLD_BALANCE_QUEUE_FAILURE_MESSAGE
+                self.last_error = GOLD_BALANCE_QUEUE_FAILURE_MESSAGE
+                ConsoleLog(MODULE_NAME, f"Manual gold balance queue error: {exc}", Console.MessageType.Error)
+            return
+
+        if not self.merchant_session_open:
+            return
+
+        closed_session_id = int(self.merchant_session_id)
+        starting_gold = self.merchant_session_starting_gold
+        was_mr_owned = bool(self.merchant_session_mr_owned)
+        self.merchant_session_open = False
+        self.merchant_session_mr_owned = False
+        self.merchant_session_starting_gold = None
+        if was_mr_owned or starting_gold is None:
+            return
+        if not self.gold_balance_enabled or not self.gold_balance_after_manual_session:
+            return
+        self.manual_session_close_retry = (closed_session_id, int(starting_gold))
+        try:
+            self._queue_merchant_rules_owned_work(
+                self._run_manual_gold_session_close(closed_session_id, int(starting_gold))
+            )
+            self.manual_session_close_retry = None
+        except Exception as exc:
+            self.status_message = GOLD_BALANCE_QUEUE_FAILURE_MESSAGE
+            self.last_error = GOLD_BALANCE_QUEUE_FAILURE_MESSAGE
+            ConsoleLog(MODULE_NAME, f"Manual gold balance queue error: {exc}", Console.MessageType.Error)
+
+    def _is_merchant_window_open(self) -> bool:
+        return self._is_qualifying_merchant_session_open()
 
     def _get_offered_item_ids(self, service: object) -> list[int]:
         getter = getattr(service, "GetOfferedItems", None)
@@ -26316,6 +26927,14 @@ class MerchantRulesWidget:
 
             self.last_manual_vendor_summary = " ".join(summary for summary in phase_summaries if summary).strip()
             if completed_any:
+                self._mark_current_merchant_session_mr_owned()
+                if self.gold_balance_enabled and self.gold_balance_after_mr_trading:
+                    yield from self._run_gold_balance_trigger("after Merchant Rules trading")
+                    if self.last_gold_balance_summary:
+                        phase_summaries.append(self.last_gold_balance_summary)
+                        self.last_manual_vendor_summary = " ".join(
+                            summary for summary in phase_summaries if summary
+                        ).strip()
                 self._mark_preview_dirty("Manual merchant automation finished. Preview again to refresh the plan.")
             elif self.last_manual_vendor_summary:
                 self.status_message = "Manual merchant automation finished."
@@ -26366,6 +26985,7 @@ class MerchantRulesWidget:
 
         self.manual_vendor_handled_signature = context.signature
         self.manual_vendor_running = True
+        self._mark_current_merchant_session_mr_owned()
         try:
             self._queue_merchant_rules_owned_work(
                 self._run_manual_vendor_pass(
@@ -26389,10 +27009,16 @@ class MerchantRulesWidget:
         self._clear_preview_projection_state()
         paused_inventory_plus = None
         phase_summaries: list[str] = []
+        route_completed_successfully = False
         try:
             destination_outpost_id, destination_name = self._get_consumable_crafter_multi_stop_target()
             if destination_outpost_id <= 0:
-                yield from self._execute_now(local_only=False, allow_multi_stop=False)
+                yield from self._execute_now(
+                    local_only=False,
+                    allow_multi_stop=False,
+                    post_gold_balance=False,
+                )
+                route_completed_successfully = bool(self.execution_completed_successfully)
                 return
 
             embark_name = self._get_embark_beach_outpost_name()
@@ -26442,6 +27068,7 @@ class MerchantRulesWidget:
                     consumable_plan.consumable_crafter_buys,
                     phase_label="Consumable crafters",
                 )
+            self._record_execution_currency_change(consumable_craft_outcome)
             self.last_execution_phase_durations_ms["consumable_crafters"] = max(
                 0.0,
                 (time.perf_counter() - consumable_crafts_started_at) * 1000.0,
@@ -26479,6 +27106,7 @@ class MerchantRulesWidget:
                     local_only=False,
                     allow_multi_stop=False,
                     exclude_consumable_crafter=True,
+                    post_gold_balance=False,
                 )
                 if self.last_error:
                     if phase_summaries:
@@ -26490,6 +27118,14 @@ class MerchantRulesWidget:
                         if combined_summary:
                             self.last_execution_summary = combined_summary
                     return
+                if not self.execution_completed_successfully:
+                    if phase_summaries:
+                        self.last_execution_summary = " ".join(
+                            summary for summary in [*phase_summaries, self.last_execution_summary] if summary
+                        ).strip()
+                    self.status_message = "Travel + Execute did not finish safely; post-run balancing was skipped."
+                    self._debug_log("Multi-stop execution aborted: nested execution did not complete successfully.")
+                    return
                 if self.last_execution_summary:
                     phase_summaries.append(self.last_execution_summary)
             else:
@@ -26500,6 +27136,8 @@ class MerchantRulesWidget:
                 self.last_execution_summary = "Execution finished, but no merchant actions reported a completed or attempted outcome."
             self.status_message = "Travel + Execute finished. Preview again to refresh the post-run state."
             self.preview_ready = False
+            route_completed_successfully = True
+            self.execution_completed_successfully = True
             self._debug_log(self.last_execution_summary)
         except Exception as exc:
             self.last_error = f"{exc}"
@@ -26507,6 +27145,20 @@ class MerchantRulesWidget:
             ConsoleLog(MODULE_NAME, f"Execution error: {exc}", Console.MessageType.Error)
             ConsoleLog(MODULE_NAME, traceback.format_exc(), Console.MessageType.Error)
         finally:
+            if (
+                route_completed_successfully
+                and self.gold_balance_enabled
+                and self.gold_balance_after_mr_trading
+                and self.execution_currency_changing_work_completed
+            ):
+                self.execution_running = True
+                yield from self._run_gold_balance_trigger("after Merchant Rules trading")
+                if self.last_gold_balance_summary:
+                    self.last_execution_summary = " ".join(
+                        summary
+                        for summary in [self.last_execution_summary, self.last_gold_balance_summary]
+                        if summary
+                    ).strip()
             self.execution_running = False
             if paused_inventory_plus is not None:
                 paused_inventory_plus.resume()
@@ -26519,6 +27171,7 @@ class MerchantRulesWidget:
         local_only: bool = False,
         allow_multi_stop: bool = True,
         exclude_consumable_crafter: bool = False,
+        post_gold_balance: bool = True,
     ):
         """Execute the preview as ordered cooperative phases with live revalidation.
 
@@ -26528,6 +27181,9 @@ class MerchantRulesWidget:
         """
 
         owned_reservation_scope = self._begin_execute_reservation_scope()
+        if post_gold_balance:
+            self.execution_currency_changing_work_completed = False
+        self.execution_completed_successfully = False
         if (
             allow_multi_stop
             and not local_only
@@ -27086,6 +27742,30 @@ class MerchantRulesWidget:
                 self.last_cleanup_summary = cleanup_summary
                 phase_summaries.append(cleanup_summary)
 
+            self._record_execution_currency_change(
+                material_sale_outcome,
+                rare_material_sale_outcome,
+                merchant_sell_outcome,
+                rune_sale_outcome,
+                xunlai_sell_outcome,
+                rune_buy_outcome,
+                scroll_buy_outcome,
+                consumable_craft_outcome,
+                merchant_buy_outcome,
+                common_buy_outcome,
+                rare_buy_outcome,
+            )
+            self.execution_completed_successfully = True
+            if (
+                post_gold_balance
+                and self.gold_balance_enabled
+                and self.gold_balance_after_mr_trading
+                and self.execution_currency_changing_work_completed
+            ):
+                yield from self._run_gold_balance_trigger("after Merchant Rules trading")
+                if self.last_gold_balance_summary:
+                    phase_summaries.append(self.last_gold_balance_summary)
+
             if local_only:
                 phase_summaries.insert(
                     0,
@@ -27218,6 +27898,49 @@ class MerchantRulesWidget:
 
         self.auto_cleanup_zone_attempted = True
         self._queue_cleanup_now(auto_triggered=True)
+
+    def _update_auto_gold_runtime(self):
+        if not Map.IsMapReady():
+            return
+        if not self.gold_balance_enabled or not self.gold_balance_on_outpost_entry:
+            return
+        if not (Map.IsOutpost() or Map.IsGuildHall()):
+            return
+        if self._merchant_rules_has_pending_or_active_work():
+            return
+        if (
+            self.execution_running
+            or self.travel_preview_running
+            or self.identify_running
+            or self.instant_destroy_running
+            or self.salvage_running
+            or self.storage_scan_running
+            or self.auto_cleanup_running
+            or self.gold_balance_running
+            or self.manual_vendor_running
+        ):
+            return
+        if self.gold_entry_attempted:
+            return
+
+        self.gold_entry_attempted = True
+        if self._inventory_plus_is_enabled():
+            self._publish_gold_balance_result(
+                GoldBalanceResult(
+                    status=GOLD_BALANCE_STATUS_BLOCKED,
+                    trigger="outpost entry",
+                    target_gold=_normalize_gold_target(self.target_carried_gold),
+                    reason="Inventory+ is enabled",
+                )
+            )
+            return
+        try:
+            self._queue_merchant_rules_owned_work(
+                self._run_gold_balance_trigger("outpost entry")
+            )
+        except Exception:
+            self.gold_entry_attempted = False
+            raise
 
     def _get_inventory_signature(self, items: list[InventoryItemInfo] | None = None) -> tuple[tuple[int, int], ...]:
         if items is None:
@@ -27482,6 +28205,7 @@ class MerchantRulesWidget:
             or self.salvage_running
             or self.storage_scan_running
             or self.auto_cleanup_running
+            or self.gold_balance_running
             or self.manual_vendor_running
         ):
             return
@@ -30394,6 +31118,12 @@ class MerchantRulesWidget:
             if not self._can_use_local_storage_actions():
                 return "Run Deposits Now requires an outpost or Guild Hall."
             return ""
+        if action == "gold_balance":
+            if self._inventory_plus_is_enabled():
+                return GOLD_BALANCE_INVENTORY_PLUS_MESSAGE
+            if not self.gold_balance_enabled:
+                return GOLD_BALANCE_DISABLED_ACTION_MESSAGE
+            return "Merchant Rules is already busy." if busy else ""
         if action == "salvage":
             if busy:
                 return "Merchant Rules is already busy."
@@ -37288,6 +38018,7 @@ class MerchantRulesWidget:
     def _draw_cleanup_workspace(self):
         cleanup_changed = False
         automation_changed = False
+        gold_automation_changed = False
         cleanup_targets = _normalize_cleanup_targets(self.cleanup_targets)
         cleanup_blacklist_model_ids = _normalize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids)
         cleanup_sources = _normalize_cleanup_protection_sources(self.cleanup_protection_sources)
@@ -37297,6 +38028,83 @@ class MerchantRulesWidget:
             "Xunlai Deposits stores selected items after sell and destroy checks. It can also auto-run once when you enter an outpost or Guild Hall."
         )
 
+        self._draw_section_heading("Carried Gold", UI_COLOR_INFO)
+        self._draw_secondary_text(
+            "Keep a chosen amount of gold on this character. Automatic options are optional."
+        )
+
+        if self._inventory_plus_is_enabled():
+            self._draw_warning_text(GOLD_BALANCE_INVENTORY_PLUS_MESSAGE)
+            self._draw_secondary_text(
+                "Inventory+ can also move gold, so Merchant Rules will not balance gold while Inventory+ is turned on."
+            )
+
+        gold_balance_enabled = PyImGui.checkbox(
+            "Maintain carried gold##merchant_rules_gold_balance_enabled",
+            bool(self.gold_balance_enabled),
+        )
+        self._draw_helper_tooltip("gold_balance_enabled")
+        if gold_balance_enabled != self.gold_balance_enabled:
+            self.gold_balance_enabled = gold_balance_enabled
+            automation_changed = True
+            gold_automation_changed = True
+
+        PyImGui.push_item_width(150)
+        current_target_platinum = max(0, min(100, int(self.target_carried_gold) // 1000))
+        updated_target_platinum = PyImGui.input_int(
+            "Target carried gold (platinum)##merchant_rules_target_carried_gold",
+            current_target_platinum,
+        )
+        PyImGui.pop_item_width()
+        self._draw_helper_tooltip("gold_balance_target")
+        if updated_target_platinum != current_target_platinum:
+            self.target_carried_gold = _normalize_gold_target(int(updated_target_platinum) * 1000)
+            automation_changed = True
+            gold_automation_changed = True
+
+        gold_entry_enabled = PyImGui.checkbox(
+            "On outpost entry##merchant_rules_gold_balance_on_outpost_entry",
+            bool(self.gold_balance_on_outpost_entry),
+        )
+        self._draw_helper_tooltip("gold_balance_on_outpost_entry")
+        if gold_entry_enabled != self.gold_balance_on_outpost_entry:
+            self.gold_balance_on_outpost_entry = gold_entry_enabled
+            automation_changed = True
+            gold_automation_changed = True
+        post_mr_enabled = PyImGui.checkbox(
+            "After Merchant Rules trading##merchant_rules_gold_balance_after_mr_trading",
+            bool(self.gold_balance_after_mr_trading),
+        )
+        self._draw_helper_tooltip("gold_balance_after_mr_trading")
+        if post_mr_enabled != self.gold_balance_after_mr_trading:
+            self.gold_balance_after_mr_trading = post_mr_enabled
+            automation_changed = True
+            gold_automation_changed = True
+        manual_session_enabled = PyImGui.checkbox(
+            "After manual merchant trading##merchant_rules_gold_balance_after_manual_session",
+            bool(self.gold_balance_after_manual_session),
+        )
+        self._draw_helper_tooltip("gold_balance_after_manual_session")
+        if manual_session_enabled != self.gold_balance_after_manual_session:
+            self.gold_balance_after_manual_session = manual_session_enabled
+            automation_changed = True
+            gold_automation_changed = True
+
+        gold_balance_action_reason = self._get_action_block_reason("gold_balance")
+        PyImGui.begin_disabled(bool(gold_balance_action_reason))
+        balance_gold_clicked = PyImGui.button(
+            "Balance Gold Now##merchant_rules_gold_balance_now"
+        )
+        PyImGui.end_disabled()
+        self._draw_helper_tooltip("gold_balance_manual_now")
+        if gold_balance_action_reason and gold_balance_action_reason != GOLD_BALANCE_INVENTORY_PLUS_MESSAGE:
+            self._draw_secondary_text(f"Balance Gold Now: {gold_balance_action_reason}")
+        if self.last_gold_balance_summary and self.last_gold_balance_summary != GOLD_BALANCE_INVENTORY_PLUS_MESSAGE:
+            self._draw_secondary_text(self.last_gold_balance_summary)
+
+        PyImGui.separator()
+        self._draw_section_heading("Item Deposits")
+
         auto_cleanup_enabled = PyImGui.checkbox(
             "Auto-run deposits when entering an outpost or Guild Hall##merchant_rules_auto_cleanup_on_entry",
             bool(self.auto_cleanup_on_outpost_entry),
@@ -37305,8 +38113,8 @@ class MerchantRulesWidget:
         if auto_cleanup_enabled != self.auto_cleanup_on_outpost_entry:
             self.auto_cleanup_on_outpost_entry = auto_cleanup_enabled
             automation_changed = True
+
         run_cleanup_reason = self._get_action_block_reason("cleanup")
-        PyImGui.same_line(0, 8)
         PyImGui.begin_disabled(bool(run_cleanup_reason))
         run_cleanup_clicked = PyImGui.button("Run Deposits Now##merchant_rules_cleanup_workspace_run_now")
         PyImGui.end_disabled()
@@ -37561,9 +38369,9 @@ class MerchantRulesWidget:
                     cleanup_actionable_entries,
                     show_reasons=bool(self.detailed_preview),
                 )
-            if cleanup_skipped_entries:
-                if cleanup_actionable_entries:
-                    PyImGui.spacing()
+                if cleanup_skipped_entries:
+                    if cleanup_actionable_entries:
+                        PyImGui.spacing()
                 if PyImGui.collapsing_header(
                     f"Not Changed ({len(cleanup_skipped_entries)})##merchant_rules_cleanup_preview_skipped"
                 ):
@@ -37576,13 +38384,18 @@ class MerchantRulesWidget:
 
         if automation_changed:
             self._save_profile()
-            self.status_message = (
-                "Auto deposits on outpost entry enabled."
-                if self.auto_cleanup_on_outpost_entry
-                else "Auto deposits on outpost entry disabled."
-            )
+            if gold_automation_changed:
+                self.status_message = "Carried-gold settings saved."
+            else:
+                self.status_message = (
+                    "Auto deposits on outpost entry enabled."
+                    if self.auto_cleanup_on_outpost_entry
+                    else "Auto deposits on outpost entry disabled."
+                )
         if run_cleanup_clicked:
             self._queue_cleanup_now()
+        if balance_gold_clicked:
+            self._queue_manual_gold_balance()
         if cleanup_changed:
             self._save_profile()
             self._mark_preview_dirty("Xunlai deposit settings changed. Preview again before execution.")

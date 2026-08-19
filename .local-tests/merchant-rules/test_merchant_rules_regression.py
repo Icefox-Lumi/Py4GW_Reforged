@@ -396,6 +396,7 @@ def _install_stub_modules(project_root: Path) -> None:
     imgui.push_item_width = lambda *_args, **_kwargs: None
     imgui.pop_item_width = lambda *_args, **_kwargs: None
     imgui.checkbox = lambda _label, checked: bool(checked)
+    imgui.input_int = lambda _label, value: int(value)
     imgui.begin_combo = lambda *_args, **_kwargs: False
     imgui.end_combo = lambda *_args, **_kwargs: None
     imgui.selectable = lambda *_args, **_kwargs: False
@@ -595,6 +596,22 @@ def _install_stub_modules(project_root: Path) -> None:
     frame_tree.Frame = DummyFrame
     frame_tree.FrameId = DummyFrameId
     sys.modules["Py4GWCoreLib.FrameTree"] = frame_tree
+
+    ui_manager = types.ModuleType("Py4GWCoreLib.UIManager")
+
+    class _StubMerchantWindow:
+        @staticmethod
+        def IsOpen() -> bool:
+            return bool(DummyFrame(DummyFrameId.Merchant).exists)
+
+    class _StubTraderWindow:
+        @staticmethod
+        def IsOpen() -> bool:
+            return bool(DummyFrame(DummyFrameId.Merchant).exists)
+
+    ui_manager.MerchantWindow = _StubMerchantWindow
+    ui_manager.TraderWindow = _StubTraderWindow
+    sys.modules["Py4GWCoreLib.UIManager"] = ui_manager
 
     _ensure_package("Py4GWCoreLib.enums_src")
     model_enums = types.ModuleType("Py4GWCoreLib.enums_src.Model_enums")
@@ -2357,6 +2374,856 @@ def _test_manual_vendor_category_filters_preserve_all_sell_protections(module) -
                 expected_reason in protection_reasons,
                 f"{mode} should retain the {expected_reason!r} sell-safety check from the disabled Weapons category.",
             )
+
+
+def _install_gold_test_inventory(
+    module,
+    state: dict[str, int],
+    *,
+    deposit_limit: int | None = None,
+    withdraw_limit: int | None = None,
+):
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    had_inventory = hasattr(module.GLOBAL_CACHE, "Inventory")
+    calls: list[tuple[str, int]] = []
+    open_calls: list[str] = []
+
+    def deposit_gold(amount: int) -> None:
+        requested = max(0, int(amount))
+        calls.append(("deposit", requested))
+        moved = min(requested, max(0, int(state["character"])))
+        if deposit_limit is not None:
+            moved = min(moved, max(0, int(deposit_limit)))
+        state["character"] -= moved
+        state["storage"] += moved
+
+    def withdraw_gold(amount: int) -> None:
+        requested = max(0, int(amount))
+        calls.append(("withdraw", requested))
+        moved = min(
+            requested,
+            max(0, int(state["storage"])),
+            max(0, module.MAX_CHARACTER_GOLD - int(state["character"])),
+        )
+        if withdraw_limit is not None:
+            moved = min(moved, max(0, int(withdraw_limit)))
+        state["character"] += moved
+        state["storage"] -= moved
+
+    module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
+        GetGoldOnCharacter=lambda: int(state["character"]),
+        GetGoldInStorage=lambda: int(state["storage"]),
+        DepositGold=deposit_gold,
+        WithdrawGold=withdraw_gold,
+        IsStorageOpen=lambda: False,
+        OpenXunlaiWindow=lambda: open_calls.append("open"),
+    )
+
+    def restore() -> None:
+        if had_inventory:
+            module.GLOBAL_CACHE.Inventory = original_inventory
+        elif hasattr(module.GLOBAL_CACHE, "Inventory"):
+            delattr(module.GLOBAL_CACHE, "Inventory")
+
+    return calls, open_calls, restore
+
+
+def _test_gold_profile_defaults_and_roundtrip(module, temp_root: Path) -> None:
+    widget = _make_widget(module)
+    _expect(
+        widget.target_carried_gold == 20000,
+        "New widgets should default carried-gold target to 20,000 gold.",
+    )
+    normalized = widget._normalize_profile_payload({"version": module.PROFILE_VERSION - 1})
+    _expect(normalized["version"] == 38, "Carried-gold profiles should normalize to version 38.")
+    _expect(
+        not any(
+            normalized[key]
+            for key in (
+                "gold_balance_enabled",
+                "gold_balance_on_outpost_entry",
+                "gold_balance_after_mr_trading",
+                "gold_balance_after_manual_session",
+            )
+        ),
+        "Legacy profiles should keep every carried-gold trigger disabled by default.",
+    )
+    _expect(
+        normalized["target_carried_gold"] == 20000,
+        "Legacy profiles should default carried-gold target to 20,000 gold.",
+    )
+    _expect(
+        widget._normalize_profile_payload({"version": 37, "target_carried_gold": -10})["target_carried_gold"] == 0,
+        "Carried-gold target normalization should preserve the valid zero target.",
+    )
+    _expect(
+        widget._normalize_profile_payload({"version": 37, "target_carried_gold": 999999})["target_carried_gold"] == module.MAX_CHARACTER_GOLD,
+        "Carried-gold target normalization should clamp to the character-gold maximum.",
+    )
+
+    widget.gold_balance_enabled = True
+    widget.gold_balance_on_outpost_entry = True
+    widget.gold_balance_after_mr_trading = True
+    widget.gold_balance_after_manual_session = True
+    widget.target_carried_gold = 12500
+    saved_payload = widget._build_profile_payload()
+    _expect(saved_payload["version"] == 38, "Saved carried-gold profiles should use version 38.")
+    _expect(saved_payload["target_carried_gold"] == 12500, "Carried-gold targets should be stored as raw gold.")
+
+    reloaded_widget = _make_widget(module)
+    reloaded_widget._apply_profile_payload(saved_payload)
+    _expect(reloaded_widget.gold_balance_enabled, "Carried-gold enablement should round-trip through profiles.")
+    _expect(reloaded_widget.gold_balance_on_outpost_entry, "Outpost-entry gold trigger should round-trip.")
+    _expect(reloaded_widget.gold_balance_after_mr_trading, "Post-MR gold trigger should round-trip.")
+    _expect(reloaded_widget.gold_balance_after_manual_session, "Manual-session gold trigger should round-trip.")
+    _expect(reloaded_widget.target_carried_gold == 12500, "Raw carried-gold target should round-trip unchanged.")
+
+
+def _test_carried_gold_balance_core_cases(module) -> None:
+    def run_case(
+        *,
+        carried: int,
+        storage: int,
+        target: int,
+        deposit_limit: int | None = None,
+        withdraw_limit: int | None = None,
+        service_available: bool = True,
+    ):
+        widget = _make_widget(module)
+        widget.gold_balance_enabled = True
+        widget.target_carried_gold = target
+        calls, open_calls, restore = _install_gold_test_inventory(
+            module,
+            {"character": carried, "storage": storage},
+            deposit_limit=deposit_limit,
+            withdraw_limit=withdraw_limit,
+        )
+        widget._has_local_storage_access = lambda: service_available
+        try:
+            result = _drain_generator_return(widget._run_gold_balance_trigger("regression"))
+            return result, calls, open_calls
+        finally:
+            restore()
+
+    disabled_widget = _make_widget(module)
+    disabled_widget.target_carried_gold = 10000
+    disabled_calls, _disabled_open_calls, disabled_restore = _install_gold_test_inventory(
+        module,
+        {"character": 15000, "storage": 0},
+    )
+    disabled_widget._has_local_storage_access = lambda: True
+    try:
+        disabled_result = _drain_generator_return(disabled_widget._run_gold_balance_trigger("disabled"))
+        _expect(disabled_result.status == module.GOLD_BALANCE_STATUS_DISABLED, "Disabled gold balancing should do nothing.")
+        _expect(not disabled_calls, "Disabled gold balancing should not submit a transfer.")
+    finally:
+        disabled_restore()
+
+    equality_widget = _make_widget(module)
+    equality_widget.gold_balance_enabled = True
+    equality_widget.target_carried_gold = 10000
+    equality_calls, _equality_open_calls, equality_restore = _install_gold_test_inventory(
+        module,
+        {"character": 10000, "storage": 5000},
+    )
+    equality_widget._has_local_storage_access = lambda: (_ for _ in ()).throw(AssertionError("target equality should not inspect Xunlai service"))
+    try:
+        equality_result = _drain_generator_return(equality_widget._run_gold_balance_trigger("equality"))
+        _expect(equality_result.status == module.GOLD_BALANCE_STATUS_TARGET_MET, "Target equality should be a no-op.")
+        _expect(not equality_calls, "Target equality should not submit a transfer.")
+    finally:
+        equality_restore()
+
+    exact_deposit, deposit_calls, deposit_open_calls = run_case(carried=15000, storage=100, target=10000)
+    _expect(exact_deposit.status == module.GOLD_BALANCE_STATUS_EXACT, "Exact excess should deposit to the target.")
+    _expect(deposit_calls == [("deposit", 5000)], "Exact excess should submit only the required deposit.")
+    _expect(not deposit_open_calls, "Gold-only balancing must not open Xunlai.")
+
+    exact_withdrawal, withdrawal_calls, _withdrawal_open_calls = run_case(carried=5000, storage=10000, target=10000)
+    _expect(exact_withdrawal.status == module.GOLD_BALANCE_STATUS_EXACT, "Exact shortfall should withdraw to the target.")
+    _expect(withdrawal_calls == [("withdraw", 5000)], "Exact shortfall should withdraw only the required amount.")
+
+    target_zero, zero_calls, _zero_open_calls = run_case(carried=5000, storage=10000, target=0)
+    _expect(target_zero.status == module.GOLD_BALANCE_STATUS_EXACT, "Zero should be a valid carried-gold target.")
+    _expect(zero_calls == [("deposit", 5000)], "Target zero should deposit all carried gold above zero.")
+
+    insufficient_storage, insufficient_calls, _insufficient_open_calls = run_case(carried=5000, storage=0, target=10000)
+    _expect(
+        insufficient_storage.status == module.GOLD_BALANCE_STATUS_NO_PROGRESS,
+        "Insufficient storage gold should finish without a transfer.",
+    )
+    _expect(not insufficient_calls, "Insufficient storage gold should not submit a zero withdrawal.")
+
+    partial, partial_calls, _partial_open_calls = run_case(
+        carried=15000,
+        storage=100,
+        target=10000,
+        deposit_limit=200,
+    )
+    _expect(partial.status == module.GOLD_BALANCE_STATUS_PARTIAL, "Partial movement should be classified as partial progress.")
+    _expect(partial_calls == [("deposit", 5000)], "Partial progress should not retry with a second transfer.")
+
+    no_progress, no_progress_calls, _no_progress_open_calls = run_case(
+        carried=15000,
+        storage=100,
+        target=10000,
+        deposit_limit=0,
+    )
+    _expect(no_progress.status == module.GOLD_BALANCE_STATUS_NO_PROGRESS, "Blocked movement should be classified as no progress.")
+    _expect(no_progress_calls == [("deposit", 5000)], "A blocked deposit should still be attempted once.")
+
+    delayed_widget = _make_widget(module)
+    delayed_widget.gold_balance_enabled = True
+    delayed_widget.target_carried_gold = 10000
+    delayed_calls, _delayed_open_calls, delayed_restore = _install_gold_test_inventory(
+        module,
+        {"character": 5000, "storage": 10000},
+    )
+    service_checks = 0
+
+    def delayed_service() -> bool:
+        nonlocal service_checks
+        service_checks += 1
+        return service_checks >= 3
+
+    delayed_widget._has_local_storage_access = delayed_service
+    try:
+        delayed_result = _drain_generator_return(delayed_widget._run_gold_balance_trigger("delayed service"))
+        _expect(delayed_result.status == module.GOLD_BALANCE_STATUS_EXACT, "Delayed Xunlai service population should be retried within the bounded window.")
+        _expect(delayed_calls == [("withdraw", 5000)], "Delayed service should still submit one exact withdrawal.")
+    finally:
+        delayed_restore()
+
+    unavailable, unavailable_calls, unavailable_open_calls = run_case(
+        carried=15000,
+        storage=100,
+        target=10000,
+        service_available=False,
+    )
+    _expect(unavailable.status == module.GOLD_BALANCE_STATUS_UNAVAILABLE, "A missing Xunlai service should be reported unavailable.")
+    _expect(not unavailable_calls and not unavailable_open_calls, "A missing Xunlai service should not submit or open anything.")
+
+    wording_widget = _make_widget(module)
+    wording_cases = (
+        (
+            module.GOLD_BALANCE_STATUS_DISABLED,
+            "",
+            "Gold balancing is disabled.",
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_BLOCKED,
+            "Inventory+ is enabled",
+            module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_TARGET_MET,
+            "",
+            "Carried gold already matches the 10 platinum target.",
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_EXACT,
+            "",
+            "Gold balance complete: carried gold is 10 platinum.",
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_PARTIAL,
+            "internal partial detail",
+            "Gold moved 200 gold, but the 10 platinum target was not reached.",
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_NO_PROGRESS,
+            "storage does not contain enough gold",
+            module.GOLD_BALANCE_STORAGE_EMPTY_MESSAGE,
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_NO_PROGRESS,
+            "ActionQueueManager failed: coroutine detail",
+            module.GOLD_BALANCE_NO_PROGRESS_MESSAGE,
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_INVALID,
+            "native exception text",
+            module.GOLD_BALANCE_INVALID_MESSAGE,
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_UNAVAILABLE,
+            "Xunlai service was not found nearby",
+            module.GOLD_BALANCE_XUNLAI_UNAVAILABLE_MESSAGE,
+        ),
+        (
+            module.GOLD_BALANCE_STATUS_UNAVAILABLE,
+            "WithdrawGold failed: native exception text",
+            module.GOLD_BALANCE_UNAVAILABLE_MESSAGE,
+        ),
+    )
+    forbidden_user_text = (
+        "api",
+        "depositgold",
+        "withdrawgold",
+        "exception",
+        "coroutine",
+        "actionqueue",
+        "queue",
+    )
+    for status, reason, expected in wording_cases:
+        wording_widget._publish_gold_balance_result(
+            module.GoldBalanceResult(
+                status=status,
+                target_gold=10000,
+                moved=200 if status == module.GOLD_BALANCE_STATUS_PARTIAL else 0,
+                reason=reason,
+            )
+        )
+        visible_text = str(wording_widget.status_message)
+        _expect(visible_text == expected, f"Gold status wording should be plain and stable for {status}.")
+        _expect(
+            not any(term in visible_text.lower() for term in forbidden_user_text),
+            f"Gold status wording must not expose internal details for {status}.",
+        )
+
+    queue_failure_widget = _make_widget(module)
+    queue_failure_widget.gold_balance_enabled = True
+    queue_failure_widget.gold_balance_after_manual_session = True
+    queue_failure_widget.merchant_session_open = True
+    queue_failure_widget.merchant_session_starting_gold = 100
+    queue_failure_widget.merchant_session_id = 1
+    queue_failure_widget._is_qualifying_merchant_session_open = lambda: False
+
+    def fail_gold_queue(*_args, **_kwargs):
+        raise RuntimeError("internal coroutine queue failure")
+
+    queue_failure_widget._queue_merchant_rules_owned_work = fail_gold_queue
+    queue_failure_widget._update_manual_gold_session_runtime()
+    _expect(
+        queue_failure_widget.status_message == module.GOLD_BALANCE_QUEUE_FAILURE_MESSAGE,
+        "Manual gold queue failures should use plain-language status text.",
+    )
+    _expect(
+        queue_failure_widget.last_error == module.GOLD_BALANCE_QUEUE_FAILURE_MESSAGE,
+        "Manual gold queue failures should not expose the internal exception in last_error.",
+    )
+
+
+def _test_carried_gold_manual_action_and_ui(module) -> None:
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    carried_gold_heading_index = source.index(
+        'self._draw_section_heading("Carried Gold", UI_COLOR_INFO)'
+    )
+    carried_gold_end_index = source.index(
+        'self._draw_helper_tooltip("gold_balance_manual_now")',
+        carried_gold_heading_index,
+    )
+    item_heading_index = source.index(
+        'self._draw_section_heading("Item Deposits")',
+        carried_gold_end_index,
+    )
+    run_deposits_index = source.index(
+        'Run Deposits Now##merchant_rules_cleanup_workspace_run_now',
+        item_heading_index,
+    )
+    _expect(
+        carried_gold_heading_index < carried_gold_end_index < item_heading_index < run_deposits_index,
+        "Carried Gold should appear before the separate Item Deposits section.",
+    )
+    carried_gold_description_index = source.index(
+        '"Keep a chosen amount of gold on this character. Automatic options are optional."',
+        carried_gold_heading_index,
+    )
+    inventory_warning_index = source.index(
+        'self._draw_warning_text(GOLD_BALANCE_INVENTORY_PLUS_MESSAGE)',
+        carried_gold_heading_index,
+    )
+    gold_control_index = source.index(
+        'gold_balance_enabled = PyImGui.checkbox(',
+        inventory_warning_index,
+    )
+    balance_button_index = source.index(
+        'Balance Gold Now##merchant_rules_gold_balance_now',
+        carried_gold_heading_index,
+    )
+    result_summary_index = source.index(
+        'if self.last_gold_balance_summary and self.last_gold_balance_summary != GOLD_BALANCE_INVENTORY_PLUS_MESSAGE:',
+        balance_button_index,
+    )
+    _expect(
+        carried_gold_description_index < inventory_warning_index < gold_control_index,
+        "Inventory+ warning should appear directly below the Carried Gold description.",
+    )
+    _expect(
+        source.count('self._draw_warning_text(GOLD_BALANCE_INVENTORY_PLUS_MESSAGE)') == 1,
+        "The Inventory+ warning should be drawn only once in the Carried Gold section.",
+    )
+    _expect(
+        balance_button_index < result_summary_index < item_heading_index,
+        "Carried-gold balance results should remain below Balance Gold Now.",
+    )
+    _expect(
+        "if gold_balance_action_reason and gold_balance_action_reason != GOLD_BALANCE_INVENTORY_PLUS_MESSAGE:"
+        in source,
+        "The Inventory+ warning should not be repeated below Balance Gold Now.",
+    )
+    manual_action_start = source.index("def _queue_manual_gold_balance")
+    manual_action_end = source.index("def _record_execution_currency_change", manual_action_start)
+    manual_action_source = source[manual_action_start:manual_action_end]
+    _expect(
+        "_run_gold_balance_trigger" in manual_action_source
+        and "DepositGold" not in manual_action_source
+        and "WithdrawGold" not in manual_action_source,
+        "Balance Gold Now should reuse the shared balance trigger without a second transfer implementation.",
+    )
+    _expect(
+        "Gold balancing is enabled, but no trigger is selected." not in source,
+        "Zero automatic gold triggers should no longer show the old warning.",
+    )
+
+    tooltip_texts = {
+        "gold_balance_enabled": "Keeps this character near the target amount of gold when the selected options run.",
+        "gold_balance_target": "The amount of gold to keep on this character. Extra gold is deposited. Missing gold is withdrawn if available.",
+        "gold_balance_on_outpost_entry": "Balances gold once when you enter an outpost or Guild Hall with Xunlai access.",
+        "gold_balance_after_mr_trading": "Balances gold once after Merchant Rules finishes its own buying or selling.",
+        "gold_balance_after_manual_session": "Balances gold once after you close a merchant or trader window after buying or selling yourself.",
+        "gold_balance_manual_now": "Balances your gold toward the target right now.",
+    }
+    tooltip_widget = _make_widget(module)
+    for tooltip_key, expected_text in tooltip_texts.items():
+        _expect(
+            module.HELPER_TOOLTIP_TEXTS[tooltip_key]["short"] == expected_text,
+            f"The {tooltip_key} tooltip should use the approved plain-language text.",
+        )
+        _expect(
+            tooltip_widget._get_helper_tooltip_text(tooltip_key) == expected_text.replace(". ", ".\n"),
+            f"The {tooltip_key} tooltip should render exactly as configured.",
+        )
+
+    manual_widget = _make_widget(module)
+    manual_widget.gold_balance_enabled = True
+    manual_widget.gold_balance_after_mr_trading = False
+    manual_widget.gold_balance_after_manual_session = False
+    manual_widget.gold_balance_on_outpost_entry = False
+    trigger_calls: list[str] = []
+    queued_generators: list[object] = []
+
+    def fake_manual_trigger(trigger: str):
+        trigger_calls.append(str(trigger))
+        if False:
+            yield None
+
+    manual_widget._run_gold_balance_trigger = fake_manual_trigger
+    manual_widget._queue_merchant_rules_owned_work = lambda generator: queued_generators.append(generator)
+    _expect(
+        manual_widget._queue_manual_gold_balance(),
+        "Balance Gold Now should queue when the feature is enabled with no automatic triggers.",
+    )
+    _drain_generator_return(queued_generators[0])
+    _expect(
+        trigger_calls == ["manual Balance Gold Now"],
+        "Balance Gold Now should route through the existing shared gold trigger.",
+    )
+    _expect(len(queued_generators) == 1, "Balance Gold Now should queue exactly one owned operation.")
+    _expect(
+        manual_widget._get_action_block_reason("gold_balance") == "",
+        "Zero automatic triggers should be valid in manual-only mode.",
+    )
+
+    target_widget = _make_widget(module)
+    target_widget.gold_balance_enabled = True
+    target_widget.target_carried_gold = 10000
+    target_calls, target_open_calls, target_restore = _install_gold_test_inventory(
+        module,
+        {"character": 10000, "storage": 5000},
+    )
+    target_queue: list[object] = []
+    target_widget._queue_merchant_rules_owned_work = lambda generator: target_queue.append(generator)
+    try:
+        _expect(target_widget._queue_manual_gold_balance(), "Balance Gold Now should queue for a ready target check.")
+        target_result = _drain_generator_return(target_queue[0])
+        _expect(
+            target_result.status == module.GOLD_BALANCE_STATUS_TARGET_MET,
+            "Balance Gold Now should report an already-met target without moving gold.",
+        )
+        _expect(not target_calls and not target_open_calls, "An already-met manual target should be a safe no-op.")
+    finally:
+        target_restore()
+
+    blocked_widget = _make_widget(module)
+    blocked_widget.gold_balance_enabled = True
+    blocked_queue: list[object] = []
+    original_handler = module.get_widget_handler
+    module.get_widget_handler = lambda: types.SimpleNamespace(
+        get_widget_info=lambda _name: types.SimpleNamespace(enabled=True, is_paused=True),
+    )
+    blocked_widget._queue_merchant_rules_owned_work = lambda generator: blocked_queue.append(generator)
+    try:
+        _expect(
+            blocked_widget._get_action_block_reason("gold_balance")
+            == module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
+            "Enabled Inventory+ should block manual gold balancing.",
+        )
+        _expect(
+            not blocked_widget._queue_manual_gold_balance(),
+            "Enabled Inventory+ should prevent the manual gold action.",
+        )
+        _expect(not blocked_queue, "Blocked manual gold balancing should submit no operation.")
+    finally:
+        module.get_widget_handler = original_handler
+
+
+def _test_carried_gold_inventory_plus_fail_closed(module) -> None:
+    original_handler = module.get_widget_handler
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    had_inventory = hasattr(module.GLOBAL_CACHE, "Inventory")
+    original_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
+    had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
+    calls: list[int] = []
+    module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
+        GetGoldOnCharacter=lambda: 10000,
+        GetGoldInStorage=lambda: 0,
+        DepositGold=lambda amount: calls.append(int(amount)),
+        WithdrawGold=lambda amount: calls.append(-int(amount)),
+    )
+
+    def install_handler(widget_info=None, *, raises: bool = False) -> None:
+        if raises:
+            def get_widget_info(_name):
+                raise RuntimeError("Inventory+ state unavailable")
+        else:
+            def get_widget_info(_name):
+                return widget_info
+        module.get_widget_handler = lambda: types.SimpleNamespace(get_widget_info=get_widget_info)
+
+    def assert_allowed(widget_info, label: str) -> None:
+        widget = _make_widget(module)
+        widget.gold_balance_enabled = True
+        widget.target_carried_gold = 10000
+        install_handler(widget_info)
+        _expect(not widget._inventory_plus_is_enabled(), f"{label} Inventory+ should allow gold balancing.")
+        _expect(
+            widget._get_action_block_reason("gold_balance") == "",
+            f"{label} Inventory+ should leave Balance Gold Now available.",
+        )
+        queued: list[object] = []
+        widget._queue_merchant_rules_owned_work = lambda generator: queued.append(generator)
+        _expect(widget._queue_manual_gold_balance(), f"{label} Inventory+ should allow the manual action.")
+        _expect(len(queued) == 1, f"{label} Inventory+ should queue one manual gold operation.")
+        result = _drain_generator_return(queued[0])
+        _expect(
+            result.status == module.GOLD_BALANCE_STATUS_TARGET_MET,
+            f"{label} Inventory+ should not publish the blocking warning.",
+        )
+        _expect(
+            widget.status_message != module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
+            f"{label} Inventory+ should not show the blocking warning.",
+        )
+
+    try:
+        assert_allowed(None, "Absent")
+        assert_allowed(types.SimpleNamespace(enabled=False, is_paused=True), "Registered-disabled")
+
+        blocking_cases = (
+            (types.SimpleNamespace(enabled=True, is_paused=False), "Enabled"),
+            (types.SimpleNamespace(enabled=True, is_paused=True), "Enabled-paused"),
+            (types.SimpleNamespace(enabled="false", is_paused=False), "Invalid-enabled-state"),
+        )
+        for widget_info, label in blocking_cases:
+            widget = _make_widget(module)
+            widget.gold_balance_enabled = True
+            install_handler(widget_info)
+            _expect(widget._inventory_plus_is_enabled(), f"{label} Inventory+ should fail closed.")
+            _expect(
+                widget._get_action_block_reason("gold_balance") == module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
+                f"{label} Inventory+ should block Balance Gold Now with the exact warning.",
+            )
+            result = _drain_generator_return(widget._run_gold_balance_trigger(f"{label} conflict"))
+            _expect(result.status == module.GOLD_BALANCE_STATUS_BLOCKED, f"{label} Inventory+ should block gold balancing.")
+            _expect(calls == [], f"{label} Inventory+ conflict should submit no gold action.")
+            _expect(
+                widget.status_message == module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
+                f"{label} Inventory+ should expose the exact plain-language warning.",
+            )
+
+        exception_widget = _make_widget(module)
+        exception_widget.gold_balance_enabled = True
+        install_handler(raises=True)
+        _expect(exception_widget._inventory_plus_is_enabled(), "Inventory+ lookup exceptions should fail closed.")
+        exception_result = _drain_generator_return(exception_widget._run_gold_balance_trigger("lookup exception"))
+        _expect(
+            exception_result.status == module.GOLD_BALANCE_STATUS_BLOCKED,
+            "Inventory+ lookup exceptions should block gold balancing.",
+        )
+        _expect(calls == [], "Inventory+ lookup exceptions should submit no gold action.")
+
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        _expect(
+            source.count("self._inventory_plus_is_enabled()") == 4,
+            "The manual action, entry scheduler, shared trigger, and warning should use the same Inventory+ gate.",
+        )
+
+        module.GLOBAL_CACHE.Coroutines = []
+        entry_blocked_widget = _make_widget(module)
+        entry_blocked_widget.gold_balance_enabled = True
+        entry_blocked_widget.gold_balance_on_outpost_entry = True
+        install_handler(types.SimpleNamespace(enabled=True, is_paused=True))
+        entry_blocked_widget._update_auto_gold_runtime()
+        _expect(
+            not module.GLOBAL_CACHE.Coroutines,
+            "Enabled-paused Inventory+ should block the outpost-entry trigger before queueing.",
+        )
+
+        entry_allowed_widget = _make_widget(module)
+        entry_allowed_widget.gold_balance_enabled = True
+        entry_allowed_widget.gold_balance_on_outpost_entry = True
+        install_handler(types.SimpleNamespace(enabled=False, is_paused=True))
+        entry_allowed_widget._update_auto_gold_runtime()
+        _expect(
+            len(module.GLOBAL_CACHE.Coroutines) == 1,
+            "Registered-disabled Inventory+ should allow the outpost-entry trigger to queue.",
+        )
+        _drain_generator_return(module.GLOBAL_CACHE.Coroutines.pop(0))
+
+        for trigger in ("after Merchant Rules trading", "manual merchant session close"):
+            trigger_widget = _make_widget(module)
+            trigger_widget.gold_balance_enabled = True
+            install_handler(types.SimpleNamespace(enabled=True, is_paused=False))
+            trigger_result = _drain_generator_return(trigger_widget._run_gold_balance_trigger(trigger))
+            _expect(
+                trigger_result.status == module.GOLD_BALANCE_STATUS_BLOCKED,
+                f"Enabled Inventory+ should block the {trigger} trigger through the shared gate.",
+            )
+    finally:
+        module.get_widget_handler = original_handler
+        if had_inventory:
+            module.GLOBAL_CACHE.Inventory = original_inventory
+        elif hasattr(module.GLOBAL_CACHE, "Inventory"):
+            delattr(module.GLOBAL_CACHE, "Inventory")
+        if had_coroutines:
+            module.GLOBAL_CACHE.Coroutines = original_coroutines
+        elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
+            delattr(module.GLOBAL_CACHE, "Coroutines")
+
+
+def _test_gold_entry_is_independent_and_one_shot(module) -> None:
+    widget = _make_widget(module)
+    widget.gold_balance_enabled = True
+    widget.gold_balance_on_outpost_entry = True
+    widget.target_carried_gold = 10000
+    widget.auto_cleanup_on_outpost_entry = False
+    widget.cleanup_targets = []
+    widget.cleanup_protection_sources = []
+    original_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
+    had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
+    module.GLOBAL_CACHE.Coroutines = []
+    calls, open_calls, restore_inventory = _install_gold_test_inventory(
+        module,
+        {"character": 10000, "storage": 0},
+    )
+    widget._has_local_storage_access = lambda: (_ for _ in ()).throw(AssertionError("target-met entry should not need service lookup"))
+    try:
+        widget._update_auto_cleanup_runtime()
+        _expect(not module.GLOBAL_CACHE.Coroutines, "Ordinary cleanup should remain inactive without cleanup settings or sources.")
+        widget._update_auto_gold_runtime()
+        _expect(len(module.GLOBAL_CACHE.Coroutines) == 1, "Gold entry should queue independently of ordinary cleanup.")
+        _drain_generator_return(module.GLOBAL_CACHE.Coroutines.pop(0))
+        _expect(widget.gold_entry_attempted, "Gold entry should consume its one-shot opportunity.")
+        widget._update_auto_gold_runtime()
+        _expect(not module.GLOBAL_CACHE.Coroutines, "Gold entry should not queue twice in one map instance.")
+        _expect(not calls and not open_calls, "A target-met gold entry should be a no-op without Xunlai access.")
+    finally:
+        restore_inventory()
+        if had_coroutines:
+            module.GLOBAL_CACHE.Coroutines = original_coroutines
+        elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
+            delattr(module.GLOBAL_CACHE, "Coroutines")
+
+
+def _test_gold_entry_latch_resets_on_new_instance(module) -> None:
+    widget = _make_widget(module)
+    widget.initialized = True
+    widget.catalog_loaded = True
+    widget.account_key = "merchant.rules@example.com"
+    widget.profile_entries_loaded = {scope: True for scope in module.PROFILE_SCOPES}
+    widget.map_snapshot = 100
+    widget.map_ready_snapshot = True
+    widget.map_instance_uptime_snapshot_ms = 500
+    widget.gold_entry_attempted = True
+    widget.gold_entry_zone_token = "100:500"
+    original_uptime = module.Map.GetInstanceUptime
+    module.Map.GetInstanceUptime = lambda: 100
+    try:
+        widget._ensure_initialized()
+        _expect(not widget.gold_entry_attempted, "A reconnect/new instance should create a fresh gold entry opportunity.")
+        _expect(widget.gold_entry_zone_token == "100:100", "The gold entry token should follow the new map instance.")
+    finally:
+        module.Map.GetInstanceUptime = original_uptime
+
+
+def _configure_test_merchant_session(module, open_state: bool):
+    module.Frame.configure(module.FrameId.Merchant, exists=True, created=True, visible=True)
+    original_merchant_open = module.MerchantWindow.IsOpen
+    original_trader_open = module.TraderWindow.IsOpen
+    module.MerchantWindow.IsOpen = staticmethod(lambda: bool(open_state))
+    module.TraderWindow.IsOpen = staticmethod(lambda: False)
+
+    def restore() -> None:
+        module.MerchantWindow.IsOpen = original_merchant_open
+        module.TraderWindow.IsOpen = original_trader_open
+        module.Frame.configure(module.FrameId.Merchant, exists=False, created=False, visible=False)
+
+    return restore
+
+
+def _test_manual_gold_session_close_and_sticky_ownership(module) -> None:
+    widget = _make_widget(module)
+    widget.gold_balance_enabled = True
+    widget.gold_balance_after_manual_session = True
+    widget.target_carried_gold = 10000
+    original_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
+    had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
+    module.GLOBAL_CACHE.Coroutines = []
+    state = {"character": 5000, "storage": 10000}
+    calls, _open_calls, restore_inventory = _install_gold_test_inventory(module, state)
+    open_state = {"value": True}
+    original_merchant_open = module.MerchantWindow.IsOpen
+    original_trader_open = module.TraderWindow.IsOpen
+    module.Frame.configure(module.FrameId.Merchant, exists=True, created=True, visible=True)
+    module.MerchantWindow.IsOpen = staticmethod(lambda: bool(open_state["value"]))
+    module.TraderWindow.IsOpen = staticmethod(lambda: False)
+    widget._has_local_storage_access = lambda: True
+    try:
+        widget._update_manual_gold_session_runtime()
+        _expect(widget.merchant_session_open, "Opening a merchant should start one manual-gold session.")
+        state["character"] = 6000
+        widget._update_manual_gold_session_runtime()
+        _expect(not module.GLOBAL_CACHE.Coroutines, "An open merchant window should not balance yet.")
+        state["character"] = 7000
+        open_state["value"] = False
+        widget._update_manual_gold_session_runtime()
+        _expect(len(module.GLOBAL_CACHE.Coroutines) == 1, "Closing a changed manual session should queue one balance.")
+        _drain_generator_return(module.GLOBAL_CACHE.Coroutines.pop(0))
+        _expect(calls == [("withdraw", 3000)], "Several manual transactions should produce one final exact balance attempt.")
+
+        open_state["value"] = True
+        widget._update_manual_gold_session_runtime()
+        widget.manual_vendor_running = True
+        widget._update_manual_gold_session_runtime()
+        widget.manual_vendor_running = False
+        open_state["value"] = False
+        widget._update_manual_gold_session_runtime()
+        _expect(not module.GLOBAL_CACHE.Coroutines, "An MR-owned session should suppress the manual close trigger.")
+
+        open_state["value"] = True
+        widget._update_manual_gold_session_runtime()
+        widget.execution_running = True
+        widget._update_manual_gold_session_runtime()
+        widget.execution_running = False
+        open_state["value"] = False
+        widget._update_manual_gold_session_runtime()
+        _expect(not module.GLOBAL_CACHE.Coroutines, "A session observed before MR starts should become sticky MR-owned.")
+    finally:
+        module.MerchantWindow.IsOpen = original_merchant_open
+        module.TraderWindow.IsOpen = original_trader_open
+        module.Frame.configure(module.FrameId.Merchant, exists=False, created=False, visible=False)
+        restore_inventory()
+        if had_coroutines:
+            module.GLOBAL_CACHE.Coroutines = original_coroutines
+        elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
+            delattr(module.GLOBAL_CACHE, "Coroutines")
+
+
+def _test_manual_gold_session_no_net_change(module) -> None:
+    widget = _make_widget(module)
+    widget.gold_balance_enabled = True
+    widget.gold_balance_after_manual_session = True
+    widget.target_carried_gold = 10000
+    original_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
+    had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
+    module.GLOBAL_CACHE.Coroutines = []
+    calls, _open_calls, restore_inventory = _install_gold_test_inventory(
+        module,
+        {"character": 10000, "storage": 5000},
+    )
+    restore_session = _configure_test_merchant_session(module, True)
+    try:
+        widget._update_manual_gold_session_runtime()
+        restore_session()
+        widget._update_manual_gold_session_runtime()
+        _expect(len(module.GLOBAL_CACHE.Coroutines) == 1, "A closed session should settle once even when no gold change occurred.")
+        _drain_generator_return(module.GLOBAL_CACHE.Coroutines.pop(0))
+        _expect(not calls, "A manual session with no net gold change should not submit a balance transfer.")
+    finally:
+        restore_inventory()
+        if had_coroutines:
+            module.GLOBAL_CACHE.Coroutines = original_coroutines
+        elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
+            delattr(module.GLOBAL_CACHE, "Coroutines")
+
+
+def _test_manual_gold_session_reopen_does_not_balance_while_open(module) -> None:
+    widget = _make_widget(module)
+    widget.gold_balance_enabled = True
+    widget.gold_balance_after_manual_session = True
+    widget.target_carried_gold = 10000
+    original_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
+    had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
+    module.GLOBAL_CACHE.Coroutines = []
+    state = {"character": 5000, "storage": 10000}
+    calls, _open_calls, restore_inventory = _install_gold_test_inventory(module, state)
+    open_state = {"value": True}
+    original_merchant_open = module.MerchantWindow.IsOpen
+    original_trader_open = module.TraderWindow.IsOpen
+    module.Frame.configure(module.FrameId.Merchant, exists=True, created=True, visible=True)
+    module.MerchantWindow.IsOpen = staticmethod(lambda: bool(open_state["value"]))
+    module.TraderWindow.IsOpen = staticmethod(lambda: False)
+    widget._has_local_storage_access = lambda: True
+    try:
+        widget._update_manual_gold_session_runtime()
+        open_state["value"] = False
+        widget._update_manual_gold_session_runtime()
+        _expect(len(module.GLOBAL_CACHE.Coroutines) == 1, "The first merchant close should queue one close attempt.")
+
+        open_state["value"] = True
+        widget._update_manual_gold_session_runtime()
+        _drain_generator_return(module.GLOBAL_CACHE.Coroutines.pop(0))
+        _expect(not calls, "A stale close attempt must not balance after the merchant reopens.")
+
+        state["character"] = 4000
+        open_state["value"] = False
+        widget._update_manual_gold_session_runtime()
+        _expect(len(module.GLOBAL_CACHE.Coroutines) == 1, "The reopened merchant should receive its own close opportunity.")
+        _drain_generator_return(module.GLOBAL_CACHE.Coroutines.pop(0))
+        _expect(calls == [("withdraw", 6000)], "The current closed session should balance once after it ends.")
+    finally:
+        module.MerchantWindow.IsOpen = original_merchant_open
+        module.TraderWindow.IsOpen = original_trader_open
+        module.Frame.configure(module.FrameId.Merchant, exists=False, created=False, visible=False)
+        restore_inventory()
+        if had_coroutines:
+            module.GLOBAL_CACHE.Coroutines = original_coroutines
+        elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
+            delattr(module.GLOBAL_CACHE, "Coroutines")
+
+
+def _test_gold_post_execution_has_one_outer_hook(module) -> None:
+    source = MERCHANT_RULES_PATH.read_text(encoding="utf-8")
+    _expect(
+        "post_gold_balance=False" in source,
+        "Nested Merchant Rules execution must explicitly disable the post-gold hook.",
+    )
+    _expect(
+        source.count('"after Merchant Rules trading"') >= 2,
+        "The outer execution and manual-vendor paths should use the shared post-trading trigger.",
+    )
+    _expect(
+        "_ensure_gold_for_purchase" in source and source.count("_run_gold_balance_trigger(\"after Merchant Rules trading\")") >= 2,
+        "Purchase top-up must remain a separate operation from the post-trading balance.",
+    )
+
+
+def _test_gold_balance_has_no_snapshot_deduplication(module) -> None:
+    source = MERCHANT_RULES_PATH.read_text(encoding="utf-8")
+    _expect(
+        "carried, storage, target" not in source.lower(),
+        "Carried-gold balancing should not add snapshot-value deduplication state.",
+    )
 
 
 def _test_gold_top_up_skips_when_total_gold_is_insufficient(module) -> None:
@@ -23229,6 +24096,12 @@ def _test_jsonfactory_dual_scope_profile_operations_and_validation(module, temp_
         "Rows must have unambiguous SHARED and ACCOUNT badges.",
     )
 
+    widget.gold_balance_enabled = True
+    widget.gold_balance_on_outpost_entry = True
+    widget.gold_balance_after_mr_trading = True
+    widget.gold_balance_after_manual_session = True
+    widget.target_carried_gold = 12500
+
     original_time = module.time.time
     module.time.time = lambda: 100.0
     try:
@@ -23276,6 +24149,14 @@ def _test_jsonfactory_dual_scope_profile_operations_and_validation(module, temp_
             _expect(
                 geometry_keys.isdisjoint(wrapper["payload"]),
                 "Saved profiles in either scope must exclude account window geometry.",
+            )
+            _expect(
+                wrapper["payload"]["gold_balance_enabled"]
+                and wrapper["payload"]["gold_balance_on_outpost_entry"]
+                and wrapper["payload"]["gold_balance_after_mr_trading"]
+                and wrapper["payload"]["gold_balance_after_manual_session"]
+                and wrapper["payload"]["target_carried_gold"] == 12500,
+                "Account and Shared profiles must persist carried-gold settings independently of scope.",
             )
 
         for scope in module.PROFILE_SCOPES:
@@ -23404,6 +24285,14 @@ def _test_jsonfactory_dual_scope_profile_operations_and_validation(module, temp_
             _expect(
                 widget.favorite_outpost_ids == expected_payload_ids[scope],
                 "Both scopes should load the selected normalized payload.",
+            )
+            _expect(
+                widget.gold_balance_enabled
+                and widget.gold_balance_on_outpost_entry
+                and widget.gold_balance_after_mr_trading
+                and widget.gold_balance_after_manual_session
+                and widget.target_carried_gold == 12500,
+                "Both scopes should restore carried-gold settings from the selected profile.",
             )
             _expect(
                 widget.active_workspace == module.WORKSPACE_PROFILES
@@ -24424,6 +25313,50 @@ def main() -> int:
             (
                 "gold_top_up_skips_when_total_gold_is_insufficient",
                 lambda: _test_gold_top_up_skips_when_total_gold_is_insufficient(module),
+            ),
+            (
+                "gold_profile_defaults_and_roundtrip",
+                lambda: _test_gold_profile_defaults_and_roundtrip(module, temp_root),
+            ),
+            (
+                "carried_gold_balance_core_cases",
+                lambda: _test_carried_gold_balance_core_cases(module),
+            ),
+            (
+                "carried_gold_manual_action_and_ui",
+                lambda: _test_carried_gold_manual_action_and_ui(module),
+            ),
+            (
+                "carried_gold_inventory_plus_fail_closed",
+                lambda: _test_carried_gold_inventory_plus_fail_closed(module),
+            ),
+            (
+                "gold_entry_is_independent_and_one_shot",
+                lambda: _test_gold_entry_is_independent_and_one_shot(module),
+            ),
+            (
+                "gold_entry_latch_resets_on_new_instance",
+                lambda: _test_gold_entry_latch_resets_on_new_instance(module),
+            ),
+            (
+                "manual_gold_session_close_and_sticky_ownership",
+                lambda: _test_manual_gold_session_close_and_sticky_ownership(module),
+            ),
+            (
+                "manual_gold_session_no_net_change",
+                lambda: _test_manual_gold_session_no_net_change(module),
+            ),
+            (
+                "manual_gold_session_reopen_does_not_balance_while_open",
+                lambda: _test_manual_gold_session_reopen_does_not_balance_while_open(module),
+            ),
+            (
+                "gold_post_execution_has_one_outer_hook",
+                lambda: _test_gold_post_execution_has_one_outer_hook(module),
+            ),
+            (
+                "gold_balance_has_no_snapshot_deduplication",
+                lambda: _test_gold_balance_has_no_snapshot_deduplication(module),
             ),
             (
                 "merchant_stock_buy_withdraws_xunlai_gold_exact_shortfall",
