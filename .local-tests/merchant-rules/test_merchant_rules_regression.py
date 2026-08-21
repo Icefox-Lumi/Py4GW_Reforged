@@ -880,8 +880,8 @@ def _prime_initialized_widget(module, widget):
 def _install_sell_rule_editor_click_stubs(module, clicked_button_label: str) -> None:
     imgui = module.PyImGui
     clicked_label = str(clicked_button_label or "")
-    _visible_label, separator, hidden_id = clicked_label.partition("##")
-    confirm_label = f"Are you sure?##{hidden_id}" if separator else "Are you sure?"
+    visible_label, separator, hidden_id = clicked_label.partition("##")
+    confirm_label = f"Confirm {visible_label.strip()}##{hidden_id}" if separator else f"Confirm {visible_label.strip()}"
     imgui.button = lambda label: str(label or "") in (clicked_label, confirm_label)
     imgui.small_button = lambda *_args, **_kwargs: False
     imgui.same_line = lambda *_args, **_kwargs: None
@@ -3786,7 +3786,7 @@ def _test_inventory_shortcut_header_counts_readable_scopes(module) -> None:
         _make_item(module, item_id=706, model_id=book_model_id, name="Book of Secrets", quantity=2)
     )
     _expect(
-        book_header == "Book of Secrets - Bags: 5, Vault: 2",
+        book_header == "Book of Secrets - Bags: 5, Xunlai panes: 2",
         "Shortcut header should count matching normal items in bags and readable vault panes.",
     )
 
@@ -3801,7 +3801,7 @@ def _test_inventory_shortcut_header_counts_readable_scopes(module) -> None:
         _make_item(module, item_id=714, model_id=plank_model_id, name="Wood Plank", quantity=10, is_material=True)
     )
     _expect(
-        material_header == "Wood Plank - Bags: 10, Vault: 40",
+        material_header == "Wood Plank - Bags: 10, Xunlai panes: 40",
         "Shortcut header should count material bags and readable Xunlai panes without probing Material Storage.",
     )
     widget._get_material_storage_quantity_and_slot = lambda _model_id: (500, 0, 40)
@@ -3809,7 +3809,7 @@ def _test_inventory_shortcut_header_counts_readable_scopes(module) -> None:
         _make_item(module, item_id=716, model_id=plank_model_id, name="10 Wood Plank", quantity=10, is_material=True)
     )
     _expect(
-        cached_material_header == "10 Wood Plank - Bags: 10, Vault: 40",
+        cached_material_header == "10 Wood Plank - Bags: 10, Xunlai panes: 40",
         "Shortcut header must ignore Material Storage even if a helper exists.",
     )
 
@@ -3823,7 +3823,7 @@ def _test_inventory_shortcut_header_falls_back_when_storage_unavailable(module) 
         _make_item(module, item_id=721, model_id=930002, name="Book of Secrets", quantity=2)
     )
     _expect(
-        normal_header == "Book of Secrets - Bags: 2, Vault: unavailable",
+        normal_header == "Book of Secrets - Bags: 2, Xunlai panes: unavailable",
         "Shortcut header should use clicked stack count and mark vault unavailable when scans are unavailable.",
     )
 
@@ -3831,7 +3831,7 @@ def _test_inventory_shortcut_header_falls_back_when_storage_unavailable(module) 
         _make_item(module, item_id=722, model_id=921, name="Wood Plank", quantity=10, is_material=True)
     )
     _expect(
-        material_header == "Wood Plank - Bags: 10, Vault: unavailable",
+        material_header == "Wood Plank - Bags: 10, Xunlai panes: unavailable",
         "Shortcut header should not force a closed-storage Material Storage read.",
     )
 
@@ -3893,7 +3893,7 @@ def _test_inventory_shortcut_xunlai_display_cache_reuses_draw_state_and_refreshe
     closed_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(material, header_base)
     closed_state = widget.inventory_shortcuts_xunlai_display_state
     repeated_closed_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(material, header_base)
-    _expect(closed_header == "250 Bones - Bags: 250, Vault: unavailable", "Closed Xunlai should remain unavailable.")
+    _expect(closed_header == "250 Bones - Bags: 250, Xunlai panes: unavailable", "Closed Xunlai should remain unavailable.")
     _expect(repeated_closed_header == closed_header, "Repeated closed-Xunlai popup draws should reuse display state.")
     _expect(
         widget.inventory_shortcuts_xunlai_display_state is closed_state,
@@ -3907,7 +3907,7 @@ def _test_inventory_shortcut_xunlai_display_cache_reuses_draw_state_and_refreshe
     opened_state = widget.inventory_shortcuts_xunlai_display_state
     scans_after_open = (inventory_scan_count["value"], storage_scan_count["value"])
     repeated_opened_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(material, header_base)
-    _expect(opened_header == "250 Bones - Bags: 250, Vault: 17", "Opening Xunlai should refresh the cached Vault header.")
+    _expect(opened_header == "250 Bones - Bags: 250, Xunlai panes: 17", "Opening Xunlai should refresh the cached Vault header.")
     _expect(repeated_opened_header == opened_header, "Repeated open-Xunlai popup draws should reuse the refreshed header.")
     _expect(opened_state is not closed_state, "The closed-to-open transition should rebuild Xunlai display state once.")
     _expect(
@@ -3918,13 +3918,13 @@ def _test_inventory_shortcut_xunlai_display_cache_reuses_draw_state_and_refreshe
     widget._store_inventory_shortcut_material_storage_count_cache({material_model_id: 234})
     positive_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(material, header_base)
     _expect(
-        positive_header == "250 Bones - Bags: 250, Vault: 17, Material Storage: 234 last seen",
+        positive_header == "250 Bones - Bags: 250, Xunlai panes: 17, Material Storage: 234 last seen",
         "A positive Material Storage refresh should update the same-popup header.",
     )
     widget._store_inventory_shortcut_material_storage_count_cache({})
     zero_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(material, header_base)
     _expect(
-        zero_header == "250 Bones - Bags: 250, Vault: 17, Material Storage: 0 last seen",
+        zero_header == "250 Bones - Bags: 250, Xunlai panes: 17, Material Storage: 0 last seen",
         "A successful zero Material Storage refresh should remain distinct from unavailable state.",
     )
     widget._clear_inventory_shortcut_material_storage_count_cache("regression invalidation")
@@ -3953,7 +3953,7 @@ def _test_inventory_shortcut_xunlai_display_cache_reuses_draw_state_and_refreshe
     closed_again_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(material, header_base)
     closed_again_state = widget.inventory_shortcuts_xunlai_display_state
     _expect(
-        closed_again_header == "250 Bones - Bags: 250, Vault: unavailable",
+        closed_again_header == "250 Bones - Bags: 250, Xunlai panes: unavailable",
         "Closing Xunlai should invalidate its cached header state without refreshing Bags.",
     )
     storage_open["value"] = True
@@ -3961,7 +3961,7 @@ def _test_inventory_shortcut_xunlai_display_cache_reuses_draw_state_and_refreshe
     reopened_state = widget.inventory_shortcuts_xunlai_display_state
     scans_after_reopen = (inventory_scan_count["value"], storage_scan_count["value"])
     repeated_reopened_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(material, header_base)
-    _expect(reopened_header == "250 Bones - Bags: 250, Vault: 17", "Reopening Xunlai should refresh Vault state again.")
+    _expect(reopened_header == "250 Bones - Bags: 250, Xunlai panes: 17", "Reopening Xunlai should refresh Vault state again.")
     _expect(closed_again_state is not opened_state, "Closing Xunlai should replace the open cached state.")
     _expect(reopened_state is not closed_again_state, "Reopening Xunlai should replace the closed cached state.")
     _expect(repeated_reopened_header == reopened_header, "The reopened Xunlai state should be reused on later draws.")
@@ -4007,7 +4007,7 @@ def _test_inventory_shortcut_xunlai_display_cache_context_and_popup_lifecycle(mo
     first_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(first_shield, first_base)
     first_state = widget.inventory_shortcuts_xunlai_display_state
     repeated_header = widget._format_inventory_shortcut_menu_header_from_cached_display_state(first_shield, first_base)
-    _expect(first_header == "Testing Shield - Bags: 1, Vault: 3", "Non-withdraw candidates should show cached Vault totals.")
+    _expect(first_header == "Testing Shield - Bags: 1, Xunlai panes: 3", "Non-withdraw candidates should show cached Vault totals.")
     _expect(repeated_header == first_header, "Non-withdraw candidate Vault headers should be stable across repeated draws.")
     _expect(storage_scan_count["value"] == 1, "A non-withdraw candidate should scan Vault only once per cached state.")
     _expect(inventory_scan_count["value"] == 1, "A non-withdraw candidate should capture Bags only at popup open.")
@@ -5779,7 +5779,7 @@ def _test_inventory_shortcut_material_storage_withdraw_label_and_draw_guards(mod
     )
     _expect(no_cache_both_enabled, "Both withdraw should be enabled from Phase 3-safe label state.")
     _expect(
-        no_cache_both_label == "Withdraw Bone From Both (Vault: 100 / Material Storage: not checked)",
+        no_cache_both_label == "Withdraw Bone From Both (Xunlai panes: 100 / Material Storage: not checked)",
         "Both withdraw should use fallback Material Storage text before an explicit count refresh.",
     )
 
@@ -5848,7 +5848,7 @@ def _test_inventory_shortcut_material_storage_withdraw_label_and_draw_guards(mod
     _expect(
         both_rows[0]
         == (
-            "Withdraw Bone From Both (Vault: 100 / Material Storage: 500 last seen)",
+            "Withdraw Bone From Both (Xunlai panes: 100 / Material Storage: 500 last seen)",
             module.INVENTORY_SHORTCUT_LIVE_ACTION_WITHDRAW_BOTH,
             True,
         ),
@@ -6537,7 +6537,7 @@ def _test_inventory_shortcut_both_withdraw_stages_sources_and_capacity(module) -
         )
         _expect(both_enabled, "Both withdraw label should be enabled from Phase 3-safe state.")
         _expect(
-            both_label == "Withdraw Bone From Both (Vault: 176 / Material Storage: 999 last seen)",
+            both_label == "Withdraw Bone From Both (Xunlai panes: 176 / Material Storage: 999 last seen)",
             "Both withdraw label should use cached Material Storage counts only as display text.",
         )
         _expect(material_storage_scan_count["value"] == 0, "Both withdraw label should not scan Material Storage.")
@@ -17519,7 +17519,8 @@ def _test_preview_reason_display_normalizes_nested_protection_wording(module) ->
         widget._get_preview_reason_for_display(direct_linked)
         == (
             "Move this item from inventory to Xunlai Storage; it is protected from sale by "
-            "Weapons Protections (#1): all-weapons perfect-base range, Shield Armor 16, req 9 Strength."
+            "Weapons Protections (#1): requirement range for all weapon types with maximum base stats, "
+            "Shield Armor 16, req 9 Strength."
         ),
         "Deposit preview display should explain the move and collapse nested protection wording without mutating it.",
     )
@@ -17530,7 +17531,10 @@ def _test_preview_reason_display_normalizes_nested_protection_wording(module) ->
     )
     _expect(
         widget._get_preview_reason_for_display(blocked_destroy)
-        == "Blocked by Destroy Weapons rule #2: protected by Weapons Protections (#1), model perfect-base range, Chaos Axe 6-28, req 9 Axe Mastery.",
+        == (
+            "Blocked by Destroy Weapons rule #2: protected by Weapons Protections (#1), requirement range for "
+            "this model with maximum base stats, Chaos Axe 6-28, req 9 Axe Mastery."
+        ),
         "Preview display should make blocked nested protection wording scannable.",
     )
     _expect(
@@ -17540,7 +17544,8 @@ def _test_preview_reason_display_normalizes_nested_protection_wording(module) ->
     )
     _expect(
         "Weapons Protections (#1)" in widget._get_preview_reason_for_display(blocked_destroy)
-        and "model perfect-base range" in widget._get_preview_reason_for_display(blocked_destroy)
+        and "requirement range for this model with maximum base stats"
+        in widget._get_preview_reason_for_display(blocked_destroy)
         and "Chaos Axe 6-28" in widget._get_preview_reason_for_display(blocked_destroy),
         "Equipment and upgrade protection display should retain useful rule and detail text.",
     )
@@ -25056,7 +25061,7 @@ def _test_profile_confirmation_binds_exact_scope_key_and_fingerprint(module) -> 
         _expect(
             second_clicked
             and second_fingerprint == profile.fingerprint
-            and labels[-1].startswith("Confirm — Affects All Accounts"),
+            and labels[-1].startswith("Confirm Delete Selected — Affects All Accounts"),
             "The second click should return the confirmed fingerprint with an all-account warning.",
         )
 

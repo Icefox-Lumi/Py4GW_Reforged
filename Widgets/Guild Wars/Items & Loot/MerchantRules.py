@@ -454,7 +454,7 @@ PROTECTION_FILTER_REQUIREMENTS = "requirements"
 PROTECTION_FILTER_WEAPON_MODS = "weapon_mods"
 PROTECTION_FILTER_RUNES = "runes"
 PROTECTION_OWNER_FILTER_OPTIONS: tuple[tuple[str, str], ...] = (
-    (PROTECTION_FILTER_ALL, "All Owners"),
+    (PROTECTION_FILTER_ALL, "All Equipment"),
     (SELL_KIND_WEAPONS, "Weapons"),
     (SELL_KIND_ARMOR, "Armor"),
 )
@@ -1401,12 +1401,21 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     },
     "inventory_right_click_shortcuts": {
         "short": "Adds Merchant Rules shortcuts to inventory item right-clicks.",
-        "long": "These shortcuts add Merchant Rules entries from the clicked inventory item. Live actions stay off unless enabled separately.",
+        "long": (
+            "Configuration shortcuts change settings for every matching copy, not only the clicked item. "
+            "Direct Deposit and Destroy actions affect only the clicked item or stack. "
+            "ID and Salvage kit actions target eligible inventory items by rarity."
+        ),
         "why": "Leave this off if Inventory+ should own the inventory right-click menu.",
     },
     "inventory_right_click_live_actions": {
         "short": "Adds live Deposit This Item and Destroy This Item shortcuts.",
-        "long": "Live shortcuts target only the clicked item or stack. Destroy always asks for a second click, and deposit asks for a second click when the item is kept out of deposits.",
+        "long": (
+            "Direct Deposit and Destroy actions affect only the clicked item or stack. "
+            "ID and Salvage kit actions target eligible inventory items by rarity. "
+            "Destroy always asks for a second click, and deposit asks for a second click when the item is "
+            "kept out of deposits."
+        ),
         "why": "Leave this off unless you want Merchant Rules to perform direct right-click inventory actions.",
     },
     "workspace_overview": {
@@ -1467,8 +1476,8 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     "workspace_rules_protections": {
         "short": "Manage items that should stay safe from sell, destroy, and salvage.",
         "long": (
-            "Protections centralizes kept models, weapon types, requirements, upgrades, runes, and deposit "
-            "keep-outs."
+            "Sell rules decide what can be sold. Protections keeps matching items safe from Sell, Salvage, "
+            "Destroy, and Sell from Xunlai."
         ),
         "why": "Protection mistakes are the highest-risk setup mistakes, so audit this area before broad actions.",
     },
@@ -1551,7 +1560,7 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
         "why": "Run this after rule or inventory changes so Execute is based on current information.",
     },
     "preview_plan_travel_execute": {
-        "short": "Travels if needed, rebuilds the live plan, then executes it.",
+        "short": "Travels if needed, rechecks current items and available services, then executes.",
         "long": "Use this when Auto Travel points to an outpost where the needed services are available.",
     },
     "preview_plan_execute_here": {
@@ -1581,8 +1590,8 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     "auto_travel": {
         "short": "Lets Merchant Rules travel to the selected outpost before executing.",
         "long": (
-            "When enabled, Travel + Execute uses the target outpost, rebuilds the live plan there, and then "
-            "runs it."
+            "When enabled, Travel + Execute uses the target outpost, rechecks current items and available "
+            "services there, and then executes."
         ),
         "why": "Travel is useful when the needed merchant, trader, crafter, or Xunlai access is not here.",
     },
@@ -1613,11 +1622,14 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     },
     "manual_vendor_buy_categories": {
         "short": "Chooses which Buy sections may run automatically when you open a merchant.",
-        "long": "Preview Plan and normal execution continue using every enabled Buy rule.",
+        "long": "Preview Plan, Travel + Execute, and Execute Here continue using every enabled Buy rule.",
     },
     "manual_vendor_sell_categories": {
         "short": "Chooses which Sell sections may run automatically when you open a merchant.",
-        "long": "Preview Plan and normal execution continue using every enabled Sell rule. Item protections always remain active.",
+        "long": (
+            "Preview Plan, Travel + Execute, and Execute Here continue using every enabled Sell rule. "
+            "Item protections always remain active."
+        ),
     },
     "manual_vendor_any_merchant": {
         "short": "Allows the selected sell groups to use any regular merchant.",
@@ -1702,8 +1714,7 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     "identify_before_execute": {
         "short": "Identifies selected rarities before Execute continues.",
         "long": (
-            "After identifying, Merchant Rules rebuilds the live plan so sell and salvage rules see the "
-            "updated items."
+            "After identifying, Merchant Rules rechecks current items so Sell and Salvage rules see the updates."
         ),
     },
     "identify_on_inventory_change": {
@@ -1732,8 +1743,8 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     "salvage_specific_upgrade_targets": {
         "short": "Specific upgrades this salvage rule can target.",
         "long": (
-            "Weapon entries can match exact names or minimum rolls. Armor entries store exact "
-            "runes.json Rune and Insignia identifiers."
+            "Weapon entries can match exact names or minimum rolls. Armor entries match the exact selected "
+            "rune or insignia."
         ),
     },
     "salvage_common_material_targets": {
@@ -1743,7 +1754,7 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
     "cleanup_auto_entry": {
         "short": "Runs Xunlai Deposits once after entering an outpost or Guild Hall.",
         "long": (
-            "Auto deposits use the deposit targets, keep-outs, and linked protected-item deposit sources "
+            "Auto deposits use the deposit targets, keep-outs, and linked Weapons or Armor protection rules "
             "you configured."
         ),
     },
@@ -7285,8 +7296,8 @@ class MerchantRulesWidget:
                 icon_path=self._get_floating_icon_path(),
                 window_id=FLOATING_ICON_WINDOW_ID,
                 window_name=FLOATING_ICON_WINDOW_NAME,
-                tooltip_visible="Hide Merchant Rules window",
-                tooltip_hidden="Show Merchant Rules window",
+                tooltip_visible="Left-click to hide Merchant Rules. Right-click for quick actions.",
+                tooltip_hidden="Left-click to show Merchant Rules. Right-click for quick actions.",
                 visible=bool(self.show_main_window),
                 on_toggle=self._on_floating_icon_visibility_toggled,
             )
@@ -8088,12 +8099,12 @@ class MerchantRulesWidget:
             return f"{base_label} (Xunlai unavailable)", False, None, None
         available_quantity = self._get_inventory_shortcut_xunlai_pane_withdraw_quantity(item)
         if available_quantity is None:
-            return f"{base_label} (Xunlai unreadable)", False, None, None
+            return f"{base_label} (contents unavailable)", False, None, None
         if available_quantity <= 0:
             return f"No {item_name} in Xunlai Panes", False, available_quantity, None
         capacity = self._get_inventory_shortcut_xunlai_pane_withdraw_capacity(item)
         if capacity is None:
-            return f"{base_label} ({available_quantity} available / capacity unavailable)", False, available_quantity, None
+            return f"{base_label} ({available_quantity} available / inventory space unknown)", False, available_quantity, None
         if capacity <= 0:
             return f"{base_label} ({available_quantity} available / 0 fits)", False, available_quantity, capacity
         if capacity >= available_quantity:
@@ -8212,7 +8223,7 @@ class MerchantRulesWidget:
             if material_storage_quantity is not None
             else "not checked"
         )
-        label = f"Withdraw {item_name} From Both (Vault: {int(pane_quantity)} / Material Storage: {material_storage_label})"
+        label = f"Withdraw {item_name} From Both (Xunlai panes: {int(pane_quantity)} / Material Storage: {material_storage_label})"
         if capacity is None or capacity <= 0:
             return label, False
         return label, True
@@ -8279,7 +8290,11 @@ class MerchantRulesWidget:
             return header_base
 
         storage_open, vault_quantity = self._get_cached_inventory_shortcut_header_vault_state(item)
-        parts = [f"Vault: {vault_quantity}" if storage_open and vault_quantity is not None else "Vault: unavailable"]
+        parts = [
+            f"Xunlai panes: {vault_quantity}"
+            if storage_open and vault_quantity is not None
+            else "Xunlai panes: unavailable"
+        ]
         material_storage_quantity = self._get_inventory_shortcut_material_storage_quantity(item)
         if material_storage_quantity is not None:
             parts.append(f"Material Storage: {material_storage_quantity} last seen")
@@ -9962,7 +9977,7 @@ class MerchantRulesWidget:
         rarity_keys = self._get_kit_action_rarity_keys(rarity_key)
         subject = f"ID {rarity_label} Items"
         self.identify_running = True
-        self.status_message = f"{subject}: queued with clicked ID kit."
+        self.status_message = f"{subject} will use the selected Identification Kit."
         try:
             self._queue_merchant_rules_owned_work(
                 self._run_identify_pass(
@@ -10011,7 +10026,7 @@ class MerchantRulesWidget:
         rarity_keys = self._get_kit_action_rarity_keys(rarity_key)
         subject = f"Salvage {rarity_label} Items"
         self.salvage_running = True
-        self.status_message = f"{subject}: queued with clicked salvage kit."
+        self.status_message = f"{subject} will use the selected Salvage Kit."
         ConsoleLog(
             MODULE_NAME,
             f"Right-click salvage confirmed: {subject} using clicked "
@@ -10306,37 +10321,37 @@ class MerchantRulesWidget:
                     if self._draw_inventory_shortcut_kit_live_actions(selected_item):
                         PyImGui.separator()
                     self._draw_inventory_shortcut_menu_item(
-                        "Protect This Item",
+                        "Protect Matching Items",
                         selected_item,
                         self._apply_inventory_shortcut_protect,
                         UI_COLOR_SUCCESS,
                     )
                     self._draw_inventory_shortcut_menu_item(
-                        "Add To Deposit Targets",
+                        "Add Matching Items to Deposit Targets",
                         selected_item,
                         self._apply_inventory_shortcut_deposit_target,
                         UI_COLOR_TEAL,
                     )
                     self._draw_inventory_shortcut_menu_item(
-                        "Keep Out Of Deposits",
+                        "Keep Matching Items Out of Deposits",
                         selected_item,
                         self._apply_inventory_shortcut_deposit_keep_out,
                         UI_COLOR_WARNING_SOFT,
                     )
                     PyImGui.separator()
                     self._draw_inventory_shortcut_menu_item(
-                        "Add To Sell Rule",
+                        "Add Matching Items to a Sell Rule",
                         selected_item,
                         self._apply_inventory_shortcut_sell_rule,
                     )
                     self._draw_inventory_shortcut_menu_item(
-                        "Add To Salvage Rule",
+                        "Add Matching Items to a Salvage Rule",
                         selected_item,
                         self._apply_inventory_shortcut_salvage_rule,
                         UI_COLOR_WARNING_SOFT,
                     )
                     self._draw_inventory_shortcut_menu_item(
-                        "Add To Destroy Rule",
+                        "Add Matching Items to a Destroy Rule",
                         selected_item,
                         self._apply_inventory_shortcut_destroy_rule,
                         UI_COLOR_WARNING_SOFT,
@@ -12284,7 +12299,7 @@ class MerchantRulesWidget:
                 preserve_workspace_state=True,
             )
             self.profile_warning = ""
-            self.profile_notice = "Restored live config from the account-scoped JsonFactory backup."
+            self.profile_notice = "Restored current settings from this account's backup."
             return True
         except Exception as exc:
             self.profile_warning = f"Failed to restore Merchant Rules live config backup: {exc}"
@@ -16250,7 +16265,7 @@ class MerchantRulesWidget:
         if raw_version <= 0 and not self.profile_warning:
             self.profile_notice = "Loaded a legacy live config without a version marker."
         elif 0 < raw_version < PROFILE_VERSION and not self.profile_warning:
-            self.profile_notice = f"Loaded and normalized Merchant Rules live config v{raw_version}."
+            self.profile_notice = "Merchant Rules loaded older settings and updated them to the current format."
 
         if should_save_normalized and allow_normalized_save and normalized_payload is not None:
             if self._save_profile():
@@ -16510,11 +16525,10 @@ class MerchantRulesWidget:
                 MERCHANT_TYPE_CONSUMABLE_CRAFTER: None,
             }
 
-        selector_mode = "specific merchant selectors" if safe_outpost_id in SUPPORTED_MAP_NPC_SELECTORS else "generic merchant selectors"
         arrival_label = "Guild Hall arrival" if self._is_guild_hall_target(safe_outpost_id) else "arrival"
         reason = (
             f"Projected preview for {outpost_name} ({safe_outpost_id}). "
-            f"Travel + Execute will auto-travel, then rebuild live merchant handling after {arrival_label} using {selector_mode}. "
+            f"Travel + Execute will auto-travel, then recheck current items and available services after {arrival_label}. "
             "Destination NPC and storage access will be confirmed on arrival."
         )
         return True, reason, coords
@@ -16576,12 +16590,11 @@ class MerchantRulesWidget:
         is_guild_hall_target = self._is_guild_hall_target(safe_outpost_id)
         arrival_label = "Guild Hall arrival" if is_guild_hall_target else "arrival"
         travel_reason = (
-            "Travel to the Guild Hall. After arrival, Merchant Rules will check the available services "
-            "and rebuild the plan before executing."
+            "Travel to the Guild Hall. After arrival, Merchant Rules will recheck current items and available "
+            "services before executing."
             if is_guild_hall_target
             else (
-                "After arrival, Merchant Rules will check the available services and rebuild the plan "
-                "before executing."
+                "After arrival, Merchant Rules will recheck current items and available services before executing."
             )
         )
         result = PlanResult(
@@ -19841,7 +19854,7 @@ class MerchantRulesWidget:
                     ExecutionPlanEntry(
                         "deposit",
                         MERCHANT_TYPE_STORAGE,
-                        "Linked protection source",
+                        "Linked protection rule",
                         0,
                         PLAN_STATE_SKIPPED,
                         "Linked sell rule no longer exists.",
@@ -25441,7 +25454,7 @@ class MerchantRulesWidget:
             if self.preview_plan.has_actions:
                 self.status_message = (
                     f"Projected preview complete. Travel + Execute will travel to {projected_target_outpost_name}, "
-                    "rebuild live, and then run the merchant plan. Execute Here can still run any green local entries."
+                    "recheck current items and services, then execute. Execute Here can still run entries marked Ready now."
                 )
             else:
                 self.status_message = (
@@ -28283,7 +28296,7 @@ class MerchantRulesWidget:
                     self._mark_preview_dirty("Inventory changed due to MR Identify. Preview again before execution.")
         except Exception as exc:
             self.last_error = f"{exc}"
-            self.last_identify_summary = "MR Identify failed. See the console log for details."
+            self.last_identify_summary = "Identify failed. See the console log for details."
             self.status_message = self.last_identify_summary
             ConsoleLog(MODULE_NAME, f"MR Identify error: {exc}", Console.MessageType.Error)
             ConsoleLog(MODULE_NAME, traceback.format_exc(), Console.MessageType.Error)
@@ -29475,7 +29488,7 @@ class MerchantRulesWidget:
             return outcome
         except Exception as exc:
             self.last_error = f"{exc}"
-            self.last_salvage_summary = "MR Salvage failed. See the console log for details."
+            self.last_salvage_summary = "Salvage failed. See the console log for details."
             self.status_message = self.last_salvage_summary
             ConsoleLog(MODULE_NAME, f"MR Salvage error: {exc}", Console.MessageType.Error)
             ConsoleLog(MODULE_NAME, traceback.format_exc(), Console.MessageType.Error)
@@ -29732,8 +29745,9 @@ class MerchantRulesWidget:
 
     def _get_destructive_confirm_label(self, label: str) -> str:
         safe_label = str(label or "")
-        _visible_label, separator, hidden_id = safe_label.partition("##")
-        return f"Are you sure?##{hidden_id}" if separator else "Are you sure?"
+        visible_label, separator, hidden_id = safe_label.partition("##")
+        confirm_label = f"Confirm {visible_label.strip()}"
+        return f"{confirm_label}##{hidden_id}" if separator else confirm_label
 
     def _push_destructive_confirm_button_style(self):
         base = (0.36, 0.27, 0.09, 0.98)
@@ -29825,11 +29839,10 @@ class MerchantRulesWidget:
             and profile.fingerprint == self.pending_profile_confirmation_fingerprint
         )
         if is_armed:
-            visible_label = (
-                "Confirm — Affects All Accounts"
-                if identity.scope == PROFILE_SCOPE_SHARED and shared_affects_all_accounts
-                else "Are you sure?"
-            )
+            original_action_label, _separator, _hidden_id = str(label or "").partition("##")
+            visible_label = f"Confirm {original_action_label.strip()}"
+            if identity.scope == PROFILE_SCOPE_SHARED and shared_affects_all_accounts:
+                visible_label = f"{visible_label} — Affects All Accounts"
             draw_label = f"{visible_label}##{base_key}"
             self._push_destructive_confirm_button_style()
         else:
@@ -30538,9 +30551,9 @@ class MerchantRulesWidget:
                 destination_label = self.preview_plan.multi_stop_destination_outpost_name
                 detail = (
                     f"Preview routes Consumable Crafter buys through {embark_label}, then continues to {destination_label} for remaining work. "
-                    "Execute Here runs only green local entries."
+                    "Execute Here runs only entries marked Ready now."
                     if destination_label
-                    else f"Preview routes Consumable Crafter buys through {embark_label} and stops there. Execute Here runs only green local entries."
+                    else f"Preview routes Consumable Crafter buys through {embark_label} and stops there. Execute Here runs only entries marked Ready now."
                 )
                 if actionable:
                     return "Multi-stop", UI_COLOR_INFO, detail
@@ -30551,8 +30564,8 @@ class MerchantRulesWidget:
                 target_label = self.preview_execute_travel_target_outpost_name or "the selected outpost"
                 detail = (
                     f"Preview is projected assuming Auto Travel reaches {target_label}. "
-                    "Travel + Execute will travel, rebuild live merchant handling, and then run the plan. "
-                    "Execute Here runs only green local entries."
+                    "Travel + Execute will travel, recheck current items and available services, then execute. "
+                    "Execute Here runs only entries marked Ready now."
                 )
                 if actionable:
                     return "Projected", UI_COLOR_INFO, detail
@@ -30560,7 +30573,14 @@ class MerchantRulesWidget:
                     return "Projected", UI_COLOR_MUTED, detail
                 return "Projected", UI_COLOR_MUTED, detail
             if actionable:
-                return "Ready", UI_COLOR_SUCCESS, f"{len(actionable)} action(s) queued from the current preview."
+                action_count = len(actionable)
+                action_word = "action" if action_count == 1 else "actions"
+                ready_verb = "is" if action_count == 1 else "are"
+                return (
+                    "Ready",
+                    UI_COLOR_SUCCESS,
+                    f"{action_count} {action_word} {ready_verb} ready in the current preview.",
+                )
             if skipped:
                 return "Ready", UI_COLOR_MUTED, "Preview is current, but nothing will execute."
             return "Ready", UI_COLOR_MUTED, "Preview is current."
@@ -30858,11 +30878,11 @@ class MerchantRulesWidget:
 
         parts = [f"{len(enabled_rarities)} rarity tier(s)"] if enabled_rarities else ["Protection only"]
         if enabled_rarities and normalized_rule.skip_customized:
-            parts.append("Skip customized")
+            parts.append("Keep customized")
         if enabled_rarities and normalized_rule.skip_unidentified:
-            parts.append("Skip unidentified")
+            parts.append("Keep unidentified")
         if normalized_rule.blacklist_model_ids:
-            parts.append(f"Models {len(normalized_rule.blacklist_model_ids)}")
+            parts.append(f"Kept models {len(normalized_rule.blacklist_model_ids)}")
         if normalized_rule.kind == SELL_KIND_WEAPONS and normalized_rule.blacklist_item_type_ids:
             parts.append(f"Weapon types {len(normalized_rule.blacklist_item_type_ids)}")
         if normalized_rule.kind == SELL_KIND_WEAPONS:
@@ -30905,9 +30925,9 @@ class MerchantRulesWidget:
                 + len(normalized_rule.protected_weapon_mod_variant_thresholds)
             )
             if protected_mod_count > 0:
-                parts.append(f"Protected mods {protected_mod_count}")
+                parts.append(f"Kept upgrades {protected_mod_count}")
         if normalized_rule.kind == SELL_KIND_ARMOR and normalized_rule.protected_rune_identifiers:
-            parts.append(f"Protected runes {len(normalized_rule.protected_rune_identifiers)}")
+            parts.append(f"Kept runes / insignias {len(normalized_rule.protected_rune_identifiers)}")
         if normalized_rule.kind == SELL_KIND_ARMOR and normalized_rule.include_standalone_runes:
             parts.append("Sell loose runes")
         return " | ".join(parts), True
@@ -31166,13 +31186,11 @@ class MerchantRulesWidget:
 
         return diagnostics
 
-    def _draw_rule_overlap_diagnostics(self, messages: list[str]):
+    def _draw_rule_overlap_diagnostics(self, messages: list[str], warning_text: str):
         if not messages:
             return
         self._draw_section_heading("Diagnostics")
-        self._draw_warning_text(
-            "Potential rule overlap detected. Hard protections win first; otherwise earlier sell rules claim matching items.",
-        )
+        self._draw_warning_text(warning_text)
         for message in messages[:6]:
             self._draw_secondary_text(message)
         if len(messages) > 6:
@@ -31222,7 +31240,7 @@ class MerchantRulesWidget:
             if busy:
                 return "Merchant Rules is already busy."
             if not self._has_cleanup_sources():
-                return "No Xunlai deposit targets or linked sources are configured."
+                return "No Xunlai deposit targets or linked protection rules are configured."
             if not Map.IsMapReady():
                 return "Wait for the current map to finish loading."
             if not self._can_use_local_storage_actions():
@@ -32259,7 +32277,7 @@ class MerchantRulesWidget:
         elif projected_preview:
             target_label = self.preview_execute_travel_target_outpost_name or "the selected outpost"
             detail_parts = [
-                f"Projected after travel to {target_label}. Travel + Execute will auto-travel and rebuild live merchant handling on arrival.",
+                f"Projected after travel to {target_label}. Travel + Execute will auto-travel, recheck current items and available services, then execute.",
             ]
             if self._plan_needs_exact_storage_scan(self.preview_plan):
                 detail_parts.append("Storage-aware rune planning is still partial until Xunlai is opened for an exact storage scan.")
@@ -32413,6 +32431,10 @@ class MerchantRulesWidget:
 
     def _draw_multibox_section(self):
         self._draw_section_heading("Multibox")
+        self._draw_secondary_text(
+            "Actions apply to the selected accounts. Sync copies this account's setup to them; "
+            "Preview and Execute otherwise use each account's own setup."
+        )
         accounts = self._get_multibox_accounts()
         if not accounts:
             self._draw_secondary_text("No other active multibox accounts were detected.")
@@ -32491,14 +32513,25 @@ class MerchantRulesWidget:
             disabled_reason=multibox_block_message,
         )
         PyImGui.end_disabled()
+        self._draw_hover_tooltip(
+            "Replaces each selected account's current Merchant Rules settings with this account's settings. "
+            "Saved profiles, window layout, and session-only Destroy settings are not copied."
+        )
         PyImGui.same_line(0, 8)
         PyImGui.begin_disabled(multibox_disabled)
         preview_clicked = PyImGui.button("Preview Selected")
         PyImGui.end_disabled()
+        self._draw_hover_tooltip(
+            "Builds a plan on each selected account without moving its character or items."
+        )
         PyImGui.same_line(0, 8)
         PyImGui.begin_disabled(multibox_disabled)
         execute_clicked = PyImGui.button("Execute Selected")
         PyImGui.end_disabled()
+        self._draw_hover_tooltip(
+            "Runs each selected account's current setup, one account at a time. "
+            "This account's current Destroy Safety choice applies only to this run."
+        )
 
         selected_statuses = [
             self.multibox_statuses.get(_normalize_multibox_account_email(email))
@@ -32726,7 +32759,7 @@ class MerchantRulesWidget:
         self._draw_secondary_text(
             f"{len(_normalize_cleanup_targets(self.cleanup_targets))} explicit target(s) | "
             f"{len(_normalize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids))} keep-out item(s) | "
-            f"{len(_normalize_cleanup_protection_sources(self.cleanup_protection_sources))} linked source(s)",
+            f"{len(_normalize_cleanup_protection_sources(self.cleanup_protection_sources))} linked protection rule(s)",
             wrapped=False,
         )
         if self.auto_cleanup_running:
@@ -32948,7 +32981,10 @@ class MerchantRulesWidget:
                 if Map.IsMapIDMatch(current_map_id, self.target_outpost_id):
                     PyImGui.text_wrapped("You are already in the selected outpost, so preview will show the full merchant plan.")
                 else:
-                    PyImGui.text_wrapped("Preview projects the post-travel plan. Travel + Execute will travel there, rebuild live merchant handling, and then run it.")
+                    PyImGui.text_wrapped(
+                        "Preview projects the post-travel plan. Travel + Execute will travel there, recheck "
+                        "current items and available services, then execute."
+                    )
             else:
                 PyImGui.text_wrapped("No specific target selected. Auto-travel stays idle until you choose an outpost.")
 
@@ -33621,14 +33657,14 @@ class MerchantRulesWidget:
             PyImGui.table_setup_column("Source", PyImGui.TableColumnFlags.WidthFixed, 85.0)
             PyImGui.table_setup_column("Type", PyImGui.TableColumnFlags.WidthFixed, 190.0)
             PyImGui.table_setup_column("Value", PyImGui.TableColumnFlags.WidthFixed, 285.0)
-            PyImGui.table_setup_column("Owner Kind", PyImGui.TableColumnFlags.WidthFixed, 110.0)
-            PyImGui.table_setup_column("Owner Rule", PyImGui.TableColumnFlags.WidthFixed, 300.0)
+            PyImGui.table_setup_column("Applies To", PyImGui.TableColumnFlags.WidthFixed, 110.0)
+            PyImGui.table_setup_column("Rule", PyImGui.TableColumnFlags.WidthFixed, 300.0)
             PyImGui.table_setup_column("Enabled", PyImGui.TableColumnFlags.WidthFixed, 72.0)
             PyImGui.table_setup_column("Order", PyImGui.TableColumnFlags.WidthFixed, 58.0)
             PyImGui.table_setup_column("Edit", PyImGui.TableColumnFlags.WidthFixed, 58.0)
 
             PyImGui.table_next_row()
-            for column_index, column_label in enumerate(("Source", "Type", "Value", "Owner Kind", "Owner Rule", "Enabled", "Order", "Edit")):
+            for column_index, column_label in enumerate(("Source", "Type", "Value", "Applies To", "Rule", "Enabled", "Order", "Edit")):
                 PyImGui.table_set_column_index(column_index)
                 self._draw_secondary_text(column_label, wrapped=False)
 
@@ -33738,7 +33774,7 @@ class MerchantRulesWidget:
         self._draw_secondary_text(
             (
                 f"{len(entries)} protection {entry_word} across {len(owner_rule_indices)} sell rule(s). "
-                f"{len(enabled_owner_rule_indices)} owner rule(s) enabled, {disabled_owner_rule_count} disabled."
+                f"{len(enabled_owner_rule_indices)} Sell rule(s) enabled, {disabled_owner_rule_count} disabled."
             ),
             wrapped=False,
         )
@@ -33775,7 +33811,7 @@ class MerchantRulesWidget:
             else 0
         )
         next_owner_filter_index = PyImGui.combo(
-            "Owner Scope##merchant_rules_protections_owner_filter",
+            "Applies To##merchant_rules_protections_owner_filter",
             current_owner_filter_index,
             owner_filter_labels,
         )
@@ -34068,7 +34104,7 @@ class MerchantRulesWidget:
         PyImGui.text_colored(state_label, state_color)
         PyImGui.same_line(0, 8)
         self._draw_secondary_text(
-            "Matching settings for this protection group. Sell criteria stay in Sell.",
+            "These protections use this Sell rule's rarity filters and are active only while the rule is enabled.",
             wrapped=False,
         )
 
@@ -34076,12 +34112,12 @@ class MerchantRulesWidget:
             index,
             "",
             "General",
-            "These options keep matching customized or unidentified items out of this sell rule.",
+            "Protect customized or unidentified items that match this rule's rarity filters. These protections apply while the rule is enabled.",
         )
         skip_customized = self._draw_protection_checkbox(
             f"Keep customized items##protections_sell_skip_customized_{index}",
             bool(rule.skip_customized),
-            "Keeps matching customized items out of this sell rule.",
+            "Protects matching customized items from Sell, Salvage, Destroy, and Sell from Xunlai while this rule is enabled.",
         )
         if skip_customized != rule.skip_customized:
             rule.skip_customized = skip_customized
@@ -34090,7 +34126,7 @@ class MerchantRulesWidget:
         skip_unidentified = self._draw_protection_checkbox(
             f"Keep unidentified items##protections_sell_skip_unidentified_{index}",
             bool(rule.skip_unidentified),
-            "Keeps matching unidentified items out of this sell rule.",
+            "Protects matching unidentified items from Sell, Salvage, Destroy, and Sell from Xunlai while this rule is enabled.",
         )
         if skip_unidentified != rule.skip_unidentified:
             rule.skip_unidentified = skip_unidentified
@@ -34167,10 +34203,13 @@ class MerchantRulesWidget:
         self._draw_secondary_text(
             "Protect matching weapons, armor, upgrades, runes, insignias, and inscriptions from destructive actions.",
         )
-        self._draw_secondary_text("Uses weapon and armor matching settings.", wrapped=False)
+        self._draw_secondary_text(
+            "Each group uses its Weapons or Armor Sell rule's matching filters.",
+            wrapped=False,
+        )
         if not sell_rule_indices:
             self._draw_secondary_text(
-                "No weapon or armor sell rules exist yet. Add one in Sell to create a protection owner."
+                "Add a Weapons or Armor rule in Sell before configuring matching equipment protections."
             )
             return False
 
@@ -34293,7 +34332,7 @@ class MerchantRulesWidget:
 
         self._draw_section_heading("Protections")
         self._draw_colored_text(
-            "Protections keeps item safety settings in one place while preserving the existing rule behavior.",
+            "Manage items Merchant Rules should keep safe.",
             UI_COLOR_INFO,
         )
         self._draw_secondary_text(
@@ -34360,7 +34399,7 @@ class MerchantRulesWidget:
         self._draw_subsection_label(f"Selected Items: {len(merchant_stock_targets)}")
         if any(_is_scroll_trader_stock_model(target.model_id) for target in merchant_stock_targets):
             self._draw_secondary_text(
-                "Confirmed scroll trader stock in this legacy stock list will route to Scroll Trader / Rare Scroll Trader, never to a regular Merchant."
+                "Scrolls in this list are bought only from a Scroll Trader or Rare Scroll Trader, never from a regular Merchant."
             )
         if not merchant_stock_targets:
             self._draw_secondary_text("No merchant stock items selected yet.", wrapped=False)
@@ -35114,6 +35153,7 @@ class MerchantRulesWidget:
                             f"##sell_rune_keep_count_{index}_{target_row.identifier}",
                             int(target_row.keep_count),
                         )
+                        self._draw_helper_tooltip("whitelist_keep_count")
                         PyImGui.pop_item_width()
                         target_row.keep_count = max(0, int(new_keep_count))
 
@@ -35835,7 +35875,7 @@ class MerchantRulesWidget:
             bool(getattr(rule, "all_weapons_perfect_stats_only", False)),
         )
         self._draw_hover_tooltip(
-            "When enabled, this range keeps only weapons whose base damage, energy, or armor exactly matches the perfect-base value."
+            "Keep this weapon only when its base damage, energy, or armor matches the maximum value for its weapon type."
         )
         if new_all_weapons_perfect_stats_only != bool(getattr(rule, "all_weapons_perfect_stats_only", False)):
             rule.all_weapons_perfect_stats_only = bool(new_all_weapons_perfect_stats_only)
@@ -35860,9 +35900,7 @@ class MerchantRulesWidget:
                 changed = True
 
         self._draw_secondary_text(
-            f"Inclusive range. Set either endpoint to 0 to disable. Req 0 / unknown does not match range rules; "
-            f"use unconditional model protection for unknown reqs. Values are capped at {MAX_WEAPON_REQUIREMENT}. "
-            f"Perfect stats only holds unidentified items when needed stats are unavailable."
+            f"Set either endpoint to 0 to disable this range. Values are limited to {MAX_WEAPON_REQUIREMENT}."
         )
 
         self._draw_light_separator()
@@ -35958,7 +35996,9 @@ class MerchantRulesWidget:
                                 bool(getattr(requirement_rule, "perfect_stats_only", False)),
                             )
                         )
-                        self._draw_hover_tooltip("Keep this model only when its base stats exactly match the perfect-base value.")
+                        self._draw_hover_tooltip(
+                            "Keep this weapon only when its base damage, energy, or armor matches the maximum value for its weapon type."
+                        )
 
                         PyImGui.table_set_column_index(4)
                         if PyImGui.small_button(f"X##sell_weapon_requirement_remove_{index}_{requirement_rule.model_id}"):
@@ -36004,8 +36044,9 @@ class MerchantRulesWidget:
             self.sell_weapon_requirement_search_cache[index] = self._get_model_name(picked_model_id) or str(picked_model_id)
 
         self._draw_secondary_text(
-            "Requirement ranges are inclusive and apply only to equippable weapons with a parsed req value. "
-            "Valid per-model ranges decide that model before the all-weapons range is considered."
+            "Requirement ranges include both endpoints and apply only when Merchant Rules can read an "
+            "equippable weapon's requirement. To protect a model regardless of requirement, add it under "
+            "Keep These Models."
         )
         self._end_sell_jump_target_group(index, SELL_PROTECTION_ANCHOR_REQUIREMENTS)
         return changed
@@ -36945,7 +36986,8 @@ class MerchantRulesWidget:
 
         self._draw_section_heading("Identify")
         self._draw_secondary_text(
-            "Identify targets unidentified inventory items by exact rarity. Identify before Execute runs after any configured travel, then Merchant Rules rebuilds the live plan before the rest of Execute continues."
+            "Identify targets unidentified inventory items by exact rarity. Identify before Execute runs after "
+            "any configured travel, then Merchant Rules rechecks current items before the remaining actions continue."
         )
 
         selector_count = self._draw_identify_status_badges(settings)
@@ -37232,8 +37274,8 @@ class MerchantRulesWidget:
         )
 
         self._draw_secondary_text(
-            "Targets matching items for Merchant Rules salvage planning/protection. "
-            "Run Salvage extracts only when this upgrade choice can be selected safely."
+            "Choose the exact upgrades this rule may extract. An item is salvaged only when Merchant Rules "
+            "can safely select that upgrade."
         )
         if is_auto_upgrade_option and target_entry_count <= 0:
             self._draw_secondary_text("Specific upgrade needs at least one specific upgrade target.")
@@ -37251,8 +37293,7 @@ class MerchantRulesWidget:
             and not target_support_available
         ):
             self._draw_secondary_text(
-                "This extraction mode is not available right now. "
-                "Matching items stay protected and Run Salvage skips extraction."
+                "This extraction method is unavailable. Matching items remain protected and are skipped."
             )
 
         self._draw_subsection_label(f"Target Entries: {target_entry_count}")
@@ -37392,7 +37433,7 @@ class MerchantRulesWidget:
             f"Search Armor Runes / Insignias##merchant_rules_salvage_armor_upgrade_search_{index}",
             armor_search_text,
         )
-        self._draw_hover_tooltip("Search exact runes.json Rune or Insignia names and identifiers.")
+        self._draw_hover_tooltip("Search rune or insignia names or identifiers.")
         if updated_armor_search_text != armor_search_text:
             self.salvage_armor_upgrade_search_cache[index] = updated_armor_search_text
 
@@ -37535,7 +37576,7 @@ class MerchantRulesWidget:
         if is_auto_upgrade_option:
             if self._has_salvage_upgrade_support_for_rule(rule):
                 self._draw_secondary_text(
-                    "Infers prefix, suffix, or inscription from the matched specific upgrade target."
+                    "Uses the matching saved target to choose the prefix, suffix, or inscription."
                 )
             else:
                 self._draw_secondary_text(
@@ -37875,7 +37916,7 @@ class MerchantRulesWidget:
         )
         PyImGui.same_line(0, 6)
         if auto_enabled:
-            self._draw_inline_badge("Pickup", UI_COLOR_SUCCESS if ready else UI_COLOR_WARNING)
+            self._draw_inline_badge("Outpost entry", UI_COLOR_SUCCESS if ready else UI_COLOR_WARNING)
         else:
             self._draw_inline_badge("Manual", UI_COLOR_MUTED)
 
@@ -38232,13 +38273,13 @@ class MerchantRulesWidget:
 
         self._draw_cleanup_status_badges(cleanup_targets, cleanup_blacklist_model_ids, cleanup_sources)
         self._draw_secondary_text(
-            f"Deposit targets: {len(cleanup_targets)} | Keep-out items: {len(cleanup_blacklist_model_ids)} | Linked protection sources: {len(cleanup_sources)}",
+            f"Deposit targets: {len(cleanup_targets)} | Keep-out items: {len(cleanup_blacklist_model_ids)} | Linked protection rules: {len(cleanup_sources)}",
             wrapped=False,
         )
         if run_cleanup_reason:
             self._draw_warning_text(f"Run Deposits Now: {run_cleanup_reason}")
         elif not cleanup_targets and not cleanup_sources:
-            self._draw_warning_text("Xunlai Deposits needs at least one target or linked protection source.")
+            self._draw_warning_text("Xunlai Deposits needs at least one target or linked protection rule.")
         if self.auto_cleanup_running:
             PyImGui.text_colored("Xunlai Deposits is running.", UI_COLOR_INFO)
         if self.last_cleanup_summary:
@@ -38248,7 +38289,8 @@ class MerchantRulesWidget:
         PyImGui.separator()
         self._draw_section_heading("Deposit Targets")
         self._draw_secondary_text(
-            "Pick exact item or material models to stash in Xunlai. Keep On Character is owned by deposit settings and does not sync back to sell rules."
+            "Pick exact item or material models to stash in Xunlai. Keep On Character applies only to deposits; "
+            "it does not change Sell keep counts."
         )
 
         self._draw_subsection_heading("Deposit Items")
@@ -38424,7 +38466,7 @@ class MerchantRulesWidget:
             "Deposit keep-outs and protected-item deposits are managed in Protections.",
         )
         self._draw_secondary_text(
-            f"{len(cleanup_blacklist_model_ids)} keep-out item(s) | {len(cleanup_sources)} linked protected-item deposit source(s)",
+            f"{len(cleanup_blacklist_model_ids)} keep-out item(s) | {len(cleanup_sources)} linked Weapons or Armor protection rule(s)",
             wrapped=False,
         )
         if PyImGui.button("Edit Keep-Outs##merchant_rules_cleanup_edit_keepouts"):
@@ -38923,9 +38965,6 @@ class MerchantRulesWidget:
                             status_key=status_key,
                         ),
                     )
-                    raw_reason = str(entry.reason or "").strip()
-                    if raw_reason and raw_reason != displayed_reason:
-                        self._draw_hover_tooltip(f"Internal detail: {raw_reason}")
 
                 PyImGui.table_set_column_index(4)
                 if muted:
@@ -38972,6 +39011,20 @@ class MerchantRulesWidget:
             r"\1, ",
             display_reason,
         )
+        display_reason = display_reason.replace(
+            "all-weapons perfect-base range",
+            "requirement range for all weapon types with maximum base stats",
+        )
+        display_reason = display_reason.replace(
+            "model perfect-base range",
+            "requirement range for this model with maximum base stats",
+        )
+        display_reason = display_reason.replace(
+            "all-weapons requirement range",
+            "requirement range for all weapon types",
+        )
+        display_reason = display_reason.replace("all-weapons", "all weapon types")
+        display_reason = display_reason.replace("perfect-base", "maximum base stats")
         return display_reason
 
     def _normalize_preview_entry_reason_display_text(
@@ -39029,8 +39082,8 @@ class MerchantRulesWidget:
             display_reason = re.sub(
                 r"Travel first, then rebuild the merchant plan in (?:specific|generic) selectors\.?",
                 (
-                    "After arrival, Merchant Rules will check the available services and rebuild the plan "
-                    "before executing."
+                    "After arrival, Merchant Rules will recheck current items and available services before "
+                    "executing."
                 ),
                 display_reason,
             )
@@ -39040,7 +39093,7 @@ class MerchantRulesWidget:
             )
             display_reason = display_reason.replace(
                 "Travel to the selected Auto Travel destination for remaining Merchant Rules work.",
-                "After crafting, travel here and rebuild the remaining merchant plan.",
+                "After crafting, travel here and recheck current items and available services.",
             )
 
         if action_type == "identify":
@@ -39140,7 +39193,7 @@ class MerchantRulesWidget:
             )
             display_reason = display_reason.replace(
                 "No protected inventory items matched this linked deposit source.",
-                "No inventory items match this linked Sell-rule source.",
+                "No inventory items match this linked Weapons or Armor protection rule.",
             )
             if state != PLAN_STATE_SKIPPED and display_reason.startswith("Protected by "):
                 protection_detail = display_reason[len("Protected by ") :]
@@ -39331,6 +39384,10 @@ class MerchantRulesWidget:
             self._draw_warning_text("Execution paused because inventory drift was detected after preview.")
             for diff_row in self.preview_inventory_diff_rows:
                 self._draw_secondary_text(diff_row)
+            self._draw_secondary_text(
+                "Execute Anyway rebuilds the plan from your current inventory and settings, then runs the "
+                "updated plan without showing it first."
+            )
             PyImGui.begin_disabled(bool(preview_reason))
             re_preview_clicked = PyImGui.button("Re-Preview##merchant_rules_preview_plan_repreview")
             PyImGui.end_disabled()
@@ -39389,7 +39446,7 @@ class MerchantRulesWidget:
                 if self._can_use_local_storage_actions()
                 else (
                     "Xunlai Storage counts are not available yet. Travel + Execute will open storage at the "
-                    "destination and rebuild the plan before moving or buying anything."
+                    "destination and recheck current items before moving or buying anything."
                 )
             )
             self._draw_warning_text(exact_scan_message)
@@ -39409,8 +39466,8 @@ class MerchantRulesWidget:
 
         if self.preview_ready and self.preview_plan.identify_item_ids:
             self._draw_secondary_text(
-                "Identify runs first. Execute then rebuilds the plan, so identified items may match later Sell, "
-                "Salvage, or Destroy rules."
+                "Identify runs first. Travel + Execute or Execute Here then rechecks current items, so identified "
+                "items may match later Sell, Salvage, or Destroy rules."
             )
 
         if self.preview_ready and self.preview_plan.multi_stop_route:
@@ -39426,21 +39483,22 @@ class MerchantRulesWidget:
             )
             self._draw_colored_text(route_detail, UI_COLOR_INFO)
             self._draw_secondary_text(
-                "Destination rows are rebuilt after travel. Ready-now rows can also run through Execute Here."
+                "Current items and available services are rechecked after travel. Entries marked Ready now can "
+                "also run through Execute Here."
             )
         elif self.preview_ready and self._preview_has_execute_travel_pending():
             target_label = self.preview_execute_travel_target_outpost_name or "the selected outpost"
             self._draw_colored_text(
                 (
                     f"Projected preview assumes Auto Travel reaches {target_label}. "
-                    "Travel + Execute will rebuild the live plan before running it."
+                    "Travel + Execute will recheck current items and available services before executing."
                 ),
                 UI_COLOR_INFO,
             )
             self._draw_secondary_text(
                 (
-                    "Ready-now rows can also run here. Rows marked After travel or Needs live check wait for "
-                    "the travel target or the matching service."
+                    "Entries marked Ready now can also run through Execute Here. Rows marked After travel or "
+                    "Needs live check wait for the travel target or the matching service."
                 )
             )
 
@@ -39792,7 +39850,7 @@ class MerchantRulesWidget:
         )
         self._draw_secondary_text(
             "These category switches affect only automatic actions when you open a merchant. "
-            "Preview Plan and normal execution continue using every enabled Buy rule."
+            "Preview Plan, Travel + Execute, and Execute Here continue using every enabled Buy rule."
         )
         self._draw_secondary_text(
             "Automatic selling is configured under Sell. Buying and selling can run from the same "
@@ -39847,7 +39905,7 @@ class MerchantRulesWidget:
         self.manual_vendor_auto_sell_categories = flags
         self._draw_secondary_text(
             "These category switches affect only automatic actions when you open a merchant. "
-            "Preview Plan and normal execution continue using every enabled Sell rule. "
+            "Preview Plan, Travel + Execute, and Execute Here continue using every enabled Sell rule. "
             "Protected items always remain protected."
         )
 
@@ -39946,7 +40004,8 @@ class MerchantRulesWidget:
                 else "Live inventory right-click actions disabled."
             )
         self._draw_secondary_text(
-            "Live actions target only the clicked item or stack. Destroy always requires a second click.",
+            "Direct Deposit and Destroy actions affect only the clicked item or stack. "
+            "ID and Salvage kit actions target eligible inventory items by rarity.",
             wrapped=False,
         )
 
@@ -40644,13 +40703,19 @@ class MerchantRulesWidget:
         if self.active_rules_workspace == RULES_WORKSPACE_BUY:
             diagnostics = self._get_buy_rule_overlap_diagnostics()
             if diagnostics:
-                self._draw_rule_overlap_diagnostics(diagnostics)
+                self._draw_rule_overlap_diagnostics(
+                    diagnostics,
+                    "Potential overlap detected. Earlier Buy rules are applied first and can affect what later rules still need.",
+                )
                 PyImGui.separator()
             self._draw_buy_rules_section()
         elif self.active_rules_workspace == RULES_WORKSPACE_SELL:
             diagnostics = self._get_sell_rule_overlap_diagnostics()
             if diagnostics:
-                self._draw_rule_overlap_diagnostics(diagnostics)
+                self._draw_rule_overlap_diagnostics(
+                    diagnostics,
+                    "Potential overlap detected. Protections apply first; otherwise earlier Sell rules handle matching items first.",
+                )
                 PyImGui.separator()
             self._draw_sell_rules_section()
         elif self.active_rules_workspace == RULES_WORKSPACE_IDENTIFY:
@@ -40664,7 +40729,10 @@ class MerchantRulesWidget:
         else:
             diagnostics = self._get_destroy_rule_overlap_diagnostics()
             if diagnostics:
-                self._draw_rule_overlap_diagnostics(diagnostics)
+                self._draw_rule_overlap_diagnostics(
+                    diagnostics,
+                    "Potential overlap detected. Protections and Salvage apply first; otherwise earlier Destroy rules handle matching items first.",
+                )
                 PyImGui.separator()
             self._draw_destroy_rules_section()
 
@@ -40752,7 +40820,7 @@ def tooltip():
     PyImGui.begin_tooltip()
     PyImGui.text(MODULE_NAME)
     PyImGui.separator()
-    PyImGui.bullet_text("Single-account merchant planner with optional auto-travel.")
+    PyImGui.bullet_text("Merchant planner with optional auto-travel and multibox coordination.")
     PyImGui.bullet_text("Weapon and armor sell rules can filter by rarity while Protections manages kept models, upgrades, runes, and insignias.")
     PyImGui.bullet_text("Pinned travel targets and searchable outpost selection.")
     PyImGui.bullet_text("Preview projects the full post-travel merchant plan without moving the character.")
@@ -40760,13 +40828,17 @@ def tooltip():
     PyImGui.bullet_text("Top-level Overview, Preview Plan, Rules, and Profiles workspaces.")
     PyImGui.bullet_text("Xunlai Deposits is a separate workspace with explicit stash targets and optional outpost-entry auto deposits.")
     PyImGui.bullet_text("Protected Items and Equipment & Upgrades keep selected models, gear, upgrades, runes, and insignias safe.")
-    PyImGui.bullet_text("Identify can target exact rarities and optionally run before Execute rebuilds the live merchant plan.")
+    PyImGui.bullet_text(
+        "Identify can target exact rarities and run before Travel + Execute or Execute Here rechecks current items."
+    )
     PyImGui.bullet_text("Destroy supports Destroy Safety, Preview -> Execute, saved Auto Destroy, and session Auto Destroy.")
     PyImGui.bullet_text("Leader-driven multibox sync, preview, and execute for selected active accounts.")
     PyImGui.bullet_text(
         "Shared and account-only profiles load locally first, then propagate only through explicit Sync Rules to Selected."
     )
-    PyImGui.bullet_text("Standalone weapon mods, runes, and insignias can route through Rune Trader when found.")
+    PyImGui.bullet_text(
+        "Loose runes and insignias can sell to the Rune Trader; standalone weapon upgrades sell to a regular Merchant."
+    )
     PyImGui.bullet_text("Exact rune and insignia sell rules can target selected loose rune names.")
     PyImGui.bullet_text("Uses main-branch merchant routines.")
     PyImGui.end_tooltip()
