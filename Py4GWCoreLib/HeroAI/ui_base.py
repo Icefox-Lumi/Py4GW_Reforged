@@ -2329,7 +2329,9 @@ class HeroAI_BaseUI:
                 for account in sorted_by_party_position:
                     if account and account.IsSlotActive and not account.IsHero and account.AgentPartyData.PartyID == GLOBAL_CACHE.Party.GetPartyID():
                         index += 1
-                        original_game_option = cached_data.party.options.get(account.AgentData.AgentID)
+                        original_game_option = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account.AccountEmail)
+                        if original_game_option is None:
+                            original_game_option = cached_data.party.options.get(account.AgentData.AgentID)
                         if PyImGui.tree_node(f"{index}. {account.AgentData.CharacterName}##ControlPlayer{index}"):
                             if original_game_option is not None:
                                 HeroAI_BaseUI.DrawPanelButtons(account.AccountEmail, original_game_option)
