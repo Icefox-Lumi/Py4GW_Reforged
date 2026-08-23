@@ -13910,6 +13910,330 @@ def _test_build_plan_captures_inventory_and_marks_conditional_stock_buy(module) 
     _expect(plan.has_actions, "Plan should be actionable when either buy or sell work was found.")
 
 
+def _test_request_scoped_merchant_stock_parser_contract(module) -> None:
+    context, error = module._parse_request_scoped_merchant_stock("stock:555:2,777:3,555:5,bad,0:4,888:0")
+    _expect(not error, "A request with valid positive stock entries should parse successfully.")
+    _expect(
+        [(target.model_id, target.target_count) for target in context.merchant_stock_targets] == [(555, 5), (777, 3)],
+        "Request stock parsing should sort models, keep multiple targets, and use the highest duplicate target.",
+    )
+
+    ordinary_context, ordinary_error = module._parse_request_scoped_merchant_stock("Execute")
+    _expect(
+        not ordinary_context.merchant_stock_targets and not ordinary_error,
+        "Non-stock remote metadata should remain an ordinary execution request.",
+    )
+
+    for malformed_spec in ("stock:", "STOCK:bad", "stock:0:1,-2:4,555:0"):
+        malformed_context, malformed_error = module._parse_request_scoped_merchant_stock(malformed_spec)
+        _expect(
+            not malformed_context.merchant_stock_targets and bool(malformed_error),
+            f"Malformed request stock payload {malformed_spec!r} should fail closed with a diagnostic.",
+        )
+
+
+def _test_request_scoped_merchant_stock_empty_profile_plan_gate(module) -> None:
+    widget = _make_widget(module)
+    widget.buy_rules = []
+    widget.sell_rules = []
+    widget.destroy_rules = []
+    widget.identify_settings = module.IdentifySettings()
+    widget.salvage_settings = module.SalvageSettings()
+    widget.cleanup_targets = []
+    widget.cleanup_protection_sources = []
+    widget._get_supported_context = lambda *, passive=False: (
+        True,
+        "Ready",
+        {module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+    )
+    inventory_snapshot_calls: list[str] = []
+
+    def _collect_inventory_items():
+        inventory_snapshot_calls.append("snapshot")
+        return [_make_item(module, item_id=1, model_id=555, name="Identification Kit", quantity=1)]
+
+    widget._collect_inventory_items = _collect_inventory_items
+    context, error = module._parse_request_scoped_merchant_stock("stock:555:2")
+    _expect(not error, "Empty-profile request stock fixture should parse.")
+
+    request_plan = widget._build_plan(execution_context=context)
+    _expect(
+        request_plan.inventory_snapshot_captured and inventory_snapshot_calls == ["snapshot"],
+        "Valid request stock should bypass the persisted-rule no-work gate and capture inventory once.",
+    )
+    _expect(
+        request_plan.has_actions
+        and [(buy.model_id, buy.quantity) for buy in request_plan.merchant_stock_buys] == [(555, 1)],
+        "An empty profile should still plan the missing request-scoped Merchant Stock quantity.",
+    )
+    _expect(
+        not widget.buy_rules
+        and not widget._build_profile_payload()["buy_rules"]
+        and all(value is not context for value in vars(widget).values()),
+        "Request stock planning must remain execution-scoped and absent from widget/profile state.",
+    )
+
+    ordinary_plan = widget._build_plan()
+    _expect(
+        inventory_snapshot_calls == ["snapshot"]
+        and not ordinary_plan.inventory_snapshot_captured
+        and not ordinary_plan.has_actions
+        and not ordinary_plan.merchant_stock_buys,
+        "An ordinary empty-profile plan should retain the no-snapshot no-work optimization after a request.",
+    )
+
+
+def _test_request_scoped_merchant_stock_planning_overlay(module) -> None:
+    widget = _make_widget(module)
+    widget.catalog_by_model_id[777] = {"model_id": 777, "name": "Second Test Stock"}
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            merchant_stock_targets=[
+                module.MerchantStockTarget(
+                    model_id=555,
+                    target_count=5,
+                    max_per_run=0,
+                    after_purchase=module.AFTER_PURCHASE_REMOVE_ENTRY,
+                )
+            ],
+        )
+    ]
+    saved_rule = widget.buy_rules[0]
+    widget._get_supported_context = lambda *, passive=False: (
+        True,
+        "Ready",
+        {
+            module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0),
+            module.MERCHANT_TYPE_SCROLL_TRADER: (2.0, 2.0),
+        },
+    )
+    widget._collect_inventory_items = lambda: [
+        _make_item(module, item_id=1, model_id=555, name="Identification Kit", quantity=1),
+    ]
+
+    lower_context, error = module._parse_request_scoped_merchant_stock("stock:555:3,777:2")
+    _expect(not error, "Lower-target planning fixture should parse.")
+    lower_plan = widget._build_plan(execution_context=lower_context)
+    _expect(
+        [(buy.model_id, buy.quantity) for buy in lower_plan.merchant_stock_buys] == [(555, 4), (777, 2)],
+        "A lower overlapping request should not reduce the saved target, while unrelated request models still plan.",
+    )
+
+    higher_context, error = module._parse_request_scoped_merchant_stock("stock:555:7")
+    _expect(not error, "Higher-target planning fixture should parse.")
+    higher_plan = widget._build_plan(execution_context=higher_context)
+    overlapping_buys = [buy for buy in higher_plan.merchant_stock_buys if buy.model_id == 555]
+    _expect(
+        [buy.quantity for buy in overlapping_buys] == [4, 2],
+        "A higher request should preserve the saved-rule tranche and buy only the additional shortfall.",
+    )
+    _expect(
+        overlapping_buys[0].cleanup is not None
+        and overlapping_buys[0].cleanup.rule_index == 0
+        and overlapping_buys[0].cleanup.after_purchase == module.AFTER_PURCHASE_REMOVE_ENTRY,
+        "Saved after-purchase behavior should remain associated with the saved rule.",
+    )
+    _expect(
+        overlapping_buys[1].cleanup is not None
+        and overlapping_buys[1].cleanup.rule_index == -1
+        and overlapping_buys[1].cleanup.after_purchase == module.AFTER_PURCHASE_KEEP,
+        "Request stock should use non-persistent KEEP cleanup semantics.",
+    )
+    _expect(
+        widget.buy_rules == [saved_rule] and widget.buy_rules[0] is saved_rule,
+        "Planning request stock must not append or replace the persisted buy-rule list.",
+    )
+
+    ordinary_plan = widget._build_plan()
+    _expect(
+        [(buy.model_id, buy.quantity) for buy in ordinary_plan.merchant_stock_buys] == [(555, 4)],
+        "Ordinary planning after a request should contain only saved Merchant Stock behavior.",
+    )
+    scroll_model_id = min(module.SCROLL_TRADER_STOCK_MODEL_IDS)
+    scroll_context, error = module._parse_request_scoped_merchant_stock(f"stock:{scroll_model_id}:1")
+    _expect(not error, "Known-scroll request fixture should parse.")
+    scroll_plan = widget._build_plan(execution_context=scroll_context)
+    _expect(
+        [(buy.model_id, buy.quantity) for buy in scroll_plan.scroll_trader_buys] == [(scroll_model_id, 1)],
+        "Request-scoped Merchant Stock should retain the planner's existing known-scroll routing.",
+    )
+    profile_payload = widget._build_profile_payload()
+    serialized_targets = profile_payload["buy_rules"][0]["merchant_stock_targets"]
+    _expect(
+        serialized_targets
+        == [
+            {
+                "model_id": 555,
+                "target_count": 5,
+                "max_per_run": 0,
+                "after_purchase": module.AFTER_PURCHASE_REMOVE_ENTRY,
+            }
+        ],
+        "Request stock must not enter profile serialization.",
+    )
+
+
+def _test_request_scoped_merchant_stock_survives_execute_replanning(module) -> None:
+    widget = _make_widget(module)
+    context, error = module._parse_request_scoped_merchant_stock("stock:555:2")
+    _expect(not error, "Execution replanning fixture should parse.")
+    captured_contexts: list[object] = []
+    plans = [
+        module.PlanResult(
+            supported_map=True,
+            travel_to_outpost_id=2,
+            travel_to_outpost_name="Regression Harbor",
+            has_actions=True,
+        ),
+        module.PlanResult(
+            supported_map=False,
+            supported_reason="Intentional test stop after travel.",
+            has_actions=False,
+        ),
+    ]
+
+    def _build_plan(**kwargs):
+        captured_contexts.append(kwargs.get("execution_context"))
+        return plans.pop(0)
+
+    def _travel_to_target_outpost(_outpost_id: int):
+        yield
+        return True
+
+    widget._build_plan = _build_plan
+    widget._travel_to_target_outpost = _travel_to_target_outpost
+    widget._get_preview_here_availability = lambda: {}
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+
+    _drain_generator_return(widget._execute_now(execution_context=context))
+
+    _expect(
+        captured_contexts == [context, context],
+        "The same immutable request context should survive the initial plan and post-travel replan.",
+    )
+    _expect(
+        all(value is not context for value in vars(widget).values()),
+        "Request context should remain generator-local rather than leaking into widget state.",
+    )
+
+
+def _test_remote_request_scoped_merchant_stock_results_and_isolation(module) -> None:
+    widget = _prime_initialized_widget(module, _make_widget(module))
+    sent_results: list[dict[str, object]] = []
+    execution_contexts: list[object] = []
+    actual_counts = {555: 2, 777: 3}
+    saved_rule = module.BuyRule(enabled=False, kind=module.BUY_KIND_MERCHANT_STOCK)
+    widget.buy_rules = [saved_rule]
+    widget._snapshot_multibox_hero_ai_options = lambda _account_email: None
+    widget._disable_multibox_hero_ai_options = lambda _account_email: None
+    widget._restore_multibox_hero_ai_options = lambda _account_email, _snapshot: None
+    widget._send_multibox_status_message = lambda *_args, **_kwargs: True
+    widget._send_multibox_result_message = lambda _receiver_email, **kwargs: sent_results.append(dict(kwargs)) or True
+
+    def _execute_now(**kwargs):
+        execution_contexts.append(kwargs.get("execution_context"))
+        widget.last_error = ""
+        widget.preview_plan = module.PlanResult(supported_map=True)
+        if False:
+            yield
+
+    widget._execute_now = _execute_now
+    widget._collect_inventory_items = lambda: [
+        _make_item(module, item_id=index + 1, model_id=model_id, name=f"Stock {model_id}", quantity=quantity)
+        for index, (model_id, quantity) in enumerate(sorted(actual_counts.items()))
+    ]
+
+    def _message(request_id: str, stock_spec: str):
+        return types.SimpleNamespace(
+            SenderEmail="leader@example.com",
+            ReceiverEmail="follower@example.com",
+            Params=(float(module.MERCHANT_RULES_OPCODE_EXECUTE), 0.0, 0.0, 0.0),
+            ExtraData=(request_id, stock_spec, "0", "0"),
+        )
+
+    _drain_generator_return(widget.handle_shared_multibox_message(_message("request-one", "stock:555:2")))
+    _expect(
+        sent_results[-1]["opcode"] == module.MERCHANT_RULES_OPCODE_EXECUTE_RESULT
+        and sent_results[-1]["success_flag"] is True,
+        "A valid request whose actual inventory meets the target should use the normal successful execute result.",
+    )
+    _expect(
+        not widget.preview_ready and not widget.preview_plan.entries,
+        "A completed request should clear its execution-only plan before ordinary preview UI can reuse it.",
+    )
+
+    _drain_generator_return(widget.handle_shared_multibox_message(_message("request-two", "stock:777:3")))
+    _expect(
+        [
+            [(target.model_id, target.target_count) for target in context.merchant_stock_targets]
+            for context in execution_contexts
+        ]
+        == [[(555, 2)], [(777, 3)]],
+        "Sequential remote requests should receive independent execution contexts without target leakage.",
+    )
+
+    _drain_generator_return(widget.handle_shared_multibox_message(_message("request-unmet", "stock:555:4")))
+    _expect(
+        sent_results[-1]["opcode"] == module.MERCHANT_RULES_OPCODE_ERROR_RESULT
+        and sent_results[-1]["success_flag"] is False
+        and sent_results[-1]["status_label"] == "Stock Unmet"
+        and "2/4" in str(sent_results[-1]["detail"]),
+        "An unmet request should report correlated failure using actual resulting inventory counts.",
+    )
+
+    execute_count_before_malformed = len(execution_contexts)
+    _drain_generator_return(widget.handle_shared_multibox_message(_message("request-bad", "stock:not-valid")))
+    _expect(
+        len(execution_contexts) == execute_count_before_malformed
+        and sent_results[-1]["opcode"] == module.MERCHANT_RULES_OPCODE_ERROR_RESULT
+        and sent_results[-1]["status_label"] == "Invalid Stock Request",
+        "A malformed stock-prefixed request should fail before ordinary profile execution starts.",
+    )
+    _expect(
+        widget.buy_rules == [saved_rule] and widget.buy_rules[0] is saved_rule,
+        "Completed and failed remote requests must leave the persisted buy-rule list untouched.",
+    )
+
+    paused_contexts: list[object] = []
+
+    def _paused_execute_now(**kwargs):
+        paused_contexts.append(kwargs.get("execution_context"))
+        widget.preview_ready = True
+        widget.preview_plan = module.PlanResult(
+            supported_map=True,
+            entries=[
+                module.ExecutionPlanEntry(
+                    action_type="buy",
+                    merchant_type=module.MERCHANT_TYPE_MERCHANT,
+                    label="Interrupted request stock",
+                    quantity=1,
+                    state=module.PLAN_STATE_CONDITIONAL,
+                )
+            ],
+            has_actions=True,
+        )
+        yield
+
+    widget._execute_now = _paused_execute_now
+    interrupted = widget.handle_shared_multibox_message(_message("request-interrupted", "stock:555:2"))
+    for _ in range(10):
+        next(interrupted)
+        if paused_contexts:
+            break
+    interrupted.close()
+    _expect(paused_contexts, "Interrupted-request fixture should reach the owned execute generator.")
+    _expect(
+        widget.buy_rules == [saved_rule]
+        and widget.buy_rules[0] is saved_rule
+        and not widget.preview_ready
+        and not widget.preview_plan.entries
+        and all(context is not value for context in paused_contexts for value in vars(widget).values()),
+        "Closing an interrupted request should not leave request context, preview entries, or synthetic rules on the widget.",
+    )
+
+
 def _test_consumable_crafter_plan_title_gate_blocks_low_rank(module) -> None:
     widget = _make_widget(module)
     essence_model_id = int(module.ModelID.Essence_Of_Celerity.value)
@@ -18540,6 +18864,225 @@ def _test_service_resolution_requires_authoritative_selectors(module) -> None:
         module.DEFAULT_NPC_SELECTORS.clear()
         module.DEFAULT_NPC_SELECTORS.update(original_default_selectors)
         module.resolve_agent_xy_from_step = original_resolve_agent_xy
+
+
+def _test_service_resolution_model_fallback_precedence(module) -> None:
+    original_resolve_agent_xy = module.resolve_agent_xy_from_step
+    original_authoritative_check = module._named_agent_target_has_authoritative_identity
+    original_log_agent_selector_failure = module._log_agent_selector_failure
+
+    try:
+        calls: list[tuple[dict[str, object], bool]] = []
+        failure_logs: list[tuple[object, str]] = []
+        resolution_results: dict[tuple[str, object], tuple[float, float] | None] = {}
+
+        def _fake_resolve(step, **kwargs):
+            safe_step = dict(step)
+            calls.append((safe_step, bool(kwargs.get("log_failures", True))))
+            if "npc" in safe_step:
+                key = ("npc", safe_step["npc"])
+            else:
+                key = ("model_id", safe_step.get("model_id"))
+            result = resolution_results.get(key)
+            if result is None and bool(kwargs.get("log_failures", True)):
+                module._log_agent_selector_failure("fake resolver", f"Could not resolve {safe_step!r}.")
+            return result
+
+        module.resolve_agent_xy_from_step = _fake_resolve
+        module._named_agent_target_has_authoritative_identity = lambda _kind, selector: str(selector) == "MERCHANT"
+        module._log_agent_selector_failure = lambda recipe_name, message: failure_logs.append(
+            (recipe_name, str(message))
+        )
+        widget = _make_widget(module)
+
+        resolution_results.update(
+            {
+                ("npc", "MERCHANT"): (10.0, 20.0),
+                ("model_id", 6813): (30.0, 40.0),
+            }
+        )
+        resolved = widget._resolve_service_coords(
+            map_id=624,
+            service_type=module.MERCHANT_TYPE_MERCHANT,
+            selector_name="MERCHANT",
+            model_id=6813,
+        )
+        _expect(
+            resolved == (10.0, 20.0),
+            "A successful generic encoded Merchant selector should win over its model fallback.",
+        )
+        _expect(
+            [step for step, _log_failures in calls] == [{"npc": "MERCHANT"}],
+            "A successful generic encoded selector must not invoke the configured model fallback.",
+        )
+        _expect(not failure_logs, "Successful encoded resolution should not emit a fallback failure diagnostic.")
+
+        calls.clear()
+        failure_logs.clear()
+        resolution_results[("npc", "MERCHANT")] = None
+        resolved = widget._resolve_service_coords(
+            map_id=624,
+            service_type=module.MERCHANT_TYPE_MERCHANT,
+            selector_name="MERCHANT",
+            model_id=6813,
+        )
+        _expect(
+            resolved == (30.0, 40.0), "A failed generic encoded selector should reach the Vlox Merchant model fallback."
+        )
+        _expect(
+            [step for step, _log_failures in calls] == [{"npc": "MERCHANT"}, {"model_id": 6813}],
+            "Generic encoded and model fallback lookups should run in that exact order.",
+        )
+        _expect(
+            [log_failures for _step, log_failures in calls] == [False, False] and not failure_logs,
+            "A successful model fallback should suppress the intermediate encoded-resolution failure.",
+        )
+
+        calls.clear()
+        failure_logs.clear()
+        resolution_results[("model_id", 6813)] = None
+        resolved = widget._resolve_service_coords(
+            map_id=624,
+            service_type=module.MERCHANT_TYPE_MERCHANT,
+            selector_name="MERCHANT",
+            model_id=6813,
+        )
+        _expect(resolved is None, "A missing generic selector and missing model fallback should remain unresolved.")
+        _expect(
+            [step for step, _log_failures in calls] == [{"npc": "MERCHANT"}, {"model_id": 6813}],
+            "A fully failed fallback should still attempt only encoded then model resolution.",
+        )
+        _expect(
+            len(failure_logs) == 1 and "MERCHANT" in failure_logs[0][1] and "6813" in failure_logs[0][1],
+            "When both lookups fail, one final diagnostic should identify the encoded selector and model fallback.",
+        )
+
+        calls.clear()
+        failure_logs.clear()
+        resolved = widget._resolve_service_coords(
+            map_id=700,
+            service_type=module.MERCHANT_TYPE_MERCHANT,
+            selector_name="MERCHANT",
+        )
+        _expect(resolved is None, "An encoded selector without a model fallback should retain its normal failure result.")
+        _expect(
+            calls == [({"npc": "MERCHANT"}, True)] and len(failure_logs) == 1,
+            "An encoded-only failure should keep the resolver's single normal diagnostic without a second fallback message.",
+        )
+
+        calls.clear()
+        failure_logs.clear()
+        map_specific_calls: list[dict[str, object]] = []
+        widget._resolve_map_specific_service_coords = lambda **kwargs: map_specific_calls.append(dict(kwargs)) or None
+        resolved = widget._resolve_service_coords(
+            map_id=module.EMBARK_BEACH_MAP_ID,
+            service_type=module.MERCHANT_TYPE_MERCHANT,
+            selector_name="MERCHANT",
+            model_id=6813,
+        )
+        _expect(
+            resolved is None and len(map_specific_calls) == 1,
+            "A complete map selector failure should remain fail closed.",
+        )
+        _expect(
+            not calls,
+            "A complete Merchant Rules map selector must not fall through to generic encoded or model resolution.",
+        )
+    finally:
+        module.resolve_agent_xy_from_step = original_resolve_agent_xy
+        module._named_agent_target_has_authoritative_identity = original_authoritative_check
+        module._log_agent_selector_failure = original_log_agent_selector_failure
+
+
+def _test_vlox_service_model_fallback_wiring(module) -> None:
+    original_get_map_id = module.Map.GetMapID
+    original_is_map_ready = module.Map.IsMapReady
+    original_is_outpost = module.Map.IsOutpost
+    original_is_guild_hall = module.Map.IsGuildHall
+    original_get_map_name = module.Map.GetMapName
+    original_default_selectors = dict(module.DEFAULT_NPC_SELECTORS)
+    original_supported_selectors = dict(module.SUPPORTED_MAP_NPC_SELECTORS)
+    original_model_overrides = dict(module.SUPPORTED_MAP_SERVICE_MODEL_IDS)
+    original_resolve_agent_xy = module.resolve_agent_xy_from_step
+    original_authoritative_check = module._named_agent_target_has_authoritative_identity
+
+    try:
+        _expect(
+            624 not in module.SUPPORTED_MAP_NPC_SELECTORS,
+            "Vlox should not claim an explicit core map-specific selector.",
+        )
+        module.DEFAULT_NPC_SELECTORS["merchant"] = "MERCHANT"
+        _expect(
+            module.DEFAULT_NPC_SELECTORS.get("merchant") == "MERCHANT",
+            "The Vlox fixture should supply the production generic encoded MERCHANT selector.",
+        )
+        _expect(
+            module.SUPPORTED_MAP_SERVICE_MODEL_IDS.get(624, {}).get(module.MERCHANT_TYPE_MERCHANT) == 6813,
+            "Vlox should retain Aink's runtime-confirmed Merchant model override.",
+        )
+
+        map_state = {"id": 624}
+        module.Map.GetMapID = lambda: map_state["id"]
+        module.Map.IsMapReady = lambda: True
+        module.Map.IsOutpost = lambda: True
+        module.Map.IsGuildHall = lambda: False
+        module.Map.GetMapName = lambda map_id=0: f"Map {int(map_id)}"
+        module._named_agent_target_has_authoritative_identity = lambda _kind, selector: bool(selector)
+        calls: list[dict[str, object]] = []
+
+        def _fake_resolve(step, **_kwargs):
+            safe_step = dict(step)
+            calls.append(safe_step)
+            if safe_step == {"model_id": 6813}:
+                return (68.13, 624.0)
+            return None
+
+        module.resolve_agent_xy_from_step = _fake_resolve
+        widget = _make_widget(module)
+        widget._get_service_resolution_diagnostics = lambda: "diagnostics"
+        supported, _reason, coords = widget._get_supported_context()
+
+        _expect(supported, "The Vlox Merchant model fallback should make the live service context supported.")
+        _expect(
+            coords[module.MERCHANT_TYPE_MERCHANT] == (68.13, 624.0),
+            "Vlox should retain coordinates returned by model fallback 6813.",
+        )
+        _expect(
+            calls[:2] == [{"npc": "MERCHANT"}, {"model_id": 6813}],
+            "Vlox wiring should pass the generic MERCHANT selector first and model 6813 second.",
+        )
+
+        map_state["id"] = 700
+        module.SUPPORTED_MAP_NPC_SELECTORS[700] = {"merchant": "MAP_MERCHANT"}
+        module.SUPPORTED_MAP_SERVICE_MODEL_IDS[700] = {module.MERCHANT_TYPE_MERCHANT: 6813}
+        calls.clear()
+        widget = _make_widget(module)
+        widget._get_service_resolution_diagnostics = lambda: "diagnostics"
+        _supported, _reason, explicit_coords = widget._get_supported_context()
+
+        _expect(
+            explicit_coords[module.MERCHANT_TYPE_MERCHANT] is None,
+            "A failed core map-specific encoded selector should remain unresolved.",
+        )
+        _expect(calls and calls[0] == {"npc": "MAP_MERCHANT"}, "The explicit core map selector should remain first.")
+        _expect(
+            {"model_id": 6813} not in calls,
+            "A model override must not bypass a failed explicit core map-specific selector.",
+        )
+    finally:
+        module.Map.GetMapID = original_get_map_id
+        module.Map.IsMapReady = original_is_map_ready
+        module.Map.IsOutpost = original_is_outpost
+        module.Map.IsGuildHall = original_is_guild_hall
+        module.Map.GetMapName = original_get_map_name
+        module.DEFAULT_NPC_SELECTORS.clear()
+        module.DEFAULT_NPC_SELECTORS.update(original_default_selectors)
+        module.SUPPORTED_MAP_NPC_SELECTORS.clear()
+        module.SUPPORTED_MAP_NPC_SELECTORS.update(original_supported_selectors)
+        module.SUPPORTED_MAP_SERVICE_MODEL_IDS.clear()
+        module.SUPPORTED_MAP_SERVICE_MODEL_IDS.update(original_model_overrides)
+        module.resolve_agent_xy_from_step = original_resolve_agent_xy
+        module._named_agent_target_has_authoritative_identity = original_authoritative_check
 
 
 def _install_service_resolution_agent_fixture(module):
@@ -25907,6 +26450,26 @@ def main() -> int:
                 lambda: _test_equipment_protections_report_xunlai_sell_withdraw_skips(module),
             ),
             ("build_plan_captures_inventory_and_marks_conditional_stock_buy", lambda: _test_build_plan_captures_inventory_and_marks_conditional_stock_buy(module)),
+            (
+                "request_scoped_merchant_stock_parser_contract",
+                lambda: _test_request_scoped_merchant_stock_parser_contract(module),
+            ),
+            (
+                "request_scoped_merchant_stock_empty_profile_plan_gate",
+                lambda: _test_request_scoped_merchant_stock_empty_profile_plan_gate(module),
+            ),
+            (
+                "request_scoped_merchant_stock_planning_overlay",
+                lambda: _test_request_scoped_merchant_stock_planning_overlay(module),
+            ),
+            (
+                "request_scoped_merchant_stock_survives_execute_replanning",
+                lambda: _test_request_scoped_merchant_stock_survives_execute_replanning(module),
+            ),
+            (
+                "remote_request_scoped_merchant_stock_results_and_isolation",
+                lambda: _test_remote_request_scoped_merchant_stock_results_and_isolation(module),
+            ),
             ("consumable_crafter_plan_title_gate_blocks_low_rank", lambda: _test_consumable_crafter_plan_title_gate_blocks_low_rank(module)),
             (
                 "consumable_crafter_plan_caps_by_skill_gold_and_material_storage",
@@ -26032,6 +26595,14 @@ def main() -> int:
             (
                 "service_resolution_requires_authoritative_selectors",
                 lambda: _test_service_resolution_requires_authoritative_selectors(module),
+            ),
+            (
+                "service_resolution_model_fallback_precedence",
+                lambda: _test_service_resolution_model_fallback_precedence(module),
+            ),
+            (
+                "vlox_service_model_fallback_wiring",
+                lambda: _test_vlox_service_model_fallback_wiring(module),
             ),
             (
                 "authoritative_service_resolution_completes_one_preview",

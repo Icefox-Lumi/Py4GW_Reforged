@@ -2068,6 +2068,21 @@ class MerchantStockTarget:
     after_purchase: str = AFTER_PURCHASE_KEEP
 
 
+@dataclass(frozen=True)
+class RequestScopedMerchantStockTarget:
+    """Represent one immutable carried-stock requirement supplied by a remote execution."""
+
+    model_id: int
+    target_count: int
+
+
+@dataclass(frozen=True)
+class MerchantRulesExecutionContext:
+    """Carry non-persistent inputs through one owned Merchant Rules execution."""
+
+    merchant_stock_targets: tuple[RequestScopedMerchantStockTarget, ...] = ()
+
+
 @dataclass
 class RuneTraderTarget:
     identifier: str = ""
@@ -5751,6 +5766,44 @@ def _normalize_merchant_stock_targets(raw_targets: object) -> list[MerchantStock
         )
 
     return normalized
+
+
+def _parse_request_scoped_merchant_stock(
+    raw_spec: object,
+) -> tuple[MerchantRulesExecutionContext, str]:
+    """Parse PR #80-compatible stock input without touching persisted buy rules."""
+
+    empty_context = MerchantRulesExecutionContext()
+    normalized_spec = str(raw_spec or "").strip()
+    if not normalized_spec.casefold().startswith("stock:"):
+        return empty_context, ""
+
+    targets_by_model_id: dict[int, int] = {}
+    for raw_entry in normalized_spec[len("stock:") :].split(","):
+        model_text, separator, target_text = str(raw_entry or "").strip().partition(":")
+        if not separator:
+            continue
+        model_id = _safe_int(model_text, 0)
+        target_count = _safe_int(target_text, 0)
+        if model_id <= 0 or target_count <= 0:
+            continue
+        targets_by_model_id[model_id] = max(target_count, targets_by_model_id.get(model_id, 0))
+
+    if not targets_by_model_id:
+        return (
+            empty_context,
+            "stock: requires at least one positive model_id:target_count entry.",
+        )
+
+    return (
+        MerchantRulesExecutionContext(
+            merchant_stock_targets=tuple(
+                RequestScopedMerchantStockTarget(model_id=model_id, target_count=targets_by_model_id[model_id])
+                for model_id in sorted(targets_by_model_id)
+            )
+        ),
+        "",
+    )
 
 
 def _normalize_consumable_crafter_count_mode(mode: object) -> str:
@@ -16090,24 +16143,41 @@ class MerchantRulesWidget:
 
         safe_selector_name = str(selector_name or "").strip()
         safe_model_id = max(0, _safe_int(model_id, 0))
-        if safe_selector_name and _named_agent_target_has_authoritative_identity("npc", safe_selector_name):
-            return resolve_agent_xy_from_step(
+        has_authoritative_selector = bool(
+            safe_selector_name and _named_agent_target_has_authoritative_identity("npc", safe_selector_name)
+        )
+        if has_authoritative_selector:
+            selector_coords = resolve_agent_xy_from_step(
                 {"npc": safe_selector_name},
                 recipe_name=MODULE_NAME,
                 step_idx=0,
                 agent_kind="npc",
                 default_max_dist=OUTPOST_SERVICE_SEARCH_MAX_DIST,
-                log_failures=log_failures,
+                log_failures=bool(log_failures and safe_model_id <= 0),
             )
+            if selector_coords is not None:
+                return selector_coords
+            if safe_model_id <= 0:
+                return None
         if safe_model_id > 0:
-            return resolve_agent_xy_from_step(
+            model_coords = resolve_agent_xy_from_step(
                 {"model_id": safe_model_id},
                 recipe_name=MODULE_NAME,
                 step_idx=0,
                 agent_kind="npc",
                 default_max_dist=OUTPOST_SERVICE_SEARCH_MAX_DIST,
-                log_failures=log_failures,
+                log_failures=bool(log_failures and not has_authoritative_selector),
             )
+            if model_coords is not None:
+                return model_coords
+            if has_authoritative_selector and log_failures:
+                service_label = MERCHANT_TYPE_LABELS.get(safe_service_type, safe_service_type or "service")
+                _log_agent_selector_failure(
+                    MODULE_NAME,
+                    f"Could not resolve {service_label} using encoded selector {safe_selector_name!r} "
+                    f"or map-scoped model ID {safe_model_id}.",
+                )
+            return None
         if not safe_selector_name:
             return None
         if log_failures:
@@ -16428,11 +16498,10 @@ class MerchantRulesWidget:
         }
 
         for merchant_type, selector_key in selector_keys.items():
-            selector_name = selector_data.get(selector_key) or DEFAULT_NPC_SELECTORS.get(selector_key)
-            model_id = max(0, _safe_int(model_overrides.get(merchant_type, 0), 0))
-            has_map_specific_selector = bool(
-                MERCHANT_RULES_MAP_SERVICE_SELECTORS.get(map_id, {}).get(merchant_type)
-            )
+            map_selector_name = str(selector_data.get(selector_key) or "").strip()
+            selector_name = map_selector_name or DEFAULT_NPC_SELECTORS.get(selector_key)
+            model_id = 0 if map_selector_name else max(0, _safe_int(model_overrides.get(merchant_type, 0), 0))
+            has_map_specific_selector = bool(MERCHANT_RULES_MAP_SERVICE_SELECTORS.get(map_id, {}).get(merchant_type))
             if not selector_name and not has_map_specific_selector and model_id <= 0:
                 continue
             coords[merchant_type] = self._resolve_service_coords(
@@ -16619,7 +16688,12 @@ class MerchantRulesWidget:
         )
         return result
 
-    def _build_consumable_crafter_multi_stop_preview(self, destination_outpost_id: int) -> PlanResult:
+    def _build_consumable_crafter_multi_stop_preview(
+        self,
+        destination_outpost_id: int,
+        *,
+        execution_context: MerchantRulesExecutionContext | None = None,
+    ) -> PlanResult:
         safe_destination_id = max(0, _safe_int(destination_outpost_id, 0))
         destination_name = self._get_outpost_name(safe_destination_id)
         if safe_destination_id <= 0 or not destination_name:
@@ -16635,12 +16709,14 @@ class MerchantRulesWidget:
             projected_target_override_outpost_id=EMBARK_BEACH_MAP_ID,
             allow_consumable_multi_stop=False,
             consumable_crafter_only=True,
+            execution_context=execution_context,
         )
         destination_plan = self._build_plan(
             projected_preview=True,
             projected_target_override_outpost_id=safe_destination_id,
             allow_consumable_multi_stop=False,
             exclude_consumable_crafter=True,
+            execution_context=execution_context,
         )
 
         if not embark_plan.has_actions:
@@ -20952,6 +21028,7 @@ class MerchantRulesWidget:
         plan: PlanResult,
         sim_model_counts: dict[int, int],
         *,
+        execution_context: MerchantRulesExecutionContext | None = None,
         sim_inventory_items: list[InventoryItemInfo] | None = None,
         storage_items: list[InventoryItemInfo] | None = None,
         consumable_crafter_only: bool = False,
@@ -21035,7 +21112,31 @@ class MerchantRulesWidget:
                         - (max(0, int(ingredient_quantity)) * safe_quantity),
                     )
 
-        for buy_rule_index, buy_rule in enumerate(self.buy_rules):
+        buy_rule_sources: list[tuple[int, BuyRule]] = list(enumerate(self.buy_rules))
+        request_stock_targets = execution_context.merchant_stock_targets if execution_context is not None else ()
+        if request_stock_targets:
+            buy_rule_sources.append(
+                (
+                    -1,
+                    BuyRule(
+                        enabled=True,
+                        kind=BUY_KIND_MERCHANT_STOCK,
+                        merchant_type=MERCHANT_TYPE_MERCHANT,
+                        merchant_stock_targets=[
+                            MerchantStockTarget(
+                                model_id=max(0, int(target.model_id)),
+                                target_count=max(0, int(target.target_count)),
+                                max_per_run=0,
+                                after_purchase=AFTER_PURCHASE_KEEP,
+                            )
+                            for target in request_stock_targets
+                        ],
+                        name="Request-scoped Merchant Stock",
+                    ),
+                )
+            )
+
+        for buy_rule_index, buy_rule in buy_rule_sources:
             normalized_buy_rule = _normalize_buy_rule(buy_rule)
             if normalized_buy_rule is None:
                 continue
@@ -21048,7 +21149,11 @@ class MerchantRulesWidget:
                 continue
             if exclude_consumable_crafter and buy_rule.kind == BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
                 continue
-            buy_rule_reference = self._format_buy_rule_reference(buy_rule_index, buy_rule)
+            buy_rule_reference = (
+                "Request-scoped Merchant Stock"
+                if buy_rule_index < 0
+                else self._format_buy_rule_reference(buy_rule_index, buy_rule)
+            )
 
             if buy_rule.kind == BUY_KIND_MATERIAL_TARGET:
                 if not buy_rule.material_targets:
@@ -21999,6 +22104,7 @@ class MerchantRulesWidget:
     def _build_plan(
         self,
         *,
+        execution_context: MerchantRulesExecutionContext | None = None,
         cleanup_only: bool = False,
         projected_preview: bool = False,
         ignore_travel_target: bool = False,
@@ -22032,7 +22138,10 @@ class MerchantRulesWidget:
                     and self._should_use_consumable_crafter_multi_stop_route()
                 ):
                     target_outpost_id, _target_outpost_name = self._get_consumable_crafter_multi_stop_target()
-                    multi_stop_plan = self._build_consumable_crafter_multi_stop_preview(target_outpost_id)
+                    multi_stop_plan = self._build_consumable_crafter_multi_stop_preview(
+                        target_outpost_id,
+                        execution_context=execution_context,
+                    )
                     self._log_plan_summary("Plan built", multi_stop_plan)
                     self.last_plan_build_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
                     return multi_stop_plan
@@ -22074,8 +22183,21 @@ class MerchantRulesWidget:
             has_enabled_rules = self._has_enabled_rules_excluding_consumable_crafters()
         else:
             has_enabled_rules = self._has_enabled_rules()
-        if not has_enabled_rules:
-            self._debug_log("Plan build skipped inventory snapshot because no buy, sell, salvage, destroy, or cleanup rules are enabled.")
+        has_request_stock_targets = bool(
+            not cleanup_only
+            and not consumable_crafter_only
+            and (buy_action_rule_kinds is None or BUY_KIND_MERCHANT_STOCK in buy_action_rule_kinds)
+            and execution_context is not None
+            and any(
+                int(target.model_id) > 0 and int(target.target_count) > 0
+                for target in execution_context.merchant_stock_targets
+            )
+        )
+        if not has_enabled_rules and not has_request_stock_targets:
+            self._debug_log(
+                "Plan build skipped inventory snapshot because no buy, sell, salvage, destroy, or cleanup rules "
+                "are enabled and no request-scoped Merchant Stock targets apply."
+            )
             self._log_plan_summary("Plan built", plan)
             self.last_plan_build_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
             return plan
@@ -22687,6 +22809,7 @@ class MerchantRulesWidget:
         self._plan_buy_actions(
             plan,
             sim_model_counts,
+            execution_context=execution_context,
             sim_inventory_items=sim_inventory_items,
             storage_items=storage_items,
             consumable_crafter_only=consumable_crafter_only,
@@ -27122,7 +27245,11 @@ class MerchantRulesWidget:
             self.manual_vendor_handled_signature = ""
             raise
 
-    def _execute_consumable_crafter_multi_stop_route(self):
+    def _execute_consumable_crafter_multi_stop_route(
+        self,
+        *,
+        execution_context: MerchantRulesExecutionContext | None = None,
+    ):
         self.execution_running = True
         self.last_error = ""
         self.last_execution_summary = ""
@@ -27140,6 +27267,7 @@ class MerchantRulesWidget:
                     local_only=False,
                     allow_multi_stop=False,
                     post_gold_balance=False,
+                    execution_context=execution_context,
                 )
                 route_completed_successfully = bool(self.execution_completed_successfully)
                 return
@@ -27161,6 +27289,7 @@ class MerchantRulesWidget:
                 ignore_travel_target=True,
                 allow_consumable_multi_stop=False,
                 consumable_crafter_only=True,
+                execution_context=execution_context,
             )
             self.preview_plan = consumable_plan
             self._log_plan_summary("Multi-stop Embark plan", consumable_plan)
@@ -27174,6 +27303,7 @@ class MerchantRulesWidget:
                         ignore_travel_target=True,
                         allow_consumable_multi_stop=False,
                         consumable_crafter_only=True,
+                        execution_context=execution_context,
                     )
                     self.preview_plan = consumable_plan
                     self._log_plan_summary("Multi-stop Embark storage-refreshed plan", consumable_plan)
@@ -27209,6 +27339,7 @@ class MerchantRulesWidget:
                 projected_target_override_outpost_id=destination_outpost_id,
                 allow_consumable_multi_stop=False,
                 exclude_consumable_crafter=True,
+                execution_context=execution_context,
             )
             self.preview_plan = remaining_preview
             if remaining_preview.has_actions:
@@ -27230,6 +27361,7 @@ class MerchantRulesWidget:
                     allow_multi_stop=False,
                     exclude_consumable_crafter=True,
                     post_gold_balance=False,
+                    execution_context=execution_context,
                 )
                 if self.last_error:
                     if phase_summaries:
@@ -27295,6 +27427,7 @@ class MerchantRulesWidget:
         allow_multi_stop: bool = True,
         exclude_consumable_crafter: bool = False,
         post_gold_balance: bool = True,
+        execution_context: MerchantRulesExecutionContext | None = None,
     ):
         """Execute the preview as ordered cooperative phases with live revalidation.
 
@@ -27314,7 +27447,9 @@ class MerchantRulesWidget:
             and self._should_use_consumable_crafter_multi_stop_route()
         ):
             try:
-                yield from self._execute_consumable_crafter_multi_stop_route()
+                yield from self._execute_consumable_crafter_multi_stop_route(
+                    execution_context=execution_context,
+                )
             finally:
                 self._end_execute_reservation_scope(owned_reservation_scope)
             return
@@ -27335,6 +27470,7 @@ class MerchantRulesWidget:
                 ignore_travel_target=local_only,
                 allow_consumable_multi_stop=allow_multi_stop,
                 exclude_consumable_crafter=exclude_consumable_crafter,
+                execution_context=execution_context,
             )
             self.preview_plan = plan
             local_availability = self._get_preview_here_availability()
@@ -27360,6 +27496,7 @@ class MerchantRulesWidget:
                 plan = self._build_plan(
                     allow_consumable_multi_stop=allow_multi_stop,
                     exclude_consumable_crafter=exclude_consumable_crafter,
+                    execution_context=execution_context,
                 )
                 self.preview_plan = plan
                 local_availability = self._get_preview_here_availability()
@@ -27398,6 +27535,7 @@ class MerchantRulesWidget:
                         ignore_travel_target=local_only,
                         allow_consumable_multi_stop=allow_multi_stop,
                         exclude_consumable_crafter=exclude_consumable_crafter,
+                        execution_context=execution_context,
                     )
                     self.preview_plan = plan
                     local_availability = self._get_preview_here_availability()
@@ -27433,6 +27571,7 @@ class MerchantRulesWidget:
                         ignore_travel_target=local_only,
                         allow_consumable_multi_stop=allow_multi_stop,
                         exclude_consumable_crafter=exclude_consumable_crafter,
+                        execution_context=execution_context,
                     )
                     self.preview_plan = plan
                     local_availability = self._get_preview_here_availability()
@@ -27516,6 +27655,7 @@ class MerchantRulesWidget:
                         ignore_travel_target=local_only,
                         allow_consumable_multi_stop=allow_multi_stop,
                         exclude_consumable_crafter=exclude_consumable_crafter,
+                        execution_context=execution_context,
                     )
                     self.preview_plan = plan
                     local_availability = self._get_preview_here_availability()
@@ -27571,6 +27711,7 @@ class MerchantRulesWidget:
                         ignore_travel_target=local_only,
                         allow_consumable_multi_stop=allow_multi_stop,
                         exclude_consumable_crafter=exclude_consumable_crafter,
+                        execution_context=execution_context,
                     )
                     self.preview_plan = plan
                     local_availability = self._get_preview_here_availability()
@@ -27682,6 +27823,7 @@ class MerchantRulesWidget:
                         ignore_travel_target=local_only,
                         allow_consumable_multi_stop=allow_multi_stop,
                         exclude_consumable_crafter=exclude_consumable_crafter,
+                        execution_context=execution_context,
                     )
                     self.preview_plan = plan
                     local_availability = self._get_preview_here_availability()
@@ -31792,6 +31934,29 @@ class MerchantRulesWidget:
         actionable_entries, skipped_entries = self._split_preview_entries(plan.entries)
         return len(actionable_entries), len(skipped_entries)
 
+    def _get_unmet_request_stock_targets(
+        self,
+        execution_context: MerchantRulesExecutionContext | None,
+    ) -> list[tuple[RequestScopedMerchantStockTarget, int]]:
+        request_targets = execution_context.merchant_stock_targets if execution_context is not None else ()
+        if not request_targets:
+            return []
+        inventory_counts = self._get_inventory_model_counts(self._collect_inventory_items())
+        return [
+            (target, max(0, int(inventory_counts.get(int(target.model_id), 0))))
+            for target in request_targets
+            if max(0, int(inventory_counts.get(int(target.model_id), 0))) < max(0, int(target.target_count))
+        ]
+
+    def _format_unmet_request_stock_targets(
+        self,
+        unmet_targets: list[tuple[RequestScopedMerchantStockTarget, int]],
+    ) -> str:
+        return ", ".join(
+            f"{self._format_model_label_short(target.model_id)} {current_count}/{target.target_count}"
+            for target, current_count in unmet_targets
+        )
+
     def _extract_multibox_message_extra_data(self, message) -> tuple[str, str, str, str]:
         values: list[str] = []
         for raw in getattr(message, "ExtraData", ()):
@@ -32053,7 +32218,7 @@ class MerchantRulesWidget:
     def _handle_shared_multibox_message(self, message):
         """Handle a follower command while restoring temporary destructive and HeroAI state.
 
-        The generator validates receiver and opcode data, applies request-scoped execution flags,
+        The generator validates receiver and opcode data, applies request-scoped execution inputs and flags,
         sends a correlated result, and restores all temporary options in ``finally``.
         """
 
@@ -32108,6 +32273,23 @@ class MerchantRulesWidget:
             )
             return
 
+        execution_context = MerchantRulesExecutionContext()
+        if opcode == MERCHANT_RULES_OPCODE_EXECUTE:
+            execution_context, request_parse_error = _parse_request_scoped_merchant_stock(extra1)
+            if request_parse_error:
+                self._send_multibox_result_message(
+                    sender_email,
+                    request_id=request_id,
+                    opcode=MERCHANT_RULES_OPCODE_ERROR_RESULT,
+                    primary_count=0,
+                    secondary_count=1,
+                    success_flag=False,
+                    status_label="Invalid Stock Request",
+                    summary="Request-scoped Merchant Stock was rejected.",
+                    detail=request_parse_error,
+                )
+                return
+
         hero_ai_snapshot: dict[str, bool] | None = None
         original_include_protected = False
         original_instant_destroy = False
@@ -32154,7 +32336,7 @@ class MerchantRulesWidget:
                     status_label="Starting",
                     summary="Remote execute is starting.",
                 )
-                yield from self._execute_now()
+                yield from self._execute_now(execution_context=execution_context)
                 if str(self.last_error or "").strip():
                     self._send_multibox_result_message(
                         sender_email,
@@ -32168,6 +32350,23 @@ class MerchantRulesWidget:
                         detail=str(self.last_error or self.status_message or ""),
                     )
                 else:
+                    unmet_request_targets = self._get_unmet_request_stock_targets(execution_context)
+                    if unmet_request_targets:
+                        primary_count, secondary_count = self._get_multibox_plan_counts(self.preview_plan)
+                        target_word = "target" if len(unmet_request_targets) == 1 else "targets"
+                        remain_word = "remains" if len(unmet_request_targets) == 1 else "remain"
+                        self._send_multibox_result_message(
+                            sender_email,
+                            request_id=request_id,
+                            opcode=MERCHANT_RULES_OPCODE_ERROR_RESULT,
+                            primary_count=primary_count,
+                            secondary_count=secondary_count,
+                            success_flag=False,
+                            status_label="Stock Unmet",
+                            summary=f"{len(unmet_request_targets)} requested stock {target_word} {remain_word} unmet.",
+                            detail=self._format_unmet_request_stock_targets(unmet_request_targets),
+                        )
+                        return
                     result = self.build_remote_execute_result()
                     self._send_multibox_result_message(
                         sender_email,
@@ -32212,6 +32411,10 @@ class MerchantRulesWidget:
             if restore_destroy_session_state:
                 self.destroy_include_protected_items = original_include_protected
                 self.destroy_instant_enabled = original_instant_destroy
+            if execution_context.merchant_stock_targets:
+                self.preview_plan = PlanResult()
+                self.preview_ready = False
+                self._clear_preview_projection_state()
 
     def build_remote_preview_result(self) -> dict[str, object]:
         """Summarize the follower's current preview into a transport-safe result payload."""
