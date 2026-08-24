@@ -2040,11 +2040,17 @@ def _test_manual_vendor_auto_buy_uses_current_offers(module) -> None:
     plan = module.PlanResult(
         supported_map=True,
         merchant_stock_buys=[
-            module.PlannedMerchantBuy(model_id=555, quantity=2, label="Identification Kit"),
+            module.PlannedMerchantBuy(
+                model_id=555,
+                quantity=2,
+                label="Identification Kit",
+                check_xunlai_first=True,
+            ),
         ],
         has_actions=True,
     )
     captured_buys: list[tuple[int, int, list[int]]] = []
+    build_kwargs: list[dict[str, object]] = []
 
     def _capture_buy(model_id, quantity, *, offered_items=None, cleanup=None):
         captured_buys.append((int(model_id), int(quantity), list(offered_items or [])))
@@ -2054,12 +2060,19 @@ def _test_manual_vendor_auto_buy_uses_current_offers(module) -> None:
 
     widget._is_merchant_window_open = lambda: True
     widget._get_current_manual_vendor_context = lambda: context
-    widget._build_plan = lambda **_kwargs: plan
+    widget._build_plan = lambda **kwargs: build_kwargs.append(dict(kwargs)) or plan
+    widget._ensure_storage_open = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("Manual merchant auto-buy must not open Xunlai for Check Xunlai first.")
+    )
     widget._buy_merchant_model = _capture_buy
 
     _drain_generator_return(widget._run_manual_vendor_pass(context))
 
     _expect(captured_buys == [(555, 2, [501])], "Manual auto-buy should use only the currently opened merchant's offers.")
+    _expect(
+        len(build_kwargs) == 1 and build_kwargs[0].get("bypass_xunlai_first") is True,
+        "Manual merchant auto-buy should bypass only the Xunlai-first phase while retaining the target purchase.",
+    )
     _expect(not widget.preview_ready, "Successful manual vendor buys should mark Preview dirty.")
 
 
@@ -2435,7 +2448,10 @@ def _test_gold_profile_defaults_and_roundtrip(module, temp_root: Path) -> None:
         "New widgets should default carried-gold target to 20,000 gold.",
     )
     normalized = widget._normalize_profile_payload({"version": module.PROFILE_VERSION - 1})
-    _expect(normalized["version"] == 38, "Carried-gold profiles should normalize to version 38.")
+    _expect(
+        normalized["version"] == module.PROFILE_VERSION,
+        "Carried-gold profiles should normalize to the current Merchant Rules version.",
+    )
     _expect(
         not any(
             normalized[key]
@@ -2467,7 +2483,10 @@ def _test_gold_profile_defaults_and_roundtrip(module, temp_root: Path) -> None:
     widget.gold_balance_after_manual_session = True
     widget.target_carried_gold = 12500
     saved_payload = widget._build_profile_payload()
-    _expect(saved_payload["version"] == 38, "Saved carried-gold profiles should use version 38.")
+    _expect(
+        saved_payload["version"] == module.PROFILE_VERSION,
+        "Saved carried-gold profiles should use the current Merchant Rules version.",
+    )
     _expect(saved_payload["target_carried_gold"] == 12500, "Carried-gold targets should be stored as raw gold.")
 
     reloaded_widget = _make_widget(module)
@@ -13910,6 +13929,423 @@ def _test_build_plan_captures_inventory_and_marks_conditional_stock_buy(module) 
     _expect(plan.has_actions, "Plan should be actionable when either buy or sell work was found.")
 
 
+def _test_xunlai_first_profile_v39_defaults_and_roundtrip(module) -> None:
+    widget = _make_widget(module)
+    legacy_payload = {
+        "version": 38,
+        "buy_rules": [
+            {
+                "enabled": True,
+                "kind": module.BUY_KIND_MERCHANT_STOCK,
+                "merchant_stock_targets": [
+                    {
+                        "model_id": 555,
+                        "target_count": 3,
+                        "max_per_run": 1,
+                        "after_purchase": module.AFTER_PURCHASE_KEEP,
+                    }
+                ],
+            }
+        ],
+    }
+
+    normalized = widget._normalize_profile_payload(legacy_payload)
+    normalized_target = normalized["buy_rules"][0]["merchant_stock_targets"][0]
+    _expect(normalized["version"] == 39, "Merchant Rules profiles should advance to payload version 39.")
+    _expect(
+        normalized_target["check_xunlai_first"] is False,
+        "A v38 Merchant Stock target should default Check Xunlai first to OFF.",
+    )
+
+    normalized_target["check_xunlai_first"] = True
+    widget._apply_profile_payload(normalized)
+    saved_target = widget._build_profile_payload()["buy_rules"][0]["merchant_stock_targets"][0]
+    _expect(
+        saved_target["check_xunlai_first"] is True,
+        "Check Xunlai first should survive profile application and serialization.",
+    )
+
+
+def _test_xunlai_first_merchant_stock_planning_contract(module) -> None:
+    widget = _make_widget(module)
+    model_id = 555
+    widget.catalog_merchant_essentials = [
+        {"model_id": model_id, "name": "Identification Kit", "item_type": "kit"},
+        {"model_id": int(module.ModelID.Vial_Of_Dye.value), "name": "Dye", "item_type": "dye"},
+    ]
+    widget._get_supported_context = lambda *, passive=False: (
+        True,
+        "Ready",
+        {module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+    )
+    inventory_items: list[object] = []
+    storage_items: list[object] = []
+    storage_state = {"open": True}
+    open_calls: list[str] = []
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    try:
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
+            IsStorageOpen=lambda: bool(storage_state["open"]),
+            OpenXunlaiWindow=lambda: open_calls.append("open"),
+        )
+        widget._collect_inventory_items = lambda: list(inventory_items)
+        widget._collect_storage_items_with_reliability = lambda: (list(storage_items), True)
+        widget._collect_material_storage_items = lambda: (_ for _ in ()).throw(
+            AssertionError("Check Xunlai first must not inspect Material Storage.")
+        )
+        target = module.MerchantStockTarget(
+            model_id=model_id,
+            target_count=10,
+            max_per_run=2,
+            check_xunlai_first=True,
+        )
+        widget.buy_rules = [
+            module.BuyRule(
+                enabled=True,
+                kind=module.BUY_KIND_MERCHANT_STOCK,
+                merchant_stock_targets=[target],
+            )
+        ]
+
+        storage_items[:] = [
+            _make_item(module, item_id=700, model_id=model_id, name="Identification Kit", quantity=7),
+        ]
+        partial_plan = widget._build_plan()
+        feature_transfers = [
+            transfer
+            for transfer in partial_plan.storage_transfers
+            if transfer.xunlai_first_merchant_stock
+        ]
+        _expect(
+            sum(int(transfer.quantity) for transfer in feature_transfers) == 7,
+            "Xunlai-first planning should withdraw against the full shortage before applying Max Per Run.",
+        )
+        _expect(
+            [buy.quantity for buy in partial_plan.merchant_stock_buys] == [2]
+            and partial_plan.merchant_stock_buys[0].check_xunlai_first,
+            "After seven stored items, a target of ten with Max Per Run two should plan only two purchases.",
+        )
+
+        storage_items[0] = replace(storage_items[0], quantity=10)
+        full_plan = widget._build_plan()
+        _expect(
+            sum(int(transfer.quantity) for transfer in full_plan.storage_transfers) == 10
+            and not full_plan.merchant_stock_buys,
+            "Xunlai stock that fully satisfies the target should eliminate the merchant purchase.",
+        )
+
+        inventory_items[:] = [
+            _make_item(module, item_id=701, model_id=model_id, name="Identification Kit", quantity=10),
+        ]
+        satisfied_plan = widget._build_plan()
+        _expect(
+            not satisfied_plan.storage_transfers and not satisfied_plan.merchant_stock_buys,
+            "A carried target that is already satisfied should require neither withdrawal nor purchase.",
+        )
+
+        inventory_items.clear()
+        widget.buy_rules[0].merchant_stock_targets[0].check_xunlai_first = False
+        off_plan = widget._build_plan()
+        _expect(
+            not off_plan.storage_transfers
+            and [buy.quantity for buy in off_plan.merchant_stock_buys] == [2],
+            "Turning Check Xunlai first OFF should preserve ordinary Max Per Run purchase planning.",
+        )
+
+        widget.buy_rules[0].merchant_stock_targets[0].check_xunlai_first = True
+        storage_state["open"] = False
+        closed_plan = widget._build_plan()
+        _expect(
+            closed_plan.storage_plan_state == module.STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN
+            and not closed_plan.storage_transfers
+            and not closed_plan.merchant_stock_buys
+            and open_calls == [],
+            "Passive planning should remain non-mutating and defer an opted target until Xunlai can be scanned.",
+        )
+
+        dye_model_id = int(module.ModelID.Vial_Of_Dye.value)
+        storage_state["open"] = True
+        widget.buy_rules[0].merchant_stock_targets = [
+            module.MerchantStockTarget(
+                model_id=dye_model_id,
+                target_count=2,
+                max_per_run=1,
+                check_xunlai_first=True,
+            )
+        ]
+        dye_plan = widget._build_plan()
+        _expect(
+            not dye_plan.storage_transfers
+            and len(dye_plan.merchant_stock_buys) == 1
+            and not dye_plan.merchant_stock_buys[0].check_xunlai_first,
+            "Dye identity should never activate the model-only Xunlai-first path.",
+        )
+    finally:
+        module.GLOBAL_CACHE.Inventory = original_inventory
+
+
+def _test_xunlai_first_cleanup_reservation_contract(module) -> None:
+    widget = _make_widget(module)
+    model_id = 555
+    widget.catalog_merchant_essentials = [
+        {"model_id": model_id, "name": "Identification Kit", "item_type": "kit"},
+    ]
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            merchant_stock_targets=[
+                module.MerchantStockTarget(
+                    model_id=model_id,
+                    target_count=2,
+                    check_xunlai_first=True,
+                )
+            ],
+        ),
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            merchant_stock_targets=[
+                module.MerchantStockTarget(
+                    model_id=model_id,
+                    target_count=5,
+                    check_xunlai_first=True,
+                )
+            ],
+        ),
+    ]
+    widget.cleanup_targets = [module.CleanupTarget(model_id=model_id, keep_on_character=1)]
+    carried_items = [
+        _make_item(module, item_id=710, model_id=model_id, name="Identification Kit", quantity=7),
+    ]
+
+    reserved_plan = _build_cleanup_plan_for_items(module, widget, carried_items)
+    reserved_transfers = _cleanup_deposit_transfers(module, reserved_plan)
+    _expect(
+        sum(int(transfer.quantity) for transfer in reserved_transfers) == 2,
+        "Duplicate opted targets should use the highest target as the carried-stock floor, not their sum.",
+    )
+    _expect(
+        any("Keeping 5 on character for Check Xunlai first." in entry.reason for entry in reserved_plan.entries),
+        "The cleanup plan should explain when the Buy target overrides the configured deposit keep.",
+    )
+
+    widget.cleanup_targets = [module.CleanupTarget(model_id=model_id, keep_on_character=6)]
+    existing_keep_plan = _build_cleanup_plan_for_items(module, widget, carried_items)
+    _expect(
+        sum(int(transfer.quantity) for transfer in _cleanup_deposit_transfers(module, existing_keep_plan)) == 1,
+        "A larger existing Keep On Character value should remain authoritative.",
+    )
+
+    widget.cleanup_targets = [module.CleanupTarget(model_id=model_id, keep_on_character=1)]
+    owned_scope = widget._begin_execute_reservation_scope()
+    try:
+        widget.buy_rules[1].merchant_stock_targets[0].target_count = 0
+        frozen_plan = _build_cleanup_plan_for_items(module, widget, carried_items)
+        _expect(
+            sum(int(transfer.quantity) for transfer in _cleanup_deposit_transfers(module, frozen_plan)) == 2,
+            "The full-Execute reservation should survive an after-purchase target reset during that execution.",
+        )
+    finally:
+        widget._end_execute_reservation_scope(owned_scope)
+
+    later_plan = _build_cleanup_plan_for_items(module, widget, carried_items)
+    _expect(
+        sum(int(transfer.quantity) for transfer in _cleanup_deposit_transfers(module, later_plan)) == 5,
+        "A later execution should recalculate the reservation from the active target configuration.",
+    )
+
+
+def _test_xunlai_first_live_purchase_guard(module) -> None:
+    widget = _make_widget(module)
+    model_counts = {555: 1}
+    buys: list[tuple[int, int]] = []
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    original_item = getattr(module.GLOBAL_CACHE, "Item", None)
+    original_trading = getattr(module.GLOBAL_CACHE, "Trading", None)
+    try:
+        def _buy_item(item_id: int, cost: int) -> None:
+            buys.append((int(item_id), int(cost)))
+            model_counts[555] = 2
+
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
+            IsStorageOpen=lambda: True,
+            GetGoldOnCharacter=lambda: 1000,
+            GetGoldInStorage=lambda: 0,
+            WithdrawGold=lambda _amount: None,
+            GetModelCount=lambda model_id: model_counts.get(int(model_id), 0),
+        )
+        module.GLOBAL_CACHE.Item = types.SimpleNamespace(
+            GetModelID=lambda item_id: 555 if int(item_id) == 501 else 0,
+            Properties=types.SimpleNamespace(GetValue=lambda item_id: 250 if int(item_id) == 501 else 0),
+        )
+        module.GLOBAL_CACHE.Trading = types.SimpleNamespace(
+            Merchant=types.SimpleNamespace(GetOfferedItems=lambda: [501], BuyItem=_buy_item),
+        )
+
+        outcome = _drain_generator_return(
+            widget._buy_merchant_model(
+                555,
+                2,
+                offered_items=[501],
+                live_target_count=2,
+            )
+        )
+        _expect(
+            outcome.completed == 1 and buys == [(501, 500)],
+            "The Xunlai-first live guard should stop later planned purchases once carried stock reaches Target.",
+        )
+
+        module.GLOBAL_CACHE.Inventory.GetModelCount = lambda _model_id: (_ for _ in ()).throw(
+            RuntimeError("unreadable carried count")
+        )
+        unreadable_outcome = _drain_generator_return(
+            widget._buy_merchant_model(
+                555,
+                1,
+                offered_items=[501],
+                live_target_count=3,
+            )
+        )
+        _expect(
+            unreadable_outcome.completed == 0
+            and unreadable_outcome.load_failures == 1
+            and buys == [(501, 500)],
+            "An unreadable live carried count should fail closed without submitting another purchase.",
+        )
+    finally:
+        module.GLOBAL_CACHE.Inventory = original_inventory
+        module.GLOBAL_CACHE.Item = original_item
+        module.GLOBAL_CACHE.Trading = original_trading
+
+
+def _test_xunlai_first_execute_partial_withdrawal_blocks_purchase(module) -> None:
+    widget = _make_widget(module)
+    model_id = 555
+    transfer = module.PlannedStorageTransfer(
+        direction=module.STORAGE_TRANSFER_WITHDRAW,
+        key=f"model:{model_id}",
+        label="Identification Kit",
+        item_id=900,
+        quantity=2,
+        model_id=model_id,
+        xunlai_first_merchant_stock=True,
+    )
+    planned_buy = module.PlannedMerchantBuy(
+        model_id=model_id,
+        quantity=1,
+        label="Identification Kit",
+        cleanup=module.PurchaseTargetCleanup(target_count=3, max_per_run=1),
+        check_xunlai_first=True,
+    )
+    plan = module.PlanResult(
+        supported_map=True,
+        coords={
+            module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0),
+            module.MERCHANT_TYPE_STORAGE: (2.0, 2.0),
+        },
+        merchant_stock_buys=[planned_buy],
+        storage_transfers=[transfer],
+        storage_plan_state=module.STORAGE_PLAN_STATE_EXACT_READY,
+        storage_exact=True,
+        xunlai_first_merchant_stock_targets={model_id: "Identification Kit"},
+        has_actions=True,
+    )
+    buy_calls: list[int] = []
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    try:
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(IsStorageOpen=lambda: True)
+        widget._build_plan = lambda **_kwargs: plan
+        widget._get_preview_here_availability = lambda: {
+            module.MERCHANT_TYPE_MERCHANT: True,
+            module.MERCHANT_TYPE_STORAGE: True,
+        }
+        widget._pause_inventory_plus = lambda: None
+
+        def _partial_transfer(_transfers, *, phase_label="Storage transfers"):
+            if False:
+                yield None
+            return module.ExecutionPhaseOutcome(
+                label=phase_label,
+                measure_label="items",
+                attempted=2,
+                completed=1,
+                timeout_failures=1,
+            )
+
+        def _capture_buy(*_args, **_kwargs):
+            buy_calls.append(1)
+            if False:
+                yield None
+            return module.ExecutionPhaseOutcome(label="Merchant stock", measure_label="items", attempted=1, completed=1)
+
+        widget._execute_storage_transfers = _partial_transfer
+        widget._buy_merchant_model = _capture_buy
+
+        _drain_generator_return(widget._execute_now())
+
+        _expect(not buy_calls, "An ambiguous partial Xunlai withdrawal must block the opted target purchase.")
+        _expect(
+            "Stopped Identification Kit: the Xunlai withdrawal could not be confirmed."
+            in widget.last_execution_summary,
+            "The explicit Execute summary should report the required fail-closed withdrawal message.",
+        )
+    finally:
+        module.GLOBAL_CACHE.Inventory = original_inventory
+
+
+def _test_xunlai_first_execute_unavailable_storage_skips_purchase(module) -> None:
+    widget = _make_widget(module)
+    model_id = 555
+    plan = module.PlanResult(
+        entries=[
+            module.ExecutionPlanEntry(
+                "withdraw",
+                module.MERCHANT_TYPE_STORAGE,
+                "Identification Kit",
+                1,
+                module.PLAN_STATE_CONDITIONAL,
+                "Xunlai Storage must be checked before buying.",
+                model_id=model_id,
+            )
+        ],
+        supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        storage_plan_state=module.STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN,
+        storage_exact=False,
+        xunlai_first_merchant_stock_targets={model_id: "Identification Kit"},
+        has_actions=False,
+    )
+    buy_calls: list[int] = []
+
+    def _storage_unavailable(*_args, **_kwargs):
+        if False:
+            yield None
+        return False
+
+    def _capture_buy(*_args, **_kwargs):
+        buy_calls.append(1)
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(label="Merchant stock", measure_label="items", attempted=1, completed=1)
+
+    widget._build_plan = lambda **_kwargs: plan
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._ensure_storage_open = _storage_unavailable
+    widget._buy_merchant_model = _capture_buy
+
+    _drain_generator_return(widget._execute_now())
+
+    _expect(not buy_calls, "Unavailable Xunlai should skip an opted explicit-Execute target without buying.")
+    _expect(
+        widget.status_message == "Skipped Identification Kit: Xunlai Storage could not be checked.",
+        "Unavailable Xunlai should surface the approved explicit-Execute skip message.",
+    )
+
+
 def _test_request_scoped_merchant_stock_parser_contract(module) -> None:
     context, error = module._parse_request_scoped_merchant_stock("stock:555:2,777:3,555:5,bad,0:4,888:0")
     _expect(not error, "A request with valid positive stock entries should parse successfully.")
@@ -14020,6 +14456,10 @@ def _test_request_scoped_merchant_stock_planning_overlay(module) -> None:
         [(buy.model_id, buy.quantity) for buy in lower_plan.merchant_stock_buys] == [(555, 4), (777, 2)],
         "A lower overlapping request should not reduce the saved target, while unrelated request models still plan.",
     )
+    _expect(
+        all(not buy.check_xunlai_first for buy in lower_plan.merchant_stock_buys),
+        "Request-scoped Merchant Stock targets must not enter the Xunlai-first execution path.",
+    )
 
     higher_context, error = module._parse_request_scoped_merchant_stock("stock:555:7")
     _expect(not error, "Higher-target planning fixture should parse.")
@@ -14069,6 +14509,7 @@ def _test_request_scoped_merchant_stock_planning_overlay(module) -> None:
                 "target_count": 5,
                 "max_per_run": 0,
                 "after_purchase": module.AFTER_PURCHASE_REMOVE_ENTRY,
+                "check_xunlai_first": False,
             }
         ],
         "Request stock must not enter profile serialization.",
@@ -23507,6 +23948,143 @@ def _test_paused_domain_operations_keep_one_profile_generation(module) -> None:
             delattr(module.GLOBAL_CACHE, "Coroutines")
 
 
+def _test_account_identity_transition_generation_contract(module) -> None:
+    account_a = "account.a@example.com"
+    account_b = "account.b@example.com"
+    identity_state = {"email": account_a, "name": "Account A Character"}
+    original_get_account_email = module.Player.GetAccountEmail
+    original_get_name = module.Player.GetName
+
+    def _prepare_initialized_widget():
+        widget = _make_widget(module)
+        widget.catalog_loaded = True
+        widget.initialized = True
+        widget.account_key = account_a
+        widget._merchant_rules_generation_account_key = account_a
+        widget.merchant_rules_profile_generation = 7
+        widget.profile_entries_loaded = {
+            scope: True
+            for scope in module.PROFILE_SCOPES
+        }
+        return widget
+
+    try:
+        module.Player.GetAccountEmail = lambda: identity_state["email"]
+        module.Player.GetName = lambda: identity_state["name"]
+
+        same_account_widget = _prepare_initialized_widget()
+        same_account_events: list[str] = []
+
+        def _same_account_work():
+            same_account_events.append("started")
+            yield
+            same_account_events.append("continued")
+            yield
+            same_account_events.append("finished")
+
+        same_account_owned = same_account_widget._track_merchant_rules_owned_work(_same_account_work())
+        next(same_account_owned)
+        identity_state["email"] = ""
+        identity_state["name"] = "Transient Character Fallback"
+        same_account_widget._ensure_initialized()
+        _expect(
+            same_account_widget.account_key == account_a
+            and same_account_widget._merchant_rules_generation_account_key == account_a
+            and same_account_widget.merchant_rules_profile_generation == 7,
+            "A temporary account-identity gap should preserve the last reliable account key and generation.",
+        )
+        _expect(
+            same_account_widget._merchant_rules_is_generation_current(7),
+            "Owned work should remain current while account identity is temporarily unavailable.",
+        )
+        next(same_account_owned)
+        identity_state["email"] = account_a
+        identity_state["name"] = "Account A Character"
+        same_account_widget._ensure_initialized()
+        _drain_generator_return(same_account_owned)
+        _expect(
+            same_account_events == ["started", "continued", "finished"]
+            and same_account_widget.merchant_rules_owned_work_count == 0,
+            "Owned work should continue through account A -> unavailable -> account A.",
+        )
+
+        changed_account_widget = _prepare_initialized_widget()
+        changed_account_events: list[str] = []
+
+        def _changed_account_work():
+            changed_account_events.append("started")
+            yield
+            changed_account_events.append("unexpected continuation")
+
+        identity_state["email"] = account_a
+        changed_account_owned = changed_account_widget._track_merchant_rules_owned_work(_changed_account_work())
+        next(changed_account_owned)
+        identity_state["email"] = account_b
+        changed_account_widget._ensure_initialized()
+        _expect(
+            changed_account_widget.merchant_rules_profile_generation == 8
+            and changed_account_widget._merchant_rules_generation_account_key == account_b
+            and changed_account_widget.account_key == account_a,
+            "A confirmed account A -> account B change should advance generation before deferred profile application.",
+        )
+        _expect(
+            not changed_account_widget._merchant_rules_is_generation_current(7),
+            "A confirmed different account should invalidate the captured owned-work generation.",
+        )
+        _expect(
+            _drain_generator_return(changed_account_owned) is None
+            and changed_account_events == ["started"]
+            and changed_account_widget.merchant_rules_owned_work_count == 0,
+            "Stale owned work should close without continuing after a confirmed account switch.",
+        )
+
+        changed_account_loads: list[str] = []
+        changed_account_widget._refresh_profile_entries = lambda scope: changed_account_loads.append(f"refresh:{scope}")
+        changed_account_widget._load_profile = lambda: changed_account_loads.append("load")
+        changed_account_widget._load_loaded_profile_provenance = lambda: changed_account_loads.append("provenance")
+        changed_account_widget._reset_runtime_after_profile_load = lambda: changed_account_loads.append("reset")
+        changed_account_widget._ensure_initialized()
+        _expect(
+            changed_account_widget.account_key == account_b
+            and changed_account_widget.merchant_rules_profile_generation == 8
+            and changed_account_loads.count("load") == 1,
+            "Once idle, the confirmed new account should apply exactly once without another generation bump.",
+        )
+
+        identity_state["email"] = ""
+        identity_state["name"] = ""
+        unbound_widget = _make_widget(module)
+        unbound_widget.catalog_loaded = True
+        unbound_loads: list[str] = []
+        unbound_widget._load_profile = lambda: unbound_loads.append("load")
+        unbound_widget._ensure_initialized()
+        _expect(
+            not unbound_widget.initialized
+            and unbound_widget.account_key == ""
+            and unbound_widget._merchant_rules_generation_account_key == ""
+            and unbound_widget.merchant_rules_profile_generation == 0
+            and not unbound_loads,
+            "Unavailable identity before first initialization should defer safely without manufacturing a default account switch.",
+        )
+
+        identity_state["email"] = account_a
+        unbound_widget._refresh_profile_entries = lambda _scope: None
+        unbound_widget._load_loaded_profile_provenance = lambda: None
+        unbound_widget._reset_runtime_after_profile_load = lambda: None
+        unbound_widget._ensure_initialized()
+        _expect(
+            unbound_widget.initialized
+            and unbound_widget.account_key == account_a
+            and unbound_widget._merchant_rules_generation_account_key == account_a
+            and unbound_widget.merchant_rules_profile_generation == 1
+            and unbound_loads == ["load"],
+            "First initialization should bind normally once a reliable account identity becomes available.",
+        )
+    finally:
+        module.Player.GetAccountEmail = original_get_account_email
+        module.Player.GetName = original_get_name
+
+
 def _test_multibox_profile_reload_defers_latest_until_owned_work_is_idle(module) -> None:
     widget = _make_widget(module)
     reload_calls: list[tuple[str, bool]] = []
@@ -26451,6 +27029,30 @@ def main() -> int:
             ),
             ("build_plan_captures_inventory_and_marks_conditional_stock_buy", lambda: _test_build_plan_captures_inventory_and_marks_conditional_stock_buy(module)),
             (
+                "xunlai_first_profile_v39_defaults_and_roundtrip",
+                lambda: _test_xunlai_first_profile_v39_defaults_and_roundtrip(module),
+            ),
+            (
+                "xunlai_first_merchant_stock_planning_contract",
+                lambda: _test_xunlai_first_merchant_stock_planning_contract(module),
+            ),
+            (
+                "xunlai_first_cleanup_reservation_contract",
+                lambda: _test_xunlai_first_cleanup_reservation_contract(module),
+            ),
+            (
+                "xunlai_first_live_purchase_guard",
+                lambda: _test_xunlai_first_live_purchase_guard(module),
+            ),
+            (
+                "xunlai_first_execute_partial_withdrawal_blocks_purchase",
+                lambda: _test_xunlai_first_execute_partial_withdrawal_blocks_purchase(module),
+            ),
+            (
+                "xunlai_first_execute_unavailable_storage_skips_purchase",
+                lambda: _test_xunlai_first_execute_unavailable_storage_skips_purchase(module),
+            ),
+            (
                 "request_scoped_merchant_stock_parser_contract",
                 lambda: _test_request_scoped_merchant_stock_parser_contract(module),
             ),
@@ -26756,6 +27358,10 @@ def main() -> int:
             (
                 "paused_domain_operations_keep_one_profile_generation",
                 lambda: _test_paused_domain_operations_keep_one_profile_generation(module),
+            ),
+            (
+                "account_identity_transition_generation_contract",
+                lambda: _test_account_identity_transition_generation_contract(module),
             ),
             (
                 "multibox_profile_reload_defers_latest_until_owned_work_is_idle",

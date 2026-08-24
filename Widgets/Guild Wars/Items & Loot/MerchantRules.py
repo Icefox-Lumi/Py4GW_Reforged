@@ -126,7 +126,7 @@ INVENTORY_SHORTCUT_LIVE_ACTION_REFRESH_MATERIAL_STORAGE_COUNT = "refresh_materia
 INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
-PROFILE_VERSION = 38
+PROFILE_VERSION = 39
 MERCHANT_RULES_OWNED_ACTION_QUEUES = frozenset({"ACTION", "IDENTIFY", "SALVAGE"})
 # Live and private rule profiles remain account-scoped. Shared profiles use one
 # global document whose per-key journal writes merge safely across multibox clients.
@@ -1665,6 +1665,10 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
         "long": "Set 0 for no extra cap, or use a number to slow spending across repeated runs.",
         "why": "A cap helps avoid spending too much gold or material stock at once.",
     },
+    "buy_check_xunlai_first": {
+        "short": "During Execute, checks Xunlai Storage before buying.",
+        "long": "Matching items are withdrawn first, then Merchant Rules buys only what is still needed.",
+    },
     "buy_after_purchase": {
         "short": "Chooses what happens to this target after a fully confirmed purchase.",
         "long": (
@@ -2066,6 +2070,7 @@ class MerchantStockTarget:
     target_count: int = 0
     max_per_run: int = 0
     after_purchase: str = AFTER_PURCHASE_KEEP
+    check_xunlai_first: bool = False
 
 
 @dataclass(frozen=True)
@@ -3638,6 +3643,7 @@ class PlannedMerchantBuy:
     quantity: int
     label: str
     cleanup: PurchaseTargetCleanup = field(default_factory=PurchaseTargetCleanup)
+    check_xunlai_first: bool = False
 
 
 @dataclass
@@ -3881,6 +3887,7 @@ class PlannedStorageTransfer:
     quantity: int
     model_id: int = 0
     reason: str = ""
+    xunlai_first_merchant_stock: bool = False
 
 
 @dataclass
@@ -3954,6 +3961,8 @@ class PlanResult:
     inventory_snapshot_captured: bool = False
     inventory_model_counts: dict[int, int] = field(default_factory=dict)
     inventory_item_count: int = 0
+    xunlai_first_merchant_stock_targets: dict[int, str] = field(default_factory=dict)
+    xunlai_first_storage_scan_reliable: bool = True
     has_actions: bool = False
 
 
@@ -5743,11 +5752,13 @@ def _normalize_merchant_stock_targets(raw_targets: object) -> list[MerchantStock
             target_count = entry.target_count
             max_per_run = entry.max_per_run
             after_purchase = entry.after_purchase
+            check_xunlai_first = entry.check_xunlai_first
         elif isinstance(entry, dict):
             model_id = entry.get("model_id", 0)
             target_count = entry.get("target_count", 0)
             max_per_run = entry.get("max_per_run", 0)
             after_purchase = entry.get("after_purchase", AFTER_PURCHASE_KEEP)
+            check_xunlai_first = entry.get("check_xunlai_first", False)
         else:
             continue
 
@@ -5762,6 +5773,7 @@ def _normalize_merchant_stock_targets(raw_targets: object) -> list[MerchantStock
                 target_count=max(0, _safe_int(target_count, 0)),
                 max_per_run=max(0, _safe_int(max_per_run, 0)),
                 after_purchase=_normalize_after_purchase_action(after_purchase),
+                check_xunlai_first=bool(check_xunlai_first),
             )
         )
 
@@ -7051,6 +7063,7 @@ class MerchantRulesWidget:
         self._merchant_rules_staged_multibox_reload_requests: set[tuple[str, str, str]] = set()
         self.execute_reservation_scope_active = False
         self.execute_reserved_item_ids: set[int] = set()
+        self.execute_xunlai_first_keep_by_model: dict[int, int] = {}
         self.destroy_auto_enabled = False
         self.destroy_instant_enabled = False
         self.destroy_include_protected_items = False
@@ -7240,13 +7253,21 @@ class MerchantRulesWidget:
         self.multibox_request_counter = 0
 
     def _get_account_key(self) -> str:
-        account_email = str(Player.GetAccountEmail() or "").strip()
+        """Return a stable account key without replacing a reliable key during map loads."""
+
+        try:
+            account_email = str(Player.GetAccountEmail() or "").strip()
+        except Exception:
+            account_email = ""
         if account_email:
             return account_email
-        character_name = str(Player.GetName() or "").strip()
-        if character_name:
-            return character_name
-        return "default"
+        reliable_account_key = str(self.account_key or "").strip()
+        if reliable_account_key:
+            return reliable_account_key
+        try:
+            return str(Player.GetName() or "").strip()
+        except Exception:
+            return ""
 
     def _live_config_doc(self) -> JsonFactory:
         """The current account's live working config (account-scoped, self-persisting)."""
@@ -10435,7 +10456,8 @@ class MerchantRulesWidget:
             return False
         if self.initialized and str(self.account_key or "").strip():
             try:
-                if self._get_account_key() != self.account_key:
+                current_account = self._get_account_key()
+                if current_account and current_account != self.account_key:
                     return False
             except Exception:
                 return False
@@ -10846,7 +10868,7 @@ class MerchantRulesWidget:
             return False
         return True
     def _build_profile_payload(self) -> dict[str, object]:
-        """Serialize current settings into a normalized profile-v38 payload."""
+        """Serialize current settings into a normalized profile-v39 payload."""
 
         payload = {
             "version": PROFILE_VERSION,
@@ -12499,6 +12521,8 @@ class MerchantRulesWidget:
             self._load_outpost_entries()
 
         current_account = self._get_account_key()
+        if not current_account:
+            return
         account_changed = current_account != self.account_key
         if account_changed:
             if self._merchant_rules_generation_account_key != current_account:
@@ -13619,6 +13643,49 @@ class MerchantRulesWidget:
             if int(entry.get("model_id", 0)) == safe_model_id:
                 return entry
         return None
+
+    def _merchant_stock_target_supports_xunlai_first(self, model_id: int) -> bool:
+        """Return whether v1 can identify this ordinary Merchant Stock target by model alone."""
+
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        if safe_model_id <= 0 or _is_scroll_trader_stock_model(safe_model_id):
+            return False
+        if safe_model_id == int(ModelID.Vial_Of_Dye.value):
+            return False
+        if safe_model_id in ALL_CRAFTING_MATERIAL_MODEL_IDS or safe_model_id in CONSUMABLE_CRAFTER_RECIPES_BY_MODEL:
+            return False
+        entry = self._get_merchant_essential(safe_model_id)
+        if entry is None:
+            return False
+        return str(entry.get("item_type", "") or "").strip().casefold() != "dye"
+
+    def _get_configured_xunlai_first_keep_by_model(self) -> dict[int, int]:
+        """Build the active cleanup floor for supported opted-in Merchant Stock targets."""
+
+        keep_by_model: dict[int, int] = {}
+        for buy_rule in self.buy_rules:
+            normalized_rule = _normalize_buy_rule(buy_rule)
+            if normalized_rule is None or not normalized_rule.enabled or normalized_rule.kind != BUY_KIND_MERCHANT_STOCK:
+                continue
+            for target in _normalize_merchant_stock_targets(normalized_rule.merchant_stock_targets):
+                model_id = max(0, int(target.model_id))
+                target_count = max(0, int(target.target_count))
+                if (
+                    not bool(target.check_xunlai_first)
+                    or target_count <= 0
+                    or not self._merchant_stock_target_supports_xunlai_first(model_id)
+                ):
+                    continue
+                keep_by_model[model_id] = max(target_count, keep_by_model.get(model_id, 0))
+        return keep_by_model
+
+    def _get_xunlai_first_cleanup_keep_by_model(self) -> dict[int, int]:
+        if bool(getattr(self, "execute_reservation_scope_active", False)):
+            return dict(getattr(self, "execute_xunlai_first_keep_by_model", {}) or {})
+        return self._get_configured_xunlai_first_keep_by_model()
+
+    def _has_enabled_xunlai_first_merchant_stock_targets(self) -> bool:
+        return bool(self._get_configured_xunlai_first_keep_by_model())
 
     def _catalog_entry_matches_merchant_stock(self, entry: dict[str, object]) -> bool:
         return self._get_merchant_essential(_safe_int(entry.get("model_id", 0), 0)) is not None
@@ -16247,7 +16314,7 @@ class MerchantRulesWidget:
         return self._resolve_storage_access_coords() is not None
 
     def _load_profile(self):
-        """Load the account-scoped JsonFactory profile with fail-closed v38 safeguards."""
+        """Load the account-scoped JsonFactory profile with fail-closed v39 safeguards."""
 
         doc = self._live_config_doc()
         stored_payload = doc.get_json("", None)
@@ -16801,6 +16868,8 @@ class MerchantRulesWidget:
             inventory_snapshot_captured=bool(embark_plan.inventory_snapshot_captured or destination_plan.inventory_snapshot_captured),
             inventory_model_counts=dict(embark_plan.inventory_model_counts or destination_plan.inventory_model_counts),
             inventory_item_count=max(int(embark_plan.inventory_item_count), int(destination_plan.inventory_item_count)),
+            xunlai_first_merchant_stock_targets=dict(destination_plan.xunlai_first_merchant_stock_targets),
+            xunlai_first_storage_scan_reliable=bool(destination_plan.xunlai_first_storage_scan_reliable),
             has_actions=bool(embark_plan.has_actions or destination_plan.has_actions),
         )
         return result
@@ -17157,6 +17226,15 @@ class MerchantRulesWidget:
         if not self._is_storage_open():
             return []
         return self._collect_item_infos_from_ids(self._get_storage_item_ids())
+
+    def _collect_storage_items_with_reliability(self) -> tuple[list[InventoryItemInfo], bool]:
+        """Collect regular Xunlai panes and report whether every listed item was readable."""
+
+        if not self._is_storage_open():
+            return [], False
+        item_ids = self._get_storage_item_ids()
+        items = self._collect_item_infos_from_ids(item_ids)
+        return items, len(items) == len(item_ids)
 
     def _collect_material_storage_items(self) -> list[InventoryItemInfo]:
         if not self._is_storage_open():
@@ -19829,9 +19907,13 @@ class MerchantRulesWidget:
         cleanup_items = list(items)
         cleanup_blacklist_model_ids = self._get_cleanup_blacklist_model_id_set()
         cleanup_targets = self._get_effective_cleanup_targets(enabled_sell_rules)
+        xunlai_first_keep_by_model = self._get_xunlai_first_cleanup_keep_by_model()
         for cleanup_target in cleanup_targets:
             target_model_id = max(0, int(cleanup_target.model_id))
-            keep_on_character = max(0, int(cleanup_target.keep_on_character))
+            configured_keep_on_character = max(0, int(cleanup_target.keep_on_character))
+            xunlai_first_keep = max(0, int(xunlai_first_keep_by_model.get(target_model_id, 0)))
+            keep_on_character = max(configured_keep_on_character, xunlai_first_keep)
+            xunlai_first_keep_controls = xunlai_first_keep > configured_keep_on_character
             target_label = self._format_cleanup_target_label_short(cleanup_target)
             matching_items = [
                 item
@@ -19875,6 +19957,14 @@ class MerchantRulesWidget:
                 continue
 
             if total_quantity <= keep_on_character:
+                keep_reason = (
+                    f"Keeping {keep_on_character} on character for Check Xunlai first."
+                    if xunlai_first_keep_controls
+                    else (
+                        f"All {total_quantity} matching items remain in inventory because "
+                        f"the keep amount is {keep_on_character}."
+                    )
+                )
                 plan.entries.append(
                     ExecutionPlanEntry(
                         "deposit",
@@ -19882,10 +19972,7 @@ class MerchantRulesWidget:
                         target_label,
                         total_quantity,
                         PLAN_STATE_SKIPPED,
-                        (
-                            f"All {total_quantity} matching items remain in inventory because "
-                            f"the keep amount is {keep_on_character}."
-                        ),
+                        keep_reason,
                     )
                 )
                 continue
@@ -19912,7 +19999,11 @@ class MerchantRulesWidget:
                     label=transfer.label,
                     model_id=transfer.model_id,
                     key=transfer.key,
-                    reason=f"Deposit target keeps {keep_on_character} on character.",
+                    reason=(
+                        f"Keeping {keep_on_character} on character for Check Xunlai first."
+                        if xunlai_first_keep_controls
+                        else f"Deposit target keeps {keep_on_character} on character."
+                    ),
                     storage_open=storage_open,
                 )
             cleanup_items = self._apply_planned_transfer_quantities(cleanup_items, planned_transfers)
@@ -21034,6 +21125,7 @@ class MerchantRulesWidget:
         consumable_crafter_only: bool = False,
         exclude_consumable_crafter: bool = False,
         allowed_rule_kinds: set[str] | None = None,
+        bypass_xunlai_first: bool = False,
     ) -> None:
         """Plan purchases against simulated inventory, storage, currency, and target reservations.
 
@@ -21128,6 +21220,7 @@ class MerchantRulesWidget:
                                 target_count=max(0, int(target.target_count)),
                                 max_per_run=0,
                                 after_purchase=AFTER_PURCHASE_KEEP,
+                                check_xunlai_first=False,
                             )
                             for target in request_stock_targets
                         ],
@@ -21350,6 +21443,11 @@ class MerchantRulesWidget:
                     model_label = self._format_model_label(merchant_stock_model_id)
                     target_merchant_type = MERCHANT_TYPE_SCROLL_TRADER if _is_scroll_trader_stock_model(merchant_stock_model_id) else merchant_type
                     target_merchant_coords = coords.get(target_merchant_type)
+                    use_xunlai_first = bool(
+                        not bypass_xunlai_first
+                        and merchant_stock_target.check_xunlai_first
+                        and self._merchant_stock_target_supports_xunlai_first(merchant_stock_model_id)
+                    )
                     if merchant_stock_model_id <= 0:
                         plan.entries.append(
                             ExecutionPlanEntry(
@@ -21375,7 +21473,7 @@ class MerchantRulesWidget:
                         )
                         continue
 
-                    if target_merchant_coords is None:
+                    if target_merchant_coords is None and not use_xunlai_first:
                         plan.entries.append(
                             ExecutionPlanEntry(
                                 action_type="buy",
@@ -21393,11 +21491,8 @@ class MerchantRulesWidget:
                         continue
 
                     current_count = sim_model_counts.get(merchant_stock_model_id, 0)
-                    needed = self._apply_max_per_run(
-                        int(merchant_stock_target.target_count) - current_count,
-                        int(merchant_stock_target.max_per_run),
-                    )
-                    if needed <= 0:
+                    full_shortage = max(0, int(merchant_stock_target.target_count) - current_count)
+                    if full_shortage <= 0:
                         plan.entries.append(
                             ExecutionPlanEntry(
                                 "buy",
@@ -21410,6 +21505,123 @@ class MerchantRulesWidget:
                                     f"target is {merchant_stock_target.target_count}."
                                 ),
                                 status_hint=PREVIEW_STATUS_ALREADY_DONE,
+                            )
+                        )
+                        continue
+
+                    planned_xunlai_withdraw_quantity = 0
+                    if use_xunlai_first:
+                        plan.xunlai_first_merchant_stock_targets[merchant_stock_model_id] = model_label
+                        if not plan.storage_exact:
+                            reason = (
+                                f"Inventory has {current_count}; target is {merchant_stock_target.target_count}. "
+                                "Xunlai Storage must be checked before Merchant Rules can determine whether to withdraw or buy."
+                            )
+                            if target_merchant_coords is None:
+                                reason = f"{reason} {MERCHANT_TYPE_LABELS[target_merchant_type]} could not be found in the current map."
+                            plan.entries.append(
+                                ExecutionPlanEntry(
+                                    "withdraw",
+                                    MERCHANT_TYPE_STORAGE,
+                                    model_label,
+                                    full_shortage,
+                                    PLAN_STATE_CONDITIONAL,
+                                    reason,
+                                    model_id=merchant_stock_model_id,
+                                )
+                            )
+                            continue
+                        if not plan.xunlai_first_storage_scan_reliable:
+                            plan.entries.append(
+                                ExecutionPlanEntry(
+                                    "withdraw",
+                                    MERCHANT_TYPE_STORAGE,
+                                    model_label,
+                                    0,
+                                    PLAN_STATE_SKIPPED,
+                                    "Xunlai Storage could not be checked reliably.",
+                                    model_id=merchant_stock_model_id,
+                                    status_hint=PREVIEW_STATUS_BLOCKED,
+                                )
+                            )
+                            continue
+
+                        stock_key = _make_model_stock_key(merchant_stock_model_id)
+                        withdraw_quantity = min(
+                            full_shortage,
+                            max(0, int(storage_model_counts.get(merchant_stock_model_id, 0))),
+                        )
+                        if withdraw_quantity > 0:
+                            raw_transfers = self._get_storage_transfer_items_for_stock_key(
+                                sim_storage_items,
+                                stock_key,
+                                quantity=withdraw_quantity,
+                                label=model_label,
+                                direction=STORAGE_TRANSFER_WITHDRAW,
+                            )
+                            transfers = [
+                                replace(
+                                    transfer,
+                                    reason="Check Xunlai first",
+                                    xunlai_first_merchant_stock=True,
+                                )
+                                for transfer in raw_transfers
+                            ]
+                            planned_xunlai_withdraw_quantity = sum(
+                                max(0, int(transfer.quantity)) for transfer in transfers
+                            )
+                            if planned_xunlai_withdraw_quantity > 0:
+                                plan.storage_transfers.extend(transfers)
+                                plan.entries.append(
+                                    ExecutionPlanEntry(
+                                        "withdraw",
+                                        MERCHANT_TYPE_STORAGE,
+                                        model_label,
+                                        planned_xunlai_withdraw_quantity,
+                                        PLAN_STATE_WILL_EXECUTE,
+                                        "Withdraw matching items from Xunlai before buying the remaining shortage.",
+                                        model_id=merchant_stock_model_id,
+                                    )
+                                )
+                                self._adjust_stock_count_for_key(
+                                    stock_key,
+                                    -planned_xunlai_withdraw_quantity,
+                                    model_counts=storage_model_counts,
+                                    identifier_counts=storage_identifier_counts,
+                                )
+                                self._adjust_stock_count_for_key(
+                                    stock_key,
+                                    planned_xunlai_withdraw_quantity,
+                                    model_counts=sim_model_counts,
+                                    identifier_counts=inventory_identifier_counts,
+                                )
+                                sim_storage_items = self._apply_planned_transfer_quantities(
+                                    sim_storage_items,
+                                    transfers,
+                                )
+                                current_count += planned_xunlai_withdraw_quantity
+
+                    remaining_shortage = max(0, int(merchant_stock_target.target_count) - current_count)
+                    needed = self._apply_max_per_run(
+                        remaining_shortage,
+                        int(merchant_stock_target.max_per_run),
+                    )
+                    if needed <= 0:
+                        continue
+                    if target_merchant_coords is None:
+                        plan.entries.append(
+                            ExecutionPlanEntry(
+                                action_type="buy",
+                                merchant_type=target_merchant_type,
+                                label=model_label,
+                                quantity=0,
+                                state=PLAN_STATE_SKIPPED,
+                                reason=(
+                                    f"{self._get_scroll_trader_service_label()} could not be found in the current map."
+                                    if target_merchant_type == MERCHANT_TYPE_SCROLL_TRADER
+                                    else f"{MERCHANT_TYPE_LABELS[target_merchant_type]} could not be found in the current map."
+                                ),
+                                model_id=merchant_stock_model_id,
                             )
                         )
                         continue
@@ -21428,6 +21640,7 @@ class MerchantRulesWidget:
                                     max_per_run=merchant_stock_target.max_per_run,
                                     after_purchase=merchant_stock_target.after_purchase,
                                     completes_target=current_count + needed >= int(merchant_stock_target.target_count),
+                                    xunlai_involved=planned_xunlai_withdraw_quantity > 0,
                                 ),
                             )
                         )
@@ -21450,7 +21663,9 @@ class MerchantRulesWidget:
                                     max_per_run=merchant_stock_target.max_per_run,
                                     after_purchase=merchant_stock_target.after_purchase,
                                     completes_target=current_count + needed >= int(merchant_stock_target.target_count),
+                                    xunlai_involved=planned_xunlai_withdraw_quantity > 0,
                                 ),
+                                check_xunlai_first=use_xunlai_first,
                             )
                         )
                         entry_reason = (
@@ -21460,6 +21675,7 @@ class MerchantRulesWidget:
                     cleanup_suffix = self._get_purchase_cleanup_preview_suffix(
                         merchant_stock_target.after_purchase,
                         completes_target=current_count + needed >= int(merchant_stock_target.target_count),
+                        xunlai_involved=planned_xunlai_withdraw_quantity > 0,
                     )
                     if cleanup_suffix:
                         entry_reason = f"{entry_reason} {cleanup_suffix}"
@@ -22115,6 +22331,7 @@ class MerchantRulesWidget:
         buy_action_rule_kinds: set[str] | None = None,
         sell_action_rule_kinds: set[str] | None = None,
         supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None,
+        bypass_xunlai_first: bool = False,
     ) -> PlanResult:
         """Build the complete preview plan without performing live merchant actions.
 
@@ -22240,9 +22457,26 @@ class MerchantRulesWidget:
             and not consumable_crafter_only
             and self._has_ready_xunlai_sell_rules(sell_action_rules)
         )
-        if needs_rune_storage_context or needs_consumable_storage_context or needs_xunlai_sell_storage_context:
+        needs_xunlai_first_storage_context = bool(
+            not cleanup_only
+            and not consumable_crafter_only
+            and not bypass_xunlai_first
+            and (buy_action_rule_kinds is None or BUY_KIND_MERCHANT_STOCK in buy_action_rule_kinds)
+            and self._has_enabled_xunlai_first_merchant_stock_targets()
+        )
+        if (
+            needs_rune_storage_context
+            or needs_consumable_storage_context
+            or needs_xunlai_sell_storage_context
+            or needs_xunlai_first_storage_context
+        ):
             if storage_open:
-                storage_items = self._collect_storage_items()
+                if needs_xunlai_first_storage_context:
+                    storage_items, plan.xunlai_first_storage_scan_reliable = (
+                        self._collect_storage_items_with_reliability()
+                    )
+                else:
+                    storage_items = self._collect_storage_items()
                 if needs_xunlai_sell_storage_context:
                     include_xunlai_material_storage = any(
                         bool(getattr(rule, "include_material_storage", False))
@@ -22815,6 +23049,7 @@ class MerchantRulesWidget:
             consumable_crafter_only=consumable_crafter_only,
             exclude_consumable_crafter=exclude_consumable_crafter,
             allowed_rule_kinds=buy_action_rule_kinds,
+            bypass_xunlai_first=bypass_xunlai_first,
         )
         self._plan_consumable_crafter_bag_space_warning(
             plan,
@@ -24304,6 +24539,7 @@ class MerchantRulesWidget:
         *,
         offered_items: list[int] | None = None,
         cleanup: PurchaseTargetCleanup | None = None,
+        live_target_count: int | None = None,
     ):
         safe_quantity = max(0, int(quantity))
         outcome = ExecutionPhaseOutcome(
@@ -24364,12 +24600,31 @@ class MerchantRulesWidget:
                 )
                 break
 
-            try:
-                before_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(int(model_id))))
-            except Exception as exc:
-                outcome.load_failures += 1
-                self._debug_log(f"Merchant stock buy could not read inventory count for model={model_id}: {exc}")
-                break
+            before_count: int
+            if live_target_count is not None:
+                try:
+                    before_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(int(model_id))))
+                except Exception as exc:
+                    remaining = max(0, safe_quantity - outcome.completed)
+                    outcome.load_failures += remaining
+                    self._debug_log(
+                        f"Xunlai-first merchant stock buy stopped because the live carried count "
+                        f"could not be read for model={model_id}: {exc}"
+                    )
+                    break
+                if before_count >= max(0, int(live_target_count)):
+                    self._debug_log(
+                        f"Xunlai-first merchant stock buy stopped at live target: model={model_id} "
+                        f"carried={before_count} target={max(0, int(live_target_count))}."
+                    )
+                    break
+            else:
+                try:
+                    before_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(int(model_id))))
+                except Exception as exc:
+                    outcome.load_failures += 1
+                    self._debug_log(f"Merchant stock buy could not read inventory count for model={model_id}: {exc}")
+                    break
             GLOBAL_CACHE.Trading.Merchant.BuyItem(matched_item_id, buy_price)
             queue_cleared = yield from self._wait_for_action_queue_empty("ACTION", timeout_ms=1500, step_ms=50)
             if not queue_cleared:
@@ -26999,6 +27254,7 @@ class MerchantRulesWidget:
                 buy_action_rule_kinds=buy_action_rule_kinds,
                 sell_action_rule_kinds=sell_action_rule_kinds,
                 supported_context_override=self._build_manual_vendor_supported_context(context),
+                bypass_xunlai_first=True,
             )
 
             paused_inventory_plus = self._pause_inventory_plus()
@@ -27462,6 +27718,31 @@ class MerchantRulesWidget:
         self._clear_preview_inventory_diff()
         paused_inventory_plus = None
         phase_summaries: list[str] = []
+        blocked_xunlai_first_models: set[int] = set()
+        reported_xunlai_first_failures: set[tuple[int, str]] = set()
+
+        def block_xunlai_first_targets(
+            targets: dict[int, str],
+            *,
+            failure_kind: str,
+        ) -> None:
+            for raw_model_id, raw_label in targets.items():
+                model_id = max(0, int(raw_model_id))
+                if model_id <= 0:
+                    continue
+                blocked_xunlai_first_models.add(model_id)
+                failure_key = (model_id, str(failure_kind))
+                if failure_key in reported_xunlai_first_failures:
+                    continue
+                reported_xunlai_first_failures.add(failure_key)
+                label = str(raw_label or self._format_model_label(model_id))
+                if failure_kind == "withdrawal":
+                    message = f"Stopped {label}: the Xunlai withdrawal could not be confirmed."
+                else:
+                    message = f"Skipped {label}: Xunlai Storage could not be checked."
+                phase_summaries.append(message)
+                self.status_message = message
+
         try:
             self._invalidate_supported_context_cache()
             self._clear_preview_projection_state()
@@ -27556,11 +27837,25 @@ class MerchantRulesWidget:
                 )
             storage_scan_failed = False
             storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
+            if (
+                plan.xunlai_first_merchant_stock_targets
+                and plan.storage_exact
+                and not plan.xunlai_first_storage_scan_reliable
+            ):
+                storage_scan_failed = True
+                block_xunlai_first_targets(
+                    plan.xunlai_first_merchant_stock_targets,
+                    failure_kind="scan",
+                )
             if self._plan_needs_exact_storage_scan(plan):
                 storage_opened = False
                 if local_only and not storage_available_here:
                     storage_scan_failed = True
                     phase_summaries.append("Rune trader buys were skipped because Xunlai is not available here.")
+                    block_xunlai_first_targets(
+                        plan.xunlai_first_merchant_stock_targets,
+                        failure_kind="scan",
+                    )
                 else:
                     self.status_message = "Opening Xunlai for exact storage-aware execution."
                     storage_opened = yield from self._ensure_storage_open(purpose="storage-aware execution")
@@ -27582,9 +27877,22 @@ class MerchantRulesWidget:
                     storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
                     self._clear_preview_projection_state()
                     self._log_plan_summary("Execution storage-refreshed plan", plan)
+                    if (
+                        plan.xunlai_first_merchant_stock_targets
+                        and not plan.xunlai_first_storage_scan_reliable
+                    ):
+                        storage_scan_failed = True
+                        block_xunlai_first_targets(
+                            plan.xunlai_first_merchant_stock_targets,
+                            failure_kind="scan",
+                        )
                 elif not storage_scan_failed:
                     storage_scan_failed = True
                     phase_summaries.append("Storage-aware rune planning was skipped because Xunlai could not be opened.")
+                    block_xunlai_first_targets(
+                        plan.xunlai_first_merchant_stock_targets,
+                        failure_kind="scan",
+                    )
                     ConsoleLog(
                         MODULE_NAME,
                         "Could not open Xunlai for exact storage-aware execution; continuing with other runnable actions.",
@@ -27602,11 +27910,17 @@ class MerchantRulesWidget:
                         or plan.scroll_trader_buys
                     )
                     if not has_other_runnable_actions:
-                        self.status_message = "Could not open Xunlai for exact storage-aware execution."
+                        self.status_message = (
+                            phase_summaries[-1]
+                            if blocked_xunlai_first_models and phase_summaries
+                            else "Could not open Xunlai for exact storage-aware execution."
+                        )
                         self._debug_log("Execution aborted: exact storage-aware rune planning required Xunlai, but it could not be opened.")
                         return
             if not plan.has_actions:
-                if storage_scan_failed:
+                if blocked_xunlai_first_models and phase_summaries:
+                    self.status_message = phase_summaries[-1]
+                elif storage_scan_failed:
                     self.status_message = "Could not open Xunlai for exact storage-aware execution."
                 else:
                     self.status_message = "Nothing to execute for the current rules and inventory state."
@@ -27813,10 +28127,46 @@ class MerchantRulesWidget:
                     storage_ready = yield from self._ensure_storage_open(purpose="planned storage transfers")
                 if storage_ready:
                     storage_transfer_ready = True
-                    storage_transfer_outcome = yield from self._execute_storage_transfers(
-                        storage_withdraw_transfers,
-                        phase_label="Storage withdraws",
-                    )
+                    xunlai_first_transfers_by_model: dict[int, list[PlannedStorageTransfer]] = {}
+                    other_storage_withdraw_transfers: list[PlannedStorageTransfer] = []
+                    for transfer in storage_withdraw_transfers:
+                        if bool(transfer.xunlai_first_merchant_stock):
+                            xunlai_first_transfers_by_model.setdefault(
+                                max(0, int(transfer.model_id)),
+                                [],
+                            ).append(transfer)
+                        else:
+                            other_storage_withdraw_transfers.append(transfer)
+
+                    if other_storage_withdraw_transfers:
+                        other_transfer_outcome = yield from self._execute_storage_transfers(  # pyright: ignore[reportGeneralTypeIssues]
+                            other_storage_withdraw_transfers,
+                            phase_label="Storage withdraws",
+                        )
+                        self._merge_phase_outcome(storage_transfer_outcome, other_transfer_outcome)
+
+                    for model_id, model_transfers in xunlai_first_transfers_by_model.items():
+                        model_transfer_outcome = yield from self._execute_storage_transfers(  # pyright: ignore[reportGeneralTypeIssues]
+                            model_transfers,
+                            phase_label="Xunlai-first withdraws",
+                        )
+                        self._merge_phase_outcome(storage_transfer_outcome, model_transfer_outcome)
+                        if (
+                            model_transfer_outcome.completed < model_transfer_outcome.attempted
+                            or model_transfer_outcome.timeout_failures > 0
+                            or model_transfer_outcome.load_failures > 0
+                        ):
+                            block_xunlai_first_targets(
+                                {
+                                    model_id: str(
+                                        plan.xunlai_first_merchant_stock_targets.get(
+                                            model_id,
+                                            self._format_model_label(model_id),
+                                        )
+                                    )
+                                },
+                                failure_kind="withdrawal",
+                            )
                     yield from Routines.Yield.wait(100)
                     self._invalidate_supported_context_cache()
                     plan = self._build_plan(
@@ -27835,6 +28185,34 @@ class MerchantRulesWidget:
                     self._clear_preview_projection_state()
                     self._log_plan_summary("Execution post-storage plan", plan)
                     rune_trader_coords = plan.coords.get(MERCHANT_TYPE_RUNE_TRADER)
+                    merchant_coords = plan.coords.get(MERCHANT_TYPE_MERCHANT)
+                    if (
+                        plan.xunlai_first_merchant_stock_targets
+                        and not plan.xunlai_first_storage_scan_reliable
+                    ):
+                        block_xunlai_first_targets(
+                            plan.xunlai_first_merchant_stock_targets,
+                            failure_kind="scan",
+                        )
+                    pending_xunlai_first_targets = {
+                        max(0, int(transfer.model_id)): str(
+                            plan.xunlai_first_merchant_stock_targets.get(
+                                max(0, int(transfer.model_id)),
+                                transfer.label,
+                            )
+                        )
+                        for transfer in plan.storage_transfers
+                        if (
+                            str(transfer.direction) == STORAGE_TRANSFER_WITHDRAW
+                            and bool(transfer.xunlai_first_merchant_stock)
+                            and max(0, int(transfer.model_id)) > 0
+                        )
+                    }
+                    if pending_xunlai_first_targets:
+                        block_xunlai_first_targets(
+                            pending_xunlai_first_targets,
+                            failure_kind="withdrawal",
+                        )
                 else:
                     storage_transfer_outcome.load_failures += 1
                     ConsoleLog(
@@ -27844,6 +28222,14 @@ class MerchantRulesWidget:
                     )
                     phase_summaries.append("Rune trader buys were skipped because planned Xunlai transfers could not be completed.")
                     plan.rune_trader_buys = []
+                    block_xunlai_first_targets(
+                        {
+                            max(0, int(transfer.model_id)): str(transfer.label)
+                            for transfer in storage_withdraw_transfers
+                            if bool(transfer.xunlai_first_merchant_stock)
+                        },
+                        failure_kind="scan",
+                    )
             self.last_execution_phase_durations_ms["storage_transfers"] = max(0.0, (time.perf_counter() - storage_transfers_started_at) * 1000.0)
             storage_transfer_summary = self._format_execution_phase_summary(storage_transfer_outcome)
             if storage_transfer_summary:
@@ -27888,6 +28274,15 @@ class MerchantRulesWidget:
             if consumable_craft_summary:
                 phase_summaries.append(consumable_craft_summary)
 
+            if blocked_xunlai_first_models:
+                plan.merchant_stock_buys = [
+                    buy
+                    for buy in plan.merchant_stock_buys
+                    if not (
+                        buy.check_xunlai_first
+                        and int(buy.model_id) in blocked_xunlai_first_models
+                    )
+                ]
             merchant_buy_outcome = ExecutionPhaseOutcome(
                 label="Merchant stock",
                 measure_label="items",
@@ -27907,6 +28302,11 @@ class MerchantRulesWidget:
                             merchant_buy.quantity,
                             offered_items=merchant_items,
                             cleanup=merchant_buy.cleanup,
+                            live_target_count=(
+                                int(merchant_buy.cleanup.target_count)
+                                if merchant_buy.check_xunlai_first
+                                else None
+                            ),
                         )
                         self._merge_merchant_buy_result(
                             merchant_buy_outcome,
@@ -28749,12 +29149,14 @@ class MerchantRulesWidget:
             return False
         self.execute_reservation_scope_active = True
         self.execute_reserved_item_ids = set()
+        self.execute_xunlai_first_keep_by_model = self._get_configured_xunlai_first_keep_by_model()
         return True
 
     def _end_execute_reservation_scope(self, owned_scope: bool) -> None:
         if not bool(owned_scope):
             return
         self.execute_reserved_item_ids.clear()
+        self.execute_xunlai_first_keep_by_model.clear()
         self.execute_reservation_scope_active = False
 
 
@@ -34614,6 +35016,11 @@ class MerchantRulesWidget:
                 target_count=merchant_stock_target.target_count,
                 max_per_run=merchant_stock_target.max_per_run,
                 after_purchase=merchant_stock_target.after_purchase,
+                check_xunlai_first=(
+                    bool(merchant_stock_target.check_xunlai_first)
+                    if self._merchant_stock_target_supports_xunlai_first(merchant_stock_target.model_id)
+                    else False
+                ),
             )
             for merchant_stock_target in merchant_stock_targets
         ]
@@ -34621,10 +35028,11 @@ class MerchantRulesWidget:
         removed_model_id = 0
         child_height = min(220, 58 + (32 * len(updated_targets)))
         if PyImGui.begin_child(f"buy_merchant_stock_selected_{index}", (0, child_height), True, PyImGui.WindowFlags.NoFlag):
-            if PyImGui.begin_table(f"buy_merchant_stock_selected_table_{index}", 5, self._get_dense_list_table_flags()):
+            if PyImGui.begin_table(f"buy_merchant_stock_selected_table_{index}", 6, self._get_dense_list_table_flags()):
                 PyImGui.table_setup_column("Item", PyImGui.TableColumnFlags.WidthStretch)
                 PyImGui.table_setup_column("Target", PyImGui.TableColumnFlags.WidthFixed, 130.0)
                 PyImGui.table_setup_column("Max/Run", PyImGui.TableColumnFlags.WidthFixed, 130.0)
+                PyImGui.table_setup_column("Check Xunlai first", PyImGui.TableColumnFlags.WidthFixed, 135.0)
                 PyImGui.table_setup_column("After purchase", PyImGui.TableColumnFlags.WidthFixed, 160.0)
                 PyImGui.table_setup_column("Remove", PyImGui.TableColumnFlags.WidthFixed, 60.0)
 
@@ -34636,11 +35044,14 @@ class MerchantRulesWidget:
                 PyImGui.table_set_column_index(2)
                 PyImGui.text("Max/Run")
                 PyImGui.table_set_column_index(3)
-                PyImGui.text("After purchase")
+                PyImGui.text("Check Xunlai first")
                 PyImGui.table_set_column_index(4)
+                PyImGui.text("After purchase")
+                PyImGui.table_set_column_index(5)
                 PyImGui.text("Remove")
 
-                for target_row in display_targets:
+                for target_object in display_targets:
+                    target_row = cast(MerchantStockTarget, target_object)
                     PyImGui.table_next_row()
                     PyImGui.table_set_column_index(0)
                     PyImGui.text_colored(
@@ -34669,12 +35080,22 @@ class MerchantRulesWidget:
                     target_row.max_per_run = max(0, int(new_max_per_run))
 
                     PyImGui.table_set_column_index(3)
+                    if self._merchant_stock_target_supports_xunlai_first(target_row.model_id):
+                        target_row.check_xunlai_first = PyImGui.checkbox(
+                            f"##buy_stock_xunlai_first_{index}_{target_row.model_id}",
+                            bool(target_row.check_xunlai_first),
+                        )
+                        self._draw_helper_tooltip("buy_check_xunlai_first")
+                    else:
+                        PyImGui.text_colored("Not available", UI_COLOR_MUTED)
+
+                    PyImGui.table_set_column_index(4)
                     target_row.after_purchase = self._draw_after_purchase_action_combo(
                         f"##buy_stock_after_purchase_{index}_{target_row.model_id}",
                         target_row.after_purchase,
                     )
 
-                    PyImGui.table_set_column_index(4)
+                    PyImGui.table_set_column_index(5)
                     if PyImGui.small_button(f"X##buy_stock_remove_{index}_{target_row.model_id}"):
                         removed_model_id = target_row.model_id
                         break
@@ -34720,6 +35141,7 @@ class MerchantRulesWidget:
                 target_count=target.target_count,
                 max_per_run=target.max_per_run,
                 after_purchase=target.after_purchase,
+                check_xunlai_first=bool(target.check_xunlai_first),
             )
             for target in scroll_targets
         ]
@@ -34860,6 +35282,7 @@ class MerchantRulesWidget:
                 target_count=target.target_count,
                 max_per_run=target.max_per_run,
                 after_purchase=target.after_purchase,
+                check_xunlai_first=bool(target.check_xunlai_first),
             )
             for target in crafter_targets
         ]
