@@ -166,6 +166,18 @@ def build_window(controller) -> "ImGui.SidebarWindow":
                 _err = str(exc)
                 win.add_section(group, "Title On Map Load",
                                 (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.travel_on_character_load import config_ui as travel_ui
+
+                travel_ui.add_sections(win, group)
+            except Exception as exc:
+                import traceback
+
+                _log("Map & Missions / Travel On Character Load section failed to build: %r" % (exc,))
+                _log(traceback.format_exc())
+                _err = str(exc)
+                win.add_section(group, "Travel On Character Load",
+                                (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
         if cat.key == "agents":
             # Custom category rendered by the name_obfuscation feature. Lazy import keeps this module
             # (and the launch_bar toggle path that imports the controller) free of that package until
