@@ -322,6 +322,16 @@ class AllAccounts(Structure):
         # both ungrouped: legacy
         return not self.AccountData[s_idx].IsIsolated and not self.AccountData[r_idx].IsIsolated
 
+    @staticmethod
+    def _is_system_control_command(command: SharedCommandType | int) -> bool:
+        """Only explicit local-control commands may cross gameplay isolation groups."""
+
+        value = int(command)
+        return value in (
+            int(SharedCommandType.AccountSettingsSync),
+            int(SharedCommandType.AccountSettingsSyncResult),
+        )
+
     def _is_slot_expired(self, index: int) -> bool:
         slot_data = self.AccountData[index]
         if not slot_data.IsSlotActive:
@@ -936,7 +946,7 @@ class AllAccounts(Structure):
             ConsoleLog(SHMEM_MODULE_NAME, "Sender email is empty.", PySystem.Console.MessageType.Error)
             return -1
 
-        if not self._can_communicate(sender_email, receiver_email):
+        if not self._is_system_control_command(command) and not self._can_communicate(sender_email, receiver_email):
             ConsoleLog(SHMEM_MODULE_NAME, f"Cannot communicate between {sender_email} and {receiver_email} (isolated or different groups).", PySystem.Console.MessageType.Warning)
             return -1
         
@@ -1005,7 +1015,8 @@ class AllAccounts(Structure):
         for index in range(SHMEM_MAX_PLAYERS):
             message = self.Inbox[index]
             if (message.ReceiverEmail == account_email and message.Active and not message.Running
-                and self._can_communicate(message.SenderEmail, account_email)):
+                and (self._is_system_control_command(message.Command)
+                     or self._can_communicate(message.SenderEmail, account_email))):
                 return index, message
         return -1, None
 
@@ -1018,7 +1029,8 @@ class AllAccounts(Structure):
             message = self.Inbox[index]
             if message.ReceiverEmail != account_email or not message.Active:
                 continue
-            if not self._can_communicate(message.SenderEmail, account_email):
+            if (not self._is_system_control_command(message.Command)
+                and not self._can_communicate(message.SenderEmail, account_email)):
                 continue
             if not message.Running or include_running:
                 return index, message

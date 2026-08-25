@@ -38,6 +38,11 @@ class TitleOnMapLoadController:
         persistence.save(self.config)
         self._title_applied = False
 
+    def reload_account_settings(self) -> bool:
+        self.config = persistence.load()
+        self._title_applied = False
+        return True
+
     def register(self) -> None:
         """Register one profiled Main callback, idempotently across widget reloads."""
 

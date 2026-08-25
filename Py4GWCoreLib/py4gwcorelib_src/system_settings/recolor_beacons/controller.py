@@ -104,6 +104,13 @@ class RecolorBeacons:
         """The outcome store changed (an edit in this feature's Outcomes tab)."""
         self._outcomes = store.load_outcomes()
 
+    def reload_account_settings(self) -> bool:
+        self.reload()
+        self.reload_outcomes()
+        if not self.live.enabled:
+            self._clear_output()
+        return True
+
     def save(self) -> None:
         """Persist the user's configuration. NEVER called with live."""
         store.save(self.persisted)

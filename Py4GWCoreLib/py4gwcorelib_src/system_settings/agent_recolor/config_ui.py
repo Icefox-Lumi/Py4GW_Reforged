@@ -349,7 +349,7 @@ def _draw_status(controller: "AgentRecolorController") -> None:
 def add_sections(win, group) -> None:
     """Add the single tabbed 'Agent Recolor' section to ``group`` on ``win`` (a SidebarWindow)."""
     controller = get_controller()
-    win.add_section(group, "Agent Recolor")
+    win.add_account_section(group, "agents.agent_recolor", "Agent Recolor")
     win.add_tab("Agent Recolor", "Agents", lambda c=controller: _draw_agents(c))
     win.add_tab("Agent Recolor", "Gadgets", lambda c=controller: _draw_gadgets(c))
     win.add_tab("Agent Recolor", "Status", lambda c=controller: _draw_status(c))

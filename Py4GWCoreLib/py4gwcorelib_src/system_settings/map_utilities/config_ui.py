@@ -73,6 +73,21 @@ def add_sections(win, group) -> None:
     """Add each migrated map feature as its own Map & Missions section."""
 
     controller = get_controller()
-    win.add_section(group, "Vanquish Tracker", lambda c=controller: _draw_vanquish(c))
-    win.add_section(group, "Instance Timer", lambda c=controller: _draw_instance_timer(c))
-    win.add_section(group, "Disable Alcohol Effect", lambda c=controller: _draw_alcohol_effect(c))
+    win.add_account_section(
+        group,
+        "map.vanquish_tracker",
+        "Vanquish Tracker",
+        lambda c=controller: _draw_vanquish(c),
+    )
+    win.add_account_section(
+        group,
+        "map.instance_timer",
+        "Instance Timer",
+        lambda c=controller: _draw_instance_timer(c),
+    )
+    win.add_account_section(
+        group,
+        "map.disable_alcohol",
+        "Disable Alcohol Effect",
+        lambda c=controller: _draw_alcohol_effect(c),
+    )

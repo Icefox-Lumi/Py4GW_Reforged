@@ -112,8 +112,9 @@ def add_sections(win, group) -> None:
     """Add automatic travel settings to Map & Missions."""
 
     controller = get_controller()
-    win.add_section(
+    win.add_account_section(
         group,
+        "map.travel_character_load",
         "Travel On Character Load",
         lambda c=controller: _draw_travel_on_character_load(c),
     )

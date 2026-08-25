@@ -49,6 +49,10 @@ class TravelOnCharacterLoadController:
         self.config.outpost_id = int(outpost_id)
         persistence.save(self.config)
 
+    def reload_account_settings(self) -> bool:
+        self.config = persistence.load()
+        return True
+
     def register(self) -> None:
         """Register one profiled Main callback, idempotently across widget reloads."""
 

@@ -215,7 +215,7 @@ def draw_budget() -> None:
 
 def add_sections(win, group) -> None:
     """Add the Recolor & Beacons section. A consumer: it selects, it never authors."""
-    win.add_section(group, "Recolor & Beacons")
+    win.add_account_section(group, "loot.recolor_beacons", "Recolor & Beacons")
     win.add_tab("Recolor & Beacons", "General", draw_general)
     win.add_tab("Recolor & Beacons", "Outcomes", draw_outcomes)
     win.add_tab("Recolor & Beacons", "Beacon budget", draw_budget)
