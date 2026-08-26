@@ -112,7 +112,10 @@ def draw_window_light(
 
 
     if not self._config.ini_key_initialized:
-        self._config.ini_key = Settings(f"{f"BottingClass/bot_{self._config.bot_name}"}/{f"bot_{self._config.bot_name}.ini"}", "account").name
+        self._config.ini_key = Settings(
+            f"BottingClass/bot_{self._config.bot_name}/bot_{self._config.bot_name}.ini",
+            "account",
+        ).name
         self._config.ini_key_initialized = True
 
     if not self._config.ini_key:
@@ -124,13 +127,9 @@ def draw_window_light(
         p_open=True,
         flags=PyImGui.WindowFlags.AlwaysAutoResize,
     ):
-                self._draw_main_child(main_child_dimensions, icon_path, iconwidth)
-                if additional_ui:
-                        additional_ui()
-                PyImGui.end_child()
-                PyImGui.end_tab_item()
-
-            
+        self._draw_main_child(main_child_dimensions, icon_path, iconwidth)
+        if additional_ui:
+            additional_ui()
 
     ImGui.End(self._config.ini_key)
 
