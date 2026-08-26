@@ -19314,8 +19314,10 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
 
     try:
         calls: list[tuple[dict[str, object], bool]] = []
+        role_calls: list[tuple[str, bool]] = []
         failure_logs: list[tuple[object, str]] = []
         resolution_results: dict[tuple[str, object], tuple[float, float] | None] = {}
+        role_result: dict[str, tuple[float, float] | None] = {"value": None}
 
         def _fake_resolve(step, **kwargs):
             safe_step = dict(step)
@@ -19336,6 +19338,15 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
         )
         widget = _make_widget(module)
 
+        def _fake_role_resolve(*, service_role, log_failures, **_kwargs):
+            role_calls.append((str(service_role), bool(log_failures)))
+            resolved = role_result["value"]
+            if resolved is None and log_failures:
+                module._log_agent_selector_failure("fake role resolver", f"Could not resolve {service_role!r}.")
+            return resolved
+
+        widget._resolve_service_role_coords = _fake_role_resolve
+
         resolution_results.update(
             {
                 ("npc", "MERCHANT"): (10.0, 20.0),
@@ -19347,6 +19358,7 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
             service_type=module.MERCHANT_TYPE_MERCHANT,
             selector_name="MERCHANT",
             model_id=6813,
+            fallback_role=module.MERCHANT_TYPE_MERCHANT,
         )
         _expect(
             resolved == (10.0, 20.0),
@@ -19357,8 +19369,10 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
             "A successful generic encoded selector must not invoke the configured model fallback.",
         )
         _expect(not failure_logs, "Successful encoded resolution should not emit a fallback failure diagnostic.")
+        _expect(not role_calls, "A successful authoritative selector must not invoke role fallback.")
 
         calls.clear()
+        role_calls.clear()
         failure_logs.clear()
         resolution_results[("npc", "MERCHANT")] = None
         resolved = widget._resolve_service_coords(
@@ -19366,6 +19380,7 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
             service_type=module.MERCHANT_TYPE_MERCHANT,
             selector_name="MERCHANT",
             model_id=6813,
+            fallback_role=module.MERCHANT_TYPE_MERCHANT,
         )
         _expect(
             resolved == (30.0, 40.0), "A failed generic encoded selector should reach the Vlox Merchant model fallback."
@@ -19378,8 +19393,10 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
             [log_failures for _step, log_failures in calls] == [False, False] and not failure_logs,
             "A successful model fallback should suppress the intermediate encoded-resolution failure.",
         )
+        _expect(not role_calls, "Vlox model 6813 must win before localized role fallback.")
 
         calls.clear()
+        role_calls.clear()
         failure_logs.clear()
         resolution_results[("model_id", 6813)] = None
         resolved = widget._resolve_service_coords(
@@ -19399,7 +19416,31 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
         )
 
         calls.clear()
+        role_calls.clear()
         failure_logs.clear()
+        role_result["value"] = (50.0, 60.0)
+        resolved = widget._resolve_service_coords(
+            map_id=624,
+            service_type=module.MERCHANT_TYPE_MERCHANT,
+            selector_name="MERCHANT",
+            model_id=6813,
+            fallback_role=module.MERCHANT_TYPE_MERCHANT,
+        )
+        _expect(resolved == (50.0, 60.0), "Localized role fallback should run only after encoded and model lookup fail.")
+        _expect(
+            [step for step, _log_failures in calls] == [{"npc": "MERCHANT"}, {"model_id": 6813}],
+            "Role fallback must preserve encoded-then-model ordering.",
+        )
+        _expect(
+            role_calls == [(module.MERCHANT_TYPE_MERCHANT, True)],
+            "The final fallback should receive the canonical Merchant service role.",
+        )
+        _expect(not failure_logs, "A successful role fallback should suppress intermediate selector diagnostics.")
+
+        calls.clear()
+        role_calls.clear()
+        failure_logs.clear()
+        role_result["value"] = None
         resolved = widget._resolve_service_coords(
             map_id=700,
             service_type=module.MERCHANT_TYPE_MERCHANT,
@@ -19408,7 +19449,8 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
         _expect(resolved is None, "An encoded selector without a model fallback should retain its normal failure result.")
         _expect(
             calls == [({"npc": "MERCHANT"}, True)] and len(failure_logs) == 1,
-            "An encoded-only failure should keep the resolver's single normal diagnostic without a second fallback message.",
+            "An encoded-only failure should keep the resolver's single normal diagnostic without a second fallback message. "
+            f"calls={calls!r} failure_logs={failure_logs!r}",
         )
 
         calls.clear()
@@ -19420,6 +19462,7 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
             service_type=module.MERCHANT_TYPE_MERCHANT,
             selector_name="MERCHANT",
             model_id=6813,
+            fallback_role=module.MERCHANT_TYPE_MERCHANT,
         )
         _expect(
             resolved is None and len(map_specific_calls) == 1,
@@ -19429,6 +19472,7 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
             not calls,
             "A complete Merchant Rules map selector must not fall through to generic encoded or model resolution.",
         )
+        _expect(not role_calls, "A failed private exact selector must not fall through to localized role matching.")
     finally:
         module.resolve_agent_xy_from_step = original_resolve_agent_xy
         module._named_agent_target_has_authoritative_identity = original_authoritative_check
@@ -19470,6 +19514,7 @@ def _test_vlox_service_model_fallback_wiring(module) -> None:
         module.Map.GetMapName = lambda map_id=0: f"Map {int(map_id)}"
         module._named_agent_target_has_authoritative_identity = lambda _kind, selector: bool(selector)
         calls: list[dict[str, object]] = []
+        role_calls: list[str] = []
 
         def _fake_resolve(step, **_kwargs):
             safe_step = dict(step)
@@ -19480,6 +19525,9 @@ def _test_vlox_service_model_fallback_wiring(module) -> None:
 
         module.resolve_agent_xy_from_step = _fake_resolve
         widget = _make_widget(module)
+        widget._resolve_service_role_coords = (
+            lambda *, service_role, log_failures, **_kwargs: role_calls.append(str(service_role)) or None
+        )
         widget._get_service_resolution_diagnostics = lambda: "diagnostics"
         supported, _reason, coords = widget._get_supported_context()
 
@@ -19492,12 +19540,20 @@ def _test_vlox_service_model_fallback_wiring(module) -> None:
             calls[:2] == [{"npc": "MERCHANT"}, {"model_id": 6813}],
             "Vlox wiring should pass the generic MERCHANT selector first and model 6813 second.",
         )
+        _expect(
+            module.MERCHANT_TYPE_MERCHANT not in role_calls,
+            "Vlox model 6813 should resolve Merchant before its localized role fallback is considered.",
+        )
 
         map_state["id"] = 700
         module.SUPPORTED_MAP_NPC_SELECTORS[700] = {"merchant": "MAP_MERCHANT"}
         module.SUPPORTED_MAP_SERVICE_MODEL_IDS[700] = {module.MERCHANT_TYPE_MERCHANT: 6813}
         calls.clear()
+        role_calls.clear()
         widget = _make_widget(module)
+        widget._resolve_service_role_coords = (
+            lambda *, service_role, log_failures, **_kwargs: role_calls.append(str(service_role)) or None
+        )
         widget._get_service_resolution_diagnostics = lambda: "diagnostics"
         _supported, _reason, explicit_coords = widget._get_supported_context()
 
@@ -19509,6 +19565,10 @@ def _test_vlox_service_model_fallback_wiring(module) -> None:
         _expect(
             {"model_id": 6813} not in calls,
             "A model override must not bypass a failed explicit core map-specific selector.",
+        )
+        _expect(
+            module.MERCHANT_TYPE_MERCHANT in role_calls,
+            "A failed CoreLib selector may use the final Merchant role fallback without bypassing it with a model override.",
         )
     finally:
         module.Map.GetMapID = original_get_map_id
@@ -19630,6 +19690,436 @@ def _install_service_resolution_agent_fixture(module):
     return state, _restore
 
 
+def _test_service_role_alias_matching_is_exact_and_multilingual(module) -> None:
+    expected_roles = {
+        module.MERCHANT_TYPE_MERCHANT,
+        module.MERCHANT_TYPE_MATERIALS,
+        module.MERCHANT_TYPE_RARE_MATERIALS,
+        module.MERCHANT_TYPE_RUNE_TRADER,
+        module.MERCHANT_TYPE_SCROLL_TRADER,
+        "rare_scroll_trader",
+    }
+    _expect(
+        set(module.SERVICE_ROLE_ALIASES) == expected_roles,
+        "The service-role fallback should expose exactly the six approved merchant/trader roles.",
+    )
+
+    canonical_cases = {
+        "Ari [Marchande]": module.MERCHANT_TYPE_MERCHANT,
+        "Bela [  MARCHANDE   DE   MATÉRIAUX  ]": module.MERCHANT_TYPE_MATERIALS,
+        "Cori [Händler für seltene Materialien]": module.MERCHANT_TYPE_RARE_MATERIALS,
+        "Dara [Торговец рунами]": module.MERCHANT_TYPE_RUNE_TRADER,
+        "Eli [두루마리 상인]": module.MERCHANT_TYPE_SCROLL_TRADER,
+        "Faye [稀有卷轴商人]": "rare_scroll_trader",
+    }
+    for live_name, expected_role in canonical_cases.items():
+        _expect(
+            module._canonical_service_role(live_name) == expected_role,
+            f"Localized service role should canonicalize correctly: {live_name!r}.",
+        )
+
+    _expect(
+        module._normalize_service_role_text("  HÄNDLER\t") == module._normalize_service_role_text("handler"),
+        "Service-role normalization should remove accents, casefold, and normalize whitespace.",
+    )
+    _expect(
+        module._agent_name_matches_service_role("Ari [Collector] [Marchande]", module.MERCHANT_TYPE_MERCHANT),
+        "Only the final complete bracketed suffix should determine the service role.",
+    )
+    rejected_names = (
+        "Ari [Marchande] extra",
+        "Ari [Marchande",
+        "Ari Marchande",
+        "The Merchant Prince",
+        "Ari [Festival Merchant]",
+        "Ari [Collector]",
+        "Ari [Rare Material Trader]",
+        "",
+    )
+    for live_name in rejected_names:
+        _expect(
+            not module._agent_name_matches_service_role(live_name, module.MERCHANT_TYPE_MERCHANT),
+            f"Merchant fallback must reject non-exact or wrong-role names: {live_name!r}.",
+        )
+    _expect(
+        module._agent_name_matches_service_role("Marchande", module.MERCHANT_TYPE_MERCHANT),
+        "An unbracketed whole display name may match a complete known role alias.",
+    )
+    _expect(
+        not module._agent_name_matches_service_role("Ari [Merchant]", "unknown_service_role"),
+        "Unknown service roles must remain unresolved.",
+    )
+
+
+def _test_multilingual_service_role_fallback_resolution(module) -> None:
+    original_get_map_id = module.Map.GetMapID
+    original_is_map_ready = module.Map.IsMapReady
+    original_is_outpost = module.Map.IsOutpost
+    original_is_guild_hall = module.Map.IsGuildHall
+    original_get_map_name = module.Map.GetMapName
+    agent_state, restore_agents = _install_service_resolution_agent_fixture(module)
+    map_state = {"id": 700, "guild_hall": False}
+
+    try:
+        module.Map.GetMapID = lambda: map_state["id"]
+        module.Map.IsMapReady = lambda: True
+        module.Map.IsOutpost = lambda: True
+        module.Map.IsGuildHall = lambda: map_state["guild_hall"]
+        module.Map.GetMapName = lambda map_id=0: f"Map {int(map_id)}"
+        agent_state["player_agent_id"] = 99
+        agent_state["npc_ids"] = [1, 2, 3, 4, 5, 6]
+        agent_state["positions"] = {
+            99: (0.0, 0.0),
+            1: (100.0, 0.0),
+            2: (200.0, 0.0),
+            3: (300.0, 0.0),
+            4: (400.0, 0.0),
+            5: (500.0, 0.0),
+            6: (600.0, 0.0),
+        }
+        agent_state["names"] = {
+            1: "Ari [Marchande]",
+            2: "Bela [Materialienhändler]",
+            3: "Cori [Торговец редкими материалами]",
+            4: "Dara [룬 상인]",
+            5: "Eli [卷轴商人]",
+            6: "Faye [Marchande de parchemins rares]",
+        }
+        widget = _make_widget(module)
+        role_expectations = (
+            (module.MERCHANT_TYPE_MERCHANT, module.MERCHANT_TYPE_MERCHANT, (100.0, 0.0)),
+            (module.MERCHANT_TYPE_MATERIALS, module.MERCHANT_TYPE_MATERIALS, (200.0, 0.0)),
+            (module.MERCHANT_TYPE_RARE_MATERIALS, module.MERCHANT_TYPE_RARE_MATERIALS, (300.0, 0.0)),
+            (module.MERCHANT_TYPE_RUNE_TRADER, module.MERCHANT_TYPE_RUNE_TRADER, (400.0, 0.0)),
+            (module.MERCHANT_TYPE_SCROLL_TRADER, module.MERCHANT_TYPE_SCROLL_TRADER, (500.0, 0.0)),
+            (module.MERCHANT_TYPE_SCROLL_TRADER, "rare_scroll_trader", (600.0, 0.0)),
+        )
+        for service_type, fallback_role, expected_xy in role_expectations:
+            resolved = widget._resolve_service_coords(
+                map_id=700,
+                service_type=service_type,
+                fallback_role=fallback_role,
+                log_failures=False,
+            )
+            _expect(resolved == expected_xy, f"The {fallback_role} role should resolve through the generic fallback.")
+
+        agent_state["npc_ids"] = [10, 11, 12]
+        agent_state["positions"].update(
+            {
+                10: (900.0, 0.0),
+                11: (100.0, 0.0),
+                12: (50.0, 0.0),
+            }
+        )
+        agent_state["names"] = {
+            10: "Far [Merchant]",
+            11: "Near [Marchand]",
+            12: "Nearest Merchant Prince",
+        }
+        _expect(
+            widget._resolve_service_role_coords(
+                service_role=module.MERCHANT_TYPE_MERCHANT,
+                log_failures=False,
+            )
+            == (100.0, 0.0),
+            "The nearest legitimate exact-role candidate should win while a closer substring impostor is rejected.",
+        )
+
+        agent_state["names"] = {10: "", 11: "", 12: ""}
+        widget._reset_service_resolution_lifecycle()
+        _expect(
+            widget._resolve_service_role_coords(
+                service_role=module.MERCHANT_TYPE_MERCHANT,
+                log_failures=False,
+            )
+            is None,
+            "Blank decoded names must fail closed.",
+        )
+        _expect(
+            widget._resolve_service_role_coords(service_role="unknown_service_role", log_failures=False) is None,
+            "An unknown fallback role must fail closed.",
+        )
+        agent_state["npc_ids"] = [13]
+        agent_state["positions"].update({13: (module.OUTPOST_SERVICE_SEARCH_MAX_DIST + 1.0, 0.0)})
+        agent_state["names"] = {13: "Remote [Merchant]"}
+        _expect(
+            widget._resolve_service_role_coords(
+                service_role=module.MERCHANT_TYPE_MERCHANT,
+                log_failures=False,
+            )
+            is None,
+            "The generic role fallback must retain the 15,000-unit outpost boundary.",
+        )
+
+        agent_state["npc_ids"] = [20, 21]
+        agent_state["positions"].update({20: (200.0, 0.0), 21: (100.0, 0.0)})
+        agent_state["names"] = {20: "Sora [Scroll Trader]", 21: "Rhea [Rare Scroll Trader]"}
+        map_state["guild_hall"] = False
+        _expect(
+            widget._resolve_scroll_trader_coords(700, {}, log_failures=False) == (100.0, 0.0),
+            "Normal outposts must request the Rare Scroll Trader role.",
+        )
+        map_state["guild_hall"] = True
+        _expect(
+            widget._resolve_scroll_trader_coords(700, {}, log_failures=False) == (200.0, 0.0),
+            "Guild Halls must request the ordinary Scroll Trader role.",
+        )
+
+        map_state.update({"id": 700, "guild_hall": False})
+        agent_state["npc_ids"] = [30]
+        agent_state["positions"].update({30: (300.0, 0.0)})
+        agent_state["names"] = {30: "Xunlai Agent"}
+        _expect(
+            widget._resolve_storage_access_coords() == (300.0, 0.0),
+            "The service-role fallback must not alter Xunlai's existing exact-name resolution.",
+        )
+
+        map_state["id"] = module.EMBARK_BEACH_MAP_ID
+        agent_state["npc_ids"] = []
+        embark_widget = _make_widget(module)
+        supported, _reason, coords = embark_widget._get_supported_context()
+        _expect(supported, "Embark's fixed Consumable Crafter coordinate should remain independently supported.")
+        _expect(
+            coords[module.MERCHANT_TYPE_CONSUMABLE_CRAFTER] == (3592.99, 78.78),
+            "Consumable Crafter resolution must remain unchanged.",
+        )
+    finally:
+        restore_agents()
+        module.Map.GetMapID = original_get_map_id
+        module.Map.IsMapReady = original_is_map_ready
+        module.Map.IsOutpost = original_is_outpost
+        module.Map.IsGuildHall = original_is_guild_hall
+        module.Map.GetMapName = original_get_map_name
+
+
+def _test_service_role_lifecycle_recovers_decoding_and_streaming(module) -> None:
+    original_get_map_id = module.Map.GetMapID
+    original_is_map_ready = module.Map.IsMapReady
+    original_is_outpost = module.Map.IsOutpost
+    original_is_guild_hall = module.Map.IsGuildHall
+    original_get_map_name = module.Map.GetMapName
+    original_default_selectors = dict(module.DEFAULT_NPC_SELECTORS)
+    original_supported_selectors = dict(module.SUPPORTED_MAP_NPC_SELECTORS)
+    original_rune_selectors = dict(module.SUPPORTED_MAP_RUNE_TRADER_SELECTORS)
+    original_scroll_selectors = dict(module.SUPPORTED_MAP_SCROLL_TRADER_SELECTORS)
+    original_resolve_agent_xy = module.resolve_agent_xy_from_step
+    original_authoritative_check = module._named_agent_target_has_authoritative_identity
+    original_monotonic = module.time.monotonic
+    agent_state, restore_agents = _install_service_resolution_agent_fixture(module)
+    clock = {"value": 100.0}
+
+    try:
+        module.Map.GetMapID = lambda: 700
+        module.Map.IsMapReady = lambda: True
+        module.Map.IsOutpost = lambda: True
+        module.Map.IsGuildHall = lambda: False
+        module.Map.GetMapName = lambda map_id=0: f"Map {int(map_id)}"
+        module.time.monotonic = lambda: float(clock["value"])
+        module.DEFAULT_NPC_SELECTORS.clear()
+        module.DEFAULT_NPC_SELECTORS.update(
+            {
+                "merchant": "MERCHANT",
+                "materials": "MATERIAL_TRADER",
+                "rare_materials": "RARE_MATERIAL_TRADER",
+            }
+        )
+        module.SUPPORTED_MAP_NPC_SELECTORS.clear()
+        module.SUPPORTED_MAP_RUNE_TRADER_SELECTORS.pop(700, None)
+        module.SUPPORTED_MAP_SCROLL_TRADER_SELECTORS.pop(700, None)
+        module.resolve_agent_xy_from_step = lambda *_args, **_kwargs: None
+        module._named_agent_target_has_authoritative_identity = lambda _kind, selector: bool(selector)
+
+        agent_state["npc_ids"] = [1]
+        agent_state["positions"] = {99: (0.0, 0.0), 1: (100.0, 0.0)}
+        agent_state["names"] = {1: ""}
+        widget = _make_widget(module)
+        initial_context = widget._get_supported_context(passive=True)
+
+        _expect(
+            initial_context[2][module.MERCHANT_TYPE_MERCHANT] is None,
+            "A first blank decoded name must remain fail closed.",
+        )
+        _expect(
+            widget._service_role_pending_agent_ids == {1}
+            and widget._service_role_name_retry_deadline_at == 108.0,
+            "Blank names should create one explicit bounded retry window.",
+        )
+        _expect(
+            agent_state["name_calls"] == 1,
+            "One shared role scan should decode each candidate once, not once per unresolved service.",
+        )
+
+        refreshed_contexts: list[tuple[bool, str, dict[str, tuple[float, float] | None]]] = []
+        lifecycle_logs: list[str] = []
+        widget._debug_log = lambda message: lifecycle_logs.append(str(message))
+
+        def _fake_build_plan(**kwargs):
+            context = kwargs["supported_context_override"]
+            refreshed_contexts.append(context)
+            return module.PlanResult(
+                supported_map=context[0],
+                supported_reason=context[1],
+                coords=context[2],
+            )
+
+        widget.preview_ready = True
+        widget.preview_plan = module.PlanResult(
+            supported_map=initial_context[0],
+            supported_reason=initial_context[1],
+            coords=initial_context[2],
+        )
+        widget._build_plan = _fake_build_plan
+        agent_state["names"][1] = "Late Decode [Merchant]"
+
+        clock["value"] = 100.24
+        widget._update_service_resolution_lifecycle()
+        _expect(not refreshed_contexts, "Name retries must honor their cooperative throttle.")
+
+        clock["value"] = 100.25
+        widget._update_service_resolution_lifecycle()
+        _expect(
+            widget.cached_supported_context is not None
+            and widget.cached_supported_context[2][module.MERCHANT_TYPE_MERCHANT] == (100.0, 0.0),
+            "A later decoded name should replace the stale negative context automatically.",
+        )
+        _expect(
+            len(refreshed_contexts) == 1
+            and widget.preview_plan.coords[module.MERCHANT_TYPE_MERCHANT] == (100.0, 0.0),
+            "An idle current-map Preview should refresh without another manual Preview click.",
+        )
+        _expect(
+            not widget._service_role_pending_agent_ids
+            and widget._service_role_name_retry_deadline_at == 0.0,
+            "A settled population should finish its bounded name retry immediately.",
+        )
+        _expect(
+            not lifecycle_logs,
+            "Cooperative name retries should not emit repeated context-resolution debug logs.",
+        )
+
+        clock["value"] = 200.0
+        agent_state["name_calls"] = 0
+        agent_state["npc_ids"] = [2]
+        agent_state["positions"] = {99: (0.0, 0.0), 2: (200.0, 0.0), 3: (300.0, 0.0)}
+        agent_state["names"] = {2: "Bela [Material Trader]"}
+        stream_widget = _make_widget(module)
+        absent_context = stream_widget._get_supported_context(passive=True)
+        _expect(
+            absent_context[2][module.MERCHANT_TYPE_MERCHANT] is None
+            and stream_widget._service_role_name_retry_deadline_at == 0.0,
+            "A genuinely absent service must stay unresolved without starting an endless name retry.",
+        )
+
+        settled_name_calls = agent_state["name_calls"]
+        clock["value"] = 220.0
+        stream_widget._update_service_resolution_lifecycle()
+        _expect(
+            agent_state["name_calls"] == settled_name_calls,
+            "An unchanged settled candidate population must not be decoded repeatedly.",
+        )
+
+        stream_refreshed_contexts: list[
+            tuple[bool, str, dict[str, tuple[float, float] | None]]
+        ] = []
+
+        def _fake_stream_build_plan(**kwargs):
+            context = kwargs["supported_context_override"]
+            stream_refreshed_contexts.append(context)
+            return module.PlanResult(
+                supported_map=context[0],
+                supported_reason=context[1],
+                coords=context[2],
+            )
+
+        stream_widget.preview_ready = True
+        stream_widget.preview_plan = module.PlanResult(
+            supported_map=absent_context[0],
+            supported_reason=absent_context[1],
+            coords=absent_context[2],
+        )
+        stream_widget._build_plan = _fake_stream_build_plan
+        agent_state["npc_ids"] = [2, 3]
+        agent_state["names"][3] = "Ozem [Merchant]"
+        clock["value"] = 220.5
+        stream_widget._update_service_resolution_lifecycle()
+        _expect(
+            stream_widget.cached_supported_context is not None
+            and stream_widget.cached_supported_context[2][module.MERCHANT_TYPE_MERCHANT] == (300.0, 0.0),
+            "A newly materialized service agent should become resolvable after the candidate population changes.",
+        )
+        _expect(
+            len(stream_refreshed_contexts) == 1
+            and stream_widget.preview_plan.coords[module.MERCHANT_TYPE_MERCHANT] == (300.0, 0.0),
+            "Streamed service discovery should automatically rebuild an idle current-map Preview.",
+        )
+
+        agent_state["npc_ids"] = [2]
+        clock["value"] = 221.0
+        stream_widget._update_service_resolution_lifecycle()
+        _expect(
+            stream_widget.cached_supported_context is not None
+            and stream_widget.cached_supported_context[2][module.MERCHANT_TYPE_MERCHANT] == (300.0, 0.0),
+            "A confidently observed generic service should survive later client-side streaming out.",
+        )
+        _expect(
+            len(stream_refreshed_contexts) == 1,
+            "Streaming out a retained service must not rebuild Preview when the effective context is unchanged.",
+        )
+
+        clock["value"] = 300.0
+        agent_state["npc_ids"] = [4]
+        agent_state["positions"] = {99: (0.0, 0.0), 4: (100.0, 0.0)}
+        agent_state["names"] = {4: "Harbor Guide"}
+        movement_widget = _make_widget(module)
+        movement_widget._get_supported_context(passive=True)
+        agent_state["positions"][99] = (800.0, 0.0)
+        agent_state["names"][4] = "Moved-Into-View [Merchant]"
+        clock["value"] = 300.5
+        movement_widget._update_service_resolution_lifecycle()
+        _expect(
+            movement_widget.cached_supported_context is not None
+            and movement_widget.cached_supported_context[2][module.MERCHANT_TYPE_MERCHANT] == (100.0, 0.0),
+            "Meaningful player movement should also trigger a generic-role rescan.",
+        )
+
+        clock["value"] = 400.0
+        agent_state["name_calls"] = 0
+        agent_state["npc_ids"] = [5]
+        agent_state["positions"] = {99: (0.0, 0.0), 5: (100.0, 0.0)}
+        agent_state["names"] = {5: ""}
+        bounded_widget = _make_widget(module)
+        bounded_widget._get_supported_context(passive=True)
+        for tick_index in range(1, 41):
+            clock["value"] = 400.0 + (tick_index * module.SERVICE_ROLE_NAME_RETRY_POLL_SECONDS)
+            bounded_widget._update_service_resolution_lifecycle()
+        calls_after_deadline = agent_state["name_calls"]
+        clock["value"] = 420.0
+        bounded_widget._update_service_resolution_lifecycle()
+        _expect(
+            bounded_widget._service_role_name_retry_deadline_at == 0.0
+            and agent_state["name_calls"] == calls_after_deadline,
+            "A name that never settles must stop retrying after the bounded window.",
+        )
+    finally:
+        restore_agents()
+        module.Map.GetMapID = original_get_map_id
+        module.Map.IsMapReady = original_is_map_ready
+        module.Map.IsOutpost = original_is_outpost
+        module.Map.IsGuildHall = original_is_guild_hall
+        module.Map.GetMapName = original_get_map_name
+        module.DEFAULT_NPC_SELECTORS.clear()
+        module.DEFAULT_NPC_SELECTORS.update(original_default_selectors)
+        module.SUPPORTED_MAP_NPC_SELECTORS.clear()
+        module.SUPPORTED_MAP_NPC_SELECTORS.update(original_supported_selectors)
+        module.SUPPORTED_MAP_RUNE_TRADER_SELECTORS.clear()
+        module.SUPPORTED_MAP_RUNE_TRADER_SELECTORS.update(original_rune_selectors)
+        module.SUPPORTED_MAP_SCROLL_TRADER_SELECTORS.clear()
+        module.SUPPORTED_MAP_SCROLL_TRADER_SELECTORS.update(original_scroll_selectors)
+        module.resolve_agent_xy_from_step = original_resolve_agent_xy
+        module._named_agent_target_has_authoritative_identity = original_authoritative_check
+        module.time.monotonic = original_monotonic
+
+
 def _test_authoritative_service_resolution_completes_one_preview(module) -> None:
     original_get_map_id = module.Map.GetMapID
     original_is_map_ready = module.Map.IsMapReady
@@ -19733,92 +20223,6 @@ def _test_authoritative_service_resolution_completes_one_preview(module) -> None
         module._named_agent_target_has_authoritative_identity = original_authoritative_check
 
 
-def _test_service_resolution_retries_blank_names_and_completes_one_preview(module) -> None:
-    original_get_map_id = module.Map.GetMapID
-    original_is_map_ready = module.Map.IsMapReady
-    original_is_outpost = module.Map.IsOutpost
-    original_is_guild_hall = module.Map.IsGuildHall
-    original_get_map_name = module.Map.GetMapName
-    original_default_selectors = dict(module.DEFAULT_NPC_SELECTORS)
-    original_supported_selectors = dict(module.SUPPORTED_MAP_NPC_SELECTORS)
-    original_monotonic = module.time.monotonic
-    agent_state, restore_agents = _install_service_resolution_agent_fixture(module)
-    now = {"value": 100.0}
-
-    try:
-        module.Map.GetMapID = lambda: 700
-        module.Map.IsMapReady = lambda: True
-        module.Map.IsOutpost = lambda: True
-        module.Map.IsGuildHall = lambda: False
-        module.Map.GetMapName = lambda map_id=0: f"Map {int(map_id)}"
-        module.DEFAULT_NPC_SELECTORS.clear()
-        module.SUPPORTED_MAP_NPC_SELECTORS.clear()
-        module.time.monotonic = lambda: now["value"]
-
-        widget = _make_widget(module)
-        build_calls: list[int] = []
-
-        def _fake_build_plan(**_kwargs):
-            build_calls.append(1)
-            supported, reason, coords = widget._get_supported_context()
-            return module.PlanResult(supported_map=supported, supported_reason=reason, coords=coords)
-
-        widget._build_plan = _fake_build_plan
-        completed_immediately = widget._scan_preview()
-
-        _expect(not completed_immediately, "A first-frame blank NPC name should leave Preview in a bounded pending state.")
-        _expect(widget.preview_service_resolution_pending, "Preview should keep resolving across frames while NPC names are blank.")
-        _expect(widget.status_message == "Finding nearby traders…", "Pending Preview should use clear, natural loading text.")
-        _expect(widget.cached_supported_context is None, "A temporary blank-name result must not enter the supported-context cache.")
-        _expect(not build_calls, "Preview must not build a fail-closed plan before pending NPC names settle.")
-
-        agent_state["names"] = {
-            1: "Ari [Merchant]",
-            2: "Bela [Material Trader]",
-            3: "Cori [Rare Material Trader]",
-            4: "Dara Rune Trader",
-            5: "Eli [Rare Scroll Trader]",
-        }
-        now["value"] += (module.SERVICE_RESOLUTION_RETRY_INTERVAL_MS + 1) / 1000.0
-        widget._advance_pending_preview_resolution()
-
-        _expect(not widget.preview_service_resolution_pending, "A later frame with decoded names should finish the original Preview request.")
-        _expect(widget.preview_ready, "One Preview click should become ready after delayed service resolution completes.")
-        _expect(len(build_calls) == 1, "The delayed Preview request should build exactly one final plan.")
-        for merchant_type in (
-            module.MERCHANT_TYPE_MERCHANT,
-            module.MERCHANT_TYPE_MATERIALS,
-            module.MERCHANT_TYPE_RARE_MATERIALS,
-            module.MERCHANT_TYPE_RUNE_TRADER,
-            module.MERCHANT_TYPE_SCROLL_TRADER,
-        ):
-            _expect(
-                widget.preview_plan.coords.get(merchant_type) is not None,
-                f"The central delayed-name behavior should cover {merchant_type}.",
-            )
-        _expect(
-            widget.service_resolution_last_diagnostics.player_xy == (100.0, 100.0),
-            "Service resolution should use the fresh player agent position instead of a stale Player.GetXY fallback.",
-        )
-        _expect(
-            len(widget.service_resolution_last_diagnostics.total_agent_ids) == 5
-            and len(widget.service_resolution_last_diagnostics.in_range_agent_ids) == 5,
-            "Service diagnostics should retain total and in-range nearby NPC counts.",
-        )
-    finally:
-        restore_agents()
-        module.Map.GetMapID = original_get_map_id
-        module.Map.IsMapReady = original_is_map_ready
-        module.Map.IsOutpost = original_is_outpost
-        module.Map.IsGuildHall = original_is_guild_hall
-        module.Map.GetMapName = original_get_map_name
-        module.DEFAULT_NPC_SELECTORS.clear()
-        module.DEFAULT_NPC_SELECTORS.update(original_default_selectors)
-        module.SUPPORTED_MAP_NPC_SELECTORS.clear()
-        module.SUPPORTED_MAP_NPC_SELECTORS.update(original_supported_selectors)
-        module.time.monotonic = original_monotonic
-
-
 def _test_service_resolution_messages_and_map_change_position(module) -> None:
     original_get_map_id = module.Map.GetMapID
     original_get_instance_uptime = module.Map.GetInstanceUptime
@@ -19891,6 +20295,10 @@ def _test_service_resolution_messages_and_map_change_position(module) -> None:
         widget.map_instance_uptime_snapshot_ms = map_state["uptime"]
         widget.cached_context_map_id = map_state["id"]
         widget.cached_supported_context = (supported, reason, coords)
+        widget._service_role_observed_coords = {
+            module.MERCHANT_TYPE_MERCHANT: (-2750.0, 731.0),
+        }
+        widget._service_role_lifecycle_active = True
 
         map_state.update({"id": 701, "uptime": 100})
         agent_state["player_agent_id"] = 199
@@ -19909,6 +20317,11 @@ def _test_service_resolution_messages_and_map_change_position(module) -> None:
         }
         agent_state["model_ids"] = {}
         widget._ensure_initialized()
+        _expect(
+            not widget._service_role_observed_coords
+            and not widget._service_role_lifecycle_active,
+            "A map transition must clear session-scoped generic service observations.",
+        )
         _supported_after_change, _reason_after_change, changed_coords = widget._get_supported_context()
 
         _expect(widget.cached_context_map_id == 701, "A map change should discard the previous map's service cache.")
@@ -19916,7 +20329,22 @@ def _test_service_resolution_messages_and_map_change_position(module) -> None:
             changed_coords[module.MERCHANT_TYPE_MERCHANT] == (50_010.0, 50_000.0),
             "Resolution after a map change should use the new live player agent, not stale Player.GetXY data.",
         )
-        _expect(agent_state["name_calls"] == 0, "Map-change resolution should remain free of decoded-name fan-out.")
+        _expect(
+            agent_state["name_calls"] > 0,
+            "Only services lacking successful encoded/model selectors should reach decoded role matching after a map change.",
+        )
+
+        widget._service_role_observed_coords = {
+            module.MERCHANT_TYPE_MERCHANT: (50_010.0, 50_000.0),
+        }
+        widget._service_role_lifecycle_active = True
+        map_state["uptime"] = 50
+        widget._ensure_initialized()
+        _expect(
+            not widget._service_role_observed_coords
+            and not widget._service_role_lifecycle_active,
+            "A same-map instance-uptime reset must also clear generic service observations.",
+        )
     finally:
         restore_agents()
         module.Map.GetMapID = original_get_map_id
@@ -19945,6 +20373,7 @@ def _test_supported_context_passive_controls_selector_failure_logging(module) ->
     original_console_log = module.ConsoleLog
     map_id = 999_999_999
     resolver_log_flags: list[bool] = []
+    role_log_flags: list[bool] = []
     failure_logs: list[tuple[object, ...]] = []
 
     def _capture_console_log(*args, **_kwargs) -> None:
@@ -19954,6 +20383,15 @@ def _test_supported_context_passive_controls_selector_failure_logging(module) ->
         resolver_log_flags.append(bool(log_failures))
         if log_failures:
             module._log_agent_selector_failure("merchant-rules-regression", "selector resolution failed")
+        return None
+
+    def _failed_role_resolver(*, service_role, log_failures, **_kwargs):
+        role_log_flags.append(bool(log_failures))
+        if log_failures:
+            module._log_agent_selector_failure(
+                "merchant-rules-regression",
+                f"service-role resolution failed for {service_role}",
+            )
         return None
 
     try:
@@ -19976,18 +20414,29 @@ def _test_supported_context_passive_controls_selector_failure_logging(module) ->
         module.ConsoleLog = _capture_console_log
 
         widget = _make_widget(module)
+        widget._resolve_service_role_coords = _failed_role_resolver
         normal_context = widget._get_supported_context(passive=False)
         normal_log_flags = list(resolver_log_flags)
+        normal_role_log_flags = list(role_log_flags)
         normal_failure_logs = list(failure_logs)
 
         widget._invalidate_supported_context_cache()
         resolver_log_flags.clear()
+        role_log_flags.clear()
         failure_logs.clear()
         passive_context = widget._get_supported_context(passive=True)
 
-        _expect(normal_log_flags and all(normal_log_flags), "passive=False should preserve selector-resolution failure logging.")
-        _expect(normal_failure_logs, "A failed selector resolution should emit the normal diagnostic log.")
+        _expect(
+            normal_log_flags and not any(normal_log_flags),
+            "Intermediate encoded-selector failures should stay quiet while role fallback remains available.",
+        )
+        _expect(
+            normal_role_log_flags and any(normal_role_log_flags),
+            "passive=False should preserve final service-role failure logging where that service enables diagnostics.",
+        )
+        _expect(normal_failure_logs, "A failed final service-role resolution should emit the normal diagnostic log.")
         _expect(resolver_log_flags and not any(resolver_log_flags), "passive=True should disable selector-resolution failure logging.")
+        _expect(role_log_flags and not any(role_log_flags), "passive=True should disable service-role failure logging.")
         _expect(not failure_logs, "passive=True should suppress selector-resolution failure diagnostics.")
         _expect(normal_context == passive_context, "passive context resolution should preserve supported-result semantics.")
     finally:
@@ -20233,118 +20682,23 @@ def _test_map_specific_rune_and_scroll_routing_and_guild_hall_scope(module) -> N
         )
 
         map_state["id"] = 180
-        _expect(widget._resolve_rune_trader_coords(180, log_failures=False) is None, "Unverified Guild Hall maps must keep Rune Traders unresolved.")
-        _expect(widget._resolve_scroll_trader_coords(180, {}, log_failures=False) is None, "Unverified Guild Hall maps must keep Scroll Traders unresolved.")
-        _expect(agent_state["name_calls"] == 0, "Rune and Scroll routing must not request decoded NPC names.")
-    finally:
-        restore_agents()
-        module.Map.GetMapID = original_get_map_id
-        module.Map.IsGuildHall = original_is_guild_hall
-
-
-def _test_service_resolution_timeout_messages_and_map_change_position(module) -> None:
-    original_get_map_id = module.Map.GetMapID
-    original_get_instance_uptime = module.Map.GetInstanceUptime
-    original_is_map_ready = module.Map.IsMapReady
-    original_is_outpost = module.Map.IsOutpost
-    original_is_guild_hall = module.Map.IsGuildHall
-    original_get_map_name = module.Map.GetMapName
-    original_default_selectors = dict(module.DEFAULT_NPC_SELECTORS)
-    original_supported_selectors = dict(module.SUPPORTED_MAP_NPC_SELECTORS)
-    original_monotonic = module.time.monotonic
-    agent_state, restore_agents = _install_service_resolution_agent_fixture(module)
-    map_state = {"id": module.EMBARK_BEACH_MAP_ID, "uptime": 10_000}
-    now = {"value": 200.0}
-
-    try:
-        module.Map.GetMapID = lambda: map_state["id"]
-        module.Map.GetInstanceUptime = lambda: map_state["uptime"]
-        module.Map.IsMapReady = lambda: True
-        module.Map.IsOutpost = lambda: True
-        module.Map.IsGuildHall = lambda: False
-        module.Map.GetMapName = lambda map_id=0: f"Map {int(map_id)}"
-        module.DEFAULT_NPC_SELECTORS.clear()
-        module.SUPPORTED_MAP_NPC_SELECTORS.clear()
-        module.time.monotonic = lambda: now["value"]
-        agent_state["npc_ids"] = [1, 2]
-        agent_state["names"] = {1: "Ari [Merchant]", 2: ""}
-
-        widget = _make_widget(module)
-        supported, pending_reason, _pending_coords = widget._get_supported_context()
-        _expect(supported, "Embark's known Consumable Crafter and resolved Merchant should remain available while names load.")
-        _expect(pending_reason == "Finding nearby traders…", "Blank nearby NPC names should keep context resolution pending.")
-        _expect(widget.cached_supported_context is None, "Pending partial coordinates must not be cached as final.")
-
-        now["value"] += (module.SERVICE_RESOLUTION_TIMEOUT_MS + 1) / 1000.0
-        supported, reason, coords = widget._get_supported_context()
-
-        _expect(supported, "A timed-out absent trader should fail closed without hiding services that did resolve.")
-        _expect(not widget.service_resolution_pending, "Service resolution should stop retrying at the bounded timeout.")
-        _expect(widget.cached_supported_context is not None, "Only the bounded final timeout result should be cached.")
-        _expect(coords[module.MERCHANT_TYPE_MATERIALS] is None, "A genuinely unavailable Material Trader should remain unresolved after timeout.")
+        name_calls_before_fallback = agent_state["name_calls"]
         _expect(
-            "Resolved services: Merchant, Consumable Crafter." in reason,
-            "Context text should include the resolved Consumable Crafter alongside other resolved services.",
+            widget._resolve_rune_trader_coords(180, log_failures=False) is None,
+            "A generic Guild Hall with blank decoded names must keep Rune Traders unresolved.",
         )
         _expect(
-            "Unresolved services: Material Trader, Rune Trader, Scroll Trader, Rare Material Trader." in reason,
-            "Context text should accurately list every unresolved service after timeout.",
-        )
-
-        widget = _prime_initialized_widget(module, _make_widget(module))
-        for scope in module.PROFILE_SCOPES:
-            widget.profile_entries_loaded[scope] = True
-        widget.map_ready_snapshot = True
-        widget.map_snapshot = map_state["id"]
-        widget.map_instance_uptime_snapshot_ms = map_state["uptime"]
-        widget.cached_context_map_id = map_state["id"]
-        widget.cached_supported_context = (supported, reason, coords)
-
-        map_state.update({"id": 701, "uptime": 100})
-        now["value"] += 1.0
-        agent_state["player_agent_id"] = 199
-        agent_state["player_xy_fallback"] = (100.0, 100.0)
-        agent_state["npc_ids"] = [11, 12, 13, 14, 15]
-        agent_state["positions"] = {
-            199: (50_000.0, 50_000.0),
-            11: (50_010.0, 50_000.0),
-            12: (50_020.0, 50_000.0),
-            13: (50_030.0, 50_000.0),
-            14: (50_040.0, 50_000.0),
-            15: (50_050.0, 50_000.0),
-        }
-        agent_state["names"] = {
-            11: "Ari [Merchant]",
-            12: "Bela [Material Trader]",
-            13: "Cori [Rare Material Trader]",
-            14: "Dara Rune Trader",
-            15: "Eli [Rare Scroll Trader]",
-        }
-        widget._ensure_initialized()
-        _supported_after_map_change, _reason_after_map_change, changed_coords = widget._get_supported_context()
-
-        _expect(widget.cached_context_map_id == 701, "A map change should discard the previous map's service-resolution cache.")
-        _expect(
-            changed_coords[module.MERCHANT_TYPE_MERCHANT] == (50_010.0, 50_000.0),
-            "Service resolution after a map change should find vendors around the new player position.",
+            widget._resolve_scroll_trader_coords(180, {}, log_failures=False) is None,
+            "A generic Guild Hall with blank decoded names must keep Scroll Traders unresolved.",
         )
         _expect(
-            widget.service_resolution_last_diagnostics.player_xy == (50_000.0, 50_000.0),
-            "A stale Player.GetXY coordinate must not be reused after a map change.",
+            agent_state["name_calls"] > name_calls_before_fallback,
+            "Only generic Rune and Scroll paths should reach decoded service-role fallback after exact selectors are absent.",
         )
     finally:
         restore_agents()
         module.Map.GetMapID = original_get_map_id
-        module.Map.GetInstanceUptime = original_get_instance_uptime
-        module.Map.IsMapReady = original_is_map_ready
-        module.Map.IsOutpost = original_is_outpost
         module.Map.IsGuildHall = original_is_guild_hall
-        module.Map.GetMapName = original_get_map_name
-        module.DEFAULT_NPC_SELECTORS.clear()
-        module.DEFAULT_NPC_SELECTORS.update(original_default_selectors)
-        module.SUPPORTED_MAP_NPC_SELECTORS.clear()
-        module.SUPPORTED_MAP_NPC_SELECTORS.update(original_supported_selectors)
-        module.time.monotonic = original_monotonic
 
 
 def _test_execute_here_ignores_travel_and_reports_local_summary(module) -> None:
@@ -27205,6 +27559,18 @@ def main() -> int:
             (
                 "vlox_service_model_fallback_wiring",
                 lambda: _test_vlox_service_model_fallback_wiring(module),
+            ),
+            (
+                "service_role_alias_matching_is_exact_and_multilingual",
+                lambda: _test_service_role_alias_matching_is_exact_and_multilingual(module),
+            ),
+            (
+                "multilingual_service_role_fallback_resolution",
+                lambda: _test_multilingual_service_role_fallback_resolution(module),
+            ),
+            (
+                "service_role_lifecycle_recovers_decoding_and_streaming",
+                lambda: _test_service_role_lifecycle_recovers_decoding_and_streaming(module),
             ),
             (
                 "authoritative_service_resolution_completes_one_preview",
