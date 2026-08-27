@@ -11,6 +11,7 @@ import PyImGui
 from Py4GWCoreLib import ImGui
 
 from . import model
+from .window import SystemSettingsWindow
 
 _INFRA_COLOR = (0.95, 0.75, 0.35, 1.0)
 _MUTED_COLOR = (0.60, 0.60, 0.65, 1.0)
@@ -127,7 +128,7 @@ def build_window(controller) -> "ImGui.SidebarWindow":
         if cat is not None:
             controller.set_group_open(cat.key, is_open)
 
-    win = ImGui.SidebarWindow(
+    win = SystemSettingsWindow(
         "System Settings",
         sidebar_width=240.0,
         content_width=520.0,
@@ -165,6 +166,18 @@ def build_window(controller) -> "ImGui.SidebarWindow":
                 _log(traceback.format_exc())
                 _err = str(exc)
                 win.add_section(group, "Title On Map Load",
+                                (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.travel_on_character_load import config_ui as travel_ui
+
+                travel_ui.add_sections(win, group)
+            except Exception as exc:
+                import traceback
+
+                _log("Map & Missions / Travel On Character Load section failed to build: %r" % (exc,))
+                _log(traceback.format_exc())
+                _err = str(exc)
+                win.add_section(group, "Travel On Character Load",
                                 (lambda e=_err: PyImGui.text_colored("Failed to build: %s" % e, ERR_COLOR)))
         if cat.key == "agents":
             # Custom category rendered by the name_obfuscation feature. Lazy import keeps this module
@@ -231,8 +244,9 @@ def build_window(controller) -> "ImGui.SidebarWindow":
             # such as "Skip gold/green sell confirmation" and
             # "Auto-open locked chests" from System Settings.
             for lsn in cat.listeners:
-                win.add_section(
+                win.add_account_section(
                     group,
+                    "listener.%s" % lsn.name,
                     lsn.label,
                     (lambda c=controller, ca=cat, ls=lsn: _draw_listener(c, ca, ls)),
                 )
@@ -293,8 +307,9 @@ def build_window(controller) -> "ImGui.SidebarWindow":
             continue
         for lsn in cat.listeners:
             # Bind each section to its own listener via default args (avoid late-binding capture).
-            win.add_section(
+            win.add_account_section(
                 group,
+                "listener.%s" % lsn.name,
                 lsn.label,
                 (lambda c=controller, ca=cat, ls=lsn: _draw_listener(c, ca, ls)),
             )

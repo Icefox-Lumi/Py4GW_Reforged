@@ -65,7 +65,12 @@ _RESIGN_DEDUP_MS = 2_500
 _last_resign_ms_by_email: dict[str, int] = {}
 
 _MESSAGE_TYPE_OPTIONS = tuple(
-    command for command in SharedCommandType if command is not SharedCommandType.NoCommand
+    command for command in SharedCommandType
+    if command not in (
+        SharedCommandType.NoCommand,
+        SharedCommandType.AccountSettingsSync,
+        SharedCommandType.AccountSettingsSyncResult,
+    )
 )
 _message_recipient_index = 0
 _message_type_index = next(
@@ -2149,19 +2154,20 @@ def PickUpLoot(index:int , message: SharedMessageStruct):
         SHMEM_ZERO_EPOCH = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         return int((time.time() - SHMEM_ZERO_EPOCH) * 1000)
 
-    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
-    SnapshotHeroAIOptions(message.ReceiverEmail)
-
-    loot_array = LootFilters().GetLootArray(Range.Earshot.value)
-    if len(loot_array) == 0:
-        RestoreHeroAISnapshot(message.ReceiverEmail)
-        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
-        return
-
-    ConsoleLog(MODULE_NAME, "Starting PickUpLoot routine", Console.MessageType.Info, False)
-
     claimed_item_id = 0
     try:
+        # Everything from the running-mark down lives inside the try so the finally below always
+        # restores HeroAI options and finishes the message -- even when a step raises, a wedged
+        # (never-finished) message can no longer be left behind to swallow future PickUpLoot sends.
+        GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+        SnapshotHeroAIOptions(message.ReceiverEmail)
+
+        loot_array = LootFilters().GetLootArray(Range.Earshot.value)
+        if len(loot_array) == 0:
+            return
+
+        ConsoleLog(MODULE_NAME, "Starting PickUpLoot routine", Console.MessageType.Info, False)
+
         DisableHeroAIOptions(message.ReceiverEmail)
         yield from Routines.Yield.wait(100)
         while True:
@@ -3512,6 +3518,37 @@ def AddModelToLootWhitelist(index: int, message: SharedMessageStruct):
 # endregion
 
 
+# region Account settings synchronization
+def AccountSettingsSync(index: int, message: SharedMessageStruct) -> None:
+    """Prepare, apply, or cancel one registered private System Settings copy."""
+
+    try:
+        from Py4GWCoreLib.py4gwcorelib_src.system_settings.account_copy import get_copy_service
+
+        get_copy_service().handle_sync_message(message)
+    except Exception as exc:
+        ConsoleLog(MODULE_NAME, "Account settings sync failed: %s" % exc, Console.MessageType.Error, False)
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+
+
+def AccountSettingsSyncResult(index: int, message: SharedMessageStruct) -> None:
+    """Advance the source transaction after a target acknowledgement."""
+
+    try:
+        from Py4GWCoreLib.py4gwcorelib_src.system_settings.account_copy import get_copy_service
+
+        get_copy_service().handle_result_message(message)
+    except Exception as exc:
+        ConsoleLog(MODULE_NAME, "Account settings sync result failed: %s" % exc,
+                   Console.MessageType.Error, False)
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+
+
+# endregion
+
+
 # region ProcessMessages
 def ProcessMessages():
     account_email = Player.GetAccountEmail()
@@ -3645,6 +3682,10 @@ def ProcessMessages():
             GLOBAL_CACHE.Coroutines.append(CollectorExchange(index, message))
         case SharedCommandType.AddModelToLootWhitelist:
             GLOBAL_CACHE.Coroutines.append(AddModelToLootWhitelist(index, message))
+        case SharedCommandType.AccountSettingsSync:
+            AccountSettingsSync(index, message)
+        case SharedCommandType.AccountSettingsSyncResult:
+            AccountSettingsSyncResult(index, message)
         case SharedCommandType.LootEx:
             # privately Handled Command, by frenkey
             pass
@@ -3663,6 +3704,12 @@ def main():
     HealStaleHeroAISnapshot(Player.GetAccountEmail())
     _process_pending_widget_enables()
     ProcessMessages()
+    try:
+        from Py4GWCoreLib.py4gwcorelib_src.system_settings.account_copy import get_copy_service
+
+        get_copy_service().tick()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

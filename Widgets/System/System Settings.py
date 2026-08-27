@@ -85,6 +85,13 @@ def draw() -> None:
             except Exception as title_error:
                 PySystem.Console.Log(MODULE_NAME, "Title On Map Load boot failed: %s" % title_error,
                                      PySystem.Console.MessageType.Error)
+            try:
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.travel_on_character_load import get_controller as _travel_get
+
+                _travel_get().register()
+            except Exception as travel_error:
+                PySystem.Console.Log(MODULE_NAME, "Travel On Character Load boot failed: %s" % travel_error,
+                                     PySystem.Console.MessageType.Error)
             # Also register the persisted name-obfuscation alias set (global/multi-account) at boot.
             try:
                 from Py4GWCoreLib.py4gwcorelib_src.system_settings.name_obfuscation import get_controller as _no_get

@@ -79,4 +79,9 @@ def add_sections(win, group) -> None:
     """Add the Window Renamer section to the System category."""
 
     controller = get_controller()
-    win.add_section(group, "Window Renamer", lambda c=controller: _draw(c))
+    win.add_account_section(
+        group,
+        "system.window_renamer",
+        "Window Renamer",
+        lambda c=controller: _draw(c),
+    )

@@ -31,6 +31,10 @@ class CameraSmoothingController:
         self.config.disable_smoothing = bool(disabled)
         persistence.save(self.config)
 
+    def reload_account_settings(self) -> bool:
+        self.config = persistence.load()
+        return True
+
     def register(self) -> None:
         """Register the original per-frame operation as a profiled Main callback."""
 

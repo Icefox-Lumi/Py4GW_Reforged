@@ -38,6 +38,11 @@ class WindowRenamerController:
         persistence.save(self.config)
         self._last_title = ""
 
+    def reload_account_settings(self) -> bool:
+        self.config = persistence.load()
+        self._last_title = ""
+        return True
+
     def register(self) -> None:
         """Register one profiled Main callback, idempotently across widget reloads."""
 

@@ -34,6 +34,10 @@ from .IntentStruct import IntentStruct
 #   from Py4GWCoreLib.GlobalCache.shared_memory_src import AllAccounts as _wb_mod
 #   _wb_mod.WHITEBOARD_DEBUG = True
 WHITEBOARD_DEBUG: bool = False
+
+#: How old a RUNNING message may be before SendMessage treats it as wedged (its coroutine died
+#: before cleanup) instead of mid-flight. Must exceed the longest legitimate command runtime.
+_MESSAGE_RUNNING_STALE_MS = 60_000
 _HERO_SUBMIT_RETRY_AFTER: dict[tuple[int, int], int] = {}
 _PET_SUBMIT_RETRY_AFTER: dict[tuple[int, int], int] = {}
 _SLOT_SUBMIT_RETRY_COOLDOWN_MS = 5000
@@ -317,6 +321,16 @@ class AllAccounts(Structure):
             return False  # one grouped, one not
         # both ungrouped: legacy
         return not self.AccountData[s_idx].IsIsolated and not self.AccountData[r_idx].IsIsolated
+
+    @staticmethod
+    def _is_system_control_command(command: SharedCommandType | int) -> bool:
+        """Only explicit local-control commands may cross gameplay isolation groups."""
+
+        value = int(command)
+        return value in (
+            int(SharedCommandType.AccountSettingsSync),
+            int(SharedCommandType.AccountSettingsSyncResult),
+        )
 
     def _is_slot_expired(self, index: int) -> bool:
         slot_data = self.AccountData[index]
@@ -932,7 +946,7 @@ class AllAccounts(Structure):
             ConsoleLog(SHMEM_MODULE_NAME, "Sender email is empty.", PySystem.Console.MessageType.Error)
             return -1
 
-        if not self._can_communicate(sender_email, receiver_email):
+        if not self._is_system_control_command(command) and not self._can_communicate(sender_email, receiver_email):
             ConsoleLog(SHMEM_MODULE_NAME, f"Cannot communicate between {sender_email} and {receiver_email} (isolated or different groups).", PySystem.Console.MessageType.Warning)
             return -1
         
@@ -943,6 +957,17 @@ class AllAccounts(Structure):
 
             if message.ReceiverEmail != receiver_email:
                 continue  # This slot is not for the intended receiver
+
+            if message.SenderEmail != sender_email:
+                continue  # This slot is from a different sender
+
+            if message.Running:
+                # A running message may be mid-flight (its coroutine is alive) or wedged (its
+                # coroutine died before cleanup). Reuse the slot only while it is fresh; a stale
+                # running message counts as dead so a new send can always get through.
+                if int(PySystem.get_tick_count64() - message.Timestamp) < _MESSAGE_RUNNING_STALE_MS:
+                    return i
+                continue
             
             if int(message.Command) != int(command.value):
                 continue  # This slot has a different command (could be from another sender)
@@ -957,7 +982,7 @@ class AllAccounts(Structure):
             if message_extra_data != normalized_extra_data:
                 continue  # This slot has different extra data (could be from another sender or an old message)
             
-            return i  # Matching active message is already queued/running; reuse it instead of duplicating it.
+            return i  # Matching pending message is already queued; reuse it instead of duplicating it.
         
         for i in range(SHMEM_MAX_PLAYERS):
             message = self.GetInbox(i)
@@ -990,7 +1015,8 @@ class AllAccounts(Structure):
         for index in range(SHMEM_MAX_PLAYERS):
             message = self.Inbox[index]
             if (message.ReceiverEmail == account_email and message.Active and not message.Running
-                and self._can_communicate(message.SenderEmail, account_email)):
+                and (self._is_system_control_command(message.Command)
+                     or self._can_communicate(message.SenderEmail, account_email))):
                 return index, message
         return -1, None
 
@@ -1003,7 +1029,8 @@ class AllAccounts(Structure):
             message = self.Inbox[index]
             if message.ReceiverEmail != account_email or not message.Active:
                 continue
-            if not self._can_communicate(message.SenderEmail, account_email):
+            if (not self._is_system_control_command(message.Command)
+                and not self._can_communicate(message.SenderEmail, account_email)):
                 continue
             if not message.Running or include_running:
                 return index, message

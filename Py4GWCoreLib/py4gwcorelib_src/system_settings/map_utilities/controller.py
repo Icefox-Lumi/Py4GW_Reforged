@@ -56,6 +56,10 @@ class MapUtilitiesController:
     def save(self) -> None:
         persistence.save(self.config)
 
+    def reload_account_settings(self) -> bool:
+        self.config = persistence.load()
+        return True
+
     def register(self) -> None:
         """Register one profiled Draw callback, idempotently across widget reloads."""
 

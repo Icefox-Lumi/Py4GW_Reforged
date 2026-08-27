@@ -23,4 +23,9 @@ def add_sections(win, group) -> None:
     """Add the camera-smoothing settings section to the Camera category."""
 
     controller = get_controller()
-    win.add_section(group, "Disable Camera Smoothing", lambda c=controller: _draw(c))
+    win.add_account_section(
+        group,
+        "camera.disable_smoothing",
+        "Disable Camera Smoothing",
+        lambda c=controller: _draw(c),
+    )

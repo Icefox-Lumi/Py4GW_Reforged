@@ -85,6 +85,10 @@ class SharedCommandType(IntEnum):
     # Generic live loot-filter extension for multibox bots.
     # IMPORTANT: appended at the end so existing SharedCommandType values do not shift.
     AddModelToLootWhitelist = auto()
+    # Local system-control messages. These are allowlisted to cross gameplay isolation groups.
+    # IMPORTANT: append only; persisted/shared enum values must never shift.
+    AccountSettingsSync = auto()
+    AccountSettingsSyncResult = auto()
     #endregion
 
 class ReloadType(IntEnum):
