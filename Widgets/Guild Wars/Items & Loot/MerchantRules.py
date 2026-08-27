@@ -22,7 +22,6 @@ from collections.abc import Iterable
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
 from typing import cast
-from uuid import uuid4
 
 import PyImGui
 import PySystem
@@ -63,11 +62,17 @@ from Sources.icefox.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA_VE
 from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPES
 from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPE_ACCOUNT
 from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPE_SHARED
+from Sources.icefox.MerchantRules.profiles import PROFILE_DOCUMENT_DIR
+from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_SCHEMA
+from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_SCHEMA_VERSION
+from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_STATE_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import ProfileIdentity
 from Sources.icefox.MerchantRules.profiles import ProfileStore
 from Sources.icefox.MerchantRules.profiles import ProfileSummary
 from Sources.icefox.MerchantRules.profiles import LoadedProfileProvenance
 from Sources.icefox.MerchantRules.profiles import SHARED_PROFILES_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import is_valid_profile_id
+from Sources.icefox.MerchantRules.profiles import new_profile_id
 from Sources.icefox.MerchantRules.profiles import _normalize_shared_profile_display_name
 
 from Sources.icefox.MerchantRules.catalog import CatalogLoadResult
@@ -129,8 +134,8 @@ INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
 PROFILE_VERSION = 39
 MERCHANT_RULES_OWNED_ACTION_QUEUES = frozenset({"ACTION", "IDENTIFY", "SALVAGE"})
-# Live and private rule profiles remain account-scoped. Shared profiles use one
-# global document whose per-key journal writes merge safely across multibox clients.
+# Live configuration remains account-scoped. Saved profiles use one standalone
+# JsonFactory document per filename, while the legacy documents remain migration input.
 DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Data")
 CATALOG_PATH = os.path.join(DATA_DIR, "merchant_rules_catalog.json")
 DROP_DATA_PATH = os.path.join(DATA_DIR, "modelid_drop_data.json")
@@ -145,6 +150,18 @@ ITEM_HANDLING_ITEMS_CATALOG_PATH = os.path.join(
 MODS_DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Sources", "marks_sources", "mods_data")
 RUNES_CATALOG_PATH = os.path.join(MODS_DATA_DIR, "runes.json")
 SEARCH_RESULT_LIMIT = 12
+PROFILE_FILENAME_MAX_STEM_LENGTH = 180
+PROFILE_FILENAME_INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+PROFILE_FILENAME_RESERVED_NAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+)
 TRAVEL_TIMEOUT_MS = 20000
 SHARED_PROFILE_REFRESH_INTERVAL_MS = 4000
 DESTRUCTIVE_BUTTON_CONFIRM_TIMEOUT_MS = 5000
@@ -7122,6 +7139,19 @@ class MerchantRulesWidget:
             scope: []
             for scope in PROFILE_SCOPES
         }
+        self.profile_known_filenames: dict[str, set[str]] = {
+            scope: set()
+            for scope in PROFILE_SCOPES
+        }
+        self.profile_selection_cleared_due_to_disappearance: dict[str, bool] = {
+            scope: False
+            for scope in PROFILE_SCOPES
+        }
+        self.profile_scan_conflicts: dict[str, dict[str, str]] = {
+            scope: {}
+            for scope in PROFILE_SCOPES
+        }
+        self._profile_migration_in_progress: set[str] = set()
         self.profile_selected_identities: dict[str, ProfileIdentity | None] = {
             scope: None
             for scope in PROFILE_SCOPES
@@ -7445,12 +7475,149 @@ class MerchantRulesWidget:
         return JsonFactory(LIVE_CONFIG_DOC_NAME)
 
     def _profile_doc(self, scope: str) -> JsonFactory:
-        """Return the saved-profile document for one explicit semantic scope."""
+        """Return a legacy bundled profile document for migration input only."""
         if scope == PROFILE_SCOPE_SHARED:
             return JsonFactory(SHARED_PROFILES_DOC_NAME, "global")
         if scope == PROFILE_SCOPE_ACCOUNT:
             return JsonFactory(ACCOUNT_PROFILES_DOC_NAME)
         raise ValueError(f"Unsupported Merchant Rules profile scope: {scope!r}")
+
+    def _profile_migration_doc(self, scope: str) -> JsonFactory:
+        """Return the additive migration journal for one profile scope."""
+
+        if scope == PROFILE_SCOPE_SHARED:
+            return JsonFactory(PROFILE_MIGRATION_STATE_DOC_NAME, "global")
+        if scope == PROFILE_SCOPE_ACCOUNT:
+            return JsonFactory(PROFILE_MIGRATION_STATE_DOC_NAME)
+        raise ValueError(f"Unsupported Merchant Rules profile scope: {scope!r}")
+
+    @staticmethod
+    def _profile_json_scope(scope: str) -> str:
+        if scope == PROFILE_SCOPE_SHARED:
+            return "global"
+        if scope == PROFILE_SCOPE_ACCOUNT:
+            return "account"
+        raise ValueError(f"Unsupported Merchant Rules profile scope: {scope!r}")
+
+    @staticmethod
+    def _validate_profile_filename(filename: str) -> str:
+        safe_filename = str(filename or "")
+        if (
+            not safe_filename
+            or safe_filename in {".", ".."}
+            or "/" in safe_filename
+            or "\\" in safe_filename
+            or os.path.basename(safe_filename) != safe_filename
+            or not safe_filename.casefold().endswith(".json")
+        ):
+            raise ValueError("The profile filename is not safe.")
+        stem = safe_filename[:-5]
+        if (
+            not stem
+            or len(stem) > PROFILE_FILENAME_MAX_STEM_LENGTH
+            or PROFILE_FILENAME_INVALID_CHARS.search(safe_filename)
+        ):
+            raise ValueError("The profile filename is not safe.")
+        if stem[-1:] in {".", " "}:
+            raise ValueError("The profile filename is not safe.")
+        if stem.upper().split(".", 1)[0] in PROFILE_FILENAME_RESERVED_NAMES:
+            raise ValueError("The profile filename is reserved by Windows.")
+        return safe_filename
+
+    @staticmethod
+    def _sanitize_profile_filename_stem(display_name: str) -> str:
+        stem = unicodedata.normalize("NFC", str(display_name or "").strip())
+        stem = PROFILE_FILENAME_INVALID_CHARS.sub("-", stem)
+        stem = " ".join(stem.split()).rstrip(" .")
+        if not stem:
+            stem = "Profile"
+        if stem.upper().split(".", 1)[0] in PROFILE_FILENAME_RESERVED_NAMES:
+            stem = f"_{stem}"
+        stem = stem[:PROFILE_FILENAME_MAX_STEM_LENGTH].rstrip(" .")
+        return stem or "Profile"
+
+    def _profile_document_name(self, filename: str) -> str:
+        safe_filename = self._validate_profile_filename(filename)
+        return f"{PROFILE_DOCUMENT_DIR}/{safe_filename}"
+
+    def _profile_file_doc(self, scope: str, filename: str) -> JsonFactory:
+        return JsonFactory(
+            self._profile_document_name(filename),
+            self._profile_json_scope(scope),
+        )
+
+    def _profile_directory_from_bound_doc(self, scope: str) -> str:
+        doc_path = str(self._profile_doc(scope).path() or "").strip()
+        if not doc_path:
+            return ""
+        document_directory = os.path.dirname(os.path.abspath(doc_path))
+        return os.path.abspath(os.path.join(document_directory, "Profiles"))
+
+    def _ensure_profiles_dir(self, scope: str, *, create: bool = True) -> str:
+        folder_path = self._profile_directory_from_bound_doc(scope)
+        if not folder_path:
+            return ""
+        if os.path.islink(folder_path):
+            raise OSError("The Merchant Rules profiles directory must not be a symbolic link.")
+        if create:
+            os.makedirs(folder_path, exist_ok=True)
+        if os.path.islink(folder_path) or not os.path.isdir(folder_path):
+            raise OSError("The Merchant Rules profiles directory is not a regular directory.")
+        return folder_path
+
+    def _profile_file_path(self, scope: str, filename: str) -> str:
+        safe_filename = self._validate_profile_filename(filename)
+        folder_path = self._ensure_profiles_dir(scope, create=True)
+        if not folder_path:
+            raise RuntimeError(
+                f"{self._profile_scope_label(scope)} are not ready for this account yet."
+            )
+        candidate_path = os.path.abspath(os.path.join(folder_path, safe_filename))
+        try:
+            common_path = os.path.commonpath((os.path.normcase(folder_path), os.path.normcase(candidate_path)))
+        except ValueError as exc:
+            raise ValueError("The profile filename is outside the Merchant Rules profiles folder.") from exc
+        if (
+            common_path != os.path.normcase(folder_path)
+            or os.path.normcase(os.path.dirname(candidate_path)) != os.path.normcase(folder_path)
+        ):
+            raise ValueError("The profile filename is outside the Merchant Rules profiles folder.")
+        return candidate_path
+
+    def _is_profile_file_present(self, scope: str, filename: str) -> bool:
+        try:
+            file_path = self._profile_file_path(scope, filename)
+        except Exception:
+            return False
+        return bool(os.path.isfile(file_path) and not os.path.islink(file_path))
+
+    def _enumerate_profile_filenames(self, scope: str) -> list[str]:
+        folder_path = self._ensure_profiles_dir(scope, create=True)
+        if not folder_path:
+            return []
+        filenames: list[str] = []
+        with os.scandir(folder_path) as entries:
+            for entry in entries:
+                filename = str(entry.name)
+                if not filename.casefold().endswith(".json"):
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                filenames.append(filename)
+        return sorted(filenames, key=lambda value: (value.casefold(), value))
+
+    def _allocate_profile_filename(self, scope: str, display_name: str) -> str:
+        base_stem = self._sanitize_profile_filename_stem(display_name)
+        existing_names = {
+            filename.casefold()
+            for filename in self._enumerate_profile_filenames(scope)
+        }
+        for suffix in range(1, 10000):
+            stem = base_stem if suffix == 1 else f"{base_stem} ({suffix})"
+            candidate = f"{stem}.json"
+            if candidate.casefold() not in existing_names:
+                return candidate
+        raise RuntimeError("Merchant Rules could not allocate a unique profile filename.")
 
     def _backup_doc(self) -> JsonFactory:
         """Account-scoped last-known-good live profile used by the Restore Backup action."""
@@ -11039,6 +11206,65 @@ class MerchantRulesWidget:
             PyImGui.end()
             return False
         return True
+    @staticmethod
+    def _build_default_profile_payload(
+        *,
+        include_rule_templates: bool,
+    ) -> dict[str, object]:
+        """Build a fresh current payload without reading or changing live settings."""
+
+        return {
+            "version": PROFILE_VERSION,
+            "auto_cleanup_on_outpost_entry": False,
+            "gold_balance_enabled": False,
+            "gold_balance_on_outpost_entry": False,
+            "gold_balance_after_mr_trading": False,
+            "gold_balance_after_manual_session": False,
+            "target_carried_gold": DEFAULT_TARGET_CARRIED_GOLD,
+            "auto_sell_on_manual_vendor_interaction": False,
+            "auto_buy_on_manual_vendor_interaction": False,
+            "manual_vendor_auto_buy_categories": _default_manual_vendor_category_flags(
+                MANUAL_VENDOR_BUY_CATEGORY_KINDS
+            ),
+            "manual_vendor_auto_sell_categories": _default_manual_vendor_category_flags(
+                MANUAL_VENDOR_SELL_CATEGORY_KINDS
+            ),
+            "auto_sell_to_any_merchant": False,
+            "auto_sell_any_merchant_normal_items": False,
+            "auto_sell_any_merchant_materials": False,
+            "auto_sell_any_merchant_runes": False,
+            "inventory_right_click_shortcuts_enabled": False,
+            "inventory_right_click_live_actions_enabled": False,
+            "destroy_auto_enabled": False,
+            "auto_travel_enabled": False,
+            "target_outpost_id": 0,
+            "favorite_outpost_ids": [],
+            "debug_logging": False,
+            "helper_tooltips_enabled": HELPER_TOOLTIPS_ENABLED_DEFAULT,
+            "detailed_preview": False,
+            "buy_rules": (
+                [asdict(rule) for rule in _default_buy_rules()]
+                if include_rule_templates
+                else []
+            ),
+            "sell_rules": (
+                [asdict(rule) for rule in _default_sell_rules()]
+                if include_rule_templates
+                else []
+            ),
+            "destroy_rules": (
+                [asdict(rule) for rule in _default_destroy_rules()]
+                if include_rule_templates
+                else []
+            ),
+            "identify_settings": _serialize_identify_settings(IdentifySettings()),
+            "salvage_settings": _serialize_salvage_settings(SalvageSettings()),
+            "cleanup_targets": [],
+            "cleanup_blacklist_model_ids": [],
+            "cleanup_protection_sources": [],
+            "protected_item_model_ids": [],
+        }
+
     def _build_profile_payload(self) -> dict[str, object]:
         """Serialize current settings into a normalized profile-v39 payload."""
 
@@ -11508,9 +11734,10 @@ class MerchantRulesWidget:
         return "SHARED" if scope == PROFILE_SCOPE_SHARED else "ACCOUNT"
 
     def _get_profiles_dir(self, scope: str) -> str:
-        doc = self._profile_doc(scope)
-        doc_path = doc.path()
-        return os.path.dirname(doc_path) if doc_path else doc.resolved_path()
+        try:
+            return self._ensure_profiles_dir(scope, create=True)
+        except Exception:
+            return ""
 
     def _build_shareable_profile_payload(self) -> dict[str, object]:
         return self._normalize_profile_payload(self._build_profile_payload())
@@ -11644,6 +11871,7 @@ class MerchantRulesWidget:
         self,
         display_name: str,
         *,
+        profile_id: str | None = None,
         payload: dict[str, object] | None = None,
         saved_at_unix_ms: int | None = None,
         saved_at_label: str | None = None,
@@ -11656,6 +11884,7 @@ class MerchantRulesWidget:
         return self._profile_store.build_shared_profile_wrapper(
             display_name,
             source_payload,
+            profile_id=profile_id,
             saved_at_unix_ms=saved_at_unix_ms,
             saved_at_label=saved_at_label,
             payload_is_normalized=payload is None,
@@ -11666,10 +11895,12 @@ class MerchantRulesWidget:
         raw_payload: object,
         *,
         fallback_name: str = "",
+        require_profile_id: bool = False,
     ) -> dict[str, object]:
         return self._profile_store.normalize_shared_profile_wrapper(
             raw_payload,
             fallback_name=fallback_name,
+            require_profile_id=require_profile_id,
         )
 
     def _load_profile_summary_from_key(
@@ -11677,11 +11908,14 @@ class MerchantRulesWidget:
         scope: str,
         profile_key: str,
         raw_payload: object,
+        *,
+        filename: str = "",
     ) -> ProfileSummary:
         return self._profile_store.load_profile_summary_from_key(
             scope,
             profile_key,
             raw_payload,
+            filename=filename,
         )
 
     def _get_saved_profile_read_error_text(self, exc: Exception) -> str:
@@ -11742,6 +11976,8 @@ class MerchantRulesWidget:
         if selection_changed:
             self._clear_profile_confirmation_state()
         self.profile_selected_identities[scope] = next_identity
+        if safe_key:
+            self.profile_selection_cleared_due_to_disappearance[scope] = False
         selected_profile = self._get_selected_profile(scope)
         if selected_profile is not None and (
             selection_changed or not self.profile_name_input_dirty[scope]
@@ -11824,13 +12060,288 @@ class MerchantRulesWidget:
         return normalized_name
 
     def _new_profile_key(self, doc: JsonFactory) -> str:
-        """Allocate an opaque, display-name-independent root key."""
+        """Compatibility alias for the standalone opaque profile ID allocator."""
 
-        for _attempt in range(8):
-            profile_key = f"profile_{uuid4().hex}"
-            if not doc.has(profile_key):
-                return profile_key
-        raise RuntimeError("Merchant Rules could not create a new profile entry.")
+        del doc
+        return new_profile_id()
+
+    def _load_profile_migration_state(
+        self,
+        scope: str,
+    ) -> tuple[JsonFactory, dict[str, object]]:
+        doc = self._profile_migration_doc(scope)
+        raw_state = doc.get_json("", None)
+        if raw_state in (None, {}):
+            return doc, {
+                "schema": PROFILE_MIGRATION_SCHEMA,
+                "schema_version": PROFILE_MIGRATION_SCHEMA_VERSION,
+                "complete": False,
+                "entries": {},
+            }
+        if not isinstance(raw_state, dict):
+            raise ValueError("Merchant Rules profile migration state is malformed.")
+        schema = str(raw_state.get("schema", "") or "").strip()
+        if schema != PROFILE_MIGRATION_SCHEMA:
+            raise ValueError("Merchant Rules profile migration state is unsupported.")
+        schema_version = _safe_int(raw_state.get("schema_version", 0), 0)
+        if schema_version > PROFILE_MIGRATION_SCHEMA_VERSION:
+            raise ValueError("Merchant Rules profile migration state is newer than this version.")
+        entries = raw_state.get("entries", {})
+        if not isinstance(entries, dict):
+            raise ValueError("Merchant Rules profile migration state is malformed.")
+        return doc, {
+            "schema": PROFILE_MIGRATION_SCHEMA,
+            "schema_version": PROFILE_MIGRATION_SCHEMA_VERSION,
+            "complete": bool(raw_state.get("complete", False)),
+            "entries": dict(entries),
+        }
+
+    @staticmethod
+    def _migration_state_error_text(entry: object) -> str:
+        if not isinstance(entry, dict):
+            return "A legacy profile could not be migrated."
+        error = str(entry.get("error", "") or "").strip()
+        return error or "A legacy profile could not be migrated."
+
+    def _save_profile_migration_state(
+        self,
+        doc: JsonFactory,
+        state: dict[str, object],
+    ) -> None:
+        doc.set_json("", state)
+        if not doc.save():
+            doc.reload()
+            raise OSError("Merchant Rules could not save profile migration progress.")
+        if not doc.reload():
+            raise OSError("Merchant Rules could not verify profile migration progress.")
+        if doc.get_json("", None) != state:
+            raise RuntimeError("Merchant Rules profile migration progress failed verification.")
+
+    def _remap_migrated_account_provenance(
+        self,
+        legacy_key: str,
+        profile_id: str,
+    ) -> str:
+        """Update one valid legacy Account provenance key without touching unrelated state."""
+
+        doc = self._loaded_profile_state_doc()
+        raw_state = doc.get_json("", None)
+        if raw_state in (None, {}):
+            return ""
+        if not isinstance(raw_state, dict):
+            return ""
+        try:
+            provenance = self._normalize_loaded_profile_provenance(raw_state)
+        except Exception:
+            return ""
+        if provenance.source_identity != ProfileIdentity(PROFILE_SCOPE_ACCOUNT, legacy_key):
+            return ""
+
+        remapped_state = dict(raw_state)
+        remapped_state["source_key"] = profile_id
+        try:
+            doc.set_json("", remapped_state)
+            if not doc.save():
+                doc.reload()
+                return "Merchant Rules could not update the last-loaded Account profile record during migration."
+            if not doc.reload():
+                return "Merchant Rules could not verify the last-loaded Account profile record during migration."
+            verified = self._normalize_loaded_profile_provenance(doc.get_json("", None))
+            if verified.source_identity != ProfileIdentity(PROFILE_SCOPE_ACCOUNT, profile_id):
+                return "Merchant Rules could not verify the migrated Account profile provenance."
+            self.loaded_profile_provenance = verified
+            self.active_profile_display_name = (
+                f"[{self._profile_scope_badge(verified.source_identity.scope)}] "
+                f"{verified.display_name_snapshot}"
+            )
+            return ""
+        except Exception as exc:
+            try:
+                doc.reload()
+            except Exception:
+                pass
+            return f"Merchant Rules could not update the last-loaded Account profile record during migration: {exc}"
+
+    def _migrate_legacy_profiles(self, scope: str) -> list[str]:
+        """Copy legacy bundled entries to standalone files without changing the source document."""
+
+        if scope in self._profile_migration_in_progress:
+            return []
+        if not self._ensure_profiles_dir(scope, create=True):
+            return []
+
+        migration_doc, state = self._load_profile_migration_state(scope)
+        raw_entries = state.get("entries", {})
+        if not isinstance(raw_entries, dict):
+            raise ValueError("Merchant Rules profile migration state is malformed.")
+        if bool(state.get("complete", False)) and not any(
+            isinstance(entry, dict)
+            and str(entry.get("status", "") or "") == "pending"
+            for entry in raw_entries.values()
+        ):
+            return [
+                self._migration_state_error_text(entry)
+                for entry in raw_entries.values()
+                if isinstance(entry, dict) and str(entry.get("status", "") or "") in {"invalid", "conflict"}
+            ]
+        state["complete"] = False
+
+        legacy_root = self._profile_doc(scope).get_json("", None)
+        if legacy_root in (None, {}):
+            return []
+        if not isinstance(legacy_root, dict):
+            state["complete"] = True
+            state["entries"] = raw_entries
+            self._save_profile_migration_state(migration_doc, state)
+            return ["The old Merchant Rules profile collection is not a JSON object."]
+
+        warnings: list[str] = []
+        self._profile_migration_in_progress.add(scope)
+        try:
+            for raw_key, raw_entry in legacy_root.items():
+                legacy_key = str(raw_key or "").strip()
+                if not legacy_key:
+                    warnings.append("A legacy Merchant Rules profile had no saved key and was skipped.")
+                    continue
+                source_fingerprint = self._get_saved_profile_raw_fingerprint(raw_entry)
+                existing_record = raw_entries.get(legacy_key)
+                if isinstance(existing_record, dict):
+                    existing_status = str(existing_record.get("status", "") or "")
+                    if existing_status == "migrated":
+                        continue
+                    if (
+                        existing_status in {"invalid", "conflict"}
+                        and str(existing_record.get("source_fingerprint", "") or "") == source_fingerprint
+                    ):
+                        warnings.append(self._migration_state_error_text(existing_record))
+                        continue
+
+                try:
+                    previous_profile_id = (
+                        str(existing_record.get("profile_id", "") or "")
+                        if isinstance(existing_record, dict)
+                        else ""
+                    )
+                    if is_valid_profile_id(previous_profile_id):
+                        profile_id = previous_profile_id
+                    elif scope == PROFILE_SCOPE_SHARED and is_valid_profile_id(legacy_key):
+                        profile_id = legacy_key
+                    else:
+                        profile_id = new_profile_id()
+
+                    migrated_wrapper = self._profile_store.build_migrated_profile_wrapper(
+                        raw_entry,
+                        profile_id=profile_id,
+                        fallback_name=legacy_key,
+                    )
+
+                    previous_filename = (
+                        str(existing_record.get("filename", "") or "")
+                        if isinstance(existing_record, dict)
+                        else ""
+                    )
+                    if previous_filename:
+                        filename = self._validate_profile_filename(previous_filename)
+                    else:
+                        filename = self._allocate_profile_filename(
+                            scope,
+                            str(migrated_wrapper.get("name", legacy_key) or legacy_key),
+                        )
+
+                    pending_record = {
+                        "profile_id": profile_id,
+                        "filename": filename,
+                        "source_fingerprint": source_fingerprint,
+                        "status": "pending",
+                    }
+                    raw_entries[legacy_key] = pending_record
+                    state["entries"] = raw_entries
+                    # Account mappings are durable before the first target write; this is also
+                    # what makes a crash between allocation and creation resumable.
+                    self._save_profile_migration_state(migration_doc, state)
+
+                    expected = self._load_profile_summary_from_key(
+                        scope,
+                        profile_id,
+                        migrated_wrapper,
+                        filename=filename,
+                    )
+                    target_exists = self._is_profile_file_present(scope, filename)
+                    if target_exists:
+                        target_doc = self._profile_file_doc(scope, filename)
+                        if not target_doc.reload() or not self._is_profile_file_present(scope, filename):
+                            raise RuntimeError("The migrated profile file disappeared during verification.")
+                        observed = self._load_profile_summary_from_key(
+                            scope,
+                            profile_id,
+                            target_doc.get_json("", None),
+                            filename=filename,
+                        )
+                        if observed.fingerprint != expected.fingerprint:
+                            raise RuntimeError(
+                                f"The target file {filename!r} already contains different profile data."
+                            )
+                    else:
+                        self._persist_profile_wrapper(
+                            scope,
+                            profile_id,
+                            migrated_wrapper,
+                            filename=filename,
+                            preserve_wrapper=True,
+                            refresh_after=False,
+                        )
+
+                    if scope == PROFILE_SCOPE_ACCOUNT:
+                        provenance_warning = self._remap_migrated_account_provenance(
+                            legacy_key,
+                            profile_id,
+                        )
+                        if provenance_warning:
+                            warnings.append(provenance_warning)
+                            pending_record["status"] = "pending"
+                            pending_record["error"] = provenance_warning
+                            state["complete"] = False
+                            state["entries"] = raw_entries
+                            self._save_profile_migration_state(migration_doc, state)
+                            continue
+
+                    pending_record["status"] = "migrated"
+                    pending_record.pop("error", None)
+                    state["entries"] = raw_entries
+                    self._save_profile_migration_state(migration_doc, state)
+                except Exception as exc:
+                    error_text = f"Legacy profile {legacy_key!r} was not migrated: {exc}"
+                    record = raw_entries.get(legacy_key)
+                    if not isinstance(record, dict):
+                        record = {
+                            "source_fingerprint": source_fingerprint,
+                        }
+                        raw_entries[legacy_key] = record
+                    if "different profile data" in str(exc):
+                        record["status"] = "conflict"
+                    elif isinstance(exc, ValueError):
+                        record["status"] = "invalid"
+                    else:
+                        record["status"] = "pending"
+                    record["source_fingerprint"] = source_fingerprint
+                    record["error"] = error_text
+                    state["entries"] = raw_entries
+                    try:
+                        self._save_profile_migration_state(migration_doc, state)
+                    except Exception as state_exc:
+                        warnings.append(f"{error_text} Migration progress could not be saved: {state_exc}")
+                    warnings.append(error_text)
+
+            state["complete"] = all(
+                isinstance(entry, dict)
+                and str(entry.get("status", "") or "") in {"migrated", "invalid", "conflict"}
+                for entry in raw_entries.values()
+            )
+            state["entries"] = raw_entries
+            self._save_profile_migration_state(migration_doc, state)
+        finally:
+            self._profile_migration_in_progress.discard(scope)
+        return warnings
 
     def _refresh_profile_entries(
         self,
@@ -11839,46 +12350,73 @@ class MerchantRulesWidget:
         reload_document: bool = False,
         report_reload_failure: bool = True,
     ) -> bool:
-        """Refresh one scope while retaining readable entries and exact-key selection."""
+        """Refresh standalone profile files while retaining exact identity selection."""
 
-        doc = self._profile_doc(scope)
-        previous_entries = list(self.profile_entries[scope])
+        if scope not in PROFILE_SCOPES:
+            return False
         previous_identity = self.profile_selected_identities.get(scope)
         previous_selected = self._get_profile_by_identity(previous_identity)
         previous_fingerprint = previous_selected.fingerprint if previous_selected is not None else ""
 
-        if reload_document and not doc.reload():
+        if scope == PROFILE_SCOPE_ACCOUNT and not self._profile_directory_from_bound_doc(scope):
+            self.profile_entries[scope] = []
+            self.profile_entries_loaded[scope] = False
+            self.profile_known_filenames[scope].clear()
+            self.profile_scan_conflicts[scope].clear()
+            self.saved_profile_failure_signatures[scope].clear()
+            self.profile_selected_identities[scope] = None
+            self.profile_name_inputs[scope] = ""
+            self.profile_name_input_dirty[scope] = False
+            self._clear_profile_confirmation_state()
+            return False
+
+        try:
+            migration_warnings = self._migrate_legacy_profiles(scope)
+            filenames = self._enumerate_profile_filenames(scope)
+        except Exception as exc:
             self.profile_document_reload_failed[scope] = True
             self.profile_entries_loaded[scope] = True
             if report_reload_failure:
-                if scope == PROFILE_SCOPE_SHARED and not previous_entries:
-                    self.saved_profile_scan_warnings[scope] = (
-                        "Shared profiles are not available yet or could not be refreshed. "
-                        "Saving the first Shared profile will create the list."
-                    )
-                else:
-                    self.saved_profile_scan_warnings[scope] = (
-                        f"Could not refresh {self._profile_scope_label(scope)}. "
-                        "Showing the last profile list Merchant Rules could read."
-                    )
+                self.saved_profile_scan_warnings[scope] = (
+                    f"Could not refresh {self._profile_scope_label(scope)}. "
+                    "Showing the last profile list Merchant Rules could read."
+                )
+            ConsoleLog(
+                MODULE_NAME,
+                f"Could not enumerate {scope} Merchant Rules profile files: {self._format_exception_chain_for_log(exc)}",
+                Console.MessageType.Warning,
+            )
             return False
-        if reload_document:
-            self.profile_document_reload_failed[scope] = False
 
         entries: list[ProfileSummary] = []
         load_failures: list[str] = []
         previous_failure_signatures = self.saved_profile_failure_signatures[scope]
         current_failure_signatures: dict[str, tuple[str, str]] = {}
+        previous_known_filenames = set(self.profile_known_filenames[scope])
+        self.profile_known_filenames[scope] = set(filenames)
 
-        for profile_key in doc.keys(""):
-            safe_key = str(profile_key)
+        for filename in filenames:
             raw_payload: object = None
             try:
-                raw_payload = doc.get_json(safe_key, {})
+                profile_doc = self._profile_file_doc(scope, filename)
+                if reload_document or filename not in previous_known_filenames:
+                    if not profile_doc.reload():
+                        raise OSError("Merchant Rules could not reload this profile file.")
+                if not self._is_profile_file_present(scope, filename):
+                    raise FileNotFoundError("The profile file disappeared during refresh.")
+                raw_payload = profile_doc.get_json("", None)
+                if not isinstance(raw_payload, dict):
+                    raise ValueError("This saved profile is incomplete or damaged.")
+                normalized_wrapper = self._normalize_shared_profile_wrapper(
+                    raw_payload,
+                    require_profile_id=True,
+                )
+                profile_id = str(normalized_wrapper.get("profile_id", "") or "").strip()
                 summary = self._load_profile_summary_from_key(
                     scope,
-                    safe_key,
+                    profile_id,
                     raw_payload,
+                    filename=filename,
                 )
                 entries.append(summary)
             except Exception as exc:
@@ -11887,34 +12425,63 @@ class MerchantRulesWidget:
                     self._get_saved_profile_raw_fingerprint(raw_payload),
                     failure_text,
                 )
-                current_failure_signatures[safe_key] = failure_signature
+                current_failure_signatures[filename] = failure_signature
                 load_failures.append(self._get_saved_profile_read_error_text(exc))
-                if previous_failure_signatures.get(safe_key) != failure_signature:
+                if previous_failure_signatures.get(filename) != failure_signature:
                     ConsoleLog(
                         MODULE_NAME,
                         (
                             f"Could not read [{self._profile_scope_badge(scope)}] saved profile "
-                            f"key {safe_key!r}: {failure_text}"
+                            f"file {filename!r}: {failure_text}"
                         ),
                         Console.MessageType.Warning,
                     )
 
-        entries.sort(
+        duplicate_warnings: dict[str, str] = {}
+        unique_entries: list[ProfileSummary] = []
+        entries_by_identity: dict[str, ProfileSummary | None] = {}
+        for entry in entries:
+            profile_id = entry.key
+            previous_entry = entries_by_identity.get(profile_id)
+            if previous_entry is None and profile_id not in entries_by_identity:
+                entries_by_identity[profile_id] = entry
+                unique_entries.append(entry)
+                continue
+            if previous_entry is None:
+                continue
+            if previous_entry.serialized_payload == entry.serialized_payload:
+                duplicate_warnings[entry.filename] = (
+                    f"Profile ID {profile_id} appears in {previous_entry.filename!r} and "
+                    f"{entry.filename!r}; only {previous_entry.filename!r} is shown."
+                )
+                continue
+            unique_entries = [candidate for candidate in unique_entries if candidate.key != profile_id]
+            entries_by_identity[profile_id] = None
+            duplicate_warnings[previous_entry.filename] = (
+                f"Profile ID {profile_id} has conflicting contents in {previous_entry.filename!r} "
+                f"and {entry.filename!r}; neither file is available until the conflict is resolved."
+            )
+            duplicate_warnings[entry.filename] = duplicate_warnings[previous_entry.filename]
+
+        unique_entries.sort(
             key=lambda entry: (
                 str(entry.display_name).casefold(),
-                str(entry.key).casefold(),
+                str(entry.filename).casefold(),
             )
         )
-        self.profile_entries[scope] = entries
+        self.profile_entries[scope] = unique_entries
         self.profile_entries_loaded[scope] = True
         self.saved_profile_failure_signatures[scope] = current_failure_signatures
+        self.profile_scan_conflicts[scope] = duplicate_warnings
+        self.profile_document_reload_failed[scope] = False
 
-        if load_failures:
-            preview = " | ".join(load_failures[:3])
-            if len(load_failures) > 3:
-                preview = f"{preview} | ...and {len(load_failures) - 3} more."
+        all_warnings = [*migration_warnings, *load_failures, *duplicate_warnings.values()]
+        if all_warnings:
+            preview = " | ".join(all_warnings[:3])
+            if len(all_warnings) > 3:
+                preview = f"{preview} | ...and {len(all_warnings) - 3} more."
             self.saved_profile_scan_warnings[scope] = (
-                f"Some {self._profile_scope_badge(scope).title()} profiles could not be read: {preview}"
+                f"Some {self._profile_scope_badge(scope).title()} profile files need attention: {preview}"
             )
         else:
             self.saved_profile_scan_warnings[scope] = ""
@@ -11922,7 +12489,7 @@ class MerchantRulesWidget:
         matching_entry = next(
             (
                 entry
-                for entry in entries
+                for entry in unique_entries
                 if entry.identity == previous_identity
             ),
             None,
@@ -11931,8 +12498,13 @@ class MerchantRulesWidget:
             if previous_fingerprint and matching_entry.fingerprint != previous_fingerprint:
                 self._clear_profile_confirmation_state()
             self._set_selected_profile_key(scope, matching_entry.key)
-        elif entries:
-            self._set_selected_profile_key(scope, entries[0].key)
+            self.profile_selection_cleared_due_to_disappearance[scope] = False
+        elif previous_identity is not None:
+            self._clear_profile_confirmation_state()
+            self._set_selected_profile_key(scope, "")
+            self.profile_selection_cleared_due_to_disappearance[scope] = True
+        elif unique_entries and not self.profile_selection_cleared_due_to_disappearance[scope]:
+            self._set_selected_profile_key(scope, unique_entries[0].key)
         else:
             self._set_selected_profile_key(scope, "")
         return True
@@ -11952,16 +12524,61 @@ class MerchantRulesWidget:
         scope: str,
         profile_key: str,
         wrapper: dict[str, object],
+        *,
+        filename: str,
+        preserve_wrapper: bool = False,
+        refresh_after: bool = True,
+        require_existing: bool = False,
+        expected_existing_fingerprint: str = "",
     ) -> ProfileSummary:
-        """Save one exact key immediately, reload it, and verify its normalized wrapper."""
+        """Save one standalone file through JsonFactory and verify its exact identity."""
 
-        doc = self._profile_doc(scope)
-        expected_wrapper = self._normalize_shared_profile_wrapper(
-            wrapper,
-            fallback_name=profile_key,
-        )
-        expected_fingerprint = self._saved_profile_wrapper_fingerprint(expected_wrapper)
-        doc.set_json(profile_key, expected_wrapper)
+        safe_filename = self._validate_profile_filename(filename)
+        safe_profile_id = str(profile_key or "").strip()
+        if not is_valid_profile_id(safe_profile_id):
+            raise ValueError("The saved profile identity is invalid.")
+        if not preserve_wrapper:
+            expected_wrapper = self._normalize_shared_profile_wrapper(
+                wrapper,
+                require_profile_id=True,
+            )
+            if str(expected_wrapper.get("profile_id", "") or "").strip() != safe_profile_id:
+                raise ValueError("The saved profile identity does not match its destination.")
+            wrapper_to_write = expected_wrapper
+        else:
+            wrapper_to_write = wrapper
+            expected_wrapper = self._normalize_shared_profile_wrapper(
+                wrapper_to_write,
+                require_profile_id=True,
+            )
+            if str(expected_wrapper.get("profile_id", "") or "").strip() != safe_profile_id:
+                raise ValueError("The saved profile identity does not match its destination.")
+
+        profile_path = self._profile_file_path(scope, safe_filename)
+        path_exists = os.path.lexists(profile_path)
+        if path_exists and not self._is_profile_file_present(scope, safe_filename):
+            raise OSError("The selected profile path is not a regular profile file.")
+        if require_existing and not path_exists:
+            raise FileNotFoundError("The selected profile file disappeared; no file was recreated.")
+        if not require_existing and path_exists:
+            raise FileExistsError(
+                f"The profile filename {safe_filename!r} is already in use; no file was overwritten."
+            )
+        doc = self._profile_file_doc(scope, safe_filename)
+        if require_existing:
+            if not doc.reload() or not self._is_profile_file_present(scope, safe_filename):
+                raise FileNotFoundError("The selected profile file disappeared; no file was recreated.")
+            existing = self._load_profile_summary_from_key(
+                scope,
+                safe_profile_id,
+                doc.get_json("", None),
+                filename=safe_filename,
+            )
+            if expected_existing_fingerprint and existing.fingerprint != expected_existing_fingerprint:
+                raise RuntimeError(
+                    "The selected profile changed elsewhere. Review it and confirm the action again."
+                )
+        doc.set_json("", wrapper_to_write)
         if not doc.save():
             doc.reload()
             raise OSError(f"Merchant Rules could not save {self._profile_scope_label(scope)}.")
@@ -11970,39 +12587,33 @@ class MerchantRulesWidget:
                 f"The change was saved, but Merchant Rules could not verify "
                 f"{self._profile_scope_label(scope)}."
             )
+        if not self._is_profile_file_present(scope, safe_filename):
+            raise OSError("The profile file could not be found after saving.")
         verified = self._load_profile_summary_from_key(
             scope,
-            profile_key,
-            doc.get_json(profile_key, {}),
+            safe_profile_id,
+            doc.get_json("", None),
+            filename=safe_filename,
         )
-        if verified.fingerprint != expected_fingerprint:
+        expected = self._load_profile_summary_from_key(
+            scope,
+            safe_profile_id,
+            expected_wrapper,
+            filename=safe_filename,
+        )
+        if (
+            verified.fingerprint != expected.fingerprint
+            or verified.serialized_payload != expected.serialized_payload
+            or verified.display_name != expected.display_name
+        ):
             raise RuntimeError(
                 f"Merchant Rules could not verify the saved {self._profile_scope_badge(scope).title()} profile."
             )
         self.profile_document_reload_failed[scope] = False
-        self._refresh_profile_entries(scope)
+        self.profile_known_filenames[scope].add(safe_filename)
+        if refresh_after:
+            self._refresh_profile_entries(scope)
         return verified
-
-    def _persist_profile_delete(self, identity: ProfileIdentity):
-        """Delete one exact key immediately, reload, and verify absence."""
-
-        doc = self._profile_doc(identity.scope)
-        if not doc.delete(identity.key):
-            raise RuntimeError("The selected profile disappeared before it could be deleted.")
-        if not doc.save():
-            doc.reload()
-            raise OSError(
-                f"Merchant Rules could not save {self._profile_scope_label(identity.scope)}."
-            )
-        if not doc.reload():
-            raise OSError(
-                f"The profile was deleted, but Merchant Rules could not verify "
-                f"{self._profile_scope_label(identity.scope)} afterward."
-            )
-        if doc.has(identity.key):
-            raise RuntimeError("Merchant Rules could not verify that the profile was deleted.")
-        self.profile_document_reload_failed[identity.scope] = False
-        self._refresh_profile_entries(identity.scope)
 
     def _resolve_profile_for_action(
         self,
@@ -12013,18 +12624,23 @@ class MerchantRulesWidget:
     ) -> ProfileSummary:
         """Re-resolve an exact key and reject stale confirmed shared actions."""
 
-        if identity.scope == PROFILE_SCOPE_SHARED and reload_shared:
-            if not self._refresh_profile_entries(
-                PROFILE_SCOPE_SHARED,
-                reload_document=True,
-            ):
-                raise OSError("Shared profiles could not be refreshed, so no changes were made.")
-        else:
-            self._refresh_profile_entries(identity.scope)
+        if identity.scope not in PROFILE_SCOPES:
+            raise RuntimeError("The selected profile scope is invalid.")
+        refresh_succeeded = self._refresh_profile_entries(
+            identity.scope,
+            reload_document=(reload_shared or identity.scope == PROFILE_SCOPE_ACCOUNT),
+        )
+        if not refresh_succeeded:
+            raise OSError(
+                f"{self._profile_scope_label(identity.scope)} could not be refreshed, so no changes were made."
+            )
 
         current = self._get_profile_by_identity(identity)
         if current is None:
             raise RuntimeError("The selected profile changed or disappeared; review the refreshed list.")
+        if not current.filename or not self._is_profile_file_present(identity.scope, current.filename):
+            self._clear_profile_confirmation_state()
+            raise RuntimeError("The selected profile file disappeared; review the refreshed list.")
         if expected_fingerprint and current.fingerprint != expected_fingerprint:
             self._clear_profile_confirmation_state()
             raise RuntimeError(
@@ -12035,15 +12651,12 @@ class MerchantRulesWidget:
         return current
 
     def _prepare_scope_for_new_profile(self, scope: str):
-        if scope == PROFILE_SCOPE_SHARED:
-            refreshed = self._refresh_profile_entries(
-                scope,
-                reload_document=True,
-            )
-            if not refreshed and self.profile_entries[scope]:
-                raise OSError("Shared profiles could not be refreshed, so no changes were made.")
-        else:
-            self._refresh_profile_entries(scope)
+        refreshed = self._refresh_profile_entries(
+            scope,
+            reload_document=True,
+        )
+        if not refreshed:
+            raise OSError(f"{self._profile_scope_label(scope)} could not be refreshed, so no changes were made.")
 
     def _save_current_as_new_profile(self, scope: str):
         self._ensure_initialized()
@@ -12054,11 +12667,19 @@ class MerchantRulesWidget:
                 scope,
                 requested_profile_name,
             )
-            doc = self._profile_doc(scope)
-            profile_key = self._new_profile_key(doc)
-            wrapper = self._build_shared_profile_wrapper(profile_name)
-            self._persist_profile_wrapper(scope, profile_key, wrapper)
-            self._select_profile_after_action(scope, profile_key)
+            profile_id = new_profile_id()
+            filename = self._allocate_profile_filename(scope, profile_name)
+            wrapper = self._build_shared_profile_wrapper(
+                profile_name,
+                profile_id=profile_id,
+            )
+            self._persist_profile_wrapper(
+                scope,
+                profile_id,
+                wrapper,
+                filename=filename,
+            )
+            self._select_profile_after_action(scope, profile_id)
             self._clear_profile_confirmation_state()
             self._set_saved_profile_feedback(
                 scope,
@@ -12072,6 +12693,47 @@ class MerchantRulesWidget:
                 scope,
                 warning=(
                     f"Failed to save {self._profile_scope_badge(scope).title()} profile: {exc}"
+                ),
+            )
+
+    def _create_blank_profile(self, scope: str):
+        self._ensure_initialized()
+        requested_profile_name = self.profile_name_inputs[scope]
+        try:
+            self._prepare_scope_for_new_profile(scope)
+            profile_name = self._ensure_profile_name_available(
+                scope,
+                requested_profile_name,
+            )
+            profile_id = new_profile_id()
+            filename = self._allocate_profile_filename(scope, profile_name)
+            wrapper = self._build_shared_profile_wrapper(
+                profile_name,
+                profile_id=profile_id,
+                payload=self._build_default_profile_payload(
+                    include_rule_templates=False,
+                ),
+            )
+            self._persist_profile_wrapper(
+                scope,
+                profile_id,
+                wrapper,
+                filename=filename,
+            )
+            self._select_profile_after_action(scope, profile_id)
+            self._clear_profile_confirmation_state()
+            self._set_saved_profile_feedback(
+                scope,
+                notice=(
+                    f"Created blank {self._profile_scope_badge(scope).title()} profile "
+                    f"'{profile_name}'."
+                ),
+            )
+        except Exception as exc:
+            self._set_saved_profile_feedback(
+                scope,
+                warning=(
+                    f"Failed to create blank {self._profile_scope_badge(scope).title()} profile: {exc}"
                 ),
             )
 
@@ -12101,13 +12763,21 @@ class MerchantRulesWidget:
                 requested_profile_name,
                 exclude_key=current.key,
             )
-            wrapper = self._build_shared_profile_wrapper(
-                new_name,
-                payload=current.payload,
-                saved_at_unix_ms=current.saved_at_unix_ms,
-                saved_at_label=current.saved_at_label,
+            wrapper = self._profile_store.rename_profile_wrapper(
+                current.raw_wrapper,
+                profile_id=current.key,
+                display_name=new_name,
+                fallback_payload=current.payload,
             )
-            self._persist_profile_wrapper(scope, current.key, wrapper)
+            self._persist_profile_wrapper(
+                scope,
+                current.key,
+                wrapper,
+                filename=current.filename,
+                preserve_wrapper=True,
+                require_existing=True,
+                expected_existing_fingerprint=current.fingerprint,
+            )
             self._select_profile_after_action(scope, current.key)
             self.profile_name_inputs[scope] = new_name
             self.profile_name_input_dirty[scope] = False
@@ -12147,8 +12817,18 @@ class MerchantRulesWidget:
                 expected_fingerprint=expected_fingerprint,
                 reload_shared=True,
             )
-            wrapper = self._build_shared_profile_wrapper(current.display_name)
-            self._persist_profile_wrapper(scope, current.key, wrapper)
+            wrapper = self._build_shared_profile_wrapper(
+                current.display_name,
+                profile_id=current.key,
+            )
+            self._persist_profile_wrapper(
+                scope,
+                current.key,
+                wrapper,
+                filename=current.filename,
+                require_existing=True,
+                expected_existing_fingerprint=current.fingerprint,
+            )
             self._select_profile_after_action(scope, current.key)
             self._clear_profile_confirmation_state()
             self._set_saved_profile_feedback(
@@ -12264,43 +12944,6 @@ class MerchantRulesWidget:
             self.status_message = warning
             self._set_saved_profile_feedback(scope, warning=warning)
 
-    def _delete_selected_profile(
-        self,
-        scope: str,
-        expected_fingerprint: str = "",
-    ):
-        self._ensure_initialized()
-        selected_profile = self._get_selected_profile(scope)
-        if selected_profile is None:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to delete.",
-            )
-            return
-
-        try:
-            current = self._resolve_profile_for_action(
-                selected_profile.identity,
-                expected_fingerprint=expected_fingerprint,
-                reload_shared=True,
-            )
-            self._persist_profile_delete(current.identity)
-            self._clear_profile_confirmation_state()
-            self._set_saved_profile_feedback(
-                scope,
-                notice=(
-                    f"Deleted {self._profile_scope_badge(scope).title()} profile "
-                    f"'{current.display_name}'."
-                ),
-            )
-        except Exception as exc:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=(
-                    f"Failed to delete {self._profile_scope_badge(scope).title()} profile: {exc}"
-                ),
-            )
-
     def _copy_selected_profile_to_other_scope(
         self,
         source_scope: str,
@@ -12331,10 +12974,14 @@ class MerchantRulesWidget:
                 destination_scope,
                 current.display_name,
             )
-            destination_doc = self._profile_doc(destination_scope)
-            destination_key = self._new_profile_key(destination_doc)
+            destination_key = new_profile_id()
+            destination_filename = self._allocate_profile_filename(
+                destination_scope,
+                destination_name,
+            )
             destination_wrapper = self._build_shared_profile_wrapper(
                 destination_name,
+                profile_id=destination_key,
                 payload=current.payload,
                 saved_at_unix_ms=current.saved_at_unix_ms,
                 saved_at_label=current.saved_at_label,
@@ -12343,6 +12990,7 @@ class MerchantRulesWidget:
                 destination_scope,
                 destination_key,
                 destination_wrapper,
+                filename=destination_filename,
             )
             self._select_profile_after_action(
                 destination_scope,
@@ -12373,8 +13021,11 @@ class MerchantRulesWidget:
             )
 
     def _open_profiles_folder(self, scope: str) -> bool:
-        folder_path = self._get_profiles_dir(scope)
+        folder_path = ""
         try:
+            folder_path = self._get_profiles_dir(scope)
+            if not folder_path:
+                raise OSError("The Merchant Rules profiles folder is not available yet.")
             startfile = getattr(os, "startfile", None)
             if startfile is None:
                 raise OSError("Opening folders is not supported on this platform.")
@@ -12708,7 +13359,15 @@ class MerchantRulesWidget:
                 self._debug_log("Deferred account profile application until Merchant Rules work is idle.")
                 return
             self.account_key = current_account
+            self.profile_entries[PROFILE_SCOPE_ACCOUNT] = []
             self.profile_entries_loaded[PROFILE_SCOPE_ACCOUNT] = False
+            self.profile_selection_cleared_due_to_disappearance[PROFILE_SCOPE_ACCOUNT] = False
+            self.profile_known_filenames[PROFILE_SCOPE_ACCOUNT].clear()
+            self.profile_scan_conflicts[PROFILE_SCOPE_ACCOUNT].clear()
+            self.saved_profile_failure_signatures[PROFILE_SCOPE_ACCOUNT].clear()
+            self.profile_selected_identities[PROFILE_SCOPE_ACCOUNT] = None
+            self.profile_name_inputs[PROFILE_SCOPE_ACCOUNT] = ""
+            self.profile_name_input_dirty[PROFILE_SCOPE_ACCOUNT] = False
 
         for scope in PROFILE_SCOPES:
             if not self.profile_entries_loaded[scope]:
@@ -16820,44 +17479,9 @@ class MerchantRulesWidget:
         self.profile_notice = ""
         self.profile_write_blocked = False
 
-        default_payload = {
-            "version": PROFILE_VERSION,
-            "auto_cleanup_on_outpost_entry": False,
-            "gold_balance_enabled": False,
-            "gold_balance_on_outpost_entry": False,
-            "gold_balance_after_mr_trading": False,
-            "gold_balance_after_manual_session": False,
-            "target_carried_gold": DEFAULT_TARGET_CARRIED_GOLD,
-            "auto_sell_on_manual_vendor_interaction": False,
-            "auto_buy_on_manual_vendor_interaction": False,
-            "manual_vendor_auto_buy_categories": _default_manual_vendor_category_flags(
-                MANUAL_VENDOR_BUY_CATEGORY_KINDS
-            ),
-            "manual_vendor_auto_sell_categories": _default_manual_vendor_category_flags(
-                MANUAL_VENDOR_SELL_CATEGORY_KINDS
-            ),
-            "auto_sell_to_any_merchant": False,
-            "auto_sell_any_merchant_normal_items": False,
-            "auto_sell_any_merchant_materials": False,
-            "auto_sell_any_merchant_runes": False,
-            "inventory_right_click_shortcuts_enabled": False,
-            "inventory_right_click_live_actions_enabled": False,
-            "destroy_auto_enabled": False,
-            "auto_travel_enabled": False,
-            "target_outpost_id": 0,
-            "favorite_outpost_ids": [],
-            "debug_logging": False,
-            "helper_tooltips_enabled": HELPER_TOOLTIPS_ENABLED_DEFAULT,
-            "detailed_preview": False,
-            "buy_rules": [asdict(rule) for rule in (_default_buy_rules() if profile_exists else [])],
-            "sell_rules": [asdict(rule) for rule in (_default_sell_rules() if profile_exists else [])],
-            "destroy_rules": [asdict(rule) for rule in (_default_destroy_rules() if profile_exists else [])],
-            "identify_settings": _serialize_identify_settings(IdentifySettings()),
-            "cleanup_targets": [],
-            "cleanup_blacklist_model_ids": [],
-            "cleanup_protection_sources": [],
-            "protected_item_model_ids": [],
-        }
+        default_payload = self._build_default_profile_payload(
+            include_rule_templates=profile_exists,
+        )
         self._apply_profile_payload(default_payload)
 
         if not profile_exists:
@@ -36881,10 +37505,14 @@ class MerchantRulesWidget:
             entry_predicate = self._catalog_entry_matches_weapon_blacklist
         elif rule.kind == SELL_KIND_ARMOR:
             include_standalone_runes = bool(rule.include_standalone_runes)
-            entry_predicate = lambda entry: self._catalog_entry_matches_armor_blacklist(
-                entry,
-                include_standalone_runes=include_standalone_runes,
-            )
+
+            def _armor_blacklist_entry_predicate(entry: dict[str, object]) -> bool:
+                return self._catalog_entry_matches_armor_blacklist(
+                    entry,
+                    include_standalone_runes=include_standalone_runes,
+                )
+
+            entry_predicate = _armor_blacklist_entry_predicate
 
         PyImGui.separator()
         self._draw_subsection_heading("Add Models to Keep")
@@ -41186,7 +41814,8 @@ class MerchantRulesWidget:
         ]
 
     def _format_profile_reference(self, profile: ProfileSummary) -> str:
-        return f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}"
+        filename = f" ({profile.filename})" if profile.filename else ""
+        return f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}{filename}"
 
     def _format_profile_reference_list(self, profiles: list[ProfileSummary]) -> str:
         references = [
@@ -41273,6 +41902,11 @@ class MerchantRulesWidget:
         profile: ProfileSummary,
         current_payload_serialized: str,
     ):
+        if profile.filename:
+            self._draw_colored_text("File:", UI_COLOR_WARNING_SOFT, wrapped=False)
+            PyImGui.same_line(0, 4)
+            self._draw_colored_text(profile.filename, UI_COLOR_INFO, wrapped=False)
+            PyImGui.same_line(0, 8)
         saved_label = profile.saved_at_label or "Unknown"
         self._draw_colored_text("Saved:", UI_COLOR_WARNING_SOFT, wrapped=False)
         PyImGui.same_line(0, 4)
@@ -41351,7 +41985,7 @@ class MerchantRulesWidget:
                     "Profile Unavailable",
                     UI_COLOR_DANGER,
                     "Merchant Rules can no longer find or read this profile. "
-                    "It may have been deleted or saved by a newer version.",
+                    "It may have been removed or saved by a newer version.",
                 )
                 PyImGui.same_line(0, 6)
                 self._draw_colored_text(
@@ -41477,9 +42111,8 @@ class MerchantRulesWidget:
 
         self._draw_section_heading(self._profile_scope_label(scope))
         if scope == PROFILE_SCOPE_SHARED:
-            self._draw_warning_text(
-                "Shared profiles are available to every account. Saving, replacing, renaming, deleting, "
-                "or copying a profile into Shared affects every account."
+            self._draw_secondary_text(
+                "Shared profiles are available to all accounts. Add a new profile file here and it will appear automatically."
             )
             self._draw_secondary_text(
                 "Loading a Shared profile changes only this account's current settings. "
@@ -41490,6 +42123,7 @@ class MerchantRulesWidget:
                 "Account profiles, current settings, and Restore Backup are available only to this account. "
                 "This account also keeps its own record of the last profile loaded."
             )
+            self._draw_secondary_text("Add a new profile file here and it will appear automatically.")
 
         warning = self.saved_profile_warnings[scope]
         notice = self.saved_profile_notices[scope]
@@ -41514,16 +42148,32 @@ class MerchantRulesWidget:
                     scope,
                     notice=f"{scope_badge.title()} profiles refreshed.",
                 )
-            if scope == PROFILE_SCOPE_SHARED:
-                self.shared_profile_refresh_timer.Reset()
+            self.shared_profile_refresh_timer.Reset()
             selected_profile = self._get_selected_profile(scope)
+        self._draw_hover_tooltip(
+            "Refresh the profile list. Refreshing does not load a profile."
+        )
         PyImGui.same_line(0, 8)
+        open_folder_label = (
+            "Open Shared Profiles Folder"
+            if scope == PROFILE_SCOPE_SHARED
+            else "Open Account Profiles Folder"
+        )
         if PyImGui.small_button(
-            f"Open Profiles Folder##merchant_rules_{scope_id}_profiles_open_folder"
+            f"{open_folder_label}##merchant_rules_{scope_id}_profiles_open_folder"
         ):
             self._clear_profile_confirmation_state()
             self._open_profiles_folder(scope)
             selected_profile = self._get_selected_profile(scope)
+        self._draw_hover_tooltip(
+            (
+                "Open the folder used by Shared profiles. You can add new profile files while Guild Wars is running. "
+                "Close all Guild Wars clients before permanently deleting or replacing an existing file."
+                if scope == PROFILE_SCOPE_SHARED
+                else "Open the folder used by Account profiles. You can add new profile files while Guild Wars is running. "
+                "Close all Guild Wars clients before permanently deleting or replacing an existing file."
+            )
+        )
 
         PyImGui.same_line(0, 8)
         self._draw_colored_text(
@@ -41542,9 +42192,9 @@ class MerchantRulesWidget:
         ):
             if not entries:
                 empty_text = (
-                    "No Shared profiles saved yet. Enter a name below to create one."
+                    "No Shared profile files found. Add a profile file to this folder, or enter a name below to create one."
                     if scope == PROFILE_SCOPE_SHARED
-                    else "No profiles have been saved for this account yet. Enter a name below to create one."
+                    else "No Account profile files found. Add a profile file to this folder, or enter a name below to create one."
                 )
                 self._draw_secondary_text(empty_text)
             else:
@@ -41577,7 +42227,7 @@ class MerchantRulesWidget:
         )
         if selected_profile is None:
             self._draw_secondary_text(
-                "Select a profile to load, rename, replace, copy, or delete."
+                "Select a profile to load, rename, replace, or copy."
             )
         else:
             self._draw_selected_profile_detail_line(
@@ -41585,6 +42235,12 @@ class MerchantRulesWidget:
                 selected_profile.display_name,
                 UI_COLOR_INFO,
             )
+            if selected_profile.filename:
+                self._draw_selected_profile_detail_line(
+                    "File:",
+                    selected_profile.filename,
+                    UI_COLOR_INFO,
+                )
             if selected_profile.saved_at_label:
                 self._draw_selected_profile_detail_line(
                     "Saved:",
@@ -41615,6 +42271,13 @@ class MerchantRulesWidget:
             "Renaming does not create a new profile."
         )
 
+        create_blank_clicked = PyImGui.button(
+            f"Create Blank Profile##merchant_rules_{scope_id}_profile_create_blank"
+        )
+        self._draw_hover_tooltip(
+            "Create a new profile with no rules. Your current settings stay unchanged, and the new profile is not loaded."
+        )
+
         self._draw_subsection_heading("Save Current Settings")
         self._draw_hover_tooltip(
             "Create a new profile from your current settings, or replace the selected profile with them."
@@ -41634,8 +42297,6 @@ class MerchantRulesWidget:
         load_fingerprint = ""
         overwrite_clicked = False
         overwrite_fingerprint = ""
-        delete_clicked = False
-        delete_fingerprint = ""
         copy_clicked = False
 
         PyImGui.begin_disabled(selected_profile is None)
@@ -41675,7 +42336,8 @@ class MerchantRulesWidget:
 
         self._draw_subsection_heading("Profile Management")
         self._draw_hover_tooltip(
-            "Rename, copy, or delete the selected profile. "
+            "Rename changes the profile name shown in Merchant Rules. The file name stays the same. "
+            "Copy creates an independent profile. "
             "These actions do not change which profile was last loaded."
         )
         PyImGui.begin_disabled(selected_profile is None)
@@ -41698,19 +42360,10 @@ class MerchantRulesWidget:
         copy_clicked = PyImGui.button(
             f"{destination_label}##merchant_rules_{scope_id}_profile_copy"
         )
-        PyImGui.same_line(0, 8)
-        if selected_profile is not None:
-            delete_clicked, delete_fingerprint = self._draw_confirm_profile_action_button(
-                f"Delete Selected##merchant_rules_{scope_id}_profile_delete",
-                "delete",
-                selected_profile,
-            )
-        else:
-            PyImGui.button(f"Delete Selected##merchant_rules_{scope_id}_profile_delete")
         PyImGui.end_disabled()
 
         if PyImGui.collapsing_header(
-            f"Technical & Storage Details##merchant_rules_{scope_id}_profile_details"
+            f"Profile File Details##merchant_rules_{scope_id}_profile_details"
         ):
             self._draw_selected_profile_detail_line(
                 "Scope:",
@@ -41719,19 +42372,22 @@ class MerchantRulesWidget:
             )
             if selected_profile is not None:
                 self._draw_selected_profile_detail_line(
-                    "Selected Stable Key:",
-                    selected_profile.key,
+                    "File:",
+                    selected_profile.filename,
                     UI_COLOR_SECONDARY_TEXT,
                 )
             else:
-                self._draw_secondary_text("Selected Stable Key: no selected profile.")
+                self._draw_secondary_text("File: no selected profile.")
             self._draw_secondary_text(
-                f"Profiles Document: {self._profile_doc(scope).resolved_path()}"
+                f"Profiles Folder: {self._get_profiles_dir(scope) or 'Not available until this account is ready.'}"
             )
             self._draw_secondary_text(
-                "Profiles remain sorted by display name; every operation resolves the exact scope and stable key."
+                "The file name stays the same when you rename a profile."
             )
 
+        if create_blank_clicked:
+            self._clear_profile_confirmation_state()
+            self._create_blank_profile(scope)
         if save_new_clicked:
             self._clear_profile_confirmation_state()
             self._save_current_as_new_profile(scope)
@@ -41747,15 +42403,14 @@ class MerchantRulesWidget:
             self._load_selected_profile(scope, load_fingerprint)
         if overwrite_clicked:
             self._save_current_over_selected_profile(scope, overwrite_fingerprint)
-        if delete_clicked:
-            self._delete_selected_profile(scope, delete_fingerprint)
 
     def _draw_profiles_workspace(self):
         if self.shared_profile_refresh_timer.IsExpired():
-            self._refresh_profile_entries(
-                PROFILE_SCOPE_SHARED,
-                reload_document=True,
-            )
+            for scope in PROFILE_SCOPES:
+                self._refresh_profile_entries(
+                    scope,
+                    reload_document=True,
+                )
             self.shared_profile_refresh_timer.Reset()
 
         current_payload_serialized = self._serialize_shareable_profile_payload(

@@ -26,6 +26,7 @@ import enum
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -152,6 +153,18 @@ def _install_stub_modules(project_root: Path) -> None:
             self.scope = str(scope)
 
         @classmethod
+        def _is_standalone_profile_name(cls, name: str) -> bool:
+            normalized_name = str(name or "").replace("\\", "/")
+            return normalized_name.startswith("Widgets/MerchantRules/Profiles/") and normalized_name.casefold().endswith(".json")
+
+        def _standalone_physical_path(self) -> Path:
+            owner = "global" if self.scope == "global" else "merchant.rules@example.com"
+            return project_root / "json" / owner / Path(self.name.replace("/", os.sep))
+
+        def _is_standalone_profile(self) -> bool:
+            return self._is_standalone_profile_name(self.name)
+
+        @classmethod
         def reset(cls) -> None:
             cls._documents.clear()
             cls._persisted_documents.clear()
@@ -161,6 +174,11 @@ def _install_stub_modules(project_root: Path) -> None:
             cls._reload_overrides.clear()
             cls._operation_log.clear()
             cls._apply_calls.clear()
+            for owner in ("global", "merchant.rules@example.com"):
+                shutil.rmtree(
+                    project_root / "json" / owner / "Widgets" / "MerchantRules" / "Profiles",
+                    ignore_errors=True,
+                )
 
         @staticmethod
         def _copy(value):
@@ -264,6 +282,13 @@ def _install_stub_modules(project_root: Path) -> None:
                 return False
             if storage_key in self._documents:
                 self._persisted_documents[storage_key] = self._copy(self._documents[storage_key])
+                if self._is_standalone_profile():
+                    physical_path = self._standalone_physical_path()
+                    physical_path.parent.mkdir(parents=True, exist_ok=True)
+                    physical_path.write_text(
+                        json.dumps(self._documents[storage_key], indent=2, sort_keys=True),
+                        encoding="utf-8",
+                    )
             else:
                 self._persisted_documents.pop(storage_key, None)
             return True
@@ -275,6 +300,21 @@ def _install_stub_modules(project_root: Path) -> None:
                 self._documents[storage_key] = self._copy(self._reload_overrides[storage_key])
             elif self.name in self._reload_overrides:
                 self._documents[storage_key] = self._copy(self._reload_overrides[self.name])
+            elif self._is_standalone_profile():
+                physical_path = self._standalone_physical_path()
+                if not physical_path.is_file():
+                    self._documents.pop(storage_key, None)
+                    self._persisted_documents.pop(storage_key, None)
+                    return False
+                try:
+                    raw_text = physical_path.read_text(encoding="utf-8")
+                    loaded = json.loads(raw_text)
+                except (OSError, ValueError):
+                    self._documents.pop(storage_key, None)
+                    self._persisted_documents.pop(storage_key, None)
+                    return False
+                self._documents[storage_key] = self._copy(loaded)
+                self._persisted_documents[storage_key] = self._copy(loaded)
             elif storage_key in self._persisted_documents:
                 self._documents[storage_key] = self._copy(self._persisted_documents[storage_key])
             else:
@@ -10890,8 +10930,11 @@ def _install_fake_slot_salvage_runtime(module, state: _FakeSlotSalvageState):
             return (10, 10, 10, 10)
         return (10, 10, 110, 30)
 
-    options_active = lambda: bool(state.options_open or state.stale_window)
-    locally_allocated = lambda: bool(options_active() or state.inactive_frames_exist)
+    def options_active() -> bool:
+        return bool(state.options_open or state.stale_window)
+
+    def locally_allocated() -> bool:
+        return bool(options_active() or state.inactive_frames_exist)
 
     def _cancel_popup(popup_kind: str) -> None:
         state.events.append(("cancel",))
@@ -19243,7 +19286,6 @@ def _test_service_resolution_requires_authoritative_selectors(module) -> None:
     original_get_map_name = module.Map.GetMapName
     original_default_selectors = dict(module.DEFAULT_NPC_SELECTORS)
     original_resolve_agent_xy = module.resolve_agent_xy_from_step
-    original_authoritative_check = module._named_agent_target_has_authoritative_identity
 
     try:
         module.Map.GetMapID = lambda: 55
@@ -19490,7 +19532,6 @@ def _test_vlox_service_model_fallback_wiring(module) -> None:
     original_model_overrides = dict(module.SUPPORTED_MAP_SERVICE_MODEL_IDS)
     original_resolve_agent_xy = module.resolve_agent_xy_from_step
     original_authoritative_check = module._named_agent_target_has_authoritative_identity
-
     try:
         _expect(
             624 not in module.SUPPORTED_MAP_NPC_SELECTORS,
@@ -24590,7 +24631,6 @@ def _test_saved_profile_management_preserves_preview_and_idle_load_invalidates(m
     widget._copy_selected_profile_to_other_scope(account_scope)
     shared_profile = widget._get_selected_profile(shared_scope)
     _expect(shared_profile is not None, "Copy should remain available because it does not replace live settings.")
-    widget._delete_selected_profile(shared_scope, shared_profile.fingerprint)
 
     _expect(
         widget.preview_plan is preview_plan
@@ -24804,9 +24844,14 @@ def _test_owned_action_leases_survive_parent_generator_and_preserve_unrelated_wo
 
     manager = FakeActionQueueManager()
     original_action_queue_manager = module.ActionQueueManager
-    unrelated_action = lambda: events.append("unrelated action")
-    unrelated_identify = lambda: events.append("unrelated identify")
-    unrelated_salvage = lambda: events.append("unrelated salvage")
+    def unrelated_action() -> None:
+        events.append("unrelated action")
+
+    def unrelated_identify() -> None:
+        events.append("unrelated identify")
+
+    def unrelated_salvage() -> None:
+        events.append("unrelated salvage")
     manager.AddAction("ACTION", unrelated_action)
     manager.AddAction("IDENTIFY", unrelated_identify)
     manager.AddAction("SALVAGE", unrelated_salvage)
@@ -24849,7 +24894,7 @@ def _test_owned_action_leases_survive_parent_generator_and_preserve_unrelated_wo
         )
         _expect(
             [getattr(entry[0], "__name__", "") for entry in manager.queues["ACTION"]]
-            == ["<lambda>", "<lambda>"],
+            == ["unrelated_action", "<lambda>"],
             "Ownership wrapping must preserve unrelated-before-owned ACTION queue order.",
         )
 
@@ -26517,8 +26562,8 @@ def _test_profile_confirmation_binds_exact_scope_key_and_fingerprint(module) -> 
     module.PyImGui.button = lambda label, *_args, **_kwargs: labels.append(str(label)) or True
     try:
         first_clicked, first_fingerprint = widget._draw_confirm_profile_action_button(
-            "Delete Selected##profile_delete",
-            "delete",
+            "Replace Selected##profile_replace",
+            "overwrite",
             profile,
         )
         _expect(
@@ -26529,20 +26574,20 @@ def _test_profile_confirmation_binds_exact_scope_key_and_fingerprint(module) -> 
             "The first shared mutation click should arm the exact scope, key, and fingerprint.",
         )
         second_clicked, second_fingerprint = widget._draw_confirm_profile_action_button(
-            "Delete Selected##profile_delete",
-            "delete",
+            "Replace Selected##profile_replace",
+            "overwrite",
             profile,
         )
         _expect(
             second_clicked
             and second_fingerprint == profile.fingerprint
-            and labels[-1].startswith("Confirm Delete Selected — Affects All Accounts"),
+            and labels[-1].startswith("Confirm Replace Selected — Affects All Accounts"),
             "The second click should return the confirmed fingerprint with an all-account warning.",
         )
 
         widget._draw_confirm_profile_action_button(
-            "Delete Selected##profile_delete",
-            "delete",
+            "Replace Selected##profile_replace",
+            "overwrite",
             profile,
         )
         changed_profile = module.ProfileSummary(
@@ -26555,8 +26600,8 @@ def _test_profile_confirmation_binds_exact_scope_key_and_fingerprint(module) -> 
             fingerprint="fingerprint-b",
         )
         changed_clicked, changed_fingerprint = widget._draw_confirm_profile_action_button(
-            "Delete Selected##profile_delete",
-            "delete",
+            "Replace Selected##profile_replace",
+            "overwrite",
             changed_profile,
         )
         _expect(
@@ -26570,6 +26615,876 @@ def _test_profile_confirmation_binds_exact_scope_key_and_fingerprint(module) -> 
             delattr(module.PyImGui, "button")
         else:
             module.PyImGui.button = original_button
+
+
+def _standalone_profile_path(widget, scope: str, filename: str) -> Path:
+    return Path(widget._profile_file_path(scope, filename))
+
+
+def _write_standalone_profile(widget, scope: str, filename: str, value: object) -> Path:
+    path = _standalone_profile_path(widget, scope, filename)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def _test_jsonfactory_standalone_profile_lifecycle(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    shared_scope = module.PROFILE_SCOPE_SHARED
+    account_scope = module.PROFILE_SCOPE_ACCOUNT
+
+    shared_dir = Path(widget._profile_directory_from_bound_doc(shared_scope))
+    account_dir = Path(widget._profile_directory_from_bound_doc(account_scope))
+    _expect(widget._refresh_profile_entries(shared_scope, reload_document=True), "The first Shared refresh should be able to initialize its profile directory.")
+    _expect(widget._refresh_profile_entries(account_scope, reload_document=True), "The first Account refresh should be able to initialize its profile directory.")
+    _expect(shared_dir.is_dir() and account_dir.is_dir(), "Refreshing a brand-new profile scope should create both fixed Profiles directories.")
+    _expect(not list(shared_dir.iterdir()) and not list(account_dir.iterdir()), "Creating the profile directories must not create a dummy profile or migration file.")
+
+    downloaded = widget._build_shared_profile_wrapper(
+        "Downloaded Default",
+        profile_id="profile_" + "a" * 32,
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[1]),
+    )
+    live_payload_before_refresh = widget._serialize_shareable_profile_payload(
+        widget._build_shareable_profile_payload()
+    )
+    _write_standalone_profile(widget, shared_scope, "Default.json", downloaded)
+    _expect(
+        widget._refresh_profile_entries(shared_scope, reload_document=True),
+        "Refresh should discover a manually copied Default.json in an initially empty Shared folder.",
+    )
+    downloaded_entry = widget._get_profile_by_identity(
+        module.ProfileIdentity(shared_scope, downloaded["profile_id"])
+    )
+    _expect(downloaded_entry is not None and downloaded_entry.filename == "Default.json", "A valid external standalone file should appear without first saving a dummy profile.")
+    _expect(
+        widget._serialize_shareable_profile_payload(widget._build_shareable_profile_payload()) == live_payload_before_refresh
+        and widget.loaded_profile_provenance is None,
+        "Discovery must not change live settings or create loaded-profile provenance.",
+    )
+
+    widget.profile_name_inputs[shared_scope] = "Shared Profile"
+    widget._save_current_as_new_profile(shared_scope)
+    widget.profile_name_inputs[account_scope] = "Account Profile"
+    widget._save_current_as_new_profile(account_scope)
+    shared_entry = widget._get_selected_profile(shared_scope)
+    account_entry = widget._get_selected_profile(account_scope)
+    _expect(shared_entry is not None and account_entry is not None, "Save New should create readable standalone entries in both scopes.")
+    _expect(shared_entry.key != account_entry.key and shared_entry.key.startswith("profile_"), "Each Save New operation should allocate an opaque profile ID.")
+    _expect(shared_entry.filename == "Shared Profile.json" and account_entry.filename == "Account Profile.json", "New profile filenames should be derived from the display name.")
+    _expect(
+        Path(shared_entry.filename).name == shared_entry.filename
+        and Path(account_entry.filename).name == account_entry.filename
+        and _standalone_profile_path(widget, shared_scope, shared_entry.filename).is_file()
+        and _standalone_profile_path(widget, account_scope, account_entry.filename).is_file(),
+        "Saved profile paths must remain immediate regular files inside their scope folders.",
+    )
+
+    shared_path = _standalone_profile_path(widget, shared_scope, shared_entry.filename)
+    account_path = _standalone_profile_path(widget, account_scope, account_entry.filename)
+    shared_before = json.loads(shared_path.read_text(encoding="utf-8"))
+    account_before = json.loads(account_path.read_text(encoding="utf-8"))
+    geometry_keys = {"window_x", "window_y", "window_width", "window_height", "window_collapsed"}
+    _expect(shared_before["profile_id"] == shared_entry.key and account_before["profile_id"] == account_entry.key, "The embedded opaque ID must be the runtime profile identity.")
+    _expect(geometry_keys.isdisjoint(shared_before["payload"]) and geometry_keys.isdisjoint(account_before["payload"]), "Standalone profile payloads must not claim account-owned window geometry.")
+
+    shared_files_before_duplicate = {path.name for path in shared_dir.glob("*.json")}
+    widget.profile_name_inputs[shared_scope] = "Shared Profile"
+    widget._save_current_as_new_profile(shared_scope)
+    _expect({path.name for path in shared_dir.glob("*.json")} == shared_files_before_duplicate, "Save New must reject a same-scope duplicate display name without overwriting a file.")
+    _expect("already exists" in widget.saved_profile_warnings[shared_scope], "Same-scope duplicate names should produce an actionable warning.")
+
+    original_shared_id = shared_entry.key
+    original_shared_timestamp = shared_entry.saved_at_unix_ms
+    original_shared_payload = json.loads(json.dumps(shared_entry.payload))
+    widget.profile_name_inputs[shared_scope] = "Shared Renamed"
+    widget._rename_selected_profile(shared_scope, shared_entry.fingerprint)
+    renamed_shared = widget._get_selected_profile(shared_scope)
+    renamed_raw = json.loads(shared_path.read_text(encoding="utf-8"))
+    _expect(
+        renamed_shared is not None
+        and renamed_shared.key == original_shared_id
+        and renamed_shared.filename == "Shared Profile.json"
+        and renamed_shared.display_name == "Shared Renamed"
+        and renamed_shared.saved_at_unix_ms == original_shared_timestamp
+        and renamed_raw["profile_id"] == original_shared_id
+        and renamed_raw["payload"] == shared_before["payload"],
+        "Rename should change only the display name while preserving the immutable filename, ID, timestamp, and payload.",
+    )
+    _expect(renamed_shared.payload == original_shared_payload, "Rename should preserve the normalized in-memory payload.")
+
+    widget.favorite_outpost_ids = [2]
+    widget._set_selected_profile_key(account_scope, account_entry.key)
+    widget._save_current_over_selected_profile(account_scope)
+    replaced_account = widget._get_selected_profile(account_scope)
+    replaced_raw = json.loads(account_path.read_text(encoding="utf-8"))
+    _expect(
+        replaced_account is not None
+        and replaced_account.key == account_entry.key
+        and replaced_account.filename == "Account Profile.json"
+        and replaced_account.payload["favorite_outpost_ids"] == [2]
+        and replaced_raw["profile_id"] == account_entry.key,
+        "Replace should update the selected file in place without changing its identity or filename.",
+    )
+
+    widget._set_selected_profile_key(shared_scope, original_shared_id)
+    widget._load_selected_profile(shared_scope, widget._get_selected_profile(shared_scope).fingerprint)
+    _expect(
+        widget.loaded_profile_provenance is not None
+        and widget.loaded_profile_provenance.source_identity == module.ProfileIdentity(shared_scope, original_shared_id),
+        "Explicit Load should persist exact (scope, profile_id) provenance.",
+    )
+    account_selected = widget._get_selected_profile(account_scope)
+    _expect(account_selected is not None, "The Account load fixture should retain its standalone profile.")
+    widget._load_selected_profile(account_scope, account_selected.fingerprint)
+    _expect(
+        widget.loaded_profile_provenance is not None
+        and widget.loaded_profile_provenance.source_identity == module.ProfileIdentity(account_scope, account_selected.key),
+        "Account Load should persist exact (scope, profile_id) provenance.",
+    )
+    widget._set_selected_profile_key(shared_scope, original_shared_id)
+    widget._load_selected_profile(shared_scope, widget._get_selected_profile(shared_scope).fingerprint)
+
+    duplicate_name = widget._build_shared_profile_wrapper(
+        "Shared Renamed",
+        profile_id="profile_" + "b" * 32,
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[8]),
+    )
+    _write_standalone_profile(widget, shared_scope, "downloaded-copy.json", duplicate_name)
+    _expect(widget._refresh_profile_entries(shared_scope, reload_document=True), "Refresh should tolerate an externally dropped same-name profile.")
+    same_name_entries = [
+        entry
+        for entry in widget.profile_entries[shared_scope]
+        if entry.display_name == "Shared Renamed"
+    ]
+    _expect(
+        len(same_name_entries) == 2
+        and {entry.filename for entry in same_name_entries} == {"Shared Profile.json", "downloaded-copy.json"},
+        "Different external profile IDs with the same display name should coexist and be disambiguated by filename.",
+    )
+
+    malformed_path = _standalone_profile_path(widget, shared_scope, "broken.json")
+    malformed_path.write_text("{not valid json", encoding="utf-8")
+    future = json.loads(shared_path.read_text(encoding="utf-8"))
+    future["profile_id"] = "profile_" + "c" * 32
+    future["name"] = "Future"
+    future["payload"] = dict(future["payload"])
+    future["payload"]["version"] = module.PROFILE_VERSION + 1
+    _write_standalone_profile(widget, shared_scope, "future.json", future)
+    _expect(widget._refresh_profile_entries(shared_scope, reload_document=True), "One malformed or future standalone file must not abort the rest of the refresh.")
+    readable_filenames = {entry.filename for entry in widget.profile_entries[shared_scope]}
+    _expect("Shared Profile.json" in readable_filenames and "downloaded-copy.json" in readable_filenames, "Readable neighbors must remain visible beside invalid standalone files.")
+    _expect("newer Merchant Rules version" in widget.saved_profile_scan_warnings[shared_scope] and "could not be read" in widget.saved_profile_scan_warnings[shared_scope], "Invalid standalone files should be isolated and reported without being rewritten.")
+    _expect(malformed_path.read_text(encoding="utf-8") == "{not valid json", "Malformed external profile bytes must remain untouched.")
+
+    conflict_id = "profile_" + "d" * 32
+    conflict_a = widget._build_shared_profile_wrapper(
+        "Conflict A",
+        profile_id=conflict_id,
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[1]),
+    )
+    conflict_b = widget._build_shared_profile_wrapper(
+        "Conflict B",
+        profile_id=conflict_id,
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[2]),
+    )
+    conflict_a_path = _write_standalone_profile(widget, shared_scope, "conflict-a.json", conflict_a)
+    conflict_b_path = _write_standalone_profile(widget, shared_scope, "conflict-b.json", conflict_b)
+    _expect(widget._refresh_profile_entries(shared_scope, reload_document=True), "Conflicting duplicate IDs should not abort the directory scan.")
+    _expect(
+        not any(entry.key == conflict_id for entry in widget.profile_entries[shared_scope])
+        and "conflicting contents" in widget.saved_profile_scan_warnings[shared_scope],
+        "Different payloads under one profile ID must be withheld rather than silently selected.",
+    )
+    _expect(conflict_a_path.is_file() and conflict_b_path.is_file(), "Conflict handling must not delete either source file.")
+
+    widget._set_selected_profile_key(shared_scope, original_shared_id)
+    missing_fingerprint = widget._get_selected_profile(shared_scope).fingerprint
+    shared_path.unlink()
+    widget._save_current_over_selected_profile(shared_scope, missing_fingerprint)
+    _expect(
+        not shared_path.exists()
+        and "disappeared" in widget.saved_profile_warnings[shared_scope].casefold(),
+        "A stale Replace after external removal must fail without recreating the missing cached profile file.",
+    )
+    _expect(widget._refresh_profile_entries(shared_scope, reload_document=True), "Refresh should complete when the selected file is removed externally.")
+    _expect(widget._get_selected_profile(shared_scope) is None, "An externally missing selected profile should clear selection.")
+    _expect(widget.profile_selection_cleared_due_to_disappearance[shared_scope], "Missing-file handling should record that selection was cleared due to disappearance.")
+    _expect(widget._refresh_profile_entries(shared_scope, reload_document=True) and widget._get_selected_profile(shared_scope) is None, "A later refresh must not silently fall back to the first remaining profile.")
+    _expect(not hasattr(widget, "_delete_selected_profile"), "V1 must not expose a JsonFactory-unsafe whole-document profile delete operation.")
+
+
+def _test_jsonfactory_create_blank_profile(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+
+    fresh_widget = _make_widget(module)
+    fresh_widget._load_profile()
+    fresh_payload = fresh_widget._build_profile_payload()
+    canonical_blank = fresh_widget._build_default_profile_payload(
+        include_rule_templates=False,
+    )
+    _expect(
+        canonical_blank == fresh_payload,
+        "The reusable blank payload must match the current fresh-session payload exactly.",
+    )
+    _expect(
+        canonical_blank["version"] == module.PROFILE_VERSION
+        and canonical_blank["buy_rules"] == []
+        and canonical_blank["sell_rules"] == []
+        and canonical_blank["destroy_rules"] == []
+        and canonical_blank["identify_settings"] == fresh_payload["identify_settings"]
+        and canonical_blank["salvage_settings"] == fresh_payload["salvage_settings"]
+        and canonical_blank["cleanup_targets"] == []
+        and canonical_blank["cleanup_blacklist_model_ids"] == []
+        and canonical_blank["cleanup_protection_sources"] == []
+        and canonical_blank["protected_item_model_ids"] == [],
+        "A blank payload must retain current schema defaults while keeping all rule/config collections empty.",
+    )
+    for disabled_field in (
+        "auto_cleanup_on_outpost_entry",
+        "gold_balance_enabled",
+        "gold_balance_on_outpost_entry",
+        "gold_balance_after_mr_trading",
+        "gold_balance_after_manual_session",
+        "auto_sell_on_manual_vendor_interaction",
+        "auto_buy_on_manual_vendor_interaction",
+        "auto_sell_to_any_merchant",
+        "auto_sell_any_merchant_normal_items",
+        "auto_sell_any_merchant_materials",
+        "auto_sell_any_merchant_runes",
+        "inventory_right_click_shortcuts_enabled",
+        "inventory_right_click_live_actions_enabled",
+        "destroy_auto_enabled",
+        "auto_travel_enabled",
+    ):
+        _expect(canonical_blank[disabled_field] is False, f"Fresh blank default {disabled_field} must remain disabled.")
+    _expect(
+        canonical_blank["target_carried_gold"] == module.DEFAULT_TARGET_CARRIED_GOLD
+        and canonical_blank["manual_vendor_auto_buy_categories"]
+        == module._default_manual_vendor_category_flags(module.MANUAL_VENDOR_BUY_CATEGORY_KINDS)
+        and canonical_blank["manual_vendor_auto_sell_categories"]
+        == module._default_manual_vendor_category_flags(module.MANUAL_VENDOR_SELL_CATEGORY_KINDS),
+        "A blank payload must retain the current carried-gold and manual-category factory defaults.",
+    )
+
+    _reset_jsonfactory_persistence_fixture(module)
+    malformed_widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    malformed_live_doc = module.JsonFactory(module.LIVE_CONFIG_DOC_NAME)
+    malformed_live_doc.set_json(
+        "",
+        {
+            "version": module.PROFILE_VERSION,
+            "buy_rules": "not-a-list",
+        },
+    )
+    _expect(malformed_live_doc.save(), "The malformed-live fallback fixture should persist its document.")
+    malformed_widget._load_profile()
+    _expect(
+        malformed_widget.profile_write_blocked
+        and len(malformed_widget.buy_rules) == len(module._default_buy_rules())
+        and len(malformed_widget.sell_rules) == len(module._default_sell_rules())
+        and len(malformed_widget.destroy_rules) == len(module._default_destroy_rules())
+        and not any(rule.enabled for rule in malformed_widget.buy_rules)
+        and not any(rule.enabled for rule in malformed_widget.sell_rules)
+        and not any(rule.enabled for rule in malformed_widget.destroy_rules),
+        "Malformed existing live documents must retain the disabled-template fallback instead of becoming blank.",
+    )
+
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    widget.auto_sell_to_any_merchant = True
+    widget.favorite_outpost_ids = [77]
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            model_id=555,
+            target_count=2,
+        )
+    ]
+    provenance_before = module.LoadedProfileProvenance(
+        source_identity=module.ProfileIdentity(
+            module.PROFILE_SCOPE_ACCOUNT,
+            "profile_" + "9" * 32,
+        ),
+        display_name_snapshot="Previously Loaded",
+        normalized_content_fingerprint="a" * 32,
+        associated_at_unix_ms=7,
+    )
+    widget.loaded_profile_provenance = provenance_before
+    live_payload_before = json.loads(json.dumps(widget._build_profile_payload()))
+    canonical_blank = widget._normalize_profile_payload(
+        widget._build_default_profile_payload(include_rule_templates=False)
+    )
+    original_time = module.time.time
+    module.time.time = lambda: 123.456
+    try:
+        created_by_scope = {}
+        for scope in module.PROFILE_SCOPES:
+            profile_name = f"Blank {scope.title()}"
+            widget.profile_name_inputs[scope] = profile_name
+            module.JsonFactory._operation_log.clear()
+            widget._create_blank_profile(scope)
+            created = widget._get_selected_profile(scope)
+            _expect(created is not None, f"Create Blank Profile should select the new {scope} profile.")
+            created_by_scope[scope] = created
+            raw_path = _standalone_profile_path(widget, scope, created.filename)
+            raw_wrapper = json.loads(raw_path.read_text(encoding="utf-8"))
+            _expect(
+                module.is_valid_profile_id(created.key)
+                and raw_wrapper["profile_id"] == created.key
+                and raw_wrapper["name"] == profile_name
+                and raw_wrapper["saved_at_unix_ms"] == 123456
+                and raw_wrapper["payload"] == canonical_blank,
+                f"The {scope} blank profile should receive fresh metadata and the canonical blank payload.",
+            )
+            _expect(
+                raw_wrapper["payload"]["buy_rules"] == []
+                and raw_wrapper["payload"]["sell_rules"] == []
+                and raw_wrapper["payload"]["destroy_rules"] == []
+                and not any("rule_id" in rule for rule in raw_wrapper["payload"]["sell_rules"]),
+                f"The {scope} blank profile must not contain copied or generated rule IDs.",
+            )
+            _expect(
+                widget._build_profile_payload() == live_payload_before
+                and widget.loaded_profile_provenance == provenance_before,
+                f"Creating a blank {scope} profile must not change live settings or loaded provenance.",
+            )
+            _expect(
+                not any(operation[1] == module.LIVE_CONFIG_DOC_NAME for operation in module.JsonFactory._operation_log),
+                f"Creating a blank {scope} profile must not write the live JsonFactory document.",
+            )
+
+        collision_scope = module.PROFILE_SCOPE_SHARED
+        collision_path = _standalone_profile_path(widget, collision_scope, "Collision.json")
+        collision_wrapper = widget._build_shared_profile_wrapper(
+            "Existing Profile",
+            profile_id="profile_" + "c" * 32,
+            payload=_minimal_profile_payload(module),
+        )
+        _write_standalone_profile(widget, collision_scope, "Collision.json", collision_wrapper)
+        collision_bytes_before = collision_path.read_bytes()
+        files_before_collision = {path.name for path in collision_path.parent.glob("*.json")}
+        widget.profile_name_inputs[collision_scope] = "Collision"
+        widget._create_blank_profile(collision_scope)
+        collision_created = widget._get_selected_profile(collision_scope)
+        _expect(
+            collision_created is not None
+            and collision_created.filename == "Collision (2).json"
+            and collision_path.read_bytes() == collision_bytes_before,
+            "A blank profile filename collision must receive a suffix without overwriting the existing file.",
+        )
+        _expect(
+            files_before_collision.issubset({path.name for path in collision_path.parent.glob("*.json")}),
+            "Creating a blank profile must retain all pre-existing files.",
+        )
+
+        duplicate_files = {path.name for path in collision_path.parent.glob("*.json")}
+        widget.profile_name_inputs[collision_scope] = "Collision"
+        widget._create_blank_profile(collision_scope)
+        _expect(
+            {path.name for path in collision_path.parent.glob("*.json")} == duplicate_files
+            and "already exists" in widget.saved_profile_warnings[collision_scope],
+            "A duplicate blank-profile display name must be rejected without creating or overwriting a file.",
+        )
+
+        account_created = created_by_scope[module.PROFILE_SCOPE_ACCOUNT]
+        widget._set_selected_profile_key(module.PROFILE_SCOPE_ACCOUNT, account_created.key)
+        widget._load_selected_profile(module.PROFILE_SCOPE_ACCOUNT)
+        _expect(
+            widget._build_shareable_profile_payload() == account_created.payload
+            and widget.loaded_profile_provenance is not None
+            and widget.loaded_profile_provenance.source_identity
+            == module.ProfileIdentity(module.PROFILE_SCOPE_ACCOUNT, account_created.key),
+            "Explicit Load Selected should apply the created blank profile and then update provenance.",
+        )
+    finally:
+        module.time.time = original_time
+
+
+def _test_jsonfactory_cross_scope_copy_and_manual_file_identity(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    shared_scope = module.PROFILE_SCOPE_SHARED
+    account_scope = module.PROFILE_SCOPE_ACCOUNT
+
+    widget.profile_name_inputs[shared_scope] = "Cross Scope"
+    widget._save_current_as_new_profile(shared_scope)
+    source = widget._get_selected_profile(shared_scope)
+    _expect(source is not None, "The cross-scope copy fixture should have a Shared source.")
+    source_path = _standalone_profile_path(widget, shared_scope, source.filename)
+    source_bytes = source_path.read_bytes()
+
+    widget._copy_selected_profile_to_other_scope(shared_scope, source.fingerprint)
+    copied_account = widget._get_selected_profile(account_scope)
+    _expect(copied_account is not None, "Shared to Account Copy should create a destination standalone file.")
+    _expect(
+        copied_account.key != source.key
+        and copied_account.display_name == source.display_name
+        and copied_account.saved_at_unix_ms == source.saved_at_unix_ms
+        and copied_account.serialized_payload == source.serialized_payload,
+        "Existing in-app Shared to Account Copy should allocate a fresh destination ID while preserving content metadata.",
+    )
+    _expect(widget.loaded_profile_provenance is None, "Copy must not transfer loaded-profile provenance or apply the destination.")
+
+    widget.profile_name_inputs[account_scope] = "Account Copy"
+    widget._rename_selected_profile(account_scope)
+    account_copy = widget._get_selected_profile(account_scope)
+    _expect(account_copy is not None and account_copy.display_name == "Account Copy", "The copied Account profile should be independently renameable.")
+    widget._copy_selected_profile_to_other_scope(account_scope)
+    copied_shared = widget._get_selected_profile(shared_scope)
+    _expect(
+        copied_shared is not None
+        and copied_shared.key not in {source.key, account_copy.key}
+        and copied_shared.display_name == "Account Copy"
+        and copied_shared.serialized_payload == account_copy.serialized_payload,
+        "Existing in-app Account to Shared Copy should also allocate a fresh destination ID.",
+    )
+
+    manual_filename = "Manual Shared Copy.json"
+    manual_path = _standalone_profile_path(widget, account_scope, manual_filename)
+    manual_path.write_bytes(source_bytes)
+    _expect(widget._refresh_profile_entries(account_scope, reload_document=True), "Refresh should discover a manually copied standalone file in the other scope.")
+    manual_entries = [entry for entry in widget.profile_entries[account_scope] if entry.filename == manual_filename]
+    _expect(
+        len(manual_entries) == 1
+        and manual_entries[0].key == source.key
+        and manual_entries[0].identity == module.ProfileIdentity(account_scope, source.key),
+        "Manual byte-for-byte cross-scope file copy should preserve the intrinsic ID while scope remains part of runtime identity.",
+    )
+    duplicate_manual_path = _standalone_profile_path(widget, account_scope, "Manual Shared Copy Duplicate.json")
+    duplicate_manual_path.write_bytes(source_bytes)
+    _expect(widget._refresh_profile_entries(account_scope, reload_document=True), "An exact duplicate file should remain safe to scan.")
+    same_id_entries = [entry for entry in widget.profile_entries[account_scope] if entry.key == source.key]
+    _expect(
+        len(same_id_entries) == 1
+        and "only" in widget.saved_profile_scan_warnings[account_scope],
+        "Same-ID same-content files should not overwrite one another and should surface a duplicate-file warning.",
+    )
+    _expect(manual_path.is_file() and duplicate_manual_path.is_file(), "Duplicate-file handling must leave both physical source files intact.")
+
+
+def _test_jsonfactory_profile_migration_is_resumable_and_payload_preserving(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    shared_scope = module.PROFILE_SCOPE_SHARED
+    account_scope = module.PROFILE_SCOPE_ACCOUNT
+    shared_legacy_key = "profile_" + "e" * 32
+    account_legacy_key = "Legacy Account Profile"
+    legacy_payload = _minimal_profile_payload(module, version=35, favorite_outpost_ids=[21])
+    legacy_payload["legacy_payload_marker"] = {"preserve": True}
+
+    def _legacy_wrapper(name: str, timestamp: int, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "schema": module.PROFILE_BACKEND.SHARED_PROFILE_SCHEMA,
+            "schema_version": module.PROFILE_BACKEND.SHARED_PROFILE_SCHEMA_VERSION,
+            "name": name,
+            "saved_at_unix_ms": timestamp,
+            "saved_at": "legacy timestamp",
+            "payload": json.loads(json.dumps(payload)),
+        }
+
+    shared_legacy = _legacy_wrapper("Migrated Shared", 101, legacy_payload)
+    account_legacy = _legacy_wrapper("Migrated Account", 202, legacy_payload)
+    malformed_legacy_key = "Malformed Legacy Profile"
+    malformed_legacy = {"schema": "unsupported_legacy_schema", "payload": {"buy_rules": []}}
+    shared_doc = _saved_profiles_doc(module, shared_scope)
+    account_doc = _saved_profiles_doc(module, account_scope)
+    shared_doc.set_json(shared_legacy_key, shared_legacy)
+    shared_doc.set_json(malformed_legacy_key, malformed_legacy)
+    account_doc.set_json(account_legacy_key, account_legacy)
+    _expect(shared_doc.save() and account_doc.save(), "The migration fixture should persist the old bundled profile collections.")
+    shared_before = shared_doc.get_json("", {})
+    account_before = account_doc.get_json("", {})
+    legacy_provenance = module.LoadedProfileProvenance(
+        source_identity=module.ProfileIdentity(account_scope, account_legacy_key),
+        display_name_snapshot="Migrated Account",
+        normalized_content_fingerprint=widget._shareable_profile_content_fingerprint(
+            widget._serialize_shareable_profile_payload(
+                widget._normalize_profile_payload(legacy_payload)
+            )
+        ),
+        associated_at_unix_ms=303,
+    )
+    provenance_doc = module.JsonFactory(module.LOADED_PROFILE_STATE_DOC_NAME)
+    provenance_doc.set_json("", widget._loaded_profile_provenance_to_json(legacy_provenance))
+    _expect(provenance_doc.save(), "The migration provenance fixture should persist its legacy Account source key.")
+
+    _expect(widget._refresh_profile_entries(shared_scope, reload_document=True), "Shared legacy profiles should migrate during the first refresh.")
+    _expect(widget._refresh_profile_entries(account_scope, reload_document=True), "Account legacy profiles should migrate during the first refresh.")
+    migrated_shared = widget._get_profile_by_identity(module.ProfileIdentity(shared_scope, shared_legacy_key))
+    migrated_account = next((entry for entry in widget.profile_entries[account_scope] if entry.display_name == "Migrated Account"), None)
+    _expect(migrated_shared is not None and migrated_account is not None, "Both legacy scopes should produce standalone entries.")
+    _expect(
+        not any(entry.display_name == malformed_legacy_key for entry in widget.profile_entries[shared_scope])
+        and "was not migrated" in widget.saved_profile_scan_warnings[shared_scope],
+        "A malformed legacy entry should be isolated while valid legacy entries continue migrating.",
+    )
+    _expect(
+        migrated_account.key != account_legacy_key
+        and module.PROFILE_BACKEND.is_valid_profile_id(migrated_account.key),
+        "Account legacy migration should use a fresh opaque ID rather than an old account-derived key.",
+    )
+    _expect(shared_doc.get_json("", {}) == shared_before and account_doc.get_json("", {}) == account_before, "Migration must leave the old bundled input documents untouched.")
+
+    migrated_shared_path = _standalone_profile_path(widget, shared_scope, migrated_shared.filename)
+    migrated_account_path = _standalone_profile_path(widget, account_scope, migrated_account.filename)
+    migrated_shared_raw = json.loads(migrated_shared_path.read_text(encoding="utf-8"))
+    migrated_account_raw = json.loads(migrated_account_path.read_text(encoding="utf-8"))
+    _expect(migrated_shared_raw["profile_id"] == shared_legacy_key, "A valid opaque Shared legacy key should remain the migrated profile ID.")
+    _expect(migrated_account_raw["profile_id"] == migrated_account.key, "The Account migration target should contain its newly allocated opaque ID.")
+    _expect(migrated_shared_raw["payload"] == legacy_payload and migrated_account_raw["payload"] == legacy_payload, "Migration must preserve the stored legacy payload instead of rewriting v35-v39 data to v39.")
+    _expect(migrated_shared_raw["payload"]["version"] == 35, "The migrated standalone payload should retain its original version marker.")
+
+    migration_state = module.JsonFactory(module.PROFILE_MIGRATION_STATE_DOC_NAME).get_json("", {})
+    account_record = migration_state.get("entries", {}).get(account_legacy_key, {})
+    _expect(account_record.get("profile_id") == migrated_account.key and account_record.get("status") == "migrated", "Account old-key to new-ID mapping must be durable in the migration state before completion.")
+    remapped_provenance = provenance_doc.get_json("", {})
+    _expect(
+        remapped_provenance.get("source_scope") == account_scope
+        and remapped_provenance.get("source_key") == migrated_account.key
+        and remapped_provenance.get("associated_at_unix_ms") == 303,
+        "A valid legacy Account loaded-profile record should follow the fresh migrated ID without changing its provenance timestamp.",
+    )
+    shared_migration_state = module.JsonFactory(
+        module.PROFILE_MIGRATION_STATE_DOC_NAME,
+        "global",
+    ).get_json("", {})
+    malformed_record = shared_migration_state.get("entries", {}).get(malformed_legacy_key, {})
+    _expect(malformed_record.get("status") == "invalid", "Malformed legacy entries should leave an explicit invalid migration record for later diagnosis.")
+    shared_bytes_before_resume = migrated_shared_path.read_bytes()
+    account_bytes_before_resume = migrated_account_path.read_bytes()
+    _expect(widget._refresh_profile_entries(shared_scope, reload_document=True) and widget._refresh_profile_entries(account_scope, reload_document=True), "A completed migration should remain refreshable.")
+    _expect(migrated_shared_path.read_bytes() == shared_bytes_before_resume and migrated_account_path.read_bytes() == account_bytes_before_resume, "A repeated migration pass must be idempotent and must not rewrite standalone payload bytes.")
+
+    _reset_jsonfactory_persistence_fixture(module)
+    interrupted_widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    interrupted_doc = _saved_profiles_doc(module, shared_scope)
+    interrupted_key = "profile_" + "1" * 32
+    interrupted_raw = _legacy_wrapper("Interrupted", 404, _minimal_profile_payload(module, favorite_outpost_ids=[1]))
+    interrupted_doc.set_json(interrupted_key, interrupted_raw)
+    _expect(interrupted_doc.save(), "The interruption fixture should persist its legacy source document.")
+
+    class SimulatedMigrationInterruption(BaseException):
+        pass
+
+    original_persist_profile_wrapper = interrupted_widget._persist_profile_wrapper
+
+    def _interrupt_migration(*_args, **_kwargs):
+        raise SimulatedMigrationInterruption()
+
+    interrupted_widget._persist_profile_wrapper = _interrupt_migration
+    try:
+        _expect_raises(
+            SimulatedMigrationInterruption,
+            lambda: interrupted_widget._refresh_profile_entries(shared_scope, reload_document=True),
+            "A simulated interruption should escape before a migration entry is marked complete.",
+        )
+    finally:
+        interrupted_widget._persist_profile_wrapper = original_persist_profile_wrapper
+    interrupted_state = module.JsonFactory(module.PROFILE_MIGRATION_STATE_DOC_NAME, "global").get_json("", {})
+    interrupted_record = interrupted_state.get("entries", {}).get(interrupted_key, {})
+    _expect(interrupted_record.get("status") == "pending", "An interrupted migration should retain its durable pending old-key mapping.")
+    _expect(interrupted_widget._refresh_profile_entries(shared_scope, reload_document=True), "A later refresh should resume an interrupted migration from its pending mapping.")
+    resumed_entry = interrupted_widget._get_profile_by_identity(module.ProfileIdentity(shared_scope, interrupted_key))
+    _expect(resumed_entry is not None and _standalone_profile_path(interrupted_widget, shared_scope, resumed_entry.filename).is_file(), "The resumed migration should create the pending standalone target without allocating a second identity.")
+
+    _reset_jsonfactory_persistence_fixture(module)
+    retry_widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    retry_doc = _saved_profiles_doc(module, shared_scope)
+    retry_key = "profile_" + "2" * 32
+    retry_doc.set_json(
+        retry_key,
+        _legacy_wrapper("Retryable Migration", 505, _minimal_profile_payload(module, favorite_outpost_ids=[2])),
+    )
+    _expect(retry_doc.save(), "The retryable migration fixture should persist its legacy source document.")
+    retry_original_persist = retry_widget._persist_profile_wrapper
+    retry_failures = {"remaining": 1}
+
+    def _fail_migration_once(*args, **kwargs):
+        if retry_failures["remaining"]:
+            retry_failures["remaining"] -= 1
+            raise OSError("simulated profile-file write failure")
+        return retry_original_persist(*args, **kwargs)
+
+    retry_widget._persist_profile_wrapper = _fail_migration_once
+    try:
+        _expect(retry_widget._refresh_profile_entries(shared_scope, reload_document=True), "A retryable migration write failure should be isolated without aborting refresh.")
+    finally:
+        retry_widget._persist_profile_wrapper = retry_original_persist
+    retry_state = module.JsonFactory(module.PROFILE_MIGRATION_STATE_DOC_NAME, "global").get_json("", {})
+    retry_record = retry_state.get("entries", {}).get(retry_key, {})
+    _expect(retry_record.get("status") == "pending", "An ordinary migration persistence failure should remain pending rather than becoming permanently invalid.")
+    _expect(retry_widget._refresh_profile_entries(shared_scope, reload_document=True), "A later refresh should retry an ordinary migration persistence failure.")
+    retry_entry = retry_widget._get_profile_by_identity(module.ProfileIdentity(shared_scope, retry_key))
+    _expect(retry_entry is not None and retry_failures["remaining"] == 0, "The retry should reuse the pending opaque identity and materialize the standalone target.")
+
+
+def _test_jsonfactory_profile_path_and_filename_jail(module) -> None:
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    production_source = Path(module.__file__).read_text(encoding="utf-8")
+    for forbidden_pattern in (
+        r"(?<![A-Za-z0-9_])open\s*\(",
+        r"json\.load\s*\(",
+        r"json\.dump\s*\(",
+        r"os\.remove\s*\(",
+        r"os\.unlink\s*\(",
+        r"os\.rename\s*\(",
+        r"os\.replace\s*\(",
+        r"\.read_text\s*\(",
+        r"\.write_text\s*\(",
+    ):
+        _expect(
+            re.search(forbidden_pattern, production_source) is None,
+            f"Merchant Rules profile storage must not use {forbidden_pattern} in production.",
+        )
+    _expect(widget._profile_directory_from_bound_doc(module.PROFILE_SCOPE_SHARED).endswith(os.path.join("Widgets", "MerchantRules", "Profiles")), "Shared profile discovery should be grounded by the bound SharedProfiles JsonFactory path.")
+    _expect(widget._profile_directory_from_bound_doc(module.PROFILE_SCOPE_ACCOUNT).endswith(os.path.join("Widgets", "MerchantRules", "Profiles")), "Account profile discovery should be grounded by the bound Profiles JsonFactory path.")
+    for unsafe_filename in (
+        "../escape.json",
+        "nested/file.json",
+        "no-extension.txt",
+        "bad:name.json",
+        "..json",
+        "CON.json",
+        "PRN.json",
+        "AUX.json",
+        "NUL.json",
+        "COM1.json",
+        "LPT1.json",
+        "trailing .json",
+        "trailing..json",
+        "control\x01.json",
+        ("x" * 181) + ".json",
+    ):
+        _expect_raises(ValueError, lambda value=unsafe_filename: widget._validate_profile_filename(value), f"Unsafe profile filename {unsafe_filename!r} should be rejected.")
+    _expect(widget._sanitize_profile_filename_stem("A/B: C") == "A-B- C", "Human-readable filename sanitization should replace path and Windows separator characters.")
+    _expect(widget._sanitize_profile_filename_stem("CON") == "_CON", "Windows reserved profile names should be made safe without exposing an unsafe target.")
+    unicode_stem = widget._sanitize_profile_filename_stem("Café + ファーム")
+    _expect(unicode_stem == "Café + ファーム" and len(widget._sanitize_profile_filename_stem("x" * 500)) <= 180, "Unicode profile names should remain readable and overlong names should be bounded.")
+    _expect(widget._refresh_profile_entries(module.PROFILE_SCOPE_SHARED, reload_document=True), "Filename collision fixtures should be able to initialize the Shared profile directory.")
+    collision_wrapper = widget._build_shared_profile_wrapper(
+        "Default",
+        profile_id="profile_" + "f" * 32,
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[1]),
+    )
+    _write_standalone_profile(widget, module.PROFILE_SCOPE_SHARED, "Default.json", collision_wrapper)
+    _expect(widget._allocate_profile_filename(module.PROFILE_SCOPE_SHARED, "Default") == "Default (2).json", "A used human-readable filename should receive a readable numeric suffix.")
+    _write_standalone_profile(widget, module.PROFILE_SCOPE_SHARED, "DEFAULT (2).json", collision_wrapper | {"profile_id": "profile_" + "1" * 32})
+    _expect(widget._allocate_profile_filename(module.PROFILE_SCOPE_SHARED, "default") == "default (3).json", "Filename allocation should treat Windows filename collisions case-insensitively.")
+
+
+def _test_jsonfactory_standalone_stale_mutation_protection(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    scope = module.PROFILE_SCOPE_SHARED
+    widget.profile_name_inputs[scope] = "Stale Target"
+    widget._save_current_as_new_profile(scope)
+    selected = widget._get_selected_profile(scope)
+    _expect(selected is not None, "The standalone stale-mutation fixture should have a selected target.")
+    target_path = _standalone_profile_path(widget, scope, selected.filename)
+
+    externally_overwritten = widget._build_shared_profile_wrapper(
+        "Stale Target",
+        profile_id=selected.key,
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[9]),
+        saved_at_unix_ms=9,
+    )
+    _write_standalone_profile(widget, scope, selected.filename, externally_overwritten)
+    widget.favorite_outpost_ids = [2]
+    widget._save_current_over_selected_profile(scope, selected.fingerprint)
+    _expect(
+        json.loads(target_path.read_text(encoding="utf-8")) == externally_overwritten
+        and "changed elsewhere" in widget.saved_profile_warnings[scope],
+        "A stale standalone Replace must preserve external content and require reconfirmation.",
+    )
+
+    current = widget._get_selected_profile(scope)
+    _expect(current is not None, "The stale standalone Rename fixture should retain the exact identity.")
+    externally_renamed = widget._build_shared_profile_wrapper(
+        "External Rename",
+        profile_id=current.key,
+        payload=current.payload,
+        saved_at_unix_ms=current.saved_at_unix_ms,
+        saved_at_label=current.saved_at_label,
+    )
+    _write_standalone_profile(widget, scope, current.filename, externally_renamed)
+    widget.profile_name_inputs[scope] = "Local Rename"
+    widget._rename_selected_profile(scope, current.fingerprint)
+    _expect(
+        json.loads(target_path.read_text(encoding="utf-8"))["name"] == "External Rename"
+        and "changed elsewhere" in widget.saved_profile_warnings[scope],
+        "A stale standalone Rename must preserve an external display-name change.",
+    )
+
+    current = widget._get_selected_profile(scope)
+    _expect(current is not None, "The disappeared standalone profile fixture should retain a target before removal.")
+    target_path.unlink()
+    widget._save_current_over_selected_profile(scope, current.fingerprint)
+    _expect(
+        not target_path.exists()
+        and widget._get_selected_profile(scope) is None
+        and "disappeared" in widget.saved_profile_warnings[scope].casefold(),
+        "A missing standalone target must abort without recreating or retargeting the file.",
+    )
+
+
+def _test_jsonfactory_standalone_profile_refresh_timer(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    shared_scope = module.PROFILE_SCOPE_SHARED
+    account_scope = module.PROFILE_SCOPE_ACCOUNT
+    widget.profile_name_inputs[shared_scope] = "Before Shared Refresh"
+    widget._save_current_as_new_profile(shared_scope)
+    shared_selected = widget._get_selected_profile(shared_scope)
+    _expect(shared_selected is not None, "The standalone refresh-timer fixture should have a Shared profile.")
+    shared_profile_path = _standalone_profile_path(widget, shared_scope, shared_selected.filename)
+    externally_updated_shared = widget._build_shared_profile_wrapper(
+        "Periodic Refresh",
+        profile_id=shared_selected.key,
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[4]),
+        saved_at_unix_ms=4,
+    )
+    _write_standalone_profile(widget, shared_scope, shared_selected.filename, externally_updated_shared)
+
+    widget.profile_name_inputs[account_scope] = "Before Account Refresh"
+    widget._save_current_as_new_profile(account_scope)
+    account_selected = widget._get_selected_profile(account_scope)
+    _expect(account_selected is not None, "The standalone refresh-timer fixture should have an Account profile.")
+    account_new_profile = widget._build_shared_profile_wrapper(
+        "Periodic Account Discovery",
+        profile_id="profile_" + "b" * 32,
+        payload=_minimal_profile_payload(module, favorite_outpost_ids=[5]),
+        saved_at_unix_ms=5,
+    )
+    account_new_path = _write_standalone_profile(
+        widget,
+        account_scope,
+        "periodic-account-discovery.json",
+        account_new_profile,
+    )
+    live_payload_before_refresh = widget._serialize_shareable_profile_payload(
+        widget._build_shareable_profile_payload()
+    )
+    provenance_before_refresh = widget.loaded_profile_provenance
+
+    class ControlledTimer:
+        def __init__(self):
+            self.expired = False
+            self.reset_count = 0
+
+        def IsExpired(self):
+            return self.expired
+
+        def Reset(self):
+            self.reset_count += 1
+            self.expired = False
+
+    timer = ControlledTimer()
+    widget.shared_profile_refresh_timer = timer
+    widget.profile_name_inputs[shared_scope] = "Typed Shared Name"
+    widget.profile_name_input_dirty[shared_scope] = True
+    widget.profile_name_inputs[account_scope] = "Typed Account Name"
+    widget.profile_name_input_dirty[account_scope] = True
+    refresh_calls: list[tuple[str, bool]] = []
+    original_refresh = widget._refresh_profile_entries
+
+    def tracking_refresh(scope, **kwargs):
+        refresh_calls.append((scope, bool(kwargs.get("reload_document", False))))
+        return original_refresh(scope, **kwargs)
+
+    original_summary = widget._draw_live_configuration_profile_summary
+    original_saved_section = widget._draw_saved_profile_section
+    original_workspace_button = widget._draw_workspace_button
+    original_separator = getattr(module.PyImGui, "separator", None)
+    original_collapsing_header = getattr(module.PyImGui, "collapsing_header", None)
+    widget._draw_live_configuration_profile_summary = lambda *_args, **_kwargs: None
+    widget._draw_saved_profile_section = lambda *_args, **_kwargs: None
+    widget._draw_workspace_button = lambda *_args, **_kwargs: False
+    widget._refresh_profile_entries = tracking_refresh
+    module.PyImGui.separator = lambda *_args, **_kwargs: None
+    module.PyImGui.collapsing_header = lambda *_args, **_kwargs: False
+    try:
+        widget._draw_profiles_workspace()
+        _expect(
+            widget._get_selected_profile(shared_scope).display_name == "Before Shared Refresh"
+            and widget._get_selected_profile(account_scope).display_name == "Before Account Refresh"
+            and not refresh_calls
+            and timer.reset_count == 0,
+            "The standalone profile refresh timer must not reload either scope every frame.",
+        )
+        timer.expired = True
+        widget._draw_profiles_workspace()
+        discovered_account = widget._get_profile_by_identity(
+            module.ProfileIdentity(account_scope, account_new_profile["profile_id"])
+        )
+        _expect(
+            widget._get_selected_profile(shared_scope).display_name == "Periodic Refresh"
+            and discovered_account is not None
+            and discovered_account.filename == "periodic-account-discovery.json"
+            and widget._get_selected_profile(account_scope).key == account_selected.key
+            and refresh_calls == [(shared_scope, True), (account_scope, True)]
+            and timer.reset_count == 1
+            and widget.profile_name_inputs[shared_scope] == "Typed Shared Name"
+            and widget.profile_name_inputs[account_scope] == "Typed Account Name"
+            and widget.loaded_profile_provenance == provenance_before_refresh
+            and widget._serialize_shareable_profile_payload(widget._build_shareable_profile_payload())
+            == live_payload_before_refresh,
+            "An expired timer must reload both scopes, discover a new Account file, preserve selection and typed UI input, and avoid loading it.",
+        )
+        _expect(
+            shared_profile_path.is_file() and account_new_path.is_file(),
+            "A profile refresh must not replace or remove standalone profile files.",
+        )
+    finally:
+        widget._refresh_profile_entries = original_refresh
+        widget._draw_live_configuration_profile_summary = original_summary
+        widget._draw_saved_profile_section = original_saved_section
+        widget._draw_workspace_button = original_workspace_button
+        if original_separator is None:
+            delattr(module.PyImGui, "separator")
+        else:
+            module.PyImGui.separator = original_separator
+        if original_collapsing_header is None:
+            delattr(module.PyImGui, "collapsing_header")
+        else:
+            module.PyImGui.collapsing_header = original_collapsing_header
+
+
+def _test_jsonfactory_standalone_load_failure_rolls_back(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    live_doc = module.JsonFactory(module.LIVE_CONFIG_DOC_NAME)
+    baseline_payload = widget._normalize_profile_payload(
+        _minimal_profile_payload(module, favorite_outpost_ids=[1])
+    )
+    live_doc.set_json("", baseline_payload)
+    _expect(live_doc.save(), "The standalone load-failure fixture should persist a baseline live config.")
+    widget._load_profile()
+
+    scope = module.PROFILE_SCOPE_SHARED
+    widget.profile_name_inputs[scope] = "Different Profile"
+    widget._save_current_as_new_profile(scope)
+    selected = widget._get_selected_profile(scope)
+    _expect(selected is not None, "The standalone load-failure fixture should have a selected profile.")
+    widget.favorite_outpost_ids = [99]
+    save_key = module.PROFILE_BACKEND.LIVE_CONFIG_DOC_NAME
+    previous_save_result = module.JsonFactory._save_results.get(save_key, None)
+    module.JsonFactory._save_results[save_key] = False
+    try:
+        widget._load_selected_profile(scope, selected.fingerprint)
+    finally:
+        if previous_save_result is None:
+            module.JsonFactory._save_results.pop(save_key, None)
+        else:
+            module.JsonFactory._save_results[save_key] = previous_save_result
+    _expect(
+        live_doc.get_json("", {}) == baseline_payload
+        and module.JsonFactory._persisted_documents[save_key] == baseline_payload
+        and widget.favorite_outpost_ids == [99]
+        and "could not save" in widget.saved_profile_warnings[scope].casefold(),
+        "A failed standalone profile load must roll back the pending live write without changing runtime settings.",
+    )
 
 
 def _test_jsonfactory_backup_restore_without_window_geometry(module, temp_root: Path) -> None:
@@ -27768,32 +28683,36 @@ def main() -> int:
             ("modifier_parse_cache_reuses_hits_and_prunes_stale_entries", lambda: _test_modifier_parse_cache_reuses_hits_and_prunes_stale_entries(module)),
             ("supported_context_cache_partial_and_negative_entries_refresh_correctly", lambda: _test_supported_context_cache_partial_and_negative_entries_refresh_correctly(module)),
             (
-                "jsonfactory_dual_scope_profile_operations_and_validation",
-                lambda: _test_jsonfactory_dual_scope_profile_operations_and_validation(module, temp_root),
+                "jsonfactory_standalone_profile_lifecycle",
+                lambda: _test_jsonfactory_standalone_profile_lifecycle(module),
             ),
             (
-                "jsonfactory_legacy_suffix_profile_isolation",
-                lambda: _test_jsonfactory_legacy_suffix_profile_isolation(module),
+                "jsonfactory_create_blank_profile",
+                lambda: _test_jsonfactory_create_blank_profile(module),
             ),
             (
-                "jsonfactory_unreadable_profile_console_deduplication",
-                lambda: _test_jsonfactory_unreadable_profile_console_deduplication(module),
+                "jsonfactory_cross_scope_copy_and_manual_file_identity",
+                lambda: _test_jsonfactory_cross_scope_copy_and_manual_file_identity(module),
             ),
             (
-                "jsonfactory_shared_profile_stale_write_protection",
-                lambda: _test_jsonfactory_shared_profile_stale_write_protection(module),
+                "jsonfactory_profile_migration_is_resumable_and_payload_preserving",
+                lambda: _test_jsonfactory_profile_migration_is_resumable_and_payload_preserving(module),
             ),
             (
-                "jsonfactory_profile_refresh_on_open_and_interval",
-                lambda: _test_jsonfactory_profile_refresh_on_open_and_interval(module),
+                "jsonfactory_profile_path_and_filename_jail",
+                lambda: _test_jsonfactory_profile_path_and_filename_jail(module),
             ),
             (
-                "jsonfactory_saved_profile_load_failure_rolls_back_pending_write",
-                lambda: _test_jsonfactory_saved_profile_load_failure_rolls_back_pending_write(module),
+                "jsonfactory_standalone_stale_mutation_protection",
+                lambda: _test_jsonfactory_standalone_stale_mutation_protection(module),
             ),
             (
-                "jsonfactory_shared_profile_post_reload_mismatch_reports_failure",
-                lambda: _test_jsonfactory_shared_profile_post_reload_mismatch_reports_failure(module),
+                "jsonfactory_standalone_profile_refresh_timer",
+                lambda: _test_jsonfactory_standalone_profile_refresh_timer(module),
+            ),
+            (
+                "jsonfactory_standalone_load_failure_rolls_back",
+                lambda: _test_jsonfactory_standalone_load_failure_rolls_back(module),
             ),
             (
                 "profile_confirmation_binds_exact_scope_key_and_fingerprint",
