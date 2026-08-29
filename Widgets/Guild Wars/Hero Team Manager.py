@@ -83,6 +83,11 @@ _code_edit_template_id = ''
 _code_edit_draft = ''
 _selected_apply_target_hero_id = 0
 _selected_alt_account_email = ''
+_expanded_alt_account_settings: set[tuple[str, int]] = set()
+_alt_ui_team_id = ''
+_alt_drag_team_id = ''
+_alt_drag_from: int | None = None
+_alt_drag_to: int | None = None
 _confirm_action = ''
 _confirm_title = ''
 _confirm_message = ''
@@ -136,6 +141,7 @@ FLOATING_ICON_WINDOW_NAME = 'Hero Team Manager Toggle'
 TEMPLATE_GROUP_ORDER_SECTION = 'Templates'
 TEMPLATE_GROUP_ORDER_KEY = 'profession_group_order'
 TEMPLATE_GROUP_DRAG_HANDLE_WIDTH = 34.0
+ALT_ACCOUNT_DRAG_HANDLE_WIDTH = 34.0
 TEMPLATE_FILTER_SECTION = 'Teams'
 TEMPLATE_FILTER_KEY = 'only_show_compatible_templates'
 UI_COLOR_SUCCESS = (0.45, 0.82, 0.45, 1.0)
@@ -438,6 +444,13 @@ def _input_text(label: str, value: str, max_len: int = 512) -> str:
         result = PyImGui.input_text(label, str(value))
     text = str(result[1]) if isinstance(result, tuple) and len(result) >= 2 else str(result)
     return text[:max_len] if max_len > 0 else text
+
+
+def _set_next_item_width(width: float) -> None:
+    try:
+        PyImGui.set_next_item_width(float(width))
+    except Exception:
+        pass
 
 
 def _button(label: str, width: int = 0, height: int = 0) -> bool:
@@ -804,8 +817,19 @@ def _status_severity(message: str) -> str:
 
 def _show_item_tooltip(text: str) -> None:
     try:
-        if PyImGui.is_item_hovered():
+        hovered_flags = getattr(getattr(PyImGui, 'HoveredFlags', None), 'AllowWhenDisabled', 0)
+        if hovered_flags:
+            hovered = bool(PyImGui.is_item_hovered(int(hovered_flags)))
+        else:
+            hovered = bool(PyImGui.is_item_hovered())
+        if hovered:
             PyImGui.set_tooltip(str(text))
+    except TypeError:
+        try:
+            if PyImGui.is_item_hovered():
+                PyImGui.set_tooltip(str(text))
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -2171,12 +2195,461 @@ def _preflight_warning_count(preflight) -> int:
     )
 
 
+_ALT_STATUS_LABELS = {
+    'ready': 'Ready',
+    'active': 'Available',
+    'query_required': 'Available',
+    'checking_party': 'Checking...',
+    'invite_waiting': 'Joining...',
+    'joined': 'In party',
+    'in_party': 'In party',
+    'wrong_character': 'Wrong character',
+    'unresolved': 'No character logged in',
+    'offline': 'Offline',
+    'stale': 'Offline',
+    'different_map': 'Not on this map',
+    'incompatible_party': 'In another party',
+    'ambiguous_party': 'Cannot verify party',
+    'duplicate': 'Duplicate account',
+    'disabled': 'Not included',
+    'isolated': 'Unavailable',
+    'invalid': 'Choose an account',
+    'local_account': 'Choose another account',
+    'ambiguous': 'Unavailable',
+    'party_changed_before_invite': 'Party changed',
+    'timeout': 'Timed out',
+    'failure': 'Could not join',
+    'unavailable': 'Unavailable',
+}
+
+
+def _masked_account_identity(account_email: str) -> str:
+    value = str(account_email or '').strip()
+    if not value:
+        return ''
+    if value.casefold() == 'default':
+        return value
+    if '@' not in value:
+        return f'{value[:2]}***' if len(value) > 1 else '***'
+    local, domain = value.split('@', 1)
+    masked_local = f'{local[:2]}***' if len(local) > 2 else '***'
+    return f'{masked_local}@{domain}'
+
+
+def _alt_status_label(status: str) -> str:
+    return _ALT_STATUS_LABELS.get(str(status or '').strip().lower(), 'Unavailable')
+
+
+def _alt_status_severity(status: str) -> str:
+    status_code = str(status or '').strip().lower()
+    if status_code in {'ready', 'joined', 'in_party'}:
+        return 'success'
+    if status_code in {
+        'active',
+        'query_required',
+        'checking_party',
+        'invite_waiting',
+        'different_map',
+        'party_changed_before_invite',
+    }:
+        return 'warning'
+    if status_code == 'disabled':
+        return 'info'
+    return 'error'
+
+
+def _alt_row_subject(binding: AltAccountBinding, status: AltAccountStatus | None, row_index: int) -> str:
+    email = str(binding.account_email or '').strip()
+    alias = str(binding.alias or '').strip()
+    if alias and alias.casefold() != email.casefold():
+        return alias
+    character_name = str(getattr(status, 'character_name', '') or '').strip() if status is not None else ''
+    if character_name:
+        return character_name
+    return _masked_account_identity(email) or f'Alt {row_index + 1}'
+
+
+def _alt_row_details(binding: AltAccountBinding, status: AltAccountStatus | None, subject: str) -> list[str]:
+    details: list[str] = []
+    character_name = str(getattr(status, 'character_name', '') or '').strip() if status is not None else ''
+    if character_name and character_name.casefold() != subject.casefold():
+        details.append(f'Current: {character_name}')
+    profession = str(getattr(status, 'profession_label', '') or '').strip() if status is not None else ''
+    if profession and profession.casefold() != 'unknown':
+        details.append(profession)
+    return details
+
+
+def _alt_settings_key(team, binding: AltAccountBinding) -> tuple[str, int]:
+    team_id = str(getattr(team, 'team_id', '') or '').strip()
+    return (team_id, id(binding))
+
+
+def _clear_alt_drag_state() -> None:
+    global _alt_drag_team_id, _alt_drag_from, _alt_drag_to
+    _alt_drag_team_id = ''
+    _alt_drag_from = None
+    _alt_drag_to = None
+
+
+def _draw_alt_drag_handle(
+    team_id: str,
+    row_index: int,
+    *,
+    is_source: bool,
+    is_target: bool,
+    selectable_flags,
+    disabled: bool,
+) -> None:
+    global _alt_drag_team_id, _alt_drag_from, _alt_drag_to
+    marker = '>>' if is_source else '[::]'
+    began_disabled = _begin_disabled(disabled)
+    try:
+        try:
+            PyImGui.selectable(
+                f'{marker}##hero_team_alt_drag_handle_{row_index}',
+                bool(is_source or is_target),
+                selectable_flags,
+                (ALT_ACCOUNT_DRAG_HANDLE_WIDTH, 0.0),
+            )
+        except Exception:
+            PyImGui.selectable(
+                f'{marker}##hero_team_alt_drag_handle_{row_index}',
+                bool(is_source or is_target),
+            )
+    finally:
+        _end_disabled(began_disabled)
+    _show_item_tooltip(
+        'Wait for the team to finish loading before changing the order.'
+        if disabled
+        else 'Drag to change the order accounts join the team. Current party members are not moved.'
+    )
+    if disabled:
+        return
+    try:
+        if PyImGui.is_item_active() and PyImGui.is_mouse_dragging(0, 0.0):
+            _alt_drag_team_id = team_id
+            _alt_drag_from = int(row_index)
+            _alt_drag_to = int(row_index)
+        if (
+            _alt_drag_team_id == team_id
+            and _alt_drag_from is not None
+            and PyImGui.is_item_hovered()
+        ):
+            _alt_drag_to = int(row_index)
+    except Exception:
+        pass
+
+
+def _finish_alt_drag(team, *, disabled: bool) -> None:
+    if _alt_drag_from is None:
+        return
+    try:
+        mouse_down = bool(PyImGui.is_mouse_down(0))
+    except Exception:
+        mouse_down = False
+    if mouse_down:
+        return
+
+    source_team_id = _alt_drag_team_id
+    source_index = _alt_drag_from
+    target_index = _alt_drag_to if _alt_drag_to is not None else source_index
+    team_id = str(getattr(team, 'team_id', '') or '').strip()
+    _clear_alt_drag_state()
+    if disabled or source_team_id != team_id or target_index is None:
+        return
+
+    members = team.alt_members
+    if not (0 <= source_index < len(members) and 0 <= target_index < len(members)):
+        return
+    if source_index == target_index:
+        return
+
+    moved = members.pop(source_index)
+    insert_at = int(target_index)
+    if target_index > source_index:
+        insert_at += 1
+    members.insert(min(insert_at, len(members)), moved)
+    _mark_dirty('Account order changed. Click Save to keep it.')
+
+
+def _alt_choice_label(choice: AltAccountStatus) -> str:
+    email = str(choice.account_email or '').strip()
+    display_name = str(choice.character_name or choice.display_name or '').strip()
+    if not display_name or display_name.casefold() == email.casefold():
+        display_name = 'Account'
+    parts = [display_name]
+    profession = str(choice.profession_label or '').strip()
+    if profession and profession.casefold() != 'unknown':
+        parts.append(profession)
+    masked_email = _masked_account_identity(email)
+    if masked_email:
+        parts.append(masked_email)
+    return ' | '.join(parts)
+
+
+def _alt_status_tooltip(
+    binding: AltAccountBinding,
+    status: AltAccountStatus | None,
+    status_code: str,
+) -> str:
+    code = str(status_code or '').strip().lower()
+    current = str(getattr(status, 'character_name', '') or '').strip() if status is not None else ''
+    expected = str(binding.expected_character_name or '').strip()
+    messages = {
+        'ready': 'This account passed the party check and is ready to join.',
+        'active': 'Available. Load Team will make sure this account is free before inviting it.',
+        'query_required': 'Available. Load Team will make sure this account is free before inviting it.',
+        'checking_party': 'Checking whether this account is already in another party.',
+        'invite_waiting': 'Invite sent; waiting for this account to join.',
+        'joined': 'This account is already in the party.',
+        'in_party': 'This account is already in the party.',
+        'unresolved': 'No character logged in.',
+        'offline': 'This account is offline or its information is out of date.',
+        'stale': 'This account is offline or its information is out of date.',
+        'different_map': 'This account must be on this map.',
+        'incompatible_party': 'This account is already in another party.',
+        'ambiguous_party': 'Could not verify whether this account is free.',
+        'duplicate': 'Choose a single row for this account.',
+        'disabled': 'This account is not included in this team.',
+        'isolated': 'This account is unavailable right now.',
+        'invalid': 'Choose an account for this row.',
+        'local_account': 'This is the current account. Choose another account.',
+        'ambiguous': 'Could not identify this account right now.',
+        'party_changed_before_invite': 'The party changed before this account could be invited.',
+        'timeout': 'This account did not respond in time.',
+        'failure': 'Could not confirm that this account joined.',
+        'unavailable': 'Live account status is unavailable.',
+    }
+    if code == 'wrong_character':
+        tooltip = '\n'.join(
+            (
+                'Wrong character is logged in.',
+                f'Expected: {expected or "Any character"}',
+                f'Current: {current or "No character logged in"}',
+            )
+        )
+    else:
+        tooltip = messages.get(code, 'Live account status is unavailable.')
+    masked_email = _masked_account_identity(binding.account_email)
+    if masked_email:
+        tooltip = f'{tooltip}\nAccount: {masked_email}'
+    return tooltip
+
+
+def _preflight_alt_status(preflight, row: int) -> AltAccountStatus | None:
+    for status in list(getattr(preflight, 'alt_statuses', []) or []):
+        try:
+            if int(status.binding_index) == int(row - 1):
+                return status
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return None
+
+
+def _alt_status_subject(status: AltAccountStatus, row: int) -> str:
+    email = str(status.account_email or '').strip()
+    display_name = str(status.display_name or '').strip()
+    if display_name and display_name.casefold() != email.casefold():
+        return display_name
+    character_name = str(status.character_name or '').strip()
+    if character_name:
+        return character_name
+    return _masked_account_identity(email) or f'Alt {row}'
+
+
+def _friendly_alt_blocker(status: AltAccountStatus | None, row: int) -> str:
+    if status is None:
+        return f'Alt {row} is not ready to join.'
+    code = str(status.status or '').strip().lower()
+    subject = _alt_status_subject(status, row)
+    if code == 'invalid':
+        return f'Choose an account for Alt {row}.'
+    if code == 'local_account':
+        return f'Alt {row} is the current account. Choose another account.'
+    if code == 'duplicate':
+        return 'Duplicate account entries must be corrected.'
+    if code == 'wrong_character':
+        return f'{subject} has the wrong character logged in.'
+    if code == 'unresolved':
+        return f'{subject} has no character logged in.'
+    if code in {'offline', 'stale'}:
+        return f'{subject} is offline.'
+    if code == 'different_map':
+        return f'{subject} is not on this map.'
+    if code == 'incompatible_party':
+        return f'{subject} is in another party.'
+    if code == 'ambiguous_party':
+        return f'Cannot verify {subject}\'s party.'
+    if code in {'ambiguous', 'isolated'}:
+        return f'{subject} is unavailable.'
+    if code == 'party_changed_before_invite':
+        return f'{subject} could not be invited because the party changed.'
+    if code == 'timeout':
+        return f'{subject} did not respond in time.'
+    if code == 'failure':
+        return f'Could not confirm that {subject} joined.'
+    return f'{subject} is not ready to join.'
+
+
+def _friendly_blocking_message(message: str, preflight=None) -> str:
+    text = str(message or '').strip()
+    lower = text.casefold()
+    row: int | None = None
+    row_prefix = 'Alt account row '
+    if text.startswith(row_prefix):
+        row_token = text[len(row_prefix):].split(' ', 1)[0].rstrip(':')
+        try:
+            row = int(row_token)
+        except (TypeError, ValueError):
+            row = None
+
+    if row is not None:
+        status = _preflight_alt_status(preflight, row) if preflight is not None else None
+        if 'left or changed state' in lower:
+            subject = _alt_status_subject(status, row) if status is not None else f'Alt {row}'
+            return f'{subject} is no longer ready to join.'
+        if 'has no account email' in lower:
+            return f'Choose an account for Alt {row}.'
+        if 'duplicates row' in lower or 'duplicated by another configured row' in lower:
+            return 'Duplicate account entries must be corrected.'
+        if status is not None:
+            return _friendly_alt_blocker(status, row)
+        return f'Alt {row} is not ready to join.'
+
+    if text.startswith('Load skipped: requested party would use '):
+        usage = text[len('Load skipped: requested party would use '):].rstrip('.').replace(
+            'available slots', 'party slots'
+        )
+        return f'Team needs {usage}.'
+    if 'remote or unknown-owner heroes prevent' in lower:
+        return 'Some current heroes cannot be safely replaced.'
+    if 'configured alt identities do not map uniquely' in lower:
+        return 'Could not match configured accounts to the current party.'
+    if 'current party already exceeds' in lower:
+        return "The current party is already over this map's limit."
+    if 'selected team has no non-empty hero slots' in lower:
+        return 'Choose at least one hero for this team.'
+    if 'no available hero slot' in lower:
+        return 'There is no room for another hero.'
+    if 'no team selected' in lower:
+        return 'Select a team first.'
+    if 'local account identity' in lower:
+        return 'Could not identify the current account.'
+    if 'local player login identity' in lower:
+        return 'Could not identify the current player.'
+    if 'current map is not an outpost' in lower:
+        return 'Team loading is available in outposts only.'
+    if 'could not verify current map' in lower:
+        return 'Could not verify the current map.'
+    if 'current character is not party leader' in lower:
+        return 'You must be the party leader.'
+    if 'could not verify party leader' in lower:
+        return 'Could not verify party leadership.'
+    if 'current party is not fully loaded' in lower:
+        return 'Wait for the party to finish loading.'
+    if 'current party components are inconsistent' in lower:
+        return 'The current party is still changing. Try again.'
+    if 'current map party capacity is unavailable' in lower:
+        return 'Could not determine party capacity.'
+    if 'current party identity is unavailable' in lower:
+        return 'Could not verify the current party.'
+    if 'current party size is unavailable' in lower:
+        return 'Could not read the current party.'
+    if 'local player is not uniquely present' in lower:
+        return 'Could not verify your place in the party.'
+    if lower.startswith('load skipped:'):
+        return 'Cannot load this team right now.'
+    return 'Cannot load this team right now.'
+
+
+def _friendly_blocking_reasons(preflight) -> list[str]:
+    reasons: list[str] = []
+    for message in list(getattr(preflight, 'blocking_messages', []) or []):
+        reason = _friendly_blocking_message(str(message), preflight)
+        if reason and reason not in reasons:
+            reasons.append(reason)
+    return reasons or ['Cannot load this team right now.']
+
+
+def _friendly_operation_message(message: str) -> str:
+    text = str(message or '').strip()
+    lower = text.casefold()
+    if not text:
+        return ''
+    if lower.startswith('checking party state for '):
+        return f'Checking {text[len("Checking party state for "):].rstrip(".")}...'
+    if lower == 'checking authoritative local party state.':
+        return 'Checking party...'
+    if lower == 'verified solo by authoritative partystatequery.':
+        return 'Ready to join.'
+    if lower.startswith('invite sent to '):
+        subject = text[len('Invite sent to '):].split(';', 1)[0].rstrip('.')
+        return f'Joining {subject}...'
+    if lower == 'invite sent; waiting for observed party membership.':
+        return 'Joining...'
+    if lower == 'joined the main account party.':
+        return 'In party.'
+    if lower == 'party changed before the reciprocal invite; no reciprocal invite was sent.':
+        return 'The party changed before the account could join.'
+    if lower == 'timed out waiting for query, guard result, or party membership.':
+        return 'Timed out waiting for the account.'
+    if lower == 'party handshake failed.':
+        return 'Could not confirm that the account joined.'
+    if lower.startswith('waiting for ') and lower.endswith(' guard result.'):
+        subject = text[len('Waiting for '): -len(' guard result.')]
+        return f'Checking {subject}...'
+    if lower.startswith('waiting for ') and lower.endswith(' to join.'):
+        subject = text[len('Waiting for '): -len(' to join.')]
+        return f'Joining {subject}...'
+    if lower == 'alt joined; recalculating live party capacity.':
+        return 'Account joined; updating the party.'
+    if lower == 'alt joined; confirming the guarded reciprocal invite result.':
+        return 'Account joined; confirming the party.'
+    if lower == 'all configured alts are present; rechecking local hero ownership.':
+        return 'Accounts are in the party; checking heroes.'
+    if lower == 'clearing locally owned heroes; unmanaged occupants are retained.':
+        return 'Updating local heroes.'
+    if lower == 'applying local hero behavior.':
+        return 'Applying hero behavior.'
+    if lower == 'adding locally owned heroes.':
+        return 'Adding local heroes.'
+    if lower == 'waiting for requested local hero to appear.':
+        return 'Waiting for the requested hero.'
+    if lower == 'rechecking final mixed party composition.':
+        return 'Checking the final party.'
+    if lower.startswith('mixed team loaded:'):
+        return 'Team loaded.'
+    if lower.startswith('mixed load failed:') or lower.startswith('mixed load failed '):
+        if 'timed out' in lower and ('query' in lower or 'party-state' in lower or 'party state' in lower):
+            return 'Could not check the account in time.'
+        if 'could not be verified' in lower:
+            return 'Could not confirm the account joined.'
+        if 'timed out' in lower:
+            return 'Timed out waiting for the account.'
+        if 'query' in lower or 'party-state' in lower or 'party state' in lower:
+            return 'Could not check the account.'
+        return 'Could not load the team.'
+    if lower.startswith('mixed load blocked'):
+        return 'Cannot load the team.'
+    return text
+
+
+def _count_label(count: int, singular: str, plural: str | None = None) -> str:
+    value = max(0, int(count))
+    word = singular if value == 1 else (plural or f'{singular}s')
+    return f'{value} {word}'
+
+
 def _draw_preflight_summary(preflight) -> None:
     if preflight is None:
         return
     blocking = list(getattr(preflight, 'blocking_messages', []) or [])
     if blocking:
-        _warning_text(f'Load blocked: {" ".join(blocking)}', 'error')
+        reasons = _friendly_blocking_reasons(preflight)
+        suffix = f' (+{len(reasons) - 1} more)' if len(reasons) > 1 else ''
+        _warning_text(f'Cannot load: {reasons[0]}{suffix}', 'error')
+        _show_item_tooltip('\n'.join(f'- {reason}' for reason in reasons))
         return
     warnings = [
         warning
@@ -2187,36 +2660,53 @@ def _draw_preflight_summary(preflight) -> None:
         _warning_text(f'Preflight: {" ".join(warnings)}', 'warning')
 
 
-def _alt_status_severity(status: str) -> str:
-    if status in {'ready', 'joined', 'in_party'}:
-        return 'success'
-    if status in {'active', 'query_required', 'checking_party', 'invite_waiting', 'disabled'}:
-        return 'info'
-    return 'error'
-
-
 def _draw_alt_accounts(config: HeroTeamConfig, team, *, disabled: bool, preflight=None) -> None:
-    global _selected_alt_account_email, _status
+    global _alt_ui_team_id, _expanded_alt_account_settings, _selected_alt_account_email, _status
+
+    team_id = str(getattr(team, 'team_id', '') or '').strip()
+    if team_id != _alt_ui_team_id:
+        _alt_ui_team_id = team_id
+        _expanded_alt_account_settings.clear()
+        _clear_alt_drag_state()
+    valid_settings_keys = {_alt_settings_key(team, binding) for binding in team.alt_members}
+    _expanded_alt_account_settings.intersection_update(valid_settings_keys)
+    if disabled:
+        _clear_alt_drag_state()
 
     PyImGui.separator()
     PyImGui.text('Alt Accounts')
-    _muted_text('Configured accounts join as players. Heroes owned by those accounts are not managed here.')
+    _muted_text('Add other accounts as players. Their heroes stay untouched.')
 
-    choices = active_alt_account_choices()
+    active_choices = active_alt_account_choices()
+    configured_account_keys = {
+        str(binding.account_email or '').strip().casefold()
+        for binding in team.alt_members
+        if str(binding.account_email or '').strip()
+    }
+    choices = [
+        choice
+        for choice in active_choices
+        if str(choice.account_email or '').strip().casefold() not in configured_account_keys
+    ]
     if choices:
-        labels = [
-            f'{choice.display_name or choice.account_email} | {choice.profession_label or "Unknown"}'
-            for choice in choices
-        ]
+        labels = [_alt_choice_label(choice) for choice in choices]
         selected_index = next(
             (index for index, choice in enumerate(choices) if choice.account_email == _selected_alt_account_email),
             0,
         )
-        selected_index = _combo('Add account##hero_team_alt_picker', selected_index, labels)
+        began_disabled = _begin_disabled(disabled)
+        try:
+            selected_index = _combo('##hero_team_alt_picker', selected_index, labels)
+        finally:
+            _end_disabled(began_disabled)
         selected_index = max(0, min(selected_index, len(choices) - 1))
         _selected_alt_account_email = str(choices[selected_index].account_email or '')
+        _show_item_tooltip(
+            f'Account: {_masked_account_identity(choices[selected_index].account_email)}\n'
+            'Only the account is added; its heroes stay untouched.'
+        )
         _same_line(8)
-        if _button_disabled('Add Alt##hero_team_add_alt', disabled, 82, 24):
+        if _button_disabled('Add account##hero_team_add_alt', disabled, 100, 24):
             selected = choices[selected_index]
             existing = any(
                 str(binding.account_email or '').strip().casefold()
@@ -2228,8 +2718,14 @@ def _draw_alt_accounts(config: HeroTeamConfig, team, *, disabled: bool, prefligh
             else:
                 team.alt_members.append(AltAccountBinding(account_email=str(selected.account_email or '').strip()))
                 _mark_dirty('Alt account added. Click Save to persist.')
+        _show_item_tooltip('Add the selected account to this team.')
     else:
-        _muted_text('No active alt accounts discovered in shared memory.')
+        if active_choices:
+            _muted_text('All available accounts are already in this team.')
+            _show_item_tooltip('Remove an account from this team before adding it again.')
+        else:
+            _muted_text('No other accounts are currently available.')
+            _show_item_tooltip('Accounts must be logged in to appear here.')
 
     statuses = list(getattr(preflight, 'alt_statuses', []) or []) if preflight is not None else []
     if not statuses and team.alt_members:
@@ -2241,52 +2737,80 @@ def _draw_alt_accounts(config: HeroTeamConfig, team, *, disabled: bool, prefligh
         int(status.binding_index): status for status in statuses if int(status.binding_index) >= 0
     }
     duplicate_indices = duplicate_alt_binding_indices(team)
-    if duplicate_indices:
-        _warning_text('Duplicate alt account identities must be corrected before mixed loading.', 'error')
 
     capacity = getattr(preflight, 'capacity', None) if preflight is not None else None
     if capacity is not None:
         plan = getattr(preflight, 'plan', None)
         target_count = len(plan.slots) if plan is not None else 0
+        configured_alt_count = sum(1 for binding in team.alt_members if bool(binding.enabled))
+        present_alt_count = max(0, int(getattr(capacity, 'configured_alt_present_count', 0) or 0))
         _colored_text(
-            f'Players: {capacity.local_player_count} main + {capacity.configured_alt_present_count} alts '
-            f'(+ {capacity.unmanaged_player_count} unmanaged)',
+            f'Players: {capacity.local_player_count} main + {configured_alt_count} alts '
+            f'({present_alt_count} already in party)',
             'info',
         )
-        _colored_text(
-            f'Heroes: {target_count} '
-            f'local target(s); {capacity.remote_hero_count + capacity.unknown_hero_count} unmanaged retained',
-            'info',
-        )
-        _colored_text(
-            f'Other occupants: {capacity.unmanaged_player_count} unmanaged player(s), '
-            f'{capacity.remote_hero_count + capacity.unknown_hero_count} remote/unmanaged hero(es), '
-            f'{capacity.henchman_count} henchman, {capacity.other_occupant_count} other',
-            'info',
-        )
+        _colored_text(f'Heroes: {target_count}', 'info')
+        _show_item_tooltip('Number of local heroes requested by this team.')
+        kept_members: list[str] = []
+        unmanaged_players = int(getattr(capacity, 'unmanaged_player_count', 0) or 0)
+        if unmanaged_players > 0:
+            kept_members.append(_count_label(unmanaged_players, 'other player'))
+        remote_heroes = int(getattr(capacity, 'remote_hero_count', 0) or 0)
+        unknown_heroes = int(getattr(capacity, 'unknown_hero_count', 0) or 0)
+        if remote_heroes > 0:
+            kept_members.append(_count_label(remote_heroes, 'hero owned by another account'))
+        if unknown_heroes > 0:
+            kept_members.append(_count_label(unknown_heroes, 'existing hero'))
+        henchmen = int(getattr(capacity, 'henchman_count', 0) or 0)
+        if henchmen > 0:
+            kept_members.append(_count_label(henchmen, 'henchman', 'henchmen'))
+        other_occupants = int(getattr(capacity, 'other_occupant_count', 0) or 0)
+        if other_occupants > 0:
+            kept_members.append(_count_label(other_occupants, 'other party member'))
+        if kept_members:
+            _muted_text(f'Existing members kept: {", ".join(kept_members)}')
         _colored_text(
             f'Party: {capacity.current_party_size}/{capacity.max_party_size} '
-            f'(forecast {capacity.forecast_final_slots})',
+            f'now; {capacity.forecast_final_slots}/{capacity.max_party_size} after load',
             'success' if capacity.forecast_final_slots <= capacity.max_party_size else 'error',
+        )
+        _show_item_tooltip(
+            'Now is the current party size. After load is the requested final size; existing members listed above stay.'
         )
 
     if not team.alt_members:
-        _muted_text('No alt accounts configured for this team.')
+        _muted_text('No other accounts added to this team.')
+        _finish_alt_drag(team, disabled=disabled)
         return
 
     removed = False
+    selectable_flags = getattr(getattr(PyImGui, 'SelectableFlags', None), 'NoFlag', 0)
     for index, binding in enumerate(team.alt_members):
         status = status_by_index.get(index)
-        status_code = str(status.status if status is not None else 'unresolved')
-        status_message = str(status.status_message if status is not None else 'Live status unavailable.')
+        status_code = str(status.status if status is not None else 'unavailable')
         if index in duplicate_indices:
             status_code = 'duplicate'
-            status_message = 'Duplicate account identity; correct this row before loading.'
 
         PyImGui.separator()
+        is_drag_source = _alt_drag_team_id == team_id and _alt_drag_from == index
+        is_drop_target = (
+            _alt_drag_team_id == team_id
+            and _alt_drag_from is not None
+            and _alt_drag_to == index
+            and _alt_drag_from != index
+        )
+        _draw_alt_drag_handle(
+            team_id,
+            index,
+            is_source=is_drag_source,
+            is_target=is_drop_target,
+            selectable_flags=selectable_flags,
+            disabled=disabled,
+        )
+        _same_line(4)
         began_disabled = _begin_disabled(disabled)
         try:
-            enabled = bool(PyImGui.checkbox(f'Enabled##hero_team_alt_enabled_{index}', bool(binding.enabled)))
+            enabled = bool(PyImGui.checkbox(f'Use##hero_team_alt_enabled_{index}', bool(binding.enabled)))
         except Exception:
             enabled = bool(binding.enabled)
         finally:
@@ -2294,39 +2818,75 @@ def _draw_alt_accounts(config: HeroTeamConfig, team, *, disabled: bool, prefligh
         if not disabled and enabled != bool(binding.enabled):
             binding.enabled = enabled
             _mark_dirty('Alt account enabled state changed. Click Save to persist.')
+        _show_item_tooltip('Include this account when loading the team.')
 
         _same_line(8)
-        label = str(binding.alias or binding.account_email or '(missing account)').strip()
-        _colored_text(label, _alt_status_severity(status_code))
-        if status is not None:
-            status_label = status_code.replace('_', ' ')
-            details = (
-                f'{status.character_name or "No character"} | '
-                f'{status.profession_label or "Unknown profession"} | {status_label}'
-            )
+        subject = _alt_row_subject(binding, status, index)
+        subject_label = f'{subject} <DROP>' if is_drop_target else subject
+        _colored_text(subject_label, _alt_status_severity(status_code))
+        for detail in _alt_row_details(binding, status, subject):
             _same_line(8)
-            _muted_text(details)
+            _muted_text(detail)
+        _same_line(12)
+        _colored_text(_alt_status_label(status_code), _alt_status_severity(status_code))
+        _show_item_tooltip(_alt_status_tooltip(binding, status, status_code))
+        settings_key = _alt_settings_key(team, binding)
+        settings_open = settings_key in _expanded_alt_account_settings
+        _same_line(12)
+        if _button_disabled(f'Settings##hero_team_alt_settings_{index}', disabled, 74, 22):
+            settings_open = not settings_open
+            if settings_open:
+                _expanded_alt_account_settings.add(settings_key)
+            else:
+                _expanded_alt_account_settings.discard(settings_key)
+        _show_item_tooltip('Show or hide the optional alias and required-character settings.')
         _same_line(8)
         if _button_disabled(f'Remove##hero_team_alt_remove_{index}', disabled, 74, 22):
+            _clear_alt_drag_state()
+            _expanded_alt_account_settings.discard(settings_key)
             team.alt_members.pop(index)
             _mark_dirty('Alt account removed. Click Save to persist.')
             removed = True
-        _show_item_tooltip(status_message)
+        _show_item_tooltip('Remove this account from the team.')
         if removed:
             break
 
-        alias = _input_text(f'Alias##hero_team_alt_alias_{index}', binding.alias, 64)
+        if not settings_open:
+            continue
+
+        _muted_text('Alias')
+        _same_line(4)
+        available_width = _content_width(720.0)
+        alias_width = min(220.0, max(140.0, available_width * 0.30))
+        expected_width = max(140.0, available_width - alias_width - 250.0)
+        _set_next_item_width(alias_width)
+        began_disabled = _begin_disabled(disabled)
+        try:
+            alias = _input_text(f'##hero_team_alt_alias_{index}', binding.alias, 64)
+        finally:
+            _end_disabled(began_disabled)
+        _show_item_tooltip('Optional name shown for this account.')
         if not disabled and alias != binding.alias:
             binding.alias = alias
             _mark_dirty('Alt account alias changed. Click Save to persist.')
-        expected = _input_text(
-            f'Expected character##hero_team_alt_expected_{index}',
-            binding.expected_character_name,
-            64,
+
+        _same_line(8)
+        _muted_text('Required character (optional)')
+        _same_line(4)
+        _set_next_item_width(expected_width)
+        began_disabled = _begin_disabled(disabled)
+        try:
+            expected = _input_text(f'##hero_team_alt_expected_{index}', binding.expected_character_name, 64)
+        finally:
+            _end_disabled(began_disabled)
+        _show_item_tooltip(
+            'If set, Load Team waits for this character. Leave blank to allow any character on the account.'
         )
         if not disabled and expected != binding.expected_character_name:
             binding.expected_character_name = expected
             _mark_dirty('Alt account character expectation changed. Click Save to persist.')
+
+    _finish_alt_drag(team, disabled=disabled)
 
 
 def _save_or_confirm(config: HeroTeamConfig, *, commit_code_edit: bool = False) -> None:
@@ -2635,7 +3195,9 @@ def _draw_teams_tab(config: HeroTeamConfig) -> None:
     if running:
         _show_item_tooltip('Team load is already running.')
     elif not bool(getattr(preflight, 'can_load', True)):
-        _show_item_tooltip('\n'.join(getattr(preflight, 'blocking_messages', []) or ['Load is blocked.']))
+        _show_item_tooltip('\n'.join(f'- {reason}' for reason in _friendly_blocking_reasons(preflight)))
+
+    _draw_preflight_summary(preflight)
 
     if not config.templates:
         PyImGui.separator()
@@ -2705,7 +3267,6 @@ def _draw_teams_tab(config: HeroTeamConfig) -> None:
     if warning_count:
         _same_line(8)
         _inline_status_text(f'Warnings {warning_count}', 'warning')
-    _draw_preflight_summary(preflight)
 
     _draw_alt_accounts(config, team, disabled=running, preflight=preflight)
 
@@ -2885,7 +3446,8 @@ def _draw_save_state_footer(config: HeroTeamConfig) -> None:
     global_dirty = _global_dirty(config)
 
     PyImGui.separator()
-    _muted_text(f'Account: {_active_account_label(config)}')
+    account_label = _masked_account_identity(_active_account_label(config)) or 'default'
+    _muted_text(f'Account: {account_label}')
     _same_line(12)
     if not dirty:
         save_label = 'Saved'
@@ -2950,7 +3512,7 @@ def main() -> None:
 
         if _status:
             PyImGui.separator()
-            _colored_text(_status, _status_severity(_status), wrapped=True)
+            _colored_text(_friendly_operation_message(_status), _status_severity(_status), wrapped=True)
         _end_window()
     except Exception as exc:
         _log_error(exc)

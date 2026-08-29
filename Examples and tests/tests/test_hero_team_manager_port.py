@@ -683,6 +683,14 @@ class HeroTeamManagerPortTests(unittest.TestCase):
             [binding['account_email'] for binding in payload['teams'][0]['alt_members']],
             ['first@example.com', 'second@example.com'],
         )
+        account_document = self.module._config_document()
+        account_document.data = {}
+        self.module.save_account_config(config, 'test-account')
+        round_tripped = self.module.load_config('test-account')
+        self.assertEqual(
+            [binding.account_email for binding in round_tripped.teams[0].alt_members],
+            ['first@example.com', 'second@example.com'],
+        )
 
     def test_duplicate_alt_bindings_are_preserved_and_block_mixed_load(self) -> None:
         team = self._team_with_alts(['duplicate@example.com', 'DUPLICATE@EXAMPLE.COM'])
@@ -698,6 +706,91 @@ class HeroTeamManagerPortTests(unittest.TestCase):
             [binding['account_email'] for binding in self.module.config_to_dict(config)['teams'][0]['alt_members']],
             ['duplicate@example.com', 'DUPLICATE@EXAMPLE.COM'],
         )
+
+    def test_duplicate_team_preserves_alt_order_and_binding_fields(self) -> None:
+        source = self._team_with_alts(['zulu@example.com', 'alpha@example.com', 'middle@example.com'])
+        source.alt_members[0].enabled = False
+        source.alt_members[0].alias = 'Zulu'
+        source.alt_members[1].expected_character_name = 'Alpha'
+        config = self.module.HeroTeamConfig(active_team_id=source.team_id, teams=[source])
+
+        duplicate = self.module.duplicate_team(config, source.team_id)
+
+        self.assertIsNotNone(duplicate)
+        self.assertEqual(
+            [binding.account_email for binding in duplicate.alt_members],
+            ['zulu@example.com', 'alpha@example.com', 'middle@example.com'],
+        )
+        self.assertEqual(duplicate.alt_members[0].enabled, False)
+        self.assertEqual(duplicate.alt_members[0].alias, 'Zulu')
+        self.assertEqual(duplicate.alt_members[1].expected_character_name, 'Alpha')
+        self.assertIsNot(duplicate.alt_members[0], source.alt_members[0])
+
+    def test_widget_alt_reorder_preserves_bindings_and_marks_account_dirty(self) -> None:
+        team = self._team_with_alts(['first@example.com', 'second@example.com', 'third@example.com'])
+        first, second, third = team.alt_members
+        first.alias = 'First'
+        first.expected_character_name = 'First Character'
+        first.enabled = False
+
+        widget = self.widget
+        old_mark_dirty = widget._mark_dirty
+        had_mouse_down = hasattr(widget.PyImGui, 'is_mouse_down')
+        old_mouse_down = getattr(widget.PyImGui, 'is_mouse_down', None)
+        dirty_messages: list[str] = []
+        try:
+            setattr(widget, '_mark_dirty', lambda message: dirty_messages.append(str(message)))
+            setattr(widget.PyImGui, 'is_mouse_down', lambda _button: False)
+            setattr(widget, '_alt_drag_team_id', team.team_id)
+            setattr(widget, '_alt_drag_from', 0)
+            setattr(widget, '_alt_drag_to', 2)
+            widget._finish_alt_drag(team, disabled=False)
+        finally:
+            setattr(widget, '_mark_dirty', old_mark_dirty)
+            if had_mouse_down:
+                setattr(widget.PyImGui, 'is_mouse_down', old_mouse_down)
+            else:
+                delattr(widget.PyImGui, 'is_mouse_down')
+
+        self.assertEqual(
+            [binding.account_email for binding in team.alt_members],
+            ['second@example.com', 'third@example.com', 'first@example.com'],
+        )
+        self.assertIs(team.alt_members[2], first)
+        self.assertIs(team.alt_members[0], second)
+        self.assertIs(team.alt_members[1], third)
+        self.assertEqual(team.alt_members[2].alias, 'First')
+        self.assertEqual(team.alt_members[2].expected_character_name, 'First Character')
+        self.assertFalse(team.alt_members[2].enabled)
+        self.assertEqual(dirty_messages, ['Account order changed. Click Save to keep it.'])
+        self.assertIsNone(widget._alt_drag_from)
+        self.assertIsNone(widget._alt_drag_to)
+
+    def test_mixed_load_uses_configured_alt_order_without_sorting(self) -> None:
+        order = ['zulu@example.com', 'alpha@example.com', 'middle@example.com']
+        team = self._team_with_alts(order)
+        accounts = [
+            _FakeAccountRecord('alpha@example.com', 3, 'Alpha'),
+            _FakeAccountRecord('middle@example.com', 4, 'Middle'),
+            _FakeAccountRecord('zulu@example.com', 2, 'Zulu'),
+        ]
+        preflight = self._mixed_preflight(team, active_accounts=accounts, all_accounts=accounts)
+
+        self.assertEqual([status.account_email for status in preflight.alt_statuses], order)
+
+        party = _FakePartyApi([_FakePartyPlayer(1)])
+        shared_memory = _FakeSharedMemory(accounts)
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            self.assertFalse(operation.tick())
+
+            self.assertEqual(operation._invite_indices, [0, 1, 2])
+            self.assertEqual(shared_memory.messages[0][0:2], ('main@example.com', 'zulu@example.com'))
+        finally:
+            self._restore_runtime_modules(previous)
 
     def test_local_account_cannot_be_configured_as_an_alt(self) -> None:
         team = self._team_with_alts(['main@example.com'])
