@@ -451,7 +451,7 @@ def _install_stub_modules(project_root: Path) -> None:
     core.JsonFactory = DummyJsonFactory
     core.Map = types.SimpleNamespace(
         GetMapID=lambda: 100,
-        GetInstanceUptime=lambda: 0,
+        GetInstanceUptime=lambda: 2000,
         IsMapReady=lambda: True,
         IsOutpost=lambda: True,
         IsGuildHall=lambda: False,
@@ -470,10 +470,18 @@ def _install_stub_modules(project_root: Path) -> None:
         GetAccountEmail=lambda: "merchant.rules@example.com",
         GetName=lambda: "Merchant Rules Tester",
         GetXY=lambda: (0.0, 0.0),
+        IsPlayerLoaded=lambda: True,
+        GetAgentID=lambda: 1,
+        GetInstanceUptime=lambda: 2000,
         GetSkillPointData=lambda: (100, 100),
         GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
     )
     core.Routines = types.SimpleNamespace(
+        Checks=types.SimpleNamespace(
+            Map=types.SimpleNamespace(
+                MapValid=lambda: bool(core.Map.IsMapReady()),
+            ),
+        ),
         Yield=types.SimpleNamespace(
             wait=_empty_generator,
             Map=types.SimpleNamespace(TravelToOutpost=_empty_generator),
@@ -913,7 +921,13 @@ def _prime_initialized_widget(module, widget):
     widget.catalog_loaded = True
     widget.initialized = True
     widget.account_key = widget._get_account_key()
+    widget.map_ready_snapshot = bool(module.Map.IsMapReady())
     widget.map_snapshot = int(module.Map.GetMapID() or 0)
+    widget.map_instance_uptime_snapshot_ms = int(module.Map.GetInstanceUptime() or 0)
+    widget._merchant_rules_lifecycle_map_ready_snapshot = widget.map_ready_snapshot
+    widget._merchant_rules_lifecycle_map_snapshot = widget.map_snapshot
+    widget._merchant_rules_lifecycle_uptime_snapshot_ms = widget.map_instance_uptime_snapshot_ms
+    widget.merchant_rules_lifecycle_generation = max(1, int(widget.merchant_rules_lifecycle_generation))
     return widget
 
 
@@ -5985,7 +5999,8 @@ def _test_inventory_shortcut_material_storage_refresh_keeps_popup_open(module) -
         widget._get_inventory_shortcut_live_item_for_action = lambda item_id, model_id: (material, "")
         widget.account_key = "test-account"
         widget.config_path = "test-profile.json"
-        widget.map_snapshot = 42
+        widget.map_ready_snapshot = True
+        widget.map_snapshot = 100
         widget.map_instance_uptime_snapshot_ms = 1000
         widget.inventory_shortcuts_popup_visible = True
         widget.inventory_shortcuts_selected_item = material
@@ -6243,7 +6258,8 @@ def _test_inventory_shortcut_material_storage_count_refresh_cache(module) -> Non
         widget._get_inventory_shortcut_live_item_for_action = lambda item_id, model_id: (material, "")
         widget.account_key = "test-account"
         widget.config_path = "test-profile.json"
-        widget.map_snapshot = 42
+        widget.map_ready_snapshot = True
+        widget.map_snapshot = 100
         widget.map_instance_uptime_snapshot_ms = 1000
 
         label, enabled = widget._format_inventory_shortcut_material_storage_withdraw_label(material)
@@ -17997,6 +18013,9 @@ def _test_consumable_multistop_execute_crafts_then_runs_destination_work(module)
             GetFreeSlotCount=lambda: 10,
         )
         module.Player = types.SimpleNamespace(
+            IsPlayerLoaded=lambda: True,
+            GetAgentID=lambda: 1,
+            GetInstanceUptime=lambda: 2000,
             GetSkillPointData=lambda: (5, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -18125,6 +18144,9 @@ def _test_consumable_multistop_execute_stops_at_embark_when_only_consumables(mod
             GetFreeSlotCount=lambda: 10,
         )
         module.Player = types.SimpleNamespace(
+            IsPlayerLoaded=lambda: True,
+            GetAgentID=lambda: 1,
+            GetInstanceUptime=lambda: 2000,
             GetSkillPointData=lambda: (5, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -18202,6 +18224,9 @@ def _test_consumable_multistop_execute_here_stays_local(module) -> None:
             GetFreeSlotCount=lambda: 10,
         )
         module.Player = types.SimpleNamespace(
+            IsPlayerLoaded=lambda: True,
+            GetAgentID=lambda: 1,
+            GetInstanceUptime=lambda: 2000,
             GetSkillPointData=lambda: (5, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -24224,6 +24249,498 @@ def _test_owned_queue_marks_pending_before_first_tick_and_preserves_sentinels(mo
             delattr(module.GLOBAL_CACHE, "Coroutines")
 
 
+def _install_lifecycle_test_state(module, state: dict[str, object]) -> dict[str, object]:
+    originals = {
+        "map_ready": module.Map.IsMapReady,
+        "map_id": module.Map.GetMapID,
+        "map_uptime": module.Map.GetInstanceUptime,
+        "map_outpost": module.Map.IsOutpost,
+        "map_guild_hall": module.Map.IsGuildHall,
+        "player_loaded": module.Player.IsPlayerLoaded,
+        "player_agent": module.Player.GetAgentID,
+        "player_uptime": module.Player.GetInstanceUptime,
+        "map_valid": module.Routines.Checks.Map.MapValid,
+    }
+    module.Map.IsMapReady = lambda: bool(state["map_ready"])
+    module.Map.GetMapID = lambda: int(state["map_id"])
+    module.Map.GetInstanceUptime = lambda: int(state["map_uptime"])
+    module.Map.IsOutpost = lambda: bool(state["outpost"])
+    module.Map.IsGuildHall = lambda: bool(state["guild_hall"])
+    module.Player.IsPlayerLoaded = lambda: bool(state["player_loaded"])
+    module.Player.GetAgentID = lambda: int(state["player_agent"])
+    module.Player.GetInstanceUptime = lambda: int(state["player_uptime"])
+    module.Routines.Checks.Map.MapValid = lambda: bool(state["party_ready"])
+    return originals
+
+
+def _restore_lifecycle_test_state(module, originals: dict[str, object]) -> None:
+    module.Map.IsMapReady = originals["map_ready"]
+    module.Map.GetMapID = originals["map_id"]
+    module.Map.GetInstanceUptime = originals["map_uptime"]
+    module.Map.IsOutpost = originals["map_outpost"]
+    module.Map.IsGuildHall = originals["map_guild_hall"]
+    module.Player.IsPlayerLoaded = originals["player_loaded"]
+    module.Player.GetAgentID = originals["player_agent"]
+    module.Player.GetInstanceUptime = originals["player_uptime"]
+    module.Routines.Checks.Map.MapValid = originals["map_valid"]
+
+
+def _test_lifecycle_readiness_gate_contract(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": False,
+        "map_id": 0,
+        "map_uptime": 0,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": False,
+        "player_loaded": False,
+        "player_agent": 0,
+        "player_uptime": 0,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    try:
+        widget = _make_widget(module)
+        widget.cleanup_targets = [module.CleanupTarget(model_id=111, keep_on_character=0)]
+        blocked_actions = ("preview", "execute", "execute_here", "cleanup", "identify", "salvage", "destroy")
+        for action in blocked_actions:
+            reason = widget._get_action_block_reason(action)
+            _expect(reason, f"{action} must be blocked while the map is loading.")
+            _expect(
+                "map" in reason.lower() or "load" in reason.lower(),
+                f"{action} should explain that map readiness is the blocking boundary.",
+            )
+        remote_reason = widget._get_remote_execute_wait_reason()
+        _expect(remote_reason, "Remote Execute must defer while the map is loading.")
+
+        build_calls: list[str] = []
+        widget._build_plan = lambda **_kwargs: build_calls.append("unexpected") or module.PlanResult()
+        _expect(not widget._scan_preview(), "Preview must not run while the map is loading.")
+        _expect(not build_calls, "Blocked Preview must not build transition-sensitive planning state.")
+
+        state.update(
+            map_ready=True,
+            map_id=100,
+            map_uptime=100,
+            party_ready=True,
+            player_loaded=True,
+            player_agent=1,
+            player_uptime=100,
+        )
+        _expect(
+            "settle" in widget._merchant_rules_lifecycle_block_reason().lower(),
+            "A map that has not reached the established uptime boundary must remain blocked.",
+        )
+        state["map_uptime"] = 2000
+        state["player_loaded"] = False
+        _expect(
+            "player" in widget._merchant_rules_lifecycle_block_reason().lower(),
+            "An unloaded player must block Merchant Rules work.",
+        )
+        state["player_loaded"] = True
+        state["player_agent"] = 0
+        _expect(
+            "agent" in widget._merchant_rules_lifecycle_block_reason().lower(),
+            "A missing player agent must block Merchant Rules work.",
+        )
+        state["player_agent"] = 1
+        state["player_uptime"] = 100
+        _expect(
+            "player instance" in widget._merchant_rules_lifecycle_block_reason().lower(),
+            "A player instance that has not settled must block Merchant Rules work.",
+        )
+        state["player_uptime"] = 2000
+        state["party_ready"] = False
+        _expect(
+            "party" in widget._merchant_rules_lifecycle_block_reason().lower(),
+            "An invalid party state must block Merchant Rules work.",
+        )
+        state["party_ready"] = True
+        state["outpost"] = False
+        _expect(
+            not widget._merchant_rules_lifecycle_block_reason()
+            and "outpost" in widget._merchant_rules_lifecycle_block_reason(require_service=True).lower(),
+            "Common work may be ready outside a service map, but service operations must remain blocked.",
+        )
+        state["outpost"] = True
+        _expect(
+            not widget._merchant_rules_lifecycle_block_reason()
+            and not widget._merchant_rules_lifecycle_block_reason(require_service=True),
+            "A settled map, party, player, and service context must satisfy the lifecycle contract.",
+        )
+    finally:
+        _restore_lifecycle_test_state(module, originals)
+
+
+def _test_lifecycle_defers_initial_work_and_invalidates_stale_work(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": False,
+        "map_id": 0,
+        "map_uptime": 0,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": False,
+        "player_loaded": False,
+        "player_agent": 0,
+        "player_uptime": 0,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    try:
+        widget = _make_widget(module)
+        work_events: list[str] = []
+        action_events: list[str] = []
+        callbacks = []
+        widget.preview_ready = True
+        widget.preview_plan = module.PlanResult(supported_map=True, has_actions=True)
+
+        def _work():
+            work_events.append("started")
+            callbacks.append(widget._track_merchant_rules_owned_action(lambda: action_events.append("ran")))
+            yield "paused"
+            work_events.append("continued")
+
+        owned_work = widget._track_merchant_rules_owned_work(_work())
+        _expect(next(owned_work) is None, "Work queued before the first valid map must defer instead of starting.")
+        _expect(not work_events, "Deferred work must not enter its generator while the map is loading.")
+        _expect(widget.merchant_rules_owned_work_count == 1, "Deferred work must remain owned while it waits.")
+
+        state.update(
+            map_ready=True,
+            map_id=100,
+            map_uptime=2000,
+            party_ready=True,
+            player_loaded=True,
+            player_agent=1,
+            player_uptime=2000,
+        )
+        _expect(next(owned_work) == "paused", "Initial loading should hand deferred work a fresh valid lifecycle.")
+        _expect(work_events == ["started"] and len(callbacks) == 1, "Deferred work should start once the lifecycle is valid.")
+
+        state["map_id"] = 101
+        callbacks[0]()
+        _expect(not action_events, "A queued MR callback from the old map must not execute after a map change.")
+        _expect(widget.merchant_rules_owned_action_count == 0, "A discarded stale callback must release its ownership lease.")
+        _expect(
+            _drain_generator_return(owned_work) is None
+            and work_events == ["started"]
+            and widget.merchant_rules_owned_work_count == 0,
+            "Stale owned work must close before its generator can continue in the new map.",
+        )
+        _expect(not widget.preview_ready and not widget.preview_plan.entries, "A map transition must invalidate stale preview state.")
+    finally:
+        _restore_lifecycle_test_state(module, originals)
+
+
+def _test_lifecycle_remote_and_automatic_loading_deferral(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": False,
+        "map_id": 0,
+        "map_uptime": 0,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": False,
+        "player_loaded": False,
+        "player_agent": 0,
+        "player_uptime": 0,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    original_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
+    had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
+    try:
+        remote_widget = _make_widget(module)
+        remote_events: list[str] = []
+
+        def _remote_work(_message):
+            remote_events.append("started")
+            yield "paused"
+            remote_events.append("finished")
+
+        remote_widget._handle_shared_multibox_message = _remote_work
+        remote_message = types.SimpleNamespace(
+            Params=(float(module.MERCHANT_RULES_OPCODE_EXECUTE), 0.0, 0.0, 0.0),
+            ExtraData=("loading-remote", "", "", ""),
+        )
+        remote_generator = remote_widget.handle_shared_multibox_message(remote_message)
+        _expect(next(remote_generator) is None, "Remote Execute received during loading must wait before entering its handler.")
+        _expect(not remote_events, "Remote Execute must not begin while the map is loading.")
+
+        state.update(
+            map_ready=True,
+            map_id=100,
+            map_uptime=2000,
+            party_ready=True,
+            player_loaded=True,
+            player_agent=1,
+            player_uptime=2000,
+        )
+        _expect(next(remote_generator) == "paused", "Remote Execute should begin after the initial lifecycle becomes valid.")
+        _drain_generator_return(remote_generator)
+        _expect(remote_events == ["started", "finished"], "Deferred Remote Execute should complete normally once ready.")
+
+        auto_widget = _make_widget(module)
+        auto_widget.gold_balance_enabled = True
+        auto_widget.gold_balance_on_outpost_entry = True
+        module.GLOBAL_CACHE.Coroutines = []
+        state.update(
+            map_ready=False,
+            map_id=0,
+            map_uptime=0,
+            party_ready=False,
+            player_loaded=False,
+            player_agent=0,
+            player_uptime=0,
+        )
+        auto_widget._update_auto_gold_runtime()
+        _expect(not module.GLOBAL_CACHE.Coroutines and not auto_widget.gold_entry_attempted, "Automatic gold maintenance must defer on first loading entry.")
+
+        state.update(
+            map_ready=True,
+            map_id=100,
+            map_uptime=2000,
+            party_ready=True,
+            player_loaded=True,
+            player_agent=1,
+            player_uptime=2000,
+        )
+        auto_widget._update_auto_gold_runtime()
+        _expect(
+            len(module.GLOBAL_CACHE.Coroutines) == 1 and auto_widget.gold_entry_attempted,
+            "Automatic gold maintenance should queue only after the lifecycle predicate is satisfied.",
+        )
+        queued = module.GLOBAL_CACHE.Coroutines.pop()
+        queued.close()
+        _expect(auto_widget.merchant_rules_owned_work_count == 0, "Closing the deferred automatic work must release its ownership marker.")
+    finally:
+        if had_coroutines:
+            module.GLOBAL_CACHE.Coroutines = original_coroutines
+        elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
+            delattr(module.GLOBAL_CACHE, "Coroutines")
+        _restore_lifecycle_test_state(module, originals)
+
+
+def _test_lifecycle_remote_dispatch_during_transition_rebinds_once(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 100,
+        "map_uptime": 5000,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 5000,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    try:
+        widget = _prime_initialized_widget(module, _make_widget(module))
+        source_work_events: list[str] = []
+        source_action_events: list[str] = []
+        source_callbacks = []
+        remote_events: list[str] = []
+
+        def _source_work():
+            source_work_events.append("started")
+            source_callbacks.append(
+                widget._track_merchant_rules_owned_action(
+                    lambda: source_action_events.append("ran")
+                )
+            )
+            yield "source paused"
+            source_work_events.append("continued")
+
+        source_work = widget._track_merchant_rules_owned_work(_source_work())
+        _expect(next(source_work) == "source paused", "Source work should start in its valid lifecycle.")
+
+        state.update(
+            map_ready=False,
+            map_id=0,
+            map_uptime=0,
+            party_ready=False,
+            player_loaded=False,
+            player_agent=0,
+            player_uptime=0,
+        )
+
+        def _remote_dispatch():
+            remote_events.append("started")
+            yield "destination paused"
+            remote_events.append("finished")
+
+        remote_message = types.SimpleNamespace(
+            Params=(float(module.MERCHANT_RULES_OPCODE_EXECUTE), 0.0, 0.0, 0.0),
+            ExtraData=("transition-remote", "", "", ""),
+        )
+        remote_dispatch = widget.track_merchant_rules_remote_dispatch(
+            remote_message,
+            _remote_dispatch(),
+        )
+
+        source_callbacks[0]()
+        _expect(not source_action_events, "Loading observed at remote queue time must invalidate stale source callbacks.")
+        _expect(
+            _drain_generator_return(source_work) is None
+            and source_work_events == ["started"]
+            and widget.merchant_rules_owned_work_count == 0,
+            "Already-running source work must remain bound to its stale lifecycle and stop.",
+        )
+        _expect(next(remote_dispatch) is None, "A new remote dispatch received during loading must wait.")
+        _expect(not remote_events, "The new remote dispatch must not enter its handler while loading.")
+
+        state.update(
+            map_ready=True,
+            map_id=101,
+            map_uptime=100,
+            party_ready=True,
+            player_loaded=True,
+            player_agent=1,
+            player_uptime=100,
+        )
+        _expect(
+            next(remote_dispatch) is None
+            and not remote_events
+            and widget.merchant_rules_remote_dispatch_count == 1,
+            "Destination identity at low uptime must keep the new remote dispatch alive and waiting.",
+        )
+
+        state.update(
+            map_uptime=2000,
+            player_uptime=2000,
+        )
+        _expect(
+            next(remote_dispatch) == "destination paused",
+            "The waiting remote dispatch must bind once to the settled destination lifecycle.",
+        )
+        _drain_generator_return(remote_dispatch)
+        _expect(
+            remote_events == ["started", "finished"]
+            and widget.merchant_rules_remote_dispatch_count == 0,
+            "The destination-bound remote dispatch should complete normally and release its lease.",
+        )
+    finally:
+        _restore_lifecycle_test_state(module, originals)
+
+
+def _test_lifecycle_same_map_uptime_rollback_invalidates_preview(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 100,
+        "map_uptime": 5000,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 5000,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    try:
+        widget = _prime_initialized_widget(module, _make_widget(module))
+        widget.preview_ready = True
+        widget.preview_plan = module.PlanResult(supported_map=True, has_actions=True)
+        widget._set_preview_projection_state(
+            requires_travel=True,
+            target_outpost_id=200,
+            target_outpost_name="Projected Destination",
+        )
+        widget.preview_inventory_diff_summary = "stale diff"
+        widget.preview_inventory_diff_rows = ["stale row"]
+        widget.execute_drift_requires_confirmation = True
+        callback_events: list[str] = []
+        stale_callback = widget._track_merchant_rules_owned_action(
+            lambda: callback_events.append("ran")
+        )
+        source_generation = widget.merchant_rules_lifecycle_generation
+
+        state["map_uptime"] = 6000
+        _expect(
+            widget._refresh_merchant_rules_lifecycle_state() == source_generation
+            and widget.preview_ready,
+            "Normal same-instance uptime progression must preserve the lifecycle and Preview.",
+        )
+
+        state["map_uptime"] = 100
+        destination_generation = widget._refresh_merchant_rules_lifecycle_state()
+        stale_callback()
+        _expect(
+            destination_generation > source_generation,
+            "A same-map uptime rollback must renew the lifecycle generation.",
+        )
+        _expect(
+            not callback_events and widget.merchant_rules_owned_action_count == 0,
+            "Callbacks captured in the previous same-map instance must be rejected and released.",
+        )
+        _expect(
+            not widget.preview_ready
+            and not widget.preview_plan.has_actions
+            and not widget.preview_requires_execute_travel
+            and widget.preview_execute_travel_target_outpost_id == 0
+            and not widget.preview_execute_travel_target_outpost_name
+            and not widget.preview_inventory_diff_summary
+            and not widget.preview_inventory_diff_rows
+            and not widget.execute_drift_requires_confirmation,
+            "Same-map instance rollover must invalidate Preview, projection, diff, and execution gating state.",
+        )
+    finally:
+        _restore_lifecycle_test_state(module, originals)
+
+
+def _test_lifecycle_planned_travel_establishes_destination_boundary(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 1,
+        "map_uptime": 2000,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 2000,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    try:
+        widget = _prime_initialized_widget(module, _make_widget(module))
+        starting_generation = widget.merchant_rules_lifecycle_generation
+        travel_events: list[tuple[str, int]] = []
+
+        def _fake_travel(target_outpost_id: int):
+            travel_events.append(("travel", int(target_outpost_id)))
+            state.update(
+                map_ready=False,
+                map_id=0,
+                map_uptime=0,
+                party_ready=False,
+                player_loaded=False,
+                player_agent=0,
+                player_uptime=0,
+            )
+            yield "map loading"
+            state.update(
+                map_ready=True,
+                map_id=2,
+                map_uptime=2000,
+                party_ready=True,
+                player_loaded=True,
+                player_agent=1,
+                player_uptime=2000,
+            )
+            return True
+
+        widget._travel_to_target_outpost = _fake_travel
+        travel_generator = widget._travel_to_target_outpost_with_lifecycle(2)
+        _expect(next(travel_generator) == "map loading", "Planned Travel should retain the existing cooperative travel yield.")
+        _expect(widget._merchant_rules_planned_travel_active, "Planned Travel must mark the transition as intentional while it is in flight.")
+        _expect(_drain_generator_return(travel_generator) is True, "Planned Travel should accept a valid destination lifecycle.")
+        _expect(
+            travel_events == [("travel", 2)]
+            and widget.merchant_rules_lifecycle_generation > starting_generation
+            and widget._merchant_rules_lifecycle_map_snapshot == 2
+            and not widget._merchant_rules_planned_travel_active
+            and widget._merchant_rules_planned_lifecycle_generation == widget.merchant_rules_lifecycle_generation,
+            "Planned Travel must establish a fresh destination boundary and publish its token without leaving the transition active.",
+        )
+    finally:
+        _restore_lifecycle_test_state(module, originals)
+
+
 def _test_queued_entry_points_close_first_tick_profile_races(module) -> None:
     queue_cases = (
         "execute",
@@ -28631,6 +29148,30 @@ def main() -> int:
             (
                 "owned_queue_marks_pending_before_first_tick_and_preserves_sentinels",
                 lambda: _test_owned_queue_marks_pending_before_first_tick_and_preserves_sentinels(module),
+            ),
+            (
+                "lifecycle_readiness_gate_contract",
+                lambda: _test_lifecycle_readiness_gate_contract(module),
+            ),
+            (
+                "lifecycle_defers_initial_work_and_invalidates_stale_work",
+                lambda: _test_lifecycle_defers_initial_work_and_invalidates_stale_work(module),
+            ),
+            (
+                "lifecycle_remote_and_automatic_loading_deferral",
+                lambda: _test_lifecycle_remote_and_automatic_loading_deferral(module),
+            ),
+            (
+                "lifecycle_remote_dispatch_during_transition_rebinds_once",
+                lambda: _test_lifecycle_remote_dispatch_during_transition_rebinds_once(module),
+            ),
+            (
+                "lifecycle_same_map_uptime_rollback_invalidates_preview",
+                lambda: _test_lifecycle_same_map_uptime_rollback_invalidates_preview(module),
+            ),
+            (
+                "lifecycle_planned_travel_establishes_destination_boundary",
+                lambda: _test_lifecycle_planned_travel_establishes_destination_boundary(module),
             ),
             (
                 "queued_entry_points_close_first_tick_profile_races",

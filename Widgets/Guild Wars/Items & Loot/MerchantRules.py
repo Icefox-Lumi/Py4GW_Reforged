@@ -163,6 +163,10 @@ PROFILE_FILENAME_RESERVED_NAMES = frozenset(
     }
 )
 TRAVEL_TIMEOUT_MS = 20000
+MERCHANT_RULES_MAP_READY_UPTIME_MS = 1500
+MERCHANT_RULES_PLAYER_READY_UPTIME_MS = 500
+MERCHANT_RULES_LIFECYCLE_WAIT_TIMEOUT_MS = 10000
+MERCHANT_RULES_LIFECYCLE_WAIT_STEP_MS = 100
 SHARED_PROFILE_REFRESH_INTERVAL_MS = 4000
 DESTRUCTIVE_BUTTON_CONFIRM_TIMEOUT_MS = 5000
 WORKSPACE_OVERVIEW = "overview"
@@ -619,7 +623,16 @@ ATTRIBUTE_NONE_REAL_VALUE = 45
 class _MerchantRulesOwnedQueueCallback:
     """Track one Merchant Rules callback until it runs or is discarded."""
 
-    __slots__ = ("_callback", "_pending", "_release", "_generation", "_is_generation_current", "__name__")
+    __slots__ = (
+        "_callback",
+        "_pending",
+        "_release",
+        "_generation",
+        "_is_generation_current",
+        "_lifecycle_generation",
+        "_is_lifecycle_current",
+        "__name__",
+    )
 
     def __init__(
         self,
@@ -628,12 +641,16 @@ class _MerchantRulesOwnedQueueCallback:
         *,
         generation: int | None = None,
         is_generation_current: Callable[[int], bool] | None = None,
+        lifecycle_generation: int | None = None,
+        is_lifecycle_current: Callable[[int], bool] | None = None,
     ):
         self._callback = callback
         self._release = release
         self._pending = True
         self._generation = generation
         self._is_generation_current = is_generation_current
+        self._lifecycle_generation = lifecycle_generation
+        self._is_lifecycle_current = is_lifecycle_current
         self.__name__ = str(getattr(callback, "__name__", callback.__class__.__name__))
 
     def release(self) -> None:
@@ -650,6 +667,13 @@ class _MerchantRulesOwnedQueueCallback:
             self._generation is not None
             and callable(self._is_generation_current)
             and not self._is_generation_current(self._generation)
+        ):
+            self.release()
+            return None
+        if (
+            self._lifecycle_generation is not None
+            and callable(self._is_lifecycle_current)
+            and not self._is_lifecycle_current(self._lifecycle_generation)
         ):
             self.release()
             return None
@@ -676,6 +700,10 @@ class _MerchantRulesOwnedGenerator:
         "_capture_actions",
         "_reset_flags",
         "_reset_values_before_start",
+        "_lifecycle_generation",
+        "_lifecycle_wait_generator",
+        "_allow_initial_lifecycle_transition",
+        "_pending_initial_lifecycle_transition_generation",
         "_started",
         "_finished",
     )
@@ -688,6 +716,8 @@ class _MerchantRulesOwnedGenerator:
         release: Callable[[], None],
         *,
         capture_actions: bool,
+        lifecycle_generation: int | None = None,
+        allow_initial_lifecycle_transition: bool = False,
         reset_flags: tuple[str, ...] = (),
         reset_values_before_start: tuple[tuple[str, object], ...] = (),
     ):
@@ -696,6 +726,12 @@ class _MerchantRulesOwnedGenerator:
         self._generation = int(generation)
         self._release = release
         self._capture_actions = bool(capture_actions)
+        self._lifecycle_generation = (
+            int(lifecycle_generation) if lifecycle_generation is not None else None
+        )
+        self._lifecycle_wait_generator = None
+        self._allow_initial_lifecycle_transition = bool(allow_initial_lifecycle_transition)
+        self._pending_initial_lifecycle_transition_generation: int | None = None
         self._reset_flags = tuple(str(flag_name) for flag_name in reset_flags if str(flag_name))
         self._reset_values_before_start = tuple(
             (str(field_name), value)
@@ -715,12 +751,53 @@ class _MerchantRulesOwnedGenerator:
             self.close()
             raise StopIteration
 
+        if self._lifecycle_generation is not None:
+            while not self._owner._merchant_rules_planned_travel_active:
+                lifecycle_state = self._owner._merchant_rules_owned_work_lifecycle_state(
+                    self._lifecycle_generation,
+                )
+                if lifecycle_state == "stale":
+                    if (
+                        self._allow_initial_lifecycle_transition
+                        and self._pending_initial_lifecycle_transition_generation is None
+                    ):
+                        lifecycle_wait_generator = self._lifecycle_wait_generator
+                        self._lifecycle_wait_generator = None
+                        if lifecycle_wait_generator is not None:
+                            close_wait = getattr(lifecycle_wait_generator, "close", None)
+                            if callable(close_wait):
+                                close_wait()
+                        self._lifecycle_generation = int(self._owner.merchant_rules_lifecycle_generation)
+                        self._pending_initial_lifecycle_transition_generation = self._lifecycle_generation
+                        continue
+                    self.close()
+                    raise StopIteration
+                if lifecycle_state == "ready":
+                    self._allow_initial_lifecycle_transition = False
+                    self._pending_initial_lifecycle_transition_generation = None
+                    break
+                if self._lifecycle_wait_generator is None:
+                    self._lifecycle_wait_generator = self._owner._wait_for_merchant_rules_lifecycle(
+                        expected_generation=self._lifecycle_generation,
+                    )
+                try:
+                    return next(self._lifecycle_wait_generator)
+                except StopIteration as stop:
+                    self._lifecycle_wait_generator = None
+                    if stop.value is None:
+                        self.close()
+                        raise StopIteration
+                    self._lifecycle_generation = int(stop.value)
+
         self._started = True
+        previous_lifecycle_generation = self._owner._merchant_rules_active_lifecycle_generation
+        self._owner._merchant_rules_active_lifecycle_generation = self._lifecycle_generation
         try:
             if self._capture_actions:
                 yielded_value = self._owner._advance_merchant_rules_owned_generator(
                     self._generator,
                     self._generation,
+                    lifecycle_generation=self._lifecycle_generation,
                 )
             else:
                 previous_generation = self._owner._merchant_rules_active_generation
@@ -735,8 +812,21 @@ class _MerchantRulesOwnedGenerator:
         except BaseException:
             self.close()
             raise
+        finally:
+            self._owner._merchant_rules_active_lifecycle_generation = previous_lifecycle_generation
 
         if not self._owner._merchant_rules_is_generation_current(self._generation):
+            self.close()
+            raise StopIteration
+        accepted_lifecycle_generation = self._owner._merchant_rules_planned_lifecycle_generation
+        if accepted_lifecycle_generation is not None:
+            self._lifecycle_generation = int(accepted_lifecycle_generation)
+            self._owner._merchant_rules_planned_lifecycle_generation = None
+        if (
+            self._lifecycle_generation is not None
+            and not self._owner._merchant_rules_planned_travel_active
+            and not self._owner._merchant_rules_lifecycle_is_current(self._lifecycle_generation)
+        ):
             self.close()
             raise StopIteration
         return yielded_value
@@ -750,6 +840,7 @@ class _MerchantRulesOwnedGenerator:
                     self._generator,
                     self._generation,
                     capture_actions=self._capture_actions,
+                    lifecycle_generation=self._lifecycle_generation,
                 )
             else:
                 close = getattr(self._generator, "close", None)
@@ -7251,6 +7342,13 @@ class MerchantRulesWidget:
         self.merchant_rules_profile_generation = 0
         self._merchant_rules_generation_account_key = ""
         self._merchant_rules_active_generation: int | None = None
+        self._merchant_rules_active_lifecycle_generation: int | None = None
+        self.merchant_rules_lifecycle_generation = 0
+        self._merchant_rules_lifecycle_map_snapshot = 0
+        self._merchant_rules_lifecycle_map_ready_snapshot = False
+        self._merchant_rules_lifecycle_uptime_snapshot_ms = 0
+        self._merchant_rules_planned_travel_active = False
+        self._merchant_rules_planned_lifecycle_generation: int | None = None
         self.pending_multibox_profile_reload: tuple[str, str, str] | None = None
         self._merchant_rules_staged_multibox_reload_requests: set[tuple[str, str, str]] = set()
         self.execute_reservation_scope_active = False
@@ -7778,8 +7876,9 @@ class MerchantRulesWidget:
         if self._is_storage_open():
             self.status_message = "Xunlai is already open."
             return
-        if not Map.IsMapReady():
-            self.status_message = "Wait for the current map to finish loading."
+        lifecycle_reason = self._merchant_rules_lifecycle_block_reason(require_service=True)
+        if lifecycle_reason:
+            self.status_message = lifecycle_reason
             return
 
         self.icon_xunlai_open_running = True
@@ -7893,9 +7992,7 @@ class MerchantRulesWidget:
             return "Merchant Rules is already busy."
         if self._is_storage_open():
             return ""
-        if not Map.IsMapReady():
-            return "Wait for the current map to finish loading."
-        return ""
+        return self._merchant_rules_lifecycle_block_reason(require_service=True)
 
     def _get_storage_scan_block_reason(self) -> str:
         if not self.preview_ready:
@@ -8657,7 +8754,7 @@ class MerchantRulesWidget:
             return f"{base_label} (opening)", False
         if self._is_storage_open():
             return f"{base_label} (already open)", False
-        if not Map.IsMapReady():
+        if self._merchant_rules_lifecycle_block_reason(require_service=True):
             return f"{base_label} (map loading)", False
         return base_label, True
 
@@ -9433,9 +9530,7 @@ class MerchantRulesWidget:
     def _inventory_shortcut_runtime_block_reason(self) -> str:
         if self._merchant_rules_has_pending_or_active_work():
             return "Merchant Rules is already busy."
-        if not Map.IsMapReady():
-            return "Wait for the current map to finish loading."
-        return ""
+        return self._merchant_rules_lifecycle_block_reason()
 
     def _queue_inventory_shortcut_live_deposit(self, item: InventoryItemInfo) -> bool:
         if self.inventory_shortcuts_live_action_running:
@@ -10801,11 +10896,269 @@ class MerchantRulesWidget:
                 return False
         return True
 
+    def _refresh_merchant_rules_lifecycle_state(self, *, sync_runtime_snapshots: bool = True) -> int:
+        try:
+            current_map_ready = bool(Map.IsMapReady())
+        except Exception:
+            current_map_ready = False
+        if current_map_ready:
+            try:
+                current_map_id = int(Map.GetMapID() or 0)
+            except Exception:
+                current_map_id = 0
+            try:
+                current_instance_uptime_ms = int(Map.GetInstanceUptime() or 0)
+            except Exception:
+                current_instance_uptime_ms = 0
+        else:
+            current_map_id = 0
+            current_instance_uptime_ms = 0
+
+        lifecycle_map_changed = current_map_id != self._merchant_rules_lifecycle_map_snapshot
+        lifecycle_map_ready_changed = current_map_ready != self._merchant_rules_lifecycle_map_ready_snapshot
+        instance_changed = (
+            current_map_ready
+            and self._merchant_rules_lifecycle_map_ready_snapshot
+            and current_map_id == self._merchant_rules_lifecycle_map_snapshot
+            and current_instance_uptime_ms < self._merchant_rules_lifecycle_uptime_snapshot_ms
+        )
+
+        if lifecycle_map_changed:
+            self.map_snapshot = current_map_id
+            self._clear_inventory_shortcut_material_storage_count_cache("map changed")
+            self._clear_inventory_shortcut_xunlai_display_cache()
+
+        if lifecycle_map_changed or instance_changed:
+            self.preview_ready = False
+            self.preview_plan = PlanResult()
+            self._clear_preview_projection_state()
+            self._clear_preview_inventory_diff()
+
+        if lifecycle_map_changed or lifecycle_map_ready_changed or instance_changed:
+            self.merchant_rules_lifecycle_generation = max(
+                0,
+                int(self.merchant_rules_lifecycle_generation),
+            ) + 1
+            if not lifecycle_map_changed:
+                self._clear_inventory_shortcut_material_storage_count_cache("map/session state changed")
+                self._clear_inventory_shortcut_xunlai_display_cache()
+            self._invalidate_supported_context_cache()
+            self._reset_service_resolution_lifecycle()
+            self.auto_cleanup_zone_attempted = False
+            self.auto_cleanup_zone_token = (
+                f"{current_map_id}:{current_instance_uptime_ms}"
+                if current_map_ready
+                else ""
+            )
+            self.gold_entry_attempted = False
+            self.gold_entry_zone_token = (
+                f"{current_map_id}:{current_instance_uptime_ms}"
+                if current_map_ready
+                else ""
+            )
+
+        self._merchant_rules_lifecycle_map_ready_snapshot = current_map_ready
+        self._merchant_rules_lifecycle_map_snapshot = current_map_id
+        self._merchant_rules_lifecycle_uptime_snapshot_ms = current_instance_uptime_ms
+        if sync_runtime_snapshots or lifecycle_map_changed or lifecycle_map_ready_changed or instance_changed:
+            self.map_ready_snapshot = current_map_ready
+            self.map_snapshot = current_map_id
+            self.map_instance_uptime_snapshot_ms = current_instance_uptime_ms
+        return int(self.merchant_rules_lifecycle_generation)
+
+    def _merchant_rules_map_party_ready(self) -> bool:
+        try:
+            return bool(Routines.Checks.Map.MapValid())
+        except Exception:
+            # Without the repository's authoritative map/party check, do not start
+            # native-facing work based on a weaker substitute.
+            return False
+
+    def _merchant_rules_lifecycle_block_reason(self, *, require_service: bool = False) -> str:
+        try:
+            if not Map.IsMapReady():
+                return "Wait for the current map to finish loading."
+        except Exception:
+            return "Current map readiness could not be verified."
+
+        try:
+            if int(Map.GetMapID() or 0) <= 0:
+                return "Current map identity could not be verified."
+        except Exception:
+            return "Current map identity could not be verified."
+
+        if not self._merchant_rules_map_party_ready():
+            return "Wait for the party and player to finish loading."
+
+        try:
+            if _safe_int(Map.GetInstanceUptime(), 0) < MERCHANT_RULES_MAP_READY_UPTIME_MS:
+                return "Wait for the current map to settle before Merchant Rules starts."
+        except Exception:
+            return "Current map uptime could not be verified."
+
+        try:
+            if not bool(Player.IsPlayerLoaded()):
+                return "Wait for the player to finish loading."
+        except Exception:
+            return "Player readiness could not be verified."
+
+        try:
+            if _safe_int(Player.GetAgentID(), 0) <= 0:
+                return "Wait for the player agent to become valid."
+        except Exception:
+            return "Player agent readiness could not be verified."
+
+        try:
+            if _safe_int(Player.GetInstanceUptime(), 0) < MERCHANT_RULES_PLAYER_READY_UPTIME_MS:
+                return "Wait for the player instance to settle before Merchant Rules starts."
+        except Exception:
+            return "Player instance uptime could not be verified."
+
+        if require_service:
+            try:
+                if not (Map.IsOutpost() or Map.IsGuildHall()):
+                    return "Merchant Rules services require an outpost or Guild Hall."
+            except Exception:
+                return "Merchant Rules service readiness could not be verified."
+        return ""
+
+    def _merchant_rules_lifecycle_is_current(self, generation: int | None = None) -> bool:
+        current_generation = self._refresh_merchant_rules_lifecycle_state(sync_runtime_snapshots=False)
+        if generation is not None and int(generation) != current_generation:
+            return False
+        return not self._merchant_rules_lifecycle_block_reason()
+
+    def _merchant_rules_owned_work_lifecycle_state(self, generation: int) -> str:
+        current_generation = self._refresh_merchant_rules_lifecycle_state(sync_runtime_snapshots=False)
+        if int(generation) != current_generation:
+            return "stale"
+        return "ready" if not self._merchant_rules_lifecycle_block_reason() else "waiting"
+
+    def _yield_merchant_rules_lifecycle_wait(self, step_ms: int):
+        waiter = Routines.Yield.wait(max(1, int(step_ms)))
+        yielded = False
+        try:
+            for value in waiter:
+                yielded = True
+                yield value
+        except TypeError:
+            pass
+        if not yielded:
+            yield None
+
+    def _wait_for_merchant_rules_lifecycle(
+        self,
+        *,
+        expected_generation: int | None = None,
+        require_service: bool = False,
+        allow_transition: bool = False,
+        timeout_ms: int = MERCHANT_RULES_LIFECYCLE_WAIT_TIMEOUT_MS,
+        step_ms: int = MERCHANT_RULES_LIFECYCLE_WAIT_STEP_MS,
+        sync_runtime_snapshots: bool = False,
+    ):
+        current_generation = self._refresh_merchant_rules_lifecycle_state(
+            sync_runtime_snapshots=sync_runtime_snapshots,
+        )
+        if expected_generation is None and not allow_transition:
+            expected_generation = current_generation
+
+        waited_ms = 0
+        safe_timeout_ms = max(0, int(timeout_ms))
+        safe_step_ms = max(1, int(step_ms))
+        while waited_ms <= safe_timeout_ms:
+            current_generation = self._refresh_merchant_rules_lifecycle_state(
+                sync_runtime_snapshots=sync_runtime_snapshots,
+            )
+            if (
+                not allow_transition
+                and expected_generation is not None
+                and int(expected_generation) != current_generation
+            ):
+                return None
+            if not self._merchant_rules_lifecycle_block_reason(require_service=require_service):
+                if allow_transition:
+                    self._merchant_rules_planned_lifecycle_generation = current_generation
+                if self._merchant_rules_active_lifecycle_generation is not None:
+                    self._merchant_rules_active_lifecycle_generation = current_generation
+                return current_generation
+            if waited_ms >= safe_timeout_ms:
+                return None
+            yield from self._yield_merchant_rules_lifecycle_wait(safe_step_ms)
+            waited_ms += safe_step_ms
+        return None
+
+    def _travel_to_target_outpost_with_lifecycle(self, target_outpost_id: int):
+        self._merchant_rules_planned_travel_active = True
+        self._merchant_rules_planned_lifecycle_generation = None
+        try:
+            travel_ok = yield from self._travel_to_target_outpost(target_outpost_id)
+            if not travel_ok:
+                return False
+            destination_generation = yield from self._wait_for_merchant_rules_lifecycle(
+                require_service=True,
+                allow_transition=True,
+            )
+            return destination_generation is not None
+        finally:
+            self._merchant_rules_planned_travel_active = False
+
     def _merchant_rules_operation_generation(self) -> int:
         active_generation = self._merchant_rules_active_generation
         if active_generation is not None:
             return int(active_generation)
         return int(self.merchant_rules_profile_generation)
+
+    def _merchant_rules_operation_lifecycle_generation(self) -> int:
+        active_generation = self._merchant_rules_active_lifecycle_generation
+        if active_generation is not None:
+            return int(active_generation)
+        return int(self.merchant_rules_lifecycle_generation)
+
+    def _capture_merchant_rules_work_lifecycle_baseline(self) -> bool:
+        if (
+            self._merchant_rules_lifecycle_map_ready_snapshot
+            or self._merchant_rules_lifecycle_map_snapshot != 0
+        ):
+            return True
+        if self.map_ready_snapshot or self.map_snapshot != 0:
+            self._merchant_rules_lifecycle_map_ready_snapshot = bool(self.map_ready_snapshot)
+            self._merchant_rules_lifecycle_map_snapshot = int(self.map_snapshot)
+            self._merchant_rules_lifecycle_uptime_snapshot_ms = int(self.map_instance_uptime_snapshot_ms)
+            return True
+        try:
+            if not Map.IsMapReady():
+                return False
+            current_map_id = int(Map.GetMapID() or 0)
+            current_instance_uptime_ms = int(Map.GetInstanceUptime() or 0)
+        except Exception:
+            return False
+        if current_map_id <= 0:
+            return False
+        self.map_ready_snapshot = True
+        self.map_snapshot = current_map_id
+        self.map_instance_uptime_snapshot_ms = current_instance_uptime_ms
+        self._merchant_rules_lifecycle_map_ready_snapshot = True
+        self._merchant_rules_lifecycle_map_snapshot = current_map_id
+        self._merchant_rules_lifecycle_uptime_snapshot_ms = current_instance_uptime_ms
+        self.merchant_rules_lifecycle_generation = max(
+            0,
+            int(self.merchant_rules_lifecycle_generation),
+        ) + 1
+        return True
+
+    def _capture_merchant_rules_remote_dispatch_lifecycle(self) -> tuple[int, bool]:
+        active_lifecycle_generation = self._merchant_rules_active_lifecycle_generation
+        if active_lifecycle_generation is not None:
+            return int(active_lifecycle_generation), False
+
+        lifecycle_generation = self._refresh_merchant_rules_lifecycle_state(
+            sync_runtime_snapshots=False,
+        )
+        has_current_map_identity = bool(
+            self._merchant_rules_lifecycle_map_ready_snapshot
+            and self._merchant_rules_lifecycle_map_snapshot > 0
+        )
+        return lifecycle_generation, not has_current_map_identity
 
     def _release_merchant_rules_owned_work(self) -> None:
         self.merchant_rules_owned_work_count = max(0, int(self.merchant_rules_owned_work_count) - 1)
@@ -10818,17 +11171,25 @@ class MerchantRulesWidget:
         callback: Callable,
         *,
         generation: int | None = None,
+        lifecycle_generation: int | None = None,
     ) -> _MerchantRulesOwnedQueueCallback:
         if self.merchant_session_open and (self.execution_running or self.manual_vendor_running):
             self._mark_current_merchant_session_mr_owned()
         self.merchant_rules_owned_action_count = max(0, int(self.merchant_rules_owned_action_count)) + 1
         try:
             captured_generation = self._merchant_rules_operation_generation() if generation is None else int(generation)
+            captured_lifecycle_generation = (
+                self._merchant_rules_operation_lifecycle_generation()
+                if lifecycle_generation is None
+                else int(lifecycle_generation)
+            )
             return _MerchantRulesOwnedQueueCallback(
                 callback,
                 self._release_merchant_rules_owned_action,
                 generation=captured_generation,
                 is_generation_current=self._merchant_rules_is_generation_current,
+                lifecycle_generation=captured_lifecycle_generation,
+                is_lifecycle_current=self._merchant_rules_lifecycle_is_current,
             )
         except BaseException:
             self._release_merchant_rules_owned_action()
@@ -10860,6 +11221,7 @@ class MerchantRulesWidget:
                     owned_callback = self._track_merchant_rules_owned_action(
                         callback,
                         generation=generation,
+                        lifecycle_generation=self._merchant_rules_operation_lifecycle_generation(),
                     )
                     try:
                         return original(queue_name, delay, owned_callback, *args, **kwargs)
@@ -10876,6 +11238,7 @@ class MerchantRulesWidget:
                     owned_callback = self._track_merchant_rules_owned_action(
                         callback,
                         generation=generation,
+                        lifecycle_generation=self._merchant_rules_operation_lifecycle_generation(),
                     )
                     try:
                         return original(queue_name, owned_callback, *args, **kwargs)
@@ -10914,12 +11277,15 @@ class MerchantRulesWidget:
         generation: int | None = None,
         *,
         capture_actions: bool = True,
+        lifecycle_generation: int | None = None,
     ) -> None:
         close = getattr(generator, "close", None)
         if not callable(close):
             return
         previous_generation = self._merchant_rules_active_generation
+        previous_lifecycle_generation = self._merchant_rules_active_lifecycle_generation
         self._merchant_rules_active_generation = generation
+        self._merchant_rules_active_lifecycle_generation = lifecycle_generation
         capture = self._begin_merchant_rules_action_capture(generation) if capture_actions else None
         try:
             close()
@@ -10928,16 +11294,26 @@ class MerchantRulesWidget:
         finally:
             self._end_merchant_rules_action_capture(capture)
             self._merchant_rules_active_generation = previous_generation
+            self._merchant_rules_active_lifecycle_generation = previous_lifecycle_generation
 
-    def _advance_merchant_rules_owned_generator(self, generator, generation: int):
-        capture = self._begin_merchant_rules_action_capture(generation)
+    def _advance_merchant_rules_owned_generator(
+        self,
+        generator,
+        generation: int,
+        *,
+        lifecycle_generation: int | None = None,
+    ):
         previous_generation = self._merchant_rules_active_generation
+        previous_lifecycle_generation = self._merchant_rules_active_lifecycle_generation
         self._merchant_rules_active_generation = generation
+        self._merchant_rules_active_lifecycle_generation = lifecycle_generation
+        capture = self._begin_merchant_rules_action_capture(generation)
         try:
             return next(generator)
         finally:
             self._end_merchant_rules_action_capture(capture)
             self._merchant_rules_active_generation = previous_generation
+            self._merchant_rules_active_lifecycle_generation = previous_lifecycle_generation
 
     def _track_merchant_rules_owned_work(
         self,
@@ -10947,6 +11323,8 @@ class MerchantRulesWidget:
         reset_values_before_start: tuple[tuple[str, object], ...] = (),
     ):
         generation = self._merchant_rules_operation_generation()
+        lifecycle_baseline_available = self._capture_merchant_rules_work_lifecycle_baseline()
+        lifecycle_generation = self._merchant_rules_operation_lifecycle_generation()
         self.merchant_rules_owned_work_count = max(0, int(self.merchant_rules_owned_work_count)) + 1
         try:
             return _MerchantRulesOwnedGenerator(
@@ -10955,6 +11333,8 @@ class MerchantRulesWidget:
                 generation,
                 self._release_merchant_rules_owned_work,
                 capture_actions=True,
+                lifecycle_generation=lifecycle_generation,
+                allow_initial_lifecycle_transition=not lifecycle_baseline_available,
                 reset_flags=reset_flags,
                 reset_values_before_start=reset_values_before_start,
             )
@@ -11063,6 +11443,9 @@ class MerchantRulesWidget:
         if not self.initialized:
             self._ensure_initialized()
         generation = self._merchant_rules_operation_generation()
+        lifecycle_generation, allow_initial_lifecycle_transition = (
+            self._capture_merchant_rules_remote_dispatch_lifecycle()
+        )
         self.merchant_rules_remote_dispatch_count = max(0, int(self.merchant_rules_remote_dispatch_count)) + 1
         try:
             return _MerchantRulesOwnedGenerator(
@@ -11071,6 +11454,8 @@ class MerchantRulesWidget:
                 generation,
                 self._release_merchant_rules_remote_dispatch,
                 capture_actions=False,
+                lifecycle_generation=lifecycle_generation,
+                allow_initial_lifecycle_transition=allow_initial_lifecycle_transition,
             )
         except BaseException:
             close = getattr(generator, "close", None)
@@ -13293,6 +13678,8 @@ class MerchantRulesWidget:
         self.manual_session_close_retry = None
         self.execution_currency_changing_work_completed = False
         self.execution_completed_successfully = False
+        self._merchant_rules_planned_travel_active = False
+        self._merchant_rules_planned_lifecycle_generation = None
         self._clear_sell_protection_jump("runtime reset after profile load")
         self._clear_inventory_shortcut_material_storage_count_cache("runtime reset after profile load")
         self._clear_inventory_shortcut_xunlai_display_cache()
@@ -13300,6 +13687,9 @@ class MerchantRulesWidget:
         self.map_ready_snapshot = bool(Map.IsMapReady())
         self.map_snapshot = int(Map.GetMapID() or 0) if self.map_ready_snapshot else 0
         self.map_instance_uptime_snapshot_ms = int(Map.GetInstanceUptime() or 0) if self.map_ready_snapshot else 0
+        self._merchant_rules_lifecycle_map_ready_snapshot = self.map_ready_snapshot
+        self._merchant_rules_lifecycle_map_snapshot = self.map_snapshot
+        self._merchant_rules_lifecycle_uptime_snapshot_ms = self.map_instance_uptime_snapshot_ms
         self._invalidate_supported_context_cache()
         self._reset_service_resolution_lifecycle()
         if status_message:
@@ -13339,6 +13729,10 @@ class MerchantRulesWidget:
         return True
 
     def _ensure_initialized(self):
+        previous_lifecycle_generation = int(self.merchant_rules_lifecycle_generation)
+        self._refresh_merchant_rules_lifecycle_state()
+        if previous_lifecycle_generation != int(self.merchant_rules_lifecycle_generation):
+            self._clear_inventory_shortcut_xunlai_display_cache()
         if not self.catalog_loaded:
             self._load_catalog()
         if not self.outpost_entries:
@@ -13382,50 +13776,6 @@ class MerchantRulesWidget:
             self._load_loaded_profile_provenance()
             self._reset_runtime_after_profile_load()
             self.initialized = True
-
-        current_map_ready = bool(Map.IsMapReady())
-        current_map_id = int(Map.GetMapID() or 0) if current_map_ready else 0
-        current_instance_uptime_ms = int(Map.GetInstanceUptime() or 0) if current_map_ready else 0
-        map_changed = current_map_id != self.map_snapshot
-        map_ready_changed = current_map_ready != self.map_ready_snapshot
-        instance_changed = (
-            current_map_ready
-            and self.map_ready_snapshot
-            and current_map_id == self.map_snapshot
-            and current_instance_uptime_ms < self.map_instance_uptime_snapshot_ms
-        )
-
-        if map_changed:
-            self.map_snapshot = current_map_id
-            self.preview_ready = False
-            self.preview_plan = PlanResult()
-            self._clear_inventory_shortcut_material_storage_count_cache("map changed")
-            self._clear_inventory_shortcut_xunlai_display_cache()
-            self._clear_preview_projection_state()
-            self._clear_preview_inventory_diff()
-
-        if map_changed or map_ready_changed or instance_changed:
-            if not map_changed:
-                self._clear_inventory_shortcut_material_storage_count_cache("map/session state changed")
-                self._clear_inventory_shortcut_xunlai_display_cache()
-            self._invalidate_supported_context_cache()
-            self._reset_service_resolution_lifecycle()
-            self.auto_cleanup_zone_attempted = False
-            self.auto_cleanup_zone_token = (
-                f"{current_map_id}:{current_instance_uptime_ms}"
-                if current_map_ready
-                else ""
-            )
-            self.gold_entry_attempted = False
-            self.gold_entry_zone_token = (
-                f"{current_map_id}:{current_instance_uptime_ms}"
-                if current_map_ready
-                else ""
-            )
-
-        self.map_ready_snapshot = current_map_ready
-        self.map_snapshot = current_map_id
-        self.map_instance_uptime_snapshot_ms = current_instance_uptime_ms
 
     def _rebuild_text_caches(self):
         self.sell_model_text_cache = {
@@ -24468,6 +24818,14 @@ class MerchantRulesWidget:
         )
 
     def _balance_carried_gold(self, trigger: str):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
+            return GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
+                trigger=trigger,
+                target_gold=_normalize_gold_target(self.target_carried_gold),
+                reason="Merchant Rules lifecycle was not ready",
+            )
         target_gold = _normalize_gold_target(self.target_carried_gold)
         before = self._read_gold_snapshot()
         if before is None:
@@ -24592,6 +24950,16 @@ class MerchantRulesWidget:
         ))
 
     def _run_gold_balance_trigger(self, trigger: str):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
+            result = GoldBalanceResult(
+                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
+                trigger=trigger,
+                target_gold=_normalize_gold_target(self.target_carried_gold),
+                reason="Merchant Rules lifecycle was not ready",
+            )
+            self._publish_gold_balance_result(result)
+            return result
         if not self.gold_balance_enabled:
             result = GoldBalanceResult(
                 status=GOLD_BALANCE_STATUS_DISABLED,
@@ -24660,6 +25028,9 @@ class MerchantRulesWidget:
         return []
 
     def _open_merchant(self, coords: tuple[float, float]):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
+            return []
         x, y = coords
         self._debug_log(f"Opening merchant at {self._format_debug_coords(coords)}.")
         yield from Routines.Yield.Movement.FollowPath([(x, y)])
@@ -24689,6 +25060,9 @@ class MerchantRulesWidget:
         return bool(ActionQueueManager().IsEmpty(str(queue_name)))
 
     def _ensure_storage_open(self, *, purpose: str = "storage access"):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
+            return False
         storage_api = getattr(GLOBAL_CACHE, "Inventory", None)
         if self._is_storage_open():
             return True
@@ -25206,6 +25580,11 @@ class MerchantRulesWidget:
             attempted=len(tracked_item_ids),
         )
         if not tracked_item_ids:
+            return outcome
+
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
+            outcome.timeout_failures += len(tracked_item_ids)
             return outcome
 
         pre_destroy_quantities = self._get_inventory_stack_quantities(tracked_item_ids)
@@ -26441,6 +26820,11 @@ class MerchantRulesWidget:
         if not normalized_transfers:
             return outcome
 
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
+            outcome.timeout_failures += outcome.attempted
+            return outcome
+
         if any(
             max(0, int(getattr(transfer, "model_id", 0))) in ALL_CRAFTING_MATERIAL_MODEL_IDS
             for transfer in normalized_transfers
@@ -26936,6 +27320,10 @@ class MerchantRulesWidget:
         return f"{outcome.label}: {', '.join(parts)}."
 
     def _open_xunlai_and_scan_preview(self):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
+            self.status_message = "Wait for the current map and Xunlai service to become ready."
+            return
         self.storage_scan_running = True
         self.last_error = ""
         try:
@@ -26963,6 +27351,14 @@ class MerchantRulesWidget:
             yield
 
     def _scan_preview(self):
+        lifecycle_reason = self._merchant_rules_lifecycle_block_reason()
+        if lifecycle_reason:
+            self.preview_ready = False
+            self.preview_plan = PlanResult()
+            self._clear_preview_projection_state()
+            self._clear_preview_inventory_diff()
+            self.status_message = lifecycle_reason
+            return False
         self._invalidate_supported_context_cache()
         if self._should_use_consumable_crafter_multi_stop_route():
             projected_target_outpost_id, projected_target_outpost_name = self._get_consumable_crafter_multi_stop_target()
@@ -27006,6 +27402,10 @@ class MerchantRulesWidget:
         self.last_error = ""
 
     def _travel_and_preview_only(self):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
+            self.status_message = "Travel + Preview stopped because the current map was not ready."
+            return
         self.travel_preview_running = True
         self.last_error = ""
         self.last_execution_summary = ""
@@ -27018,7 +27418,7 @@ class MerchantRulesWidget:
             )
             if target_outpost_id > 0 and not self._is_travel_target_reached(target_outpost_id):
                 self.status_message = f"Traveling to {target_outpost_name} for preview."
-                travel_ok = yield from self._travel_to_target_outpost(target_outpost_id)
+                travel_ok = yield from self._travel_to_target_outpost_with_lifecycle(target_outpost_id)
                 if not travel_ok:
                     self.status_message = f"Failed to travel to {target_outpost_name} for preview."
                     self._debug_log(f"Travel + Preview failed to reach {target_outpost_name} ({target_outpost_id}).")
@@ -28287,6 +28687,11 @@ class MerchantRulesWidget:
         if not manual_sales:
             return outcome
 
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
+            outcome.timeout_failures += outcome.attempted
+            return outcome
+
         for sale in manual_sales:
             item_id = int(sale.item_id)
             current_quantity = max(0, int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id)))
@@ -28365,6 +28770,9 @@ class MerchantRulesWidget:
         """
 
         if self.manual_vendor_running and not running_already_marked:
+            return ExecutionPhaseOutcome(label="Manual merchant automation", measure_label="actions")
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
             return ExecutionPhaseOutcome(label="Manual merchant automation", measure_label="actions")
         self.manual_vendor_running = True
         self.last_error = ""
@@ -28624,7 +29032,8 @@ class MerchantRulesWidget:
             yield
 
     def _update_manual_vendor_runtime(self):
-        if not Map.IsMapReady():
+        self._refresh_merchant_rules_lifecycle_state()
+        if self._merchant_rules_lifecycle_block_reason(require_service=True):
             return
         if self._merchant_rules_has_pending_or_active_work():
             return
@@ -28666,6 +29075,10 @@ class MerchantRulesWidget:
         *,
         execution_context: MerchantRulesExecutionContext | None = None,
     ):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
+            self.status_message = "Travel + Execute stopped because the current map was not ready."
+            return
         self.execution_running = True
         self.last_error = ""
         self.last_execution_summary = ""
@@ -28693,7 +29106,7 @@ class MerchantRulesWidget:
             if not self._is_travel_target_reached(EMBARK_BEACH_MAP_ID):
                 self.status_message = f"Traveling to {embark_name} for Consumable Crafter buys."
                 self._debug_log(f"Multi-stop execution travel: target={embark_name} ({EMBARK_BEACH_MAP_ID})")
-                travel_ok = yield from self._travel_to_target_outpost(EMBARK_BEACH_MAP_ID)
+                travel_ok = yield from self._travel_to_target_outpost_with_lifecycle(EMBARK_BEACH_MAP_ID)
                 if not travel_ok:
                     self.status_message = f"Failed to travel to {embark_name}."
                     self._debug_log(f"Multi-stop execution aborted: failed to travel to {embark_name} ({EMBARK_BEACH_MAP_ID}).")
@@ -28761,7 +29174,7 @@ class MerchantRulesWidget:
             if remaining_preview.has_actions:
                 self.status_message = f"Traveling to {destination_name} for remaining Merchant Rules work."
                 if not self._is_travel_target_reached(destination_outpost_id):
-                    travel_ok = yield from self._travel_to_target_outpost(destination_outpost_id)
+                    travel_ok = yield from self._travel_to_target_outpost_with_lifecycle(destination_outpost_id)
                     if not travel_ok:
                         self.status_message = f"Failed to travel to {destination_name}."
                         if phase_summaries:
@@ -28852,6 +29265,11 @@ class MerchantRulesWidget:
         storage, sale, buy, and craft work remains bounded by the approved plan.
         """
 
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
+            self.status_message = "Execution stopped because the current map was not ready."
+            return
+
         owned_reservation_scope = self._begin_execute_reservation_scope()
         if post_gold_balance:
             self.execution_currency_changing_work_completed = False
@@ -28925,7 +29343,7 @@ class MerchantRulesWidget:
                 self._debug_log(
                     f"Execution travel: target={plan.travel_to_outpost_name} ({plan.travel_to_outpost_id})"
                 )
-                travel_ok = yield from self._travel_to_target_outpost(plan.travel_to_outpost_id)
+                travel_ok = yield from self._travel_to_target_outpost_with_lifecycle(plan.travel_to_outpost_id)
                 if not travel_ok:
                     self.status_message = f"Failed to travel to {plan.travel_to_outpost_name}."
                     self._debug_log(
@@ -29622,6 +30040,10 @@ class MerchantRulesWidget:
     def _execute_cleanup_now(self, *, auto_triggered: bool = False):
         """Rebuild and execute a cleanup-only plan against current Xunlai state."""
 
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
+        if lifecycle_generation is None:
+            self.status_message = "Xunlai Deposits stopped because the current map or service was not ready."
+            return
         self.auto_cleanup_running = True
         self.last_error = ""
         self.last_cleanup_summary = ""
@@ -29699,7 +30121,8 @@ class MerchantRulesWidget:
             yield
 
     def _update_auto_cleanup_runtime(self):
-        if not Map.IsMapReady():
+        self._refresh_merchant_rules_lifecycle_state()
+        if self._merchant_rules_lifecycle_block_reason(require_service=True):
             return
         if self._merchant_rules_has_pending_or_active_work():
             return
@@ -29725,7 +30148,8 @@ class MerchantRulesWidget:
         self._queue_cleanup_now(auto_triggered=True)
 
     def _update_auto_gold_runtime(self):
-        if not Map.IsMapReady():
+        self._refresh_merchant_rules_lifecycle_state()
+        if self._merchant_rules_lifecycle_block_reason(require_service=True):
             return
         if not self.gold_balance_enabled or not self.gold_balance_on_outpost_entry:
             return
@@ -29821,6 +30245,9 @@ class MerchantRulesWidget:
         preferred_id_kit_id: int = 0,
         preferred_id_kit_model_id: int = 0,
     ):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
+            return "blocked"
         from Py4GWCoreLib.Inventory import Inventory
 
         live_item = self._build_inventory_item_info(int(item.item_id))
@@ -29903,6 +30330,9 @@ class MerchantRulesWidget:
         """
 
         if self.identify_running and not running_already_marked:
+            return ExecutionPhaseOutcome(label=summary_subject, measure_label="items")
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
             return ExecutionPhaseOutcome(label=summary_subject, measure_label="items")
         self.identify_running = True
         self.last_error = ""
@@ -30018,7 +30448,8 @@ class MerchantRulesWidget:
         self.identify_rescan_requested = True
 
     def _update_identify_runtime(self):
-        if not Map.IsMapReady():
+        self._refresh_merchant_rules_lifecycle_state()
+        if self._merchant_rules_lifecycle_block_reason():
             return
         if self._merchant_rules_has_pending_or_active_work():
             return
@@ -30168,6 +30599,9 @@ class MerchantRulesWidget:
         return bool(weapon_supported and armor_supported)
 
     def _queue_salvage_start(self, item_id: int, salvage_kit_id: int, attempt: int):
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
+            return False
         from Py4GWCoreLib.Inventory import Inventory
 
         self._salvage_flow_log(
@@ -31056,6 +31490,9 @@ class MerchantRulesWidget:
 
         if self.salvage_running and not running_already_marked:
             return ExecutionPhaseOutcome(label="MR Salvage", measure_label="items")
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
+            return ExecutionPhaseOutcome(label="MR Salvage", measure_label="items")
         self.salvage_running = True
         self.last_error = ""
         self.last_salvage_summary = ""
@@ -31208,7 +31645,8 @@ class MerchantRulesWidget:
             yield
 
     def _update_salvage_runtime(self):
-        if not Map.IsMapReady():
+        self._refresh_merchant_rules_lifecycle_state()
+        if self._merchant_rules_lifecycle_block_reason():
             return
         if self._merchant_rules_has_pending_or_active_work():
             return
@@ -31267,6 +31705,9 @@ class MerchantRulesWidget:
         if self.instant_destroy_running:
             return
         if require_auto_enabled and not self._is_destroy_auto_enabled():
+            return
+        lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle()
+        if lifecycle_generation is None:
             return
 
         self.instant_destroy_running = True
@@ -31378,7 +31819,8 @@ class MerchantRulesWidget:
         )
 
     def _update_instant_destroy_runtime(self):
-        if not Map.IsMapReady():
+        self._refresh_merchant_rules_lifecycle_state()
+        if self._merchant_rules_lifecycle_block_reason():
             return
         if self._merchant_rules_has_pending_or_active_work():
             return
@@ -32905,7 +33347,9 @@ class MerchantRulesWidget:
 
         busy = self._merchant_rules_has_pending_or_active_work()
         if action == "preview":
-            return "Merchant Rules is already busy." if busy else ""
+            if busy:
+                return "Merchant Rules is already busy."
+            return self._merchant_rules_lifecycle_block_reason()
         if action == "travel_preview":
             if busy:
                 return "Preview, deposits, or execution is already running."
@@ -32913,10 +33357,13 @@ class MerchantRulesWidget:
                 return "Enable Auto Travel to use Travel + Preview."
             if self.target_outpost_id <= 0:
                 return "Choose a target outpost for Travel + Preview."
-            return ""
+            return self._merchant_rules_lifecycle_block_reason()
         if action == "execute":
             if busy:
                 return "Merchant Rules is already busy."
+            lifecycle_reason = self._merchant_rules_lifecycle_block_reason()
+            if lifecycle_reason:
+                return lifecycle_reason
             if not self.preview_ready:
                 return "Run Preview before executing merchant actions."
             if (
@@ -32934,6 +33381,9 @@ class MerchantRulesWidget:
         if action == "execute_here":
             if busy:
                 return "Merchant Rules is already busy."
+            lifecycle_reason = self._merchant_rules_lifecycle_block_reason()
+            if lifecycle_reason:
+                return lifecycle_reason
             if not self.preview_ready:
                 return "Run Preview before executing merchant actions here."
             actionable_here_count, _skipped_here_count = self._get_locally_actionable_preview_counts(self.preview_plan)
@@ -32945,8 +33395,9 @@ class MerchantRulesWidget:
                 return "Merchant Rules is already busy."
             if not self._has_cleanup_sources():
                 return "No Xunlai deposit targets or linked protection rules are configured."
-            if not Map.IsMapReady():
-                return "Wait for the current map to finish loading."
+            lifecycle_reason = self._merchant_rules_lifecycle_block_reason(require_service=True)
+            if lifecycle_reason:
+                return lifecycle_reason
             if not self._can_use_local_storage_actions():
                 return "Run Deposits Now requires an outpost or Guild Hall."
             return ""
@@ -32955,28 +33406,33 @@ class MerchantRulesWidget:
                 return GOLD_BALANCE_INVENTORY_PLUS_MESSAGE
             if not self.gold_balance_enabled:
                 return GOLD_BALANCE_DISABLED_ACTION_MESSAGE
-            return "Merchant Rules is already busy." if busy else ""
+            if busy:
+                return "Merchant Rules is already busy."
+            return self._merchant_rules_lifecycle_block_reason(require_service=True)
         if action == "salvage":
             if busy:
                 return "Merchant Rules is already busy."
-            if not Map.IsMapReady():
-                return "Wait for the current map to finish loading."
+            lifecycle_reason = self._merchant_rules_lifecycle_block_reason()
+            if lifecycle_reason:
+                return lifecycle_reason
             if not self._has_enabled_salvage_settings():
                 return "No Salvage settings are enabled."
             return ""
         if action == "destroy":
             if busy:
                 return "Merchant Rules is already busy."
-            if not Map.IsMapReady():
-                return "Wait for the current map to finish loading."
+            lifecycle_reason = self._merchant_rules_lifecycle_block_reason()
+            if lifecycle_reason:
+                return lifecycle_reason
             if not self._collect_enabled_destroy_rules():
                 return "No Destroy rules are enabled."
             return ""
         if action == "identify":
             if busy:
                 return "Merchant Rules is already busy."
-            if not Map.IsMapReady():
-                return "Wait for the current map to finish loading."
+            lifecycle_reason = self._merchant_rules_lifecycle_block_reason()
+            if lifecycle_reason:
+                return lifecycle_reason
             if not self._has_enabled_identify_settings():
                 return "No Identify rarities are selected."
             return ""
@@ -33666,9 +34122,7 @@ class MerchantRulesWidget:
             return "Merchant Rules manual merchant automation is already running."
         if self._merchant_rules_has_pending_or_active_work(include_remote_dispatch=False):
             return "Merchant Rules owned work is already running."
-        if not Map.IsMapReady():
-            return "Current map is still loading."
-        return ""
+        return self._merchant_rules_lifecycle_block_reason()
 
     def _wait_for_remote_execute_start(
         self,
@@ -33706,7 +34160,7 @@ class MerchantRulesWidget:
         timeout_reason = self._get_remote_execute_wait_reason()
         if not timeout_reason and callable(is_merchant_busy) and bool(is_merchant_busy()):
             timeout_reason = "Another merchant action is still running on this client."
-        timeout_label = "Map Not Ready" if not Map.IsMapReady() else "Busy Timeout"
+        timeout_label = "Map Not Ready" if self._merchant_rules_lifecycle_block_reason() else "Busy Timeout"
         self._send_multibox_result_message(
             str(getattr(message, "SenderEmail", "") or "").strip(),
             request_id=str(self._extract_multibox_message_extra_data(message)[0] or "").strip(),
@@ -35868,10 +36322,6 @@ class MerchantRulesWidget:
 
         PyImGui.text_colored(state_label, state_color)
         PyImGui.same_line(0, 8)
-        self._draw_secondary_text(
-            "These protections use this Sell rule's rarity filters and are active only while the rule is enabled.",
-            wrapped=False,
-        )
 
         self._begin_sell_jump_target_group(
             index,
@@ -35969,8 +36419,7 @@ class MerchantRulesWidget:
             "Protect matching weapons, armor, upgrades, runes, insignias, and inscriptions from destructive actions.",
         )
         self._draw_secondary_text(
-            "Each group uses its Weapons or Armor Sell rule's matching filters.",
-            wrapped=False,
+            "Each group is linked to a Weapons or Armor Sell rule. Enable or disable the rule in Sell. Its rarity choices apply to Keep customized and Keep unidentified; the other protections below do not use those rarity choices.",
         )
         if not sell_rule_indices:
             self._draw_secondary_text(
