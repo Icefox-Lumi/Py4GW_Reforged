@@ -3,6 +3,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+from typing import Any
 
 import Py4GW
 import ctypes
@@ -61,6 +62,14 @@ _pending_widget_enables: list[str] = []
 # the same transition. Only the first request should issue /resign on a client.
 _RESIGN_DEDUP_MS = 2_500
 _last_resign_ms_by_email: dict[str, int] = {}
+
+# Hero Team Manager party handshake modes.  These use the existing
+# SharedMessageStruct payload and deliberately do not share InventoryQuery's
+# response cache or wire modes.
+_PARTY_STATE_QUERY_REQUEST = "party_state_request"
+_PARTY_STATE_QUERY_REPLY = "party_state_reply"
+_PARTY_STATE_GUARD_RESULT = "party_state_guard"
+_PARTY_INVITE_GUARD = "party_invite_guard"
 
 _MESSAGE_TYPE_OPTIONS = tuple(
     command for command in SharedCommandType if command is not SharedCommandType.NoCommand
@@ -204,6 +213,18 @@ def reset_inventory_state(sender_email: str, request_id: str) -> None:
         (str(sender_email or "").strip(), str(request_id or "").strip()),
         None,
     )
+
+
+def _party_state_query_cache() -> dict[tuple[str, str], dict[str, Any]]:
+    cache = getattr(GLOBAL_CACHE, "_hero_team_party_state_query_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(GLOBAL_CACHE, "_hero_team_party_state_query_cache", cache)
+    return cache
+
+
+def _party_state_cache_key(sender_email: str, request_id: str) -> tuple[str, str]:
+    return (str(sender_email or "").strip().casefold(), str(request_id or "").strip())
 
 
 def _get_merchant_rules_widget():
@@ -865,15 +886,410 @@ def EnableHeroAIOptions(account_email: str):
 
 # endregion
 
+# region PartyStateQuery
+
+
+def _party_state_int(value: Any, default: int = -1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _party_state_map_scalar(value: Any) -> int:
+    if isinstance(value, (tuple, list)):
+        value = value[0] if value else 0
+    return _party_state_int(value, 0)
+
+
+def _party_state_map_signature() -> tuple[int, int, int, int] | None:
+    try:
+        region = _party_state_map_scalar(Map.GetRegion())
+        language = _party_state_map_scalar(Map.GetLanguage())
+        map_value = (
+            _party_state_int(Map.GetMapID(), 0),
+            region,
+            _party_state_int(Map.GetDistrict(), 0),
+            language,
+        )
+    except Exception:
+        return None
+    return map_value if map_value[0] > 0 else None
+
+
+def _party_state_map_text(map_signature: tuple[int, int, int, int] | None) -> str:
+    values = map_signature or (0, 0, 0, 0)
+    return ",".join(str(int(value)) for value in values)
+
+
+def _party_state_parse_metadata(value: str) -> dict[str, Any] | None:
+    parts = str(value or "").split(";")
+    if len(parts) != 6:
+        return None
+    map_parts = parts[0].split(",")
+    if len(map_parts) != 4:
+        return None
+    try:
+        map_signature = tuple(int(item) for item in map_parts)
+        party_id = int(parts[1])
+        party_position = int(parts[2])
+        is_party_leader = int(parts[3])
+        is_loaded = int(parts[4])
+        other_count = int(parts[5])
+    except (TypeError, ValueError):
+        return None
+    if is_party_leader not in (0, 1) or is_loaded not in (0, 1):
+        return None
+    return {
+        "map_signature": map_signature,
+        "party_id": party_id,
+        "party_position": party_position,
+        "is_party_leader": bool(is_party_leader),
+        "is_loaded": bool(is_loaded),
+        "other_count": other_count,
+    }
+
+
+def _party_state_local_snapshot() -> dict[str, Any]:
+    party_api = GLOBAL_CACHE.Party
+
+    def read_members(method_name: str) -> tuple[list[Any], bool]:
+        method = getattr(party_api, method_name, None)
+        if not callable(method):
+            return [], False
+        try:
+            values: Any = method()
+            return list(values or []), values is not None
+        except Exception:
+            return [], False
+
+    players, players_ok = read_members("GetPlayers")
+    heroes, heroes_ok = read_members("GetHeroes")
+    henchmen, henchmen_ok = read_members("GetHenchmen")
+    others, others_ok = read_members("GetOthers")
+
+    def read_int(method_name: str) -> int:
+        method = getattr(party_api, method_name, None)
+        if not callable(method):
+            return -1
+        try:
+            value: Any = method()
+            return int(value)
+        except Exception:
+            return -1
+
+    party_size = read_int("GetPartySize")
+    player_count = read_int("GetPlayerCount")
+    hero_count = read_int("GetHeroCount")
+    henchman_count = read_int("GetHenchmanCount")
+    party_id = read_int("GetPartyID")
+    party_position = read_int("GetOwnPartyNumber")
+    try:
+        is_party_leader = bool(party_api.IsPartyLeader())
+    except Exception:
+        is_party_leader = False
+    try:
+        is_loaded = bool(party_api.IsPartyLoaded())
+    except Exception:
+        is_loaded = False
+
+    map_signature = _party_state_map_signature()
+    character_name = ""
+    try:
+        login_number = int(Player.GetLoginNumber() or 0)
+        if login_number > 0:
+            character_name = str(party_api.Players.GetPlayerNameByLoginNumber(login_number) or "").strip()
+    except Exception:
+        character_name = ""
+
+    other_count = len(others)
+    components_reconciled = (
+        players_ok
+        and heroes_ok
+        and henchmen_ok
+        and others_ok
+        and party_size >= 0
+        and player_count == len(players)
+        and hero_count == len(heroes)
+        and henchman_count == len(henchmen)
+        and party_size == len(players) + len(heroes) + len(henchmen) + other_count
+    )
+    valid = bool(
+        components_reconciled
+        and party_id > 0
+        and party_position >= 0
+        and map_signature is not None
+        and bool(character_name)
+    )
+    return {
+        "valid": valid,
+        "character_name": character_name,
+        "party_size": party_size,
+        "player_count": player_count,
+        "hero_count": hero_count,
+        "henchman_count": henchman_count,
+        "other_count": other_count,
+        "party_id": party_id,
+        "party_position": party_position,
+        "is_party_leader": is_party_leader,
+        "is_loaded": is_loaded,
+        "map_signature": map_signature,
+    }
+
+
+def _party_state_params(snapshot: dict[str, Any]) -> tuple[float, float, float, float]:
+    return (
+        float(_party_state_int(snapshot.get("party_size"), -1)),
+        float(_party_state_int(snapshot.get("player_count"), -1)),
+        float(_party_state_int(snapshot.get("hero_count"), -1)),
+        float(_party_state_int(snapshot.get("henchman_count"), -1)),
+    )
+
+
+def _party_state_metadata(snapshot: dict[str, Any]) -> str:
+    return ";".join(
+        (
+            _party_state_map_text(snapshot.get("map_signature")),
+            str(_party_state_int(snapshot.get("party_id"), -1)),
+            str(_party_state_int(snapshot.get("party_position"), -1)),
+            "1" if bool(snapshot.get("is_party_leader")) else "0",
+            "1" if bool(snapshot.get("is_loaded")) else "0",
+            str(_party_state_int(snapshot.get("other_count"), -1)),
+        )
+    )
+
+
+def _cache_party_state_result(
+    message: SharedMessageStruct,
+    mode: str,
+    request_id: str,
+    *,
+    character_name: str = "",
+    result: str = "",
+) -> None:
+    metadata = _party_state_parse_metadata(_extra_data(message)[3])
+    params = [_party_state_int(message.Params[index], -1) for index in range(4)]
+    entry = {
+        "mode": str(mode),
+        "request_id": str(request_id),
+        "sender_email": str(message.SenderEmail or "").strip(),
+        "receiver_email": str(message.ReceiverEmail or "").strip(),
+        "character_name": str(character_name or "").strip(),
+        "result": str(result or "").strip(),
+        "party_size": params[0],
+        "player_count": params[1],
+        "hero_count": params[2],
+        "henchman_count": params[3],
+        "other_count": metadata["other_count"] if metadata else -1,
+        "party_id": metadata["party_id"] if metadata else -1,
+        "party_position": metadata["party_position"] if metadata else -1,
+        "is_party_leader": metadata["is_party_leader"] if metadata else None,
+        "is_loaded": metadata["is_loaded"] if metadata else None,
+        "map_signature": metadata["map_signature"] if metadata else None,
+        "message_timestamp": _party_state_int(message.Timestamp, 0),
+        "received_at": time.monotonic(),
+    }
+    sender_email = entry["sender_email"]
+    if sender_email and request_id:
+        _party_state_query_cache()[_party_state_cache_key(sender_email, request_id)] = entry
+
+
+def _send_party_state_result(
+    sender_email: str,
+    mode: str,
+    request_id: str,
+    snapshot: dict[str, Any],
+    *,
+    character_name: str = "",
+    result: str = "",
+) -> int:
+    local_email = str(Player.GetAccountEmail() or "").strip()
+    sender = str(sender_email or "").strip()
+    if not local_email or not sender or not request_id:
+        return -1
+    extra_value = character_name if mode == _PARTY_STATE_QUERY_REPLY else result
+    return GLOBAL_CACHE.ShMem.SendMessage(
+        local_email,
+        sender,
+        SharedCommandType.PartyStateQuery,
+        _party_state_params(snapshot),
+        (mode, request_id, extra_value, _party_state_metadata(snapshot)),
+    )
+
+
+def PartyStateQuery(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    extra0, extra1, extra2, _extra3 = _extra_data(message)
+    mode = extra0.strip().lower()
+    request_id = extra1.strip()
+    try:
+        if mode == _PARTY_STATE_QUERY_REQUEST:
+            snapshot = _party_state_local_snapshot()
+            sent_index = _send_party_state_result(
+                message.SenderEmail,
+                _PARTY_STATE_QUERY_REPLY,
+                request_id,
+                snapshot,
+                character_name=snapshot["character_name"],
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    f"[PartyStateQuery] reply request={request_id!r} "
+                    f"to={message.SenderEmail!r} party={snapshot['party_size']} "
+                    f"players={snapshot['player_count']} heroes={snapshot['hero_count']} "
+                    f"henchmen={snapshot['henchman_count']} others={snapshot['other_count']} "
+                    f"queued={sent_index >= 0}"
+                ),
+                Console.MessageType.Info if sent_index >= 0 else Console.MessageType.Warning,
+                False,
+            )
+        elif mode == _PARTY_STATE_QUERY_REPLY:
+            _cache_party_state_result(
+                message,
+                mode,
+                request_id,
+                character_name=extra2,
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                f"[PartyStateQuery] cached reply request={request_id!r} from={message.SenderEmail!r}",
+                Console.MessageType.Info,
+                False,
+            )
+        elif mode == _PARTY_STATE_GUARD_RESULT:
+            _cache_party_state_result(
+                message,
+                mode,
+                request_id,
+                result=extra2,
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    f"[PartyStateQuery] cached guard request={request_id!r} "
+                    f"from={message.SenderEmail!r} result={extra2!r}"
+                ),
+                Console.MessageType.Info if extra2 == "reciprocal_invite_sent" else Console.MessageType.Warning,
+                False,
+            )
+        else:
+            ConsoleLog(
+                MODULE_NAME,
+                f"[PartyStateQuery] ignored unsupported mode={mode!r} request={request_id!r}",
+                Console.MessageType.Warning,
+                False,
+            )
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f"[PartyStateQuery] processing failed request={request_id!r}: {exc}",
+            Console.MessageType.Error,
+            False,
+        )
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    yield
+
+
+# endregion
+
 # region InviteToParty
 
 
-def InviteToParty(index :int, message: SharedMessageStruct):
-    # ConsoleLog(MODULE_NAME, f"Processing InviteToParty message: {message}", Console.MessageType.Info)
+def _party_state_is_solo(snapshot: dict[str, Any]) -> bool:
+    return bool(
+        snapshot.get("valid")
+        and snapshot.get("is_loaded") is True
+        and snapshot.get("is_party_leader") is True
+        and _party_state_int(snapshot.get("party_position"), -1) == 0
+        and _party_state_int(snapshot.get("party_size"), -1) == 1
+        and _party_state_int(snapshot.get("player_count"), -1) == 1
+        and _party_state_int(snapshot.get("hero_count"), -1) == 0
+        and _party_state_int(snapshot.get("henchman_count"), -1) == 0
+        and _party_state_int(snapshot.get("other_count"), -1) == 0
+    )
+
+
+def _guarded_party_invite_result(
+    message: SharedMessageStruct,
+    extras: tuple[str, str, str, str],
+) -> tuple[str, dict[str, Any]]:
+    request_id = extras[1].strip()
+    expected_character = extras[2].strip()
+    expected_map = extras[3].strip()
+    snapshot = _party_state_local_snapshot()
+    local_email = str(Player.GetAccountEmail() or "").strip()
+    result = "guard_failed: invalid_request"
+
+    if not request_id or local_email.casefold() != str(message.ReceiverEmail or "").strip().casefold():
+        result = "guard_failed: invalid_request"
+    elif expected_map != _party_state_map_text(snapshot.get("map_signature")):
+        result = "guard_failed: map_changed"
+    elif not snapshot.get("valid"):
+        result = "guard_failed: party_state_unavailable"
+    elif expected_character.casefold() != str(snapshot.get("character_name") or "").strip().casefold():
+        result = "guard_failed: character_changed"
+    elif not _party_state_is_solo(snapshot):
+        result = "guard_failed: party_changed"
+    else:
+        try:
+            sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
+        except Exception:
+            sender_data = None
+        sender_character = str(getattr(getattr(sender_data, "AgentData", None), "CharacterName", "") or "").strip()
+        if not sender_character:
+            result = "guard_failed: sender_identity_unavailable"
+        else:
+            try:
+                # This is intentionally the next party mutation after the
+                # authoritative local recheck; no delay belongs in this gap.
+                GLOBAL_CACHE.Party.Players.InvitePlayer(sender_character)
+                result = "reciprocal_invite_sent"
+            except Exception:
+                result = "guard_failed: reciprocal_invite_failed"
+    return result, snapshot
+
+
+def InviteToParty(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    extras = _extra_data(message)
+    if extras[0].strip().lower() == _PARTY_INVITE_GUARD:
+        request_id = extras[1].strip()
+        try:
+            result, snapshot = _guarded_party_invite_result(message, extras)
+            sent_index = _send_party_state_result(
+                message.SenderEmail,
+                _PARTY_STATE_GUARD_RESULT,
+                request_id,
+                snapshot,
+                result=result,
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    f"[InviteToParty] guard request={request_id!r} sender={message.SenderEmail!r} "
+                    f"result={result!r} reply_queued={sent_index >= 0}"
+                ),
+                Console.MessageType.Info if result == "reciprocal_invite_sent" else Console.MessageType.Warning,
+                False,
+            )
+        except Exception as exc:
+            ConsoleLog(
+                MODULE_NAME,
+                f"[InviteToParty] guarded processing failed request={request_id!r}: {exc}",
+                Console.MessageType.Error,
+                False,
+            )
+        finally:
+            GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        yield
+        return
+
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        yield
         return
     yield from Routines.Yield.wait(100)
     GLOBAL_CACHE.Party.Players.InvitePlayer(sender_data.AgentData.CharacterName)
@@ -3496,6 +3912,8 @@ def ProcessMessages():
     _record_received_message(message)
 
     match message.Command:
+        case SharedCommandType.PartyStateQuery:
+            GLOBAL_CACHE.Coroutines.append(PartyStateQuery(index, message))
         case SharedCommandType.TravelToMap:
             GLOBAL_CACHE.Coroutines.append(TravelToMap(index, message))
         case SharedCommandType.InviteToParty:

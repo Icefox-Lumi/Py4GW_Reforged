@@ -7,6 +7,8 @@ import PyImGui
 import PySystem
 
 from Py4GWCoreLib.ImGui import ImGui
+from Py4GWCoreLib.modular.hero_team_manager import AltAccountBinding
+from Py4GWCoreLib.modular.hero_team_manager import AltAccountStatus
 from Py4GWCoreLib.modular.hero_team_manager import HERO_BEHAVIOR_DONT_CHANGE
 from Py4GWCoreLib.modular.hero_team_manager import HERO_BEHAVIOR_LABELS
 from Py4GWCoreLib.modular.hero_team_manager import HERO_BEHAVIOR_VALUES
@@ -16,12 +18,15 @@ from Py4GWCoreLib.modular.hero_team_manager import HERO_SLOT_COUNT
 from Py4GWCoreLib.modular.hero_team_manager import HeroTeamApplyOperation
 from Py4GWCoreLib.modular.hero_team_manager import HeroTeamConfig
 from Py4GWCoreLib.modular.hero_team_manager import HeroTemplateEntry
+from Py4GWCoreLib.modular.hero_team_manager import MixedHeroTeamApplyOperation
 from Py4GWCoreLib.modular.hero_team_manager import TemplateProfessionGroup
 from Py4GWCoreLib.modular.hero_team_manager import account_config_to_dict
+from Py4GWCoreLib.modular.hero_team_manager import active_alt_account_choices
 from Py4GWCoreLib.modular.hero_team_manager import add_team
 from Py4GWCoreLib.modular.hero_team_manager import add_template
 from Py4GWCoreLib.modular.hero_team_manager import apply_template_to_current_party_hero
 from Py4GWCoreLib.modular.hero_team_manager import build_load_preflight
+from Py4GWCoreLib.modular.hero_team_manager import build_mixed_team_preflight
 from Py4GWCoreLib.modular.hero_team_manager import classify_template_profession
 from Py4GWCoreLib.modular.hero_team_manager import clear_hero_alias
 from Py4GWCoreLib.modular.hero_team_manager import create_apply_operation
@@ -42,6 +47,7 @@ from Py4GWCoreLib.modular.hero_team_manager import load_config
 from Py4GWCoreLib.modular.hero_team_manager import merge_template_libraries
 from Py4GWCoreLib.modular.hero_team_manager import reload_global_templates
 from Py4GWCoreLib.modular.hero_team_manager import resolve_slot_template_code
+from Py4GWCoreLib.modular.hero_team_manager import resolve_alt_account_statuses
 from Py4GWCoreLib.modular.hero_team_manager import safe_account_key
 from Py4GWCoreLib.modular.hero_team_manager import save_account_config
 from Py4GWCoreLib.modular.hero_team_manager import save_current_party_as_team
@@ -50,6 +56,8 @@ from Py4GWCoreLib.modular.hero_team_manager import save_template_name
 from Py4GWCoreLib.modular.hero_team_manager import set_hero_alias
 from Py4GWCoreLib.modular.hero_team_manager import set_template_preferred_hero_id
 from Py4GWCoreLib.modular.hero_team_manager import summarize_skill_template
+from Py4GWCoreLib.modular.hero_team_manager import team_has_enabled_alt_bindings
+from Py4GWCoreLib.modular.hero_team_manager import duplicate_alt_binding_indices
 from Py4GWCoreLib.modular.hero_team_manager import template_preferred_hero_id
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 
@@ -64,7 +72,7 @@ _config: HeroTeamConfig | None = None
 _selected_template_id = ''
 _active_tab = 'teams'
 _status = ''
-_operation: HeroTeamApplyOperation | None = None
+_operation: HeroTeamApplyOperation | MixedHeroTeamApplyOperation | None = None
 _dirty = False
 _saved_account_state: dict[str, object] | None = None
 _saved_global_state: list[HeroTemplateEntry] | None = None
@@ -74,6 +82,7 @@ _rename_draft = ''
 _code_edit_template_id = ''
 _code_edit_draft = ''
 _selected_apply_target_hero_id = 0
+_selected_alt_account_email = ''
 _confirm_action = ''
 _confirm_title = ''
 _confirm_message = ''
@@ -2178,6 +2187,148 @@ def _draw_preflight_summary(preflight) -> None:
         _warning_text(f'Preflight: {" ".join(warnings)}', 'warning')
 
 
+def _alt_status_severity(status: str) -> str:
+    if status in {'ready', 'joined', 'in_party'}:
+        return 'success'
+    if status in {'active', 'query_required', 'checking_party', 'invite_waiting', 'disabled'}:
+        return 'info'
+    return 'error'
+
+
+def _draw_alt_accounts(config: HeroTeamConfig, team, *, disabled: bool, preflight=None) -> None:
+    global _selected_alt_account_email, _status
+
+    PyImGui.separator()
+    PyImGui.text('Alt Accounts')
+    _muted_text('Configured accounts join as players. Heroes owned by those accounts are not managed here.')
+
+    choices = active_alt_account_choices()
+    if choices:
+        labels = [
+            f'{choice.display_name or choice.account_email} | {choice.profession_label or "Unknown"}'
+            for choice in choices
+        ]
+        selected_index = next(
+            (index for index, choice in enumerate(choices) if choice.account_email == _selected_alt_account_email),
+            0,
+        )
+        selected_index = _combo('Add account##hero_team_alt_picker', selected_index, labels)
+        selected_index = max(0, min(selected_index, len(choices) - 1))
+        _selected_alt_account_email = str(choices[selected_index].account_email or '')
+        _same_line(8)
+        if _button_disabled('Add Alt##hero_team_add_alt', disabled, 82, 24):
+            selected = choices[selected_index]
+            existing = any(
+                str(binding.account_email or '').strip().casefold()
+                == str(selected.account_email or '').strip().casefold()
+                for binding in team.alt_members
+            )
+            if existing:
+                _status = 'Alt account is already configured; duplicate rows are not added.'
+            else:
+                team.alt_members.append(AltAccountBinding(account_email=str(selected.account_email or '').strip()))
+                _mark_dirty('Alt account added. Click Save to persist.')
+    else:
+        _muted_text('No active alt accounts discovered in shared memory.')
+
+    statuses = list(getattr(preflight, 'alt_statuses', []) or []) if preflight is not None else []
+    if not statuses and team.alt_members:
+        try:
+            statuses = resolve_alt_account_statuses(team)
+        except Exception:
+            statuses = []
+    status_by_index: dict[int, AltAccountStatus] = {
+        int(status.binding_index): status for status in statuses if int(status.binding_index) >= 0
+    }
+    duplicate_indices = duplicate_alt_binding_indices(team)
+    if duplicate_indices:
+        _warning_text('Duplicate alt account identities must be corrected before mixed loading.', 'error')
+
+    capacity = getattr(preflight, 'capacity', None) if preflight is not None else None
+    if capacity is not None:
+        plan = getattr(preflight, 'plan', None)
+        target_count = len(plan.slots) if plan is not None else 0
+        _colored_text(
+            f'Players: {capacity.local_player_count} main + {capacity.configured_alt_present_count} alts '
+            f'(+ {capacity.unmanaged_player_count} unmanaged)',
+            'info',
+        )
+        _colored_text(
+            f'Heroes: {target_count} '
+            f'local target(s); {capacity.remote_hero_count + capacity.unknown_hero_count} unmanaged retained',
+            'info',
+        )
+        _colored_text(
+            f'Other occupants: {capacity.unmanaged_player_count} unmanaged player(s), '
+            f'{capacity.remote_hero_count + capacity.unknown_hero_count} remote/unmanaged hero(es), '
+            f'{capacity.henchman_count} henchman, {capacity.other_occupant_count} other',
+            'info',
+        )
+        _colored_text(
+            f'Party: {capacity.current_party_size}/{capacity.max_party_size} '
+            f'(forecast {capacity.forecast_final_slots})',
+            'success' if capacity.forecast_final_slots <= capacity.max_party_size else 'error',
+        )
+
+    if not team.alt_members:
+        _muted_text('No alt accounts configured for this team.')
+        return
+
+    removed = False
+    for index, binding in enumerate(team.alt_members):
+        status = status_by_index.get(index)
+        status_code = str(status.status if status is not None else 'unresolved')
+        status_message = str(status.status_message if status is not None else 'Live status unavailable.')
+        if index in duplicate_indices:
+            status_code = 'duplicate'
+            status_message = 'Duplicate account identity; correct this row before loading.'
+
+        PyImGui.separator()
+        began_disabled = _begin_disabled(disabled)
+        try:
+            enabled = bool(PyImGui.checkbox(f'Enabled##hero_team_alt_enabled_{index}', bool(binding.enabled)))
+        except Exception:
+            enabled = bool(binding.enabled)
+        finally:
+            _end_disabled(began_disabled)
+        if not disabled and enabled != bool(binding.enabled):
+            binding.enabled = enabled
+            _mark_dirty('Alt account enabled state changed. Click Save to persist.')
+
+        _same_line(8)
+        label = str(binding.alias or binding.account_email or '(missing account)').strip()
+        _colored_text(label, _alt_status_severity(status_code))
+        if status is not None:
+            status_label = status_code.replace('_', ' ')
+            details = (
+                f'{status.character_name or "No character"} | '
+                f'{status.profession_label or "Unknown profession"} | {status_label}'
+            )
+            _same_line(8)
+            _muted_text(details)
+        _same_line(8)
+        if _button_disabled(f'Remove##hero_team_alt_remove_{index}', disabled, 74, 22):
+            team.alt_members.pop(index)
+            _mark_dirty('Alt account removed. Click Save to persist.')
+            removed = True
+        _show_item_tooltip(status_message)
+        if removed:
+            break
+
+        alias = _input_text(f'Alias##hero_team_alt_alias_{index}', binding.alias, 64)
+        if not disabled and alias != binding.alias:
+            binding.alias = alias
+            _mark_dirty('Alt account alias changed. Click Save to persist.')
+        expected = _input_text(
+            f'Expected character##hero_team_alt_expected_{index}',
+            binding.expected_character_name,
+            64,
+        )
+        if not disabled and expected != binding.expected_character_name:
+            binding.expected_character_name = expected
+            _mark_dirty('Alt account character expectation changed. Click Save to persist.')
+
+
 def _save_or_confirm(config: HeroTeamConfig, *, commit_code_edit: bool = False) -> None:
     dirty = _sync_dirty_state(config)
     if dirty or (commit_code_edit and _active_code_edit_changed(config)):
@@ -2427,12 +2578,23 @@ def _draw_teams_tab(config: HeroTeamConfig) -> None:
     global _active_tab, _operation, _status
     running = _operation_running()
     _team_combo(config, disabled=running)
-    preflight = build_load_preflight(
-        config,
-        config.active_team_id,
-        include_runtime=True,
-        leave_party_first=True,
-        clear_existing=True,
+    team = get_team(config)
+    mixed_mode = team is not None and team_has_enabled_alt_bindings(team)
+    operation_preflight = getattr(_operation, 'preflight', None) if running else None
+    preflight = (
+        operation_preflight
+        if mixed_mode and operation_preflight is not None
+        else (
+            build_mixed_team_preflight(config, config.active_team_id)
+            if mixed_mode
+            else build_load_preflight(
+                config,
+                config.active_team_id,
+                include_runtime=True,
+                leave_party_first=True,
+                clear_existing=True,
+            )
+        )
     )
     warning_count = _preflight_warning_count(preflight)
     plan = preflight.plan
@@ -2464,7 +2626,7 @@ def _draw_teams_tab(config: HeroTeamConfig) -> None:
             _operation = create_apply_operation(
                 config,
                 config.active_team_id,
-                leave_party_first=True,
+                leave_party_first=not mixed_mode,
                 clear_existing=True,
             )
             _status = 'Starting team load from unsaved changes.' if _dirty else 'Starting team load.'
@@ -2482,7 +2644,6 @@ def _draw_teams_tab(config: HeroTeamConfig) -> None:
         if _button('Templates##open_templates_from_teams', 96, 24):
             _active_tab = 'templates'
 
-    team = get_team(config)
     if team is None:
         _colored_text('No team selected.', 'error')
         return
@@ -2545,6 +2706,8 @@ def _draw_teams_tab(config: HeroTeamConfig) -> None:
         _same_line(8)
         _inline_status_text(f'Warnings {warning_count}', 'warning')
     _draw_preflight_summary(preflight)
+
+    _draw_alt_accounts(config, team, disabled=running, preflight=preflight)
 
     if config.templates:
         _draw_template_filter_toggle()

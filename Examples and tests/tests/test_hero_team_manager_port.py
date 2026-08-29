@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import ast
 import copy
+import ctypes
 import importlib.util
 import sys
+import time
 import types
 import unittest
 from pathlib import Path
@@ -12,6 +14,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 HELPER_PATH = ROOT / 'Py4GWCoreLib' / 'modular' / 'hero_team_manager.py'
 WIDGET_PATH = ROOT / 'Widgets' / 'Guild Wars' / 'Hero Team Manager.py'
+MESSAGING_PATH = ROOT / 'Widgets' / 'System' / 'Messaging.py'
+ALL_ACCOUNTS_PATH = ROOT / 'Py4GWCoreLib' / 'GlobalCache' / 'shared_memory_src' / 'AllAccounts.py'
 
 
 class _FakeJsonDocument:
@@ -171,6 +175,117 @@ def _load_widget(helper):
     return module, previous, module_name
 
 
+def _load_messaging_party_state_functions() -> dict[str, Any]:
+    source = MESSAGING_PATH.read_text(encoding='utf-8')
+    tree = ast.parse(source, filename=str(MESSAGING_PATH))
+    wanted = {
+        '_party_state_int',
+        '_party_state_map_scalar',
+        '_party_state_map_signature',
+        '_party_state_map_text',
+        '_party_state_local_snapshot',
+        '_party_state_params',
+        '_party_state_metadata',
+        '_party_state_is_solo',
+        '_send_party_state_result',
+        '_guarded_party_invite_result',
+        'PartyStateQuery',
+        'InviteToParty',
+    }
+    nodes: list[ast.stmt] = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
+    module = ast.Module(body=nodes, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace: dict[str, Any] = {
+        '__name__': '_messaging_party_state_port',
+        'Any': Any,
+        'SharedMessageStruct': object,
+        'time': time,
+        '_PARTY_STATE_QUERY_REQUEST': 'party_state_request',
+        '_PARTY_STATE_QUERY_REPLY': 'party_state_reply',
+        '_PARTY_STATE_GUARD_RESULT': 'party_state_guard',
+        '_PARTY_INVITE_GUARD': 'party_invite_guard',
+    }
+    exec(compile(module, str(MESSAGING_PATH), 'exec'), namespace)
+    return namespace
+
+
+def _load_authoritative_shared_command_type():
+    source_path = ROOT / 'Py4GWCoreLib' / 'enums_src' / 'Multiboxing_enums.py'
+    source = source_path.read_text(encoding='utf-8')
+    tree = ast.parse(source, filename=str(source_path))
+    enum_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'SharedCommandType')
+    module = ast.Module(body=[enum_node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    from enum import IntEnum, auto
+
+    namespace: dict[str, Any] = {'IntEnum': IntEnum, 'auto': auto}
+    exec(compile(module, str(source_path), 'exec'), namespace)
+    return namespace['SharedCommandType']
+
+
+def _load_authoritative_all_accounts_send_message():
+    source = ALL_ACCOUNTS_PATH.read_text(encoding='utf-8')
+    tree = ast.parse(source, filename=str(ALL_ACCOUNTS_PATH))
+    send_node = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == 'SendMessage'
+    )
+    module = ast.Module(body=[send_node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    console = types.SimpleNamespace(MessageType=types.SimpleNamespace(Error='error', Warning='warning'))
+    system = types.SimpleNamespace(
+        Console=console,
+        get_tick_count64=lambda: 1234,
+    )
+    namespace: dict[str, Any] = {
+        'SharedCommandType': _load_authoritative_shared_command_type(),
+        'SHMEM_MAX_PLAYERS': 64,
+        'SHMEM_MAX_CHAR_LEN': 64,
+        'SHMEM_MODULE_NAME': 'Shared Memory',
+        'ConsoleLog': lambda *_args, **_kwargs: None,
+        'PySystem': system,
+    }
+    exec(compile(module, str(ALL_ACCOUNTS_PATH), 'exec'), namespace)
+    return namespace['SendMessage'], namespace['SharedCommandType']
+
+
+class _RealSharedMemorySendHarness:
+    def __init__(self, receiver_email: str) -> None:
+        self.receiver_email = str(receiver_email)
+        self.Inbox = [
+            types.SimpleNamespace(
+                Active=False,
+                Running=False,
+                SenderEmail='',
+                ReceiverEmail='',
+                Command=0,
+                Params=(),
+                ExtraData=(),
+                Timestamp=0,
+            )
+            for _ in range(64)
+        ]
+
+    def GetSlotByEmail(self, email: str) -> int:
+        return 0 if str(email) == self.receiver_email else -1
+
+    def _can_communicate(self, _sender_email: str, _receiver_email: str) -> bool:
+        return True
+
+    def GetInbox(self, index: int):
+        return self.Inbox[index]
+
+    def _str_to_c_wchar_array(self, value: str, maxlen: int):
+        array_type = ctypes.c_wchar * maxlen
+        result = array_type()
+        for index, character in enumerate(str(value)[: maxlen - 1]):
+            result[index] = character
+        return result
+
+    @staticmethod
+    def _c_wchar_array_to_str(value) -> str:
+        return ''.join(character for character in value if character != '\0').rstrip()
+
+
 def _current_reforged_fixture() -> tuple[dict[str, Any], dict[str, Any]]:
     """Return a stable current-format account and shared-template fixture."""
     template_records = [
@@ -226,6 +341,206 @@ def _current_reforged_fixture() -> tuple[dict[str, Any], dict[str, Any]]:
     return account_source, global_source
 
 
+class _FakePartyPlayer:
+    def __init__(self, login_number: int) -> None:
+        self.login_number = int(login_number)
+
+
+class _FakePartyHero:
+    def __init__(self, hero_id: int, owner_player_id: int) -> None:
+        self.hero_id = int(hero_id)
+        self.owner_player_id = int(owner_player_id)
+        self.agent_id = 1000 + int(hero_id)
+
+
+class _FakePartyApi:
+    def __init__(
+        self,
+        players: list[_FakePartyPlayer],
+        heroes: list[_FakePartyHero] | None = None,
+        henchmen: list[Any] | None = None,
+        others: list[Any] | None = None,
+        *,
+        party_id: int = 10,
+        loaded: bool = True,
+        leader: bool = True,
+        reported_size: int | None = None,
+    ) -> None:
+        self.players = list(players)
+        self.heroes = list(heroes or [])
+        self.henchmen = list(henchmen or [])
+        self.others = list(others or [])
+        self.party_id = int(party_id)
+        self.loaded = bool(loaded)
+        self.leader = bool(leader)
+        self.reported_size = reported_size
+        self.kick_all_calls = 0
+        self.leave_party_calls = 0
+        self.invites: list[str] = []
+        self.added_heroes: list[int] = []
+        self.Players = types.SimpleNamespace(
+            GetAgentIDByLoginNumber=lambda login_number: 2000 + int(login_number or 0),
+            GetPlayerNameByLoginNumber=lambda login_number: (
+                'Main' if int(login_number or 0) == 1 else f'Player {int(login_number or 0)}'
+            ),
+            InvitePlayer=lambda character_name: self.invites.append(str(character_name)),
+        )
+        self.Heroes = types.SimpleNamespace(
+            KickAllHeroes=self._kick_all_heroes,
+            AddHero=self._add_hero,
+            GetHeroAgentIDByPartyPosition=lambda _position: 3000,
+            SetHeroBehavior=lambda *_args: None,
+        )
+
+    def _kick_all_heroes(self) -> None:
+        self.kick_all_calls += 1
+
+    def LeaveParty(self) -> None:
+        self.leave_party_calls += 1
+
+    def _add_hero(self, hero_id: int) -> None:
+        self.added_heroes.append(int(hero_id))
+
+    def GetPlayers(self) -> list[_FakePartyPlayer]:
+        return list(self.players)
+
+    def GetHeroes(self) -> list[_FakePartyHero]:
+        return list(self.heroes)
+
+    def GetHenchmen(self) -> list[Any]:
+        return list(self.henchmen)
+
+    def GetOthers(self) -> list[Any]:
+        return list(self.others)
+
+    def GetPartySize(self) -> int:
+        if self.reported_size is not None:
+            return int(self.reported_size)
+        return len(self.players) + len(self.heroes) + len(self.henchmen) + len(self.others)
+
+    def GetPlayerCount(self) -> int:
+        return len(self.players)
+
+    def GetHeroCount(self) -> int:
+        return len(self.heroes)
+
+    def GetHenchmanCount(self) -> int:
+        return len(self.henchmen)
+
+    def GetPartyID(self) -> int:
+        return self.party_id
+
+    def GetOwnPartyNumber(self) -> int:
+        for index, player in enumerate(self.players):
+            if int(getattr(player, 'login_number', 0) or 0) == 1:
+                return index
+        return -1
+
+    def IsPartyLoaded(self) -> bool:
+        return self.loaded
+
+    def IsPartyLeader(self) -> bool:
+        return self.leader
+
+
+class _FakeMapApi:
+    def __init__(self, max_party_size: int, *, outpost: bool = True) -> None:
+        self.max_party_size = int(max_party_size)
+        self.outpost = bool(outpost)
+
+    def GetMaxPartySize(self) -> int:
+        return self.max_party_size
+
+    def IsOutpost(self) -> bool:
+        return self.outpost
+
+    def GetMapID(self) -> int:
+        return 100
+
+    def GetRegion(self) -> tuple[int, str]:
+        return (1, 'America')
+
+    def GetDistrict(self) -> int:
+        return 1
+
+    def GetLanguage(self) -> tuple[int, str]:
+        return (0, 'English')
+
+
+class _FakePlayerApi:
+    def __init__(self, email: str = 'main@example.com', login_number: int = 1) -> None:
+        self.email = str(email)
+        self.login_number = int(login_number)
+
+    def GetAccountEmail(self) -> str:
+        return self.email
+
+    def GetLoginNumber(self) -> int:
+        return self.login_number
+
+
+class _FakeAccountRecord:
+    def __init__(
+        self,
+        email: str,
+        login_number: int,
+        character_name: str,
+        *,
+        active: bool = True,
+        isolated: bool = False,
+        party_id: int | None = None,
+        party_position: int = 0,
+        is_party_leader: bool = True,
+        map_id: int = 100,
+    ) -> None:
+        self.AccountEmail = str(email)
+        self.IsAccount = True
+        self.IsSlotActive = bool(active)
+        self.IsIsolated = bool(isolated)
+        self.AgentData = types.SimpleNamespace(
+            CharacterName=str(character_name),
+            AgentID=4000 + int(login_number),
+            LoginNumber=int(login_number),
+            Map=types.SimpleNamespace(MapID=int(map_id), Region=1, District=1, Language=0),
+            Profession=(1, 2),
+        )
+        self.AgentPartyData = types.SimpleNamespace(
+            PartyID=10000 + int(login_number) if party_id is None else int(party_id),
+            PartyPosition=int(party_position),
+            IsPartyLeader=bool(is_party_leader),
+        )
+
+
+class _FakeSharedMemory:
+    def __init__(self, active: list[_FakeAccountRecord], all_records: list[_FakeAccountRecord] | None = None) -> None:
+        self.active = list(active)
+        self.all_records = list(all_records if all_records is not None else active)
+        self.messages: list[tuple[Any, ...]] = []
+
+    def GetAllAccountData(self, **_kwargs) -> list[_FakeAccountRecord]:
+        return list(self.active)
+
+    def GetAllAccounts(self):
+        return types.SimpleNamespace(AccountData=list(self.all_records))
+
+    def SendMessage(self, *args) -> int:
+        self.messages.append(tuple(args))
+        return len(self.messages) - 1
+
+    def GetAccountDataFromEmail(self, email: str):
+        target = str(email or '').strip().casefold()
+        return next(
+            (record for record in self.all_records if str(record.AccountEmail).strip().casefold() == target),
+            None,
+        )
+
+    def MarkMessageAsRunning(self, *_args) -> None:
+        pass
+
+    def MarkMessageAsFinished(self, *_args) -> None:
+        pass
+
+
 class HeroTeamManagerPortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -246,6 +561,888 @@ class HeroTeamManagerPortTests(unittest.TestCase):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = previous
+
+    def _install_runtime_modules(self, party, shared_memory, map_api=None):
+        map_api = map_api or _FakeMapApi(8)
+        fake_global_cache = types.ModuleType('Py4GWCoreLib.GlobalCache')
+        setattr(
+            fake_global_cache,
+            'GLOBAL_CACHE',
+            types.SimpleNamespace(
+                Party=party,
+                ShMem=shared_memory,
+                SkillBar=types.SimpleNamespace(LoadHeroSkillTemplate=lambda *_args: None),
+            ),
+        )
+        fake_player = types.ModuleType('Py4GWCoreLib.Player')
+        setattr(fake_player, 'Player', _FakePlayerApi())
+        fake_map = types.ModuleType('Py4GWCoreLib.Map')
+        setattr(fake_map, 'Map', map_api)
+        fake_enums = types.ModuleType('Py4GWCoreLib.enums_src')
+        fake_multibox_enums = types.ModuleType('Py4GWCoreLib.enums_src.Multiboxing_enums')
+        setattr(
+            fake_multibox_enums,
+            'SharedCommandType',
+            types.SimpleNamespace(
+                InviteToParty='InviteToParty',
+                PartyStateQuery='PartyStateQuery',
+            ),
+        )
+        names = {
+            'Py4GWCoreLib.GlobalCache': fake_global_cache,
+            'Py4GWCoreLib.Player': fake_player,
+            'Py4GWCoreLib.Map': fake_map,
+            'Py4GWCoreLib.enums_src': fake_enums,
+            'Py4GWCoreLib.enums_src.Multiboxing_enums': fake_multibox_enums,
+        }
+        previous = {name: sys.modules.get(name) for name in names}
+        sys.modules.update(names)
+        return previous
+
+    @staticmethod
+    def _restore_runtime_modules(previous) -> None:
+        for name, prior in previous.items():
+            if prior is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = prior
+
+    def _team_with_alts(self, emails: list[str], hero_ids: list[int] | None = None):
+        team = self.module.new_team('Mixed team')
+        team.alt_members = [self.module.AltAccountBinding(account_email=email) for email in emails]
+        for slot, hero_id in zip(team.slots, hero_ids or []):
+            slot.hero_id = int(hero_id)
+        return team
+
+    def _mixed_preflight(
+        self,
+        team,
+        *,
+        max_party_size: int = 8,
+        players: list[_FakePartyPlayer] | None = None,
+        heroes: list[_FakePartyHero] | None = None,
+        henchmen: list[Any] | None = None,
+        others: list[Any] | None = None,
+        active_accounts: list[_FakeAccountRecord] | None = None,
+        all_accounts: list[_FakeAccountRecord] | None = None,
+        reported_size: int | None = None,
+    ):
+        party = _FakePartyApi(
+            players or [_FakePartyPlayer(1)],
+            heroes,
+            henchmen,
+            others,
+            reported_size=reported_size,
+        )
+        accounts = list(active_accounts or [])
+        shared_memory = _FakeSharedMemory(accounts, all_accounts if all_accounts is not None else accounts)
+        config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+        return self.module.build_mixed_team_preflight(
+            config,
+            team.team_id,
+            map_api=_FakeMapApi(max_party_size),
+            party_api=party,
+            player_api=_FakePlayerApi(),
+            shared_memory=shared_memory,
+        )
+
+    def test_alt_bindings_migrate_empty_and_round_trip_in_saved_order(self) -> None:
+        legacy = self.module.normalize_config(
+            {
+                'version': 2,
+                'active_team_id': 'team-a',
+                'teams': [{'id': 'team-a', 'name': 'A', 'slots': []}],
+            }
+        )
+        self.assertEqual(legacy.teams[0].alt_members, [])
+
+        config = self.module.normalize_config(
+            {
+                'version': 3,
+                'active_team_id': 'team-a',
+                'teams': [
+                    {
+                        'id': 'team-a',
+                        'name': 'A',
+                        'slots': [],
+                        'alt_members': [
+                            {'account_email': 'first@example.com', 'alias': 'First', 'enabled': False},
+                            {'account_email': 'second@example.com', 'expected_character_name': 'Second'},
+                        ],
+                    }
+                ],
+            }
+        )
+        payload = self.module.config_to_dict(config)
+
+        self.assertEqual(
+            [(binding.account_email, binding.enabled, binding.alias) for binding in config.teams[0].alt_members],
+            [('first@example.com', False, 'First'), ('second@example.com', True, '')],
+        )
+        self.assertEqual(
+            [binding['account_email'] for binding in payload['teams'][0]['alt_members']],
+            ['first@example.com', 'second@example.com'],
+        )
+
+    def test_duplicate_alt_bindings_are_preserved_and_block_mixed_load(self) -> None:
+        team = self._team_with_alts(['duplicate@example.com', 'DUPLICATE@EXAMPLE.COM'])
+        config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+
+        self.assertEqual(self.module.duplicate_alt_binding_indices(team), {0, 1})
+        self.assertTrue(self.module.validate_alt_bindings(team))
+        preflight = self._mixed_preflight(team)
+
+        self.assertFalse(preflight.can_load)
+        self.assertTrue(any('Duplicate account identity' in message for message in preflight.blocking_messages))
+        self.assertEqual(
+            [binding['account_email'] for binding in self.module.config_to_dict(config)['teams'][0]['alt_members']],
+            ['duplicate@example.com', 'DUPLICATE@EXAMPLE.COM'],
+        )
+
+    def test_local_account_cannot_be_configured_as_an_alt(self) -> None:
+        team = self._team_with_alts(['main@example.com'])
+        messages = self.module.validate_alt_bindings(team, 'main@example.com')
+
+        self.assertTrue(any('local account' in message for message in messages))
+        preflight = self._mixed_preflight(team)
+        self.assertFalse(preflight.can_load)
+        self.assertTrue(any(status.status == 'local_account' for status in preflight.alt_statuses))
+
+    def test_distinct_alt_bindings_cannot_share_one_live_party_player_slot(self) -> None:
+        team = self._team_with_alts(['alt1@example.com', 'alt2@example.com'])
+        preflight = self._mixed_preflight(
+            team,
+            players=[_FakePartyPlayer(1), _FakePartyPlayer(2)],
+            active_accounts=[
+                _FakeAccountRecord('alt1@example.com', 2, 'Alt 1', party_id=10),
+                _FakeAccountRecord('alt2@example.com', 2, 'Alt 2', party_id=10),
+            ],
+        )
+
+        self.assertFalse(preflight.can_load)
+        self.assertTrue(
+            any('do not map uniquely to non-local party players' in message for message in preflight.blocking_messages)
+        )
+        self.assertEqual(preflight.capacity.configured_alt_present_count, 1)
+        self.assertEqual(preflight.capacity.unmanaged_player_count, 0)
+
+    def test_active_alt_discovery_excludes_local_and_has_no_three_account_limit(self) -> None:
+        accounts = [
+            _FakeAccountRecord('main@example.com', 1, 'Main'),
+            *[_FakeAccountRecord(f'alt{index}@example.com', index + 2, f'Alt {index}') for index in range(7)],
+        ]
+        choices = self.module.active_alt_account_choices(
+            player_api=_FakePlayerApi(),
+            shared_memory=_FakeSharedMemory(accounts),
+        )
+
+        self.assertEqual(
+            [choice.account_email for choice in choices],
+            [f'alt{index}@example.com' for index in range(7)],
+        )
+        self.assertNotIn('main@example.com', [choice.account_email for choice in choices])
+
+    def test_dynamic_capacity_supports_full_party_compositions_without_an_alt_cap(self) -> None:
+        def accounts(count: int) -> list[_FakeAccountRecord]:
+            return [
+                _FakeAccountRecord(
+                    f'alt{index}@example.com',
+                    index + 2,
+                    f'Alt {index}',
+                )
+                for index in range(count)
+            ]
+
+        seven_alt_team = self._team_with_alts([f'alt{index}@example.com' for index in range(7)])
+        seven_alt_preflight = self._mixed_preflight(seven_alt_team, active_accounts=accounts(7))
+        self.assertTrue(seven_alt_preflight.can_load)
+        self.assertEqual(seven_alt_preflight.capacity.missing_alt_count, 7)
+        self.assertEqual(seven_alt_preflight.capacity.forecast_final_slots, 8)
+
+        four_alt_team = self._team_with_alts(
+            [f'alt{index}@example.com' for index in range(4)],
+            [28, 29, 30],
+        )
+        four_alt_preflight = self._mixed_preflight(
+            four_alt_team,
+            heroes=[_FakePartyHero(hero_id, 1) for hero_id in [28, 29, 30]],
+            active_accounts=accounts(4),
+        )
+        self.assertTrue(four_alt_preflight.can_load)
+        self.assertEqual(four_alt_preflight.capacity.forecast_final_slots, 8)
+
+        two_alt_team = self._team_with_alts(
+            [f'alt{index}@example.com' for index in range(2)],
+            [28, 29, 30, 31, 32],
+        )
+        two_alt_preflight = self._mixed_preflight(
+            two_alt_team,
+            heroes=[_FakePartyHero(hero_id, 1) for hero_id in [28, 29, 30, 31, 32]],
+            active_accounts=accounts(2),
+        )
+        self.assertTrue(two_alt_preflight.can_load)
+        self.assertEqual(two_alt_preflight.capacity.forecast_final_slots, 8)
+
+        twelve_slot_team = self._team_with_alts([f'alt{index}@example.com' for index in range(10)], [28])
+        twelve_slot_preflight = self._mixed_preflight(
+            twelve_slot_team,
+            max_party_size=12,
+            heroes=[_FakePartyHero(28, 1)],
+            active_accounts=accounts(10),
+        )
+        self.assertTrue(twelve_slot_preflight.can_load)
+        self.assertEqual(twelve_slot_preflight.capacity.forecast_final_slots, 12)
+
+    def test_capacity_rejects_overflow_and_does_not_double_count_existing_alt_or_local_heroes(self) -> None:
+        eight_alt_team = self._team_with_alts([f'alt{index}@example.com' for index in range(8)])
+        over_capacity = self._mixed_preflight(
+            eight_alt_team,
+            max_party_size=8,
+            active_accounts=[
+                _FakeAccountRecord(f'alt{index}@example.com', index + 2, f'Alt {index}') for index in range(8)
+            ],
+        )
+        self.assertFalse(over_capacity.can_load)
+        self.assertEqual(over_capacity.capacity.forecast_final_slots, 9)
+        self.assertTrue(any('would use 9 of 8' in message for message in over_capacity.blocking_messages))
+
+        team = self._team_with_alts(['alt1@example.com', 'alt2@example.com'], [28, 29])
+        existing_alt = self._mixed_preflight(
+            team,
+            players=[_FakePartyPlayer(1), _FakePartyPlayer(2)],
+            heroes=[_FakePartyHero(28, 1), _FakePartyHero(29, 1)],
+            active_accounts=[
+                _FakeAccountRecord('alt1@example.com', 2, 'Alt 1', party_id=10),
+                _FakeAccountRecord('alt2@example.com', 3, 'Alt 2'),
+            ],
+        )
+        self.assertTrue(existing_alt.can_load)
+        self.assertEqual(existing_alt.capacity.configured_alt_present_count, 1)
+        self.assertEqual(existing_alt.capacity.missing_alt_count, 1)
+        self.assertEqual(existing_alt.capacity.forecast_final_slots, 5)
+
+        replacement = self.module.calculate_mixed_capacity(8, 4, 3, 4, 3)
+        self.assertEqual(replacement.forecast_final_slots, 8)
+
+    def test_solo_candidate_requires_authoritative_party_query(self) -> None:
+        team = self._team_with_alts(['solo@example.com'])
+        preflight = self._mixed_preflight(
+            team,
+            max_party_size=6,
+            active_accounts=[
+                _FakeAccountRecord(
+                    'solo@example.com',
+                    2,
+                    'Solo Alt',
+                    party_id=20,
+                    party_position=0,
+                )
+            ],
+        )
+
+        self.assertTrue(preflight.can_load)
+        status = preflight.alt_statuses[0]
+        self.assertEqual(status.status, 'query_required')
+        self.assertEqual(status.party_state, 'unknown')
+        self.assertEqual(status.known_party_member_count, 1)
+        self.assertEqual(preflight.capacity.missing_alt_count, 1)
+        self.assertEqual(preflight.capacity.forecast_final_slots, 2)
+
+    def test_alt_with_known_remote_party_peer_remains_incompatible(self) -> None:
+        team = self._team_with_alts(['grouped@example.com'])
+        preflight = self._mixed_preflight(
+            team,
+            active_accounts=[
+                _FakeAccountRecord(
+                    'grouped@example.com',
+                    2,
+                    'Grouped Alt',
+                    party_id=20,
+                    party_position=0,
+                ),
+                _FakeAccountRecord(
+                    'other@example.com',
+                    3,
+                    'Other Player',
+                    party_id=20,
+                    party_position=1,
+                    is_party_leader=False,
+                ),
+            ],
+        )
+
+        self.assertFalse(preflight.can_load)
+        self.assertEqual(preflight.alt_statuses[0].status, 'incompatible_party')
+        self.assertEqual(preflight.alt_statuses[0].party_state, 'other_party')
+        self.assertTrue(any('different party' in message for message in preflight.blocking_messages))
+
+    def test_nonleader_alt_is_incompatible_even_without_visible_peer_record(self) -> None:
+        team = self._team_with_alts(['nonleader@example.com'])
+        preflight = self._mixed_preflight(
+            team,
+            active_accounts=[
+                _FakeAccountRecord(
+                    'nonleader@example.com',
+                    2,
+                    'Nonleader Alt',
+                    party_id=20,
+                    party_position=1,
+                    is_party_leader=False,
+                )
+            ],
+        )
+
+        self.assertFalse(preflight.can_load)
+        self.assertEqual(preflight.alt_statuses[0].status, 'incompatible_party')
+        self.assertEqual(preflight.alt_statuses[0].party_evidence, 'party position is not zero')
+
+    def test_alt_with_unavailable_shared_party_identity_requires_query(self) -> None:
+        team = self._team_with_alts(['ambiguous@example.com'])
+        preflight = self._mixed_preflight(
+            team,
+            active_accounts=[
+                _FakeAccountRecord(
+                    'ambiguous@example.com',
+                    2,
+                    'Ambiguous Alt',
+                    party_id=0,
+                    party_position=0,
+                )
+            ],
+        )
+
+        self.assertTrue(preflight.can_load)
+        self.assertEqual(preflight.alt_statuses[0].status, 'query_required')
+        self.assertEqual(preflight.alt_statuses[0].party_state, 'unknown')
+
+    def test_joined_alt_is_present_and_not_counted_as_missing(self) -> None:
+        team = self._team_with_alts(['joining@example.com'])
+        config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+        party = _FakePartyApi([_FakePartyPlayer(1)])
+        account = _FakeAccountRecord(
+            'joining@example.com',
+            2,
+            'Joining Alt',
+            party_id=20,
+            party_position=0,
+        )
+        shared_memory = _FakeSharedMemory([account])
+        map_api = _FakeMapApi(6)
+
+        before = self.module.build_mixed_team_preflight(
+            config,
+            team.team_id,
+            map_api=map_api,
+            party_api=party,
+            player_api=_FakePlayerApi(),
+            shared_memory=shared_memory,
+        )
+
+        self.assertTrue(before.can_load)
+        self.assertEqual(before.capacity.missing_alt_count, 1)
+        self.assertEqual(before.capacity.forecast_final_slots, 2)
+
+        party.players = [_FakePartyPlayer(1), _FakePartyPlayer(2)]
+        account.AgentPartyData.PartyID = 10
+        account.AgentPartyData.PartyPosition = 1
+        account.AgentPartyData.IsPartyLeader = False
+        after = self.module.build_mixed_team_preflight(
+            config,
+            team.team_id,
+            map_api=map_api,
+            party_api=party,
+            player_api=_FakePlayerApi(),
+            shared_memory=shared_memory,
+        )
+
+        self.assertTrue(after.can_load)
+        self.assertEqual(after.alt_statuses[0].status, 'in_party')
+        self.assertEqual(after.capacity.configured_alt_present_count, 1)
+        self.assertEqual(after.capacity.missing_alt_count, 0)
+        self.assertEqual(after.capacity.current_party_size, 2)
+        self.assertEqual(after.capacity.forecast_final_slots, 2)
+
+    def _cache_party_state_result(
+        self,
+        operation,
+        *,
+        mode: str,
+        result: str = '',
+        party_size: int = 1,
+        player_count: int = 1,
+        hero_count: int = 0,
+        henchman_count: int = 0,
+        other_count: int = 0,
+        party_id: int = 20,
+        party_position: int = 0,
+        is_party_leader: bool = True,
+        is_loaded: bool = True,
+    ) -> None:
+        status = operation._status_by_index(operation._party_query_binding_index)
+        self.assertIsNotNone(status)
+        request_id = operation._party_query_id
+        received_after = (
+            operation._party_query_sent_at if mode == self.module.PARTY_STATE_QUERY_REPLY else operation._invite_sent_at
+        )
+        cache = sys.modules['Py4GWCoreLib.GlobalCache'].GLOBAL_CACHE._hero_team_party_state_query_cache
+        cache[(status.account_email, request_id)] = {
+            'mode': mode,
+            'request_id': request_id,
+            'sender_email': status.account_email,
+            'receiver_email': 'main@example.com',
+            'character_name': status.character_name if mode == self.module.PARTY_STATE_QUERY_REPLY else '',
+            'result': result,
+            'party_size': party_size,
+            'player_count': player_count,
+            'hero_count': hero_count,
+            'henchman_count': henchman_count,
+            'other_count': other_count,
+            'party_id': party_id,
+            'party_position': party_position,
+            'is_party_leader': is_party_leader,
+            'is_loaded': is_loaded,
+            'map_signature': (100, 1, 1, 0),
+            'message_timestamp': 1,
+            'received_at': max(float(received_after) + 0.001, time.monotonic()),
+        }
+        operation._next_at = 0.0
+
+    def test_capacity_categories_are_authoritative_and_remote_occupants_are_retained(self) -> None:
+        team = self._team_with_alts(['alt@example.com'])
+        preflight = self._mixed_preflight(
+            team,
+            max_party_size=5,
+            players=[_FakePartyPlayer(1), _FakePartyPlayer(99)],
+            heroes=[_FakePartyHero(20, 99)],
+            henchmen=[types.SimpleNamespace()],
+            others=[types.SimpleNamespace()],
+            active_accounts=[_FakeAccountRecord('alt@example.com', 2, 'Alt')],
+        )
+
+        self.assertFalse(preflight.can_load)
+        self.assertEqual(preflight.capacity.current_party_size, 5)
+        self.assertEqual(preflight.capacity.local_player_count, 1)
+        self.assertEqual(preflight.capacity.configured_alt_present_count, 0)
+        self.assertEqual(preflight.capacity.unmanaged_player_count, 1)
+        self.assertEqual(preflight.capacity.remote_hero_count, 1)
+        self.assertEqual(preflight.capacity.unknown_hero_count, 0)
+        self.assertEqual(preflight.capacity.henchman_count, 1)
+        self.assertEqual(preflight.capacity.other_occupant_count, 1)
+        self.assertEqual(preflight.capacity.forecast_final_slots, 6)
+        self.assertEqual(
+            preflight.capacity.local_player_count
+            + preflight.capacity.configured_alt_present_count
+            + preflight.capacity.unmanaged_player_count
+            + preflight.capacity.local_hero_count
+            + preflight.capacity.remote_hero_count
+            + preflight.capacity.unknown_hero_count
+            + preflight.capacity.henchman_count
+            + preflight.capacity.other_occupant_count,
+            preflight.capacity.current_party_size,
+        )
+
+    def test_remote_hero_with_same_id_does_not_satisfy_local_target(self) -> None:
+        team = self._team_with_alts(['alt@example.com'], [2])
+        party = _FakePartyApi(
+            [_FakePartyPlayer(1), _FakePartyPlayer(2)],
+            [_FakePartyHero(2, 2)],
+        )
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10)
+        config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+        preflight = self.module.build_mixed_team_preflight(
+            config,
+            team.team_id,
+            map_api=_FakeMapApi(4),
+            party_api=party,
+            player_api=_FakePlayerApi(),
+            shared_memory=_FakeSharedMemory([account]),
+        )
+
+        self.assertTrue(preflight.can_load)
+        self.assertEqual(self.module.current_local_hero_ids(party, 1), set())
+        self.assertEqual(preflight.plan.slots[0].hero_id, 2)
+        self.assertEqual(preflight.capacity.remote_hero_count, 1)
+        self.assertEqual(preflight.capacity.target_local_hero_count, 1)
+        self.assertEqual(preflight.capacity.local_heroes_to_add, 1)
+        self.assertEqual(preflight.capacity.forecast_final_slots, 4)
+
+    def test_save_current_team_captures_only_locally_owned_heroes(self) -> None:
+        team = self._team_with_alts([])
+        config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+        party = _FakePartyApi(
+            [_FakePartyPlayer(1), _FakePartyPlayer(2)],
+            [_FakePartyHero(28, 1), _FakePartyHero(29, 2)],
+        )
+        previous = self._install_runtime_modules(party, _FakeSharedMemory([]))
+        try:
+            saved_team, saved_count = self.module.save_current_party_as_team(config, party_api=party)
+
+            self.assertEqual(saved_count, 1)
+            self.assertEqual([slot.hero_id for slot in saved_team.slots if slot.hero_id > 0], [28])
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_unknown_owner_blocks_unsafe_local_replacement(self) -> None:
+        team = self._team_with_alts([], [4])
+        preflight = self._mixed_preflight(
+            team,
+            heroes=[_FakePartyHero(2, 1), _FakePartyHero(3, 0)],
+        )
+
+        self.assertFalse(preflight.can_load)
+        self.assertTrue(
+            any(
+                'remote or unknown-owner heroes prevent a safe local hero replacement' in message
+                for message in preflight.blocking_messages
+            )
+        )
+        self.assertEqual(preflight.capacity.unknown_hero_count, 1)
+
+    def test_alt_statuses_distinguish_ready_wrong_character_stale_and_offline(self) -> None:
+        team = self._team_with_alts(
+            ['ready@example.com', 'wrong@example.com', 'stale@example.com', 'offline@example.com']
+        )
+        team.alt_members[1].expected_character_name = 'Expected'
+        ready = _FakeAccountRecord('ready@example.com', 2, 'Ready')
+        wrong = _FakeAccountRecord('wrong@example.com', 3, 'Actual')
+        stale = _FakeAccountRecord('stale@example.com', 4, 'Stale', active=False)
+        preflight = self._mixed_preflight(
+            team,
+            active_accounts=[ready, wrong],
+            all_accounts=[ready, wrong, stale],
+        )
+        statuses = {status.account_email: status for status in preflight.alt_statuses}
+
+        self.assertEqual(statuses['ready@example.com'].status, 'query_required')
+        self.assertEqual(statuses['ready@example.com'].party_state, 'unknown')
+        self.assertEqual(statuses['wrong@example.com'].status, 'wrong_character')
+        self.assertEqual(statuses['stale@example.com'].status, 'stale')
+        self.assertTrue(statuses['stale@example.com'].is_stale)
+        self.assertEqual(statuses['offline@example.com'].status, 'offline')
+
+    def test_inconsistent_party_components_fail_closed(self) -> None:
+        team = self._team_with_alts([])
+        preflight = self._mixed_preflight(team, reported_size=2)
+
+        self.assertFalse(preflight.can_load)
+        self.assertTrue(any('party components are inconsistent' in message for message in preflight.blocking_messages))
+
+    def test_mixed_dispatch_uses_owner_safe_operation_without_leave_party(self) -> None:
+        hero_only_team = self._team_with_alts([], [28])
+        hero_only_config = self.module.HeroTeamConfig(
+            active_team_id=hero_only_team.team_id,
+            teams=[hero_only_team],
+        )
+        legacy_operation = self.module.create_apply_operation(hero_only_config, hero_only_team.team_id)
+
+        mixed_team = self._team_with_alts(['alt@example.com'], [28])
+        mixed_config = self.module.HeroTeamConfig(active_team_id=mixed_team.team_id, teams=[mixed_team])
+        mixed_operation = self.module.create_apply_operation(mixed_config, mixed_team.team_id)
+
+        self.assertIsInstance(legacy_operation, self.module.HeroTeamApplyOperation)
+        self.assertIsInstance(mixed_operation, self.module.MixedHeroTeamApplyOperation)
+        mixed_source = HELPER_PATH.read_text(encoding='utf-8').split('class MixedHeroTeamApplyOperation:', 1)[1]
+        mixed_source = mixed_source.split('def create_apply_operation', 1)[0]
+        self.assertNotIn('LeaveParty', mixed_source)
+
+    def test_mixed_operation_invites_missing_alt_through_existing_invite_surfaces(self) -> None:
+        team = self._team_with_alts(['alt@example.com'])
+        party = _FakePartyApi([_FakePartyPlayer(1)])
+        shared_memory = _FakeSharedMemory([_FakeAccountRecord('alt@example.com', 2, 'Alt')])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            self.assertFalse(operation.tick())
+            self.assertEqual(party.invites, [])
+            self.assertEqual(len(shared_memory.messages), 1)
+            self.assertEqual(shared_memory.messages[0][0:2], ('main@example.com', 'alt@example.com'))
+            self.assertEqual(shared_memory.messages[0][2], 'PartyStateQuery')
+            self.assertEqual(shared_memory.messages[0][4][0], self.module.PARTY_STATE_QUERY_REQUEST)
+            self.assertEqual(operation._phase, 'wait_party_query')
+
+            self._cache_party_state_result(
+                operation,
+                mode=self.module.PARTY_STATE_QUERY_REPLY,
+            )
+            self.assertFalse(operation.tick())
+            self.assertEqual(party.invites, ['Alt'])
+            self.assertEqual(len(shared_memory.messages), 2)
+            self.assertEqual(shared_memory.messages[1][2], 'InviteToParty')
+            self.assertEqual(shared_memory.messages[1][4][0], self.module.PARTY_INVITE_GUARD)
+            self.assertEqual(operation._phase, 'wait_invite')
+
+            self._cache_party_state_result(
+                operation,
+                mode=self.module.PARTY_STATE_GUARD_RESULT,
+                result='reciprocal_invite_sent',
+            )
+            party.players = [_FakePartyPlayer(1), _FakePartyPlayer(2)]
+            self.assertFalse(operation.tick())
+            self.assertEqual(operation._phase, 'invite')
+            self.assertEqual(operation.preflight.alt_statuses[0].status, 'joined')
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_mixed_operation_blocks_reciprocal_invite_when_alt_guard_reports_party_change(self) -> None:
+        team = self._team_with_alts(['alt@example.com'])
+        party = _FakePartyApi([_FakePartyPlayer(1)])
+        shared_memory = _FakeSharedMemory([_FakeAccountRecord('alt@example.com', 2, 'Alt')])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            self.assertFalse(operation.tick())
+            self._cache_party_state_result(operation, mode=self.module.PARTY_STATE_QUERY_REPLY)
+            self.assertFalse(operation.tick())
+            self.assertEqual(party.invites, ['Alt'])
+
+            self._cache_party_state_result(
+                operation,
+                mode=self.module.PARTY_STATE_GUARD_RESULT,
+                result='guard_failed: party_changed',
+                party_size=2,
+                player_count=2,
+                party_position=0,
+            )
+            self.assertTrue(operation.tick())
+            self.assertFalse(operation.success)
+            self.assertIn('guard_failed: party_changed', operation.message)
+            self.assertEqual(party.invites, ['Alt'])
+            self.assertEqual(operation.preflight.alt_statuses[0].status, 'party_changed_before_invite')
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_mixed_operation_blocks_non_solo_party_state_before_main_invite(self) -> None:
+        team = self._team_with_alts(['grouped@example.com'])
+        party = _FakePartyApi([_FakePartyPlayer(1)])
+        shared_memory = _FakeSharedMemory([_FakeAccountRecord('grouped@example.com', 2, 'Grouped')])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            self.assertFalse(operation.tick())
+            self._cache_party_state_result(
+                operation,
+                mode=self.module.PARTY_STATE_QUERY_REPLY,
+                party_size=2,
+                player_count=2,
+                party_position=0,
+            )
+            self.assertTrue(operation.tick())
+            self.assertFalse(operation.success)
+            self.assertIn('not solo', operation.message)
+            self.assertEqual(party.invites, [])
+            self.assertEqual(len(shared_memory.messages), 1)
+            self.assertEqual(operation.preflight.alt_statuses[0].status, 'incompatible_party')
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_messaging_guard_rechecks_live_party_before_reciprocal_invite(self) -> None:
+        functions = _load_messaging_party_state_functions()
+        console = types.SimpleNamespace(
+            MessageType=types.SimpleNamespace(Info='info', Warning='warning', Error='error')
+        )
+        main_account = _FakeAccountRecord('main@example.com', 1, 'Main')
+        shared_memory = _FakeSharedMemory([], [main_account])
+        message = types.SimpleNamespace(
+            SenderEmail='main@example.com',
+            ReceiverEmail='alt@example.com',
+            ExtraData=('party_invite_guard', 'request-1', 'Player 2', '100,1,1,0'),
+            Params=(0, 0, 0, 0),
+            Timestamp=1,
+        )
+        query_message = types.SimpleNamespace(
+            SenderEmail='main@example.com',
+            ReceiverEmail='alt@example.com',
+            ExtraData=('party_state_request', 'request-1', 'Alt', '100,1,1,0'),
+            Params=(0, 0, 0, 0),
+            Timestamp=1,
+        )
+
+        for players, expected_size, expected_result, expected_invites in (
+            ([_FakePartyPlayer(2)], 1, 'reciprocal_invite_sent', ['Main']),
+            ([_FakePartyPlayer(2), _FakePartyPlayer(99)], 2, 'guard_failed: party_changed', []),
+        ):
+            party = _FakePartyApi(players)
+            party.GetOwnPartyNumber = lambda: 0
+            functions.update(
+                {
+                    'GLOBAL_CACHE': types.SimpleNamespace(Party=party, ShMem=shared_memory),
+                    'Player': _FakePlayerApi('alt@example.com', 2),
+                    'Map': _FakeMapApi(8),
+                    'SharedCommandType': types.SimpleNamespace(PartyStateQuery='PartyStateQuery'),
+                    'MODULE_NAME': 'Messaging',
+                    'Console': console,
+                    'ConsoleLog': lambda *_args, **_kwargs: None,
+                    '_extra_data': lambda current_message: tuple(current_message.ExtraData),
+                }
+            )
+            shared_memory.messages.clear()
+
+            list(functions['PartyStateQuery'](0, query_message))
+            self.assertEqual(len(shared_memory.messages), 1)
+            self.assertEqual(shared_memory.messages[0][2], 'PartyStateQuery')
+            self.assertEqual(shared_memory.messages[0][3][0], float(expected_size))
+            self.assertEqual(shared_memory.messages[0][3][1], float(expected_size))
+            self.assertEqual(shared_memory.messages[0][4][0], 'party_state_reply')
+            self.assertEqual(shared_memory.messages[0][4][2], 'Player 2')
+            shared_memory.messages.clear()
+
+            list(functions['InviteToParty'](0, message))
+
+            self.assertEqual(party.invites, expected_invites)
+            self.assertEqual(len(shared_memory.messages), 1)
+            self.assertEqual(shared_memory.messages[0][2], 'PartyStateQuery')
+            self.assertEqual(shared_memory.messages[0][4][0], 'party_state_guard')
+            self.assertEqual(shared_memory.messages[0][4][2], expected_result)
+
+    def test_party_state_query_send_path_resolves_legacy_command_members(self) -> None:
+        send_message, command_type = _load_authoritative_all_accounts_send_message()
+
+        self.assertEqual(int(command_type.AddModelToLootWhitelist), 71)
+        self.assertEqual(int(command_type.AccountSettingsSync), 72)
+        self.assertEqual(int(command_type.AccountSettingsSyncResult), 73)
+        self.assertEqual(int(command_type.PartyStateQuery), 74)
+
+        harness = _RealSharedMemorySendHarness('alt@example.com')
+        message_index = send_message(
+            harness,
+            'main@example.com',
+            'alt@example.com',
+            command_type.PartyStateQuery,
+            (0, 0, 0, 0),
+            ('party_state_request', 'request-1', 'Alt', '100,1,1,0'),
+        )
+
+        self.assertEqual(message_index, 0)
+        self.assertEqual(harness.Inbox[message_index].Command, int(command_type.PartyStateQuery))
+        self.assertTrue(harness.Inbox[message_index].Active)
+
+    def test_mixed_operation_revalidates_alt_departure_before_hero_mutation(self) -> None:
+        team = self._team_with_alts(['alt@example.com'])
+        party = _FakePartyApi([_FakePartyPlayer(1), _FakePartyPlayer(2)])
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10)
+        shared_memory = _FakeSharedMemory([account])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+            operation._joined_binding_indices = {0}
+            party.players = [_FakePartyPlayer(1)]
+
+            preflight = operation._refresh_preflight()
+
+            self.assertFalse(preflight.can_load)
+            self.assertTrue(any('left or changed state' in message for message in preflight.blocking_messages))
+            self.assertEqual(party.kick_all_calls, 0)
+            self.assertEqual(party.leave_party_calls, 0)
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_mixed_operation_blocks_over_capacity_before_invites_or_mutations(self) -> None:
+        team = self._team_with_alts([f'alt{index}@example.com' for index in range(8)])
+        party = _FakePartyApi([_FakePartyPlayer(1)])
+        accounts = [_FakeAccountRecord(f'alt{index}@example.com', index + 2, f'Alt {index}') for index in range(8)]
+        shared_memory = _FakeSharedMemory(accounts)
+        previous = self._install_runtime_modules(party, shared_memory, _FakeMapApi(8))
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            self.assertTrue(operation.tick())
+            self.assertFalse(operation.success)
+            self.assertEqual(party.invites, [])
+            self.assertEqual(shared_memory.messages, [])
+            self.assertEqual(party.kick_all_calls, 0)
+            self.assertEqual(party.leave_party_calls, 0)
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_mixed_operation_preserves_unmanaged_real_players_when_capacity_blocks(self) -> None:
+        team = self._team_with_alts(['alt@example.com'])
+        party = _FakePartyApi([_FakePartyPlayer(1), _FakePartyPlayer(99)])
+        shared_memory = _FakeSharedMemory([_FakeAccountRecord('alt@example.com', 2, 'Alt')])
+        previous = self._install_runtime_modules(party, shared_memory, _FakeMapApi(2))
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            self.assertTrue(operation.tick())
+            self.assertFalse(operation.success)
+            self.assertEqual([player.login_number for player in party.players], [1, 99])
+            self.assertEqual(party.invites, [])
+            self.assertEqual(party.kick_all_calls, 0)
+            self.assertEqual(party.leave_party_calls, 0)
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_mixed_operation_uses_unscoped_clear_only_after_all_heroes_are_local(self) -> None:
+        team = self._team_with_alts(['alt@example.com'], [28])
+        party = _FakePartyApi(
+            [_FakePartyPlayer(1), _FakePartyPlayer(2)],
+            [_FakePartyHero(28, 1)],
+        )
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10)
+        shared_memory = _FakeSharedMemory([account])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            self.assertFalse(operation.tick())
+            self.assertEqual(party.kick_all_calls, 1)
+            self.assertEqual(party.leave_party_calls, 0)
+            self.assertEqual(operation._phase, 'wait_local_clear')
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_mixed_operation_never_clears_or_leaves_around_remote_heroes(self) -> None:
+        team = self._team_with_alts(['alt@example.com'], [4])
+        party = _FakePartyApi(
+            [_FakePartyPlayer(1), _FakePartyPlayer(2)],
+            [_FakePartyHero(2, 1), _FakePartyHero(3, 2)],
+        )
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10)
+        shared_memory = _FakeSharedMemory([account])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            self.assertTrue(operation.tick())
+            self.assertFalse(operation.success)
+            self.assertEqual(party.kick_all_calls, 0)
+            self.assertEqual(party.leave_party_calls, 0)
+            self.assertEqual([player.login_number for player in party.players], [1, 2])
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_mixed_operation_retains_remote_hero_when_no_local_replacement_is_needed(self) -> None:
+        team = self._team_with_alts(['alt@example.com'])
+        party = _FakePartyApi(
+            [_FakePartyPlayer(1), _FakePartyPlayer(2)],
+            [_FakePartyHero(3, 2)],
+        )
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10)
+        previous = self._install_runtime_modules(party, _FakeSharedMemory([account]), _FakeMapApi(3))
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+
+            for _ in range(5):
+                operation.tick()
+
+            self.assertTrue(operation.done)
+            self.assertTrue(operation.success)
+            self.assertEqual([(hero.hero_id, hero.owner_player_id) for hero in party.heroes], [(3, 2)])
+            self.assertEqual(party.kick_all_calls, 0)
+            self.assertEqual(party.leave_party_calls, 0)
+        finally:
+            self._restore_runtime_modules(previous)
 
     def test_legacy_shape_normalizes_and_round_trips_all_persisted_data(self) -> None:
         raw = {
@@ -424,10 +1621,7 @@ class HeroTeamManagerPortTests(unittest.TestCase):
             if slot.template_id
         }
         actual_reference_sequence = [
-            slot.template_id
-            for team in config.teams
-            for slot in team.slots
-            if slot.template_id
+            slot.template_id for team in config.teams for slot in team.slots if slot.template_id
         ]
 
         self.assertEqual(actual_ids, expected_ids)

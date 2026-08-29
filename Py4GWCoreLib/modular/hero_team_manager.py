@@ -14,7 +14,7 @@ from Py4GWCoreLib.modular.hero_setup_model import HERO_OPTIONS
 from Py4GWCoreLib.modular.hero_setup_model import safe_account_key as _shared_safe_account_key
 
 HERO_SLOT_COUNT = 7
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 TEMPLATE_LIBRARY_VERSION = 1
 GLOBAL_TEMPLATE_MIGRATION_KEY = 'global_templates_v1'
 MERCENARY_HERO_IDS = set(range(28, 36))
@@ -34,6 +34,51 @@ HERO_BEHAVIOR_CHOICES = [
 HERO_BEHAVIOR_VALUES = [value for value, _label in HERO_BEHAVIOR_CHOICES]
 HERO_BEHAVIOR_LABELS = [label for _value, label in HERO_BEHAVIOR_CHOICES]
 EMPTY_SKILLBAR_TEMPLATE_NAME = 'Empty skill bar'
+MIXED_LOG_SENDER = 'Hero Team Manager'
+_MIXED_LOG_LAST: dict[tuple[object, ...], str] = {}
+
+# PartyStateQuery uses the existing SharedMessageStruct payload.  Keep the
+# mode names explicit: this is a protocol, not an overloaded inventory query.
+PARTY_STATE_QUERY_REQUEST = 'party_state_request'
+PARTY_STATE_QUERY_REPLY = 'party_state_reply'
+PARTY_STATE_GUARD_RESULT = 'party_state_guard'
+PARTY_INVITE_GUARD = 'party_invite_guard'
+
+
+def _mixed_log(
+    event: str,
+    message: str,
+    *,
+    key: tuple[object, ...] = (),
+    message_type: str = 'Info',
+) -> None:
+    """Write one searchable mixed-load event without repeating identical state."""
+    log_key = (str(event), *key)
+    rendered = str(message)
+    if _MIXED_LOG_LAST.get(log_key) == rendered:
+        return
+    _MIXED_LOG_LAST[log_key] = rendered
+    try:
+        import PySystem
+
+        console_type = getattr(PySystem.Console.MessageType, message_type, None)
+        if console_type is None:
+            console_type = PySystem.Console.MessageType.Info
+        PySystem.Console.Log(MIXED_LOG_SENDER, f'[{event}] {rendered}', console_type)
+    except Exception:
+        # Logging must never make a live mixed-team operation fail.
+        pass
+
+
+def _masked_account_identity(account_email: str) -> str:
+    """Keep diagnostics useful without placing a full account email in logs."""
+    value = str(account_email or '').strip()
+    if not value:
+        return '<missing>'
+    if '@' not in value:
+        return f'{value[:1]}***'
+    local, domain = value.split('@', 1)
+    return f'{local[:1] if local else "?"}***@{domain}'
 
 
 def hero_id_from_member(hero_member) -> int:
@@ -46,6 +91,82 @@ def hero_id_from_member(hero_member) -> int:
         return int(hero_id_obj or 0)
     except Exception:
         return 0
+
+
+def hero_owner_player_id(hero_member) -> int:
+    try:
+        return int(getattr(hero_member, 'owner_player_id', 0) or 0)
+    except Exception:
+        return 0
+
+
+def hero_owner_category(hero_member, local_login_number: int) -> str:
+    owner_login = hero_owner_player_id(hero_member)
+    local_login = int(local_login_number or 0)
+    if local_login <= 0 or owner_login <= 0:
+        return 'unknown'
+    return 'local' if owner_login == local_login else 'remote'
+
+
+def current_local_login_number() -> int:
+    try:
+        from Py4GWCoreLib.Player import Player
+
+        return int(Player.GetLoginNumber() or 0)
+    except Exception:
+        return 0
+
+
+def current_party_hero_members(party_api=None) -> list[Any]:
+    if party_api is None:
+        from Py4GWCoreLib import Party as party_api
+    try:
+        return list(party_api.GetHeroes() or [])
+    except Exception:
+        return []
+
+
+def current_local_hero_members(party_api=None, local_login_number: int | None = None) -> list[Any]:
+    local_login = current_local_login_number() if local_login_number is None else int(local_login_number or 0)
+    if local_login <= 0:
+        return []
+    return [hero for hero in current_party_hero_members(party_api) if hero_owner_category(hero, local_login) == 'local']
+
+
+def current_remote_hero_members(party_api=None, local_login_number: int | None = None) -> list[Any]:
+    local_login = current_local_login_number() if local_login_number is None else int(local_login_number or 0)
+    return [
+        hero for hero in current_party_hero_members(party_api) if hero_owner_category(hero, local_login) == 'remote'
+    ]
+
+
+def current_unknown_owner_hero_members(party_api=None, local_login_number: int | None = None) -> list[Any]:
+    local_login = current_local_login_number() if local_login_number is None else int(local_login_number or 0)
+    return [
+        hero for hero in current_party_hero_members(party_api) if hero_owner_category(hero, local_login) == 'unknown'
+    ]
+
+
+def current_local_hero_ids(party_api=None, local_login_number: int | None = None) -> set[int]:
+    return {
+        hero_id_from_member(hero)
+        for hero in current_local_hero_members(party_api, local_login_number)
+        if hero_id_from_member(hero) > 0
+    }
+
+
+def local_hero_party_index_one_based(
+    hero_id: int,
+    party_api=None,
+    local_login_number: int | None = None,
+) -> int:
+    local_login = current_local_login_number() if local_login_number is None else int(local_login_number or 0)
+    if local_login <= 0:
+        return 0
+    for index, hero in enumerate(current_party_hero_members(party_api), start=1):
+        if hero_id_from_member(hero) == int(hero_id) and hero_owner_category(hero, local_login) == 'local':
+            return int(index)
+    return 0
 
 
 def current_hero_ids(party_api=None) -> set[int]:
@@ -114,10 +235,19 @@ class HeroTeamSlot:
 
 
 @dataclass(slots=True)
+class AltAccountBinding:
+    account_email: str = ''
+    enabled: bool = True
+    expected_character_name: str = ''
+    alias: str = ''
+
+
+@dataclass(slots=True)
 class HeroTeamSetup:
     team_id: str
     name: str
     slots: list[HeroTeamSlot] = field(default_factory=list)
+    alt_members: list[AltAccountBinding] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -169,10 +299,77 @@ class HeroTeamLoadPreflight:
     warnings: list[str] = field(default_factory=list)
     blocking_messages: list[str] = field(default_factory=list)
     max_heroes: int = HERO_SLOT_COUNT
+    mixed_mode: bool = False
+    alt_statuses: list['AltAccountStatus'] = field(default_factory=list)
+    capacity: 'MixedPartyCapacity | None' = None
 
     @property
     def can_load(self) -> bool:
         return not self.blocking_messages
+
+
+@dataclass(slots=True)
+class AltAccountStatus:
+    binding_index: int = 0
+    account_email: str = ''
+    display_name: str = ''
+    character_name: str = ''
+    profession_label: str = ''
+    status: str = 'unresolved'
+    status_message: str = ''
+    is_active: bool = False
+    is_stale: bool = False
+    same_map: bool = False
+    in_current_party: bool = False
+    expected_character_matches: bool = True
+    party_id: int = 0
+    party_position: int = -1
+    remote_party_position: int = -1
+    login_number: int = 0
+    agent_id: int = 0
+    map_id: int = 0
+    map_region: int = 0
+    map_district: int = 0
+    map_language: int = 0
+    party_state: str = 'unknown'
+    known_party_member_count: int = 0
+    party_evidence: str = ''
+    is_party_leader: bool = False
+    party_state_query_id: str = ''
+    party_state_query_received_at: float = 0.0
+    guard_result: str = ''
+
+
+@dataclass(slots=True)
+class MixedPartyCapacity:
+    max_party_size: int = 0
+    current_party_size: int = 0
+    local_player_count: int = 0
+    configured_alt_present_count: int = 0
+    unmanaged_player_count: int = 0
+    local_hero_count: int = 0
+    remote_hero_count: int = 0
+    unknown_hero_count: int = 0
+    henchman_count: int = 0
+    other_occupant_count: int = 0
+    local_heroes_to_remove: int = 0
+    local_heroes_to_add: int = 0
+    missing_alt_count: int = 0
+    target_local_hero_count: int = 0
+    forecast_final_slots: int = 0
+
+
+@dataclass(slots=True)
+class MixedPartySnapshot:
+    capacity: MixedPartyCapacity = field(default_factory=MixedPartyCapacity)
+    players: list[Any] = field(default_factory=list)
+    heroes: list[Any] = field(default_factory=list)
+    henchmen: list[Any] = field(default_factory=list)
+    others: list[Any] = field(default_factory=list)
+    party_id: int = 0
+    local_login_number: int = 0
+    components_reconciled: bool = False
+    party_loaded: bool = False
 
 
 @dataclass(slots=True)
@@ -260,6 +457,138 @@ def _clean_display_name(value: Any) -> str:
     return str(value or '').strip()
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'0', 'false', 'no', 'off', 'disabled'}:
+            return False
+        if normalized in {'1', 'true', 'yes', 'on', 'enabled'}:
+            return True
+    return bool(value)
+
+
+def alt_account_identity_key(value: Any) -> str:
+    """Return the validation-only identity key for a configured account."""
+    return str(value or '').strip().casefold()
+
+
+def _alt_binding_from_raw(raw: Any) -> AltAccountBinding:
+    if isinstance(raw, AltAccountBinding):
+        return AltAccountBinding(
+            account_email=str(raw.account_email or '').strip(),
+            enabled=_coerce_bool(raw.enabled, True),
+            expected_character_name=str(raw.expected_character_name or '').strip(),
+            alias=str(raw.alias or '').strip(),
+        )
+    if not isinstance(raw, dict):
+        # Keep malformed rows visible so normalization cannot silently change a
+        # saved team definition into a different member list.
+        return AltAccountBinding()
+    return AltAccountBinding(
+        account_email=str(raw.get('account_email', raw.get('email', '')) or '').strip(),
+        enabled=_coerce_bool(raw.get('enabled', True), True),
+        expected_character_name=str(
+            raw.get('expected_character_name', raw.get('expected_character', raw.get('character_name', ''))) or ''
+        ).strip(),
+        alias=str(raw.get('alias', raw.get('display_name', '')) or '').strip(),
+    )
+
+
+def normalize_alt_bindings(raw_bindings: Any) -> list[AltAccountBinding]:
+    source = raw_bindings if isinstance(raw_bindings, list) else []
+    return [_alt_binding_from_raw(raw) for raw in source]
+
+
+def alt_binding_to_dict(binding: AltAccountBinding) -> dict[str, Any]:
+    return {
+        'account_email': str(binding.account_email or ''),
+        'enabled': bool(binding.enabled),
+        'expected_character_name': str(binding.expected_character_name or ''),
+        'alias': str(binding.alias or ''),
+    }
+
+
+def duplicate_alt_binding_indices(
+    team: HeroTeamSetup,
+    local_account_email: str = '',
+) -> set[int]:
+    keys: dict[str, list[int]] = {}
+    local_key = alt_account_identity_key(local_account_email)
+    for index, binding in enumerate(team.alt_members):
+        key = alt_account_identity_key(binding.account_email)
+        if not key or key == local_key:
+            continue
+        keys.setdefault(key, []).append(index)
+
+    duplicate_indices: set[int] = set()
+    for indices in keys.values():
+        if len(indices) > 1:
+            duplicate_indices.update(indices)
+    return duplicate_indices
+
+
+def validate_alt_bindings(
+    team: HeroTeamSetup,
+    local_account_email: str = '',
+) -> list[str]:
+    """Validate a team's alt rows without mutating or deduplicating them."""
+    local_key = alt_account_identity_key(local_account_email)
+    seen: dict[str, int] = {}
+    duplicate_indices = duplicate_alt_binding_indices(team, local_account_email)
+    messages: list[str] = []
+
+    for index, binding in enumerate(team.alt_members):
+        row = index + 1
+        email = str(binding.account_email or '').strip()
+        key = alt_account_identity_key(email)
+        if not key:
+            messages.append(f'Alt account row {row} has no account email.')
+            continue
+        if local_key and key == local_key:
+            messages.append(f'Alt account row {row} is the local account and cannot be configured as an alt.')
+        previous = seen.get(key)
+        if previous is not None:
+            messages.append(f'Alt account row {row} duplicates row {previous + 1}; remove or correct one entry.')
+        else:
+            seen[key] = index
+        if index in duplicate_indices and previous is None:
+            messages.append(f'Alt account row {row} is duplicated by another configured row; correct the entries.')
+    return messages
+
+
+def team_has_enabled_alt_bindings(team: HeroTeamSetup) -> bool:
+    return any(bool(binding.enabled) for binding in team.alt_members)
+
+
+def calculate_mixed_capacity(
+    max_party_size: int,
+    current_party_size: int,
+    local_heroes_to_remove: int,
+    missing_alt_count: int,
+    target_local_hero_count: int,
+    local_heroes_to_add: int | None = None,
+) -> MixedPartyCapacity:
+    max_size = max(0, int(max_party_size))
+    current_size = max(0, int(current_party_size))
+    remove_count = max(0, int(local_heroes_to_remove))
+    missing_count = max(0, int(missing_alt_count))
+    target_count = max(0, int(target_local_hero_count))
+    add_count = target_count if local_heroes_to_add is None else max(0, int(local_heroes_to_add))
+    return MixedPartyCapacity(
+        max_party_size=max_size,
+        current_party_size=current_size,
+        local_heroes_to_remove=remove_count,
+        local_heroes_to_add=add_count,
+        missing_alt_count=missing_count,
+        target_local_hero_count=target_count,
+        forecast_final_slots=current_size - remove_count + missing_count + add_count,
+    )
+
+
 def empty_slots(count: int = HERO_SLOT_COUNT) -> list[HeroTeamSlot]:
     return [HeroTeamSlot() for _ in range(max(0, int(count)))]
 
@@ -304,6 +633,7 @@ def team_to_dict(team: HeroTeamSetup) -> dict[str, Any]:
         'id': str(team.team_id),
         'name': str(team.name),
         'slots': [slot_to_dict(slot) for slot in normalize_slots(team.slots)],
+        'alt_members': [alt_binding_to_dict(binding) for binding in team.alt_members],
     }
 
 
@@ -493,7 +823,12 @@ def _team_from_raw(raw: Any, used_ids: set[str]) -> HeroTeamSetup | None:
         if not team_id or team_id in used_ids:
             team_id = _new_id('team', name)
         used_ids.add(team_id)
-        return HeroTeamSetup(team_id=team_id, name=name, slots=normalize_slots(raw.slots))
+        return HeroTeamSetup(
+            team_id=team_id,
+            name=name,
+            slots=normalize_slots(raw.slots),
+            alt_members=normalize_alt_bindings(raw.alt_members),
+        )
     if not isinstance(raw, dict):
         return None
     name = str(raw.get('name', '') or '').strip() or 'New Hero Team'
@@ -501,7 +836,12 @@ def _team_from_raw(raw: Any, used_ids: set[str]) -> HeroTeamSetup | None:
     if not team_id or team_id in used_ids:
         team_id = _new_id('team', name)
     used_ids.add(team_id)
-    return HeroTeamSetup(team_id=team_id, name=name, slots=normalize_slots(raw.get('slots', [])))
+    return HeroTeamSetup(
+        team_id=team_id,
+        name=name,
+        slots=normalize_slots(raw.get('slots', [])),
+        alt_members=normalize_alt_bindings(raw.get('alt_members', raw.get('alt_accounts', raw.get('alts', [])))),
+    )
 
 
 def _template_source_entries(raw: Any) -> list[Any]:
@@ -961,6 +1301,8 @@ def is_pristine_default_config(config: HeroTeamConfig) -> bool:
     if config.templates or config.template_preferences or config.hero_names or len(config.teams) != 1:
         return False
     team = config.teams[0]
+    if team.alt_members:
+        return False
     if str(team.name or '') != 'New Hero Team':
         return False
     return all(
@@ -1783,6 +2125,7 @@ def duplicate_team(config: HeroTeamConfig, team_id: str) -> HeroTeamSetup | None
         team_id=_new_id('team', f'{source.name} Copy'),
         name=f'{source.name} Copy',
         slots=deepcopy(normalize_slots(source.slots)),
+        alt_members=deepcopy(source.alt_members),
     )
     config.teams.append(team)
     config.active_team_id = team.team_id
@@ -1893,8 +2236,11 @@ def save_current_party_as_team(
     slots: list[HeroTeamSlot] = []
     seen: set[int] = set()
     detected_names: dict[str, str] = {}
+    local_login_number = current_local_login_number()
 
     for hero_member in party_api.GetHeroes() or []:
+        if hero_owner_category(hero_member, local_login_number) != 'local':
+            continue
         hero_id = _coerce_hero_id(hero_id_from_member(hero_member))
         if hero_id <= 0 or hero_id in seen:
             continue
@@ -2800,16 +3146,1952 @@ class HeroTeamApplyOperation:
             self._finish(True, self._final_status())
 
 
+def _party_component_list(party_api, method_name: str) -> tuple[list[Any], bool]:
+    method = getattr(party_api, method_name, None)
+    if not callable(method):
+        return [], False
+    try:
+        values: Any = method()
+    except Exception:
+        return [], False
+    if values is None:
+        return [], True
+    try:
+        return list(values), True
+    except Exception:
+        return [], False
+
+
+def snapshot_mixed_party(
+    *,
+    map_api=None,
+    party_api=None,
+    local_login_number: int | None = None,
+) -> MixedPartySnapshot:
+    if map_api is None:
+        try:
+            from Py4GWCoreLib.Map import Map
+
+            map_api = Map
+        except Exception:
+            map_api = None
+    if party_api is None:
+        try:
+            from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+            party_api = GLOBAL_CACHE.Party
+        except Exception:
+            party_api = None
+
+    local_login = current_local_login_number() if local_login_number is None else int(local_login_number or 0)
+    if party_api is None:
+        return MixedPartySnapshot(local_login_number=local_login)
+
+    players, players_ok = _party_component_list(party_api, 'GetPlayers')
+    heroes, heroes_ok = _party_component_list(party_api, 'GetHeroes')
+    henchmen, henchmen_ok = _party_component_list(party_api, 'GetHenchmen')
+    others, others_ok = _party_component_list(party_api, 'GetOthers')
+    components_ok = players_ok and heroes_ok and henchmen_ok and others_ok
+
+    try:
+        current_size = int(party_api.GetPartySize() or 0)
+    except Exception:
+        current_size = 0
+        components_ok = False
+    try:
+        party_id = int(party_api.GetPartyID() or 0)
+    except Exception:
+        party_id = 0
+
+    try:
+        player_count = int(party_api.GetPlayerCount() or 0)
+        hero_count = int(party_api.GetHeroCount() or 0)
+        henchman_count = int(party_api.GetHenchmanCount() or 0)
+        components_ok = components_ok and (
+            player_count == len(players) and hero_count == len(heroes) and henchman_count == len(henchmen)
+        )
+    except Exception:
+        player_count = len(players)
+        hero_count = len(heroes)
+        henchman_count = len(henchmen)
+        components_ok = False
+
+    components_ok = components_ok and current_size == len(players) + len(heroes) + len(henchmen) + len(others)
+    try:
+        party_loaded = bool(party_api.IsPartyLoaded())
+    except Exception:
+        party_loaded = bool(current_size > 0)
+    components_ok = components_ok and party_loaded
+
+    if map_api is not None:
+        try:
+            max_party_size = int(map_api.GetMaxPartySize() or 0)
+        except Exception:
+            max_party_size = 0
+    else:
+        max_party_size = 0
+
+    local_player_count = sum(
+        1 for player in players if int(getattr(player, 'login_number', 0) or 0) == local_login and local_login > 0
+    )
+    local_heroes = [hero for hero in heroes if hero_owner_category(hero, local_login) == 'local']
+    remote_heroes = [hero for hero in heroes if hero_owner_category(hero, local_login) == 'remote']
+    unknown_heroes = [hero for hero in heroes if hero_owner_category(hero, local_login) == 'unknown']
+
+    capacity = calculate_mixed_capacity(
+        max_party_size,
+        current_size,
+        0,
+        0,
+        0,
+    )
+    capacity.local_player_count = local_player_count
+    capacity.local_hero_count = len(local_heroes)
+    capacity.remote_hero_count = len(remote_heroes)
+    capacity.unknown_hero_count = len(unknown_heroes)
+    capacity.henchman_count = len(henchmen)
+    capacity.other_occupant_count = len(others)
+    return MixedPartySnapshot(
+        capacity=capacity,
+        players=players,
+        heroes=heroes,
+        henchmen=henchmen,
+        others=others,
+        party_id=party_id,
+        local_login_number=local_login,
+        components_reconciled=components_ok,
+        party_loaded=party_loaded,
+    )
+
+
+def _map_tuple_from_api(map_api) -> tuple[int, int, int, int] | None:
+    if map_api is None:
+        return None
+    try:
+        region_value = map_api.GetRegion()
+        language_value = map_api.GetLanguage()
+        region = int(region_value[0] if isinstance(region_value, (tuple, list)) else region_value or 0)
+        language = int(language_value[0] if isinstance(language_value, (tuple, list)) else language_value or 0)
+        return (
+            int(map_api.GetMapID() or 0),
+            region,
+            int(map_api.GetDistrict() or 0),
+            language,
+        )
+    except Exception:
+        return None
+
+
+def _map_tuple_from_account(account: Any) -> tuple[int, int, int, int] | None:
+    map_data = getattr(getattr(account, 'AgentData', None), 'Map', None)
+    if map_data is None:
+        return None
+    try:
+        result = (
+            int(getattr(map_data, 'MapID', 0) or 0),
+            int(getattr(map_data, 'Region', 0) or 0),
+            int(getattr(map_data, 'District', 0) or 0),
+            int(getattr(map_data, 'Language', 0) or 0),
+        )
+    except Exception:
+        return None
+    return result if result[0] > 0 else None
+
+
+def _account_email(account: Any) -> str:
+    return str(getattr(account, 'AccountEmail', '') or '').strip()
+
+
+def _account_character_name(account: Any) -> str:
+    return str(getattr(getattr(account, 'AgentData', None), 'CharacterName', '') or '').strip()
+
+
+def _account_login_number(account: Any) -> int:
+    try:
+        return int(getattr(getattr(account, 'AgentData', None), 'LoginNumber', 0) or 0)
+    except Exception:
+        return 0
+
+
+def _account_agent_id(account: Any) -> int:
+    try:
+        return int(getattr(getattr(account, 'AgentData', None), 'AgentID', 0) or 0)
+    except Exception:
+        return 0
+
+
+def _account_profession_label(account: Any) -> str:
+    profession = getattr(getattr(account, 'AgentData', None), 'Profession', ())
+    try:
+        primary = int(profession[0] or 0) if len(profession) > 0 else 0
+        secondary = int(profession[1] or 0) if len(profession) > 1 else 0
+    except Exception:
+        primary = 0
+        secondary = 0
+    return _profession_short_label(primary, secondary) or 'Unknown'
+
+
+def _account_party_id(account: Any) -> int:
+    try:
+        return int(getattr(getattr(account, 'AgentPartyData', None), 'PartyID', 0) or 0)
+    except Exception:
+        return 0
+
+
+def _account_party_position(account: Any) -> int:
+    try:
+        party_data = getattr(account, 'AgentPartyData', None)
+        position = getattr(party_data, 'PartyPosition', None)
+        return -1 if position is None else int(position)
+    except Exception:
+        return -1
+
+
+def _account_is_party_leader(account: Any) -> bool:
+    return bool(getattr(getattr(account, 'AgentPartyData', None), 'IsPartyLeader', False))
+
+
+def _account_is_isolated(account: Any) -> bool:
+    return bool(getattr(account, 'IsIsolated', False))
+
+
+def _shared_memory_account_records(shared_memory) -> tuple[list[Any], list[Any]]:
+    if shared_memory is None:
+        return [], []
+    try:
+        active = list(shared_memory.GetAllAccountData(sort_results=True, include_isolated=True) or [])
+    except TypeError:
+        try:
+            active = list(shared_memory.GetAllAccountData() or [])
+        except Exception:
+            active = []
+    except Exception:
+        active = []
+
+    all_records = list(active)
+    try:
+        all_accounts = shared_memory.GetAllAccounts()
+        raw_records = getattr(all_accounts, 'AccountData', [])
+        all_records = [record for record in raw_records if bool(getattr(record, 'IsAccount', False))]
+    except Exception:
+        pass
+    return active, all_records
+
+
+def _party_player_position_and_login(
+    account: Any,
+    party_api,
+    players: list[Any],
+) -> tuple[int, int]:
+    account_login = _account_login_number(account)
+    account_agent = _account_agent_id(account)
+    players_api = getattr(party_api, 'Players', None)
+    for position, player in enumerate(players):
+        login_number = int(getattr(player, 'login_number', 0) or 0)
+        if login_number > 0 and login_number == account_login:
+            return position, login_number
+        if account_agent > 0 and players_api is not None:
+            try:
+                agent_id = int(players_api.GetAgentIDByLoginNumber(login_number) or 0)
+            except Exception:
+                agent_id = 0
+            if agent_id > 0 and agent_id == account_agent:
+                return position, login_number
+    return -1, account_login
+
+
+def _known_shared_party_peers(
+    account: Any,
+    active_accounts: list[Any],
+    account_map: tuple[int, int, int, int] | None,
+) -> list[Any]:
+    """Return other active injected account records sharing this party/map."""
+    party_id = _account_party_id(account)
+    account_key = alt_account_identity_key(_account_email(account))
+    if party_id <= 0 or account_map is None:
+        return []
+    peers: list[Any] = []
+    for candidate in active_accounts:
+        if not bool(getattr(candidate, 'IsAccount', False)) or not bool(getattr(candidate, 'IsSlotActive', True)):
+            continue
+        if alt_account_identity_key(_account_email(candidate)) == account_key:
+            continue
+        if _account_party_id(candidate) != party_id:
+            continue
+        if _map_tuple_from_account(candidate) != account_map:
+            continue
+        peers.append(candidate)
+    return peers
+
+
+def _map_fields(map_value: tuple[int, int, int, int] | None) -> tuple[int, int, int, int]:
+    return map_value if map_value is not None else (0, 0, 0, 0)
+
+
+def _party_state_map_signature(map_value: tuple[int, int, int, int] | None) -> str:
+    return ','.join(str(int(value)) for value in _map_fields(map_value))
+
+
+def _party_state_query_cache() -> dict[tuple[str, str], dict[str, Any]]:
+    """Return the per-client PartyStateQuery reply cache owned by GLOBAL_CACHE."""
+    try:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+    except Exception:
+        return {}
+
+    cache = getattr(GLOBAL_CACHE, '_hero_team_party_state_query_cache', None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(GLOBAL_CACHE, '_hero_team_party_state_query_cache', cache)
+    return cache
+
+
+def _party_state_cache_key(sender_email: str, request_id: str) -> tuple[str, str]:
+    return (str(sender_email or '').strip().casefold(), str(request_id or '').strip())
+
+
+def reset_party_state_query(sender_email: str, request_id: str) -> None:
+    _party_state_query_cache().pop(_party_state_cache_key(sender_email, request_id), None)
+
+
+def get_party_state_query(sender_email: str, request_id: str) -> dict[str, Any] | None:
+    return _party_state_query_cache().get(_party_state_cache_key(sender_email, request_id))
+
+
+def new_party_state_query_id() -> str:
+    """Create a unique text correlation ID that fits one ExtraData field."""
+    return uuid4().hex
+
+
+def _party_state_reply_int(reply: dict[str, Any], key: str, default: int = -1) -> int:
+    try:
+        return int(reply.get(key, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _party_state_reply_bool(reply: dict[str, Any], key: str) -> bool | None:
+    value = reply.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.strip() in {'0', '1'}:
+        return value.strip() == '1'
+    return None
+
+
+def validate_party_state_reply(
+    reply: dict[str, Any] | None,
+    *,
+    request_id: str,
+    expected_sender_email: str,
+    expected_receiver_email: str,
+    expected_character_name: str,
+    expected_map: tuple[int, int, int, int] | None,
+    sent_at: float,
+    now: float | None = None,
+) -> tuple[str, str]:
+    """Classify one cached reply without treating malformed data as safe."""
+    if not isinstance(reply, dict):
+        return 'failure', 'No authoritative party-state reply was received.'
+
+    if str(reply.get('request_id', '')).strip() != str(request_id or '').strip():
+        return 'failure', 'Party-state reply correlation ID did not match the request.'
+    if str(reply.get('sender_email', '')).strip().casefold() != str(expected_sender_email or '').strip().casefold():
+        return 'failure', 'Party-state reply came from an unexpected account.'
+    if str(reply.get('receiver_email', '')).strip().casefold() != str(expected_receiver_email or '').strip().casefold():
+        return 'failure', 'Party-state reply was addressed to an unexpected account.'
+    if str(reply.get('mode', '')).strip() != PARTY_STATE_QUERY_REPLY:
+        return 'failure', 'Party-state reply used an unexpected response mode.'
+
+    received_at = reply.get('received_at')
+    try:
+        received_at_value = float(str(received_at if received_at is not None else '').strip())
+    except (TypeError, ValueError):
+        return 'failure', 'Party-state reply has no valid receipt timestamp.'
+    if _party_state_reply_int(reply, 'message_timestamp', 0) <= 0:
+        return 'failure', 'Party-state reply has no valid message timestamp.'
+    current_time = monotonic() if now is None else float(now)
+    if received_at_value < float(sent_at) or received_at_value > current_time + 0.5:
+        return 'failure', 'Party-state reply is stale or has an invalid timestamp.'
+
+    character_name = str(reply.get('character_name', '') or '').strip()
+    expected_name = str(expected_character_name or '').strip()
+    if not character_name or (expected_name and character_name.casefold() != expected_name.casefold()):
+        return 'failure', 'Party-state reply character identity did not match the configured account.'
+
+    reported_map = reply.get('map_signature')
+    if not isinstance(reported_map, tuple) or len(reported_map) != 4:
+        return 'failure', 'Party-state reply has no valid map signature.'
+    try:
+        reported_map_tuple = tuple(int(value) for value in reported_map)
+        expected_map_tuple = tuple(int(value) for value in expected_map) if expected_map is not None else None
+    except (TypeError, ValueError):
+        return 'failure', 'Party-state reply has no valid map signature.'
+    if expected_map_tuple is None or reported_map_tuple != expected_map_tuple:
+        return 'failure', 'Alt party-state reply is not from the expected map and district.'
+
+    loaded = _party_state_reply_bool(reply, 'is_loaded')
+    leader = _party_state_reply_bool(reply, 'is_party_leader')
+    if loaded is not True:
+        return 'failure', 'Alt party-state reply is not fully loaded.'
+    if leader is not True:
+        return 'incompatible_party', 'Alt is not the leader of its current party.'
+
+    party_size = _party_state_reply_int(reply, 'party_size')
+    player_count = _party_state_reply_int(reply, 'player_count')
+    hero_count = _party_state_reply_int(reply, 'hero_count')
+    henchman_count = _party_state_reply_int(reply, 'henchman_count')
+    other_count = _party_state_reply_int(reply, 'other_count')
+    party_id = _party_state_reply_int(reply, 'party_id')
+    party_position = _party_state_reply_int(reply, 'party_position')
+    values = (party_size, player_count, hero_count, henchman_count, other_count, party_id, party_position)
+    if any(value < 0 for value in values):
+        return 'failure', 'Alt party-state reply contains malformed counts or identity.'
+    if party_id <= 0:
+        return 'failure', 'Alt party-state reply has no valid party identity.'
+    if party_size != player_count + hero_count + henchman_count + other_count:
+        return 'failure', 'Alt party-state components are inconsistent.'
+    if (
+        party_position != 0
+        or party_size != 1
+        or player_count != 1
+        or hero_count != 0
+        or henchman_count != 0
+        or other_count != 0
+    ):
+        return 'incompatible_party', 'Alt is not solo; reciprocal invitation is blocked.'
+    return 'ready', 'Authoritative PartyStateQuery verified the alt is solo.'
+
+
+def _log_alt_resolution(
+    status: AltAccountStatus,
+    *,
+    team: HeroTeamSetup,
+    current_map: tuple[int, int, int, int] | None,
+    local_party_id: int,
+    local_party_size: int,
+) -> None:
+    local_map_id, local_region, local_district, local_language = _map_fields(current_map)
+    _mixed_log(
+        'AltResolution',
+        (
+            f'row={status.binding_index + 1} account={_masked_account_identity(status.account_email)} '
+            f'char={status.character_name or "<none>"!r} active={int(status.is_active)} '
+            f'stale={int(status.is_stale)} '
+            f'local_map={local_map_id}/{local_region}/{local_district}/{local_language} '
+            f'alt_map={status.map_id}/{status.map_region}/{status.map_district}/{status.map_language} '
+            f'local_party_id={local_party_id} local_party_size={local_party_size} '
+            f'alt_party_id={status.party_id} alt_party_position={status.remote_party_position} '
+            f'alt_party_leader={int(status.is_party_leader)} '
+            f'known_party_members={status.known_party_member_count} '
+            f'in_local_party={int(status.in_current_party)} '
+            f'classification={status.status} party_state={status.party_state} '
+            f'evidence={status.party_evidence or "none"}'
+        ),
+        key=('team', id(team), 'row', status.binding_index),
+        message_type='Warning' if status.status not in {'ready', 'in_party', 'disabled'} else 'Info',
+    )
+
+
+def _status_for_binding_error(
+    binding_index: int,
+    binding: AltAccountBinding,
+    status: str,
+    message: str,
+) -> AltAccountStatus:
+    return AltAccountStatus(
+        binding_index=binding_index,
+        account_email=str(binding.account_email or '').strip(),
+        display_name=str(binding.alias or binding.account_email or '').strip(),
+        status=status,
+        status_message=message,
+        expected_character_matches=True,
+    )
+
+
+def active_alt_account_choices(*, player_api=None, shared_memory=None) -> list[AltAccountStatus]:
+    """Return selectable active accounts using the existing shared-memory discovery surface."""
+    if player_api is None:
+        try:
+            from Py4GWCoreLib.Player import Player
+
+            player_api = Player
+        except Exception:
+            player_api = None
+    if shared_memory is None:
+        try:
+            from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+            shared_memory = GLOBAL_CACHE.ShMem
+        except Exception:
+            shared_memory = None
+
+    try:
+        local_email = str(player_api.GetAccountEmail() or '').strip() if player_api is not None else ''
+    except Exception:
+        local_email = ''
+    local_key = alt_account_identity_key(local_email)
+    active, _all_records = _shared_memory_account_records(shared_memory)
+    choices: list[AltAccountStatus] = []
+    seen: set[str] = set()
+    for account in active:
+        email = _account_email(account)
+        key = alt_account_identity_key(email)
+        if not key or key == local_key or key in seen:
+            continue
+        seen.add(key)
+        character_name = _account_character_name(account)
+        isolated = _account_is_isolated(account)
+        choices.append(
+            AltAccountStatus(
+                binding_index=-1,
+                account_email=email,
+                display_name=character_name or email,
+                character_name=character_name,
+                profession_label=_account_profession_label(account),
+                status='isolated' if isolated else 'active',
+                status_message='Active but isolated.' if isolated else 'Active.',
+                is_active=True,
+                is_stale=False,
+                login_number=_account_login_number(account),
+                agent_id=_account_agent_id(account),
+                party_id=_account_party_id(account),
+                party_position=_account_party_position(account),
+            )
+        )
+    return choices
+
+
+def resolve_alt_account_statuses(
+    team: HeroTeamSetup,
+    *,
+    party_api=None,
+    map_api=None,
+    player_api=None,
+    shared_memory=None,
+    snapshot: MixedPartySnapshot | None = None,
+    local_account_email: str = '',
+) -> list[AltAccountStatus]:
+    """Resolve configured alt rows without changing their persisted bindings."""
+    if player_api is None:
+        try:
+            from Py4GWCoreLib.Player import Player
+
+            player_api = Player
+        except Exception:
+            player_api = None
+    if shared_memory is None:
+        try:
+            from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+            shared_memory = GLOBAL_CACHE.ShMem
+        except Exception:
+            shared_memory = None
+    if party_api is None and snapshot is None:
+        try:
+            from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+            party_api = GLOBAL_CACHE.Party
+        except Exception:
+            party_api = None
+    if map_api is None:
+        try:
+            from Py4GWCoreLib.Map import Map
+
+            map_api = Map
+        except Exception:
+            map_api = None
+    if snapshot is None:
+        snapshot = snapshot_mixed_party(map_api=map_api, party_api=party_api)
+
+    if not local_account_email:
+        try:
+            local_account_email = str(player_api.GetAccountEmail() or '').strip() if player_api is not None else ''
+        except Exception:
+            local_account_email = ''
+    local_key = alt_account_identity_key(local_account_email)
+    duplicate_indices = duplicate_alt_binding_indices(team, local_account_email)
+    active, all_records = _shared_memory_account_records(shared_memory)
+    current_map = _map_tuple_from_api(map_api)
+    current_party_id = int(snapshot.party_id or 0)
+    current_party_size = int(snapshot.capacity.current_party_size or 0)
+    statuses: list[AltAccountStatus] = []
+
+    def append_status(status: AltAccountStatus) -> None:
+        statuses.append(status)
+        _log_alt_resolution(
+            status,
+            team=team,
+            current_map=current_map,
+            local_party_id=current_party_id,
+            local_party_size=current_party_size,
+        )
+
+    for binding_index, binding in enumerate(team.alt_members):
+        email = str(binding.account_email or '').strip()
+        key = alt_account_identity_key(email)
+        if not binding.enabled:
+            append_status(_status_for_binding_error(binding_index, binding, 'disabled', 'Disabled for this team.'))
+            continue
+        if not key:
+            append_status(
+                _status_for_binding_error(binding_index, binding, 'invalid', 'No account email is configured.')
+            )
+            continue
+        if key == local_key:
+            append_status(
+                _status_for_binding_error(
+                    binding_index,
+                    binding,
+                    'local_account',
+                    'This is the local account; choose another account.',
+                )
+            )
+            continue
+        if binding_index in duplicate_indices:
+            append_status(
+                _status_for_binding_error(
+                    binding_index,
+                    binding,
+                    'duplicate',
+                    'Duplicate account identity; correct the saved team before loading.',
+                )
+            )
+            continue
+
+        active_candidates = [account for account in active if alt_account_identity_key(_account_email(account)) == key]
+        all_candidates = [
+            account for account in all_records if alt_account_identity_key(_account_email(account)) == key
+        ]
+        if len(active_candidates) > 1:
+            append_status(
+                _status_for_binding_error(
+                    binding_index,
+                    binding,
+                    'ambiguous',
+                    'More than one active shared-memory record matches this account email.',
+                )
+            )
+            continue
+        if not active_candidates:
+            stale = bool(all_candidates)
+            stale_status = _status_for_binding_error(
+                binding_index,
+                binding,
+                'stale' if stale else 'offline',
+                'Account data is stale.' if stale else 'Account is offline or not discovered.',
+            )
+            stale_status.is_stale = stale
+            append_status(stale_status)
+            continue
+
+        account = active_candidates[0]
+        resolved_email = _account_email(account) or email
+        character_name = _account_character_name(account)
+        account_map = _map_tuple_from_account(account)
+        login_number = _account_login_number(account)
+        agent_id = _account_agent_id(account)
+        local_party_position, matched_login = _party_player_position_and_login(account, party_api, snapshot.players)
+        in_current_party = local_party_position >= 0
+        account_party_id = _account_party_id(account)
+        account_party_position = _account_party_position(account)
+        account_party_leader = _account_is_party_leader(account)
+        known_party_peers = _known_shared_party_peers(account, active, account_map)
+        same_map = current_map is not None and account_map is not None and current_map == account_map
+        expected = str(binding.expected_character_name or '').strip()
+        expected_matches = not expected or expected.casefold() == character_name.casefold()
+        account_map_id, account_region, account_district, account_language = _map_fields(account_map)
+        status = AltAccountStatus(
+            binding_index=binding_index,
+            account_email=resolved_email,
+            display_name=str(binding.alias or character_name or email).strip(),
+            character_name=character_name,
+            profession_label=_account_profession_label(account),
+            status='active',
+            status_message='Active.',
+            is_active=True,
+            is_stale=False,
+            same_map=same_map,
+            in_current_party=in_current_party,
+            expected_character_matches=expected_matches,
+            party_id=account_party_id,
+            party_position=local_party_position,
+            remote_party_position=account_party_position,
+            login_number=matched_login or login_number,
+            agent_id=agent_id,
+            map_id=account_map_id,
+            map_region=account_region,
+            map_district=account_district,
+            map_language=account_language,
+            known_party_member_count=1 + len(known_party_peers) if account_party_id > 0 else 0,
+            is_party_leader=account_party_leader,
+        )
+        if not character_name:
+            status.status = 'unresolved'
+            status.status_message = 'Active account has no current character identity.'
+            status.party_state = 'unresolved'
+            status.party_evidence = 'character identity unavailable'
+        elif not expected_matches:
+            status.status = 'wrong_character'
+            status.status_message = f'Wrong character: expected {expected}, found {character_name}.'
+            status.party_state = 'wrong_character'
+            status.party_evidence = 'expected character does not match'
+        elif in_current_party:
+            status.status = 'in_party'
+            status.status_message = 'Already in the current party.'
+            status.party_state = 'in_party'
+            status.party_evidence = 'live local Party.GetPlayers membership'
+        elif not same_map:
+            status.status = 'different_map'
+            status.status_message = 'Account is active but not on the local map.'
+            status.party_state = 'different_map'
+            status.party_evidence = 'full map/district/language signature differs'
+        elif _account_is_isolated(account):
+            status.status = 'isolated'
+            status.status_message = 'Account is isolated and cannot be coordinated safely.'
+            status.party_state = 'isolated'
+            status.party_evidence = 'shared-memory isolation flag'
+        elif account_party_position < 0:
+            status.status = 'query_required'
+            status.status_message = 'Party state requires an authoritative query before invitation.'
+            status.party_state = 'unknown'
+            status.party_evidence = 'shared-memory party position is unavailable; PartyStateQuery required'
+        elif current_party_id <= 0:
+            status.status = 'ambiguous_party'
+            status.status_message = 'Local party identity is unavailable; mixed loading is blocked.'
+            status.party_state = 'ambiguous'
+            status.party_evidence = 'local Party.GetPartyID returned no valid party ID'
+        elif account_party_position == 0 and not account_party_leader:
+            status.status = 'ambiguous_party'
+            status.status_message = 'Account party metadata is contradictory; mixed loading is blocked.'
+            status.party_state = 'ambiguous'
+            status.party_evidence = 'zero party position without party-leader state'
+        elif current_party_id > 0 and account_party_id == current_party_id:
+            status.status = 'ambiguous_party'
+            status.status_message = (
+                'Shared-memory party matches the local party, but live membership could not be verified.'
+            )
+            status.party_state = 'ambiguous'
+            status.party_evidence = 'party ID matches local party without live player membership'
+        elif account_party_position > 0 or known_party_peers:
+            status.status = 'incompatible_party'
+            status.status_message = 'Account is already in a different party.'
+            status.party_state = 'other_party'
+            status.party_evidence = (
+                'party position is not zero'
+                if account_party_position > 0
+                else 'another active shared-memory account shares the party ID and map'
+            )
+        else:
+            status.status = 'query_required'
+            status.status_message = 'Party state requires an authoritative query before invitation.'
+            status.party_state = 'unknown'
+            status.party_evidence = 'shared-memory metadata is insufficient; PartyStateQuery required'
+        append_status(status)
+    return statuses
+
+
+def build_mixed_team_preflight(
+    config: HeroTeamConfig,
+    team_id: str | None = None,
+    *,
+    map_api=None,
+    party_api=None,
+    player_api=None,
+    shared_memory=None,
+) -> HeroTeamLoadPreflight:
+    preflight = HeroTeamLoadPreflight(mixed_mode=True)
+    team = get_team(config, team_id)
+    if team is None:
+        preflight.blocking_messages.append('Load skipped: no team selected.')
+        return preflight
+
+    if map_api is None:
+        try:
+            from Py4GWCoreLib.Map import Map
+
+            map_api = Map
+        except Exception:
+            map_api = None
+    if party_api is None:
+        try:
+            from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+            party_api = GLOBAL_CACHE.Party
+        except Exception:
+            party_api = None
+    if player_api is None:
+        try:
+            from Py4GWCoreLib.Player import Player
+
+            player_api = Player
+        except Exception:
+            player_api = None
+    if shared_memory is None:
+        try:
+            from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+            shared_memory = GLOBAL_CACHE.ShMem
+        except Exception:
+            shared_memory = None
+
+    try:
+        local_email = str(player_api.GetAccountEmail() or '').strip() if player_api is not None else ''
+    except Exception:
+        local_email = ''
+    try:
+        local_login = int(player_api.GetLoginNumber() or 0) if player_api is not None else 0
+    except Exception:
+        local_login = 0
+    if not local_email:
+        preflight.blocking_messages.append('Load skipped: local account identity could not be resolved.')
+    if local_login <= 0:
+        preflight.blocking_messages.append('Load skipped: local player login identity could not be resolved.')
+
+    snapshot = snapshot_mixed_party(
+        map_api=map_api,
+        party_api=party_api,
+        local_login_number=local_login,
+    )
+    target_local_hero_ids = {int(slot.hero_id) for slot in normalize_slots(team.slots) if int(slot.hero_id) > 0}
+    _mixed_log(
+        'MixedPreflight',
+        (
+            f'start team={team.name!r} alts={sum(1 for binding in team.alt_members if binding.enabled)} '
+            f'hero_targets={len(target_local_hero_ids)} '
+            f'party={snapshot.capacity.current_party_size}/{snapshot.capacity.max_party_size}'
+        ),
+        key=('team', team.team_id, 'preflight-start'),
+    )
+    preflight.alt_statuses = resolve_alt_account_statuses(
+        team,
+        party_api=party_api,
+        map_api=map_api,
+        player_api=player_api,
+        shared_memory=shared_memory,
+        snapshot=snapshot,
+        local_account_email=local_email,
+    )
+    preflight.blocking_messages.extend(validate_alt_bindings(team, local_email))
+
+    for status in preflight.alt_statuses:
+        if status.status in {'disabled', 'ready', 'query_required', 'in_party'}:
+            continue
+        preflight.blocking_messages.append(
+            f'Alt account row {status.binding_index + 1}: {status.status_message or status.status}.'
+        )
+
+    hero_preflight = build_load_preflight(
+        config,
+        team_id,
+        include_runtime=False,
+        leave_party_first=False,
+        clear_existing=False,
+    )
+    preflight.plan = hero_preflight.plan
+    preflight.row_warnings = hero_preflight.row_warnings
+    preflight.warnings = list(hero_preflight.warnings)
+    preflight.max_heroes = HERO_SLOT_COUNT
+
+    if map_api is None:
+        preflight.blocking_messages.append('Load skipped: could not verify current map.')
+    else:
+        try:
+            if not map_api.IsOutpost():
+                preflight.blocking_messages.append('Load skipped: current map is not an outpost.')
+        except Exception:
+            preflight.blocking_messages.append('Load skipped: could not verify current map.')
+    if party_api is None:
+        preflight.blocking_messages.append('Load skipped: could not access the current party.')
+    else:
+        try:
+            if not party_api.IsPartyLeader():
+                preflight.blocking_messages.append('Load skipped: current character is not party leader.')
+        except Exception:
+            preflight.blocking_messages.append('Load skipped: could not verify party leader.')
+
+    if not snapshot.party_loaded:
+        preflight.blocking_messages.append('Load skipped: current party is not fully loaded.')
+    if not snapshot.components_reconciled:
+        preflight.blocking_messages.append('Load skipped: current party components are inconsistent.')
+    if snapshot.capacity.max_party_size <= 0:
+        preflight.blocking_messages.append('Load skipped: current map party capacity is unavailable.')
+    if snapshot.party_id <= 0:
+        preflight.blocking_messages.append('Load skipped: current party identity is unavailable.')
+    if snapshot.capacity.current_party_size <= 0:
+        preflight.blocking_messages.append('Load skipped: current party size is unavailable.')
+    if snapshot.capacity.local_player_count != 1:
+        preflight.blocking_messages.append('Load skipped: local player is not uniquely present in the party.')
+
+    enabled_statuses = [status for status in preflight.alt_statuses if status.status != 'disabled']
+    present_alt_statuses = [status for status in enabled_statuses if status.in_current_party]
+    present_party_positions = [int(status.party_position) for status in present_alt_statuses]
+    present_party_logins = [int(status.login_number) for status in present_alt_statuses]
+    present_alt_count = len(set(present_party_positions))
+    missing_alt_count = max(0, len(enabled_statuses) - present_alt_count)
+    if (
+        len(set(present_party_positions)) != len(present_party_positions)
+        or len(set(present_party_logins)) != len(present_party_logins)
+        or any(login_number <= 0 or login_number == local_login for login_number in present_party_logins)
+    ):
+        preflight.blocking_messages.append(
+            'Load skipped: configured alt identities do not map uniquely to non-local party players.'
+        )
+
+    target_local_hero_ids = {int(slot.hero_id) for slot in preflight.plan.slots if int(slot.hero_id) > 0}
+    local_hero_members = current_local_hero_members(party_api, local_login)
+    local_hero_ids = current_local_hero_ids(party_api, local_login)
+    unmanaged_hero_count = snapshot.capacity.remote_hero_count + snapshot.capacity.unknown_hero_count
+
+    local_heroes_to_remove = len(local_hero_members)
+    local_heroes_to_add = len(target_local_hero_ids)
+    if unmanaged_hero_count > 0:
+        if len(local_hero_members) != len(local_hero_ids) or not local_hero_ids.issubset(target_local_hero_ids):
+            preflight.blocking_messages.append(
+                'Load skipped: remote or unknown-owner heroes prevent a safe local hero replacement.'
+            )
+        local_heroes_to_remove = 0
+        local_heroes_to_add = len(target_local_hero_ids - local_hero_ids)
+
+    capacity = calculate_mixed_capacity(
+        snapshot.capacity.max_party_size,
+        snapshot.capacity.current_party_size,
+        local_heroes_to_remove,
+        missing_alt_count,
+        len(target_local_hero_ids),
+        local_heroes_to_add,
+    )
+    capacity.local_player_count = snapshot.capacity.local_player_count
+    capacity.configured_alt_present_count = present_alt_count
+    capacity.unmanaged_player_count = max(
+        0,
+        len(snapshot.players) - snapshot.capacity.local_player_count - present_alt_count,
+    )
+    capacity.local_hero_count = snapshot.capacity.local_hero_count
+    capacity.remote_hero_count = snapshot.capacity.remote_hero_count
+    capacity.unknown_hero_count = snapshot.capacity.unknown_hero_count
+    capacity.henchman_count = snapshot.capacity.henchman_count
+    capacity.other_occupant_count = snapshot.capacity.other_occupant_count
+    preflight.capacity = capacity
+
+    ownership_blocked = any(
+        'remote or unknown-owner heroes prevent a safe local hero replacement' in message
+        for message in preflight.blocking_messages
+    )
+    _mixed_log(
+        'Ownership',
+        (
+            f'team={team.name!r} local_heroes={capacity.local_hero_count} '
+            f'protected_remote={capacity.remote_hero_count} unknown_owner={capacity.unknown_hero_count} '
+            f'replacement={"blocked" if ownership_blocked else "safe"}'
+        ),
+        key=('team', team.team_id, 'ownership'),
+        message_type='Warning' if ownership_blocked else 'Info',
+    )
+    _mixed_log(
+        'Capacity',
+        (
+            f'team={team.name!r} current={capacity.current_party_size} '
+            f'local_heroes={capacity.local_hero_count} remove_local={capacity.local_heroes_to_remove} '
+            f'missing_alts={capacity.missing_alt_count} hero_targets={capacity.target_local_hero_count} '
+            f'add_local={capacity.local_heroes_to_add} forecast={capacity.forecast_final_slots} '
+            f'max={capacity.max_party_size}'
+        ),
+        key=('team', team.team_id, 'capacity'),
+        message_type='Warning' if capacity.forecast_final_slots > capacity.max_party_size > 0 else 'Info',
+    )
+
+    if capacity.current_party_size > capacity.max_party_size:
+        preflight.blocking_messages.append('Load skipped: current party already exceeds this map capacity.')
+    if capacity.forecast_final_slots > capacity.max_party_size:
+        preflight.blocking_messages.append(
+            f'Load skipped: requested party would use {capacity.forecast_final_slots} '
+            f'of {capacity.max_party_size} available slots.'
+        )
+    if preflight.blocking_messages:
+        _mixed_log(
+            'MixedPreflight',
+            f'blocked team={team.name!r} reason={" | ".join(preflight.blocking_messages)}',
+            key=('team', team.team_id, 'preflight-result'),
+            message_type='Warning',
+        )
+    else:
+        _mixed_log(
+            'MixedPreflight',
+            f'passed team={team.name!r} party={capacity.current_party_size}/{capacity.max_party_size}',
+            key=('team', team.team_id, 'preflight-result'),
+        )
+    return preflight
+
+
+class MixedHeroTeamApplyOperation:
+    """Apply a team without leaving the party or claiming unmanaged occupants."""
+
+    def __init__(
+        self,
+        config: HeroTeamConfig,
+        team_id: str | None = None,
+        *,
+        clear_existing: bool = True,
+        invite_timeout_ms: int = 5000,
+        poll_ms: int = 250,
+        hero_add_delay_ms: int = 250,
+        post_clear_wait_ms: int = 500,
+        template_delay_ms: int = 500,
+    ) -> None:
+        team = get_team(config, team_id)
+        if team is None:
+            raise ValueError('No team selected.')
+        self.config = deepcopy(config)
+        self.team = deepcopy(team)
+        self.templates = deepcopy(self.config.templates)
+        self.hero_names = dict(self.config.hero_names)
+        self.clear_existing = bool(clear_existing)
+        self.invite_timeout_ms = max(500, int(invite_timeout_ms))
+        self.poll_ms = max(50, int(poll_ms))
+        self.hero_add_delay_ms = max(0, int(hero_add_delay_ms))
+        self.post_clear_wait_ms = max(0, int(post_clear_wait_ms))
+        self.template_delay_ms = max(0, int(template_delay_ms))
+
+        self.plan = HeroTeamLoadPlan()
+        self.preflight = HeroTeamLoadPreflight(mixed_mode=True)
+        self.state = 'pending'
+        self.message = 'Pending.'
+        self.done = False
+        self.success = False
+        self.added_hero_ids: list[int] = []
+        self.applied_template_hero_ids: list[int] = []
+        self.cleared_skillbar_hero_ids: list[int] = []
+        self.applied_behavior_hero_ids: list[int] = []
+
+        self._phase = 'validate'
+        self._next_at = 0.0
+        self._invite_indices: list[int] = []
+        self._invite_cursor = 0
+        self._invite_binding_index = -1
+        self._invite_deadline = 0.0
+        self._party_query_binding_index = -1
+        self._party_query_id = ''
+        self._party_query_sent_at = 0.0
+        self._party_query_deadline = 0.0
+        self._invite_sent_at = 0.0
+        self._guard_result_received = False
+        self._joined_observed = False
+        self._runtime_alt_states: dict[int, dict[str, Any]] = {}
+        self._joined_binding_indices: set[int] = set()
+        self._clear_deadline = 0.0
+        self._clear_dispatched = False
+        self._hero_add_slots: list[ResolvedHeroSlot] = []
+        self._hero_add_index = 0
+        self._hero_add_target_id = 0
+        self._hero_add_deadline = 0.0
+        self._behavior_index = 0
+        self._template_index = 0
+        self._operation_log_key = id(self)
+        self._last_logged_phase = ''
+        self._operation_start_logged = False
+
+    def _wait(self, ms: int) -> None:
+        self._next_at = monotonic() + (max(0, int(ms)) / 1000.0)
+
+    def _ready(self) -> bool:
+        return monotonic() >= self._next_at
+
+    def _log_phase_transition(self) -> None:
+        phase = str(self._phase)
+        if phase == self._last_logged_phase:
+            return
+        self._last_logged_phase = phase
+        _mixed_log(
+            'MixedLoad',
+            f'team={self.team.name!r} phase={phase}',
+            key=('operation', self._operation_log_key, 'phase', phase),
+        )
+
+    def _log_operation_start(self, preflight: HeroTeamLoadPreflight) -> None:
+        if self._operation_start_logged:
+            return
+        capacity = preflight.capacity
+        current_size = int(capacity.current_party_size) if capacity is not None else 0
+        max_size = int(capacity.max_party_size) if capacity is not None else 0
+        hero_target_count = len(self._target_ids())
+        alt_count = sum(1 for binding in self.team.alt_members if binding.enabled)
+        _mixed_log(
+            'MixedLoad',
+            (
+                f'Starting team {self.team.name!r} alts={alt_count} '
+                f'hero_targets={hero_target_count} party={current_size}/{max_size}'
+            ),
+            key=('operation', self._operation_log_key, 'start'),
+        )
+        self._operation_start_logged = True
+
+    def _finish(self, success: bool, message: str) -> None:
+        self.done = True
+        self.success = bool(success)
+        self.state = 'done' if success else 'failed'
+        self.message = str(message)
+        _mixed_log(
+            'MixedLoad',
+            f'{"completed" if success else "failed"} team={self.team.name!r} reason={self.message}',
+            key=('operation', self._operation_log_key, 'finish'),
+            message_type='Success' if success else 'Error',
+        )
+
+    def _refresh_preflight(self) -> HeroTeamLoadPreflight:
+        self.preflight = build_mixed_team_preflight(self.config, self.team.team_id)
+        if self._joined_binding_indices:
+            status_by_index = {status.binding_index: status for status in self.preflight.alt_statuses}
+            for binding_index in sorted(self._joined_binding_indices):
+                status = status_by_index.get(binding_index)
+                if status is None or not status.in_current_party:
+                    _mixed_log(
+                        'Invite',
+                        (
+                            f'unexpected state change row={binding_index + 1}: '
+                            'configured alt left or changed state during the load'
+                        ),
+                        key=('operation', self._operation_log_key, 'alt-state', binding_index),
+                        message_type='Warning',
+                    )
+                    self.preflight.blocking_messages.append(
+                        f'Alt account row {binding_index + 1} left or changed state during the load.'
+                    )
+        self.plan = deepcopy(self.preflight.plan)
+        self._apply_runtime_alt_states()
+        return self.preflight
+
+    def _status_by_index(self, binding_index: int) -> AltAccountStatus | None:
+        return next(
+            (status for status in self.preflight.alt_statuses if status.binding_index == int(binding_index)),
+            None,
+        )
+
+    def _apply_runtime_alt_states(self) -> None:
+        for binding_index, runtime in self._runtime_alt_states.items():
+            status = self._status_by_index(binding_index)
+            if status is None:
+                continue
+
+            status.party_state_query_id = str(runtime.get('query_id', '') or '')
+            status.guard_result = str(runtime.get('guard_result', '') or '')
+            reply = runtime.get('reply')
+            if isinstance(reply, dict):
+                status.party_state_query_received_at = float(reply.get('received_at', 0.0) or 0.0)
+                status.party_id = _party_state_reply_int(reply, 'party_id', status.party_id)
+                status.remote_party_position = _party_state_reply_int(
+                    reply,
+                    'party_position',
+                )
+                status.is_party_leader = bool(reply.get('is_party_leader'))
+                status.known_party_member_count = max(
+                    0,
+                    _party_state_reply_int(reply, 'party_size', status.known_party_member_count),
+                )
+                map_signature = reply.get('map_signature')
+                if isinstance(map_signature, tuple) and len(map_signature) == 4:
+                    status.map_id, status.map_region, status.map_district, status.map_language = (
+                        int(value) for value in map_signature
+                    )
+
+            phase = str(runtime.get('phase', '') or '')
+            if phase == 'checking_party':
+                status.status = 'checking_party'
+                status.status_message = 'Checking authoritative local party state.'
+                status.party_state = 'checking'
+                status.party_evidence = 'PartyStateQuery request is pending'
+            elif phase == 'verified_solo':
+                status.status = 'ready'
+                status.status_message = 'Verified solo by authoritative PartyStateQuery.'
+                status.party_state = 'solo'
+                status.party_evidence = 'authoritative local Party API reply'
+            elif phase == 'invite_waiting':
+                status.status = 'invite_waiting'
+                status.status_message = 'Invite sent; waiting for observed party membership.'
+                status.party_state = 'invite_pending'
+                status.party_evidence = 'main invite and guarded reciprocal invite dispatched'
+            elif phase == 'party_changed_before_invite':
+                status.status = 'party_changed_before_invite'
+                status.status_message = 'Party changed before the reciprocal invite; no reciprocal invite was sent.'
+                status.party_state = 'changed'
+                status.party_evidence = 'alt-side immediate PartyState guard failed'
+            elif phase == 'incompatible_party':
+                status.status = 'incompatible_party'
+                status.status_message = str(
+                    runtime.get('message', '') or 'Alt is not solo; reciprocal invitation is blocked.'
+                )
+                status.party_state = 'other_party'
+                status.party_evidence = 'authoritative local PartyStateQuery reply'
+            elif phase == 'joined':
+                status.status = 'joined'
+                status.status_message = 'Joined the main account party.'
+                status.party_state = 'in_party'
+                status.party_evidence = 'live local Party.GetPlayers membership'
+                status.in_current_party = True
+            elif phase == 'timeout':
+                status.status = 'timeout'
+                status.status_message = 'Timed out waiting for query, guard result, or party membership.'
+                status.party_state = 'unknown'
+                status.party_evidence = 'no complete correlated handshake'
+            elif phase == 'failure':
+                status.status = 'failure'
+                status.status_message = str(runtime.get('message', '') or 'Party handshake failed.')
+                status.party_state = 'unknown'
+                status.party_evidence = 'correlated handshake failure'
+
+    def _set_runtime_alt_state(self, binding_index: int, phase: str, **values: Any) -> None:
+        runtime = self._runtime_alt_states.setdefault(int(binding_index), {})
+        runtime['phase'] = str(phase)
+        runtime.update(values)
+        self._apply_runtime_alt_states()
+
+    def _target_ids(self) -> set[int]:
+        return {int(slot.hero_id) for slot in self.plan.slots if int(slot.hero_id) > 0}
+
+    def _owner_safe_position(self, hero_id: int, party_api) -> int:
+        local_login = current_local_login_number()
+        position = local_hero_party_index_one_based(hero_id, party_api, local_login)
+        if position <= 0:
+            return 0
+        heroes = current_party_hero_members(party_api)
+        if position > len(heroes):
+            return 0
+        member = heroes[position - 1]
+        if hero_id_from_member(member) != int(hero_id) or hero_owner_category(member, local_login) != 'local':
+            return 0
+        return position
+
+    def _begin_party_query(self, status: AltAccountStatus) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+        from Py4GWCoreLib.Player import Player
+        from Py4GWCoreLib.Map import Map
+        from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
+
+        target_email = str(status.account_email or '').strip()
+        sender_email = str(Player.GetAccountEmail() or '').strip()
+        target_name = str(status.character_name or '').strip()
+        map_signature = _map_tuple_from_api(Map)
+        if not target_email or not sender_email or not target_name or map_signature is None:
+            self._set_runtime_alt_state(
+                status.binding_index,
+                'failure',
+                message='Party-state query identity or map could not be resolved.',
+            )
+            self._finish(False, 'Mixed load failed: party-state query identity or map could not be resolved.')
+            return
+
+        request_id = new_party_state_query_id()
+        reset_party_state_query(target_email, request_id)
+        sent_at = monotonic()
+        try:
+            message_index = GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                target_email,
+                SharedCommandType.PartyStateQuery,
+                (0, 0, 0, 0),
+                (
+                    PARTY_STATE_QUERY_REQUEST,
+                    request_id,
+                    target_name,
+                    _party_state_map_signature(map_signature),
+                ),
+            )
+        except Exception as exc:
+            self._set_runtime_alt_state(
+                status.binding_index,
+                'failure',
+                message=f'Party-state query could not be queued: {exc}',
+            )
+            self._finish(False, f'Mixed load failed while querying {target_name}: {exc}')
+            return
+
+        if int(message_index) < 0:
+            self._set_runtime_alt_state(
+                status.binding_index,
+                'failure',
+                message='Party-state query could not be queued.',
+            )
+            self._finish(False, f'Mixed load failed: party-state query could not be sent to {target_name}.')
+            return
+
+        self._party_query_binding_index = int(status.binding_index)
+        self._party_query_id = request_id
+        self._party_query_sent_at = sent_at
+        self._party_query_deadline = sent_at + (self.invite_timeout_ms / 1000.0)
+        self._set_runtime_alt_state(
+            status.binding_index,
+            'checking_party',
+            query_id=request_id,
+        )
+        _mixed_log(
+            'PartyStateQuery',
+            (
+                f'sent row={status.binding_index + 1} account={_masked_account_identity(target_email)} '
+                f'char={target_name!r} request={request_id!r} message_index={int(message_index)}'
+            ),
+            key=('operation', self._operation_log_key, 'query-sent', status.binding_index),
+        )
+        self._phase = 'wait_party_query'
+        self.message = f'Checking party state for {target_name}.'
+        self._wait(self.poll_ms)
+
+    def _tick_wait_party_query(self) -> None:
+        from Py4GWCoreLib.Map import Map
+        from Py4GWCoreLib.Player import Player
+
+        status = self._status_by_index(self._party_query_binding_index)
+        if status is None:
+            self._finish(False, 'Mixed load failed: queried alt account row disappeared.')
+            return
+
+        reply = get_party_state_query(status.account_email, self._party_query_id)
+        if reply is None:
+            if monotonic() >= self._party_query_deadline:
+                self._set_runtime_alt_state(status.binding_index, 'timeout', query_id=self._party_query_id)
+                _mixed_log(
+                    'PartyStateQuery',
+                    (
+                        f'timeout row={status.binding_index + 1} '
+                        f'request={self._party_query_id!r} no authoritative reply'
+                    ),
+                    key=('operation', self._operation_log_key, 'query-timeout', status.binding_index),
+                    message_type='Warning',
+                )
+                self._finish(False, 'Mixed load failed: authoritative alt party-state query timed out.')
+                return
+            self.message = f'Checking party state for {status.character_name or status.account_email}.'
+            self._wait(self.poll_ms)
+            return
+
+        expected_map = _map_tuple_from_api(Map)
+        receiver_email = str(Player.GetAccountEmail() or '').strip()
+        result, reason = validate_party_state_reply(
+            reply,
+            request_id=self._party_query_id,
+            expected_sender_email=status.account_email,
+            expected_receiver_email=receiver_email,
+            expected_character_name=status.character_name,
+            expected_map=expected_map,
+            sent_at=self._party_query_sent_at,
+        )
+        _mixed_log(
+            'PartyStateQuery',
+            (
+                f'received row={status.binding_index + 1} account={_masked_account_identity(status.account_email)} '
+                f'request={self._party_query_id!r} result={result} reason={reason} '
+                f'party={_party_state_reply_int(reply, "party_size", -1)} '
+                f'players={_party_state_reply_int(reply, "player_count", -1)} '
+                f'heroes={_party_state_reply_int(reply, "hero_count", -1)} '
+                f'henchmen={_party_state_reply_int(reply, "henchman_count", -1)} '
+                f'others={_party_state_reply_int(reply, "other_count", -1)}'
+            ),
+            key=('operation', self._operation_log_key, 'query-reply', status.binding_index),
+            message_type='Warning' if result != 'ready' else 'Info',
+        )
+        if result == 'ready':
+            self._set_runtime_alt_state(
+                status.binding_index,
+                'verified_solo',
+                query_id=self._party_query_id,
+                reply=reply,
+            )
+            status = self._status_by_index(status.binding_index) or status
+            self._dispatch_invite(status)
+            return
+
+        phase = 'incompatible_party' if result == 'incompatible_party' else 'failure'
+        self._set_runtime_alt_state(
+            status.binding_index,
+            phase,
+            query_id=self._party_query_id,
+            reply=reply,
+            message=reason,
+        )
+        self._finish(
+            False,
+            f'Mixed load blocked for {status.character_name or status.account_email}: {reason}',
+        )
+
+    def _dispatch_invite(self, status: AltAccountStatus) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+        from Py4GWCoreLib.Player import Player
+        from Py4GWCoreLib.Map import Map
+        from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
+
+        target_name = str(status.character_name or '').strip()
+        target_email = str(status.account_email or '').strip()
+        sender_email = str(Player.GetAccountEmail() or '').strip()
+        query_id = str(self._party_query_id or '').strip()
+        map_signature = _map_tuple_from_api(Map)
+        _mixed_log(
+            'Invite',
+            (
+                f'preparing row={status.binding_index + 1} char={target_name or "<none>"!r} '
+                f'classification={status.status} query={query_id!r}'
+            ),
+            key=('operation', self._operation_log_key, 'invite-prepare', status.binding_index),
+        )
+        if not target_name or not target_email or not sender_email or not query_id or map_signature is None:
+            self._finish(False, 'Mixed load failed: correlated invite identity or map could not be resolved.')
+            return
+        try:
+            GLOBAL_CACHE.Party.Players.InvitePlayer(target_name)
+            message_index = GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                target_email,
+                SharedCommandType.InviteToParty,
+                (0, 0, 0, 0),
+                (
+                    PARTY_INVITE_GUARD,
+                    query_id,
+                    target_name,
+                    _party_state_map_signature(map_signature),
+                ),
+            )
+        except Exception as exc:
+            self._finish(False, f'Mixed load failed while inviting {target_name}: {exc}')
+            return
+        if int(message_index) < 0:
+            _mixed_log(
+                'Invite',
+                (
+                    f'main invite was sent to {target_name!r}, but guarded command could not be queued '
+                    f'query={query_id!r}'
+                ),
+                key=('operation', self._operation_log_key, 'guard-command-failed', status.binding_index),
+                message_type='Warning',
+            )
+            self._finish(False, f'Mixed load failed: guarded invite command could not reach {target_name}.')
+            return
+        self._invite_binding_index = int(status.binding_index)
+        self._invite_sent_at = monotonic()
+        self._invite_deadline = monotonic() + (self.invite_timeout_ms / 1000.0)
+        self._guard_result_received = False
+        self._joined_observed = False
+        self._set_runtime_alt_state(
+            status.binding_index,
+            'invite_waiting',
+            query_id=query_id,
+        )
+        self._phase = 'wait_invite'
+        _mixed_log(
+            'Invite',
+            (
+                f'requested row={status.binding_index + 1} char={target_name!r} '
+                f'shared_message_index={int(message_index)} query={query_id!r}'
+            ),
+            key=('operation', self._operation_log_key, 'invite-requested', status.binding_index),
+        )
+        _mixed_log(
+            'Invite',
+            f'waiting row={status.binding_index + 1} for guard result and observed local-party join',
+            key=('operation', self._operation_log_key, 'invite-waiting', status.binding_index),
+        )
+        self.message = f'Invite sent to {target_name}; waiting for guarded reciprocal invite.'
+        self._wait(self.poll_ms)
+
+    def _read_guard_result(self, status: AltAccountStatus) -> tuple[str, str, dict[str, Any]] | None:
+        reply = get_party_state_query(status.account_email, self._party_query_id)
+        if reply is None or str(reply.get('mode', '') or '') != PARTY_STATE_GUARD_RESULT:
+            return None
+        from Py4GWCoreLib.Player import Player
+        from Py4GWCoreLib.Map import Map
+
+        expected_receiver = str(Player.GetAccountEmail() or '').strip().casefold()
+        if str(reply.get('request_id', '') or '').strip() != self._party_query_id:
+            return 'invalid', 'Guard result correlation ID did not match the request.', reply
+        if str(reply.get('sender_email', '') or '').strip().casefold() != status.account_email.casefold():
+            return 'invalid', 'Guard result came from an unexpected account.', reply
+        if str(reply.get('receiver_email', '') or '').strip().casefold() != expected_receiver:
+            return 'invalid', 'Guard result was addressed to an unexpected account.', reply
+        if _party_state_reply_int(reply, 'message_timestamp', 0) <= 0:
+            return 'invalid', 'Guard result has no valid message timestamp.', reply
+        try:
+            received_at = float(reply.get('received_at', 0.0))
+        except (TypeError, ValueError):
+            return 'invalid', 'Guard result has no valid receipt timestamp.', reply
+        if received_at < self._invite_sent_at or received_at > monotonic() + 0.5:
+            return 'invalid', 'Guard result is stale or has an invalid timestamp.', reply
+
+        result = str(reply.get('result', '') or '').strip()
+        if result.startswith('guard_failed:'):
+            return 'failed', result, reply
+        if result != 'reciprocal_invite_sent':
+            return 'invalid', 'Guard result used an unexpected outcome.', reply
+
+        expected_map = _map_tuple_from_api(Map)
+        map_signature = reply.get('map_signature')
+        if expected_map is None or not isinstance(map_signature, tuple) or tuple(map_signature) != tuple(expected_map):
+            return 'invalid', 'Guard result is not from the current map and district.', reply
+        party_size = _party_state_reply_int(reply, 'party_size', -1)
+        player_count = _party_state_reply_int(reply, 'player_count', -1)
+        hero_count = _party_state_reply_int(reply, 'hero_count', -1)
+        henchman_count = _party_state_reply_int(reply, 'henchman_count', -1)
+        other_count = _party_state_reply_int(reply, 'other_count', -1)
+        if (
+            reply.get('is_loaded') is not True
+            or reply.get('is_party_leader') is not True
+            or _party_state_reply_int(reply, 'party_id', -1) <= 0
+            or _party_state_reply_int(reply, 'party_position', -1) != 0
+            or party_size != 1
+            or player_count != 1
+            or hero_count != 0
+            or henchman_count != 0
+            or other_count != 0
+            or party_size != player_count + hero_count + henchman_count + other_count
+        ):
+            return 'invalid', 'Alt reported a reciprocal invite without a verified solo guard.', reply
+        return 'sent', result, reply
+
+    def _prepare_hero_mutation(self) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        self.plan = deepcopy(preflight.plan)
+        local_members = current_local_hero_members(GLOBAL_CACHE.Party, current_local_login_number())
+        local_ids = current_local_hero_ids(GLOBAL_CACHE.Party, current_local_login_number())
+        unmanaged_hero_count = int(
+            (preflight.capacity.remote_hero_count if preflight.capacity is not None else 0)
+            + (preflight.capacity.unknown_hero_count if preflight.capacity is not None else 0)
+        )
+        target_ids = self._target_ids()
+        if not self.clear_existing and not local_ids.issubset(target_ids):
+            self._finish(False, 'Mixed load blocked: existing local heroes would require removal.')
+            return
+
+        self._hero_add_slots = [slot for slot in self.plan.slots if int(slot.hero_id) not in local_ids]
+        self._hero_add_index = 0
+        self._behavior_index = 0
+        self._template_index = 0
+
+        if unmanaged_hero_count <= 0 and self.clear_existing and local_members:
+            # This call is permitted only after the snapshot proved that every
+            # current hero is locally owned. Mixed mode never uses it around a
+            # remote or unknown-owner hero.
+            GLOBAL_CACHE.Party.Heroes.KickAllHeroes()
+            self._clear_dispatched = True
+            self._clear_deadline = monotonic() + (max(1000, self.post_clear_wait_ms * 4) / 1000.0)
+            self.message = 'Clearing locally owned heroes; unmanaged occupants are retained.'
+            self._phase = 'wait_local_clear'
+            self._wait(self.post_clear_wait_ms)
+            return
+
+        if not self._hero_add_slots:
+            self._phase = 'behaviors'
+            self.message = 'Applying local hero behavior.'
+        else:
+            self._phase = 'add_local_heroes'
+            self.message = 'Adding locally owned heroes.'
+
+    def _tick_invite(self) -> None:
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        while self._invite_cursor < len(self._invite_indices):
+            binding_index = self._invite_indices[self._invite_cursor]
+            status = self._status_by_index(binding_index)
+            if status is None:
+                self._finish(False, f'Mixed load failed: alt account row {binding_index + 1} disappeared.')
+                return
+            if status.in_current_party:
+                _mixed_log(
+                    'Invite',
+                    f'row={binding_index + 1} already-in-party; no invite required',
+                    key=('operation', self._operation_log_key, 'invite-present', binding_index),
+                )
+                self._joined_binding_indices.add(binding_index)
+                self._invite_cursor += 1
+                continue
+            if status.status not in {'ready', 'query_required'}:
+                _mixed_log(
+                    'Invite',
+                    (
+                        f'row={binding_index + 1} invite blocked by state={status.status}: '
+                        f'{status.status_message or "no reason"}'
+                    ),
+                    key=('operation', self._operation_log_key, 'invite-blocked', binding_index),
+                    message_type='Warning',
+                )
+                self._finish(False, f'Mixed load failed: {status.status_message or status.status}.')
+                return
+            self._begin_party_query(status)
+            return
+        self._phase = 'prepare_heroes'
+        self.message = 'All configured alts are present; rechecking local hero ownership.'
+
+    def _tick_wait_invite(self) -> None:
+        status_before_refresh = self._status_by_index(self._invite_binding_index)
+        guard_state = (
+            self._read_guard_result(status_before_refresh)
+            if status_before_refresh is not None and self._party_query_id
+            else None
+        )
+        preflight = self._refresh_preflight()
+        status = self._status_by_index(self._invite_binding_index)
+        if guard_state is not None:
+            guard_kind, guard_reason, guard_reply = guard_state
+            if guard_kind == 'failed':
+                self._guard_result_received = True
+                guard_phase = (
+                    'party_changed_before_invite' if guard_reason == 'guard_failed: party_changed' else 'failure'
+                )
+                self._set_runtime_alt_state(
+                    self._invite_binding_index,
+                    guard_phase,
+                    query_id=self._party_query_id,
+                    reply=guard_reply,
+                    guard_result=guard_reason,
+                )
+                _mixed_log(
+                    'InviteGuard',
+                    (
+                        f'row={self._invite_binding_index + 1} request={self._party_query_id!r} '
+                        f'result={guard_reason}'
+                    ),
+                    key=('operation', self._operation_log_key, 'guard-failed', self._invite_binding_index),
+                    message_type='Warning',
+                )
+                self._finish(
+                    False,
+                    f'Mixed load blocked: {status.character_name if status is not None else "alt"} ' f'{guard_reason}.',
+                )
+                return
+            if guard_kind == 'invalid':
+                self._set_runtime_alt_state(
+                    self._invite_binding_index,
+                    'failure',
+                    query_id=self._party_query_id,
+                    reply=guard_reply,
+                    message=guard_reason,
+                )
+                _mixed_log(
+                    'InviteGuard',
+                    f'row={self._invite_binding_index + 1} invalid result: {guard_reason}',
+                    key=('operation', self._operation_log_key, 'guard-invalid', self._invite_binding_index),
+                    message_type='Warning',
+                )
+                self._finish(False, f'Mixed load failed: {guard_reason}')
+                return
+            if guard_kind == 'sent':
+                self._guard_result_received = True
+                _mixed_log(
+                    'InviteGuard',
+                    (
+                        f'row={self._invite_binding_index + 1} request={self._party_query_id!r} '
+                        'reciprocal invite sent after immediate solo recheck'
+                    ),
+                    key=('operation', self._operation_log_key, 'guard-sent', self._invite_binding_index),
+                )
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        if status is not None and status.in_current_party:
+            if self._guard_result_received:
+                _mixed_log(
+                    'Invite',
+                    (
+                        f'observed row={self._invite_binding_index + 1} char={status.character_name!r} '
+                        f'in local party after guarded reciprocal invite; recalculating capacity'
+                    ),
+                    key=('operation', self._operation_log_key, 'invite-observed', self._invite_binding_index),
+                )
+                self._set_runtime_alt_state(
+                    self._invite_binding_index,
+                    'joined',
+                    query_id=self._party_query_id,
+                    guard_result='reciprocal_invite_sent',
+                )
+                self._joined_binding_indices.add(self._invite_binding_index)
+                self._invite_cursor += 1
+                self._invite_binding_index = -1
+                self._party_query_binding_index = -1
+                self._party_query_id = ''
+                self._phase = 'invite'
+                self.message = 'Alt joined; recalculating live party capacity.'
+                self._wait(0)
+                return
+            self._joined_observed = True
+            self.message = 'Alt joined; confirming the guarded reciprocal invite result.'
+        if status is None or status.status not in {'ready', 'invite_waiting', 'joined', 'in_party'}:
+            _mixed_log(
+                'Invite',
+                (
+                    f'row={self._invite_binding_index + 1} unexpected invite state '
+                    f'{status.status if status is not None else "missing"}: '
+                    f'{status.status_message if status is not None else "identity disappeared"}'
+                ),
+                key=('operation', self._operation_log_key, 'invite-state-failed', self._invite_binding_index),
+                message_type='Warning',
+            )
+            self._finish(
+                False,
+                f'Mixed load failed: {status.status_message if status is not None else "invite identity disappeared"}.',
+            )
+            return
+        if monotonic() >= self._invite_deadline:
+            _mixed_log(
+                'Invite',
+                (
+                    f'timeout row={self._invite_binding_index + 1}: '
+                    f'guard_received={int(self._guard_result_received)} '
+                    f'join_observed={int(self._joined_observed)}'
+                ),
+                key=('operation', self._operation_log_key, 'invite-timeout', self._invite_binding_index),
+                message_type='Warning',
+            )
+            self._set_runtime_alt_state(self._invite_binding_index, 'timeout', query_id=self._party_query_id)
+            self._finish(False, 'Mixed load failed: guarded invite/join result could not be verified.')
+            return
+        if not self._guard_result_received:
+            self.message = f'Waiting for {status.character_name or status.account_email} guard result.'
+        elif not self._joined_observed:
+            self.message = f'Waiting for {status.character_name or status.account_email} to join.'
+        self._wait(self.poll_ms)
+
+    def _tick_wait_local_clear(self) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        if current_local_hero_members(GLOBAL_CACHE.Party, current_local_login_number()):
+            if monotonic() >= self._clear_deadline:
+                self._finish(False, 'Mixed load failed: locally owned heroes did not leave the party.')
+            else:
+                self.message = 'Waiting for local heroes to leave.'
+                self._wait(self.poll_ms)
+            return
+        self._hero_add_slots = list(self.plan.slots)
+        self._hero_add_index = 0
+        self._phase = 'add_local_heroes' if self._hero_add_slots else 'behaviors'
+        self.message = 'Adding locally owned heroes.' if self._hero_add_slots else 'Applying local hero behavior.'
+        self._wait(0)
+
+    def _tick_add_local_heroes(self) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        local_ids = current_local_hero_ids(GLOBAL_CACHE.Party, current_local_login_number())
+        while self._hero_add_index < len(self._hero_add_slots):
+            slot = self._hero_add_slots[self._hero_add_index]
+            hero_id = int(slot.hero_id)
+            if hero_id in local_ids:
+                self._hero_add_index += 1
+                continue
+            GLOBAL_CACHE.Party.Heroes.AddHero(hero_id)
+            self.added_hero_ids.append(hero_id)
+            self._hero_add_target_id = hero_id
+            self._hero_add_deadline = monotonic() + 4.0
+            self.message = f'Adding {slot.hero_name or hero_default_name(hero_id)}.'
+            self._phase = 'wait_local_hero'
+            self._wait(self.hero_add_delay_ms)
+            return
+        self._phase = 'behaviors'
+        self.message = 'Applying local hero behavior.'
+
+    def _tick_wait_local_hero(self) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        if self._hero_add_target_id in current_local_hero_ids(GLOBAL_CACHE.Party, current_local_login_number()):
+            self._hero_add_index += 1
+            self._hero_add_target_id = 0
+            self._phase = 'add_local_heroes'
+            self._wait(0)
+            return
+        if monotonic() >= self._hero_add_deadline:
+            self._finish(False, 'Mixed load failed: a requested local hero could not be observed after adding.')
+            return
+        self.message = 'Waiting for the requested local hero to appear.'
+        self._wait(self.poll_ms)
+
+    def _tick_behaviors(self) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        while self._behavior_index < len(self.plan.slots):
+            slot = self.plan.slots[self._behavior_index]
+            self._behavior_index += 1
+            if slot.behavior == HERO_BEHAVIOR_DONT_CHANGE:
+                continue
+            position = self._owner_safe_position(int(slot.hero_id), GLOBAL_CACHE.Party)
+            if position <= 0:
+                self._finish(False, f'Mixed load failed: local owner could not be verified for {slot.hero_name}.')
+                return
+            hero_agent_id = GLOBAL_CACHE.Party.Heroes.GetHeroAgentIDByPartyPosition(position)
+            if int(hero_agent_id or 0) <= 0:
+                self._finish(False, f'Mixed load failed: local hero agent could not be resolved for {slot.hero_name}.')
+                return
+            GLOBAL_CACHE.Party.Heroes.SetHeroBehavior(int(hero_agent_id), int(slot.behavior))
+            self.applied_behavior_hero_ids.append(int(slot.hero_id))
+            self.message = f'Applying behavior to {slot.hero_name or hero_default_name(slot.hero_id)}.'
+            self._wait(100)
+            return
+        self._phase = 'templates'
+        self.message = 'Applying local hero templates.'
+
+    def _tick_templates(self) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        while self._template_index < len(self.plan.slots):
+            slot = self.plan.slots[self._template_index]
+            self._template_index += 1
+            if not slot.template_code and not slot.clear_skillbar:
+                continue
+            position = self._owner_safe_position(int(slot.hero_id), GLOBAL_CACHE.Party)
+            if position <= 0:
+                self._finish(False, f'Mixed load failed: local owner could not be verified for {slot.hero_name}.')
+                return
+            template_code = slot.template_code
+            if slot.clear_skillbar:
+                template_code = _empty_skillbar_template_for_hero_position(position, party_api=GLOBAL_CACHE.Party)
+                if not template_code:
+                    self._finish(False, f'Mixed load failed: empty skill bar could not be built for {slot.hero_name}.')
+                    return
+            try:
+                GLOBAL_CACHE.SkillBar.LoadHeroSkillTemplate(position, template_code)
+            except Exception as exc:
+                self._finish(False, f'Mixed load failed while applying {slot.hero_name}: {exc}')
+                return
+            if slot.clear_skillbar:
+                self.cleared_skillbar_hero_ids.append(int(slot.hero_id))
+                self.message = f'Clearing skill bar for {slot.hero_name or hero_default_name(slot.hero_id)}.'
+            else:
+                self.applied_template_hero_ids.append(int(slot.hero_id))
+                self.message = f'Applying template to {slot.hero_name or hero_default_name(slot.hero_id)}.'
+            self._wait(self.template_delay_ms)
+            return
+        self._phase = 'final'
+        self.message = 'Rechecking final mixed party composition.'
+        self._wait(0)
+
+    def _tick_final(self) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load failed final verification: {" ".join(preflight.blocking_messages)}')
+            return
+        target_ids = self._target_ids()
+        local_members = current_local_hero_members(GLOBAL_CACHE.Party, current_local_login_number())
+        local_ids = current_local_hero_ids(GLOBAL_CACHE.Party, current_local_login_number())
+        enabled_statuses = [status for status in preflight.alt_statuses if status.status != 'disabled']
+        if any(not status.in_current_party for status in enabled_statuses):
+            self._finish(False, 'Mixed load failed final verification: a configured alt is no longer in the party.')
+            return
+        if local_ids != target_ids or len(local_members) != len(target_ids):
+            self._finish(False, 'Mixed load failed final verification: local hero composition does not match the team.')
+            return
+        capacity = preflight.capacity
+        party_summary = (
+            f'party {capacity.current_party_size}/{capacity.max_party_size}'
+            if capacity is not None
+            else 'party state verified'
+        )
+        self._finish(
+            True,
+            f'Mixed team loaded: {len(enabled_statuses)} alt(s), {len(target_ids)} local hero(es), {party_summary}.',
+        )
+
+    def tick(self) -> bool:
+        if self.done:
+            return True
+        if not self._ready():
+            return False
+        self._log_phase_transition()
+        try:
+            if self._phase == 'validate':
+                preflight = self._refresh_preflight()
+                self._log_operation_start(preflight)
+                if not preflight.can_load:
+                    self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+                    return True
+                self._joined_binding_indices = {
+                    status.binding_index for status in preflight.alt_statuses if status.status == 'in_party'
+                }
+                self._invite_indices = [
+                    status.binding_index
+                    for status in preflight.alt_statuses
+                    if status.status in {'ready', 'query_required'}
+                ]
+                self._invite_cursor = 0
+                self._phase = 'invite' if self._invite_indices else 'prepare_heroes'
+                self.message = (
+                    'Preparing configured alt accounts.' if self._invite_indices else 'Preparing local heroes.'
+                )
+
+            if self._phase == 'invite':
+                self._tick_invite()
+                return self.done
+            if self._phase == 'wait_party_query':
+                self._tick_wait_party_query()
+                return self.done
+            if self._phase == 'wait_invite':
+                self._tick_wait_invite()
+                return self.done
+            if self._phase == 'prepare_heroes':
+                self._prepare_hero_mutation()
+                return self.done
+            if self._phase == 'wait_local_clear':
+                self._tick_wait_local_clear()
+                return self.done
+            if self._phase == 'add_local_heroes':
+                self._tick_add_local_heroes()
+                return self.done
+            if self._phase == 'wait_local_hero':
+                self._tick_wait_local_hero()
+                return self.done
+            if self._phase == 'behaviors':
+                self._tick_behaviors()
+                return self.done
+            if self._phase == 'templates':
+                self._tick_templates()
+                return self.done
+            if self._phase == 'final':
+                self._tick_final()
+                return self.done
+            self._finish(False, f'Mixed load failed: unknown operation phase {self._phase}.')
+        except Exception as exc:
+            self._finish(False, f'Mixed team load failed: {exc}')
+        return self.done
+
+
 def create_apply_operation(
     config: HeroTeamConfig,
     team_id: str | None = None,
     *,
     leave_party_first: bool = False,
     clear_existing: bool = True,
-) -> HeroTeamApplyOperation:
+) -> HeroTeamApplyOperation | MixedHeroTeamApplyOperation:
     team = get_team(config, team_id)
     if team is None:
         raise ValueError('No team selected.')
+    if team_has_enabled_alt_bindings(team):
+        return MixedHeroTeamApplyOperation(
+            config,
+            team_id,
+            clear_existing=clear_existing,
+        )
     return HeroTeamApplyOperation(
         team,
         config.templates,

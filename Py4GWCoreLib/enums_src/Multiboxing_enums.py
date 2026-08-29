@@ -85,6 +85,14 @@ class SharedCommandType(IntEnum):
     # Generic live loot-filter extension for multibox bots.
     # IMPORTANT: appended at the end so existing SharedCommandType values do not shift.
     AddModelToLootWhitelist = auto()
+    # Existing system-settings synchronization commands.  Keep these before any
+    # newer command so their established wire values remain compatible.
+    # IMPORTANT: append-only wire protocol; do not reorder existing members.
+    AccountSettingsSync = auto()
+    AccountSettingsSyncResult = auto()
+    # Hero Team Manager authoritative remote party-state request/reply.
+    # IMPORTANT: appended at the end so existing SharedCommandType values do not shift.
+    PartyStateQuery = auto()
     #endregion
 
 class ReloadType(IntEnum):
