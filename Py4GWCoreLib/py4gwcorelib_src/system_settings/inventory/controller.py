@@ -7,7 +7,7 @@ from typing import Optional
 
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color
 
-from ..item_runtime import StableMapGate
+from ..item_runtime import StableMapGate, get_item_operation_lease
 from . import store
 from .model import BagSettings, ColorizeSettings, InventoryFeatureSettings, BAGS
 from Py4GWCoreLib.enums_src.Item_enums import INVENTORY_BAGS, MAX_BAG_SIZES, STORAGE_BAGS, Bags
@@ -19,6 +19,8 @@ _COLORIZE_CALLBACK = "SystemItemsColorize"
 _ACTION_CALLBACK = "SystemItemsActions"
 _IDENTIFY_TIMEOUT_SECONDS = 2.0
 _ITEM_MAP_GATE = StableMapGate()
+_IDENTIFY_OPERATION_OWNER = "system_settings_inventory_identification"
+_SALVAGE_OPERATION_OWNER = "system_settings_inventory_salvage"
 
 
 @dataclass
@@ -175,6 +177,7 @@ class InventorySettingsController:
             return False
         run = self._identify_run
         self._identify_run = None
+        get_item_operation_lease().release(_IDENTIFY_OPERATION_OWNER)
         self._action_status = "Identify batch cancelled after %d identified and %d skipped." % (
             run.identified_count,
             run.skipped_count,
@@ -188,6 +191,7 @@ class InventorySettingsController:
             return False
         run = self._salvage_run
         self._salvage_run = None
+        get_item_operation_lease().release(_SALVAGE_OPERATION_OWNER)
         self._action_status = "Salvage batch stopped after %d completed and %d skipped item(s)." % (
             run.salvaged_count,
             run.skipped_count,
@@ -531,7 +535,11 @@ class InventorySettingsController:
         if run is None:
             return
         now = time.monotonic()
+        lease = get_item_operation_lease()
         if run.active_item_id > 0:
+            if not lease.acquire(_IDENTIFY_OPERATION_OWNER):
+                self._action_status = "Identify batch is waiting for another item operation to finish."
+                return
             try:
                 from Py4GWCoreLib.Item import Item
 
@@ -539,17 +547,21 @@ class InventorySettingsController:
                     run.identified_count += 1
                     run.active_item_id = 0
                     run.active_started_at = 0.0
+                    lease.release(_IDENTIFY_OPERATION_OWNER)
                 elif now - run.active_started_at >= _IDENTIFY_TIMEOUT_SECONDS:
                     run.skipped_count += 1
                     run.active_item_id = 0
                     run.active_started_at = 0.0
+                    lease.release(_IDENTIFY_OPERATION_OWNER)
             except Exception:
                 run.skipped_count += 1
                 run.active_item_id = 0
                 run.active_started_at = 0.0
+                lease.release(_IDENTIFY_OPERATION_OWNER)
             return
 
         if not run.pending_item_ids:
+            lease.release(_IDENTIFY_OPERATION_OWNER)
             self._action_status = "Identify batch completed: %d identified, %d skipped." % (
                 run.identified_count,
                 run.skipped_count,
@@ -557,7 +569,11 @@ class InventorySettingsController:
             self._identify_run = None
             return
 
+        if not lease.acquire(_IDENTIFY_OPERATION_OWNER):
+            self._action_status = "Identify batch is waiting for another item operation to finish."
+            return
         item_id = run.pending_item_ids.pop(0)
+        keep_lease = False
         try:
             from Py4GWCoreLib.Item import Item
 
@@ -577,17 +593,25 @@ class InventorySettingsController:
             PyInventory.PyInventory().IdentifyItem(kit_id, item_id)
             run.active_item_id = item_id
             run.active_started_at = now
+            keep_lease = True
             self._action_status = "Identifying item %d (%d remaining)." % (item_id, len(run.pending_item_ids))
         except Exception as exc:
             run.skipped_count += 1
             self._action_status = "Identify request failed for item %d: %s" % (item_id, exc)
             _log(self._action_status, error=True)
+        finally:
+            if not keep_lease:
+                lease.release(_IDENTIFY_OPERATION_OWNER)
 
     def _process_salvage_run(self) -> None:
         run = self._salvage_run
         if run is None:
             return
+        lease = get_item_operation_lease()
         if run.active_item_id > 0:
+            if not lease.acquire(_SALVAGE_OPERATION_OWNER):
+                self._action_status = "Salvage batch is waiting for another item operation to finish."
+                return
             try:
                 from Py4GWCoreLib.Item import Item
                 from Py4GWCoreLib.Inventory import Inventory
@@ -597,15 +621,18 @@ class InventorySettingsController:
                     run.salvaged_count += 1
                     run.active_item_id = 0
                     run.active_quantity = 0
+                    lease.release(_SALVAGE_OPERATION_OWNER)
                 elif Inventory.IsSalvageChoiceMaterialConfirmVisible():
                     self._action_status = "Materials-salvage confirmation is waiting for explicit approval."
             except Exception:
                 run.salvaged_count += 1
                 run.active_item_id = 0
                 run.active_quantity = 0
+                lease.release(_SALVAGE_OPERATION_OWNER)
             return
 
         if not run.pending_item_ids:
+            lease.release(_SALVAGE_OPERATION_OWNER)
             self._action_status = "Salvage batch completed: %d completed, %d skipped." % (
                 run.salvaged_count,
                 run.skipped_count,
@@ -613,7 +640,11 @@ class InventorySettingsController:
             self._salvage_run = None
             return
 
+        if not lease.acquire(_SALVAGE_OPERATION_OWNER):
+            self._action_status = "Salvage batch is waiting for another item operation to finish."
+            return
         item_id = run.pending_item_ids.pop(0)
+        keep_lease = False
         try:
             from Py4GWCoreLib.Item import Item
 
@@ -631,6 +662,7 @@ class InventorySettingsController:
             if not enqueue_salvage_request(kit_id, item_id):
                 raise RuntimeError("the salvage request could not be queued on the GW game thread")
             run.active_item_id = item_id
+            keep_lease = True
             self._action_status = "Native salvage requested for item %d (%d remaining)." % (
                 item_id,
                 len(run.pending_item_ids),
@@ -639,6 +671,9 @@ class InventorySettingsController:
             run.skipped_count += 1
             self._action_status = "Salvage request failed for item %d: %s" % (item_id, exc)
             _log(self._action_status, error=True)
+        finally:
+            if not keep_lease:
+                lease.release(_SALVAGE_OPERATION_OWNER)
 
     def _first_kit(self, kind: str) -> int:
         if not _map_is_ready():
@@ -724,6 +759,9 @@ class InventorySettingsController:
             return
         self._identify_run = None
         self._salvage_run = None
+        lease = get_item_operation_lease()
+        lease.release(_IDENTIFY_OPERATION_OWNER)
+        lease.release(_SALVAGE_OPERATION_OWNER)
         self._action_status = "Item operation cancelled because the map is no longer stably valid."
 
     def _draw_context_menu(self) -> None:

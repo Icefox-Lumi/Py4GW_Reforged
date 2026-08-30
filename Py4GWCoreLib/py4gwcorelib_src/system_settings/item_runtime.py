@@ -13,6 +13,41 @@ MapContext = tuple[int, bool, bool]
 ArrivalDelay = float | Callable[[MapContext], float]
 
 
+class ItemOperationLease:
+    """Single-owner lease for native identification and salvage work.
+
+    System Settings callbacks execute on one update thread, so this needs no
+    locking primitive.  Its job is ownership: no second item operation may
+    inspect, tick, or dispatch native work while another owns the lease.
+    """
+
+    def __init__(self) -> None:
+        self._owner = ""
+
+    def owner(self) -> str:
+        return self._owner
+
+    def is_available(self, owner: str) -> bool:
+        return not self._owner or self._owner == owner
+
+    def acquire(self, owner: str) -> bool:
+        if not owner or not self.is_available(owner):
+            return False
+        self._owner = owner
+        return True
+
+    def release(self, owner: str) -> None:
+        if self._owner == owner:
+            self._owner = ""
+
+
+_ITEM_OPERATION_LEASE = ItemOperationLease()
+
+
+def get_item_operation_lease() -> ItemOperationLease:
+    return _ITEM_OPERATION_LEASE
+
+
 class StableMapGate:
     """Admit item work only after the normal map boundary has settled."""
 

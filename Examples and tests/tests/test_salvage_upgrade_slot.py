@@ -87,6 +87,20 @@ class FakeItem:
     Mods = FakeMods
 
 
+class FakeLease:
+    def is_available(self, _owner: str) -> bool:
+        return True
+
+    def acquire(self, _owner: str) -> bool:
+        return True
+
+    def release(self, _owner: str) -> None:
+        return None
+
+    def owner(self) -> str:
+        return ""
+
+
 setattr(sys.modules["Py4GWCoreLib"], "ThrottledTimer", object)
 module("Py4GWCoreLib.Item", Item=FakeItem)
 module(
@@ -100,7 +114,11 @@ module(
     select_salvage_kit=lambda *_args, **_kwargs: None,
 )
 module("Py4GWCoreLib.enums_src.Item_enums", INVENTORY_BAGS=(), SalvageMode=SalvageMode)
-module("Py4GWCoreLib.py4gwcorelib_src.system_settings.item_runtime", StableMapGate=object)
+module(
+    "Py4GWCoreLib.py4gwcorelib_src.system_settings.item_runtime",
+    StableMapGate=object,
+    get_item_operation_lease=lambda: FakeLease(),
+)
 module("Py4GWCoreLib.py4gwcorelib_src.system_settings.inventory.store", load_bags=lambda: None)
 module("Py4GWCoreLib.py4gwcorelib_src.system_settings.inventory.model", BAGS=())
 module("Py4GWCoreLib.py4gwcorelib_src.system_settings.inventory.monitor", InventoryMonitor=object)

@@ -18,7 +18,7 @@ from Py4GWCoreLib.enums_src.Item_enums import INVENTORY_BAGS
 from ..inventory import store as inventory_store
 from ..inventory.model import BAGS
 from ..inventory.monitor import InventoryMonitor
-from ..item_runtime import StableMapGate
+from ..item_runtime import StableMapGate, get_item_operation_lease
 from ..loot_filter_factory.matcher import matching_filters
 from ..loot_filter_factory.model import Filter, UpgradeCriterion, canonical_upgrade_name
 from . import store
@@ -31,6 +31,7 @@ _SALVAGE_INTERVAL_MS = 15_000
 _SALVAGE_TIMEOUT_SECONDS = 5.0
 _DEBUG_LOGGING = False
 _UPGRADE_ACTION_PREFIX = "upgrade_slot:"
+_OPERATION_OWNER = "system_settings_salvage"
 
 
 def _log(message: str, error: bool = False) -> None:
@@ -456,6 +457,9 @@ class SalvageController:
         if self._map_context() is None:
             self._status = "Salvage is unavailable until the map is fully ready."
             return False
+        if not get_item_operation_lease().is_available(_OPERATION_OWNER):
+            self._status = "Salvage is waiting for Identification or another item operation to finish."
+            return False
         if self.is_active():
             self._status = "Salvage is already active for item %d." % self._active_item_id
             return False
@@ -711,6 +715,9 @@ class SalvageController:
             self._timer.Reset()
             self._clear_active()
         if self._active_item_id > 0:
+            if not get_item_operation_lease().acquire(_OPERATION_OWNER):
+                self._status = "Salvage is paused while another item operation owns the pipeline."
+                return
             self._trace_execution("active", "item=%d" % self._active_item_id)
             self._process_active()
             return
@@ -721,6 +728,10 @@ class SalvageController:
         if not is_explorable and not is_outpost:
             self._pending_candidates.clear()
             self._trace_execution("map_blocked", "map_type=unsupported")
+            return
+        if not get_item_operation_lease().is_available(_OPERATION_OWNER):
+            self._trace_execution("operation_blocked", "owner=%s" % get_item_operation_lease().owner())
+            self._status = "Salvage is waiting for Identification or another item operation to finish."
             return
         try:
             from Py4GWCoreLib.Inventory import Inventory
@@ -839,9 +850,14 @@ class SalvageController:
         return self._upgrade_action(upgrade_mode)
 
     def _start_salvage(self, item_id: int, mode: str, require_automatic_candidate: bool = True) -> bool:
+        lease = get_item_operation_lease()
+        keep_lease = False
         try:
             if self._map_context() is None:
                 self._status = "Salvage is unavailable until the map is fully ready."
+                return False
+            if not lease.acquire(_OPERATION_OWNER):
+                self._status = "Salvage is waiting for Identification or another item operation to finish."
                 return False
             if require_automatic_candidate and (item_id, mode) not in self._candidate_batch(force=True):
                 self._status = "Skipped stale salvage candidate %d." % item_id
@@ -877,6 +893,7 @@ class SalvageController:
             self._active_item_id = item_id
             self._active_node = node
             self._active_started_at = time.monotonic()
+            keep_lease = True
             self._status = "Salvage BT node running for item %d (%s)." % (item_id, mode)
             _log("Salvage BT active item=%d mode=%s." % (item_id, mode))
             return True
@@ -885,6 +902,9 @@ class SalvageController:
             self._status = "Salvage request failed for item %d: %s" % (item_id, exc)
             _log(self._status, error=True)
             return False
+        finally:
+            if not keep_lease:
+                lease.release(_OPERATION_OWNER)
 
     def _salvage_mode(self, item_id: int, mode: str) -> Any:
         from Py4GWCoreLib.enums_src.Item_enums import SalvageMode
@@ -999,6 +1019,7 @@ class SalvageController:
         self._active_item_id = 0
         self._active_node = None
         self._active_started_at = 0.0
+        get_item_operation_lease().release(_OPERATION_OWNER)
 
 
 _controller: Optional[SalvageController] = None

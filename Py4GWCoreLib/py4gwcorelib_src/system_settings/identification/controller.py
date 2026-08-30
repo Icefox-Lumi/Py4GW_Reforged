@@ -9,7 +9,7 @@ from Py4GWCoreLib import ThrottledTimer
 from ..inventory.monitor import InventoryMonitor
 from ..inventory import store as inventory_store
 from ..inventory.model import BAGS
-from ..item_runtime import StableMapGate
+from ..item_runtime import StableMapGate, get_item_operation_lease
 from ..loot_filter_factory.matcher import matches
 from ..loot_filter_factory.model import MATCH_ALL, Filter
 from . import store
@@ -19,6 +19,7 @@ from .model import IdentificationSettings
 _CALLBACK = "SystemSettingsIdentification"
 _IDENTIFY_INTERVAL_MS = 15_000
 _IDENTIFY_TIMEOUT_SECONDS = 2.0
+_OPERATION_OWNER = "system_settings_identification"
 
 
 def _log(message: str, error: bool = False) -> None:
@@ -141,6 +142,9 @@ class IdentificationController:
         if self._map_context() is None:
             self._status = "Identification is unavailable until the map is fully ready."
             return False
+        if not get_item_operation_lease().is_available(_OPERATION_OWNER):
+            self._status = "Identification is waiting for Salvage or another item operation to finish."
+            return False
         if self.is_active():
             self._status = "Identification is already active for item %d." % self._active_item_id
             return False
@@ -175,9 +179,15 @@ class IdentificationController:
             self._id_timer.Reset()
             self._clear_active()
         if self._active_item_id > 0:
+            if not get_item_operation_lease().acquire(_OPERATION_OWNER):
+                self._status = "Identification is paused while another item operation owns the pipeline."
+                return
             self._process_active()
             return
         if not self._settings.enabled:
+            return
+        if not get_item_operation_lease().is_available(_OPERATION_OWNER):
+            self._status = "Identification is waiting for Salvage or another item operation to finish."
             return
         if is_outpost:
             if not self._outpost_pass_pending:
@@ -240,8 +250,13 @@ class IdentificationController:
         return False
 
     def _start_identify(self, item_id: int) -> None:
+        lease = get_item_operation_lease()
+        keep_lease = False
         try:
             if self._map_context() is None:
+                return
+            if not lease.acquire(_OPERATION_OWNER):
+                self._status = "Identification is waiting for Salvage or another item operation to finish."
                 return
             if not self._has_usable_id_kit():
                 self._status = "No usable identification kit is in the configured Bags slots."
@@ -262,10 +277,14 @@ class IdentificationController:
             self._active_node_finished = state != BehaviorTree.NodeState.RUNNING
             self._active_item_id = item_id
             self._active_started_at = time.monotonic()
+            keep_lease = True
             self._status = "Identification requested for item %d." % item_id
         except Exception as exc:
             self._status = "Identification request failed for item %d: %s" % (item_id, exc)
             _log(self._status, error=True)
+        finally:
+            if not keep_lease:
+                lease.release(_OPERATION_OWNER)
 
     def _process_active(self) -> None:
         item_id = self._active_item_id
@@ -296,6 +315,7 @@ class IdentificationController:
         self._active_node_finished = False
         self._active_item_id = 0
         self._active_started_at = 0.0
+        get_item_operation_lease().release(_OPERATION_OWNER)
 
 
 _controller: Optional[IdentificationController] = None

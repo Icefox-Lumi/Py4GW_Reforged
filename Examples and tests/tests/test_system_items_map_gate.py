@@ -121,6 +121,16 @@ check("new stable map admits after its configured delay", (2, True, False), gate
 FakeChecks.valid = False
 check("Checks.Map.MapValid remains a hard boundary", None, gate.context(0.0))
 
+lease = runtime.get_item_operation_lease()
+check("first operation acquires the native item lease", True, lease.acquire("identification"))
+check("same operation can continue polling its lease", True, lease.acquire("identification"))
+check("salvage cannot overlap active identification", False, lease.acquire("salvage"))
+lease.release("salvage")
+check("a non-owner cannot release active identification", "identification", lease.owner())
+lease.release("identification")
+check("salvage acquires the lease only after identification releases it", True, lease.acquire("salvage"))
+lease.release("salvage")
+
 print("=" * 68)
 print("%d case(s) failed" % failures)
 sys.exit(1 if failures else 0)
