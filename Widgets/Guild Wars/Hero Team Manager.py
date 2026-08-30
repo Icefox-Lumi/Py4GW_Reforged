@@ -2513,6 +2513,12 @@ def _friendly_blocking_message(message: str, preflight=None) -> str:
             return f'Choose an account for Alt {row}.'
         if 'duplicates row' in lower or 'duplicated by another configured row' in lower:
             return 'Duplicate account entries must be corrected.'
+        if 'configured player build is missing' in lower:
+            return f'Choose a valid player build for Alt {row}.'
+        if 'configured player build is invalid' in lower:
+            return f'Choose a valid player build for Alt {row}.'
+        if 'player build exceeds' in lower:
+            return f'Choose a shorter player build for Alt {row}.'
         if status is not None:
             return _friendly_alt_blocker(status, row)
         return f'Alt {row} is not ready to join.'
@@ -2606,6 +2612,22 @@ def _friendly_operation_message(message: str) -> str:
         return 'Account joined; updating the party.'
     if lower == 'alt joined; confirming the guarded reciprocal invite result.':
         return 'Account joined; confirming the party.'
+    if lower == 'preparing remote player builds.':
+        return 'Preparing player builds.'
+    if lower.startswith('applying player build for '):
+        return 'Applying a player build...'
+    if lower == 'player build verified; preparing the next configured build.':
+        return 'Player build verified; continuing.'
+    if lower.startswith('waiting for ') and lower.endswith(' player build result.'):
+        return 'Waiting for the player build...'
+    if lower == 'all configured player builds are verified; rechecking local hero ownership.':
+        return 'Player builds ready; checking heroes.'
+    if lower.startswith('mixed load failed: player build'):
+        return 'Could not apply a player build.'
+    if lower.startswith('mixed load failed: timed out waiting for ') and 'player build result' in lower:
+        return 'Timed out waiting for a player build.'
+    if lower.startswith('mixed load failed: player-build'):
+        return 'Could not verify a player build.'
     if lower == 'all configured alts are present; rechecking local hero ownership.':
         return 'Accounts are in the party; checking heroes.'
     if lower == 'clearing locally owned heroes; unmanaged occupants are retained.':
@@ -2885,6 +2907,47 @@ def _draw_alt_accounts(config: HeroTeamConfig, team, *, disabled: bool, prefligh
         if not disabled and expected != binding.expected_character_name:
             binding.expected_character_name = expected
             _mark_dirty('Alt account character expectation changed. Click Save to persist.')
+
+        _muted_text('Player build')
+        _same_line(4)
+        player_template_ids = ['']
+        player_template_labels = ['<No player build>']
+        selected_player_template_id = str(getattr(binding, 'player_template_id', '') or '').strip()
+        for template in config.templates:
+            template_id = str(getattr(template, 'template_id', '') or '').strip()
+            if not template_id:
+                continue
+            player_template_ids.append(template_id)
+            player_template_labels.append(str(getattr(template, 'name', '') or 'Template'))
+        if selected_player_template_id and selected_player_template_id not in player_template_ids:
+            player_template_ids.append(selected_player_template_id)
+            player_template_labels.append(
+                f'<Missing player build: {selected_player_template_id[:18]}>'
+            )
+        try:
+            selected_player_index = player_template_ids.index(selected_player_template_id)
+        except ValueError:
+            selected_player_index = 0
+        began_disabled = _begin_disabled(disabled)
+        try:
+            selected_player_index = _combo_with_popup_style(
+                f'##hero_team_alt_player_template_{index}',
+                selected_player_index,
+                player_template_labels,
+            )
+        finally:
+            _end_disabled(began_disabled)
+        selected_player_index = max(0, min(selected_player_index, len(player_template_ids) - 1))
+        selected_player_template_id = player_template_ids[selected_player_index]
+        _show_item_tooltip(
+            'Optional linked player build. The saved global template is loaded on this account before local heroes.'
+        )
+        if (
+            not disabled
+            and selected_player_template_id != str(getattr(binding, 'player_template_id', '') or '').strip()
+        ):
+            binding.player_template_id = selected_player_template_id
+            _mark_dirty('Alt account player build changed. Click Save to persist.')
 
     _finish_alt_drag(team, disabled=disabled)
 

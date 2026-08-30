@@ -93,6 +93,10 @@ class SharedCommandType(IntEnum):
     # Hero Team Manager authoritative remote party-state request/reply.
     # IMPORTANT: appended at the end so existing SharedCommandType values do not shift.
     PartyStateQuery = auto()
+    # Hero Team Manager correlated remote player-template request/result.
+    # IMPORTANT: append-only wire protocol; do not reorder existing members.
+    HeroTeamPlayerSkillTemplateRequest = auto()
+    HeroTeamPlayerSkillTemplateResult = auto()
     #endregion
 
 class ReloadType(IntEnum):

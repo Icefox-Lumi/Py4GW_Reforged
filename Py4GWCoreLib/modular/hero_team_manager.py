@@ -5,6 +5,7 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
+from math import isfinite
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -43,6 +44,43 @@ PARTY_STATE_QUERY_REQUEST = 'party_state_request'
 PARTY_STATE_QUERY_REPLY = 'party_state_reply'
 PARTY_STATE_GUARD_RESULT = 'party_state_guard'
 PARTY_INVITE_GUARD = 'party_invite_guard'
+
+# Bounded HTM remote player-template protocol.  The shared-memory payload has
+# c_wchar[64] fields, so 63 characters are available after the terminator.
+PLAYER_TEMPLATE_PROTOCOL_VERSION = 1
+PLAYER_TEMPLATE_MAX_CODE_LENGTH = 63
+PLAYER_TEMPLATE_REQUEST_TTL_MS = 5000
+PLAYER_TEMPLATE_VERIFY_TIMEOUT_MS = 2000
+PLAYER_TEMPLATE_STABLE_MS = 100
+PLAYER_TEMPLATE_RESULT_TIMEOUT_MS = 5000
+PLAYER_TEMPLATE_REQUEST_ID_LENGTH = 32
+PLAYER_TEMPLATE_SUCCESS_RESULTS = frozenset({'applied', 'already_matches'})
+PLAYER_TEMPLATE_RESULT_CODES = frozenset(
+    {
+        'applied',
+        'already_matches',
+        'invalid_request',
+        'malformed_template',
+        'oversized_template',
+        'wrong_character',
+        'wrong_primary_profession',
+        'not_outpost',
+        'target_state_unavailable',
+        'wrong_map',
+        'wrong_party',
+        'sender_not_in_party',
+        'sender_identity_unavailable',
+        'stale_request',
+        'duplicate_request',
+        'target_busy',
+        'queue_dispatch_failed',
+        'skill_mismatch',
+        'profession_mismatch',
+        'attribute_mismatch',
+        'encoding_mismatch',
+        'verification_timeout',
+    }
+)
 
 
 def _mixed_log(
@@ -240,6 +278,7 @@ class AltAccountBinding:
     enabled: bool = True
     expected_character_name: str = ''
     alias: str = ''
+    player_template_id: str = ''
 
 
 @dataclass(slots=True)
@@ -385,6 +424,397 @@ class SkillTemplatePreview:
     skill_icon_paths: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class PlayerTemplateSpec:
+    """Normalized player-template data used by the HTM request/verification protocol."""
+
+    code: str
+    primary_profession_id: int
+    secondary_profession_id: int
+    attributes: tuple[tuple[int, int], ...]
+    skill_ids: tuple[int, ...]
+
+    @property
+    def attribute_map(self) -> dict[int, int]:
+        return {int(attribute_id): int(level) for attribute_id, level in self.attributes}
+
+
+def _player_template_read_bits(binary: str, offset: int, width: int, utils) -> tuple[int, int]:
+    end = int(offset) + int(width)
+    if int(width) <= 0 or end > len(binary):
+        raise ValueError('player template ended before a required field.')
+    return int(utils.bin64_to_dec(binary[offset:end])), end
+
+
+def parse_player_template_code(
+    code: Any,
+    *,
+    max_length: int = PLAYER_TEMPLATE_MAX_CODE_LENGTH,
+) -> PlayerTemplateSpec | None:
+    """Parse and validate a bounded Guild Wars player skill-template code."""
+
+    cleaned = str(code or '').strip()
+    if not (16 <= len(cleaned) <= int(max_length)):
+        return None
+    if not re.fullmatch(r'[A-Za-z0-9+/]+', cleaned):
+        return None
+
+    try:
+        from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
+
+        binary = ''.join(Utils.base64_to_bin64(character) for character in cleaned)
+        offset = 0
+        template_type, offset = _player_template_read_bits(binary, offset, 4, Utils)
+        version, offset = _player_template_read_bits(binary, offset, 4, Utils)
+        profession_bits_code, offset = _player_template_read_bits(binary, offset, 2, Utils)
+        profession_bits = profession_bits_code * 2 + 4
+        primary_profession_id, offset = _player_template_read_bits(binary, offset, profession_bits, Utils)
+        secondary_profession_id, offset = _player_template_read_bits(binary, offset, profession_bits, Utils)
+        attributes_count, offset = _player_template_read_bits(binary, offset, 4, Utils)
+        attribute_bits_code, offset = _player_template_read_bits(binary, offset, 4, Utils)
+        attribute_bits = attribute_bits_code + 4
+
+        if template_type != 14 or version != 0:
+            return None
+        if not 1 <= primary_profession_id <= 10:
+            return None
+        if not 0 <= secondary_profession_id <= 10:
+            return None
+
+        attributes: dict[int, int] = {}
+        seen_attribute_ids: set[int] = set()
+        for _ in range(attributes_count):
+            attribute_id, offset = _player_template_read_bits(binary, offset, attribute_bits, Utils)
+            level, offset = _player_template_read_bits(binary, offset, 4, Utils)
+            if attribute_id <= 0 or attribute_id in seen_attribute_ids:
+                return None
+            seen_attribute_ids.add(attribute_id)
+            if level > 0:
+                attributes[attribute_id] = level
+
+        skill_bits_code, offset = _player_template_read_bits(binary, offset, 4, Utils)
+        skill_bits = skill_bits_code + 8
+        skill_ids: list[int] = []
+        for _ in range(8):
+            skill_id, offset = _player_template_read_bits(binary, offset, skill_bits, Utils)
+            skill_ids.append(max(0, int(skill_id)))
+        tail, offset = _player_template_read_bits(binary, offset, 1, Utils)
+        if tail != 0 or any(bit != '0' for bit in binary[offset:]):
+            return None
+    except Exception:
+        return None
+
+    return PlayerTemplateSpec(
+        code=cleaned,
+        primary_profession_id=int(primary_profession_id),
+        secondary_profession_id=int(secondary_profession_id),
+        attributes=tuple(sorted((int(attribute_id), int(level)) for attribute_id, level in attributes.items())),
+        skill_ids=tuple(skill_ids),
+    )
+
+
+def normalize_player_attributes(raw_attributes: Any) -> tuple[dict[int, int], dict[int, int]]:
+    """Return positive base ranks and diagnostic effective levels by attribute ID."""
+
+    base_attributes: dict[int, int] = {}
+    effective_levels: dict[int, int] = {}
+    if isinstance(raw_attributes, dict):
+        values = [
+            (attribute_id, raw_value, raw_value)
+            for attribute_id, raw_value in raw_attributes.items()
+        ]
+    else:
+        values = []
+        for raw_attribute in raw_attributes or []:
+            if isinstance(raw_attribute, dict):
+                values.append(
+                    (
+                        raw_attribute.get('attribute_id', raw_attribute.get('id', 0)),
+                        raw_attribute.get('level_base', raw_attribute.get('level', 0)),
+                        raw_attribute.get('level', 0),
+                    )
+                )
+            else:
+                values.append(
+                    (
+                        getattr(raw_attribute, 'attribute_id', getattr(raw_attribute, 'id', 0)),
+                        getattr(raw_attribute, 'level_base', 0),
+                        getattr(raw_attribute, 'level', 0),
+                    )
+                )
+
+    for raw_id, raw_base, raw_effective in values:
+        try:
+            attribute_id = int(raw_id or 0)
+            base_level = int(raw_base or 0)
+            effective_level = int(raw_effective or 0)
+        except (TypeError, ValueError):
+            continue
+        if attribute_id <= 0:
+            continue
+        if base_level > 0:
+            base_attributes[attribute_id] = base_level
+        effective_levels[attribute_id] = effective_level
+    return base_attributes, effective_levels
+
+
+def normalize_player_template_decoded(decoded: Any) -> dict[str, Any] | None:
+    """Normalize the native PySkillbar.decode_skill_template() result."""
+
+    if not isinstance(decoded, dict):
+        return None
+    try:
+        primary = int(decoded.get('profession', 0) or 0)
+        secondary = int(decoded.get('secondary_profession', 0) or 0)
+        skills = tuple(int(skill_id or 0) for skill_id in list(decoded.get('skills', [])))
+    except (TypeError, ValueError):
+        return None
+    if len(skills) != 8:
+        return None
+
+    raw_attributes = decoded.get('attributes', [])
+    attributes: dict[int, int] = {}
+    if isinstance(raw_attributes, dict):
+        entries = raw_attributes.items()
+        for raw_id, raw_level in entries:
+            try:
+                attribute_id = int(raw_id or 0)
+                level = int(raw_level or 0)
+            except (TypeError, ValueError):
+                return None
+            if attribute_id <= 0:
+                return None
+            if level > 0:
+                attributes[attribute_id] = level
+    elif isinstance(raw_attributes, list):
+        for entry in raw_attributes:
+            if not isinstance(entry, dict):
+                return None
+            try:
+                attribute_id = int(entry.get('id', entry.get('attribute_id', 0)) or 0)
+                level = int(entry.get('level', 0) or 0)
+            except (TypeError, ValueError):
+                return None
+            if attribute_id <= 0:
+                return None
+            if level > 0:
+                attributes[attribute_id] = level
+    else:
+        return None
+
+    return {
+        'primary_profession_id': primary,
+        'secondary_profession_id': secondary,
+        'skill_ids': skills,
+        'attributes': attributes,
+    }
+
+
+def player_template_direct_flags(
+    spec: PlayerTemplateSpec,
+    skill_ids: Any,
+    primary_profession_id: Any,
+    secondary_profession_id: Any,
+    base_attributes: Any,
+) -> dict[str, bool]:
+    try:
+        observed_skills = tuple(int(skill_id or 0) for skill_id in list(skill_ids))
+        observed_primary = int(primary_profession_id or 0)
+        observed_secondary = int(secondary_profession_id or 0)
+        observed_attributes = {
+            int(attribute_id): int(level)
+            for attribute_id, level in dict(base_attributes or {}).items()
+            if int(level or 0) > 0
+        }
+    except (TypeError, ValueError):
+        observed_skills = ()
+        observed_primary = 0
+        observed_secondary = 0
+        observed_attributes = {}
+    return {
+        'skills': observed_skills == spec.skill_ids,
+        'professions': (observed_primary, observed_secondary)
+        == (spec.primary_profession_id, spec.secondary_profession_id),
+        'attributes': observed_attributes == spec.attribute_map,
+    }
+
+
+def player_template_normalized_flags(spec: PlayerTemplateSpec, decoded: Any) -> dict[str, bool]:
+    normalized = normalize_player_template_decoded(decoded)
+    if normalized is None:
+        return {'normalized': False}
+    return {
+        'normalized': (
+            normalized['primary_profession_id'] == spec.primary_profession_id
+            and normalized['secondary_profession_id'] == spec.secondary_profession_id
+            and normalized['skill_ids'] == spec.skill_ids
+            and normalized['attributes'] == spec.attribute_map
+        )
+    }
+
+
+def encode_player_template_guard(
+    map_signature: tuple[int, int, int, int],
+    party_id: int,
+    sender_login_number: int,
+) -> str:
+    values = tuple(int(value) for value in map_signature)
+    if len(values) != 4:
+        raise ValueError('player-template guard requires a four-part map signature.')
+    map_id, region, district, language = values
+    return '|'.join(
+        [
+            '1',
+            f'{map_id & 0xFFFFFFFF:08x}',
+            f'{region & 0xFFFFFFFF:08x}',
+            f'{district & 0xFFFFFFFF:08x}',
+            f'{language & 0xFFFFFFFF:08x}',
+            f'{int(party_id) & 0xFFFFFFFF:08x}',
+            f'{int(sender_login_number) & 0xFFFFFFFF:08x}',
+        ]
+    )
+
+
+def decode_player_template_guard(value: Any) -> tuple[int, int, int, int, int, int] | None:
+    parts = str(value or '').strip().split('|')
+    if len(parts) != 7 or parts[0] != '1':
+        return None
+    if any(not re.fullmatch(r'[0-9a-fA-F]{8}', part) for part in parts[1:]):
+        return None
+    unsigned = [int(part, 16) for part in parts[1:]]
+    signed_region = unsigned[1] if unsigned[1] < 0x80000000 else unsigned[1] - 0x100000000
+    signed_language = unsigned[3] if unsigned[3] < 0x80000000 else unsigned[3] - 0x100000000
+    return (
+        unsigned[0],
+        signed_region,
+        unsigned[2],
+        signed_language,
+        unsigned[4],
+        unsigned[5],
+    )
+
+
+def valid_player_template_request_id(value: Any) -> bool:
+    return bool(re.fullmatch(r'[0-9a-f]{32}', str(value or '').strip()))
+
+
+def new_player_template_request_id() -> str:
+    return uuid4().hex
+
+
+def _player_template_result_cache() -> dict[tuple[str, str], dict[str, Any]]:
+    try:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+    except Exception:
+        return {}
+    cache = getattr(GLOBAL_CACHE, '_hero_team_player_template_result_cache', None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(GLOBAL_CACHE, '_hero_team_player_template_result_cache', cache)
+    return cache
+
+
+def _player_template_result_key(sender_email: str, request_id: str) -> tuple[str, str]:
+    return str(sender_email or '').strip().casefold(), str(request_id or '').strip()
+
+
+def reset_player_template_result(sender_email: str, request_id: str) -> None:
+    _player_template_result_cache().pop(_player_template_result_key(sender_email, request_id), None)
+
+
+def get_player_template_result(sender_email: str, request_id: str) -> dict[str, Any] | None:
+    return _player_template_result_cache().get(_player_template_result_key(sender_email, request_id))
+
+
+def cache_player_template_result(result: dict[str, Any]) -> None:
+    sender_email = str(result.get('sender_email', '') or '').strip()
+    request_id = str(result.get('request_id', '') or '').strip()
+    if sender_email and request_id:
+        _player_template_result_cache()[_player_template_result_key(sender_email, request_id)] = result
+
+
+def _player_template_timestamp_age(message_timestamp: Any, now_tick: int | None = None) -> int | None:
+    try:
+        timestamp = int(message_timestamp or 0) & 0xFFFFFFFF
+        if timestamp <= 0:
+            return None
+        if now_tick is None:
+            import PySystem
+
+            now_tick = int(PySystem.get_tick_count64())
+        return (int(now_tick) - timestamp) & 0xFFFFFFFF
+    except (ImportError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def validate_player_template_result(
+    result: dict[str, Any] | None,
+    *,
+    request_id: str,
+    expected_sender_email: str,
+    expected_receiver_email: str,
+    sent_at: float,
+    now: float | None = None,
+    now_tick: int | None = None,
+) -> tuple[str, str]:
+    """Validate a cached HTM result without allowing malformed data to advance loading."""
+
+    if not isinstance(result, dict):
+        return 'failure', 'No player-build result was received.'
+    if str(result.get('request_id', '') or '').strip() != str(request_id or '').strip():
+        return 'invalid', 'Player-build result correlation ID did not match the request.'
+    if (
+        str(result.get('sender_email', '') or '').strip().casefold()
+        != str(expected_sender_email or '').strip().casefold()
+    ):
+        return 'invalid', 'Player-build result came from an unexpected account.'
+    if (
+        str(result.get('receiver_email', '') or '').strip().casefold()
+        != str(expected_receiver_email or '').strip().casefold()
+    ):
+        return 'invalid', 'Player-build result was addressed to an unexpected account.'
+    try:
+        protocol_version = int(result.get('protocol_version', 0) or 0)
+    except (TypeError, ValueError):
+        return 'invalid', 'Player-build result has a malformed protocol version.'
+    if protocol_version != PLAYER_TEMPLATE_PROTOCOL_VERSION:
+        return 'invalid', 'Player-build result used an unsupported protocol version.'
+
+    received_at = result.get('received_at')
+    if received_at is None:
+        return 'invalid', 'Player-build result has no valid receipt timestamp.'
+    try:
+        received_at_value = float(str(received_at))
+    except (TypeError, ValueError):
+        return 'invalid', 'Player-build result has no valid receipt timestamp.'
+    current_time = monotonic() if now is None else float(now)
+    sent_at_value = float(sent_at)
+    if (
+        not isfinite(received_at_value)
+        or not isfinite(current_time)
+        or not isfinite(sent_at_value)
+        or received_at_value < sent_at_value
+        or received_at_value > current_time + 0.5
+    ):
+        return 'invalid', 'Player-build result is stale or has an invalid receipt timestamp.'
+    timestamp_age = _player_template_timestamp_age(result.get('message_timestamp'), now_tick)
+    if timestamp_age is None or timestamp_age > PLAYER_TEMPLATE_REQUEST_TTL_MS or timestamp_age >= 0x80000000:
+        return 'invalid', 'Player-build result has an expired message timestamp.'
+
+    result_code = str(result.get('result', '') or '').strip().lower()
+    if result_code not in PLAYER_TEMPLATE_RESULT_CODES:
+        return 'invalid', 'Player-build result used an unexpected outcome.'
+    if result_code in PLAYER_TEMPLATE_SUCCESS_RESULTS:
+        flags = result.get('flags')
+        if not isinstance(flags, dict):
+            return 'invalid', 'Successful player-build result has no verification flags.'
+        required = ('skills', 'professions', 'attributes', 'normalized')
+        if not all(flags.get(name) is True for name in required):
+            return 'invalid', 'Successful player-build result did not prove complete verification.'
+        return 'success', result_code
+    return 'failure', result_code
+
+
 @dataclass(slots=True)
 class TemplateProfessionGroup:
     group_key: str
@@ -483,6 +913,7 @@ def _alt_binding_from_raw(raw: Any) -> AltAccountBinding:
             enabled=_coerce_bool(raw.enabled, True),
             expected_character_name=str(raw.expected_character_name or '').strip(),
             alias=str(raw.alias or '').strip(),
+            player_template_id=str(getattr(raw, 'player_template_id', '') or '').strip(),
         )
     if not isinstance(raw, dict):
         # Keep malformed rows visible so normalization cannot silently change a
@@ -495,6 +926,7 @@ def _alt_binding_from_raw(raw: Any) -> AltAccountBinding:
             raw.get('expected_character_name', raw.get('expected_character', raw.get('character_name', ''))) or ''
         ).strip(),
         alias=str(raw.get('alias', raw.get('display_name', '')) or '').strip(),
+        player_template_id=str(raw.get('player_template_id', '') or '').strip(),
     )
 
 
@@ -509,6 +941,7 @@ def alt_binding_to_dict(binding: AltAccountBinding) -> dict[str, Any]:
         'enabled': bool(binding.enabled),
         'expected_character_name': str(binding.expected_character_name or ''),
         'alias': str(binding.alias or ''),
+        'player_template_id': str(binding.player_template_id or ''),
     }
 
 
@@ -1330,6 +1763,52 @@ def get_template(config: HeroTeamConfig, template_id: str) -> HeroTemplateEntry 
         if template.template_id == wanted:
             return template
     return None
+
+
+def resolve_player_template_binding(
+    binding: AltAccountBinding,
+    templates: list[HeroTemplateEntry],
+) -> tuple[HeroTemplateEntry | None, PlayerTemplateSpec | None]:
+    template_id = str(binding.player_template_id or '').strip()
+    if not template_id:
+        return None, None
+    template = next(
+        (entry for entry in templates if str(entry.template_id or '').strip() == template_id),
+        None,
+    )
+    if template is None:
+        return None, None
+    return template, parse_player_template_code(template.code)
+
+
+def validate_player_template_bindings(
+    team: HeroTeamSetup,
+    templates: list[HeroTemplateEntry],
+) -> list[str]:
+    """Validate configured linked player builds before any party mutation."""
+
+    messages: list[str] = []
+    for binding_index, binding in enumerate(team.alt_members):
+        if not bool(binding.enabled) or not str(binding.player_template_id or '').strip():
+            continue
+        row = binding_index + 1
+        template_id = str(binding.player_template_id or '').strip()
+        template = next(
+            (entry for entry in templates if str(entry.template_id or '').strip() == template_id),
+            None,
+        )
+        if template is None:
+            messages.append(f'Alt account row {row}: configured player build is missing.')
+            continue
+        code = str(template.code or '').strip()
+        if len(code) > PLAYER_TEMPLATE_MAX_CODE_LENGTH:
+            messages.append(
+                f'Alt account row {row}: player build exceeds the {PLAYER_TEMPLATE_MAX_CODE_LENGTH}-character limit.'
+            )
+            continue
+        if parse_player_template_code(code) is None:
+            messages.append(f'Alt account row {row}: configured player build is invalid.')
+    return messages
 
 
 def template_preferred_hero_id(config: HeroTeamConfig | None, template_id: str) -> int:
@@ -3908,6 +4387,8 @@ def build_mixed_team_preflight(
         preflight.blocking_messages.append('Load skipped: no team selected.')
         return preflight
 
+    preflight.blocking_messages.extend(validate_player_template_bindings(team, config.templates))
+
     if map_api is None:
         try:
             from Py4GWCoreLib.Map import Map
@@ -4189,6 +4670,32 @@ class MixedHeroTeamApplyOperation:
         self._hero_add_deadline = 0.0
         self._behavior_index = 0
         self._template_index = 0
+        self._player_template_specs: dict[int, PlayerTemplateSpec] = {}
+        self._player_template_indices = [
+            binding_index
+            for binding_index, binding in enumerate(self.team.alt_members)
+            if bool(binding.enabled) and str(binding.player_template_id or '').strip()
+        ]
+        for binding_index in self._player_template_indices:
+            _template, spec = resolve_player_template_binding(
+                self.team.alt_members[binding_index],
+                self.templates,
+            )
+            if spec is not None:
+                self._player_template_specs[binding_index] = spec
+        self._player_template_cursor = 0
+        self._player_template_binding_index = -1
+        self._player_template_request_id = ''
+        self._player_template_sent_at = 0.0
+        self._player_template_deadline = 0.0
+        self._player_template_expected_map: tuple[int, int, int, int] | None = None
+        self._player_template_expected_party_id = 0
+        self._player_template_expected_sender_login = 0
+        self._player_template_expected_target_login = 0
+        self._player_template_expected_sender_email = ''
+        self._player_template_expected_target_email = ''
+        self._player_template_expected_character = ''
+        self._player_template_results: dict[int, dict[str, Any]] = {}
         self._operation_log_key = id(self)
         self._last_logged_phase = ''
         self._operation_start_logged = False
@@ -4592,6 +5099,296 @@ class MixedHeroTeamApplyOperation:
         self.message = f'Invite sent to {target_name}; waiting for guarded reciprocal invite.'
         self._wait(self.poll_ms)
 
+    def _enter_remote_player_template_phase(self) -> None:
+        self._phase = 'remote_player_templates'
+        self.message = 'Preparing remote player builds.'
+        self._wait(0)
+
+    def _remote_player_template_context_failure(
+        self,
+        status: AltAccountStatus | None,
+    ) -> str | None:
+        """Recheck the controller-side context captured in the request envelope."""
+
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+        from Py4GWCoreLib.Map import Map
+        from Py4GWCoreLib.Player import Player
+
+        if status is None or not status.in_current_party:
+            return 'the target is no longer in the current party'
+        if str(status.account_email or '').strip().casefold() != self._player_template_expected_target_email.casefold():
+            return 'the target account identity changed'
+        if str(status.character_name or '').strip().casefold() != self._player_template_expected_character.casefold():
+            return 'the target character changed'
+        target_login = int(status.login_number or 0)
+        if target_login <= 0 or target_login != self._player_template_expected_target_login:
+            return 'the target player identity changed'
+
+        current_map = _map_tuple_from_api(Map)
+        if current_map is None or current_map != self._player_template_expected_map:
+            return 'the controller map or district changed'
+        try:
+            current_party_id = int(GLOBAL_CACHE.Party.GetPartyID() or 0)
+            party_loaded = bool(GLOBAL_CACHE.Party.IsPartyLoaded())
+            party_leader = bool(GLOBAL_CACHE.Party.IsPartyLeader())
+        except (AttributeError, TypeError, ValueError):
+            return 'the controller party identity is unavailable'
+        if not party_loaded or current_party_id <= 0:
+            return 'the controller party is not ready'
+        if current_party_id != self._player_template_expected_party_id:
+            return 'the controller party changed'
+        if not party_leader:
+            return 'the controller is no longer party leader'
+
+        try:
+            current_sender_email = str(Player.GetAccountEmail() or '').strip()
+            current_sender_login = int(Player.GetLoginNumber() or 0)
+        except (AttributeError, TypeError, ValueError):
+            return 'the controller identity is unavailable'
+        if current_sender_email.casefold() != self._player_template_expected_sender_email.casefold():
+            return 'the controller account changed'
+        if current_sender_login != self._player_template_expected_sender_login:
+            return 'the controller player identity changed'
+        return None
+
+    def _begin_remote_player_template(self, status: AltAccountStatus) -> None:
+        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+        from Py4GWCoreLib.Map import Map
+        from Py4GWCoreLib.Player import Player
+        from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
+
+        binding_index = int(status.binding_index)
+        binding = self.team.alt_members[binding_index]
+        spec = self._player_template_specs.get(binding_index)
+        if spec is None:
+            self._finish(False, f'Mixed load failed: player build for {status.character_name or "the alt"} is invalid.')
+            return
+
+        sender_email = str(Player.GetAccountEmail() or '').strip()
+        target_email = str(status.account_email or '').strip()
+        expected_character = str(binding.expected_character_name or '').strip() or str(
+            status.character_name or ''
+        ).strip()
+        map_signature = _map_tuple_from_api(Map)
+        try:
+            party_id = int(GLOBAL_CACHE.Party.GetPartyID() or 0)
+            sender_login = int(Player.GetLoginNumber() or 0)
+        except (AttributeError, TypeError, ValueError):
+            party_id = 0
+            sender_login = 0
+
+        if (
+            not sender_email
+            or not target_email
+            or not expected_character
+            or map_signature is None
+            or party_id <= 0
+            or sender_login <= 0
+            or int(status.login_number or 0) <= 0
+        ):
+            self._finish(False, 'Mixed load failed: player-build identity or party context is unavailable.')
+            return
+        if len(expected_character) > PLAYER_TEMPLATE_MAX_CODE_LENGTH:
+            self._finish(False, 'Mixed load failed: the configured target character name is too long.')
+            return
+        if any(
+            len(value) > PLAYER_TEMPLATE_MAX_CODE_LENGTH
+            for value in (sender_email, target_email, spec.code)
+        ):
+            self._finish(False, 'Mixed load failed: a player-build transport field is too long.')
+            return
+        if not status.in_current_party:
+            self._finish(False, f'Mixed load failed: {expected_character} is no longer in the party.')
+            return
+
+        request_id = new_player_template_request_id()
+        guard = encode_player_template_guard(map_signature, party_id, sender_login)
+        reset_player_template_result(target_email, request_id)
+        try:
+            message_index = GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                target_email,
+                SharedCommandType.HeroTeamPlayerSkillTemplateRequest,
+                (
+                    float(PLAYER_TEMPLATE_PROTOCOL_VERSION),
+                    float(len(spec.code)),
+                    0.0,
+                    0.0,
+                ),
+                (
+                    request_id,
+                    spec.code,
+                    expected_character,
+                    guard,
+                ),
+            )
+        except Exception as exc:
+            _mixed_log(
+                'PlayerTemplate',
+                f'row={binding_index + 1} request could not be queued: {exc}',
+                key=('operation', self._operation_log_key, 'player-template-send', binding_index),
+                message_type='Error',
+            )
+            self._finish(False, f'Mixed load failed: player build for {expected_character} could not be sent.')
+            return
+        if int(message_index) < 0:
+            _mixed_log(
+                'PlayerTemplate',
+                f'row={binding_index + 1} request queue returned {int(message_index)}',
+                key=('operation', self._operation_log_key, 'player-template-send', binding_index),
+                message_type='Error',
+            )
+            self._finish(False, f'Mixed load failed: player build for {expected_character} could not be sent.')
+            return
+
+        self._player_template_binding_index = binding_index
+        self._player_template_request_id = request_id
+        self._player_template_sent_at = monotonic()
+        self._player_template_deadline = self._player_template_sent_at + (
+            PLAYER_TEMPLATE_RESULT_TIMEOUT_MS / 1000.0
+        )
+        self._player_template_expected_map = map_signature
+        self._player_template_expected_party_id = party_id
+        self._player_template_expected_sender_login = sender_login
+        self._player_template_expected_target_login = int(status.login_number or 0)
+        self._player_template_expected_sender_email = sender_email
+        self._player_template_expected_target_email = target_email
+        self._player_template_expected_character = expected_character
+        self._phase = 'wait_player_template'
+        self.message = f'Applying player build for {expected_character}.'
+        _mixed_log(
+            'PlayerTemplate',
+            (
+                f'sent row={binding_index + 1} target={_masked_account_identity(target_email)} '
+                f'char={expected_character!r} request={request_id!r} message_index={int(message_index)}'
+            ),
+            key=('operation', self._operation_log_key, 'player-template-sent', binding_index),
+        )
+        self._wait(self.poll_ms)
+
+    def _player_template_failure_message(self, status: AltAccountStatus, result_code: str) -> str:
+        subject = str(status.character_name or status.account_email or 'the alt').strip()
+        messages = {
+            'wrong_character': f'{subject} has the wrong character logged in.',
+            'wrong_primary_profession': f'{subject} has the wrong primary profession for this build.',
+            'not_outpost': f'{subject} is not in an outpost.',
+            'wrong_map': f'{subject} is no longer on the same map.',
+            'wrong_party': f'{subject} is no longer in the same party.',
+            'sender_not_in_party': f'{subject} cannot verify the controller in the party.',
+            'sender_identity_unavailable': f'{subject} could not verify the controller identity.',
+            'stale_request': f'The request for {subject} expired.',
+            'duplicate_request': f'The request for {subject} was already processed.',
+            'target_busy': f'{subject} is already processing another player build.',
+            'queue_dispatch_failed': f'{subject} could not start the player build.',
+            'skill_mismatch': f'{subject} could not apply one or more skills in the player build.',
+            'profession_mismatch': f'{subject} did not reach the requested professions.',
+            'attribute_mismatch': f'{subject} did not reach the requested attributes.',
+            'encoding_mismatch': f'{subject} did not reproduce the requested player build.',
+            'verification_timeout': f'{subject} did not finish applying the player build in time.',
+            'target_state_unavailable': f'{subject} could not report the applied player build.',
+            'malformed_template': 'The configured player build is invalid.',
+            'oversized_template': 'The configured player build is too long.',
+            'invalid_request': 'The player-build request was rejected.',
+        }
+        return messages.get(result_code, f'{subject} returned an unrecognized player-build result.')
+
+    def _tick_remote_player_templates(self) -> None:
+        preflight = self._refresh_preflight()
+        if not preflight.can_load:
+            self._finish(False, f'Mixed load blocked: {" ".join(preflight.blocking_messages)}')
+            return
+        while self._player_template_cursor < len(self._player_template_indices):
+            binding_index = self._player_template_indices[self._player_template_cursor]
+            status = self._status_by_index(binding_index)
+            if status is None:
+                self._finish(False, f'Mixed load failed: player-build alt row {binding_index + 1} disappeared.')
+                return
+            if not status.in_current_party:
+                self._finish(
+                    False,
+                    f'Mixed load failed: {status.character_name or "The configured alt"} is no longer in the party.',
+                )
+                return
+            self._begin_remote_player_template(status)
+            return
+
+        self._phase = 'prepare_heroes'
+        self.message = 'All configured player builds are verified; rechecking local hero ownership.'
+        self._wait(0)
+
+    def _tick_wait_player_template(self) -> None:
+        status = self._status_by_index(self._player_template_binding_index)
+        context_failure = self._remote_player_template_context_failure(status)
+        if context_failure:
+            _mixed_log(
+                'PlayerTemplate',
+                (
+                    f'context changed row={self._player_template_binding_index + 1} '
+                    f'request={self._player_template_request_id!r}: {context_failure}'
+                ),
+                key=('operation', self._operation_log_key, 'player-template-context-failed'),
+                message_type='Warning',
+            )
+            self._finish(False, f'Mixed load failed: player-build context changed ({context_failure}).')
+            return
+        if status is None:
+            self._finish(False, 'Mixed load failed: player-build target disappeared.')
+            return
+
+        result = get_player_template_result(status.account_email, self._player_template_request_id)
+        if result is not None:
+            result_kind, result_reason = validate_player_template_result(
+                result,
+                request_id=self._player_template_request_id,
+                expected_sender_email=status.account_email,
+                expected_receiver_email=self._player_template_expected_sender_email,
+                sent_at=self._player_template_sent_at,
+            )
+            result_code = str(result.get('result', '') or '').strip().lower()
+            _mixed_log(
+                'PlayerTemplate',
+                (
+                    f'received row={self._player_template_binding_index + 1} '
+                    f'target={_masked_account_identity(status.account_email)} '
+                    f'request={self._player_template_request_id!r} '
+                    f'kind={result_kind} code={result_code or "<none>"} reason={result_reason}'
+                ),
+                key=('operation', self._operation_log_key, 'player-template-result'),
+                message_type='Warning' if result_kind != 'success' else 'Info',
+            )
+            if result_kind == 'invalid':
+                self._finish(False, 'Mixed load failed: player-build result could not be verified.')
+                return
+            if result_kind == 'failure':
+                self._finish(False, f'Mixed load failed: {self._player_template_failure_message(status, result_code)}')
+                return
+
+            self._player_template_results[self._player_template_binding_index] = result
+            self._player_template_cursor += 1
+            self._player_template_binding_index = -1
+            self._player_template_request_id = ''
+            self._player_template_expected_map = None
+            self._phase = 'remote_player_templates'
+            self.message = 'Player build verified; preparing the next configured build.'
+            self._wait(0)
+            return
+
+        if monotonic() >= self._player_template_deadline:
+            _mixed_log(
+                'PlayerTemplate',
+                (
+                    f'timeout row={self._player_template_binding_index + 1} '
+                    f'request={self._player_template_request_id!r} no correlated result'
+                ),
+                key=('operation', self._operation_log_key, 'player-template-timeout'),
+                message_type='Warning',
+            )
+            subject = status.character_name or status.account_email
+            self._finish(False, f'Mixed load failed: timed out waiting for {subject} player build result.')
+            return
+        self.message = f'Waiting for {status.character_name or status.account_email} player build result.'
+        self._wait(self.poll_ms)
+
     def _read_guard_result(self, status: AltAccountStatus) -> tuple[str, str, dict[str, Any]] | None:
         reply = get_party_state_query(status.account_email, self._party_query_id)
         if reply is None or str(reply.get('mode', '') or '') != PARTY_STATE_GUARD_RESULT:
@@ -4722,8 +5519,12 @@ class MixedHeroTeamApplyOperation:
                 return
             self._begin_party_query(status)
             return
-        self._phase = 'prepare_heroes'
-        self.message = 'All configured alts are present; rechecking local hero ownership.'
+        if self._player_template_indices:
+            self._enter_remote_player_template_phase()
+        else:
+            self._phase = 'prepare_heroes'
+            self.message = 'All configured alts are present; rechecking local hero ownership.'
+            self._wait(0)
 
     def _tick_wait_invite(self) -> None:
         status_before_refresh = self._status_by_index(self._invite_binding_index)
@@ -5035,9 +5836,20 @@ class MixedHeroTeamApplyOperation:
                     if status.status in {'ready', 'query_required'}
                 ]
                 self._invite_cursor = 0
-                self._phase = 'invite' if self._invite_indices else 'prepare_heroes'
+                if self._invite_indices:
+                    self._phase = 'invite'
+                elif self._player_template_indices:
+                    self._phase = 'remote_player_templates'
+                else:
+                    self._phase = 'prepare_heroes'
                 self.message = (
-                    'Preparing configured alt accounts.' if self._invite_indices else 'Preparing local heroes.'
+                    'Preparing configured alt accounts.'
+                    if self._invite_indices
+                    else (
+                        'Preparing remote player builds.'
+                        if self._player_template_indices
+                        else 'Preparing local heroes.'
+                    )
                 )
 
             if self._phase == 'invite':
@@ -5048,6 +5860,12 @@ class MixedHeroTeamApplyOperation:
                 return self.done
             if self._phase == 'wait_invite':
                 self._tick_wait_invite()
+                return self.done
+            if self._phase == 'remote_player_templates':
+                self._tick_remote_player_templates()
+                return self.done
+            if self._phase == 'wait_player_template':
+                self._tick_wait_player_template()
                 return self.done
             if self._phase == 'prepare_heroes':
                 self._prepare_hero_mutation()

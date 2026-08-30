@@ -96,6 +96,73 @@ class _FakeJsonFactory(_FakeJsonDocument):
         pass
 
 
+class _FakeTemplateUtils:
+    _alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+    @classmethod
+    def base64_to_bin64(cls, char: str) -> str:
+        return format(cls._alphabet.index(str(char)), '06b')[::-1]
+
+    @staticmethod
+    def bin64_to_dec(binary: str) -> int:
+        return int(str(binary)[::-1], 2) if binary else 0
+
+
+def _encode_test_player_template(
+    primary_profession_id: int = 1,
+    secondary_profession_id: int = 2,
+    attributes: dict[int, int] | None = None,
+    skills: tuple[int, ...] = (1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008),
+) -> str:
+    attributes = dict(attributes or {29: 12, 38: 3, 40: 12})
+
+    def bits(value: int, width: int) -> str:
+        return bin(int(value))[2:].zfill(int(width))[::-1]
+
+    max_profession = max(int(primary_profession_id), int(secondary_profession_id))
+    profession_bits_code = 0 if max_profession <= 15 else 1 if max_profession <= 63 else 2
+    profession_bits = profession_bits_code * 2 + 4
+
+    max_attribute = max(attributes.keys()) if attributes else 0
+    if max_attribute <= 15:
+        attribute_bits_code = 0
+    elif max_attribute <= 31:
+        attribute_bits_code = 1
+    elif max_attribute <= 63:
+        attribute_bits_code = 2
+    elif max_attribute <= 127:
+        attribute_bits_code = 3
+    elif max_attribute <= 255:
+        attribute_bits_code = 4
+    else:
+        attribute_bits_code = min(15, max_attribute.bit_length() - 4)
+    attribute_bits = attribute_bits_code + 4
+
+    max_skill = max(skills) if skills else 0
+    skill_bits_code = 0 if max_skill <= 255 else 1 if max_skill <= 511 else 2
+    skill_bits = skill_bits_code + 8
+
+    binary = ''.join(
+        (
+            bits(14, 4),
+            bits(0, 4),
+            bits(profession_bits_code, 2),
+            bits(primary_profession_id, profession_bits),
+            bits(secondary_profession_id, profession_bits),
+            bits(len(attributes), 4),
+            bits(attribute_bits_code, 4),
+            *(bits(attribute_id, attribute_bits) + bits(level, 4) for attribute_id, level in attributes.items()),
+            bits(skill_bits_code, 4),
+            *(bits(skill_id, skill_bits) for skill_id in skills),
+            bits(0, 1),
+        )
+    )
+    while len(binary) % 6:
+        binary += '0'
+    alphabet = _FakeTemplateUtils._alphabet
+    return ''.join(alphabet[int(binary[offset : offset + 6][::-1], 2)] for offset in range(0, len(binary), 6))
+
+
 def _load_helper():
     fake_core = types.ModuleType('Py4GWCoreLib')
     fake_core.__path__ = []
@@ -110,12 +177,15 @@ def _load_helper():
     fake_support.__path__ = []
     fake_json = types.ModuleType('Py4GWCoreLib.py4gwcorelib_src.JsonFactory')
     setattr(fake_json, 'JsonFactory', _FakeJsonFactory)
+    fake_utils = types.ModuleType('Py4GWCoreLib.py4gwcorelib_src.Utils')
+    setattr(fake_utils, 'Utils', _FakeTemplateUtils)
     names = {
         'Py4GWCoreLib': fake_core,
         'Py4GWCoreLib.modular': fake_modular,
         'Py4GWCoreLib.modular.hero_setup_model': fake_setup,
         'Py4GWCoreLib.py4gwcorelib_src': fake_support,
         'Py4GWCoreLib.py4gwcorelib_src.JsonFactory': fake_json,
+        'Py4GWCoreLib.py4gwcorelib_src.Utils': fake_utils,
     }
     previous = {name: sys.modules.get(name) for name in names}
     sys.modules.update(names)
@@ -571,7 +641,10 @@ class HeroTeamManagerPortTests(unittest.TestCase):
             types.SimpleNamespace(
                 Party=party,
                 ShMem=shared_memory,
-                SkillBar=types.SimpleNamespace(LoadHeroSkillTemplate=lambda *_args: None),
+                SkillBar=types.SimpleNamespace(
+                    LoadHeroSkillTemplate=lambda *_args: None,
+                    LoadSkillTemplate=lambda *_args: None,
+                ),
             ),
         )
         fake_player = types.ModuleType('Py4GWCoreLib.Player')
@@ -586,14 +659,32 @@ class HeroTeamManagerPortTests(unittest.TestCase):
             types.SimpleNamespace(
                 InviteToParty='InviteToParty',
                 PartyStateQuery='PartyStateQuery',
+                HeroTeamPlayerSkillTemplateRequest='HeroTeamPlayerSkillTemplateRequest',
+                HeroTeamPlayerSkillTemplateResult='HeroTeamPlayerSkillTemplateResult',
             ),
         )
+        fake_system = types.ModuleType('PySystem')
+        setattr(
+            fake_system,
+            'Console',
+            types.SimpleNamespace(
+                Log=lambda *_args, **_kwargs: None,
+                MessageType=types.SimpleNamespace(
+                    Error='error',
+                    Warning='warning',
+                    Info='info',
+                    Success='success',
+                ),
+            ),
+        )
+        setattr(fake_system, 'get_tick_count64', lambda: 1000)
         names = {
             'Py4GWCoreLib.GlobalCache': fake_global_cache,
             'Py4GWCoreLib.Player': fake_player,
             'Py4GWCoreLib.Map': fake_map,
             'Py4GWCoreLib.enums_src': fake_enums,
             'Py4GWCoreLib.enums_src.Multiboxing_enums': fake_multibox_enums,
+            'PySystem': fake_system,
         }
         previous = {name: sys.modules.get(name) for name in names}
         sys.modules.update(names)
@@ -645,6 +736,334 @@ class HeroTeamManagerPortTests(unittest.TestCase):
             player_api=_FakePlayerApi(),
             shared_memory=shared_memory,
         )
+
+    def _player_template_config(self, emails: list[str] | None = None):
+        code = _encode_test_player_template()
+        team = self._team_with_alts(emails or ['alt@example.com'], [28])
+        for binding in team.alt_members:
+            binding.player_template_id = 'player-build'
+        config = self.module.HeroTeamConfig(
+            active_team_id=team.team_id,
+            teams=[team],
+            templates=[self.module.HeroTemplateEntry('player-build', 'Player Build', code)],
+        )
+        return config, team, code
+
+    @staticmethod
+    def _player_template_result(
+        operation,
+        *,
+        result: str = 'applied',
+        flags: dict[str, bool] | None = None,
+        timestamp: int = 1000,
+    ) -> dict[str, Any]:
+        return {
+            'request_id': operation._player_template_request_id,
+            'sender_email': operation._player_template_expected_target_email,
+            'receiver_email': operation._player_template_expected_sender_email,
+            'result': result,
+            'observed_encoded': '',
+            'flags': flags or {
+                'skills': True,
+                'professions': True,
+                'attributes': True,
+                'normalized': True,
+                'raw': True,
+            },
+            'detail': 'none',
+            'protocol_version': 1,
+            'elapsed_ms': 200,
+            'primary_profession_id': 1,
+            'secondary_profession_id': 2,
+            'message_timestamp': timestamp,
+            'received_at': operation._player_template_sent_at + 0.01,
+        }
+
+    def test_player_template_parser_uses_base_attributes_and_round_trips_guard(self) -> None:
+        code = _encode_test_player_template()
+        spec = self.module.parse_player_template_code(code)
+
+        self.assertIsNotNone(spec)
+        assert spec is not None
+        self.assertEqual(len(code), 24)
+        self.assertEqual(spec.primary_profession_id, 1)
+        self.assertEqual(spec.secondary_profession_id, 2)
+        self.assertEqual(spec.skill_ids, (1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008))
+        self.assertEqual(spec.attribute_map, {29: 12, 38: 3, 40: 12})
+
+        base, effective = self.module.normalize_player_attributes(
+            [
+                {'attribute_id': 29, 'level_base': 12, 'level': 12},
+                {'attribute_id': 38, 'level_base': 3, 'level': 4},
+                {'attribute_id': 40, 'level_base': 12, 'level': 16},
+                {'attribute_id': 91, 'level_base': 0, 'level': 1},
+            ]
+        )
+        self.assertEqual(base, {29: 12, 38: 3, 40: 12})
+        self.assertEqual(effective, {29: 12, 38: 4, 40: 16, 91: 1})
+        self.assertEqual(
+            self.module.player_template_direct_flags(spec, spec.skill_ids, 1, 2, base),
+            {'skills': True, 'professions': True, 'attributes': True},
+        )
+
+        guard = self.module.encode_player_template_guard((100, -2, 7, -3), 44, 9)
+        self.assertEqual(self.module.decode_player_template_guard(guard), (100, -2, 7, -3, 44, 9))
+        self.assertEqual(len(guard), 55)
+
+    def test_player_template_persistence_is_linked_and_operation_snapshots_code(self) -> None:
+        config, team, code = self._player_template_config()
+        team.alt_members[0].expected_character_name = 'Alt'
+        payload = self.module.config_to_dict(config)
+
+        self.assertEqual(payload['teams'][0]['alt_members'][0]['player_template_id'], 'player-build')
+        template, spec = self.module.resolve_player_template_binding(team.alt_members[0], config.templates)
+        self.assertIsNotNone(template)
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec.code if spec is not None else '', code)
+
+        operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+        config.templates[0].code = _encode_test_player_template(primary_profession_id=1, secondary_profession_id=0)
+        self.assertEqual(operation._player_template_specs[0].code, code)
+
+        legacy = self.module.normalize_config(
+            {
+                'version': 2,
+                'active_team_id': team.team_id,
+                'teams': [{'id': team.team_id, 'name': team.name, 'slots': [], 'alt_members': [
+                    {'account_email': 'alt@example.com'}
+                ]}],
+            }
+        )
+        self.assertEqual(legacy.teams[0].alt_members[0].player_template_id, '')
+
+    def test_invalid_or_missing_player_template_blocks_before_party_mutation(self) -> None:
+        code = _encode_test_player_template()
+        for template_id, templates in (
+            ('missing-build', [self.module.HeroTemplateEntry('other', 'Other', code)]),
+            ('invalid-build', [self.module.HeroTemplateEntry('invalid-build', 'Invalid', 'not-a-template')]),
+            ('oversized-build', [self.module.HeroTemplateEntry('oversized-build', 'Long', 'A' * 64)]),
+        ):
+            team = self._team_with_alts(['alt@example.com'], [28])
+            team.alt_members[0].player_template_id = template_id
+            config = self.module.HeroTeamConfig(
+                active_team_id=team.team_id,
+                teams=[team],
+                templates=templates,
+            )
+            party = _FakePartyApi([_FakePartyPlayer(1), _FakePartyPlayer(2)])
+            account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10, party_position=1)
+            preflight = self.module.build_mixed_team_preflight(
+                config,
+                team.team_id,
+                map_api=_FakeMapApi(8),
+                party_api=party,
+                player_api=_FakePlayerApi(),
+                shared_memory=_FakeSharedMemory([account]),
+            )
+            messages = self.module.validate_player_template_bindings(team, templates)
+            self.assertTrue(messages)
+            self.assertFalse(preflight.can_load)
+            self.assertTrue(any('player build' in message.lower() for message in preflight.blocking_messages))
+
+    def test_no_player_build_skips_remote_phase(self) -> None:
+        team = self._team_with_alts(['alt@example.com'], [28])
+        party = _FakePartyApi([_FakePartyPlayer(1), _FakePartyPlayer(2)])
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10, party_position=1)
+        shared_memory = _FakeSharedMemory([account])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            config = self.module.HeroTeamConfig(active_team_id=team.team_id, teams=[team])
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+            self.assertFalse(operation.tick())
+            self.assertEqual(shared_memory.messages, [])
+            self.assertEqual(operation._phase, 'add_local_heroes')
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_player_template_result_validation_rejects_wrong_or_stale_results(self) -> None:
+        config, team, _code = self._player_template_config()
+        party = _FakePartyApi([_FakePartyPlayer(1), _FakePartyPlayer(2)])
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10, party_position=1)
+        shared_memory = _FakeSharedMemory([account])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+            operation._player_template_request_id = 'a' * 32
+            operation._player_template_sent_at = time.monotonic() - 0.1
+            operation._player_template_expected_target_email = 'alt@example.com'
+            operation._player_template_expected_sender_email = 'main@example.com'
+            valid = self._player_template_result(operation)
+
+            self.assertEqual(
+                self.module.validate_player_template_result(
+                    valid,
+                    request_id='a' * 32,
+                    expected_sender_email='alt@example.com',
+                    expected_receiver_email='main@example.com',
+                    sent_at=operation._player_template_sent_at,
+                    now=time.monotonic() + 0.1,
+                    now_tick=1000,
+                ),
+                ('success', 'applied'),
+            )
+            wrong_id = dict(valid, request_id='b' * 32)
+            self.assertEqual(
+                self.module.validate_player_template_result(
+                    wrong_id,
+                    request_id='a' * 32,
+                    expected_sender_email='alt@example.com',
+                    expected_receiver_email='main@example.com',
+                    sent_at=operation._player_template_sent_at,
+                    now=time.monotonic() + 0.1,
+                    now_tick=1000,
+                )[0],
+                'invalid',
+            )
+            stale = dict(valid, message_timestamp=0)
+            self.assertEqual(
+                self.module.validate_player_template_result(
+                    stale,
+                    request_id='a' * 32,
+                    expected_sender_email='alt@example.com',
+                    expected_receiver_email='main@example.com',
+                    sent_at=operation._player_template_sent_at,
+                    now=time.monotonic() + 0.1,
+                    now_tick=1000,
+                )[0],
+                'invalid',
+            )
+            failure = dict(valid, result='skill_mismatch')
+            self.assertEqual(
+                self.module.validate_player_template_result(
+                    failure,
+                    request_id='a' * 32,
+                    expected_sender_email='alt@example.com',
+                    expected_receiver_email='main@example.com',
+                    sent_at=operation._player_template_sent_at,
+                    now=time.monotonic() + 0.1,
+                    now_tick=1000,
+                ),
+                ('failure', 'skill_mismatch'),
+            )
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_mixed_operation_sends_sequential_player_builds_and_waits_for_results(self) -> None:
+        config, team, _code = self._player_template_config(['first@example.com', 'second@example.com'])
+        party = _FakePartyApi([_FakePartyPlayer(1), _FakePartyPlayer(2), _FakePartyPlayer(3)])
+        accounts = [
+            _FakeAccountRecord('first@example.com', 2, 'First', party_id=10, party_position=1),
+            _FakeAccountRecord('second@example.com', 3, 'Second', party_id=10, party_position=2),
+        ]
+        shared_memory = _FakeSharedMemory(accounts)
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+            self.assertFalse(operation.tick())
+            self.assertEqual(len(shared_memory.messages), 1)
+            self.assertEqual(shared_memory.messages[0][1], 'first@example.com')
+            self.assertEqual(shared_memory.messages[0][3][0], 1.0)
+            self.assertEqual(shared_memory.messages[0][3][1], float(len(_code)))
+            self.assertEqual(operation._phase, 'wait_player_template')
+
+            self.module.cache_player_template_result(self._player_template_result(operation))
+            operation._next_at = 0.0
+            self.assertFalse(operation.tick())
+            self.assertEqual(operation._phase, 'remote_player_templates')
+            operation._next_at = 0.0
+            self.assertFalse(operation.tick())
+            self.assertEqual(len(shared_memory.messages), 2)
+            self.assertEqual(shared_memory.messages[1][1], 'second@example.com')
+            self.assertEqual(operation._phase, 'wait_player_template')
+
+            self.module.cache_player_template_result(self._player_template_result(operation))
+            operation._next_at = 0.0
+            self.assertFalse(operation.tick())
+            self.assertEqual(operation._phase, 'remote_player_templates')
+            self.assertEqual(operation._player_template_cursor, 2)
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_remote_player_build_failure_finishes_before_local_hero_mutation(self) -> None:
+        config, team, _code = self._player_template_config()
+        party = _FakePartyApi(
+            [_FakePartyPlayer(1), _FakePartyPlayer(2)],
+            [_FakePartyHero(28, 1)],
+        )
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10, party_position=1)
+        shared_memory = _FakeSharedMemory([account])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+            self.assertFalse(operation.tick())
+            self.module.cache_player_template_result(
+                self._player_template_result(
+                    operation,
+                    result='skill_mismatch',
+                    flags={'skills': False, 'professions': True, 'attributes': True, 'normalized': False, 'raw': False},
+                )
+            )
+            operation._next_at = 0.0
+            self.assertTrue(operation.tick())
+            self.assertFalse(operation.success)
+            self.assertIn('skills', operation.message.lower())
+            self.assertEqual(party.kick_all_calls, 0)
+            self.assertEqual(party.added_heroes, [])
+            self.assertEqual(operation._phase, 'wait_player_template')
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_remote_player_build_result_timeout_fails_closed(self) -> None:
+        config, team, _code = self._player_template_config()
+        party = _FakePartyApi([_FakePartyPlayer(1), _FakePartyPlayer(2)], [_FakePartyHero(28, 1)])
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10, party_position=1)
+        shared_memory = _FakeSharedMemory([account])
+        previous = self._install_runtime_modules(party, shared_memory)
+        try:
+            operation = self.module.MixedHeroTeamApplyOperation(config, team.team_id)
+            self.assertFalse(operation.tick())
+            operation._player_template_deadline = time.monotonic() - 1.0
+            operation._next_at = 0.0
+            self.assertTrue(operation.tick())
+            self.assertFalse(operation.success)
+            self.assertIn('timed out', operation.message.lower())
+            self.assertEqual(party.kick_all_calls, 0)
+            self.assertEqual(party.added_heroes, [])
+        finally:
+            self._restore_runtime_modules(previous)
+
+    def test_success_result_requires_all_authoritative_verification_flags(self) -> None:
+        operation_result = {
+            'request_id': 'a' * 32,
+            'sender_email': 'alt@example.com',
+            'receiver_email': 'main@example.com',
+            'result': 'already_matches',
+            'flags': {'skills': True, 'professions': True, 'attributes': True, 'normalized': False, 'raw': True},
+            'protocol_version': 1,
+            'message_timestamp': 1000,
+            'received_at': time.monotonic(),
+        }
+        self.assertEqual(
+            self.module.validate_player_template_result(
+                operation_result,
+                request_id='a' * 32,
+                expected_sender_email='alt@example.com',
+                expected_receiver_email='main@example.com',
+                sent_at=time.monotonic() - 0.1,
+                now=time.monotonic() + 0.1,
+                now_tick=1000,
+            )[0],
+            'invalid',
+        )
+
+    def test_messaging_protocol_is_correlated_and_keeps_legacy_load_command(self) -> None:
+        source = MESSAGING_PATH.read_text(encoding='utf-8')
+        self.assertIn('def HeroTeamPlayerSkillTemplateRequest', source)
+        self.assertIn('def HeroTeamPlayerSkillTemplateResult', source)
+        self.assertIn('case SharedCommandType.HeroTeamPlayerSkillTemplateRequest:', source)
+        self.assertIn('case SharedCommandType.HeroTeamPlayerSkillTemplateResult:', source)
+        self.assertIn('GLOBAL_CACHE.SkillBar.LoadSkillTemplate(spec.code)', source)
+        self.assertIn('def LoadSkillTemplate(index: int, message: SharedMessageStruct):', source)
 
     def test_alt_bindings_migrate_empty_and_round_trip_in_saved_order(self) -> None:
         legacy = self.module.normalize_config(
@@ -711,7 +1130,9 @@ class HeroTeamManagerPortTests(unittest.TestCase):
         source = self._team_with_alts(['zulu@example.com', 'alpha@example.com', 'middle@example.com'])
         source.alt_members[0].enabled = False
         source.alt_members[0].alias = 'Zulu'
+        source.alt_members[0].player_template_id = 'player-a'
         source.alt_members[1].expected_character_name = 'Alpha'
+        source.alt_members[1].player_template_id = 'player-b'
         config = self.module.HeroTeamConfig(active_team_id=source.team_id, teams=[source])
 
         duplicate = self.module.duplicate_team(config, source.team_id)
@@ -723,7 +1144,9 @@ class HeroTeamManagerPortTests(unittest.TestCase):
         )
         self.assertEqual(duplicate.alt_members[0].enabled, False)
         self.assertEqual(duplicate.alt_members[0].alias, 'Zulu')
+        self.assertEqual(duplicate.alt_members[0].player_template_id, 'player-a')
         self.assertEqual(duplicate.alt_members[1].expected_character_name, 'Alpha')
+        self.assertEqual(duplicate.alt_members[1].player_template_id, 'player-b')
         self.assertIsNot(duplicate.alt_members[0], source.alt_members[0])
 
     def test_widget_alt_reorder_preserves_bindings_and_marks_account_dirty(self) -> None:
@@ -731,6 +1154,7 @@ class HeroTeamManagerPortTests(unittest.TestCase):
         first, second, third = team.alt_members
         first.alias = 'First'
         first.expected_character_name = 'First Character'
+        first.player_template_id = 'player-a'
         first.enabled = False
 
         widget = self.widget
@@ -761,6 +1185,7 @@ class HeroTeamManagerPortTests(unittest.TestCase):
         self.assertIs(team.alt_members[1], third)
         self.assertEqual(team.alt_members[2].alias, 'First')
         self.assertEqual(team.alt_members[2].expected_character_name, 'First Character')
+        self.assertEqual(team.alt_members[2].player_template_id, 'player-a')
         self.assertFalse(team.alt_members[2].enabled)
         self.assertEqual(dirty_messages, ['Account order changed. Click Save to keep it.'])
         self.assertIsNone(widget._alt_drag_from)
@@ -1400,6 +1825,8 @@ class HeroTeamManagerPortTests(unittest.TestCase):
         self.assertEqual(int(command_type.AccountSettingsSync), 72)
         self.assertEqual(int(command_type.AccountSettingsSyncResult), 73)
         self.assertEqual(int(command_type.PartyStateQuery), 74)
+        self.assertEqual(int(command_type.HeroTeamPlayerSkillTemplateRequest), 75)
+        self.assertEqual(int(command_type.HeroTeamPlayerSkillTemplateResult), 76)
 
         harness = _RealSharedMemorySendHarness('alt@example.com')
         message_index = send_message(
