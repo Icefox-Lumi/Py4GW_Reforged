@@ -111,10 +111,15 @@ class _FakeTemplateUtils:
 def _encode_test_player_template(
     primary_profession_id: int = 1,
     secondary_profession_id: int = 2,
-    attributes: dict[int, int] | None = None,
+    attributes: dict[int, int] | list[tuple[int, int]] | None = None,
     skills: tuple[int, ...] = (1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008),
 ) -> str:
-    attributes = dict(attributes or {29: 12, 38: 3, 40: 12})
+    attribute_source = attributes or {29: 12, 38: 3, 40: 12}
+    attribute_entries = (
+        list(attribute_source.items())
+        if isinstance(attribute_source, dict)
+        else list(attribute_source)
+    )
 
     def bits(value: int, width: int) -> str:
         return bin(int(value))[2:].zfill(int(width))[::-1]
@@ -123,7 +128,7 @@ def _encode_test_player_template(
     profession_bits_code = 0 if max_profession <= 15 else 1 if max_profession <= 63 else 2
     profession_bits = profession_bits_code * 2 + 4
 
-    max_attribute = max(attributes.keys()) if attributes else 0
+    max_attribute = max((int(attribute_id) for attribute_id, _level in attribute_entries), default=0)
     if max_attribute <= 15:
         attribute_bits_code = 0
     elif max_attribute <= 31:
@@ -149,9 +154,9 @@ def _encode_test_player_template(
             bits(profession_bits_code, 2),
             bits(primary_profession_id, profession_bits),
             bits(secondary_profession_id, profession_bits),
-            bits(len(attributes), 4),
+            bits(len(attribute_entries), 4),
             bits(attribute_bits_code, 4),
-            *(bits(attribute_id, attribute_bits) + bits(level, 4) for attribute_id, level in attributes.items()),
+            *(bits(attribute_id, attribute_bits) + bits(level, 4) for attribute_id, level in attribute_entries),
             bits(skill_bits_code, 4),
             *(bits(skill_id, skill_bits) for skill_id in skills),
             bits(0, 1),
@@ -809,6 +814,118 @@ class HeroTeamManagerPortTests(unittest.TestCase):
         guard = self.module.encode_player_template_guard((100, -2, 7, -3), 44, 9)
         self.assertEqual(self.module.decode_player_template_guard(guard), (100, -2, 7, -3, 44, 9))
         self.assertEqual(len(guard), 55)
+
+    def test_fast_casting_attribute_zero_survives_all_player_template_normalization(self) -> None:
+        attributes = {0: 9, 2: 12, 3: 9, 38: 3}
+        code = _encode_test_player_template(
+            primary_profession_id=5,
+            secondary_profession_id=9,
+            attributes=attributes,
+        )
+        spec = self.module.parse_player_template_code(code)
+
+        self.assertIsNotNone(spec)
+        assert spec is not None
+        self.assertEqual(spec.attribute_map, attributes)
+
+        base, effective = self.module.normalize_player_attributes(
+            [
+                {'attribute_id': 0, 'level_base': 9, 'level': 9},
+                {'attribute_id': 2, 'level_base': 12, 'level': 12},
+                {'attribute_id': 3, 'level_base': 9, 'level': 9},
+                {'attribute_id': 38, 'level_base': 3, 'level': 3},
+            ]
+        )
+        self.assertEqual(base, attributes)
+        self.assertEqual(effective, attributes)
+        self.assertEqual(
+            self.module.normalize_player_attributes([{'level_base': 9, 'level': 9}]),
+            ({}, {}),
+        )
+        self.assertEqual(
+            self.module.player_template_direct_flags(
+                spec,
+                spec.skill_ids,
+                spec.primary_profession_id,
+                spec.secondary_profession_id,
+                base,
+            ),
+            {'skills': True, 'professions': True, 'attributes': True},
+        )
+
+        for raw_attributes in (
+            attributes,
+            [
+                {'id': 0, 'level': 9},
+                {'id': 2, 'level': 12},
+                {'id': 3, 'level': 9},
+                {'id': 38, 'level': 3},
+            ],
+        ):
+            decoded = {
+                'profession': 5,
+                'secondary_profession': 9,
+                'skills': list(spec.skill_ids),
+                'attributes': raw_attributes,
+            }
+            normalized = self.module.normalize_player_template_decoded(decoded)
+            self.assertIsNotNone(normalized)
+            assert normalized is not None
+            self.assertEqual(normalized['attributes'], attributes)
+            self.assertEqual(
+                self.module.player_template_normalized_flags(spec, decoded),
+                {'normalized': True},
+            )
+
+        malformed_decoded = {
+            'profession': 5,
+            'secondary_profession': 9,
+            'skills': list(spec.skill_ids),
+            'attributes': [{'level': 9}],
+        }
+        self.assertIsNone(self.module.normalize_player_template_decoded(malformed_decoded))
+
+    def test_player_template_parser_still_rejects_duplicate_attribute_ids(self) -> None:
+        code = _encode_test_player_template(
+            primary_profession_id=5,
+            secondary_profession_id=9,
+            attributes=[(0, 9), (2, 12), (2, 9), (38, 3)],
+        )
+
+        self.assertIsNone(self.module.parse_player_template_code(code))
+
+    def test_fast_casting_player_build_does_not_block_mixed_preflight(self) -> None:
+        code = _encode_test_player_template(
+            primary_profession_id=5,
+            secondary_profession_id=9,
+            attributes={0: 9, 2: 12, 3: 9, 38: 3},
+        )
+        team = self._team_with_alts(['alt@example.com'], [28])
+        team.alt_members[0].player_template_id = 'fast-casting-build'
+        templates = [self.module.HeroTemplateEntry('fast-casting-build', 'Fast Casting', code)]
+        config = self.module.HeroTeamConfig(
+            active_team_id=team.team_id,
+            teams=[team],
+            templates=templates,
+        )
+        party = _FakePartyApi([_FakePartyPlayer(1), _FakePartyPlayer(2)])
+        account = _FakeAccountRecord('alt@example.com', 2, 'Alt', party_id=10, party_position=1)
+        preflight = self.module.build_mixed_team_preflight(
+            config,
+            team.team_id,
+            map_api=_FakeMapApi(8),
+            party_api=party,
+            player_api=_FakePlayerApi(),
+            shared_memory=_FakeSharedMemory([account]),
+        )
+
+        self.assertEqual(self.module.validate_player_template_bindings(team, templates), [])
+        self.assertFalse(
+            any(
+                'configured player build is invalid' in message.lower()
+                for message in preflight.blocking_messages
+            )
+        )
 
     def test_player_template_persistence_is_linked_and_operation_snapshots_code(self) -> None:
         config, team, code = self._player_template_config()

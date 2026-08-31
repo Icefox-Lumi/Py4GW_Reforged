@@ -486,7 +486,7 @@ def parse_player_template_code(
         for _ in range(attributes_count):
             attribute_id, offset = _player_template_read_bits(binary, offset, attribute_bits, Utils)
             level, offset = _player_template_read_bits(binary, offset, 4, Utils)
-            if attribute_id <= 0 or attribute_id in seen_attribute_ids:
+            if attribute_id < 0 or attribute_id in seen_attribute_ids:
                 return None
             seen_attribute_ids.add(attribute_id)
             if level > 0:
@@ -529,7 +529,7 @@ def normalize_player_attributes(raw_attributes: Any) -> tuple[dict[int, int], di
             if isinstance(raw_attribute, dict):
                 values.append(
                     (
-                        raw_attribute.get('attribute_id', raw_attribute.get('id', 0)),
+                        raw_attribute.get('attribute_id', raw_attribute.get('id')),
                         raw_attribute.get('level_base', raw_attribute.get('level', 0)),
                         raw_attribute.get('level', 0),
                     )
@@ -537,7 +537,7 @@ def normalize_player_attributes(raw_attributes: Any) -> tuple[dict[int, int], di
             else:
                 values.append(
                     (
-                        getattr(raw_attribute, 'attribute_id', getattr(raw_attribute, 'id', 0)),
+                        getattr(raw_attribute, 'attribute_id', getattr(raw_attribute, 'id', None)),
                         getattr(raw_attribute, 'level_base', 0),
                         getattr(raw_attribute, 'level', 0),
                     )
@@ -545,12 +545,14 @@ def normalize_player_attributes(raw_attributes: Any) -> tuple[dict[int, int], di
 
     for raw_id, raw_base, raw_effective in values:
         try:
-            attribute_id = int(raw_id or 0)
+            if raw_id is None:
+                continue
+            attribute_id = int(raw_id)
             base_level = int(raw_base or 0)
             effective_level = int(raw_effective or 0)
         except (TypeError, ValueError):
             continue
-        if attribute_id <= 0:
+        if attribute_id < 0:
             continue
         if base_level > 0:
             base_attributes[attribute_id] = base_level
@@ -578,11 +580,13 @@ def normalize_player_template_decoded(decoded: Any) -> dict[str, Any] | None:
         entries = raw_attributes.items()
         for raw_id, raw_level in entries:
             try:
-                attribute_id = int(raw_id or 0)
+                if raw_id is None:
+                    return None
+                attribute_id = int(raw_id)
                 level = int(raw_level or 0)
             except (TypeError, ValueError):
                 return None
-            if attribute_id <= 0:
+            if attribute_id < 0:
                 return None
             if level > 0:
                 attributes[attribute_id] = level
@@ -591,11 +595,14 @@ def normalize_player_template_decoded(decoded: Any) -> dict[str, Any] | None:
             if not isinstance(entry, dict):
                 return None
             try:
-                attribute_id = int(entry.get('id', entry.get('attribute_id', 0)) or 0)
+                raw_id = entry.get('id', entry.get('attribute_id'))
+                if raw_id is None:
+                    return None
+                attribute_id = int(raw_id)
                 level = int(entry.get('level', 0) or 0)
             except (TypeError, ValueError):
                 return None
-            if attribute_id <= 0:
+            if attribute_id < 0:
                 return None
             if level > 0:
                 attributes[attribute_id] = level
