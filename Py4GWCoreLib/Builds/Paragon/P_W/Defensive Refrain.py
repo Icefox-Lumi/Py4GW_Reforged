@@ -153,8 +153,15 @@ class Paragon_Refrain(BuildMgr):
         # The elite, and the reason for the bar, must be first. Its helper casts
         # on self until the Leadership bootstrap reaches 20, then walks the
         # party. Refrains cast before that bootstrap would use the lower rank.
-        if self.IsSkillEquipped(Heroic_Refrain_ID) and (yield from self.skillbook.Paragon.Leadership.Heroic_Refrain()):
-            return True
+        if self.IsSkillEquipped(Heroic_Refrain_ID):
+            if (yield from self.skillbook.Paragon.Leadership.Heroic_Refrain()):
+                return True
+
+            # Heroic_Refrain returns False both when bootstrap is complete and
+            # when the second self cast is merely recharging. Only the live
+            # rank-20 postcondition permits lower-rank refrains to be spread.
+            if not self.skillbook.Paragon.Leadership.IsHeroicRefrainSelfReady():
+                return True
 
         # Spread every equipped party refrain immediately after Heroic Refrain,
         # in or out of combat. Entering combat must not postpone an incomplete
