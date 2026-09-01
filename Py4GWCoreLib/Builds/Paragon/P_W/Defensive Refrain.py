@@ -23,6 +23,8 @@ Ebon_Battle_Standard_of_Wisdom_ID = Skill.GetID("Ebon_Battle_Standard_of_Wisdom"
 Ebon_Battle_Standard_of_Honor_ID = Skill.GetID("Ebon_Battle_Standard_of_Honor")
 Protectors_Defense_ID = Skill.GetID("Protectors_Defense")
 Cant_Touch_This_ID = Skill.GetID("Cant_Touch_This")
+Aria_of_Zeal_ID = Skill.GetID("Aria_of_Zeal")
+Aria_of_Restoration_ID = Skill.GetID("Aria_of_Restoration")
 Make_Your_Time_ID = Skill.GetID("Make_Your_Time")
 Angelic_Protection_ID = Skill.GetID("Angelic_Protection")
 
@@ -94,6 +96,8 @@ class Paragon_Refrain(BuildMgr):
                 Ebon_Battle_Standard_of_Honor_ID,
                 Protectors_Defense_ID,
                 Cant_Touch_This_ID,
+                Aria_of_Zeal_ID,
+                Aria_of_Restoration_ID,
                 Make_Your_Time_ID,
                 Angelic_Protection_ID,
                 Mighty_Throw_ID,
@@ -227,6 +231,12 @@ class Paragon_Refrain(BuildMgr):
         # they are also the bar's energy engine, since Leadership refunds energy
         # per ally a shout or chant affects.
         if self.IsSkillEquipped(Theres_Nothing_to_Fear_ID) and (yield from self.skillbook.Any.NoAttribute.Theres_Nothing_to_Fear()):
+            return True
+
+        if self.IsSkillEquipped(Aria_of_Zeal_ID) and (yield from self.skillbook.Paragon.Motivation.Aria_of_Zeal()):
+            return True
+
+        if self.IsSkillEquipped(Aria_of_Restoration_ID) and (yield from self.skillbook.Paragon.Motivation.Aria_of_Restoration()):
             return True
 
         # Save Yourselves outranks the skills that charge it: when it is already
