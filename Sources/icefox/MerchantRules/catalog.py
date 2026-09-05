@@ -530,7 +530,7 @@ class _CatalogIndexLoader:
         if not isinstance(raw_catalog, dict):
             return 0
 
-        grouped_entries: dict[int, tuple[set[str], set[str]]] = {}
+        grouped_entries: dict[int, tuple[set[str], set[str], set[str]]] = {}
         for raw_identifier, raw_entry in raw_catalog.items():
             if not isinstance(raw_entry, dict):
                 continue
@@ -545,6 +545,7 @@ class _CatalogIndexLoader:
             if not display_name:
                 continue
 
+            identifier = str(raw_entry.get('Identifier', raw_identifier) or raw_identifier).strip()
             mod_type = str(raw_entry.get('ModType', '') or '').strip()
             normalized_name = _normalize_catalog_search_text(display_name)
             if mod_type == 'Prefix' or 'insignia' in normalized_name:
@@ -554,13 +555,18 @@ class _CatalogIndexLoader:
             else:
                 kind = ''
 
-            names_for_model, kinds_for_model = grouped_entries.setdefault(model_id, (set(), set()))
+            names_for_model, kinds_for_model, identifiers_for_model = grouped_entries.setdefault(
+                model_id,
+                (set(), set(), set()),
+            )
             names_for_model.add(display_name)
             if kind:
                 kinds_for_model.add(kind)
+            if identifier:
+                identifiers_for_model.add(identifier)
 
         loaded_count = 0
-        for model_id, (names_for_model, kinds_for_model) in grouped_entries.items():
+        for model_id, (names_for_model, kinds_for_model, identifiers_for_model) in grouped_entries.items():
             names = sorted(str(name) for name in names_for_model if str(name or '').strip())
             kinds = sorted(str(kind) for kind in kinds_for_model if str(kind or '').strip())
             if not names:
@@ -615,6 +621,23 @@ class _CatalogIndexLoader:
                 merged_names = sorted(set(current_names) | set(names))
                 if merged_names:
                     current['rune_model_names'] = merged_names
+
+                current_name = _normalize_catalog_search_text(current.get('name', ''))
+                current_item_type = _normalize_catalog_search_text(current.get('item_type', ''))
+                rich_name = merged_names[0] if len(merged_names) == 1 else ''
+                normalized_rich_name = _normalize_catalog_search_text(rich_name)
+                rich_kind = merged_kinds[0] if len(merged_kinds) == 1 else ''
+                if (
+                    current_name in {'rune', 'insignia'}
+                    and current_item_type == 'rune mod'
+                    and rich_name
+                    and normalized_rich_name not in {'rune', 'insignia'}
+                    and rich_kind in normalized_rich_name.split()
+                    and len(identifiers_for_model) == 1
+                ):
+                    # Keep the ItemHandling record and provenance, but use an unambiguous
+                    # rich rune/insignia name as the shared Merchant Rules display label.
+                    current['name'] = rich_name
 
                 current_alias_labels = current.get('alias_labels', {})
                 if not isinstance(current_alias_labels, dict):

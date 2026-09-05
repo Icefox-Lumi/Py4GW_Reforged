@@ -7922,6 +7922,172 @@ def _test_common_material_targeting_revalidates_item_type_drift(module) -> None:
     _expect(not valid and reason == "target item type changed before Materials confirmation", "Live ItemType drift must fail targeted salvage safely.")
 
 
+def _test_salvage_kit_model_contract_and_normal_boundary(module) -> None:
+    normal_model_id = int(module.ModelID.Salvage_Kit.value)
+    pre_searing_model_id = int(module.ModelID.Salvage_Kit_preSearing.value)
+
+    _expect(normal_model_id == 2992, "The ordinary post-Searing Salvage Kit contract must remain literal model 2992.")
+    _expect(pre_searing_model_id == 2993, "The pre-Searing Salvage Kit contract must remain literal model 2993.")
+    _expect(normal_model_id != pre_searing_model_id, "Normal and pre-Searing Salvage Kit models must remain distinct.")
+
+    widget = _make_widget(module)
+    _expect(
+        widget._salvage_kit_model_supports_option(2992, module.SALVAGE_OPTION_MATERIALS),
+        "Merchant Rules must recognize a literal runtime model-2992 Salvage Kit for Materials salvage.",
+    )
+
+
+def _test_generic_lesser_salvage_selectors_accept_both_models(_module) -> None:
+    selector_paths = (
+        REPO_ROOT / "Py4GWCoreLib" / "routines_src" / "behaviourtrees_src" / "items.py",
+        REPO_ROOT / "Sources" / "frenkeyLib" / "ItemHandling" / "BTNodes.py",
+    )
+    expected_members = {
+        "ModelID.Salvage_Kit",
+        "ModelID.Salvage_Kit_preSearing",
+    }
+
+    for selector_path in selector_paths:
+        tree = ast.parse(selector_path.read_text(encoding="utf-8"))
+        salvage_functions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "SalvageItem"
+        ]
+        _expect(len(salvage_functions) == 1, f"{selector_path.name} must expose one auditable SalvageItem selector.")
+        salvage_function = salvage_functions[0]
+
+        lesser_assignments = [
+            node
+            for node in ast.walk(salvage_function)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "lesser_kit_model_ids" for target in node.targets)
+            and isinstance(node.value, ast.Tuple)
+        ]
+        _expect(len(lesser_assignments) == 1, f"{selector_path.name} must define one explicit lesser-kit model tuple.")
+        actual_members = {ast.unparse(element) for element in lesser_assignments[0].value.elts}
+        _expect(
+            actual_members == expected_members,
+            f"{selector_path.name} must explicitly preserve normal 2992 and pre-Searing 2993 lesser-kit models.",
+        )
+
+        preferred_uses = [
+            node
+            for node in ast.walk(salvage_function)
+            if isinstance(node, ast.Call)
+            and ast.unparse(node.func) == "_resolve_preferred_kit"
+            and any(isinstance(argument, ast.Name) and argument.id == "lesser_kit_model_ids" for argument in node.args)
+        ]
+        membership_uses = [
+            node
+            for node in ast.walk(salvage_function)
+            if isinstance(node, ast.Compare)
+            and any(isinstance(operator, ast.In) for operator in node.ops)
+            and any(
+                isinstance(comparator, ast.Name) and comparator.id == "lesser_kit_model_ids"
+                for comparator in node.comparators
+            )
+        ]
+        _expect(
+            preferred_uses,
+            f"{selector_path.name} must accept both lesser-kit models for preferred-kit validation.",
+        )
+        _expect(
+            len(membership_uses) >= 2,
+            (
+                f"{selector_path.name} must use both lesser-kit models for fallback selection "
+                "and lesser-kit safety checks."
+            ),
+        )
+
+
+def _test_literal_kama_iron_salvage_plan_with_normal_kit(module) -> None:
+    widget = _make_widget(module)
+    original_paths = {
+        "CATALOG_PATH": module.CATALOG_PATH,
+        "DROP_DATA_PATH": module.DROP_DATA_PATH,
+        "ITEM_HANDLING_ITEMS_CATALOG_PATH": module.ITEM_HANDLING_ITEMS_CATALOG_PATH,
+        "RUNES_CATALOG_PATH": module.RUNES_CATALOG_PATH,
+    }
+    try:
+        module.CATALOG_PATH = str(REPO_ROOT / "Widgets" / "Data" / "merchant_rules_catalog.json")
+        module.DROP_DATA_PATH = str(REPO_ROOT / "Widgets" / "Data" / "modelid_drop_data.json")
+        module.ITEM_HANDLING_ITEMS_CATALOG_PATH = str(
+            REPO_ROOT / "Sources" / "frenkeyLib" / "ItemHandling" / "Items" / "items.json"
+        )
+        module.RUNES_CATALOG_PATH = str(REPO_ROOT / "Sources" / "marks_sources" / "mods_data" / "runes.json")
+        widget._load_catalog()
+    finally:
+        for name, value in original_paths.items():
+            setattr(module, name, value)
+
+    _expect(
+        int(module.ItemType.Daggers) == 32,
+        "The external ItemType contract for Daggers must remain literal value 32.",
+    )
+    _expect(
+        widget.common_salvage_model_ids_by_item_key.get((32, 763)) == (948,),
+        "Normal Kamas (Daggers, model 763) must retain literal Iron Ingot model 948 as a common salvage output.",
+    )
+
+    rule = module.SalvageRule(
+        enabled=True,
+        target_common_material_model_ids=[948],
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+        name="Kama to Iron",
+    )
+    widget.salvage_settings = _salvage_settings(module, rules=[rule])
+    widget._get_supported_context = lambda *, passive=False: (False, "Merchant support unavailable.", {})
+
+    kama = _make_item(
+        module,
+        item_id=76301,
+        model_id=763,
+        name="Kamas",
+        rarity="White",
+        identified=True,
+        salvageable=True,
+        is_weapon_like=True,
+        item_type_id=32,
+        item_type_name="Daggers",
+    )
+    normal_kit_item_id = 299201
+    widget._collect_inventory_items = lambda: [kama]
+    widget._get_inventory_item_ids = lambda: [normal_kit_item_id]
+
+    original_item_api = getattr(module.GLOBAL_CACHE, "Item", None)
+    module.GLOBAL_CACHE.Item = types.SimpleNamespace(
+        GetModelID=lambda item_id: 2992 if int(item_id) == normal_kit_item_id else 0,
+        Usage=types.SimpleNamespace(
+            GetUses=lambda item_id: 10 if int(item_id) == normal_kit_item_id else 0,
+        ),
+    )
+    try:
+        _expect(
+            widget._get_normal_salvage_kit_id() == normal_kit_item_id,
+            "Literal runtime model 2992 must resolve as the available normal Salvage Kit.",
+        )
+        plan = widget._build_plan()
+    finally:
+        if original_item_api is None:
+            delattr(module.GLOBAL_CACHE, "Item")
+        else:
+            module.GLOBAL_CACHE.Item = original_item_api
+
+    runnable_entries = [
+        entry
+        for entry in plan.entries
+        if entry.action_type == "salvage"
+        and entry.state == module.PLAN_STATE_WILL_EXECUTE
+        and entry.model_id == 763
+    ]
+    _expect(
+        plan.salvage_item_ids == [kama.item_id],
+        "The Iron-targeted normal Kama must reach the salvage execution plan.",
+    )
+    _expect(len(runnable_entries) == 1, "Preview must contain one runnable normal-Kama salvage entry.")
+
+
 def _test_stackable_salvage_rule_drains_same_stack(module) -> None:
     widget = _make_widget(module)
     rule = module.SalvageRule(
@@ -22182,6 +22348,148 @@ def _test_item_handling_catalog_migration_loads_primary_catalog_and_modelid_fall
             "Identification Kit should use the curated override when present and ItemHandling otherwise.",
         )
 
+        vigor_entry = widget.catalog_by_model_id.get(5551, {})
+        _expect(
+            vigor_entry.get("model_id") == 5551
+            and vigor_entry.get("name") == "Rune of Superior Vigor",
+            "An unambiguous rune model should use its rich display name in the Merchant Rules catalog.",
+        )
+        _expect(
+            vigor_entry.get("source") == "item_handling_items_catalog"
+            and vigor_entry.get("priority") == 20
+            and vigor_entry.get("item_type") == "Rune_Mod",
+            "Rich rune-name promotion must preserve the ItemHandling record provenance and type.",
+        )
+        vigor_aliases = vigor_entry.get("alias_labels", {})
+        _expect(
+            "Rune of Superior Vigor" in vigor_entry.get("rune_model_names", [])
+            and "rune" in vigor_aliases
+            and "rune of superior vigor" in vigor_aliases,
+            "Rich rune-name promotion must preserve rune metadata and search aliases.",
+        )
+        for shared_rune_model_id in (898, 5550):
+            shared_entry = widget.catalog_by_model_id.get(shared_rune_model_id, {})
+            _expect(
+                shared_entry.get("name") == "Rune",
+                "Multi-name rune models must retain their generic family display name.",
+            )
+            shared_names = list(shared_entry.get("rune_model_names", []))
+            shared_aliases = shared_entry.get("alias_labels", {})
+            _expect(
+                len(shared_names) > 1
+                and all(module._normalize_catalog_search_text(name) in shared_aliases for name in shared_names),
+                "Multi-name rune models must retain every specific rich search alias.",
+            )
+            for shared_name in shared_names:
+                shared_matches = widget._search_catalog(
+                    shared_name,
+                    limit=max(1, len(widget.catalog_by_model_id)),
+                )
+                _expect(
+                    shared_rune_model_id in {int(entry.get("model_id", 0)) for entry in shared_matches},
+                    "Multi-name rune models must remain searchable by each specific rich alias.",
+                )
+
+        expected_insignia_names = {
+            19131: "Radiant Insignia",
+            19132: "Survivor Insignia",
+            19133: "Stalwart Insignia",
+            19134: "Brawler's Insignia",
+            19135: "Blessed Insignia",
+            19136: "Herald's Insignia",
+            19137: "Sentry's Insignia",
+        }
+        _expect(
+            all(
+                widget.catalog_by_model_id.get(model_id, {}).get("name") == expected_name
+                for model_id, expected_name in expected_insignia_names.items()
+            ),
+            "Unambiguous generic insignia models should use their unique rich display names.",
+        )
+
+        widget.cleanup_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+        widget.cleanup_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+        expected_tome_records = {
+            21786: ("Elite Assassin Tome", "EliteTome"),
+            21787: ("Elite Mesmer Tome", "EliteTome"),
+            21788: ("Elite Necromancer Tome", "EliteTome"),
+            21789: ("Elite Elementalist Tome", "EliteTome"),
+            21790: ("Elite Monk Tome", "EliteTome"),
+            21791: ("Elite Warrior Tome", "EliteTome"),
+            21792: ("Elite Ranger Tome", "EliteTome"),
+            21793: ("Elite Dervish Tome", "EliteTome"),
+            21794: ("Elite Ritualist Tome", "EliteTome"),
+            21795: ("Elite Paragon Tome", "EliteTome"),
+            21796: ("Assassin Tome", "NormalTome"),
+            21797: ("Mesmer Tome", "NormalTome"),
+            21798: ("Necromancer Tome", "NormalTome"),
+            21799: ("Elementalist Tome", "NormalTome"),
+            21800: ("Monk Tome", "NormalTome"),
+            21801: ("Warrior Tome", "NormalTome"),
+            21802: ("Ranger Tome", "NormalTome"),
+            21803: ("Dervish Tome", "NormalTome"),
+            21804: ("Ritualist Tome", "NormalTome"),
+            21805: ("Paragon Tome", "NormalTome"),
+        }
+        for model_id, (expected_name, expected_subcategory) in expected_tome_records.items():
+            tome_entry = widget.catalog_by_model_id.get(model_id, {})
+            _expect(
+                tome_entry.get("name") == expected_name
+                and tome_entry.get("category") == "Tome"
+                and tome_entry.get("sub_category") == expected_subcategory,
+                f"Tome model {model_id} must retain its correct name and category metadata.",
+            )
+
+        expected_tome_model_ids = set(expected_tome_records)
+        tome_search_model_ids = {
+            int(entry.get("model_id", 0))
+            for entry in widget._search_cleanup_deposit_catalog("tome")
+        }
+        _expect(
+            tome_search_model_ids == expected_tome_model_ids,
+            "Xunlai Tome search should expose all regular and elite tome models, not only the first 12 results.",
+        )
+        for query in ("superior", "vigor"):
+            matches = widget._search_cleanup_deposit_catalog(query)
+            _expect(
+                5551 in {int(entry.get("model_id", 0)) for entry in matches},
+                f"Xunlai search should surface Rune of Superior Vigor by {query!r} after name promotion.",
+            )
+
+        widget.cleanup_item_type_filter_category = module.DEPOSIT_FILTER_CONSUMABLES
+        widget.cleanup_item_type_filter_subcategory = module.DEPOSIT_FILTER_CONSUMABLES_OTHER
+        elite_tome_model_ids = {
+            model_id
+            for model_id, (_name, subcategory) in expected_tome_records.items()
+            if subcategory == "EliteTome"
+        }
+        filtered_elite_model_ids = {
+            int(entry.get("model_id", 0))
+            for entry in widget._search_cleanup_deposit_catalog("elite")
+        }
+        _expect(
+            filtered_elite_model_ids == elite_tome_model_ids,
+            "The Tome-compatible consumables filter should expose all ten elite Tomes without equipment matches.",
+        )
+
+        cleanup_target = module.CleanupTarget(
+            model_id=5551,
+            keep_on_character=3,
+            scope=module.CLEANUP_TARGET_SCOPE_EXACT,
+        )
+        matching_rune = _make_item(module, item_id=555101, model_id=5551, name="Rune")
+        other_rune = _make_item(module, item_id=555001, model_id=5550, name="Rune")
+        _expect(
+            widget._cleanup_target_matches_item(cleanup_target, matching_rune)
+            and not widget._cleanup_target_matches_item(cleanup_target, other_rune),
+            "A richer catalog name must not change exact model matching for Xunlai targets.",
+        )
+        _expect(
+            module._serialize_cleanup_targets([cleanup_target])
+            == [{"model_id": 5551, "keep_on_character": 3, "scope": module.CLEANUP_TARGET_SCOPE_EXACT}],
+            "A richer catalog name must not change persisted cleanup identity, scope, or keep amount.",
+        )
+
         crystalline_entry = widget.catalog_by_model_id.get(399, {})
         _expect(crystalline_entry.get("source") == "modelid_enum_fallback", "Missing rich catalog items should be added from ModelID fallback.")
         _expect(crystalline_entry.get("name") == "Crystalline Sword", "CamelCase ModelID fallback names should be humanized for display/search.")
@@ -22254,6 +22562,35 @@ def _test_catalog_loads_without_deprecated_item_mirror(module) -> None:
     finally:
         for name, value in original_paths.items():
             setattr(module, name, value)
+
+
+def _test_cleanup_deposit_search_expands_direct_name_matches_generically(module) -> None:
+    widget = _make_widget(module)
+    widget.cleanup_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+    widget.cleanup_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+    direct_model_ids = set(range(41000, 41060))
+    widget.catalog_by_model_id = {
+        model_id: {
+            "model_id": model_id,
+            "name": f"Archive Family Item {model_id}",
+            "item_type": "Trophy",
+            "alias_labels": {f"weak family alias {model_id}": f"Weak Family Alias {model_id}"},
+        }
+        for model_id in direct_model_ids
+    }
+
+    direct_results = widget._search_cleanup_deposit_catalog("archive family")
+    _expect(
+        len(direct_results) == module.SEARCH_RESULT_LIMIT * 4
+        and all(int(entry.get("model_id", 0)) in direct_model_ids for entry in direct_results),
+        "Xunlai search should generically expand strong direct-name matches within its bounded result window.",
+    )
+
+    weak_results = widget._search_cleanup_deposit_catalog("weak family")
+    _expect(
+        len(weak_results) == module.SEARCH_RESULT_LIMIT,
+        "Xunlai search should retain the normal picker limit when additional matches are alias-only.",
+    )
 
 
 def _test_scroll_of_heros_insight_wins_duplicate_model_id_and_searches(module) -> None:
@@ -22541,6 +22878,10 @@ def _test_rune_model_catalog_enriches_deposit_filter_aliases(module) -> None:
         _expect(
             entry.get("source") == "test_existing_catalog",
             "Rune metadata should enrich existing entries without replacing them.",
+        )
+        _expect(
+            entry.get("name") == "Radiant Insignia",
+            "Unambiguous rune metadata should promote a generic existing primary display name.",
         )
         _expect(
             "insignia" in entry.get("rune_model_kinds", []),
@@ -28178,6 +28519,18 @@ def main() -> int:
                 lambda: _test_salvage_option_combo_selects_public_choices(module),
             ),
             (
+                "salvage_kit_model_contract_and_normal_boundary",
+                lambda: _test_salvage_kit_model_contract_and_normal_boundary(module),
+            ),
+            (
+                "generic_lesser_salvage_selectors_accept_both_models",
+                lambda: _test_generic_lesser_salvage_selectors_accept_both_models(module),
+            ),
+            (
+                "literal_kama_iron_salvage_plan_with_normal_kit",
+                lambda: _test_literal_kama_iron_salvage_plan_with_normal_kit(module),
+            ),
+            (
                 "common_material_targeting_known_possible_any_and_empty",
                 lambda: _test_common_material_targeting_known_possible_any_and_empty(module),
             ),
@@ -29104,6 +29457,10 @@ def main() -> int:
                 lambda: _test_catalog_loads_without_deprecated_item_mirror(module),
             ),
             (
+                "cleanup_deposit_search_expands_direct_name_matches_generically",
+                lambda: _test_cleanup_deposit_search_expands_direct_name_matches_generically(module),
+            ),
+            (
                 "scroll_of_heros_insight_wins_duplicate_model_id_and_searches",
                 lambda: _test_scroll_of_heros_insight_wins_duplicate_model_id_and_searches(module),
             ),
@@ -29283,6 +29640,13 @@ def main() -> int:
                 lambda: _test_catalog_loader_preserves_failure_aggregation_and_import_boundary(module),
             ),
         ]
+        if os.environ.get("MERCHANT_RULES_SALVAGE_KIT_ONLY") == "1":
+            salvage_kit_contract_names = {
+                "salvage_kit_model_contract_and_normal_boundary",
+                "generic_lesser_salvage_selectors_accept_both_models",
+                "literal_kama_iron_salvage_plan_with_normal_kit",
+            }
+            tests = [test for test in tests if test[0] in salvage_kit_contract_names]
         if os.environ.get("MERCHANT_RULES_CATALOG_CONTRACTS") == "1":
             tests.extend(catalog_contract_tests)
         if os.environ.get("MERCHANT_RULES_CATALOG_ONLY") == "1":

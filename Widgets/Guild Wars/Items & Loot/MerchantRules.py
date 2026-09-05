@@ -15387,21 +15387,35 @@ class MerchantRulesWidget:
         raw_query: str,
         limit: int = SEARCH_RESULT_LIMIT,
     ) -> list[dict[str, object]]:
+        query = _normalize_catalog_search_text(raw_query)
+        if not query:
+            return []
+
         category = _normalize_deposit_filter_category(self.cleanup_item_type_filter_category)
         subcategory = _normalize_deposit_filter_subcategory(category, self.cleanup_item_type_filter_subcategory)
         self.cleanup_item_type_filter_category = category
         self.cleanup_item_type_filter_subcategory = subcategory
+        base_limit = max(1, int(limit))
+        expanded_limit = max(base_limit, SEARCH_RESULT_LIMIT * 4)
         if category == DEPOSIT_FILTER_ALL:
-            return self._search_catalog(raw_query, limit=limit)
-        return self._search_catalog_with_predicate(
-            raw_query,
-            entry_predicate=lambda entry: self._catalog_entry_matches_cleanup_deposit_filter(
-                entry,
-                category,
-                subcategory,
-            ),
-            limit=limit,
-        )
+            ranked_results = self._search_catalog(raw_query, limit=expanded_limit)
+        else:
+            ranked_results = self._search_catalog_with_predicate(
+                raw_query,
+                entry_predicate=lambda entry: self._catalog_entry_matches_cleanup_deposit_filter(
+                    entry,
+                    category,
+                    subcategory,
+                ),
+                limit=expanded_limit,
+            )
+
+        visible_results = list(ranked_results[:base_limit])
+        for entry in ranked_results[base_limit:]:
+            name = _normalize_catalog_search_text(entry.get("name", ""))
+            if query in name:
+                visible_results.append(entry)
+        return visible_results[:expanded_limit]
 
     def _search_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
         query = _normalize_catalog_search_text(raw_query)
