@@ -132,7 +132,7 @@ INVENTORY_SHORTCUT_LIVE_ACTION_REFRESH_MATERIAL_STORAGE_COUNT = "refresh_materia
 INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
-PROFILE_VERSION = 39
+PROFILE_VERSION = 40
 MERCHANT_RULES_OWNED_ACTION_QUEUES = frozenset({"ACTION", "IDENTIFY", "SALVAGE"})
 # Live configuration remains account-scoped. Saved profiles use one standalone
 # JsonFactory document per filename, while the legacy documents remain migration input.
@@ -2013,10 +2013,12 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
         ),
     },
     "protected_items": {
-        "short": "Items selected under Exact Items are protected from destructive actions.",
+        "short": "Exact Items protects every copy of each selected item.",
         "long": (
-            "Exact Items protects selected items from sell, salvage, and sell-from-storage. Destroy also skips them "
-            "unless Allow destroying protected items this session is enabled. Configured deposit rules may still move them."
+            "Exact Items protects every copy of a specific item you choose, including copies obtained later. "
+            "Equipment & Upgrades protects broader equipment groups by type or live properties such as requirements, "
+            "customization, identification, and attached upgrades. Destroy also skips protected items unless Allow "
+            "destroying protected items this session is enabled. Configured deposit rules may still move them."
         ),
     },
     "destroy_include_protected": {
@@ -2496,6 +2498,107 @@ def _normalize_cleanup_blacklist_model_ids(raw_model_ids: object) -> list[int]:
 
 def _normalize_protected_item_model_ids(raw_model_ids: object) -> list[int]:
     return _normalize_cleanup_blacklist_model_ids(raw_model_ids)
+
+
+@dataclass(frozen=True)
+class ExactProtectionTarget:
+    """One Exact Items target; ``None`` preserves a legacy model-wide wildcard."""
+
+    model_id: int
+    item_type_id: int | None = None
+
+
+_EXACT_NON_RUNTIME_ITEM_TYPES = frozenset(
+    {
+        ItemType.Weapon,
+        ItemType.MartialWeapon,
+        ItemType.OffhandOrShield,
+        ItemType.EquippableItem,
+        ItemType.SpellcastingWeapon,
+        ItemType.Unknown,
+    }
+)
+
+
+def _is_valid_exact_item_type_id(raw_item_type_id: object) -> bool:
+    if isinstance(raw_item_type_id, bool):
+        return False
+    try:
+        item_type = ItemType(_safe_int(raw_item_type_id, -1))
+    except (TypeError, ValueError):
+        return False
+    return item_type not in _EXACT_NON_RUNTIME_ITEM_TYPES
+
+
+def _strict_exact_target_integer(raw_value: object) -> int | None:
+    """Return only real integer values for serialized typed Exact targets."""
+
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        return None
+    return int(raw_value)
+
+
+def _normalize_protected_item_targets(
+    raw_targets: object,
+    *,
+    strict: bool = False,
+) -> list[ExactProtectionTarget]:
+    if not isinstance(raw_targets, list):
+        if strict:
+            raise ValueError("Merchant Rules protected_item_targets must be a list.")
+        return []
+
+    normalized: list[ExactProtectionTarget] = []
+    seen_keys: set[tuple[int, int]] = set()
+    for raw_target in raw_targets:
+        if isinstance(raw_target, ExactProtectionTarget):
+            model_id = raw_target.model_id
+            item_type_id = raw_target.item_type_id
+        elif isinstance(raw_target, dict):
+            model_id = raw_target.get("model_id", 0)
+            item_type_id = raw_target.get("item_type_id")
+        else:
+            model_id = 0
+            item_type_id = None
+
+        if strict:
+            strict_model_id = _strict_exact_target_integer(model_id)
+            safe_item_type_id = (
+                _strict_exact_target_integer(item_type_id)
+                if item_type_id is not None
+                else None
+            )
+            safe_model_id = max(0, strict_model_id) if strict_model_id is not None else 0
+        else:
+            safe_model_id = max(0, _safe_int(model_id, 0))
+            safe_item_type_id = (
+                _safe_int(item_type_id, -1)
+                if item_type_id is not None
+                else None
+            )
+        valid_target = (
+            safe_model_id > 0
+            and safe_item_type_id is not None
+            and _is_valid_exact_item_type_id(safe_item_type_id)
+        )
+        if not valid_target:
+            if strict:
+                raise ValueError("Merchant Rules protected_item_targets contains an invalid typed target.")
+            continue
+
+        if safe_item_type_id is None:
+            continue
+        target_key = (safe_item_type_id, safe_model_id)
+        if target_key in seen_keys:
+            continue
+        seen_keys.add(target_key)
+        normalized.append(
+            ExactProtectionTarget(
+                model_id=safe_model_id,
+                item_type_id=safe_item_type_id,
+            )
+        )
+    return normalized
 
 
 @dataclass
@@ -6324,6 +6427,17 @@ def _serialize_protected_item_model_ids(raw_model_ids: object) -> list[int]:
     return [int(model_id) for model_id in _normalize_protected_item_model_ids(raw_model_ids)]
 
 
+def _serialize_protected_item_targets(raw_targets: object) -> list[dict[str, int]]:
+    return [
+        {
+            "item_type_id": int(target.item_type_id),
+            "model_id": int(target.model_id),
+        }
+        for target in _normalize_protected_item_targets(raw_targets)
+        if target.item_type_id is not None
+    ]
+
+
 def _normalize_rule_id(value: object) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "", str(value or "").strip())
 
@@ -7299,6 +7413,7 @@ class MerchantRulesWidget:
         self.cleanup_blacklist_model_ids: list[int] = []
         self.cleanup_protection_sources: list[CleanupProtectionSource] = []
         self.protected_item_model_ids: list[int] = []
+        self.protected_item_targets: list[ExactProtectionTarget] = []
         self.auto_cleanup_on_outpost_entry = False
         self.gold_balance_enabled = False
         self.gold_balance_on_outpost_entry = False
@@ -7445,6 +7560,8 @@ class MerchantRulesWidget:
         self.catalog_loaded = False
         self.catalog_load_error = ""
         self.catalog_by_model_id: dict[int, dict[str, object]] = {}
+        self.exact_catalog_by_item_key: dict[tuple[int, int], dict[str, object]] = {}
+        self.exact_catalog_untyped_by_model_id: dict[int, dict[str, object]] = {}
         self._catalog_generation = 0
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
@@ -7748,7 +7865,7 @@ class MerchantRulesWidget:
         return profile_name or self._get_live_profile_display_name()
 
     def _get_profile_safety_summary_text(self) -> str:
-        protected_item_count = len(_normalize_protected_item_model_ids(self.protected_item_model_ids))
+        protected_item_count = self._get_exact_protection_target_count()
         keep_out_count = len(_normalize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids))
         live_actions_state = "enabled" if self.inventory_right_click_live_actions_enabled else "disabled"
         shortcuts_state = "enabled" if self.inventory_right_click_shortcuts_enabled else "disabled"
@@ -9009,14 +9126,25 @@ class MerchantRulesWidget:
 
     def _apply_inventory_shortcut_protect(self, item: InventoryItemInfo):
         model_id = max(0, _safe_int(getattr(item, "model_id", 0), 0))
+        item_type_id = _safe_int(getattr(item, "item_type_id", -1), -1)
         item_label = self._format_inventory_shortcut_item_label(item)
         if model_id <= 0:
             self.status_message = "Could not protect this item because Merchant Rules could not read it."
             return
-        if model_id in _normalize_protected_item_model_ids(self.protected_item_model_ids):
+        target = ExactProtectionTarget(
+            model_id=model_id,
+            item_type_id=item_type_id if _is_valid_exact_item_type_id(item_type_id) else None,
+        )
+        if target.item_type_id is None and model_id in _normalize_protected_item_model_ids(self.protected_item_model_ids):
             self.status_message = f"{item_label} is already protected."
             return
-        if not self._add_protected_item_model_id(model_id):
+        if target.item_type_id is not None and (
+            target.item_type_id,
+            target.model_id,
+        ) in self._get_protected_item_typed_target_set():
+            self.status_message = f"{item_label} is already protected."
+            return
+        if not self._add_exact_protection_target(target):
             self.status_message = f"Could not add {item_label} to Protected Items."
             return
         self._focus_inventory_shortcut_workspace(
@@ -9024,9 +9152,18 @@ class MerchantRulesWidget:
             protections_workspace=PROTECTIONS_WORKSPACE_PROTECTED_ITEMS,
         )
         self.active_protected_items_workspace = PROTECTED_ITEMS_WORKSPACE_EXACT
+        if target.item_type_id is None:
+            status_message = (
+                "Item protected with a broad protection because its type could not be determined: "
+                f"{item_label}. Preview again before execution."
+            )
+            log_message = f"added broad model protection for {item_label} because item type could not be determined."
+        else:
+            status_message = f"Protected {item_label}. Preview again before execution."
+            log_message = f"added {item_label} to Protected Items."
         self._finish_inventory_shortcut_config_change(
-            f"Protected {item_label}. Preview again before execution.",
-            log_message=f"added {item_label} to Protected Items.",
+            status_message,
+            log_message=log_message,
         )
 
     def _apply_inventory_shortcut_deposit_target(self, item: InventoryItemInfo):
@@ -9378,7 +9515,10 @@ class MerchantRulesWidget:
             return self._get_hard_protection_hit(item, self._collect_enabled_sell_rules()) is not None
         except Exception as exc:
             self._debug_log(f"Inventory shortcut protection check failed: {exc}")
-        return self._is_exact_protected_item_model_id(model_id)
+        return self._is_exact_protected_item_model_id(
+            model_id,
+            _safe_int(getattr(item, "item_type_id", -1), -1),
+        )
 
     def _is_inventory_shortcut_all_matching_deposit_candidate(self, item: InventoryItemInfo | None) -> bool:
         if item is None:
@@ -11648,10 +11788,11 @@ class MerchantRulesWidget:
             "cleanup_blacklist_model_ids": [],
             "cleanup_protection_sources": [],
             "protected_item_model_ids": [],
+            "protected_item_targets": [],
         }
 
     def _build_profile_payload(self) -> dict[str, object]:
-        """Serialize current settings into a normalized profile-v39 payload."""
+        """Serialize current settings into a normalized profile-v40 payload."""
 
         payload = {
             "version": PROFILE_VERSION,
@@ -11699,6 +11840,7 @@ class MerchantRulesWidget:
             "cleanup_blacklist_model_ids": _serialize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids),
             "cleanup_protection_sources": _serialize_cleanup_protection_sources(self.cleanup_protection_sources),
             "protected_item_model_ids": _serialize_protected_item_model_ids(self.protected_item_model_ids),
+            "protected_item_targets": _serialize_protected_item_targets(self.protected_item_targets),
         }
         return payload
 
@@ -11766,6 +11908,12 @@ class MerchantRulesWidget:
             protected_item_model_ids_raw = []
         if not isinstance(protected_item_model_ids_raw, list):
             raise ValueError("Merchant Rules protected_item_model_ids must be a list.")
+
+        protected_item_targets_raw = raw_payload.get("protected_item_targets", [])
+        if protected_item_targets_raw is None:
+            protected_item_targets_raw = []
+        if not isinstance(protected_item_targets_raw, list):
+            raise ValueError("Merchant Rules protected_item_targets must be a list.")
 
         manual_vendor_auto_buy_categories = _normalize_manual_vendor_category_flags(
             raw_payload.get("manual_vendor_auto_buy_categories"),
@@ -11920,6 +12068,10 @@ class MerchantRulesWidget:
             )
 
         normalized_protected_item_model_ids = _normalize_protected_item_model_ids(protected_item_model_ids_raw)
+        normalized_protected_item_targets = _normalize_protected_item_targets(
+            protected_item_targets_raw,
+            strict=True,
+        )
 
         return {
             "version": PROFILE_VERSION,
@@ -11963,6 +12115,7 @@ class MerchantRulesWidget:
             "cleanup_blacklist_model_ids": _serialize_cleanup_blacklist_model_ids(normalized_cleanup_blacklist_model_ids),
             "cleanup_protection_sources": _serialize_cleanup_protection_sources(normalized_cleanup_sources),
             "protected_item_model_ids": _serialize_protected_item_model_ids(normalized_protected_item_model_ids),
+            "protected_item_targets": _serialize_protected_item_targets(normalized_protected_item_targets),
         }
 
     def _apply_profile_payload(self, payload: dict[str, object]):
@@ -12046,6 +12199,9 @@ class MerchantRulesWidget:
         self.protected_item_model_ids = _normalize_protected_item_model_ids(
             _coerce_list(payload.get("protected_item_model_ids", []))
         )
+        self.protected_item_targets = _normalize_protected_item_targets(
+            _coerce_list(payload.get("protected_item_targets", []))
+        )
         self.auto_cleanup_on_outpost_entry = bool(payload.get("auto_cleanup_on_outpost_entry", False))
         self.gold_balance_enabled = bool(payload.get("gold_balance_enabled", False))
         self.gold_balance_on_outpost_entry = bool(payload.get("gold_balance_on_outpost_entry", False))
@@ -12092,6 +12248,7 @@ class MerchantRulesWidget:
         self.cleanup_blacklist_model_ids = _normalize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids)
         self.cleanup_protection_sources = _normalize_cleanup_protection_sources(self.cleanup_protection_sources)
         self.protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
+        self.protected_item_targets = _normalize_protected_item_targets(self.protected_item_targets)
         if self.cleanup_targets != previous_cleanup_targets:
             self._cleanup_targets_revision += 1
         self._invalidate_cleanup_target_display_cache()
@@ -14059,6 +14216,8 @@ class MerchantRulesWidget:
         self.catalog_loaded = False
         self.catalog_load_error = ""
         self.catalog_by_model_id = {}
+        self.exact_catalog_by_item_key = {}
+        self.exact_catalog_untyped_by_model_id = {}
         self.catalog_alias_to_model_ids = {}
         self.catalog_alias_display_names = {}
         self.common_salvage_model_ids_by_item_key = {}
@@ -14140,6 +14299,8 @@ class MerchantRulesWidget:
 
     def _load_catalog(self):
         self.catalog_by_model_id = {}
+        self.exact_catalog_by_item_key = {}
+        self.exact_catalog_untyped_by_model_id = {}
         self.catalog_alias_to_model_ids = {}
         self.catalog_alias_display_names = {}
         self.common_salvage_model_ids_by_item_key = {}
@@ -14151,6 +14312,8 @@ class MerchantRulesWidget:
 
         result: CatalogLoadResult = self._get_catalog_loader().load()
         self.catalog_by_model_id = result.catalog_by_model_id
+        self.exact_catalog_by_item_key = result.exact_catalog_by_item_key
+        self.exact_catalog_untyped_by_model_id = result.exact_catalog_untyped_by_model_id
         self.catalog_alias_to_model_ids = result.catalog_alias_to_model_ids
         self.catalog_alias_display_names = result.catalog_alias_display_names
         self.common_salvage_model_ids_by_item_key = result.common_salvage_model_ids_by_item_key
@@ -14525,6 +14688,186 @@ class MerchantRulesWidget:
         if item_type:
             label = f"{label} [{item_type}]"
         return self._append_model_attribute_suffix(label, model_id)
+
+    def _iter_exact_catalog_entries(self) -> Iterable[dict[str, object]]:
+        yield from self.exact_catalog_by_item_key.values()
+        yield from self.exact_catalog_untyped_by_model_id.values()
+
+    def _get_exact_catalog_entry(self, item_type_id: object, model_id: object) -> dict[str, object] | None:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        safe_item_type_id = _safe_int(item_type_id, -1)
+        if safe_model_id <= 0 or safe_item_type_id < 0:
+            return None
+        return self.exact_catalog_by_item_key.get((safe_item_type_id, safe_model_id))
+
+    def _get_exact_catalog_entry_key(self, entry: dict[str, object]) -> tuple[int | None, int] | None:
+        safe_model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
+        if safe_model_id <= 0:
+            return None
+        raw_item_type_id = entry.get("item_type_id")
+        if raw_item_type_id is None:
+            return None, safe_model_id
+        safe_item_type_id = _safe_int(raw_item_type_id, -1)
+        if not _is_valid_exact_item_type_id(safe_item_type_id):
+            return None
+        return safe_item_type_id, safe_model_id
+
+    @staticmethod
+    def _humanize_exact_item_type(item_type_id: object, raw_item_type: object = "") -> str:
+        raw_name = str(raw_item_type or "").strip()
+        if not raw_name:
+            try:
+                raw_name = ItemType(_safe_int(item_type_id, -1)).name
+            except (TypeError, ValueError):
+                raw_name = f"Item type {_safe_int(item_type_id, -1)}"
+        return re.sub(r"\s+", " ", raw_name.replace("_", " ")).strip()
+
+    def _get_exact_catalog_entry_descriptor(self, entry: dict[str, object]) -> str:
+        item_type = _normalize_catalog_search_text(entry.get("item_type", ""))
+        match_keys = self._get_cleanup_deposit_filter_match_keys(
+            self._get_exact_catalog_filter_entry(entry)
+        )
+        humanized_type = self._humanize_exact_item_type(entry.get("item_type_id"), entry.get("item_type", ""))
+        if DEPOSIT_FILTER_MATERIALS in match_keys:
+            material_type = _normalize_catalog_search_text(entry.get("material_type", ""))
+            if not material_type:
+                if DEPOSIT_FILTER_MATERIALS_COMMON in match_keys:
+                    material_type = "common"
+                elif DEPOSIT_FILTER_MATERIALS_RARE in match_keys:
+                    material_type = "rare"
+            material_label = material_type.title() if material_type else ""
+            return f"Crafting Material · {material_label}" if material_label else "Crafting Material"
+        if DEPOSIT_FILTER_EQUIPMENT in match_keys:
+            if DEPOSIT_FILTER_EQUIPMENT_OFFHANDS in match_keys:
+                return "Weapon · Offhand"
+            if DEPOSIT_FILTER_EQUIPMENT_WEAPONS in match_keys:
+                return f"Weapon · {humanized_type}" if humanized_type else "Weapon"
+            if DEPOSIT_FILTER_EQUIPMENT_ARMOR in match_keys:
+                return f"Armor · {humanized_type}" if humanized_type else "Armor"
+        if DEPOSIT_FILTER_UPGRADES in match_keys:
+            if "insignia" in self._get_catalog_entry_filter_text(entry):
+                return "Upgrade · Insignia"
+            if "rune" in self._get_catalog_entry_filter_text(entry):
+                return "Upgrade · Rune"
+            return "Upgrade"
+        if DEPOSIT_FILTER_CONSUMABLES in match_keys:
+            return "Consumable"
+        if humanized_type:
+            return humanized_type
+        if item_type:
+            return item_type.title()
+        return "Item"
+
+    def _format_exact_catalog_entry_label(self, entry: dict[str, object]) -> str:
+        safe_model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
+        name = str(entry.get("name", "")).strip() or f"Model {safe_model_id}"
+        descriptor = self._get_exact_catalog_entry_descriptor(entry)
+        if entry.get("item_type_id") is None:
+            return f"{name} ({safe_model_id}) — {descriptor} · Broad match"
+        return f"{name} ({safe_model_id}) — {descriptor}"
+
+    def _get_exact_catalog_entries_for_model(self, model_id: object) -> list[dict[str, object]]:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return []
+        typed_entries = [
+            entry
+            for (item_type_id, entry_model_id), entry in self.exact_catalog_by_item_key.items()
+            if int(entry_model_id) == safe_model_id and _is_valid_exact_item_type_id(item_type_id)
+        ]
+        if typed_entries:
+            return typed_entries
+        fallback = self.exact_catalog_untyped_by_model_id.get(safe_model_id)
+        return [fallback] if isinstance(fallback, dict) else []
+
+    def _format_exact_protection_target_label(self, target: ExactProtectionTarget) -> str:
+        safe_model_id = max(0, _safe_int(target.model_id, 0))
+        if target.item_type_id is None:
+            return f"Broad legacy protection — ID {safe_model_id}"
+        entry = self._get_exact_catalog_entry(target.item_type_id, safe_model_id)
+        if entry is not None:
+            return self._format_exact_catalog_entry_label(entry)
+        item_type_label = self._humanize_exact_item_type(target.item_type_id)
+        return f"Model {safe_model_id} — {item_type_label}"
+
+    def _get_exact_protection_target_key(self, target: ExactProtectionTarget) -> tuple[int | None, int]:
+        return target.item_type_id, int(target.model_id)
+
+    def _exact_catalog_entry_matches_filter(
+        self,
+        entry: dict[str, object],
+        category: object,
+        subcategory: object,
+    ) -> bool:
+        return self._catalog_entry_matches_item_type_filter(
+            self._get_exact_catalog_filter_entry(entry),
+            category,
+            subcategory,
+        )
+
+    @staticmethod
+    def _get_exact_catalog_filter_entry(entry: dict[str, object]) -> dict[str, object]:
+        """Classify typed Exact rows from their typed metadata, not a colliding model number."""
+        if entry.get("item_type_id") is None:
+            return entry
+        filtered_entry = dict(entry)
+        filtered_entry["model_id"] = 0
+        return filtered_entry
+
+    def _exact_protection_target_matches_filter(
+        self,
+        target: ExactProtectionTarget,
+        category: object,
+        subcategory: object,
+    ) -> bool:
+        safe_category = _normalize_item_type_filter_category(category)
+        safe_subcategory = _normalize_item_type_filter_subcategory(safe_category, subcategory)
+        if safe_category == DEPOSIT_FILTER_ALL:
+            return True
+        if target.item_type_id is not None:
+            entry = self._get_exact_catalog_entry(target.item_type_id, target.model_id)
+            return entry is not None and self._exact_catalog_entry_matches_filter(
+                entry,
+                safe_category,
+                safe_subcategory,
+            )
+        return any(
+            self._exact_catalog_entry_matches_filter(entry, safe_category, safe_subcategory)
+            for entry in self._get_exact_catalog_entries_for_model(target.model_id)
+        )
+
+    def _exact_protection_target_matches_search(self, target: ExactProtectionTarget, raw_query: object) -> bool:
+        query = _normalize_catalog_search_text(raw_query)
+        if not query:
+            return True
+        target_label = _normalize_catalog_search_text(self._format_exact_protection_target_label(target))
+        if query in target_label:
+            return True
+        if target.item_type_id is not None:
+            entry = self._get_exact_catalog_entry(target.item_type_id, target.model_id)
+            return entry is not None and query in self._get_catalog_entry_filter_text(entry)
+        return any(
+            query in self._get_catalog_entry_filter_text(entry)
+            for entry in self._get_exact_catalog_entries_for_model(target.model_id)
+        )
+
+    def _exact_model_id_matches_item_type_filter(
+        self,
+        model_id: object,
+        category: object,
+        subcategory: object,
+    ) -> bool:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return False
+        safe_category = _normalize_item_type_filter_category(category)
+        safe_subcategory = _normalize_item_type_filter_subcategory(safe_category, subcategory)
+        if safe_category == DEPOSIT_FILTER_ALL:
+            return True
+        return any(
+            self._exact_catalog_entry_matches_filter(entry, safe_category, safe_subcategory)
+            for entry in self._get_exact_catalog_entries_for_model(safe_model_id)
+        )
 
     def _format_model_label_short(self, model_id: int) -> str:
         return self._append_model_attribute_suffix(self._format_model_label(model_id), model_id)
@@ -15356,16 +15699,97 @@ class MerchantRulesWidget:
         self.protected_item_type_filter_category = category
         self.protected_item_type_filter_subcategory = subcategory
         if category == DEPOSIT_FILTER_ALL:
-            return self._search_catalog(raw_query, limit=limit)
-        return self._search_catalog_with_predicate(
+            return self._search_exact_catalog(raw_query, limit=limit)
+        return self._search_exact_catalog_with_predicate(
             raw_query,
-            entry_predicate=lambda entry: self._catalog_entry_matches_item_type_filter(
+            entry_predicate=lambda entry: self._exact_catalog_entry_matches_filter(
                 entry,
                 category,
                 subcategory,
             ),
             limit=limit,
         )
+
+    def _search_exact_catalog(
+        self,
+        raw_query: str,
+        limit: int = SEARCH_RESULT_LIMIT,
+    ) -> list[dict[str, object]]:
+        query = _normalize_catalog_search_text(raw_query)
+        if not query:
+            return []
+
+        matches: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        for entry in self._iter_exact_catalog_entries():
+            name = str(entry.get("name", "")).strip()
+            model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
+            if model_id <= 0 or not name:
+                continue
+
+            item_type = _normalize_catalog_search_text(entry.get("item_type", ""))
+            material_type = _normalize_catalog_search_text(entry.get("material_type", ""))
+            model_id_text = str(model_id)
+            name_lower = _normalize_catalog_search_text(name)
+            alias_labels = entry.get("alias_labels", {})
+            alias_matches: list[str] = []
+            if isinstance(alias_labels, dict):
+                alias_matches = [
+                    normalized_alias
+                    for normalized_alias in alias_labels.keys()
+                    if query in str(normalized_alias or "")
+                ]
+            if (
+                query not in name_lower
+                and query not in model_id_text
+                and query not in item_type
+                and query not in material_type
+                and not alias_matches
+            ):
+                continue
+
+            exact_alias_hit = any(alias == query for alias in alias_matches)
+            prefix_alias_hit = any(alias.startswith(query) for alias in alias_matches)
+            raw_item_type_id = entry.get("item_type_id")
+            type_sort = _safe_int(raw_item_type_id, -1) if raw_item_type_id is not None else -1
+            score = (
+                0 if query == model_id_text else 1,
+                0 if name_lower.startswith(query) else 1,
+                0 if query in name_lower else 1,
+                0 if exact_alias_hit else 1,
+                0 if prefix_alias_hit else 1,
+                0 if alias_matches else 1,
+                0 if query in item_type or query in material_type else 1,
+                len(name),
+                name_lower,
+                type_sort,
+            )
+            matches.append((score, entry))
+
+        matches.sort(key=lambda match: match[0])
+        return [entry for _, entry in matches[: max(1, int(limit))]]
+
+    def _search_exact_catalog_with_predicate(
+        self,
+        raw_query: str,
+        *,
+        entry_predicate: Callable[[dict[str, object]], bool],
+        limit: int = SEARCH_RESULT_LIMIT,
+    ) -> list[dict[str, object]]:
+        catalog_limit = max(max(1, len(self.exact_catalog_by_item_key) + len(self.exact_catalog_untyped_by_model_id)), limit * 4)
+        results = self._search_exact_catalog(raw_query, limit=catalog_limit)
+        filtered_results: list[dict[str, object]] = []
+        seen_keys: set[tuple[int | None, int]] = set()
+        for entry in results:
+            entry_key = self._get_exact_catalog_entry_key(entry)
+            if entry_key is None or entry_key in seen_keys:
+                continue
+            if not entry_predicate(entry):
+                continue
+            seen_keys.add(entry_key)
+            filtered_results.append(entry)
+            if len(filtered_results) >= max(1, int(limit)):
+                break
+        return filtered_results
 
     def _get_addable_cleanup_deposit_filter_targets(
         self,
@@ -16016,6 +16440,37 @@ class MerchantRulesWidget:
         existing_model_ids.append(safe_model_id)
         return self._set_protected_item_model_ids(existing_model_ids)
 
+    def _set_protected_item_targets(self, targets: list[ExactProtectionTarget]) -> bool:
+        normalized_targets = _normalize_protected_item_targets(targets)
+        if normalized_targets == self.protected_item_targets:
+            return False
+        self.protected_item_targets = normalized_targets
+        return True
+
+    def _add_protected_item_target(self, target: ExactProtectionTarget) -> bool:
+        normalized_targets = _normalize_protected_item_targets([target])
+        if not normalized_targets:
+            return False
+        safe_target = normalized_targets[0]
+        safe_item_type_id = safe_target.item_type_id
+        if safe_item_type_id is None:
+            return False
+        existing_targets = _normalize_protected_item_targets(self.protected_item_targets)
+        target_key = (int(safe_item_type_id), int(safe_target.model_id))
+        if any(
+            (int(existing.item_type_id), int(existing.model_id)) == target_key
+            for existing in existing_targets
+            if existing.item_type_id is not None
+        ):
+            return False
+        existing_targets.append(safe_target)
+        return self._set_protected_item_targets(existing_targets)
+
+    def _add_exact_protection_target(self, target: ExactProtectionTarget) -> bool:
+        if target.item_type_id is None:
+            return self._add_protected_item_model_id(target.model_id)
+        return self._add_protected_item_target(target)
+
     def _set_cleanup_protection_sources(self, cleanup_sources: list[CleanupProtectionSource]) -> bool:
         normalized_sources = _normalize_cleanup_protection_sources(cleanup_sources)
         if normalized_sources == self.cleanup_protection_sources:
@@ -16281,42 +16736,56 @@ class MerchantRulesWidget:
         self,
         child_id: str,
         query: str,
-        existing_model_ids: set[int] | None = None,
-    ) -> tuple[int, list[int]]:
+        existing_target_keys: set[tuple[int | None, int]] | None = None,
+    ) -> tuple[ExactProtectionTarget | None, list[ExactProtectionTarget]]:
         normalized_query = str(query or "").strip()
         if not normalized_query:
-            return 0, []
+            return None, []
 
         results = self._search_protected_item_catalog(normalized_query)
-        visible_model_ids = _collect_model_ids_from_catalog_entries(results)
-        protected_model_ids = {
-            max(0, _safe_int(model_id, 0))
-            for model_id in (existing_model_ids or set())
-            if max(0, _safe_int(model_id, 0)) > 0
-        }
-        picked_model_id = 0
+        visible_targets: list[ExactProtectionTarget] = []
+        seen_target_keys: set[tuple[int | None, int]] = set()
+        for entry in results:
+            model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
+            if model_id <= 0:
+                continue
+            raw_item_type_id = entry.get("item_type_id")
+            item_type_id = (
+                _safe_int(raw_item_type_id, -1)
+                if raw_item_type_id is not None and _is_valid_exact_item_type_id(raw_item_type_id)
+                else None
+            )
+            target = ExactProtectionTarget(model_id=model_id, item_type_id=item_type_id)
+            target_key = self._get_exact_protection_target_key(target)
+            if target_key in seen_target_keys:
+                continue
+            seen_target_keys.add(target_key)
+            visible_targets.append(target)
+
+        configured_target_keys = set(existing_target_keys or set())
+        picked_target: ExactProtectionTarget | None = None
         child_height = 110 if len(results) > 4 else 80
         if PyImGui.begin_child(child_id, (0, child_height), True, PyImGui.WindowFlags.NoFlag):
             if not results:
-                PyImGui.text_wrapped("No matching items found for the current search and item type.")
+                PyImGui.text_wrapped("No matching items found for the current search and category.")
             else:
-                for entry in results:
-                    model_id = int(entry.get("model_id", 0))
-                    label = self._format_model_label_long(model_id)
-                    if model_id in protected_model_ids:
-                        PyImGui.text_colored(label, self._get_model_text_color(model_id))
+                for target in visible_targets:
+                    target_key = self._get_exact_protection_target_key(target)
+                    label = self._format_exact_protection_target_label(target)
+                    if target_key in configured_target_keys:
+                        PyImGui.text_colored(label, self._get_model_text_color(target.model_id))
                         PyImGui.same_line(0, 8)
                         self._draw_inline_badge("Already protected", UI_COLOR_MUTED)
                         continue
                     if self._draw_colored_selectable(
                         label,
-                        self._get_model_text_color(model_id),
-                        f"{child_id}_{model_id}",
+                        self._get_model_text_color(target.model_id),
+                        f"{child_id}_{target.item_type_id}_{target.model_id}",
                     ):
-                        picked_model_id = model_id
+                        picked_target = target
                         break
         PyImGui.end_child()
-        return picked_model_id, visible_model_ids
+        return picked_target, visible_targets
 
     def _draw_cleanup_deposit_search_results(
         self,
@@ -16967,6 +17436,81 @@ class MerchantRulesWidget:
                 PyImGui.end_table()
         PyImGui.end_child()
         return changed
+
+    def _draw_selected_exact_targets(
+        self,
+        section_name: str,
+        index: int,
+        targets: list[ExactProtectionTarget],
+    ) -> ExactProtectionTarget | None:
+        normalized_targets: list[ExactProtectionTarget] = []
+        seen_target_keys: set[tuple[int | None, int]] = set()
+        for target in targets:
+            safe_model_id = max(0, _safe_int(target.model_id, 0))
+            if safe_model_id <= 0:
+                continue
+            if target.item_type_id is None:
+                normalized_target = ExactProtectionTarget(model_id=safe_model_id)
+            elif _is_valid_exact_item_type_id(target.item_type_id):
+                normalized_target = ExactProtectionTarget(
+                    model_id=safe_model_id,
+                    item_type_id=_safe_int(target.item_type_id, -1),
+                )
+            else:
+                continue
+            target_key = self._get_exact_protection_target_key(normalized_target)
+            if target_key in seen_target_keys:
+                continue
+            seen_target_keys.add(target_key)
+            normalized_targets.append(normalized_target)
+        if not normalized_targets:
+            self._draw_secondary_text("No items selected yet.", wrapped=False)
+            return None
+
+        display_targets = sorted(
+            normalized_targets,
+            key=lambda target: (
+                self._format_exact_protection_target_label(target).casefold(),
+                -1 if target.item_type_id is None else int(target.item_type_id),
+                int(target.model_id),
+            ),
+        )
+        removed_target: ExactProtectionTarget | None = None
+        child_height = min(180, 28 + (22 * len(display_targets)))
+        if PyImGui.begin_child(
+            f"{section_name}_selected_{index}",
+            (0, child_height),
+            True,
+            PyImGui.WindowFlags.NoFlag,
+        ):
+            if PyImGui.begin_table(
+                f"{section_name}_selected_table_{index}",
+                2,
+                self._get_dense_list_table_flags(),
+            ):
+                PyImGui.table_setup_column("Remove", PyImGui.TableColumnFlags.WidthFixed, 34.0)
+                PyImGui.table_setup_column("Item", PyImGui.TableColumnFlags.WidthStretch)
+                for target in display_targets:
+                    target_key = self._get_exact_protection_target_key(target)
+                    PyImGui.table_next_row()
+                    PyImGui.table_set_column_index(0)
+                    if PyImGui.small_button(
+                        f"X##{section_name}_remove_{index}_{target_key[0]}_{target_key[1]}"
+                    ):
+                        removed_target = target
+                        break
+                    PyImGui.table_set_column_index(1)
+                    PyImGui.text_colored(
+                        self._format_exact_protection_target_label(target),
+                        self._get_model_text_color(target.model_id),
+                    )
+                    if target.item_type_id is None:
+                        self._draw_hover_tooltip(
+                            "Broad legacy protection. Protects items that share this saved model ID."
+                        )
+                PyImGui.end_table()
+        PyImGui.end_child()
+        return removed_target
 
     def _draw_selected_model_ids(
         self,
@@ -17837,7 +18381,7 @@ class MerchantRulesWidget:
         return self._resolve_storage_access_coords() is not None
 
     def _load_profile(self):
-        """Load the account-scoped JsonFactory profile with fail-closed v39 safeguards."""
+        """Load the account-scoped JsonFactory profile with fail-closed version safeguards."""
 
         doc = self._live_config_doc()
         stored_payload = doc.get_json("", None)
@@ -17849,6 +18393,21 @@ class MerchantRulesWidget:
         self.profile_warning = ""
         self.profile_notice = ""
         self.profile_write_blocked = False
+
+        stored_version = (
+            _safe_int(stored_payload.get("version", 0), 0)
+            if isinstance(stored_payload, dict)
+            else 0
+        )
+        if profile_exists and stored_version > PROFILE_VERSION:
+            self.profile_write_blocked = True
+            self.active_workspace = WORKSPACE_RULES
+            self.profile_warning = (
+                f"Live config version {stored_version} is newer than Merchant Rules version {PROFILE_VERSION}. "
+                "The config was not applied and will not be rewritten."
+            )
+            ConsoleLog(MODULE_NAME, self.profile_warning, Console.MessageType.Error)
+            return
 
         default_payload = self._build_default_profile_payload(
             include_rule_templates=profile_exists,
@@ -17865,13 +18424,6 @@ class MerchantRulesWidget:
         try:
             raw_payload = doc.get_json("", {})
             raw_version = _safe_int(raw_payload.get("version", 0), 0) if isinstance(raw_payload, dict) else 0
-            if raw_version > PROFILE_VERSION:
-                allow_normalized_save = False
-                self.profile_write_blocked = True
-                self.profile_warning = (
-                    f"Live config version {raw_version} is newer than Merchant Rules version {PROFILE_VERSION}. "
-                    f"Loaded in compatibility mode without rewriting the file."
-                )
             normalized_payload = self._normalize_profile_payload(raw_payload)
             should_save_normalized = self._serialize_profile_payload(raw_payload) != self._serialize_profile_payload(normalized_payload)
             self._apply_profile_payload(normalized_payload)
@@ -19456,34 +20008,69 @@ class MerchantRulesWidget:
     def _get_protected_item_model_id_set(self) -> set[int]:
         return set(_normalize_protected_item_model_ids(self.protected_item_model_ids))
 
-    def _is_exact_protected_item_model_id(self, model_id: int) -> bool:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        return safe_model_id > 0 and safe_model_id in self._get_protected_item_model_id_set()
+    def _get_protected_item_typed_target_set(self) -> set[tuple[int, int]]:
+        return {
+            (int(target.item_type_id), int(target.model_id))
+            for target in _normalize_protected_item_targets(self.protected_item_targets)
+            if target.item_type_id is not None
+        }
 
-    def _format_model_label_with_exact_protection_status(self, label: str, model_id: int) -> str:
+    def _get_exact_protection_target_count(self) -> int:
+        return len(self._get_protected_item_model_id_set()) + len(self._get_protected_item_typed_target_set())
+
+    def _is_exact_protected_item_model_id(self, model_id: int, item_type_id: int | None = None) -> bool:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return False
+        if safe_model_id in self._get_protected_item_model_id_set():
+            return True
+        safe_item_type_id = _safe_int(item_type_id, -1)
+        return (
+            _is_valid_exact_item_type_id(safe_item_type_id)
+            and (safe_item_type_id, safe_model_id) in self._get_protected_item_typed_target_set()
+        )
+
+    def _format_model_label_with_exact_protection_status(
+        self,
+        label: str,
+        model_id: int,
+        item_type_id: int | None = None,
+    ) -> str:
         safe_label = str(label or "")
-        if not self._is_exact_protected_item_model_id(model_id):
+        if not self._is_exact_protected_item_model_id(model_id, item_type_id):
             return safe_label
         if "[Protected]" in safe_label:
             return safe_label
         return f"{safe_label} [Protected]"
 
-    def _draw_exact_protected_item_badge(self, model_id: int) -> None:
-        if not self._is_exact_protected_item_model_id(model_id):
+    def _draw_exact_protected_item_badge(self, model_id: int, item_type_id: int | None = None) -> None:
+        if not self._is_exact_protected_item_model_id(model_id, item_type_id):
             return
         PyImGui.same_line(0, 8)
         self._draw_inline_badge("Protected", UI_COLOR_SUCCESS)
+        protection_scope = (
+            "this model across all item types"
+            if item_type_id is None and max(0, _safe_int(model_id, 0)) in self._get_protected_item_model_id_set()
+            else "this item type and model"
+        )
         self._draw_hover_tooltip(
-            "Exact Protected Items protects every copy of this model from sell, salvage, destroy, "
+            f"Exact Items protects every copy matching {protection_scope} from sell, salvage, destroy, "
             "and sell-from-storage. "
             "Destroy only includes it when Destroy Safety allows protected items for this session."
         )
 
     def _get_exact_model_protection_hit(self, item: InventoryItemInfo) -> tuple[str, str] | None:
-        if int(item.model_id) not in self._get_protected_item_model_id_set():
-            return None
         destination = self._get_explicit_sell_destination(item)
-        return destination, "Protected by Protected Items: exact model."
+        model_id = max(0, _safe_int(getattr(item, "model_id", 0), 0))
+        if model_id in self._get_protected_item_model_id_set():
+            return destination, "Protected by Protected Items: exact model."
+        item_type_id = _safe_int(getattr(item, "item_type_id", -1), -1)
+        if (
+            _is_valid_exact_item_type_id(item_type_id)
+            and (item_type_id, model_id) in self._get_protected_item_typed_target_set()
+        ):
+            return destination, "Protected by Protected Items: exact item type and model."
+        return None
 
     def _get_hard_protection_hit(
         self,
@@ -36023,7 +36610,7 @@ class MerchantRulesWidget:
             for filter_key, label in PROTECTION_TYPE_FILTER_OPTIONS
             if filter_key != PROTECTION_FILTER_ALL
         ]
-        protected_item_count = len(_normalize_protected_item_model_ids(self.protected_item_model_ids))
+        protected_item_count = self._get_exact_protection_target_count()
         summary_parts.insert(0, f"Protected Items: {protected_item_count}")
         self._draw_secondary_text(" | ".join(summary_parts), wrapped=False)
 
@@ -36159,13 +36746,17 @@ class MerchantRulesWidget:
     def _draw_protected_items_editor(self) -> bool:
         changed = False
         protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
+        protected_item_targets = _normalize_protected_item_targets(self.protected_item_targets)
+        configured_targets = [
+            ExactProtectionTarget(model_id=model_id)
+            for model_id in protected_item_model_ids
+        ] + protected_item_targets
 
         self._draw_section_heading("Exact Items")
         self._draw_secondary_text(
             (
-                "Protect selected items from sell, salvage, and sell-from-storage. Destroy also skips them unless "
-                "Allow destroying protected items this session is enabled. Use this for materials, consumables, "
-                "trophies, keys, lockpicks, ZCoins, event items, or other items you always want kept safe."
+                "Protect every copy of a specific item you choose, including copies you obtain later. Use this for "
+                "a particular material, consumable, trophy, key, piece of equipment, or other named item."
             )
         )
         self._draw_helper_tooltip("protected_items")
@@ -36190,60 +36781,81 @@ class MerchantRulesWidget:
         self.protected_item_type_filter_subcategory = item_type_filter_subcategory
         item_type_filter_active = item_type_filter_category != DEPOSIT_FILTER_ALL
         protected_list_search_active = bool(_normalize_catalog_search_text(self.protected_item_list_search_text))
-        visible_protected_item_model_ids = [
-            int(model_id)
-            for model_id in protected_item_model_ids
-            if self._model_id_matches_item_type_filter(
-                model_id,
+        visible_protected_item_targets = [
+            target
+            for target in configured_targets
+            if self._exact_protection_target_matches_filter(
+                target,
                 item_type_filter_category,
                 item_type_filter_subcategory,
             )
-            and self._model_id_matches_item_search_text(model_id, self.protected_item_list_search_text)
+            and self._exact_protection_target_matches_search(
+                target,
+                self.protected_item_list_search_text,
+            )
         ]
 
-        removed_model_id = 0
-        if not visible_protected_item_model_ids and (item_type_filter_active or protected_list_search_active):
+        removed_target: ExactProtectionTarget | None = None
+        if not visible_protected_item_targets and (item_type_filter_active or protected_list_search_active):
             if item_type_filter_active and protected_list_search_active:
-                empty_text = "No protected exact items match the current search and item type."
+                empty_text = "No protected Exact Items match the current search and category."
             elif protected_list_search_active:
-                empty_text = "No protected exact items match this search."
+                empty_text = "No protected Exact Items match this search."
             else:
-                empty_text = "No protected exact items match this item type."
+                empty_text = "No protected Exact Items match this category."
             self._draw_secondary_text(empty_text, wrapped=False)
         else:
-            removed_model_id = self._draw_selected_model_ids(
+            removed_target = self._draw_selected_exact_targets(
                 "merchant_rules_protected_items",
                 0,
-                visible_protected_item_model_ids,
+                visible_protected_item_targets,
             )
-        if removed_model_id > 0:
-            next_model_ids = [
-                model_id
+        if removed_target is not None:
+            if removed_target.item_type_id is None:
+                next_model_ids = [
+                    model_id
+                    for model_id in protected_item_model_ids
+                    if int(model_id) != int(removed_target.model_id)
+                ]
+                if self._set_protected_item_model_ids(next_model_ids):
+                    changed = True
+            else:
+                next_targets = [
+                    target
+                    for target in protected_item_targets
+                    if self._get_exact_protection_target_key(target)
+                    != self._get_exact_protection_target_key(removed_target)
+                ]
+                if self._set_protected_item_targets(next_targets):
+                    changed = True
+            protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
+            protected_item_targets = _normalize_protected_item_targets(self.protected_item_targets)
+            configured_targets = [
+                ExactProtectionTarget(model_id=model_id)
                 for model_id in protected_item_model_ids
-                if int(model_id) != int(removed_model_id)
-            ]
-            if self._set_protected_item_model_ids(next_model_ids):
-                changed = True
-                protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
+            ] + protected_item_targets
 
         if item_type_filter_active or protected_list_search_active:
             visible_count = len([
-                int(model_id)
-                for model_id in protected_item_model_ids
-                if self._model_id_matches_item_type_filter(
-                    model_id,
+                target
+                for target in configured_targets
+                if self._exact_protection_target_matches_filter(
+                    target,
                     item_type_filter_category,
                     item_type_filter_subcategory,
                 )
-                and self._model_id_matches_item_search_text(model_id, self.protected_item_list_search_text)
+                and self._exact_protection_target_matches_search(
+                    target,
+                    self.protected_item_list_search_text,
+                )
             ])
             self._draw_secondary_text(
-                f"{visible_count} of {len(protected_item_model_ids)} protected exact item model(s) shown.",
+                f"{visible_count} of {len(configured_targets)} protected Exact Items target(s) shown.",
                 wrapped=False,
             )
         else:
             self._draw_secondary_text(
-                f"{len(protected_item_model_ids)} protected exact item model(s).",
+                f"{len(configured_targets)} protected Exact Items target(s).",
                 wrapped=False,
             )
 
@@ -36256,62 +36868,71 @@ class MerchantRulesWidget:
         if updated_search != self.protected_item_search_text:
             self.protected_item_search_text = updated_search
 
-        existing_model_ids = {int(model_id) for model_id in protected_item_model_ids}
-        picked_model_id, visible_model_ids = self._draw_protected_item_search_results(
+        existing_target_keys = {
+            self._get_exact_protection_target_key(target)
+            for target in configured_targets
+        }
+        picked_target, visible_targets = self._draw_protected_item_search_results(
             "merchant_rules_protected_items_search_results",
             self.protected_item_search_text,
-            existing_model_ids,
+            existing_target_keys,
         )
-        addable_model_ids = [
-            int(model_id)
-            for model_id in visible_model_ids
-            if int(model_id) not in existing_model_ids
+        addable_targets = [
+            target
+            for target in visible_targets
+            if self._get_exact_protection_target_key(target) not in existing_target_keys
         ]
 
         direct_model_id = max(0, _safe_int(self.protected_item_search_text, 0))
-        add_candidate_model_id = 0
+        add_candidate_target: ExactProtectionTarget | None = None
         direct_model_matches_filter = (
             direct_model_id > 0
-            and self._model_id_matches_item_type_filter(
+            and self._exact_model_id_matches_item_type_filter(
                 direct_model_id,
                 item_type_filter_category,
                 item_type_filter_subcategory,
             )
         )
-        if direct_model_id > 0 and direct_model_id not in existing_model_ids and direct_model_matches_filter:
-            add_candidate_model_id = direct_model_id
-        elif len(addable_model_ids) == 1:
-            add_candidate_model_id = int(addable_model_ids[0])
+        if (
+            direct_model_id > 0
+            and (None, direct_model_id) not in existing_target_keys
+            and direct_model_matches_filter
+        ):
+            add_candidate_target = ExactProtectionTarget(model_id=direct_model_id)
+        elif len(addable_targets) == 1:
+            add_candidate_target = addable_targets[0]
 
-        PyImGui.begin_disabled(add_candidate_model_id <= 0)
+        PyImGui.begin_disabled(add_candidate_target is None)
         add_clicked = PyImGui.button("Add Protected Item##merchant_rules_protected_items_add")
         PyImGui.end_disabled()
-        self._draw_hover_tooltip("Add the exact model ID or the single matching search result.")
-        if add_clicked and add_candidate_model_id > 0:
-            if self._add_protected_item_model_id(add_candidate_model_id):
+        self._draw_hover_tooltip(
+            "Add a broad model-ID protection or the single typed item selected from the catalog."
+        )
+        if add_clicked and add_candidate_target is not None:
+            if self._add_exact_protection_target(add_candidate_target):
                 changed = True
                 protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
-            self.protected_item_search_text = (
-                self._get_model_name(add_candidate_model_id)
-                or str(add_candidate_model_id)
-            )
+                protected_item_targets = _normalize_protected_item_targets(self.protected_item_targets)
+            self.protected_item_search_text = self._format_exact_protection_target_label(add_candidate_target)
 
         if self._draw_add_all_matches_button(
             "merchant_rules_protected_items_add_all_matches",
-            len(visible_model_ids),
-            len(addable_model_ids),
+            len(visible_targets),
+            len(addable_targets),
             button_label="Add Shown",
         ):
-            next_model_ids = list(protected_item_model_ids) + addable_model_ids
-            if self._set_protected_item_model_ids(next_model_ids):
-                changed = True
-                protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
+            for target in addable_targets:
+                if self._add_exact_protection_target(target):
+                    changed = True
+            protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
+            protected_item_targets = _normalize_protected_item_targets(self.protected_item_targets)
 
-        if picked_model_id > 0:
-            if self._add_protected_item_model_id(picked_model_id):
+        if picked_target is not None:
+            if self._add_exact_protection_target(picked_target):
                 changed = True
                 protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
-            self.protected_item_search_text = self._get_model_name(picked_model_id) or str(picked_model_id)
+                protected_item_targets = _normalize_protected_item_targets(self.protected_item_targets)
+            self.protected_item_search_text = self._format_exact_protection_target_label(picked_target)
 
         if changed:
             self._save_profile()

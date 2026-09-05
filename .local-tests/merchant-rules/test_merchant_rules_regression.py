@@ -1253,6 +1253,91 @@ def _test_malformed_profile_is_preserved(module, temp_root: Path) -> None:
     _expect(widget.active_workspace == module.WORKSPACE_RULES, "Malformed profile load should open the Rules workspace for recovery.")
 
 
+def _test_live_config_version_gates_and_preserves_state(module, temp_root: Path) -> None:
+    widget = _make_widget(module)
+    config_path = temp_root / "live_config_version_gates.json"
+    widget.config_path = str(config_path)
+
+    older_payload = _minimal_profile_payload(
+        module,
+        version=module.PROFILE_VERSION - 1,
+        favorite_outpost_ids=[1],
+    )
+    older_payload["protected_item_model_ids"] = [111]
+    config_path.write_text(json.dumps(older_payload, indent=2), encoding="utf-8")
+    widget._load_profile()
+    _expect(
+        widget.protected_item_model_ids == [111],
+        "A supported older live profile should apply its legacy wildcard protection normally.",
+    )
+    migrated_payload = json.loads(config_path.read_text(encoding="utf-8"))
+    _expect(
+        migrated_payload["version"] == module.PROFILE_VERSION
+        and migrated_payload["protected_item_model_ids"] == [111],
+        "A supported older live profile should migrate and save at the current version.",
+    )
+
+    current_target = module.ExactProtectionTarget(
+        model_id=923,
+        item_type_id=int(module.ItemType.Axe),
+    )
+    current_payload = _minimal_profile_payload(
+        module,
+        version=module.PROFILE_VERSION,
+        favorite_outpost_ids=[2],
+    )
+    current_payload["protected_item_model_ids"] = []
+    current_payload["protected_item_targets"] = [
+        {"item_type_id": int(module.ItemType.Axe), "model_id": 923},
+    ]
+    config_path.write_text(json.dumps(current_payload, indent=2), encoding="utf-8")
+    widget._load_profile()
+    _expect(
+        widget.protected_item_targets == [current_target]
+        and widget.favorite_outpost_ids == [2],
+        "A current live profile should apply its typed protection and settings normally.",
+    )
+
+    future_payload = _minimal_profile_payload(
+        module,
+        version=module.PROFILE_VERSION + 1,
+        favorite_outpost_ids=[1],
+    )
+    future_payload["protected_item_model_ids"] = [222]
+    future_payload["protected_item_targets"] = [
+        {"item_type_id": int(module.ItemType.Materials_Zcoins), "model_id": 923},
+    ]
+    future_payload["destroy_auto_enabled"] = True
+    future_text = json.dumps(future_payload, indent=2)
+    config_path.write_text(future_text, encoding="utf-8")
+
+    widget._load_profile()
+    _expect(
+        widget.protected_item_targets == [current_target]
+        and widget.protected_item_model_ids == []
+        and widget.favorite_outpost_ids == [2]
+        and not widget.destroy_auto_enabled,
+        "A future live profile must not replace current in-memory state with a partial payload.",
+    )
+    _expect(
+        widget.profile_write_blocked
+        and widget.active_workspace == module.WORKSPACE_RULES
+        and "not applied" in widget.profile_warning.casefold()
+        and "will not be rewritten" in widget.profile_warning.casefold(),
+        "Future live profiles must fail closed with a clear non-application warning.",
+    )
+    _expect(
+        config_path.read_text(encoding="utf-8") == future_text,
+        "Future live-profile bytes must remain unchanged after load rejection.",
+    )
+    widget.favorite_outpost_ids = [99]
+    _expect(not widget._save_profile(), "Future live profiles must continue blocking later saves.")
+    _expect(
+        config_path.read_text(encoding="utf-8") == future_text,
+        "Blocked future-profile saves must not rewrite the future payload.",
+    )
+
+
 def _test_legacy_profile_normalizes_and_saves(module, temp_root: Path) -> None:
     widget = _make_widget(module)
     config_path = temp_root / "legacy_profile.json"
@@ -2965,14 +3050,14 @@ def _test_protected_items_ui_copy_contract(module) -> None:
     protected_editor_source = source[protected_editor_start:protected_editor_end]
     _expect(
         'button_label="Add Shown"' in protected_editor_source
-        and "len(visible_model_ids)" in protected_editor_source
-        and "len(addable_model_ids)" in protected_editor_source,
-        "Exact Items should use Add Shown with the existing visible and addable counts.",
+        and "len(visible_targets)" in protected_editor_source
+        and "len(addable_targets)" in protected_editor_source,
+        "Exact Items should use Add Shown with typed visible and addable targets.",
     )
     _expect(
-        "self._add_protected_item_model_id(add_candidate_model_id)" in protected_editor_source
-        and "self._set_protected_item_model_ids(next_model_ids)" in protected_editor_source,
-        "Exact Items add behavior should continue using the existing protection mutations.",
+        "self._add_exact_protection_target(add_candidate_target)" in protected_editor_source
+        and "self._set_protected_item_targets(next_targets)" in protected_editor_source,
+        "Exact Items add/remove behavior should use typed protection mutations while preserving wildcards.",
     )
 
     _expect(
@@ -2980,14 +3065,14 @@ def _test_protected_items_ui_copy_contract(module) -> None:
         "The Exact Items search result cap should remain 12.",
     )
     _expect(
-        module.PROFILE_VERSION == 39,
-        "The UI-only wording change must not change the profile version.",
+        module.PROFILE_VERSION == 40,
+        "Typed Exact Items identity should use profile version 40.",
     )
     tooltip = module.HELPER_TOOLTIP_TEXTS["protected_items"]
     _expect(
-        "Exact Items protects selected items" in tooltip["long"]
+        "Exact Items protects every copy of a specific item" in tooltip["long"]
         and "Configured deposit rules may still move them." in tooltip["long"],
-        "The Protected Items tooltip should explain global protection and deposit behavior plainly.",
+        "The Protected Items tooltip should explain typed Exact Items, broader Equipment protections, and deposits plainly.",
     )
     _expect(
         "broader groups of weapons and armor" in source
@@ -14231,7 +14316,7 @@ def _test_xunlai_first_profile_v39_defaults_and_roundtrip(module) -> None:
 
     normalized = widget._normalize_profile_payload(legacy_payload)
     normalized_target = normalized["buy_rules"][0]["merchant_stock_targets"][0]
-    _expect(normalized["version"] == 39, "Merchant Rules profiles should advance to payload version 39.")
+    _expect(normalized["version"] == 40, "Merchant Rules profiles should advance to payload version 40.")
     _expect(
         normalized_target["check_xunlai_first"] is False,
         "A v38 Merchant Stock target should default Check Xunlai first to OFF.",
@@ -21990,6 +22075,697 @@ def _test_rule_custom_names_persist_and_fallback_cleanly(module, temp_root: Path
     )
 
 
+def _load_real_merchant_rules_catalog_for_test(module, widget):
+    original_paths = {
+        "CATALOG_PATH": module.CATALOG_PATH,
+        "DROP_DATA_PATH": module.DROP_DATA_PATH,
+        "ITEM_HANDLING_ITEMS_CATALOG_PATH": module.ITEM_HANDLING_ITEMS_CATALOG_PATH,
+        "RUNES_CATALOG_PATH": module.RUNES_CATALOG_PATH,
+    }
+    try:
+        module.CATALOG_PATH = str(REPO_ROOT / "Widgets" / "Data" / "merchant_rules_catalog.json")
+        module.DROP_DATA_PATH = str(REPO_ROOT / "Widgets" / "Data" / "modelid_drop_data.json")
+        module.ITEM_HANDLING_ITEMS_CATALOG_PATH = str(
+            REPO_ROOT / "Sources" / "frenkeyLib" / "ItemHandling" / "Items" / "items.json"
+        )
+        module.RUNES_CATALOG_PATH = str(REPO_ROOT / "Sources" / "marks_sources" / "mods_data" / "runes.json")
+        widget._load_catalog()
+    finally:
+        for name, value in original_paths.items():
+            setattr(module, name, value)
+
+
+def _item_handling_type_id(module, raw_value: object) -> int | None:
+    if isinstance(raw_value, str):
+        candidate = raw_value.strip()
+        if candidate.startswith("ItemType."):
+            candidate = candidate.split(".", 1)[1].strip()
+        enum_value = next(
+            (
+                value
+                for name, value in module.ItemType.__members__.items()
+                if name.casefold() == candidate.casefold()
+            ),
+            None,
+        )
+        if enum_value is not None:
+            return int(enum_value)
+        try:
+            return int(candidate, 0)
+        except (TypeError, ValueError):
+            return None
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _test_typed_exact_catalog_collision_contract(module) -> None:
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+
+    raw_catalog = json.loads(
+        (
+            REPO_ROOT
+            / "Sources"
+            / "frenkeyLib"
+            / "ItemHandling"
+            / "Items"
+            / "items.json"
+        ).read_text(encoding="utf-8")
+    )
+    typed_source_keys: set[tuple[int, int]] = set()
+    model_types: dict[int, set[int]] = {}
+    for row in module._iter_item_handling_catalog_entries(raw_catalog):
+        item_type_id = _item_handling_type_id(module, row.get("item_type"))
+        model_id = int(row.get("model_id", 0) or 0)
+        if (
+            item_type_id is None
+            or model_id <= 0
+            or not str(row.get("name", "") or "").strip()
+            or not module._is_valid_exact_item_type_id(item_type_id)
+        ):
+            continue
+        item_key = (item_type_id, model_id)
+        _expect(item_key not in typed_source_keys, f"ItemHandling should not duplicate Exact key {item_key}.")
+        typed_source_keys.add(item_key)
+        model_types.setdefault(model_id, set()).add(item_type_id)
+
+    _expect(
+        len(widget.exact_catalog_by_item_key) == len(typed_source_keys),
+        "The typed Exact catalog should retain every valid positive ItemHandling identity exactly once.",
+    )
+    _expect(
+        all(item_key in widget.exact_catalog_by_item_key for item_key in typed_source_keys),
+        "Every valid ItemHandling (ItemType, ModelID) key should be represented in the Exact catalog.",
+    )
+    collision_models = {model_id for model_id, item_types in model_types.items() if len(item_types) > 1}
+    _expect(len(collision_models) == 69, "The current ItemHandling data should expose 69 positive cross-type collisions.")
+    _expect(
+        all(
+            sum(1 for item_key in widget.exact_catalog_by_item_key if item_key[1] == model_id) == len(item_types)
+            for model_id, item_types in model_types.items()
+            if model_id in collision_models
+        ),
+        "Each current collision group should remain independently represented by typed Exact rows.",
+    )
+
+    for model_id in sorted(collision_models):
+        collision_keys = sorted(
+            (item_key for item_key in widget.exact_catalog_by_item_key if item_key[1] == model_id),
+            key=lambda item_key: item_key[0],
+        )
+        selected_key = collision_keys[0]
+        selected_target = module.ExactProtectionTarget(
+            model_id=model_id,
+            item_type_id=selected_key[0],
+        )
+        widget.protected_item_model_ids = []
+        widget.protected_item_targets = [selected_target]
+        for item_type_id, item_model_id in collision_keys:
+            entry = widget.exact_catalog_by_item_key[(item_type_id, item_model_id)]
+            live_item = _make_item(
+                module,
+                item_id=(model_id * 1000) + int(item_type_id),
+                model_id=model_id,
+                name=str(entry["name"]),
+                item_type_id=int(item_type_id),
+                item_type_name=str(entry.get("item_type", "")),
+                salvageable=True,
+            )
+            hit = widget._get_exact_model_protection_hit(live_item)
+            if item_type_id == selected_key[0]:
+                _expect(
+                    hit is not None,
+                    f"Typed Exact target {(selected_key[0], model_id)} should match its collision-group item.",
+                )
+            else:
+                _expect(
+                    hit is None,
+                    f"Typed Exact target {(selected_key[0], model_id)} must not match {(item_type_id, model_id)}.",
+                )
+
+        widget.protected_item_targets = []
+        widget.protected_item_model_ids = [model_id]
+        for item_type_id, item_model_id in collision_keys:
+            entry = widget.exact_catalog_by_item_key[(item_type_id, item_model_id)]
+            live_item = _make_item(
+                module,
+                item_id=(model_id * 2000) + int(item_type_id),
+                model_id=model_id,
+                name=str(entry["name"]),
+                item_type_id=int(item_type_id),
+                item_type_name=str(entry.get("item_type", "")),
+                salvageable=True,
+            )
+            _expect(
+                widget._get_exact_model_protection_hit(live_item) is not None,
+                f"Legacy wildcard {model_id} should match every current collision-group type.",
+            )
+
+    widget.protected_item_model_ids = []
+    widget.protected_item_targets = [
+        module.ExactProtectionTarget(model_id=923, item_type_id=int(module.ItemType.Axe))
+    ]
+    unrelated_item = _make_item(
+        module,
+        item_id=999001,
+        model_id=999,
+        name="Unrelated item",
+        item_type_id=int(module.ItemType.Axe),
+        salvageable=True,
+    )
+    _expect(
+        widget._get_exact_model_protection_hit(unrelated_item) is None,
+        "A typed Exact target must not match an unrelated model.",
+    )
+
+    golden_rows = {
+        (int(module.ItemType.Axe), 923): "Kaineng Axe",
+        (int(module.ItemType.Materials_Zcoins), 923): "Monstrous Claw",
+        (int(module.ItemType.Wand), 925): "Amber Wand",
+        (int(module.ItemType.Materials_Zcoins), 925): "Bolt of Cloth",
+        (int(module.ItemType.Boots), 419): "Rawhide Boots",
+        (int(module.ItemType.Sword), 419): "Spatha",
+        (int(module.ItemType.Offhand), 1271): "Grim Cesta",
+        (int(module.ItemType.Scythe), 1271): "Suntouched Scythe",
+    }
+    for item_key, expected_name in golden_rows.items():
+        entry = widget.exact_catalog_by_item_key.get(item_key)
+        _expect(entry is not None, f"Golden collision key {item_key} should be present in the typed Exact catalog.")
+        _expect(entry["name"] == expected_name, f"Golden collision key {item_key} should retain {expected_name!r}.")
+
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+    numeric_results = widget._search_protected_item_catalog("923")
+    numeric_keys = {
+        (entry.get("item_type_id"), int(entry.get("model_id", 0)))
+        for entry in numeric_results
+    }
+    _expect(
+        {(int(module.ItemType.Axe), 923), (int(module.ItemType.Materials_Zcoins), 923)} <= numeric_keys,
+        "Numeric Exact search should expose both typed identities for model 923.",
+    )
+    _expect(
+        len(numeric_keys) == len(numeric_results) and len(numeric_results) <= module.SEARCH_RESULT_LIMIT,
+        "Exact search should keep typed row identity and the existing 12-result cap.",
+    )
+    _expect(
+        {(entry.get("item_type_id"), int(entry.get("model_id", 0))) for entry in widget._search_protected_item_catalog("kaineng axe")}
+        == {(int(module.ItemType.Axe), 923)},
+        "Aliases and names should remain attached to the Kaineng Axe typed row.",
+    )
+    _expect(
+        {(entry.get("item_type_id"), int(entry.get("model_id", 0))) for entry in widget._search_protected_item_catalog("monstrous claw")}
+        == {(int(module.ItemType.Materials_Zcoins), 923)},
+        "Aliases and names should remain attached to the Monstrous Claw typed row.",
+    )
+    axe_target = module.ExactProtectionTarget(model_id=923, item_type_id=int(module.ItemType.Axe))
+    material_target = module.ExactProtectionTarget(
+        model_id=923,
+        item_type_id=int(module.ItemType.Materials_Zcoins),
+    )
+    wildcard_target = module.ExactProtectionTarget(model_id=923)
+    _expect(
+        widget._exact_protection_target_matches_search(axe_target, "Kaineng Axe")
+        and not widget._exact_protection_target_matches_search(axe_target, "Monstrous Claw"),
+        "A typed Axe target should search its own name without matching the material sibling.",
+    )
+    _expect(
+        widget._exact_protection_target_matches_search(material_target, "Monstrous Claw")
+        and not widget._exact_protection_target_matches_search(material_target, "Kaineng Axe"),
+        "A typed material target should search its own name without matching the Axe sibling.",
+    )
+    _expect(
+        widget._exact_protection_target_matches_search(wildcard_target, "Kaineng Axe")
+        and widget._exact_protection_target_matches_search(wildcard_target, "Monstrous Claw"),
+        "A legacy wildcard target should continue searching across every catalog sibling.",
+    )
+
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_EQUIPMENT
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_EQUIPMENT_WEAPONS
+    weapon_results = widget._search_protected_item_catalog("923")
+    weapon_result_keys = {
+        (entry.get("item_type_id"), int(entry.get("model_id", 0)))
+        for entry in weapon_results
+    }
+    _expect(
+        (int(module.ItemType.Axe), 923) in weapon_result_keys
+        and (int(module.ItemType.Materials_Zcoins), 923) not in weapon_result_keys,
+        "The Exact Equipment category should select only the weapon side of model 923.",
+    )
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_MATERIALS
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_MATERIALS_RARE
+    material_results = widget._search_protected_item_catalog("923")
+    material_result_keys = {
+        (entry.get("item_type_id"), int(entry.get("model_id", 0)))
+        for entry in material_results
+    }
+    _expect(
+        (int(module.ItemType.Materials_Zcoins), 923) in material_result_keys
+        and (int(module.ItemType.Axe), 923) not in material_result_keys,
+        "The Exact Materials category should select only the material side of model 923.",
+    )
+    axe_descriptor = widget._get_exact_catalog_entry_descriptor(
+        widget.exact_catalog_by_item_key[(int(module.ItemType.Axe), 923)]
+    )
+    material_descriptor = widget._get_exact_catalog_entry_descriptor(
+        widget.exact_catalog_by_item_key[(int(module.ItemType.Materials_Zcoins), 923)]
+    )
+    _expect(axe_descriptor == "Weapon · Axe", "The typed Axe row should display its weapon classification.")
+    _expect(
+        material_descriptor == "Crafting Material · Rare",
+        "The typed material row should display its rare-material classification.",
+    )
+
+    salvage_entries = [
+        item_key
+        for item_key in widget.exact_catalog_by_item_key
+        if item_key[0] == int(module.ItemType.Salvage)
+    ]
+    _expect(salvage_entries, "Current ItemHandling data should retain typed Salvage rows with item_type_id 0.")
+    salvage_key = salvage_entries[0]
+    _expect(
+        module._normalize_protected_item_targets(
+            [{"item_type_id": int(module.ItemType.Salvage), "model_id": salvage_key[1]}]
+        )
+        == [module.ExactProtectionTarget(model_id=salvage_key[1], item_type_id=int(module.ItemType.Salvage))],
+        "ItemType 0 must normalize as a typed Salvage target, not as a wildcard.",
+    )
+
+
+def _test_typed_exact_profile_matching_and_shortcut_contract(module) -> None:
+    widget = _make_widget(module)
+    axe_target = module.ExactProtectionTarget(model_id=923, item_type_id=int(module.ItemType.Axe))
+    widget.protected_item_targets = [axe_target, axe_target]
+    payload = widget._build_profile_payload()
+    _expect(payload["version"] == 40, "Typed Exact profiles should serialize at v40.")
+    _expect(
+        payload["protected_item_targets"] == [{"item_type_id": int(module.ItemType.Axe), "model_id": 923}],
+        "Duplicate typed targets should serialize once with explicit type and model fields.",
+    )
+    normalized = widget._normalize_profile_payload(
+        {
+            "version": 39,
+            "protected_item_model_ids": [923, 923],
+            "protected_item_targets": [
+                {"item_type_id": int(module.ItemType.Axe), "model_id": 923},
+                {"item_type_id": int(module.ItemType.Axe), "model_id": 923},
+            ],
+        }
+    )
+    _expect(normalized["version"] == 40, "v39 profiles should normalize to v40.")
+    _expect(normalized["protected_item_model_ids"] == [923], "Legacy model entries must remain broad wildcard IDs.")
+    _expect(
+        normalized["protected_item_targets"] == [{"item_type_id": int(module.ItemType.Axe), "model_id": 923}],
+        "Typed targets should survive v39-to-v40 normalization without replacing legacy wildcards.",
+    )
+    loaded_widget = _make_widget(module)
+    loaded_widget._apply_profile_payload(normalized)
+    _expect(loaded_widget.protected_item_model_ids == [923], "Profile application must preserve wildcard IDs.")
+    _expect(loaded_widget.protected_item_targets == [axe_target], "Profile application must restore typed targets.")
+    _expect(
+        loaded_widget._get_exact_protection_target_count() == 2,
+        "Wildcard and typed targets should coexist and count as explicit configured targets.",
+    )
+    for invalid_type in (int(module.ItemType.Unknown), int(module.ItemType.Weapon), int(module.ItemType.EquippableItem)):
+        _expect_raises(
+            ValueError,
+            lambda invalid_type=invalid_type: widget._normalize_profile_payload(
+                {"version": 40, "protected_item_targets": [{"item_type_id": invalid_type, "model_id": 923}]}
+            ),
+            f"Non-runtime item type {invalid_type} should be rejected for typed Exact targets.",
+        )
+    _expect_raises(
+        ValueError,
+        lambda: widget._normalize_profile_payload(
+            {"version": 40, "protected_item_targets": [{"item_type_id": int(module.ItemType.Axe)}]}
+        ),
+        "Malformed typed Exact targets should be rejected.",
+    )
+    malformed_typed_targets = [
+        {"item_type_id": int(module.ItemType.Axe) + 0.9, "model_id": 923},
+        {"item_type_id": int(module.ItemType.Axe), "model_id": 923.8},
+        {"item_type_id": True, "model_id": 923},
+        {"item_type_id": int(module.ItemType.Axe), "model_id": True},
+        {"item_type_id": str(int(module.ItemType.Axe)), "model_id": 923},
+        {"item_type_id": int(module.ItemType.Axe), "model_id": "923"},
+        {"item_type_id": int(module.ItemType.Axe), "model_id": 0},
+        {"item_type_id": int(module.ItemType.Axe), "model_id": -1},
+        {"model_id": 923},
+        {"item_type_id": int(module.ItemType.Axe)},
+    ]
+    for malformed_target in malformed_typed_targets:
+        _expect_raises(
+            ValueError,
+            lambda malformed_target=malformed_target: widget._normalize_profile_payload(
+                {"version": 40, "protected_item_targets": [malformed_target]}
+            ),
+            f"Malformed typed Exact record should be rejected: {malformed_target!r}",
+        )
+    salvage_normalized = widget._normalize_profile_payload(
+        {
+            "version": 40,
+            "protected_item_targets": [
+                {"item_type_id": int(module.ItemType.Salvage), "model_id": 923},
+            ],
+        }
+    )
+    _expect(
+        salvage_normalized["protected_item_targets"]
+        == [{"item_type_id": int(module.ItemType.Salvage), "model_id": 923}],
+        "Serialized ItemType 0 must remain a valid typed Salvage target.",
+    )
+
+    axe_item = _make_item(
+        module,
+        item_id=92301,
+        model_id=923,
+        name="Kaineng Axe",
+        item_type_id=int(module.ItemType.Axe),
+        item_type_name="Axe",
+        is_weapon_like=True,
+        salvageable=True,
+    )
+    material_item = _make_item(
+        module,
+        item_id=92302,
+        model_id=923,
+        name="Monstrous Claw",
+        item_type_id=int(module.ItemType.Materials_Zcoins),
+        item_type_name="Materials_Zcoins",
+        is_material=True,
+        is_stackable=True,
+        salvageable=True,
+    )
+    widget.protected_item_model_ids = []
+    widget.protected_item_targets = [axe_target]
+    _expect(widget._get_exact_model_protection_hit(axe_item) is not None, "A typed Axe target should protect the typed Axe row.")
+    _expect(widget._get_exact_model_protection_hit(material_item) is None, "A typed Axe target must not protect the colliding material row.")
+    _expect(
+        widget._get_exact_model_protection_hit(replace(axe_item, item_id=92303, rarity="White", identified=False)) is not None,
+        "Typed Exact protection should apply to future copies regardless of instance or transient item properties.",
+    )
+    widget.protected_item_model_ids = [923]
+    _expect(widget._get_exact_model_protection_hit(material_item) is not None, "Legacy wildcard IDs must retain broad matching.")
+    _expect(widget._get_exact_model_protection_hit(axe_item) is not None, "Legacy wildcard IDs must also match the typed side.")
+
+    shortcut_widget = _make_inventory_shortcut_test_widget(module)
+    shortcut_widget._apply_inventory_shortcut_protect(axe_item)
+    _expect(shortcut_widget.protected_item_model_ids == [], "Live-item Exact shortcuts should no longer create model-only entries.")
+    _expect(
+        shortcut_widget.protected_item_targets == [axe_target],
+        "Live-item Exact shortcuts should record the runtime item type and model together.",
+    )
+    _expect(
+        shortcut_widget.status_message.startswith("Protected ")
+        and "broad protection" not in shortcut_widget.status_message.casefold(),
+        "Valid runtime item types should keep the normal right-click success wording.",
+    )
+
+    fallback_widget = _make_inventory_shortcut_test_widget(module)
+    unknown_type_item = _make_item(
+        module,
+        item_id=92401,
+        model_id=924,
+        name="Unknown Type Item",
+        item_type_id=-1,
+    )
+    fallback_widget._apply_inventory_shortcut_protect(unknown_type_item)
+    _expect(
+        fallback_widget.protected_item_model_ids == [924]
+        and fallback_widget.protected_item_targets == [],
+        "An unavailable runtime item type should create only a broad model protection.",
+    )
+    _expect(
+        "broad protection" in fallback_widget.status_message.casefold()
+        and "type could not be determined" in fallback_widget.status_message.casefold(),
+        "Right-click broad fallback should be disclosed in the result status.",
+    )
+
+    widget.protected_item_model_ids = []
+    widget.protected_item_targets = [axe_target]
+    salvage_rule = module.SalvageRule(
+        enabled=True,
+        model_ids=[923],
+        salvage_option=module.SALVAGE_OPTION_MATERIALS,
+    )
+    _expect(
+        widget._get_salvage_candidate_block_reason(
+            axe_item,
+            [],
+            salvage_rule=salvage_rule,
+            require_salvage_kit=False,
+        ).startswith("protected:"),
+        "Typed Exact protection must flow through the real salvage protection gate.",
+    )
+    _expect(
+        not widget._get_salvage_candidate_block_reason(
+            material_item,
+            [],
+            salvage_rule=salvage_rule,
+            require_salvage_kit=False,
+        ).startswith("protected:"),
+        "Typed Exact protection must not block the colliding material in salvage planning.",
+    )
+
+
+def _test_typed_exact_downstream_protection_contract(module) -> None:
+    axe_target = module.ExactProtectionTarget(model_id=923, item_type_id=int(module.ItemType.Axe))
+    axe_item = _make_item(
+        module,
+        item_id=92301,
+        model_id=923,
+        name="Kaineng Axe",
+        rarity="Gold",
+        identified=True,
+        is_weapon_like=True,
+        salvageable=True,
+        item_type_id=int(module.ItemType.Axe),
+        item_type_name="Axe",
+    )
+    material_item = _make_item(
+        module,
+        item_id=92302,
+        model_id=923,
+        name="Monstrous Claw",
+        rarity="White",
+        identified=True,
+        is_material=True,
+        is_stackable=True,
+        salvageable=True,
+        item_type_id=int(module.ItemType.Materials_Zcoins),
+        item_type_name="Materials_Zcoins",
+    )
+    coords = {
+        module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0),
+        module.MERCHANT_TYPE_MATERIALS: (2.0, 2.0),
+        module.MERCHANT_TYPE_RUNE_TRADER: (3.0, 3.0),
+        module.MERCHANT_TYPE_RARE_MATERIALS: (4.0, 4.0),
+    }
+
+    def install_sell_context(widget, *, sell_from_xunlai: bool = False) -> None:
+        widget._get_supported_context = lambda *, passive=False: (True, "Ready", coords)
+        widget.sell_rules = [
+            module._normalize_sell_rule(
+                module.SellRule(
+                    enabled=True,
+                    kind=module.SELL_KIND_EXPLICIT_MODELS,
+                    model_ids=[923],
+                    sell_from_xunlai=sell_from_xunlai,
+                )
+            )
+        ]
+
+    sell_widget = _make_widget(module)
+    sell_widget.protected_item_targets = [axe_target]
+    install_sell_context(sell_widget)
+    sell_widget._collect_inventory_items = lambda: [axe_item, material_item]
+    sell_plan = sell_widget._build_plan()
+    _expect(
+        92301 not in sell_plan.merchant_sell_item_ids
+        and any(sale.item_id == 92302 for sale in sell_plan.material_sales),
+        "Typed Exact protection should skip the weapon side of a sell plan while allowing the colliding material.",
+    )
+    _expect(
+        any(
+            entry.action_type == "sell"
+            and entry.model_id == 923
+            and entry.state == module.PLAN_STATE_SKIPPED
+            and "exact item type and model" in entry.reason
+            for entry in sell_plan.entries
+        ),
+        "Typed sell preview rows should report the typed Exact protection reason.",
+    )
+
+    destroy_widget = _make_widget(module)
+    destroy_widget.protected_item_targets = [axe_target]
+    destroy_widget._get_supported_context = lambda *, passive=False: (True, "Ready", coords)
+    destroy_widget.destroy_rules = [
+        module._normalize_destroy_rule(
+            module.DestroyRule(
+                enabled=True,
+                kind=module.DESTROY_KIND_EXPLICIT_MODELS,
+                whitelist_targets=[module.WhitelistTarget(model_id=923, keep_count=0)],
+            )
+        )
+    ]
+    destroy_widget._collect_inventory_items = lambda: [axe_item, material_item]
+    destroy_plan = destroy_widget._build_plan()
+    _expect(
+        not any(action.item_id == 92301 for action in destroy_plan.destroy_actions)
+        and any(action.item_id == 92302 for action in destroy_plan.destroy_actions),
+        "Typed Exact protection should skip the weapon side of a destroy plan while allowing the colliding material.",
+    )
+
+    xunlai_widget = _make_widget(module)
+    xunlai_widget.protected_item_targets = [axe_target]
+    install_sell_context(xunlai_widget, sell_from_xunlai=True)
+    protected_preview_entries: list[object] = []
+    transfers, adjusted_rules = xunlai_widget._plan_xunlai_sell_withdrawals(
+        list(enumerate(xunlai_widget.sell_rules)),
+        current_items=[],
+        regular_storage_items=[axe_item, material_item],
+        material_storage_items=[],
+        coords=coords,
+        protected_preview_entries=protected_preview_entries,
+    )
+    _expect(
+        [transfer.item_id for transfer in transfers] == [92302],
+        "Typed Exact Xunlai planning should withdraw only the unprotected colliding material.",
+    )
+    _expect(
+        len(adjusted_rules) == 1 and not adjusted_rules[0].sell_from_xunlai,
+        "Typed Exact Xunlai planning should keep the unprotected collision side in a regular-merchant follow-up rule.",
+    )
+    _expect(
+        [entry.model_id for entry in protected_preview_entries] == [923]
+        and "exact item type and model" in protected_preview_entries[0].reason,
+        "Typed Exact Xunlai planning should report the typed protection reason.",
+    )
+
+    execute_widget = _make_widget(module)
+    execute_widget.protected_item_targets = [axe_target]
+    install_sell_context(execute_widget)
+    execute_widget._collect_inventory_items = lambda: [axe_item, material_item]
+    captured_sell_ids: list[int] = []
+    captured_material_ids: list[int] = []
+
+    def capture_merchant_sell(_coords, item_ids, **_kwargs):
+        captured_sell_ids.extend(int(item_id) for item_id in item_ids)
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant sells",
+            measure_label="items",
+            attempted=len(item_ids),
+            completed=len(item_ids),
+        )
+
+    execute_widget._execute_merchant_sell_phase = capture_merchant_sell
+
+    def capture_material_sales(_coords, sales, *, phase_label="Material sales"):
+        captured_material_ids.extend(int(sale.item_id) for sale in sales)
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label=phase_label,
+            measure_label="trades",
+            attempted=len(sales),
+            completed=len(sales),
+        )
+
+    execute_widget._sell_planned_materials = capture_material_sales
+    _drain_generator_return(execute_widget._execute_now())
+    _expect(
+        captured_sell_ids == [] and captured_material_ids == [92302],
+        "Execution-time plan rebuilding should retain typed Exact protection and sell only the unprotected collision side.",
+    )
+
+    mutation_widget = _make_widget(module)
+    material_target = module.ExactProtectionTarget(
+        model_id=923,
+        item_type_id=int(module.ItemType.Materials_Zcoins),
+    )
+    _expect(mutation_widget._add_exact_protection_target(axe_target), "Add-one should accept a typed Exact target.")
+    _expect(mutation_widget._add_exact_protection_target(material_target), "Add-one should accept the sibling collision target.")
+    _expect(
+        mutation_widget._get_exact_protection_target_count() == 2,
+        "Typed collision targets should count independently.",
+    )
+    _expect(
+        mutation_widget._set_protected_item_targets([material_target])
+        and mutation_widget.protected_item_targets == [material_target],
+        "Removing one typed collision target must preserve its sibling target.",
+    )
+
+
+def _test_typed_exact_equipment_boundary_contract(module) -> None:
+    def requirement_rule(model_id: int):
+        return module._normalize_sell_rule(
+            module.SellRule(
+                enabled=True,
+                kind=module.SELL_KIND_WEAPONS,
+                protected_weapon_requirement_rules=[
+                    module.WeaponRequirementRule(model_id=model_id, min_requirement=1, max_requirement=9),
+                ],
+            )
+        )
+
+    widget = _make_widget(module)
+    axe = _make_item(
+        module,
+        item_id=92301,
+        model_id=923,
+        name="Kaineng Axe",
+        is_weapon_like=True,
+        item_type_id=int(module.ItemType.Axe),
+        item_type_name="Axe",
+        requirement=5,
+    )
+    material = _make_item(
+        module,
+        item_id=92302,
+        model_id=923,
+        name="Monstrous Claw",
+        is_material=True,
+        item_type_id=int(module.ItemType.Materials_Zcoins),
+        item_type_name="Materials_Zcoins",
+        requirement=5,
+    )
+    _expect(
+        widget._get_equippable_hard_protection_reason(axe, requirement_rule(923)) is not None
+        and widget._get_equippable_hard_protection_reason(material, requirement_rule(923)) is None,
+        "Equipment protection should remain scoped to the live weapon family for a cross-family model collision.",
+    )
+
+    offhand = _make_item(
+        module,
+        item_id=127112,
+        model_id=1271,
+        name="Grim Cesta",
+        is_weapon_like=True,
+        item_type_id=int(module.ItemType.Offhand),
+        item_type_name="Offhand",
+        requirement=5,
+    )
+    scythe = _make_item(
+        module,
+        item_id=127135,
+        model_id=1271,
+        name="Suntouched Scythe",
+        is_weapon_like=True,
+        item_type_id=int(module.ItemType.Scythe),
+        item_type_name="Scythe",
+        requirement=5,
+    )
+    _expect(
+        widget._get_equippable_hard_protection_reason(offhand, requirement_rule(1271)) is not None
+        and widget._get_equippable_hard_protection_reason(scythe, requirement_rule(1271)) is not None,
+        "Known same-family model-only Equipment ambiguity should remain documented and unchanged.",
+    )
+
+
 def _test_catalog_loader_result_is_fresh_and_preserves_load_order(module) -> None:
     root = SCRIPT_DIR / "_merchant_rules_regression_tmp" / "catalog_contract"
     shutil.rmtree(root, ignore_errors=True)
@@ -28534,6 +29310,10 @@ def main() -> int:
 
         tests = [
             ("malformed_profile_is_preserved", lambda: _test_malformed_profile_is_preserved(module, temp_root)),
+            (
+                "live_config_version_gates_and_preserves_state",
+                lambda: _test_live_config_version_gates_and_preserves_state(module, temp_root),
+            ),
             ("legacy_profile_normalizes_and_saves", lambda: _test_legacy_profile_normalizes_and_saves(module, temp_root)),
             ("legacy_whitelist_keep_count_migrates_to_per_target_rows", lambda: _test_legacy_whitelist_keep_count_migrates_to_per_target_rows(module, temp_root)),
             ("sell_material_presets_survive_same_frame_table_writeback", lambda: _test_sell_material_presets_survive_same_frame_table_writeback(module)),
@@ -28613,6 +29393,22 @@ def main() -> int:
             (
                 "protected_items_ui_copy_contract",
                 lambda: _test_protected_items_ui_copy_contract(module),
+            ),
+            (
+                "typed_exact_catalog_collision_contract",
+                lambda: _test_typed_exact_catalog_collision_contract(module),
+            ),
+            (
+                "typed_exact_profile_matching_and_shortcut_contract",
+                lambda: _test_typed_exact_profile_matching_and_shortcut_contract(module),
+            ),
+            (
+                "typed_exact_downstream_protection_contract",
+                lambda: _test_typed_exact_downstream_protection_contract(module),
+            ),
+            (
+                "typed_exact_equipment_boundary_contract",
+                lambda: _test_typed_exact_equipment_boundary_contract(module),
             ),
             ("manual_vendor_runtime_queues_once_per_signature", lambda: _test_manual_vendor_runtime_queues_once_per_signature(module)),
             ("manual_vendor_matching_sell_uses_current_merchant_only", lambda: _test_manual_vendor_matching_sell_uses_current_merchant_only(module)),
