@@ -2013,10 +2013,10 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
         ),
     },
     "protected_items": {
-        "short": "Exact item models protected by Merchant Rules.",
+        "short": "Items selected under Exact Items are protected from destructive actions.",
         "long": (
-            "Protected Items are skipped by sell, salvage, and sell-from-storage. Destroy skips them unless "
-            "Allow destroying protected items this session is enabled. Configured deposit rules may still move them."
+            "Exact Items protects selected items from sell, salvage, and sell-from-storage. Destroy also skips them "
+            "unless Allow destroying protected items this session is enabled. Configured deposit rules may still move them."
         ),
     },
     "destroy_include_protected": {
@@ -16192,13 +16192,20 @@ class MerchantRulesWidget:
     def _get_dense_list_table_flags(self):
         return PyImGui.TableFlags.RowBg | PyImGui.TableFlags.BordersInnerV
 
-    def _draw_add_all_matches_button(self, button_id: str, visible_count: int, addable_count: int) -> bool:
+    def _draw_add_all_matches_button(
+        self,
+        button_id: str,
+        visible_count: int,
+        addable_count: int,
+        *,
+        button_label: str = "Add All Matches",
+    ) -> bool:
         if visible_count <= 0:
             return False
 
         PyImGui.begin_disabled(addable_count <= 0)
         clicked = self._draw_confirm_destructive_button(
-            f"Add All Matches ({visible_count})##{button_id}",
+            f"{button_label} ({visible_count})##{button_id}",
             small=True,
         )
         PyImGui.end_disabled()
@@ -36156,8 +36163,9 @@ class MerchantRulesWidget:
         self._draw_section_heading("Exact Items")
         self._draw_secondary_text(
             (
-                "Protect every copy of selected item models. Use this for materials, consumables, trophies, keys, "
-                "lockpicks, ZCoins, event items, and any specific item model you always want kept safe."
+                "Protect selected items from sell, salvage, and sell-from-storage. Destroy also skips them unless "
+                "Allow destroying protected items this session is enabled. Use this for materials, consumables, "
+                "trophies, keys, lockpicks, ZCoins, event items, or other items you always want kept safe."
             )
         )
         self._draw_helper_tooltip("protected_items")
@@ -36292,6 +36300,7 @@ class MerchantRulesWidget:
             "merchant_rules_protected_items_add_all_matches",
             len(visible_model_ids),
             len(addable_model_ids),
+            button_label="Add Shown",
         ):
             next_model_ids = list(protected_item_model_ids) + addable_model_ids
             if self._set_protected_item_model_ids(next_model_ids):
@@ -36430,10 +36439,12 @@ class MerchantRulesWidget:
         }
         self._draw_section_heading("Equipment & Upgrade Protections")
         self._draw_secondary_text(
-            "Protect matching weapons, armor, upgrades, runes, insignias, and inscriptions from destructive actions.",
+            "Protect broader groups of weapons and armor based on their type or properties, including requirements, "
+            "customization, identification, and attached upgrades.",
         )
         self._draw_secondary_text(
-            "Each group is linked to a Weapons or Armor Sell rule. Enable or disable the rule in Sell. Its rarity choices apply to Keep customized and Keep unidentified; the other protections below do not use those rarity choices.",
+            "These protections belong to enabled Weapons or Armor Sell rules. Rarity choices apply to Keep customized "
+            "and Keep unidentified; the other protections below do not use those rarity choices.",
         )
         if not sell_rule_indices:
             self._draw_secondary_text(
@@ -40057,7 +40068,7 @@ class MerchantRulesWidget:
 
         PyImGui.push_item_width(210)
         next_category_index = PyImGui.combo(
-            "Item Type##merchant_rules_protected_item_type_filter",
+            "Category##merchant_rules_protected_item_type_filter",
             category_index,
             category_labels,
         )

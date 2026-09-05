@@ -2941,6 +2941,61 @@ def _test_carried_gold_manual_action_and_ui(module) -> None:
         module.get_widget_handler = original_handler
 
 
+def _test_protected_items_ui_copy_contract(module) -> None:
+    source = Path(module.__file__).read_text(encoding="utf-8")
+
+    protected_filter_start = source.index("def _draw_protected_item_type_filter_controls")
+    protected_filter_end = source.index("def _draw_cleanup_item_type_filter_controls", protected_filter_start)
+    protected_filter_source = source[protected_filter_start:protected_filter_end]
+    _expect(
+        '"Category##merchant_rules_protected_item_type_filter"' in protected_filter_source,
+        "Exact Items should label its derived filter as Category.",
+    )
+    _expect(
+        '"Item Type##merchant_rules_protected_item_type_filter"' not in protected_filter_source,
+        "Exact Items should not retain the misleading Item Type label.",
+    )
+    _expect(
+        '"Subtype##merchant_rules_protected_item_subtype_filter"' in protected_filter_source,
+        "The existing Subtype terminology should remain stable alongside Category.",
+    )
+
+    protected_editor_start = source.index("def _draw_protected_items_editor")
+    protected_editor_end = source.index("def _draw_sell_rule_protection_owner_editor", protected_editor_start)
+    protected_editor_source = source[protected_editor_start:protected_editor_end]
+    _expect(
+        'button_label="Add Shown"' in protected_editor_source
+        and "len(visible_model_ids)" in protected_editor_source
+        and "len(addable_model_ids)" in protected_editor_source,
+        "Exact Items should use Add Shown with the existing visible and addable counts.",
+    )
+    _expect(
+        "self._add_protected_item_model_id(add_candidate_model_id)" in protected_editor_source
+        and "self._set_protected_item_model_ids(next_model_ids)" in protected_editor_source,
+        "Exact Items add behavior should continue using the existing protection mutations.",
+    )
+
+    _expect(
+        module.SEARCH_RESULT_LIMIT == 12,
+        "The Exact Items search result cap should remain 12.",
+    )
+    _expect(
+        module.PROFILE_VERSION == 39,
+        "The UI-only wording change must not change the profile version.",
+    )
+    tooltip = module.HELPER_TOOLTIP_TEXTS["protected_items"]
+    _expect(
+        "Exact Items protects selected items" in tooltip["long"]
+        and "Configured deposit rules may still move them." in tooltip["long"],
+        "The Protected Items tooltip should explain global protection and deposit behavior plainly.",
+    )
+    _expect(
+        "broader groups of weapons and armor" in source
+        and "enabled Weapons or Armor Sell rules" in source,
+        "Equipment & Upgrades should explain broader rule-based protection and its enabled-rule dependency.",
+    )
+
+
 def _test_carried_gold_inventory_plus_fail_closed(module) -> None:
     original_handler = module.get_widget_handler
     original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
@@ -28554,6 +28609,10 @@ def main() -> int:
             (
                 "helper_tooltips_profile_defaults_and_roundtrip",
                 lambda: _test_helper_tooltips_profile_defaults_and_roundtrip(module, temp_root),
+            ),
+            (
+                "protected_items_ui_copy_contract",
+                lambda: _test_protected_items_ui_copy_contract(module),
             ),
             ("manual_vendor_runtime_queues_once_per_signature", lambda: _test_manual_vendor_runtime_queues_once_per_signature(module)),
             ("manual_vendor_matching_sell_uses_current_merchant_only", lambda: _test_manual_vendor_matching_sell_uses_current_merchant_only(module)),
