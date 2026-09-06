@@ -7562,6 +7562,10 @@ class MerchantRulesWidget:
         self.catalog_by_model_id: dict[int, dict[str, object]] = {}
         self.exact_catalog_by_item_key: dict[tuple[int, int], dict[str, object]] = {}
         self.exact_catalog_untyped_by_model_id: dict[int, dict[str, object]] = {}
+        self._equipment_typed_entries_by_model_id: dict[int, tuple[dict[str, object], ...]] = {}
+        self._equipment_model_search_entry_cache: dict[
+            tuple[int, str, bool, bool], dict[str, object]
+        ] = {}
         self._catalog_generation = 0
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
@@ -14218,6 +14222,8 @@ class MerchantRulesWidget:
         self.catalog_by_model_id = {}
         self.exact_catalog_by_item_key = {}
         self.exact_catalog_untyped_by_model_id = {}
+        self._equipment_typed_entries_by_model_id = {}
+        self._equipment_model_search_entry_cache = {}
         self.catalog_alias_to_model_ids = {}
         self.catalog_alias_display_names = {}
         self.common_salvage_model_ids_by_item_key = {}
@@ -14314,6 +14320,7 @@ class MerchantRulesWidget:
         self.catalog_by_model_id = result.catalog_by_model_id
         self.exact_catalog_by_item_key = result.exact_catalog_by_item_key
         self.exact_catalog_untyped_by_model_id = result.exact_catalog_untyped_by_model_id
+        self._rebuild_equipment_typed_entry_index()
         self.catalog_alias_to_model_ids = result.catalog_alias_to_model_ids
         self.catalog_alias_display_names = result.catalog_alias_display_names
         self.common_salvage_model_ids_by_item_key = result.common_salvage_model_ids_by_item_key
@@ -14688,6 +14695,242 @@ class MerchantRulesWidget:
         if item_type:
             label = f"{label} [{item_type}]"
         return self._append_model_attribute_suffix(label, model_id)
+
+    def _rebuild_equipment_typed_entry_index(self) -> None:
+        """Index the typed catalog rows used by Equipment's collision projections."""
+
+        self._equipment_model_search_entry_cache = {}
+        entries_by_model_id: dict[int, list[dict[str, object]]] = {}
+        for (raw_item_type_id, raw_model_id), entry in self.exact_catalog_by_item_key.items():
+            model_id = max(0, _safe_int(raw_model_id, 0))
+            item_type_id = _safe_int(raw_item_type_id, -1)
+            if model_id <= 0 or not _is_valid_exact_item_type_id(item_type_id) or not isinstance(entry, dict):
+                continue
+            entries_by_model_id.setdefault(model_id, []).append(entry)
+        self._equipment_typed_entries_by_model_id = {
+            model_id: tuple(entries)
+            for model_id, entries in entries_by_model_id.items()
+        }
+
+    def _get_equipment_typed_entries_for_model(self, model_id: object) -> list[dict[str, object]]:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return []
+
+        indexed_entries = getattr(self, "_equipment_typed_entries_by_model_id", {})
+        if not indexed_entries and self.exact_catalog_by_item_key:
+            self._rebuild_equipment_typed_entry_index()
+            indexed_entries = self._equipment_typed_entries_by_model_id
+        return list(indexed_entries.get(safe_model_id, ()))
+
+    def _catalog_entry_matches_equipment_family(
+        self,
+        entry: dict[str, object],
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+    ) -> bool:
+        item_type_id = _safe_int(entry.get("item_type_id"), -1)
+        item_type: ItemType | None = None
+        if _is_valid_exact_item_type_id(item_type_id):
+            try:
+                item_type = ItemType(item_type_id)
+            except ValueError:
+                item_type = None
+
+        if rule_kind == SELL_KIND_WEAPONS:
+            if item_type in WEAPON_LIKE_ITEM_TYPES:
+                return True
+            if item_type == ItemType.Rune_Mod:
+                return include_standalone_weapon_mods and not _is_armor_rune_catalog_name(entry.get("name", ""))
+            item_type_name = str(entry.get("item_type", "")).strip()
+            if _is_weapon_catalog_item_type(item_type_name):
+                return True
+            return (
+                include_standalone_weapon_mods
+                and item_type_name.casefold() == "rune_mod"
+                and _is_weapon_mod_catalog_name(entry.get("name", ""))
+            )
+
+        if rule_kind == SELL_KIND_ARMOR:
+            if item_type in ARMOR_PIECE_TYPES:
+                return True
+            if item_type == ItemType.Rune_Mod:
+                return include_standalone_runes and _is_armor_rune_catalog_name(entry.get("name", ""))
+            item_type_name = str(entry.get("item_type", "")).strip()
+            if _is_armor_catalog_item_type(item_type_name):
+                return True
+            if item_type_name.casefold() == "salvage":
+                return _is_armor_salvage_catalog_name(entry.get("name", ""))
+            return include_standalone_runes and (
+                item_type_name.casefold() == "rune_mod"
+                and _is_armor_rune_catalog_name(entry.get("name", ""))
+            )
+
+        return False
+
+    def _get_equipment_model_family_entries(
+        self,
+        model_id: object,
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+    ) -> list[dict[str, object]]:
+        typed_entries = self._get_equipment_typed_entries_for_model(model_id)
+        if typed_entries:
+            return [
+                entry
+                for entry in typed_entries
+                if self._catalog_entry_matches_equipment_family(
+                    entry,
+                    rule_kind,
+                    include_standalone_weapon_mods=include_standalone_weapon_mods,
+                    include_standalone_runes=include_standalone_runes,
+                )
+            ]
+
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        flat_entry = self._get_model_entry(safe_model_id)
+        if flat_entry is None or not self._catalog_entry_matches_equipment_family(
+            flat_entry,
+            rule_kind,
+            include_standalone_weapon_mods=include_standalone_weapon_mods,
+            include_standalone_runes=include_standalone_runes,
+        ):
+            return []
+        return [flat_entry]
+
+    def _get_equipment_catalog_type_label(self, entry: dict[str, object], rule_kind: str) -> str:
+        item_type_id = _safe_int(entry.get("item_type_id"), -1)
+        if item_type_id == int(ItemType.Rune_Mod):
+            return "Weapon Mod" if rule_kind == SELL_KIND_WEAPONS else "Armor Upgrade"
+        raw_item_type = str(entry.get("item_type", "")).strip()
+        if raw_item_type:
+            return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw_item_type.replace("_", " ")).strip()
+        if _is_valid_exact_item_type_id(item_type_id):
+            return self._humanize_exact_item_type(item_type_id)
+        return "Item"
+
+    def _get_equipment_model_search_entry(
+        self,
+        model_id: object,
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+    ) -> dict[str, object] | None:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return None
+        cache_key = (
+            safe_model_id,
+            str(rule_kind),
+            bool(include_standalone_weapon_mods),
+            bool(include_standalone_runes),
+        )
+        cached_entry = self._equipment_model_search_entry_cache.get(cache_key)
+        if cached_entry is not None:
+            return cached_entry
+        family_entries = self._get_equipment_model_family_entries(
+            safe_model_id,
+            rule_kind,
+            include_standalone_weapon_mods=include_standalone_weapon_mods,
+            include_standalone_runes=include_standalone_runes,
+        )
+        if not family_entries:
+            return None
+
+        def is_concrete_entry(entry: dict[str, object]) -> bool:
+            item_type_id = _safe_int(entry.get("item_type_id"), -1)
+            if rule_kind == SELL_KIND_WEAPONS:
+                return item_type_id in WEAPON_ITEM_TYPE_IDS
+            return item_type_id in {int(item_type.value) for item_type in ARMOR_PIECE_TYPES if item_type != ItemType.Salvage}
+
+        preferred_entry = next((entry for entry in family_entries if is_concrete_entry(entry)), family_entries[0])
+        ordered_entries = [preferred_entry] + [entry for entry in family_entries if entry is not preferred_entry]
+        result = dict(preferred_entry)
+        names: list[str] = []
+        type_labels: list[str] = []
+        alias_labels: dict[str, str] = {}
+
+        def add_unique(values: list[str], raw_value: object) -> None:
+            value = str(raw_value or "").strip()
+            if value and value.casefold() not in {existing.casefold() for existing in values}:
+                values.append(value)
+
+        for entry in ordered_entries:
+            add_unique(names, entry.get("name", ""))
+            add_unique(type_labels, self._get_equipment_catalog_type_label(entry, rule_kind))
+            raw_alias_labels = entry.get("alias_labels", {})
+            if isinstance(raw_alias_labels, dict):
+                for raw_alias, display_name in raw_alias_labels.items():
+                    normalized_alias = _normalize_catalog_search_text(raw_alias)
+                    if normalized_alias:
+                        alias_labels.setdefault(
+                            normalized_alias,
+                            str(display_name or raw_alias or "").strip() or normalized_alias.title(),
+                        )
+
+        for value in names + type_labels:
+            normalized_value = _normalize_catalog_search_text(value)
+            if normalized_value:
+                alias_labels.setdefault(normalized_value, value)
+
+        is_group = len(family_entries) > 1
+        group_label = ""
+        if is_group:
+            name_label = " / ".join(names) or f"Model {safe_model_id}"
+            type_label = " + ".join(type_labels)
+            group_label = f"{name_label} ({safe_model_id})"
+            if type_label:
+                group_label = f"{group_label} - {type_label}"
+            normalized_group_label = _normalize_catalog_search_text(group_label)
+            if normalized_group_label:
+                alias_labels.setdefault(normalized_group_label, group_label)
+
+        result["equipment_group"] = is_group
+        result["equipment_group_label"] = group_label
+        result["equipment_group_names"] = names
+        result["equipment_group_types"] = type_labels
+        result["equipment_family"] = rule_kind
+        result["alias_labels"] = alias_labels
+        result["equipment_search_text"] = _normalize_catalog_search_text(
+            " ".join(
+                [
+                    str(safe_model_id),
+                    str(result.get("name", "")),
+                    str(result.get("item_type", "")),
+                    group_label,
+                    " ".join(names),
+                    " ".join(type_labels),
+                    " ".join(alias_labels.keys()),
+                ]
+            )
+        )
+        self._equipment_model_search_entry_cache[cache_key] = result
+        return result
+
+    def _format_equipment_model_label(
+        self,
+        model_id: object,
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+    ) -> str:
+        entry = self._get_equipment_model_search_entry(
+            model_id,
+            rule_kind,
+            include_standalone_weapon_mods=include_standalone_weapon_mods,
+            include_standalone_runes=include_standalone_runes,
+        )
+        if entry is not None:
+            group_label = str(entry.get("equipment_group_label", "")).strip()
+            if group_label:
+                return group_label
+        return self._format_model_label_long(max(0, _safe_int(model_id, 0)))
 
     def _iter_exact_catalog_entries(self) -> Iterable[dict[str, object]]:
         yield from self.exact_catalog_by_item_key.values()
@@ -15460,7 +15703,15 @@ class MerchantRulesWidget:
             }
         return self._catalog_entry_matches_item_type_filter(entry, safe_category, safe_subcategory)
 
-    def _model_id_matches_item_search_text(self, model_id: object, raw_query: object) -> bool:
+    def _model_id_matches_item_search_text(
+        self,
+        model_id: object,
+        raw_query: object,
+        *,
+        equipment_rule_kind: str = "",
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+    ) -> bool:
         query = _normalize_catalog_search_text(raw_query)
         if not query:
             return True
@@ -15468,6 +15719,16 @@ class MerchantRulesWidget:
         safe_model_id = max(0, _safe_int(model_id, 0))
         if safe_model_id <= 0:
             return False
+
+        if equipment_rule_kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
+            equipment_entry = self._get_equipment_model_search_entry(
+                safe_model_id,
+                equipment_rule_kind,
+                include_standalone_weapon_mods=include_standalone_weapon_mods,
+                include_standalone_runes=include_standalone_runes,
+            )
+            if equipment_entry is not None:
+                return query in str(equipment_entry.get("equipment_search_text", ""))
 
         parts = [
             str(safe_model_id),
@@ -15946,22 +16207,101 @@ class MerchantRulesWidget:
             limit=limit,
         )
 
+    def _search_equipment_catalog(
+        self,
+        raw_query: str,
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+        entry_predicate: Callable[[dict[str, object]], bool] | None = None,
+        limit: int = SEARCH_RESULT_LIMIT,
+    ) -> list[dict[str, object]]:
+        query = _normalize_catalog_search_text(raw_query)
+        if not query or rule_kind not in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
+            return []
+
+        model_ids = {
+            max(0, _safe_int(model_id, 0))
+            for model_id in self.catalog_by_model_id
+            if max(0, _safe_int(model_id, 0)) > 0
+        }
+        model_ids.update(
+            max(0, _safe_int(model_id, 0))
+            for _item_type_id, model_id in self.exact_catalog_by_item_key
+            if max(0, _safe_int(model_id, 0)) > 0
+        )
+
+        matches: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        for model_id in model_ids:
+            entry = self._get_equipment_model_search_entry(
+                model_id,
+                rule_kind,
+                include_standalone_weapon_mods=include_standalone_weapon_mods,
+                include_standalone_runes=include_standalone_runes,
+            )
+            if entry is None:
+                continue
+            if entry_predicate is not None:
+                family_entries = self._get_equipment_model_family_entries(
+                    model_id,
+                    rule_kind,
+                    include_standalone_weapon_mods=include_standalone_weapon_mods,
+                    include_standalone_runes=include_standalone_runes,
+                )
+                if not any(entry_predicate(family_entry) for family_entry in family_entries):
+                    continue
+
+            name = str(entry.get("name", "")).strip()
+            normalized_search_text = str(entry.get("equipment_search_text", "")).strip()
+            if not name or query not in normalized_search_text:
+                continue
+
+            name_lower = _normalize_catalog_search_text(name)
+            model_id_text = str(model_id)
+            item_type = _normalize_catalog_search_text(entry.get("item_type", ""))
+            alias_labels = entry.get("alias_labels", {})
+            alias_matches = [
+                str(alias)
+                for alias in alias_labels
+                if query in str(alias or "")
+            ] if isinstance(alias_labels, dict) else []
+            exact_alias_hit = any(alias == query for alias in alias_matches)
+            prefix_alias_hit = any(alias.startswith(query) for alias in alias_matches)
+            group_search_values: list[str] = []
+            for key in ("equipment_group_names", "equipment_group_types"):
+                raw_values = entry.get(key, [])
+                if isinstance(raw_values, (list, tuple, set)):
+                    group_search_values.extend(str(value or "") for value in raw_values)
+            grouped_identity_hit = bool(
+                entry.get("equipment_group", False)
+                and query in _normalize_catalog_search_text(" ".join(group_search_values))
+            )
+            display_label = str(entry.get("equipment_group_label", "")).strip() or name
+            score = (
+                0 if query == model_id_text else 1,
+                0 if grouped_identity_hit else 1,
+                0 if name_lower.startswith(query) else 1,
+                0 if query in name_lower else 1,
+                0 if exact_alias_hit else 1,
+                0 if prefix_alias_hit else 1,
+                0 if alias_matches else 1,
+                0 if query in item_type else 1,
+                len(display_label),
+                display_label.casefold(),
+                model_id,
+            )
+            matches.append((score, entry))
+
+        matches.sort(key=lambda match: match[0])
+        return [entry for _, entry in matches[: max(1, int(limit))]]
+
     def _search_weapon_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
-        catalog_limit = max(max(1, len(self.catalog_by_model_id)), limit * 4, SEARCH_RESULT_LIMIT * 4)
-        results = self._search_catalog(raw_query, limit=catalog_limit)
-        weapon_results: list[dict[str, object]] = []
-        seen_model_ids: set[int] = set()
-        for entry in results:
-            model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
-            if model_id <= 0 or model_id in seen_model_ids:
-                continue
-            if not _is_weapon_catalog_item_type(entry.get("item_type", "")):
-                continue
-            seen_model_ids.add(model_id)
-            weapon_results.append(entry)
-            if len(weapon_results) >= max(1, int(limit)):
-                break
-        return weapon_results
+        return self._search_equipment_catalog(
+            raw_query,
+            SELL_KIND_WEAPONS,
+            limit=limit,
+        )
 
     def _search_common_material_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
         return self._search_catalog_with_predicate(
@@ -17063,7 +17403,7 @@ class MerchantRulesWidget:
             else:
                 for entry in results:
                     model_id = int(entry.get("model_id", 0))
-                    label = self._format_model_label_long(model_id)
+                    label = self._format_equipment_model_label(model_id, SELL_KIND_WEAPONS)
                     if self._draw_colored_selectable(
                         label,
                         self._get_item_name_text_color(
@@ -17084,6 +17424,8 @@ class MerchantRulesWidget:
         existing_model_ids: list[int],
         *,
         entry_predicate: Callable[[dict[str, object]], bool] | None = None,
+        equipment_rule_kind: str = "",
+        include_standalone_runes: bool = False,
     ) -> tuple[int, dict[str, object] | None, dict[str, int | bool | str], list[int]]:
         normalized_query = str(query or "").strip()
         if not normalized_query:
@@ -17099,11 +17441,20 @@ class MerchantRulesWidget:
             exclude_model_ids=existing_model_ids,
             entry_predicate=entry_predicate,
         )
-        item_results = (
-            self._search_catalog_with_predicate(normalized_query, entry_predicate=entry_predicate)
-            if entry_predicate is not None
-            else self._search_catalog(normalized_query)
-        )
+        if equipment_rule_kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
+            item_results = self._search_equipment_catalog(
+                normalized_query,
+                equipment_rule_kind,
+                include_standalone_weapon_mods=equipment_rule_kind == SELL_KIND_WEAPONS,
+                include_standalone_runes=include_standalone_runes,
+                entry_predicate=entry_predicate,
+            )
+        else:
+            item_results = (
+                self._search_catalog_with_predicate(normalized_query, entry_predicate=entry_predicate)
+                if entry_predicate is not None
+                else self._search_catalog(normalized_query)
+            )
         visible_item_model_ids = _collect_model_ids_from_catalog_entries(item_results)
         existing_model_id_set = set(_dedupe_model_ids(existing_model_ids))
         picked_model_id = 0
@@ -17132,7 +17483,15 @@ class MerchantRulesWidget:
                 if picked_group_info is None:
                     for entry in item_results:
                         model_id = int(entry.get("model_id", 0))
-                        label = self._format_model_label_long(model_id)
+                        if equipment_rule_kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
+                            label = self._format_equipment_model_label(
+                                model_id,
+                                equipment_rule_kind,
+                                include_standalone_weapon_mods=equipment_rule_kind == SELL_KIND_WEAPONS,
+                                include_standalone_runes=include_standalone_runes,
+                            )
+                        else:
+                            label = self._format_model_label_long(model_id)
                         if model_id in existing_model_id_set:
                             PyImGui.text_colored(label, self._get_model_text_color(model_id))
                             PyImGui.same_line(0, 8)
@@ -17522,6 +17881,9 @@ class MerchantRulesWidget:
         display_model_ids: set[int] | None = None,
         filtered_empty_text: str = "",
         show_exact_protection_badge: bool = False,
+        equipment_rule_kind: str = "",
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
     ) -> int:
         if not model_ids:
             self._draw_secondary_text("No items selected yet.", wrapped=False)
@@ -17557,7 +17919,14 @@ class MerchantRulesWidget:
                         break
                     PyImGui.table_set_column_index(1)
                     PyImGui.text_colored(
-                        self._format_model_label_long(model_id),
+                        self._format_equipment_model_label(
+                            model_id,
+                            equipment_rule_kind,
+                            include_standalone_weapon_mods=include_standalone_weapon_mods,
+                            include_standalone_runes=include_standalone_runes,
+                        )
+                        if equipment_rule_kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR)
+                        else self._format_model_label_long(model_id),
                         self._get_model_text_color(model_id),
                     )
                     if show_exact_protection_badge:
@@ -19698,7 +20067,39 @@ class MerchantRulesWidget:
 
         return ""
 
+    def _get_concrete_weapon_item_type_ids_for_model(self, model_id: object) -> set[int] | None:
+        """Return typed concrete weapon identities, or ``None`` when the catalog cannot prove them."""
+
+        typed_entries = self._get_equipment_typed_entries_for_model(model_id)
+        if not typed_entries:
+            return None
+        concrete_item_type_ids = {
+            _safe_int(entry.get("item_type_id"), -1)
+            for entry in typed_entries
+            if _safe_int(entry.get("item_type_id"), -1) in WEAPON_ITEM_TYPE_IDS
+        }
+        return concrete_item_type_ids or None
+
+    def _is_ambiguous_weapon_model(self, model_id: object) -> bool | None:
+        concrete_item_type_ids = self._get_concrete_weapon_item_type_ids_for_model(model_id)
+        if concrete_item_type_ids is None:
+            return None
+        return len(concrete_item_type_ids) > 1
+
+    def _should_fall_back_to_global_weapon_requirement(self, model_id: object) -> bool:
+        """Keep global protection available for ambiguous or unverifiable model identities."""
+
+        return self._is_ambiguous_weapon_model(model_id) is not False
+
     def _get_requirement_rule_item_label(self, item: InventoryItemInfo) -> str:
+        typed_entry = self._get_exact_catalog_entry(
+            getattr(item, "item_type_id", 0),
+            getattr(item, "model_id", 0),
+        )
+        typed_name = str(typed_entry.get("name", "")).strip() if typed_entry is not None else ""
+        if typed_name:
+            return typed_name
+
         catalog_name = str(self._get_model_name(item.model_id) or "").strip()
         if catalog_name:
             return catalog_name
@@ -19860,14 +20261,19 @@ class MerchantRulesWidget:
                 continue
             has_model_requirement_range = True
             if bool(getattr(requirement_rule, "perfect_stats_only", False)):
-                return self._get_perfect_base_range_hit_reason(
+                perfect_reason = self._get_perfect_base_range_hit_reason(
                     item,
                     min_requirement,
                     max_requirement,
                     source="model",
                 )
+                if perfect_reason:
+                    return perfect_reason
+                if not self._should_fall_back_to_global_weapon_requirement(item.model_id):
+                    return ""
+                continue
 
-        if has_model_requirement_range:
+        if has_model_requirement_range and not self._should_fall_back_to_global_weapon_requirement(item.model_id):
             return ""
 
         all_weapons_min_requirement, all_weapons_max_requirement = _normalize_weapon_requirement_range(
@@ -19920,7 +20326,7 @@ class MerchantRulesWidget:
                 item_label = self._get_requirement_rule_item_label(item)
                 return f"Protected by requirement range: {item_label} req {requirement} in {min_requirement}-{max_requirement}."
 
-        if has_model_requirement_range:
+        if has_model_requirement_range and not self._should_fall_back_to_global_weapon_requirement(item.model_id):
             return ""
 
         all_weapons_min_requirement, all_weapons_max_requirement = _normalize_weapon_requirement_range(
@@ -36333,7 +36739,12 @@ class MerchantRulesWidget:
                 append_entry(
                     PROTECTION_FILTER_MODELS,
                     "Kept Model",
-                    self._format_model_label(model_id),
+                    self._format_equipment_model_label(
+                        model_id,
+                        normalized_rule.kind,
+                        include_standalone_weapon_mods=normalized_rule.kind == SELL_KIND_WEAPONS,
+                        include_standalone_runes=bool(normalized_rule.include_standalone_runes),
+                    ),
                     f"{int(model_id):09d}",
                     subsection_anchor=SELL_PROTECTION_ANCHOR_MODELS,
                     target_key=f"model:{int(model_id)}",
@@ -36376,7 +36787,7 @@ class MerchantRulesWidget:
                     append_entry(
                         PROTECTION_FILTER_REQUIREMENTS,
                         "Requirement Keep",
-                        f"{self._format_model_label(requirement_rule.model_id)}{perfect_suffix} req {min_requirement}-{max_requirement}",
+                        f"{self._format_equipment_model_label(requirement_rule.model_id, SELL_KIND_WEAPONS)}{perfect_suffix} req {min_requirement}-{max_requirement}",
                         f"{int(requirement_rule.model_id):09d}-{min_requirement:02d}-{max_requirement:02d}",
                         subsection_anchor=SELL_PROTECTION_ANCHOR_REQUIREMENTS,
                         target_key=f"requirement_model:{int(requirement_rule.model_id)}",
@@ -38541,6 +38952,9 @@ class MerchantRulesWidget:
             if jump_model_id in rule.blacklist_model_ids and not self._model_id_matches_item_search_text(
                 jump_model_id,
                 selected_search_text,
+                equipment_rule_kind=rule.kind,
+                include_standalone_weapon_mods=rule.kind == SELL_KIND_WEAPONS,
+                include_standalone_runes=bool(rule.include_standalone_runes),
             ):
                 selected_search_text = ""
                 self.sell_blacklist_list_search_cache[index] = ""
@@ -38559,7 +38973,13 @@ class MerchantRulesWidget:
         visible_blacklist_model_ids = [
             int(model_id)
             for model_id in rule.blacklist_model_ids
-            if self._model_id_matches_item_search_text(model_id, selected_search_text)
+            if self._model_id_matches_item_search_text(
+                model_id,
+                selected_search_text,
+                equipment_rule_kind=rule.kind,
+                include_standalone_weapon_mods=rule.kind == SELL_KIND_WEAPONS,
+                include_standalone_runes=bool(rule.include_standalone_runes),
+            )
         ]
         removed_model_id = 0
         if selected_search_active and rule.blacklist_model_ids and not visible_blacklist_model_ids:
@@ -38571,6 +38991,9 @@ class MerchantRulesWidget:
                 visible_blacklist_model_ids,
                 jump_anchor=SELL_PROTECTION_ANCHOR_MODELS,
                 show_exact_protection_badge=True,
+                equipment_rule_kind=rule.kind,
+                include_standalone_weapon_mods=rule.kind == SELL_KIND_WEAPONS,
+                include_standalone_runes=bool(rule.include_standalone_runes),
             )
         if removed_model_id > 0:
             if self._set_sell_rule_blacklist_model_ids(
@@ -38583,7 +39006,13 @@ class MerchantRulesWidget:
             visible_count = len([
                 int(model_id)
                 for model_id in rule.blacklist_model_ids
-                if self._model_id_matches_item_search_text(model_id, selected_search_text)
+                if self._model_id_matches_item_search_text(
+                    model_id,
+                    selected_search_text,
+                    equipment_rule_kind=rule.kind,
+                    include_standalone_weapon_mods=rule.kind == SELL_KIND_WEAPONS,
+                    include_standalone_runes=bool(rule.include_standalone_runes),
+                )
             ])
             self._draw_secondary_text(
                 f"{visible_count} of {len(rule.blacklist_model_ids)} kept model(s) shown.",
@@ -38622,6 +39051,8 @@ class MerchantRulesWidget:
             self.sell_blacklist_search_cache.get(index, ""),
             rule.blacklist_model_ids,
             entry_predicate=entry_predicate,
+            equipment_rule_kind=rule.kind,
+            include_standalone_runes=bool(rule.include_standalone_runes),
         )
         addable_blacklist_model_ids = [model_id for model_id in visible_item_model_ids if model_id not in rule.blacklist_model_ids]
         if self._draw_add_all_matches_button(
@@ -38837,7 +39268,7 @@ class MerchantRulesWidget:
                         PyImGui.table_next_row()
                         PyImGui.table_set_column_index(0)
                         PyImGui.text_colored(
-                            self._format_model_label_short(requirement_rule.model_id),
+                            self._format_equipment_model_label(requirement_rule.model_id, SELL_KIND_WEAPONS),
                             self._get_model_text_color(requirement_rule.model_id),
                         )
                         self._maybe_scroll_sell_jump_target_row(
@@ -38926,7 +39357,10 @@ class MerchantRulesWidget:
                 max_requirement=default_max_requirement,
             ):
                 changed = True
-            self.sell_weapon_requirement_search_cache[index] = self._get_model_name(picked_model_id) or str(picked_model_id)
+            self.sell_weapon_requirement_search_cache[index] = self._format_equipment_model_label(
+                picked_model_id,
+                SELL_KIND_WEAPONS,
+            )
 
         self._draw_secondary_text(
             "Requirement ranges include both endpoints and apply only when Merchant Rules can read an "

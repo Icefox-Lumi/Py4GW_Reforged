@@ -16548,6 +16548,15 @@ def _test_model_specific_weapon_requirement_range_is_inclusive(module) -> None:
 
 def _test_model_specific_requirement_range_overrides_global_range(module) -> None:
     widget = _make_widget(module)
+    widget.exact_catalog_by_item_key = {
+        (int(module.ItemType.Axe), 111): {
+            "item_type_id": int(module.ItemType.Axe),
+            "model_id": 111,
+            "name": "Chaos Axe",
+            "item_type": "Axe",
+        },
+    }
+    widget._rebuild_equipment_typed_entry_index()
     rule = module._normalize_sell_rule(
         module.SellRule(
             enabled=True,
@@ -22738,6 +22747,19 @@ def _test_typed_exact_equipment_boundary_contract(module) -> None:
         and widget._get_equippable_hard_protection_reason(material, requirement_rule(923)) is None,
         "Equipment protection should remain scoped to the live weapon family for a cross-family model collision.",
     )
+    keep_rule = module._normalize_sell_rule(
+        module.SellRule(
+            enabled=True,
+            kind=module.SELL_KIND_WEAPONS,
+            rarities=_rarity_flags("gold"),
+            blacklist_model_ids=[923],
+        )
+    )
+    _expect(
+        widget._get_equippable_hard_protection_reason(axe, keep_rule) is not None
+        and widget._get_equippable_hard_protection_reason(material, keep_rule) is None,
+        "Model-only Weapons keeps must remain scoped to weapons across cross-family model collisions.",
+    )
 
     offhand = _make_item(
         module,
@@ -22763,6 +22785,525 @@ def _test_typed_exact_equipment_boundary_contract(module) -> None:
         widget._get_equippable_hard_protection_reason(offhand, requirement_rule(1271)) is not None
         and widget._get_equippable_hard_protection_reason(scythe, requirement_rule(1271)) is not None,
         "Known same-family model-only Equipment ambiguity should remain documented and unchanged.",
+    )
+
+
+def _test_equipment_collision_projection_and_requirement_fallback(module) -> None:
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+
+    def typed_entry_item(
+        entry,
+        *,
+        item_id: int,
+        requirement: int = 7,
+        identified: bool = True,
+        rule_kind: str = module.SELL_KIND_WEAPONS,
+        **stats,
+    ):
+        item_type_id = int(entry["item_type_id"])
+        is_weapon = item_type_id in module.WEAPON_ITEM_TYPE_IDS
+        is_armor = item_type_id in {
+            int(item_type.value) for item_type in module.ARMOR_PIECE_TYPES
+        }
+        standalone_kind = (
+            module.RUNE_STANDALONE_KIND
+            if item_type_id == int(module.ItemType.Rune_Mod) and rule_kind == module.SELL_KIND_ARMOR
+            else module.WEAPON_MOD_STANDALONE_KIND
+            if item_type_id == int(module.ItemType.Rune_Mod)
+            else ""
+        )
+        return _make_item(
+            module,
+            item_id=item_id,
+            model_id=int(entry["model_id"]),
+            name=str(entry.get("name", "Model")),
+            rarity="Gold",
+            identified=identified,
+            is_weapon_like=is_weapon,
+            is_armor_piece=is_armor,
+            standalone_kind=standalone_kind,
+            requirement=requirement,
+            item_type_id=item_type_id,
+            item_type_name=str(entry.get("item_type", "")),
+            **stats,
+        )
+
+    typed_by_model: dict[int, set[int]] = {}
+    for (item_type_id, model_id) in widget.exact_catalog_by_item_key:
+        typed_by_model.setdefault(int(model_id), set()).add(int(item_type_id))
+    concrete_weapon_collision_ids = {
+        model_id
+        for model_id, item_type_ids in typed_by_model.items()
+        if len(item_type_ids & set(module.WEAPON_ITEM_TYPE_IDS)) > 1
+    }
+    _expect(
+        {1271, 1957, 1958}.issubset(concrete_weapon_collision_ids),
+        "Real typed catalog data should derive the three concrete same-family weapon collisions.",
+    )
+
+    weapon_group_ids = {
+        model_id
+        for model_id in typed_by_model
+        if len(
+            widget._get_equipment_model_family_entries(
+                model_id,
+                module.SELL_KIND_WEAPONS,
+                include_standalone_weapon_mods=True,
+            )
+        )
+        > 1
+    }
+    armor_group_ids = {
+        model_id
+        for model_id in typed_by_model
+        if len(
+            widget._get_equipment_model_family_entries(
+                model_id,
+                module.SELL_KIND_ARMOR,
+            )
+        )
+        > 1
+    }
+    _expect(
+        {1271, 1957, 1958, 894, 895, 897, 905}.issubset(weapon_group_ids)
+        and len(weapon_group_ids) == 7,
+        "Equipment collision projection should derive the seven current same-Weapons groups.",
+    )
+    _expect(
+        {
+            17207,
+            23108,
+            23281,
+            23851,
+            23856,
+            23857,
+            23858,
+            23859,
+        }.issubset(armor_group_ids)
+        and len(armor_group_ids) == 8,
+        "Equipment collision projection should derive the eight current same-Armor groups.",
+    )
+
+    expected_labels = {
+        1271: ("Grim Cesta", "Suntouched Scythe", "Offhand", "Scythe"),
+        1957: ("Frog Scepter", "Wand", "Staff"),
+        1958: ("Frog Scepter", "Wand", "Staff"),
+        894: ("Bleached Skull", "Bowstring", "Weapon Mod"),
+    }
+    for model_id, fragments in expected_labels.items():
+        label = widget._format_equipment_model_label(
+            model_id,
+            module.SELL_KIND_WEAPONS,
+            include_standalone_weapon_mods=True,
+        )
+        _expect(
+            all(fragment in label for fragment in fragments),
+            f"Equipment model {model_id} should display one broad collision-aware label.",
+        )
+
+    for rule_kind, group_ids, include_weapon_mods, include_runes in (
+        (module.SELL_KIND_WEAPONS, weapon_group_ids, True, False),
+        (module.SELL_KIND_ARMOR, armor_group_ids, False, False),
+    ):
+        keep_rule = module._normalize_sell_rule(
+            module.SellRule(
+                enabled=True,
+                kind=rule_kind,
+                rarities=_rarity_flags("gold"),
+                blacklist_model_ids=sorted(group_ids),
+                include_standalone_runes=include_runes,
+            )
+        )
+        for model_id in sorted(group_ids):
+            family_entries = widget._get_equipment_model_family_entries(
+                model_id,
+                rule_kind,
+                include_standalone_weapon_mods=include_weapon_mods,
+                include_standalone_runes=include_runes,
+            )
+            for entry_index, entry in enumerate(family_entries):
+                sibling = typed_entry_item(
+                    entry,
+                    item_id=500000 + (model_id * 10) + entry_index,
+                    rule_kind=rule_kind,
+                )
+                protection = widget._get_equippable_hard_protection_reason(sibling, keep_rule)
+                _expect(
+                    protection is not None and "Blacklisted model" in protection[1],
+                    f"Model-only Keep These Models should remain broad for {rule_kind} model {model_id} sibling {entry.get('name')!r}.",
+                )
+
+    weapon_blacklist_predicate = widget._catalog_entry_matches_weapon_blacklist
+
+    def armor_blacklist_predicate(entry):
+        return widget._catalog_entry_matches_armor_blacklist(
+            entry,
+            include_standalone_runes=False,
+        )
+
+    for query, expected_model_id, predicate in (
+        ("Grim Cesta", 1271, weapon_blacklist_predicate),
+        ("Suntouched Scythe", 1271, weapon_blacklist_predicate),
+        ("Scythe", 1271, weapon_blacklist_predicate),
+        ("Staff", 1957, weapon_blacklist_predicate),
+        ("Bowstring", 894, weapon_blacklist_predicate),
+        ("Hammer Haft", 895, weapon_blacklist_predicate),
+        ("Aeromancer Insignia", 17207, armor_blacklist_predicate),
+        ("Feathered Crest", 23851, armor_blacklist_predicate),
+    ):
+        rule_kind = module.SELL_KIND_ARMOR if predicate is armor_blacklist_predicate else module.SELL_KIND_WEAPONS
+        results = widget._search_equipment_catalog(
+            query,
+            rule_kind,
+            include_standalone_weapon_mods=rule_kind == module.SELL_KIND_WEAPONS,
+            entry_predicate=predicate,
+        )
+        _expect(
+            expected_model_id in {int(entry.get("model_id", 0)) for entry in results},
+            f"Equipment search should expose model {expected_model_id} for sibling query {query!r}.",
+        )
+
+    _expect(
+        widget._model_id_matches_item_search_text(
+            1271,
+            "Suntouched Scythe",
+            equipment_rule_kind=module.SELL_KIND_WEAPONS,
+            include_standalone_weapon_mods=True,
+        ),
+        "Configured broad model lists should search through hidden same-model sibling names.",
+    )
+
+    six_identities = [
+        (1271, module.ItemType.Offhand, "Grim Cesta"),
+        (1271, module.ItemType.Scythe, "Suntouched Scythe"),
+        (1957, module.ItemType.Wand, "Frog Scepter"),
+        (1957, module.ItemType.Staff, "Frog Scepter"),
+        (1958, module.ItemType.Wand, "Frog Scepter"),
+        (1958, module.ItemType.Staff, "Frog Scepter"),
+    ]
+    for model_id, item_type, item_name in six_identities:
+        rule = module._normalize_sell_rule(
+            module.SellRule(
+                enabled=True,
+                kind=module.SELL_KIND_WEAPONS,
+                all_weapons_min_requirement=1,
+                all_weapons_max_requirement=8,
+                protected_weapon_requirement_rules=[
+                    module.WeaponRequirementRule(
+                        model_id=model_id,
+                        min_requirement=1,
+                        max_requirement=5,
+                    ),
+                ],
+            )
+        )
+        specific_item = _make_weapon_item(
+            module,
+            item_id=100000 + model_id + int(item_type),
+            model_id=model_id,
+            name=item_name,
+            requirement=3,
+            item_type=item_type,
+        )
+        fallback_item = replace(specific_item, requirement=7)
+        outside_item = replace(specific_item, requirement=10)
+        _expect(
+            "Protected by requirement range:" in widget._get_weapon_requirement_hit_reason(specific_item, rule),
+            f"Specific requirement range should protect {item_name} model {model_id}.",
+        )
+        _expect(
+            "Protected by all-weapons requirement range:" in widget._get_weapon_requirement_hit_reason(fallback_item, rule),
+            f"Ambiguous model {model_id} should fall back to a matching global requirement range.",
+        )
+        _expect(
+            widget._get_weapon_requirement_hit_reason(outside_item, rule) == "",
+            f"Model {model_id} should remain unprotected when neither requirement range matches.",
+        )
+
+        perfect_rule = module._normalize_sell_rule(
+            module.SellRule(
+                enabled=True,
+                kind=module.SELL_KIND_WEAPONS,
+                all_weapons_min_requirement=1,
+                all_weapons_max_requirement=8,
+                all_weapons_perfect_stats_only=True,
+                protected_weapon_requirement_rules=[
+                    module.WeaponRequirementRule(
+                        model_id=model_id,
+                        min_requirement=1,
+                        max_requirement=5,
+                        perfect_stats_only=True,
+                    ),
+                ],
+            )
+        )
+        perfect_stats = {
+            module.ItemType.Offhand: {"energy": 12},
+            module.ItemType.Scythe: {"damage_min": 9, "damage_max": 41},
+            module.ItemType.Wand: {"damage_min": 11, "damage_max": 22},
+            module.ItemType.Staff: {"damage_min": 11, "damage_max": 22, "energy": 10},
+        }[item_type]
+        perfect_specific = replace(specific_item, **perfect_stats)
+        perfect_fallback = replace(fallback_item, **perfect_stats)
+        _expect(
+            "Protected by model perfect-base range:" in widget._get_weapon_requirement_hit_reason(perfect_specific, perfect_rule),
+            f"Specific perfect-only protection should use live {item_type.name} stats.",
+        )
+        _expect(
+            "Protected by all-weapons perfect-base range:" in widget._get_weapon_requirement_hit_reason(perfect_fallback, perfect_rule),
+            f"Ambiguous model {model_id} should fall back to global perfect-only protection.",
+        )
+        _expect(
+            widget._get_weapon_requirement_hit_reason(replace(perfect_fallback, requirement=10), perfect_rule) == "",
+            f"Global perfect-only protection should still reject out-of-range model {model_id} requirements.",
+        )
+
+        unidentified = replace(
+            fallback_item,
+            identified=False,
+            damage_min=0,
+            damage_max=0,
+            energy=0,
+        )
+        _expect(
+            "Protected until identified" in widget._get_perfect_only_unidentified_hold_reason(unidentified, perfect_rule),
+            f"Ambiguous model {model_id} should retain the global perfect-only unidentified hold fallback.",
+        )
+
+        for item in (
+            specific_item,
+            fallback_item,
+        ):
+            _expect(
+                item_name in widget._get_requirement_rule_item_label(item),
+                f"Requirement reason labels should retain the live typed name for model {model_id}.",
+            )
+
+    unambiguous_widget = _make_widget(module)
+    unambiguous_widget.exact_catalog_by_item_key = {
+        (int(module.ItemType.Axe), 111): {
+            "item_type_id": int(module.ItemType.Axe),
+            "model_id": 111,
+            "name": "Chaos Axe",
+            "item_type": "Axe",
+        },
+    }
+    unambiguous_widget._rebuild_equipment_typed_entry_index()
+    unambiguous_rule = module._normalize_sell_rule(
+        module.SellRule(
+            enabled=True,
+            kind=module.SELL_KIND_WEAPONS,
+            all_weapons_min_requirement=1,
+            all_weapons_max_requirement=8,
+            protected_weapon_requirement_rules=[
+                module.WeaponRequirementRule(model_id=111, min_requirement=1, max_requirement=5),
+            ],
+        )
+    )
+    _expect(
+        unambiguous_widget._get_weapon_requirement_hit_reason(
+            _make_weapon_item(module, item_id=1117, model_id=111, name="Chaos Axe", requirement=7),
+            unambiguous_rule,
+        )
+        == "",
+        "An unambiguous weapon model should retain the existing specific-rule override semantics.",
+    )
+
+    unverifiable_widget = _make_widget(module)
+    unverifiable_rule = module._normalize_sell_rule(
+        module.SellRule(
+            enabled=True,
+            kind=module.SELL_KIND_WEAPONS,
+            all_weapons_min_requirement=1,
+            all_weapons_max_requirement=8,
+            protected_weapon_requirement_rules=[
+                module.WeaponRequirementRule(model_id=777, min_requirement=1, max_requirement=5),
+            ],
+        )
+    )
+    _expect(
+        "Protected by all-weapons requirement range:" in unverifiable_widget._get_weapon_requirement_hit_reason(
+            _make_weapon_item(module, item_id=7771, model_id=777, name="Unknown Axe", requirement=7),
+            unverifiable_rule,
+        ),
+        "Unavailable collision metadata should fail conservatively by retaining global protection evaluation.",
+    )
+
+    profile_payload = widget._build_profile_payload()
+    serialized_rule = module._normalize_sell_rule(
+        module.SellRule(
+            enabled=True,
+            kind=module.SELL_KIND_WEAPONS,
+            blacklist_model_ids=[1271],
+            protected_weapon_requirement_rules=[
+                module.WeaponRequirementRule(model_id=1271, min_requirement=1, max_requirement=5),
+            ],
+        )
+    )
+    widget.sell_rules = [serialized_rule]
+    profile_payload = widget._build_profile_payload()
+    normalized_payload = widget._normalize_profile_payload(profile_payload)
+    _expect(
+        profile_payload["version"] == module.PROFILE_VERSION == 40
+        and normalized_payload["version"] == 40
+        and "item_type_id" not in profile_payload["sell_rules"][0]["protected_weapon_requirement_rules"][0]
+        and normalized_payload["sell_rules"][0]["blacklist_model_ids"] == [1271],
+        "Equipment collision repair should preserve the v40 model-only profile schema without new typed fields.",
+    )
+    hub_entries = widget._build_protection_hub_entries()
+    _expect(
+        any(
+            entry.filter_key == module.PROTECTION_FILTER_MODELS
+            and "Grim Cesta" in entry.value_label
+            and "Suntouched Scythe" in entry.value_label
+            for entry in hub_entries
+        )
+        and any(
+            entry.filter_key == module.PROTECTION_FILTER_REQUIREMENTS
+            and "Grim Cesta" in entry.value_label
+            and "Suntouched Scythe" in entry.value_label
+            for entry in hub_entries
+        ),
+        "Configured Equipment protections should retain collision-aware labels in the Protection Hub.",
+    )
+
+
+def _test_equipment_collision_fallback_shared_downstream_paths(module) -> None:
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+    item = _make_item(
+        module,
+        item_id=127101,
+        model_id=1271,
+        name="Suntouched Scythe",
+        rarity="Gold",
+        identified=True,
+        is_weapon_like=True,
+        salvageable=True,
+        requirement=7,
+        item_type_id=int(module.ItemType.Scythe),
+        item_type_name="Scythe",
+        damage_min=9,
+        damage_max=41,
+    )
+    protection_rule = module._normalize_sell_rule(
+        module.SellRule(
+            enabled=True,
+            kind=module.SELL_KIND_WEAPONS,
+            all_weapons_min_requirement=1,
+            all_weapons_max_requirement=8,
+            protected_weapon_requirement_rules=[
+                module.WeaponRequirementRule(model_id=1271, min_requirement=1, max_requirement=5),
+            ],
+        )
+    )
+    ordinary_sell_rule = module._normalize_sell_rule(
+        module.SellRule(
+            enabled=True,
+            kind=module.SELL_KIND_WEAPONS,
+            rarities=_rarity_flags("gold"),
+        )
+    )
+    widget.sell_rules = [protection_rule, ordinary_sell_rule]
+    widget.destroy_rules = [
+        module._normalize_destroy_rule(
+            module.DestroyRule(
+                enabled=True,
+                kind=module.DESTROY_KIND_WEAPONS,
+                rarities=_rarity_flags("gold"),
+            )
+        )
+    ]
+    widget.salvage_settings = module.SalvageSettings(
+        rules=[
+            module.SalvageRule(
+                enabled=True,
+                model_ids=[1271],
+                rarities=_rarity_flags("gold"),
+                salvage_option=module.SALVAGE_OPTION_MATERIALS,
+            )
+        ]
+    )
+    coords = {
+        module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0),
+        module.MERCHANT_TYPE_MATERIALS: (2.0, 2.0),
+        module.MERCHANT_TYPE_RUNE_TRADER: (3.0, 3.0),
+        module.MERCHANT_TYPE_RARE_MATERIALS: (4.0, 4.0),
+    }
+    widget._get_supported_context = lambda *, passive=False: (True, "Ready", coords)
+    widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
+    widget._collect_inventory_items = lambda: [item]
+
+    plan = widget._build_plan()
+    _expect(
+        not plan.merchant_sell_item_ids and not plan.salvage_item_ids and not plan.destroy_actions and not plan.destroy_item_ids,
+        "The shared preview plan should keep the fallback-protected colliding sibling out of sell, salvage, and destroy actions.",
+    )
+    _expect(
+        any(
+            entry.state == module.PLAN_STATE_SKIPPED
+            and entry.status_hint == "protected"
+            and "all-weapons requirement range" in entry.reason
+            for entry in plan.entries
+        ),
+        "Preview should report the conservative global requirement protection for the colliding sibling on its owning protected action.",
+    )
+    _expect(
+        widget._get_salvage_candidate_block_reason(
+            item,
+            widget._collect_enabled_sell_rules(),
+            require_salvage_kit=True,
+            salvage_kit_id=77,
+        ).startswith("protected:"),
+        "Salvage candidate evaluation should consume the shared hard-protection fallback.",
+    )
+
+    replan = widget._build_plan()
+    _expect(
+        replan.merchant_sell_item_ids == plan.merchant_sell_item_ids
+        and replan.salvage_item_ids == plan.salvage_item_ids
+        and replan.destroy_item_ids == plan.destroy_item_ids
+        and replan.destroy_actions == plan.destroy_actions,
+        "A second execution-style plan rebuild should retain the same protected result.",
+    )
+
+    _drain_generator_return(widget._execute_now(local_only=True))
+    _expect(
+        widget.status_message == "Nothing to execute for the current rules and inventory state."
+        and not widget.preview_plan.has_actions
+        and not widget.preview_plan.merchant_sell_item_ids
+        and not widget.preview_plan.salvage_item_ids
+        and not widget.preview_plan.destroy_item_ids,
+        "Execution-time plan rebuilding should retain the protected result for the colliding sibling.",
+    )
+
+    xunlai_rule = module._normalize_sell_rule(
+        module.SellRule(
+            enabled=True,
+            kind=module.SELL_KIND_WEAPONS,
+            rarities=_rarity_flags("gold"),
+            sell_from_xunlai=True,
+        )
+    )
+    xunlai_widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, xunlai_widget)
+    xunlai_widget.sell_rules = [protection_rule, xunlai_rule]
+    protected_preview_entries = []
+    transfers, adjusted_rules = xunlai_widget._plan_xunlai_sell_withdrawals(
+        xunlai_widget._collect_enabled_xunlai_sell_rules(),
+        current_items=[],
+        regular_storage_items=[item],
+        material_storage_items=[],
+        coords=coords,
+        protected_preview_entries=protected_preview_entries,
+    )
+    _expect(
+        not transfers
+        and not adjusted_rules
+        and len(protected_preview_entries) == 1
+        and "all-weapons requirement range" in protected_preview_entries[0].reason,
+        "Xunlai sell-from-storage planning should keep the fallback-protected sibling in storage.",
     )
 
 
@@ -29409,6 +29950,14 @@ def main() -> int:
             (
                 "typed_exact_equipment_boundary_contract",
                 lambda: _test_typed_exact_equipment_boundary_contract(module),
+            ),
+            (
+                "equipment_collision_projection_and_requirement_fallback",
+                lambda: _test_equipment_collision_projection_and_requirement_fallback(module),
+            ),
+            (
+                "equipment_collision_fallback_shared_downstream_paths",
+                lambda: _test_equipment_collision_fallback_shared_downstream_paths(module),
             ),
             ("manual_vendor_runtime_queues_once_per_signature", lambda: _test_manual_vendor_runtime_queues_once_per_signature(module)),
             ("manual_vendor_matching_sell_uses_current_merchant_only", lambda: _test_manual_vendor_matching_sell_uses_current_merchant_only(module)),
