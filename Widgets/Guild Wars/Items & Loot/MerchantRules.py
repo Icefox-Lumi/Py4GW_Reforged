@@ -4287,6 +4287,31 @@ class PlanResult:
 
 
 @dataclass
+class EarlyKitExecutionState:
+    """Keep early kit sourcing bounded to the authorization from this Execute run."""
+
+    purchase_budget_by_target: dict[tuple[int, str], int] = field(default_factory=dict)
+    purchase_budget_ready: set[tuple[int, str]] = field(default_factory=set)
+    quarantined_purchase_targets: set[tuple[int, str]] = field(default_factory=set)
+    deferred_cleanups: dict[tuple[int, str], PurchaseTargetCleanup] = field(default_factory=dict)
+
+
+@dataclass
+class EarlyKitPrerequisiteOutcome:
+    """Report one bounded early kit source attempt."""
+
+    category: str
+    attempted: bool = False
+    acquired: bool = False
+    completed: int = 0
+    xunlai_model_id: int = 0
+    xunlai_failed: bool = False
+    purchase_unverified: bool = False
+    verified_merchant_purchase_count: int = 0
+    source_label: str = ""
+
+
+@dataclass
 class ManualVendorContext:
     """Snapshot the currently open merchant services and offered item identifiers."""
 
@@ -4364,6 +4389,7 @@ class ExecutionPhaseOutcome:
     load_failures: int = 0
     gold_blocked: int = 0
     depleted: int = 0
+    dispatched: int = 0
 
 
 @dataclass
@@ -21852,6 +21878,472 @@ class MerchantRulesWidget:
             live_shortage = ((live_shortage + safe_batch_size - 1) // safe_batch_size) * safe_batch_size
         return min(safe_remaining, live_shortage)
 
+    @staticmethod
+    def _early_kit_purchase_target_key(cleanup: PurchaseTargetCleanup) -> tuple[int, str]:
+        return (
+            int(getattr(cleanup, "rule_index", -1)),
+            str(getattr(cleanup, "target_key", "") or ""),
+        )
+
+    @staticmethod
+    def _early_kit_model_ids(category: str) -> tuple[int, ...]:
+        normalized_category = str(category or "").strip().lower()
+        if normalized_category == "identification":
+            return tuple(int(model_id) for model_id in ID_KIT_MODEL_IDS)
+        if normalized_category == "normal_salvage":
+            return tuple(int(model_id) for model_id in NORMAL_SALVAGE_KIT_MODEL_IDS)
+        if normalized_category == "upgrade_salvage":
+            return tuple(
+                int(model_id)
+                for model_id in UPGRADE_SALVAGE_KIT_MODEL_IDS
+                if int(model_id) != int(ModelID.Perfect_Salvage_Kit.value)
+            )
+        return ()
+
+    @classmethod
+    def _is_early_kit_model_id(cls, model_id: object) -> bool:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        return any(
+            safe_model_id in set(cls._early_kit_model_ids(category))
+            for category in ("identification", "normal_salvage", "upgrade_salvage")
+        )
+
+    def _capture_early_kit_purchase_budgets(
+        self,
+        plan: PlanResult,
+        state: EarlyKitExecutionState,
+    ) -> None:
+        """Capture each compatible target's first complete, storage-aware authorization."""
+
+        planned_quantity_by_target: dict[tuple[int, str], int] = {}
+        for merchant_buy in plan.merchant_stock_buys:
+            cleanup = merchant_buy.cleanup
+            if str(getattr(cleanup, "rule_kind", "")) != BUY_KIND_MERCHANT_STOCK:
+                continue
+            if not self._is_early_kit_model_id(merchant_buy.model_id):
+                continue
+            target_key = self._early_kit_purchase_target_key(cleanup)
+            planned_quantity_by_target[target_key] = (
+                max(0, int(planned_quantity_by_target.get(target_key, 0)))
+                + max(0, int(merchant_buy.quantity))
+            )
+
+        # Request-scoped Merchant Stock targets have no persisted target entry, but their
+        # PlannedMerchantBuy cleanup still carries the -1 owner identity.
+        for target_key, quantity in planned_quantity_by_target.items():
+            if target_key in state.purchase_budget_ready:
+                continue
+            state.purchase_budget_by_target[target_key] = max(0, int(quantity))
+            state.purchase_budget_ready.add(target_key)
+
+        for rule_index, raw_buy_rule in enumerate(self.buy_rules):
+            buy_rule = _normalize_buy_rule(raw_buy_rule)
+            if buy_rule is None or not buy_rule.enabled or buy_rule.kind != BUY_KIND_MERCHANT_STOCK:
+                continue
+            for target in _normalize_merchant_stock_targets(buy_rule.merchant_stock_targets):
+                model_id = max(0, int(target.model_id))
+                if not self._is_early_kit_model_id(model_id):
+                    continue
+                if (
+                    bool(target.check_xunlai_first)
+                    and self._merchant_stock_target_supports_xunlai_first(model_id)
+                    and not bool(plan.storage_exact)
+                ):
+                    # The target's first complete authorization is not knowable until the
+                    # existing exact Xunlai scan has run.
+                    continue
+                target_key = (int(rule_index), str(model_id))
+                if target_key in state.purchase_budget_ready:
+                    continue
+                state.purchase_budget_by_target[target_key] = max(
+                    0,
+                    int(planned_quantity_by_target.get(target_key, 0)),
+                )
+                state.purchase_budget_ready.add(target_key)
+
+    def _clamp_early_kit_merchant_buys(
+        self,
+        plan: PlanResult,
+        state: EarlyKitExecutionState,
+    ) -> None:
+        """Prevent rebuilt compatible Merchant Stock plans from recreating spent authorization."""
+
+        clamped_buys: list[PlannedMerchantBuy] = []
+        for merchant_buy in plan.merchant_stock_buys:
+            cleanup = merchant_buy.cleanup
+            target_key = self._early_kit_purchase_target_key(cleanup)
+            if (
+                str(getattr(cleanup, "rule_kind", "")) != BUY_KIND_MERCHANT_STOCK
+                or target_key not in state.purchase_budget_ready
+            ):
+                clamped_buys.append(merchant_buy)
+                continue
+            if target_key in state.quarantined_purchase_targets:
+                continue
+            remaining_authorized = max(
+                0,
+                int(state.purchase_budget_by_target.get(target_key, 0)),
+            )
+            remaining_quantity = min(max(0, int(merchant_buy.quantity)), remaining_authorized)
+            if remaining_quantity <= 0:
+                continue
+            if remaining_quantity != int(merchant_buy.quantity):
+                merchant_buy = replace(merchant_buy, quantity=remaining_quantity)
+            clamped_buys.append(merchant_buy)
+        plan.merchant_stock_buys = clamped_buys
+
+    def _quarantine_early_kit_purchase_target(
+        self,
+        state: EarlyKitExecutionState,
+        merchant_buy: PlannedMerchantBuy,
+    ) -> None:
+        cleanup = merchant_buy.cleanup
+        if str(getattr(cleanup, "rule_kind", "")) != BUY_KIND_MERCHANT_STOCK:
+            return
+        state.quarantined_purchase_targets.add(self._early_kit_purchase_target_key(cleanup))
+
+    def _consume_early_kit_purchase_budget(
+        self,
+        state: EarlyKitExecutionState,
+        merchant_buy: PlannedMerchantBuy,
+        completed: int,
+    ) -> None:
+        cleanup = merchant_buy.cleanup
+        if str(getattr(cleanup, "rule_kind", "")) != BUY_KIND_MERCHANT_STOCK:
+            return
+        target_key = self._early_kit_purchase_target_key(cleanup)
+        if target_key not in state.purchase_budget_ready:
+            return
+        state.purchase_budget_by_target[target_key] = max(
+            0,
+            int(state.purchase_budget_by_target.get(target_key, 0)) - max(0, int(completed)),
+        )
+
+    def _record_early_kit_deferred_cleanup(
+        self,
+        state: EarlyKitExecutionState,
+        merchant_buy: PlannedMerchantBuy,
+        completed: int,
+    ) -> None:
+        if max(0, int(completed)) <= 0:
+            return
+        cleanup = merchant_buy.cleanup
+        if (
+            _normalize_after_purchase_action(getattr(cleanup, "after_purchase", AFTER_PURCHASE_KEEP))
+            == AFTER_PURCHASE_KEEP
+            or not bool(getattr(cleanup, "completes_target", False))
+            or bool(getattr(cleanup, "xunlai_involved", False))
+        ):
+            return
+        state.deferred_cleanups[self._early_kit_purchase_target_key(cleanup)] = cleanup
+
+    def _apply_deferred_early_kit_cleanups(self, state: EarlyKitExecutionState) -> None:
+        for cleanup in list(state.deferred_cleanups.values()):
+            model_id = max(0, _safe_int(getattr(cleanup, "target_key", 0), 0))
+            target_count = max(0, int(getattr(cleanup, "target_count", 0)))
+            if model_id <= 0 or target_count <= 0:
+                continue
+            try:
+                carried_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(model_id)))
+            except Exception:
+                continue
+            if carried_count < target_count:
+                continue
+            cleanup_applied = self._apply_after_purchase_cleanup(
+                cleanup,
+                label=self._format_model_label(model_id),
+            )
+            if cleanup_applied:
+                state.deferred_cleanups.pop(self._early_kit_purchase_target_key(cleanup), None)
+
+    def _clear_satisfied_early_kit_cleanup(
+        self,
+        state: EarlyKitExecutionState,
+        merchant_buy: PlannedMerchantBuy,
+        completed: int,
+    ) -> None:
+        if max(0, int(completed)) <= 0:
+            return
+        cleanup = merchant_buy.cleanup
+        if (
+            _normalize_after_purchase_action(getattr(cleanup, "after_purchase", AFTER_PURCHASE_KEEP))
+            == AFTER_PURCHASE_KEEP
+            or not bool(getattr(cleanup, "completes_target", False))
+            or bool(getattr(cleanup, "xunlai_involved", False))
+        ):
+            return
+        model_id = max(0, _safe_int(getattr(cleanup, "target_key", 0), 0))
+        target_count = max(0, int(getattr(cleanup, "target_count", 0)))
+        if model_id <= 0 or target_count <= 0:
+            return
+        try:
+            carried_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(model_id)))
+        except Exception:
+            return
+        if carried_count >= target_count:
+            state.deferred_cleanups.pop(self._early_kit_purchase_target_key(cleanup), None)
+
+    def _filter_blocked_early_kit_xunlai_actions(
+        self,
+        plan: PlanResult,
+        blocked_models: set[int],
+    ) -> None:
+        if not blocked_models:
+            return
+        plan.storage_transfers = [
+            transfer
+            for transfer in plan.storage_transfers
+            if not (
+                bool(transfer.xunlai_first_merchant_stock)
+                and max(0, int(transfer.model_id)) in blocked_models
+            )
+        ]
+        plan.merchant_stock_buys = [
+            merchant_buy
+            for merchant_buy in plan.merchant_stock_buys
+            if not (
+                bool(merchant_buy.check_xunlai_first)
+                and max(0, int(merchant_buy.model_id)) in blocked_models
+            )
+        ]
+
+    def _plan_has_early_kit_xunlai_target(
+        self,
+        plan: PlanResult,
+        model_ids: set[int],
+    ) -> bool:
+        if bool(plan.storage_exact):
+            return False
+        if any(
+            max(0, int(model_id)) in model_ids
+            for model_id in plan.xunlai_first_merchant_stock_targets
+        ):
+            return True
+        return False
+
+    def _plan_has_authorized_early_kit_source(
+        self,
+        plan: PlanResult,
+        model_ids: set[int],
+    ) -> bool:
+        if any(
+            max(0, int(merchant_buy.model_id)) in model_ids
+            and max(0, int(merchant_buy.quantity)) > 0
+            and str(getattr(merchant_buy.cleanup, "rule_kind", "")) == BUY_KIND_MERCHANT_STOCK
+            for merchant_buy in plan.merchant_stock_buys
+        ):
+            return True
+        if any(
+            str(transfer.direction) == STORAGE_TRANSFER_WITHDRAW
+            and bool(transfer.xunlai_first_merchant_stock)
+            and max(0, int(transfer.model_id)) in model_ids
+            and max(0, int(transfer.quantity)) > 0
+            for transfer in plan.storage_transfers
+        ):
+            return True
+        if not plan.storage_exact and any(
+            max(0, int(model_id)) in model_ids
+            for model_id in plan.xunlai_first_merchant_stock_targets
+        ):
+            return True
+        return False
+
+    def _annotate_early_kit_preview(self, plan: PlanResult) -> None:
+        identification_models = set(self._early_kit_model_ids("identification"))
+        normal_salvage_models = set(self._early_kit_model_ids("normal_salvage"))
+        upgrade_salvage_models = set(self._early_kit_model_ids("upgrade_salvage"))
+        identification_source = self._plan_has_authorized_early_kit_source(plan, identification_models)
+        normal_source = self._plan_has_authorized_early_kit_source(plan, normal_salvage_models)
+        upgrade_source = self._plan_has_authorized_early_kit_source(plan, upgrade_salvage_models)
+
+        for entry in plan.entries:
+            if (
+                str(entry.action_type) == "identify"
+                and str(entry.state) == PLAN_STATE_SKIPPED
+                and str(entry.reason) == "No ID kit found."
+                and identification_source
+            ):
+                entry.state = PLAN_STATE_CONDITIONAL
+                entry.reason = "Identify after acquiring the configured Identification Kit."
+                entry.status_hint = PREVIEW_STATUS_LIVE_CHECK
+                continue
+            if str(entry.action_type) != "salvage" or str(entry.state) != PLAN_STATE_SKIPPED:
+                continue
+            if "no normal salvage kit" in str(entry.reason).lower() and normal_source:
+                entry.state = PLAN_STATE_CONDITIONAL
+                entry.reason = "Salvage after acquiring the configured normal Salvage Kit."
+                entry.status_hint = PREVIEW_STATUS_LIVE_CHECK
+            elif "no upgrade salvage kit" in str(entry.reason).lower() and upgrade_source:
+                entry.state = PLAN_STATE_CONDITIONAL
+                entry.reason = "Salvage after acquiring the configured Expert or Superior Salvage Kit."
+                entry.status_hint = PREVIEW_STATUS_LIVE_CHECK
+
+    def _get_early_salvage_kit_categories(
+        self,
+        items: list[InventoryItemInfo],
+        enabled_sell_rules: list[tuple[int, SellRule]],
+    ) -> set[str]:
+        if not self._has_enabled_salvage_settings():
+            return set()
+        candidates, _blocked_counts = self._collect_salvage_candidates(
+            items,
+            enabled_sell_rules,
+            require_salvage_kit=False,
+            mode="manual",
+        )
+        categories: set[str] = set()
+        for candidate in candidates:
+            block_reason = self._get_salvage_candidate_block_reason(
+                candidate.item,
+                enabled_sell_rules,
+                salvage_rule=candidate.rule,
+                require_salvage_kit=True,
+                salvage_kit_id=0,
+                mode="manual",
+            )
+            if block_reason == "no normal salvage kit":
+                categories.add("normal_salvage")
+            elif block_reason == "no upgrade salvage kit":
+                categories.add("upgrade_salvage")
+        return categories
+
+    def _get_early_kit_storage_source(
+        self,
+        plan: PlanResult,
+        category: str,
+        blocked_models: set[int],
+    ) -> PlannedStorageTransfer | None:
+        model_ids = set(self._early_kit_model_ids(category))
+        for transfer in plan.storage_transfers:
+            model_id = max(0, int(transfer.model_id))
+            if (
+                str(transfer.direction) == STORAGE_TRANSFER_WITHDRAW
+                and bool(transfer.xunlai_first_merchant_stock)
+                and model_id in model_ids
+                and model_id not in blocked_models
+                and max(0, int(transfer.quantity)) > 0
+            ):
+                return transfer
+        return None
+
+    def _get_early_kit_merchant_source(
+        self,
+        plan: PlanResult,
+        category: str,
+        state: EarlyKitExecutionState,
+        blocked_models: set[int],
+    ) -> PlannedMerchantBuy | None:
+        model_ids = set(self._early_kit_model_ids(category))
+        for merchant_buy in plan.merchant_stock_buys:
+            model_id = max(0, int(merchant_buy.model_id))
+            cleanup = merchant_buy.cleanup
+            target_key = self._early_kit_purchase_target_key(cleanup)
+            if (
+                model_id in model_ids
+                and model_id not in blocked_models
+                and str(getattr(cleanup, "rule_kind", "")) == BUY_KIND_MERCHANT_STOCK
+                and target_key in state.purchase_budget_ready
+                and target_key not in state.quarantined_purchase_targets
+                and max(0, int(state.purchase_budget_by_target.get(target_key, 0))) > 0
+                and max(0, int(merchant_buy.quantity)) > 0
+            ):
+                return merchant_buy
+        return None
+
+    def _early_kit_is_usable(self, category: str) -> bool:
+        normalized_category = str(category or "").strip().lower()
+        if normalized_category == "identification":
+            return self._get_id_kit_id() > 0
+        if normalized_category == "normal_salvage":
+            return self._get_normal_salvage_kit_id() > 0
+        if normalized_category == "upgrade_salvage":
+            return self._get_upgrade_salvage_kit_id() > 0
+        return False
+
+    def _execute_early_kit_prerequisite(
+        self,
+        plan: PlanResult,
+        category: str,
+        state: EarlyKitExecutionState,
+        blocked_models: set[int],
+    ):
+        """Use one already-authorized storage or Merchant Stock item for one kit category."""
+
+        if self._early_kit_is_usable(category):
+            return EarlyKitPrerequisiteOutcome(category=category)
+
+        transfer = self._get_early_kit_storage_source(plan, category, blocked_models)
+        if transfer is not None:
+            model_id = max(0, int(transfer.model_id))
+            one_transfer = replace(transfer, quantity=1)
+            outcome = yield from self._execute_storage_transfers(  # pyright: ignore[reportGeneralTypeIssues]
+                [one_transfer],
+                phase_label=f"Early {category} kit withdrawal",
+            )
+            result = EarlyKitPrerequisiteOutcome(
+                category=category,
+                attempted=True,
+                completed=max(0, int(outcome.completed)),
+                xunlai_model_id=model_id,
+                source_label=str(transfer.label or self._format_model_label(model_id)),
+            )
+            transfer_failed = bool(
+                int(outcome.completed) < int(outcome.attempted)
+                or int(outcome.timeout_failures) > 0
+                or int(outcome.load_failures) > 0
+                or int(outcome.depleted) > 0
+            )
+            if result.completed > 0 and not transfer_failed and self._early_kit_is_usable(category):
+                result.acquired = True
+            else:
+                result.xunlai_failed = True
+            return result
+
+        merchant_buy = self._get_early_kit_merchant_source(
+            plan,
+            category,
+            state,
+            blocked_models,
+        )
+        if merchant_buy is None:
+            return EarlyKitPrerequisiteOutcome(category=category)
+
+        merchant_coords = plan.coords.get(MERCHANT_TYPE_MERCHANT)
+        result = EarlyKitPrerequisiteOutcome(
+            category=category,
+            attempted=True,
+            source_label=str(merchant_buy.label or self._format_model_label(merchant_buy.model_id)),
+        )
+        if merchant_coords is None:
+            return result
+        merchant_items = yield from self._open_merchant(merchant_coords)
+        if not merchant_items:
+            return result
+        cleanup = merchant_buy.cleanup
+        buy_outcome = yield from self._buy_merchant_model(
+            merchant_buy.model_id,
+            1,
+            offered_items=merchant_items,
+            cleanup=None,
+            live_target_count=(
+                int(cleanup.target_count)
+                if int(getattr(cleanup, "target_count", 0)) > 0
+                else None
+            ),
+        )
+        result.completed = max(0, int(buy_outcome.completed))
+        dispatched = max(0, int(getattr(buy_outcome, "dispatched", 0)))
+        if dispatched > result.completed:
+            result.purchase_unverified = True
+            self._quarantine_early_kit_purchase_target(state, merchant_buy)
+        else:
+            self._consume_early_kit_purchase_budget(state, merchant_buy, result.completed)
+            self._record_early_kit_deferred_cleanup(state, merchant_buy, result.completed)
+            result.verified_merchant_purchase_count = result.completed
+        if result.completed > 0 and not result.purchase_unverified and self._early_kit_is_usable(category):
+            result.acquired = True
+        return result
+
     def _make_purchase_target_cleanup(
         self,
         *,
@@ -25641,6 +26133,8 @@ class MerchantRulesWidget:
                 storage_open=storage_open,
                 storage_context_available=storage_context_ready,
             )
+        if not cleanup_only and not consumable_crafter_only:
+            self._annotate_early_kit_preview(plan)
         if projected_destination_context:
             self._apply_projected_preview_post_processing(plan, projected_target_outpost_name)
         plan.has_actions = bool(
@@ -27249,6 +27743,7 @@ class MerchantRulesWidget:
                     )
                     break
             GLOBAL_CACHE.Trading.Merchant.BuyItem(matched_item_id, buy_price)
+            outcome.dispatched += 1
             queue_cleared = yield from self._wait_for_action_queue_empty("ACTION", timeout_ms=1500, step_ms=50)
             if not queue_cleared:
                 outcome.timeout_failures += 1
@@ -28730,6 +29225,7 @@ class MerchantRulesWidget:
         total.load_failures += max(0, int(part.load_failures))
         total.gold_blocked += max(0, int(part.gold_blocked))
         total.depleted += max(0, int(part.depleted))
+        total.dispatched += max(0, int(part.dispatched))
 
     def _merge_merchant_buy_result(
         self,
@@ -28746,6 +29242,7 @@ class MerchantRulesWidget:
             total.load_failures += max(0, int(result.load_failures))
             total.gold_blocked += max(0, int(result.gold_blocked))
             total.depleted += max(0, int(result.depleted))
+            total.dispatched += max(0, int(result.dispatched))
             return
         if isinstance(result, bool):
             if result:
@@ -30573,6 +31070,30 @@ class MerchantRulesWidget:
         phase_summaries: list[str] = []
         blocked_xunlai_first_models: set[int] = set()
         reported_xunlai_first_failures: set[tuple[int, str]] = set()
+        early_kit_state = EarlyKitExecutionState()
+        storage_available_here = False
+        actionable_here_count = 0
+        skipped_here_count = 0
+        post_gold_balance_triggered = False
+        early_kit_completion_blocked = False
+
+        def finalize_successful_execution():
+            nonlocal post_gold_balance_triggered
+            if early_kit_completion_blocked and not self.execution_currency_changing_work_completed:
+                return
+            if post_gold_balance_triggered:
+                return
+            post_gold_balance_triggered = True
+            if (
+                post_gold_balance
+                and self.gold_balance_enabled
+                and self.gold_balance_after_mr_trading
+                and self.execution_currency_changing_work_completed
+            ):
+                yield from self._run_gold_balance_trigger("after Merchant Rules trading")
+                if self.last_gold_balance_summary:
+                    phase_summaries.append(self.last_gold_balance_summary)
+            self.execution_completed_successfully = True
 
         def block_xunlai_first_targets(
             targets: dict[int, str],
@@ -30595,6 +31116,31 @@ class MerchantRulesWidget:
                     message = f"Skipped {label}: Xunlai Storage could not be checked."
                 phase_summaries.append(message)
                 self.status_message = message
+
+        def refresh_execution_plan(label: str) -> None:
+            nonlocal plan, local_availability, actionable_here_count, skipped_here_count, storage_available_here
+            self._invalidate_supported_context_cache()
+            plan = self._build_plan(
+                ignore_travel_target=local_only,
+                allow_consumable_multi_stop=allow_multi_stop,
+                exclude_consumable_crafter=exclude_consumable_crafter,
+                execution_context=execution_context,
+            )
+            self.preview_plan = plan
+            local_availability = self._get_preview_here_availability()
+            actionable_here_count, skipped_here_count = self._get_locally_actionable_preview_counts(
+                plan,
+                availability_here=local_availability,
+            )
+            storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
+            self._capture_early_kit_purchase_budgets(plan, early_kit_state)
+            self._clamp_early_kit_merchant_buys(plan, early_kit_state)
+            self._filter_blocked_early_kit_xunlai_actions(plan, blocked_xunlai_first_models)
+            self._clear_preview_projection_state()
+            self._log_plan_summary(label, plan)
+
+        def finish_early_kit_dependency_window() -> None:
+            self._apply_deferred_early_kit_cleanups(early_kit_state)
 
         try:
             self._invalidate_supported_context_cache()
@@ -30640,6 +31186,90 @@ class MerchantRulesWidget:
                 )
                 self._clear_preview_projection_state()
                 self._log_plan_summary("Execution post-travel plan", plan)
+            self._capture_early_kit_purchase_budgets(plan, early_kit_state)
+            self._clamp_early_kit_merchant_buys(plan, early_kit_state)
+            self._filter_blocked_early_kit_xunlai_actions(plan, blocked_xunlai_first_models)
+            storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
+
+            if self._should_identify_before_execute():
+                identify_candidates = self._collect_identify_candidates(self._collect_inventory_items())
+                identification_models = set(self._early_kit_model_ids("identification"))
+                early_identification_result = EarlyKitPrerequisiteOutcome(category="identification")
+                if (
+                    identify_candidates
+                    and self._get_id_kit_id() <= 0
+                ):
+                    if paused_inventory_plus is None:
+                        paused_inventory_plus = self._pause_inventory_plus()
+                    if self._plan_has_early_kit_xunlai_target(plan, identification_models):
+                        early_scan_targets = {
+                            max(0, int(model_id)): str(label)
+                            for model_id, label in plan.xunlai_first_merchant_stock_targets.items()
+                            if max(0, int(model_id)) in identification_models
+                        }
+                    else:
+                        early_scan_targets = {}
+                    if early_scan_targets and local_only and not storage_available_here:
+                        block_xunlai_first_targets(early_scan_targets, failure_kind="scan")
+                    elif early_scan_targets:
+                        self.status_message = "Opening Xunlai for the configured Identification Kit prerequisite."
+                        storage_opened = yield from self._ensure_storage_open(
+                            purpose="early Identification Kit prerequisite"
+                        )
+                        if storage_opened:
+                            yield from Routines.Yield.wait(150)
+                            refresh_execution_plan("Execution early-identification-kit storage plan")
+                            if not plan.xunlai_first_storage_scan_reliable:
+                                block_xunlai_first_targets(
+                                    early_scan_targets,
+                                    failure_kind="scan",
+                                )
+                        else:
+                            block_xunlai_first_targets(early_scan_targets, failure_kind="scan")
+                    early_identification_result = yield from self._execute_early_kit_prerequisite(
+                        plan,
+                        "identification",
+                        early_kit_state,
+                        blocked_xunlai_first_models,
+                    )
+                if early_identification_result.purchase_unverified:
+                    self._clamp_early_kit_merchant_buys(plan, early_kit_state)
+                if (
+                    early_identification_result.attempted
+                    and not early_identification_result.acquired
+                    and not self._early_kit_is_usable("identification")
+                ):
+                    early_kit_completion_blocked = True
+                if early_identification_result.verified_merchant_purchase_count > 0:
+                    self._record_execution_currency_change(
+                        ExecutionPhaseOutcome(
+                            label="Early Merchant kit prerequisite",
+                            measure_label="items",
+                            completed=early_identification_result.verified_merchant_purchase_count,
+                        )
+                    )
+                if early_identification_result.attempted:
+                    if early_identification_result.xunlai_failed and early_identification_result.xunlai_model_id > 0:
+                        block_xunlai_first_targets(
+                            {
+                                early_identification_result.xunlai_model_id: early_identification_result.source_label
+                            },
+                            failure_kind="withdrawal",
+                        )
+                        self._filter_blocked_early_kit_xunlai_actions(
+                            plan,
+                            blocked_xunlai_first_models,
+                        )
+                    if early_identification_result.completed > 0:
+                        refresh_execution_plan("Execution post-early-identification-kit plan")
+                    if early_identification_result.acquired:
+                        phase_summaries.append(
+                            f"Sourced one {early_identification_result.source_label} before Identify."
+                        )
+                    else:
+                        phase_summaries.append(
+                            "Identify prerequisite kit was not acquired; Identify remains blocked."
+                        )
             if self._should_identify_before_execute():
                 self.status_message = "Identifying selected rarities before merchant handling."
                 identify_started_at = time.perf_counter()
@@ -30664,21 +31294,7 @@ class MerchantRulesWidget:
                     return
                 if identify_outcome.attempted > 0 or identify_outcome.completed > 0 or identify_outcome.depleted > 0 or identify_outcome.unavailable > 0:
                     yield from Routines.Yield.wait(150)
-                    self._invalidate_supported_context_cache()
-                    plan = self._build_plan(
-                        ignore_travel_target=local_only,
-                        allow_consumable_multi_stop=allow_multi_stop,
-                        exclude_consumable_crafter=exclude_consumable_crafter,
-                        execution_context=execution_context,
-                    )
-                    self.preview_plan = plan
-                    local_availability = self._get_preview_here_availability()
-                    actionable_here_count, skipped_here_count = self._get_locally_actionable_preview_counts(
-                        plan,
-                        availability_here=local_availability,
-                    )
-                    self._clear_preview_projection_state()
-                    self._log_plan_summary("Execution post-identify plan", plan)
+                    refresh_execution_plan("Execution post-identify plan")
             if not plan.supported_map:
                 local_action_labels = self._get_plan_local_action_labels(plan)
                 if not local_action_labels:
@@ -30690,6 +31306,17 @@ class MerchantRulesWidget:
                 )
             storage_scan_failed = False
             storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
+
+            def early_kit_completion_is_safe() -> bool:
+                return bool(
+                    not blocked_xunlai_first_models
+                    and not storage_scan_failed
+                    and not any(
+                        "remains blocked" in str(summary).lower()
+                        for summary in phase_summaries
+                    )
+                )
+
             if (
                 plan.xunlai_first_merchant_stock_targets
                 and plan.storage_exact
@@ -30714,22 +31341,7 @@ class MerchantRulesWidget:
                     storage_opened = yield from self._ensure_storage_open(purpose="storage-aware execution")
                 if storage_opened:
                     yield from Routines.Yield.wait(150)
-                    self._invalidate_supported_context_cache()
-                    plan = self._build_plan(
-                        ignore_travel_target=local_only,
-                        allow_consumable_multi_stop=allow_multi_stop,
-                        exclude_consumable_crafter=exclude_consumable_crafter,
-                        execution_context=execution_context,
-                    )
-                    self.preview_plan = plan
-                    local_availability = self._get_preview_here_availability()
-                    actionable_here_count, skipped_here_count = self._get_locally_actionable_preview_counts(
-                        plan,
-                        availability_here=local_availability,
-                    )
-                    storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
-                    self._clear_preview_projection_state()
-                    self._log_plan_summary("Execution storage-refreshed plan", plan)
+                    refresh_execution_plan("Execution storage-refreshed plan")
                     if (
                         plan.xunlai_first_merchant_stock_targets
                         and not plan.xunlai_first_storage_scan_reliable
@@ -30770,13 +31382,124 @@ class MerchantRulesWidget:
                         )
                         self._debug_log("Execution aborted: exact storage-aware rune planning required Xunlai, but it could not be opened.")
                         return
+
+            early_salvage_categories = (
+                self._get_early_salvage_kit_categories(
+                    self._collect_inventory_items(),
+                    self._collect_enabled_sell_rules(),
+                )
+                if self._has_enabled_salvage_settings()
+                else set()
+            )
+            if early_salvage_categories:
+                early_salvage_missing_categories = {
+                    category
+                    for category in early_salvage_categories
+                    if (
+                        category == "normal_salvage"
+                        and self._get_normal_salvage_kit_id() <= 0
+                    )
+                    or (
+                        category == "upgrade_salvage"
+                        and self._get_upgrade_salvage_kit_id() <= 0
+                    )
+                }
+                early_salvage_needs_source = bool(early_salvage_missing_categories)
+                if early_salvage_needs_source and paused_inventory_plus is None:
+                    paused_inventory_plus = self._pause_inventory_plus()
+                if not plan.storage_exact:
+                    early_salvage_models = {
+                        model_id
+                        for category in early_salvage_categories
+                        for model_id in self._early_kit_model_ids(category)
+                    }
+                    if self._plan_has_early_kit_xunlai_target(plan, early_salvage_models):
+                        early_scan_targets = {
+                            max(0, int(model_id)): str(label)
+                            for model_id, label in plan.xunlai_first_merchant_stock_targets.items()
+                            if max(0, int(model_id)) in early_salvage_models
+                        }
+                        if local_only and not storage_available_here:
+                            block_xunlai_first_targets(early_scan_targets, failure_kind="scan")
+                        elif not storage_scan_failed:
+                            self.status_message = "Opening Xunlai for the configured Salvage Kit prerequisite."
+                            storage_opened = yield from self._ensure_storage_open(
+                                purpose="early Salvage Kit prerequisite"
+                            )
+                            if storage_opened:
+                                yield from Routines.Yield.wait(150)
+                                refresh_execution_plan("Execution early-salvage-kit storage plan")
+                                if not plan.xunlai_first_storage_scan_reliable:
+                                    block_xunlai_first_targets(
+                                        early_scan_targets,
+                                        failure_kind="scan",
+                                    )
+                            else:
+                                storage_scan_failed = True
+                                block_xunlai_first_targets(early_scan_targets, failure_kind="scan")
+
+                for category in ("normal_salvage", "upgrade_salvage"):
+                    if category not in early_salvage_categories:
+                        continue
+                    category_was_missing = category in early_salvage_missing_categories
+                    category_is_usable = self._early_kit_is_usable(category)
+                    if category_is_usable:
+                        if category_was_missing:
+                            refresh_execution_plan("Execution live Salvage Kit prerequisite plan")
+                        continue
+                    early_salvage_result = yield from self._execute_early_kit_prerequisite(
+                        plan,
+                        category,
+                        early_kit_state,
+                        blocked_xunlai_first_models,
+                    )
+                    if early_salvage_result.purchase_unverified:
+                        self._clamp_early_kit_merchant_buys(plan, early_kit_state)
+                    if early_salvage_result.verified_merchant_purchase_count > 0:
+                        self._record_execution_currency_change(
+                            ExecutionPhaseOutcome(
+                                label="Early Merchant kit prerequisite",
+                                measure_label="items",
+                                completed=early_salvage_result.verified_merchant_purchase_count,
+                            )
+                        )
+                    category_is_usable = self._early_kit_is_usable(category)
+                    if early_salvage_result.attempted and not early_salvage_result.acquired and not category_is_usable:
+                        early_kit_completion_blocked = True
+                    if category_was_missing and (early_salvage_result.completed > 0 or category_is_usable):
+                        refresh_execution_plan("Execution post-early-salvage-kit plan")
+                    if not early_salvage_result.attempted:
+                        continue
+                    if early_salvage_result.xunlai_failed and early_salvage_result.xunlai_model_id > 0:
+                        block_xunlai_first_targets(
+                            {
+                                early_salvage_result.xunlai_model_id: early_salvage_result.source_label
+                            },
+                            failure_kind="withdrawal",
+                        )
+                        self._filter_blocked_early_kit_xunlai_actions(
+                            plan,
+                            blocked_xunlai_first_models,
+                        )
+                    if early_salvage_result.acquired:
+                        phase_summaries.append(
+                            f"Sourced one {early_salvage_result.source_label} before Salvage."
+                        )
+                    else:
+                        phase_summaries.append(
+                            f"{category.replace('_', ' ').title()} prerequisite kit was not acquired; Salvage remains blocked."
+                        )
             if not plan.has_actions:
+                finish_early_kit_dependency_window()
                 if blocked_xunlai_first_models and phase_summaries:
-                    self.status_message = phase_summaries[-1]
+                    completion_status = phase_summaries[-1]
                 elif storage_scan_failed:
-                    self.status_message = "Could not open Xunlai for exact storage-aware execution."
+                    completion_status = "Could not open Xunlai for exact storage-aware execution."
                 else:
-                    self.status_message = "Nothing to execute for the current rules and inventory state."
+                    completion_status = "Nothing to execute for the current rules and inventory state."
+                if self.execution_currency_changing_work_completed and early_kit_completion_is_safe():
+                    yield from finalize_successful_execution()
+                self.status_message = completion_status
                 self._debug_log("Execution aborted: no actionable work in the current plan.")
                 return
 
@@ -30817,23 +31540,11 @@ class MerchantRulesWidget:
                     or salvage_outcome.unavailable > 0
                 ):
                     yield from Routines.Yield.wait(150)
-                    self._invalidate_supported_context_cache()
-                    plan = self._build_plan(
-                        ignore_travel_target=local_only,
-                        allow_consumable_multi_stop=allow_multi_stop,
-                        exclude_consumable_crafter=exclude_consumable_crafter,
-                        execution_context=execution_context,
-                    )
-                    self.preview_plan = plan
-                    local_availability = self._get_preview_here_availability()
-                    actionable_here_count, skipped_here_count = self._get_locally_actionable_preview_counts(
-                        plan,
-                        availability_here=local_availability,
-                    )
-                    storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
-                    self._clear_preview_projection_state()
-                    self._log_plan_summary("Execution post-salvage plan", plan)
+                    refresh_execution_plan("Execution post-salvage plan")
                     if not plan.has_actions:
+                        finish_early_kit_dependency_window()
+                        if self.execution_currency_changing_work_completed and early_kit_completion_is_safe():
+                            yield from finalize_successful_execution()
                         if local_only:
                             phase_summaries.insert(
                                 0,
@@ -30873,23 +31584,8 @@ class MerchantRulesWidget:
                 )
                 if xunlai_prefetch_outcome.completed > 0:
                     yield from Routines.Yield.wait(150)
-                    self._invalidate_supported_context_cache()
-                    plan = self._build_plan(
-                        ignore_travel_target=local_only,
-                        allow_consumable_multi_stop=allow_multi_stop,
-                        exclude_consumable_crafter=exclude_consumable_crafter,
-                        execution_context=execution_context,
-                    )
-                    self.preview_plan = plan
-                    local_availability = self._get_preview_here_availability()
-                    actionable_here_count, skipped_here_count = self._get_locally_actionable_preview_counts(
-                        plan,
-                        availability_here=local_availability,
-                    )
-                    storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
+                    refresh_execution_plan("Execution post-Xunlai pre-pull plan")
                     merchant_coords = plan.coords.get(MERCHANT_TYPE_MERCHANT)
-                    self._clear_preview_projection_state()
-                    self._log_plan_summary("Execution post-Xunlai pre-pull plan", plan)
             self.last_execution_phase_durations_ms["xunlai_sell_prefetch"] = max(
                 0.0,
                 (time.perf_counter() - xunlai_prefetch_started_at) * 1000.0,
@@ -31021,22 +31717,7 @@ class MerchantRulesWidget:
                                 failure_kind="withdrawal",
                             )
                     yield from Routines.Yield.wait(100)
-                    self._invalidate_supported_context_cache()
-                    plan = self._build_plan(
-                        ignore_travel_target=local_only,
-                        allow_consumable_multi_stop=allow_multi_stop,
-                        exclude_consumable_crafter=exclude_consumable_crafter,
-                        execution_context=execution_context,
-                    )
-                    self.preview_plan = plan
-                    local_availability = self._get_preview_here_availability()
-                    actionable_here_count, skipped_here_count = self._get_locally_actionable_preview_counts(
-                        plan,
-                        availability_here=local_availability,
-                    )
-                    storage_available_here = bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
-                    self._clear_preview_projection_state()
-                    self._log_plan_summary("Execution post-storage plan", plan)
+                    refresh_execution_plan("Execution post-storage plan")
                     rune_trader_coords = plan.coords.get(MERCHANT_TYPE_RUNE_TRADER)
                     merchant_coords = plan.coords.get(MERCHANT_TYPE_MERCHANT)
                     if (
@@ -31136,6 +31817,7 @@ class MerchantRulesWidget:
                         and int(buy.model_id) in blocked_xunlai_first_models
                     )
                 ]
+            self._clamp_early_kit_merchant_buys(plan, early_kit_state)
             merchant_buy_outcome = ExecutionPhaseOutcome(
                 label="Merchant stock",
                 measure_label="items",
@@ -31166,6 +31848,17 @@ class MerchantRulesWidget:
                             buy_result,
                             int(merchant_buy.quantity),
                         )
+                        if isinstance(buy_result, ExecutionPhaseOutcome):
+                            self._consume_early_kit_purchase_budget(
+                                early_kit_state,
+                                merchant_buy,
+                                buy_result.completed,
+                            )
+                            self._clear_satisfied_early_kit_cleanup(
+                                early_kit_state,
+                                merchant_buy,
+                                buy_result.completed,
+                            )
                         if (
                             isinstance(buy_result, ExecutionPhaseOutcome)
                             and buy_result.completed <= 0
@@ -31184,6 +31877,7 @@ class MerchantRulesWidget:
             merchant_buy_summary = self._format_execution_phase_summary(merchant_buy_outcome)
             if merchant_buy_summary:
                 phase_summaries.append(merchant_buy_summary)
+            finish_early_kit_dependency_window()
 
             common_material_buys = [buy for buy in plan.material_buys if buy.merchant_type == MERCHANT_TYPE_MATERIALS]
             common_buy_outcome = ExecutionPhaseOutcome(label="Material buys", measure_label="trades")
@@ -31273,16 +31967,7 @@ class MerchantRulesWidget:
                 common_buy_outcome,
                 rare_buy_outcome,
             )
-            self.execution_completed_successfully = True
-            if (
-                post_gold_balance
-                and self.gold_balance_enabled
-                and self.gold_balance_after_mr_trading
-                and self.execution_currency_changing_work_completed
-            ):
-                yield from self._run_gold_balance_trigger("after Merchant Rules trading")
-                if self.last_gold_balance_summary:
-                    phase_summaries.append(self.last_gold_balance_summary)
+            yield from finalize_successful_execution()
 
             if local_only:
                 phase_summaries.insert(

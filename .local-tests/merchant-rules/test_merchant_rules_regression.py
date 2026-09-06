@@ -1231,6 +1231,21 @@ def _drain_generator_return(generator):
         return stop.value
 
 
+def _install_gold_balance_trigger_spy(widget) -> list[str]:
+    calls: list[str] = []
+    widget.gold_balance_enabled = True
+    widget.gold_balance_after_mr_trading = True
+
+    def _fake_gold_balance_trigger(trigger: str):
+        calls.append(str(trigger))
+        if False:
+            yield None
+        return None
+
+    widget._run_gold_balance_trigger = _fake_gold_balance_trigger
+    return calls
+
+
 def _get_multibox_status(widget, account_email: str):
     return widget.multibox_statuses.get(str(account_email or "").strip().lower())
 
@@ -3639,7 +3654,10 @@ def _test_merchant_stock_after_purchase_skips_without_inventory_gain(module) -> 
 
         outcome = _drain_generator_return(widget._buy_merchant_model(555, 1, offered_items=[501], cleanup=cleanup))
 
-        _expect(outcome.completed == 0, "Merchant stock buy should not complete without verified inventory gain.")
+        _expect(
+            outcome.completed == 0 and outcome.dispatched == 1,
+            "Merchant stock buy should distinguish a dispatched request from its missing verified inventory gain.",
+        )
         _expect(
             len(widget.buy_rules[0].merchant_stock_targets) == 1,
             "Remove after purchase should leave the entry unchanged when inventory gain is missing.",
@@ -13503,6 +13521,1282 @@ def _test_identify_no_kit_still_claims_selected_items(module) -> None:
     _expect(
         any(entry.action_type == "identify" and entry.state == module.PLAN_STATE_SKIPPED and "No ID kit" in entry.reason for entry in plan.entries),
         "Preview should surface a no-ID-kit identify warning.",
+    )
+
+
+def _test_early_kit_preview_and_budget_contract(module) -> None:
+    widget = _make_widget(module)
+    id_model = int(module.ID_KIT_MODEL_IDS[0])
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], before_execute=True)
+    widget._get_id_kit_id = lambda: 0
+    widget._get_supported_context = lambda *, passive=False: (
+        True,
+        "Ready",
+        {
+            module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0),
+            module.MERCHANT_TYPE_MATERIALS: (2.0, 2.0),
+            module.MERCHANT_TYPE_RUNE_TRADER: (3.0, 3.0),
+            module.MERCHANT_TYPE_RARE_MATERIALS: (4.0, 4.0),
+        },
+    )
+    widget._collect_inventory_items = lambda: [
+        _make_item(module, item_id=1001, model_id=200, name="Blue Sword", rarity="Blue", identified=False),
+    ]
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            merchant_stock_targets=[
+                module.MerchantStockTarget(model_id=id_model, target_count=1, max_per_run=1),
+            ],
+        )
+    ]
+
+    plan = widget._build_plan()
+    identify_entries = [entry for entry in plan.entries if entry.action_type == "identify"]
+    _expect(
+        len(identify_entries) == 1
+        and identify_entries[0].state == module.PLAN_STATE_CONDITIONAL
+        and "configured Identification Kit" in identify_entries[0].reason,
+        "An explicit Identification Kit target should make the no-kit Identify preview conditional.",
+    )
+    _expect(
+        len(plan.merchant_stock_buys) == 1 and plan.merchant_stock_buys[0].quantity == 1,
+        "The configured Identification Kit target should retain one authorized Merchant purchase.",
+    )
+
+    state = module.EarlyKitExecutionState()
+    widget._capture_early_kit_purchase_budgets(plan, state)
+    target_key = (0, str(id_model))
+    _expect(
+        state.purchase_budget_by_target.get(target_key) == 1,
+        "Early-kit budget capture should use the original Max Per Run authorization.",
+    )
+    widget._consume_early_kit_purchase_budget(state, plan.merchant_stock_buys[0], 1)
+    rebuilt_plan = module.PlanResult(
+        merchant_stock_buys=[replace(plan.merchant_stock_buys[0], quantity=1)],
+    )
+    widget._clamp_early_kit_merchant_buys(rebuilt_plan, state)
+    _expect(
+        not rebuilt_plan.merchant_stock_buys,
+        "A rebuild after the early kit purchase must not recreate the consumed authorization.",
+    )
+
+    widget.buy_rules[0].enabled = False
+    disabled_plan = widget._build_plan()
+    disabled_identify_entries = [entry for entry in disabled_plan.entries if entry.action_type == "identify"]
+    _expect(
+        len(disabled_identify_entries) == 1
+        and disabled_identify_entries[0].state == module.PLAN_STATE_SKIPPED
+        and "No ID kit" in disabled_identify_entries[0].reason,
+        "A disabled kit target must not authorize early sourcing or conditional Identify.",
+    )
+
+
+def _test_early_kit_source_compatibility_and_xunlai_failure(module) -> None:
+    widget = _make_widget(module)
+    state = module.EarlyKitExecutionState()
+    id_model = int(module.ID_KIT_MODEL_IDS[0])
+    normal_model = int(module.NORMAL_SALVAGE_KIT_MODEL_IDS[0])
+    upgrade_model = int(module.ModelID.Expert_Salvage_Kit.value)
+
+    carried_plan = module.PlanResult(
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=id_model,
+                quantity=1,
+                label="Identification Kit",
+                cleanup=module.PurchaseTargetCleanup(
+                    rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                    rule_index=0,
+                    target_key=str(id_model),
+                    target_count=1,
+                    max_per_run=1,
+                ),
+            )
+        ],
+    )
+    carried_widget = _make_widget(module)
+    carried_widget._get_id_kit_id = lambda: 9001
+    carried_result = _drain_generator_return(
+        carried_widget._execute_early_kit_prerequisite(
+            carried_plan,
+            "identification",
+            module.EarlyKitExecutionState(),
+            set(),
+        )
+    )
+    _expect(
+        not carried_result.attempted,
+        "A usable carried Identification Kit must suppress unnecessary early sourcing.",
+    )
+
+    incompatible_normal_plan = module.PlanResult(
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=upgrade_model,
+                quantity=1,
+                label="Expert Salvage Kit",
+                cleanup=module.PurchaseTargetCleanup(
+                    rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                    rule_index=0,
+                    target_key=str(upgrade_model),
+                    target_count=1,
+                    max_per_run=1,
+                ),
+            )
+        ],
+    )
+    state.purchase_budget_ready.add((0, str(upgrade_model)))
+    state.purchase_budget_by_target[(0, str(upgrade_model))] = 1
+    incompatible_result = _drain_generator_return(
+        widget._execute_early_kit_prerequisite(
+            incompatible_normal_plan,
+            "normal_salvage",
+            state,
+            set(),
+        )
+    )
+    _expect(
+        not incompatible_result.attempted,
+        "An Expert Salvage Kit target must not source an automatic material-salvage prerequisite.",
+    )
+
+    widget._get_upgrade_salvage_kit_id = lambda: 0
+    acquired = {"value": False}
+    buy_calls: list[tuple[int, int]] = []
+
+    def _open_merchant(_coords):
+        if False:
+            yield None
+        return [9001]
+
+    def _buy_merchant(model_id, quantity, **_kwargs):
+        buy_calls.append((int(model_id), int(quantity)))
+        acquired["value"] = True
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=1,
+            completed=1,
+        )
+
+    widget._open_merchant = _open_merchant
+    widget._buy_merchant_model = _buy_merchant
+    widget._get_upgrade_salvage_kit_id = lambda: 9002 if acquired["value"] else 0
+    compatible_upgrade_result = _drain_generator_return(
+        widget._execute_early_kit_prerequisite(
+            incompatible_normal_plan,
+            "upgrade_salvage",
+            state,
+            set(),
+        )
+    )
+    _expect(
+        compatible_upgrade_result.acquired
+        and buy_calls == [(upgrade_model, 1)],
+        "An Expert Salvage Kit target should source exactly one kit for exact upgrade salvage.",
+    )
+    _expect(
+        int(module.ModelID.Perfect_Salvage_Kit.value) not in set(widget._early_kit_model_ids("upgrade_salvage")),
+        "Perfect Salvage Kit crafting must remain outside the Merchant Stock prerequisite categories.",
+    )
+
+    partial_widget = _make_widget(module)
+    partial_widget._get_normal_salvage_kit_id = lambda: 0
+
+    def _partial_transfer(_transfers, *, phase_label="Storage transfers"):
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label=phase_label,
+            measure_label="items",
+            attempted=1,
+            completed=0,
+            timeout_failures=1,
+        )
+
+    partial_widget._execute_storage_transfers = _partial_transfer
+    partial_plan = module.PlanResult(
+        storage_transfers=[
+            module.PlannedStorageTransfer(
+                direction=module.STORAGE_TRANSFER_WITHDRAW,
+                key=f"model:{normal_model}",
+                label="Salvage Kit",
+                item_id=900,
+                quantity=1,
+                model_id=normal_model,
+                xunlai_first_merchant_stock=True,
+            )
+        ]
+    )
+    partial_result = _drain_generator_return(
+        partial_widget._execute_early_kit_prerequisite(
+            partial_plan,
+            "normal_salvage",
+            module.EarlyKitExecutionState(),
+            set(),
+        )
+    )
+    _expect(
+        partial_result.xunlai_failed and not partial_result.acquired,
+        "An unverified early Xunlai withdrawal must fail closed even if the target policy is explicit.",
+    )
+
+    successful_widget = _make_widget(module)
+    kit_available = {"value": False}
+    successful_widget._get_normal_salvage_kit_id = lambda: normal_model if kit_available["value"] else 0
+
+    def _successful_transfer(_transfers, *, phase_label="Storage transfers"):
+        kit_available["value"] = True
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label=phase_label,
+            measure_label="items",
+            attempted=1,
+            completed=1,
+        )
+
+    successful_widget._execute_storage_transfers = _successful_transfer
+    successful_result = _drain_generator_return(
+        successful_widget._execute_early_kit_prerequisite(
+            partial_plan,
+            "normal_salvage",
+            module.EarlyKitExecutionState(),
+            set(),
+        )
+    )
+    _expect(
+        successful_result.acquired and successful_result.xunlai_model_id == normal_model,
+        "A verified Xunlai-first withdrawal must satisfy the early Salvage Kit prerequisite.",
+    )
+
+
+def _test_early_kit_dispatch_quarantine_and_retryability(module) -> None:
+    id_model = int(module.ID_KIT_MODEL_IDS[0])
+
+    def _make_buy(rule_index: int) -> object:
+        return module.PlannedMerchantBuy(
+            model_id=id_model,
+            quantity=1,
+            label="Identification Kit",
+            cleanup=module.PurchaseTargetCleanup(
+                rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                rule_index=rule_index,
+                target_key=str(id_model),
+                target_count=1,
+                max_per_run=1,
+            ),
+        )
+
+    widget = _make_widget(module)
+    widget._get_id_kit_id = lambda: 0
+    ambiguous_plan = module.PlanResult(
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[_make_buy(0), _make_buy(1)],
+    )
+    ambiguous_state = module.EarlyKitExecutionState(
+        purchase_budget_by_target={(0, str(id_model)): 1, (1, str(id_model)): 1},
+        purchase_budget_ready={(0, str(id_model)), (1, str(id_model))},
+    )
+
+    def _open_merchant(_coords):
+        if False:
+            yield None
+        return [9001]
+
+    def _ambiguous_buy(_model_id, _quantity, **_kwargs):
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=1,
+            completed=0,
+            timeout_failures=1,
+            dispatched=1,
+        )
+
+    widget._open_merchant = _open_merchant
+    widget._buy_merchant_model = _ambiguous_buy
+    ambiguous_result = _drain_generator_return(
+        widget._execute_early_kit_prerequisite(
+            ambiguous_plan,
+            "identification",
+            ambiguous_state,
+            set(),
+        )
+    )
+    _expect(
+        ambiguous_result.purchase_unverified,
+        "A dispatched but unverified early purchase must be marked ambiguous rather than completed.",
+    )
+    _expect(
+        (0, str(id_model)) in ambiguous_state.quarantined_purchase_targets,
+        "An ambiguous early purchase must quarantine its exact owning target.",
+    )
+    _expect(
+        ambiguous_state.purchase_budget_by_target[(0, str(id_model))] == 1,
+        "An ambiguous early purchase must not numerically consume verified completion budget.",
+    )
+    rebuilt_plan = module.PlanResult(merchant_stock_buys=list(ambiguous_plan.merchant_stock_buys))
+    widget._clamp_early_kit_merchant_buys(rebuilt_plan, ambiguous_state)
+    _expect(
+        [buy.cleanup.rule_index for buy in rebuilt_plan.merchant_stock_buys] == [1],
+        "Quarantine must block only the ambiguous target owner, not another same-model target.",
+    )
+
+    retry_widget = _make_widget(module)
+    retry_widget._get_id_kit_id = lambda: 0
+    retry_buy = _make_buy(0)
+    retry_plan = module.PlanResult(
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[retry_buy],
+    )
+    retry_state = module.EarlyKitExecutionState(
+        purchase_budget_by_target={(0, str(id_model)): 1},
+        purchase_budget_ready={(0, str(id_model))},
+    )
+    retry_widget._open_merchant = _open_merchant
+
+    def _never_dispatched_buy(_model_id, _quantity, **_kwargs):
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=1,
+            completed=0,
+            unavailable=1,
+            dispatched=0,
+        )
+
+    retry_widget._buy_merchant_model = _never_dispatched_buy
+    retry_result = _drain_generator_return(
+        retry_widget._execute_early_kit_prerequisite(
+            retry_plan,
+            "identification",
+            retry_state,
+            set(),
+        )
+    )
+    _expect(
+        not retry_result.purchase_unverified
+        and not retry_state.quarantined_purchase_targets,
+        "A failure before dispatch must remain retryable for the later ordinary buy phase.",
+    )
+    retry_rebuilt_plan = module.PlanResult(merchant_stock_buys=[retry_buy])
+    retry_widget._clamp_early_kit_merchant_buys(retry_rebuilt_plan, retry_state)
+    _expect(
+        len(retry_rebuilt_plan.merchant_stock_buys) == 1,
+        "A never-dispatched failure must retain the remaining target authorization.",
+    )
+
+
+def _test_early_kit_identify_execute_gate(module) -> None:
+    widget = _make_widget(module)
+    gold_balance_calls = _install_gold_balance_trigger_spy(widget)
+    id_model = int(module.ID_KIT_MODEL_IDS[0])
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], before_execute=True)
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            merchant_stock_targets=[module.MerchantStockTarget(model_id=id_model, target_count=1, max_per_run=1)],
+        )
+    ]
+    widget._collect_inventory_items = lambda: [
+        _make_item(module, item_id=1001, model_id=200, name="Blue Sword", rarity="Blue", identified=False),
+    ]
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+    widget._begin_execute_reservation_scope = lambda: False
+    widget._end_execute_reservation_scope = lambda _owned: None
+
+    def _ready_lifecycle(*_args, **_kwargs):
+        if False:
+            yield None
+        return 1
+
+    widget._wait_for_merchant_rules_lifecycle = _ready_lifecycle
+    kit_available = {"value": False}
+    events: list[str] = []
+    widget._get_id_kit_id = lambda: id_model if kit_available["value"] else 0
+
+    first_plan = module.PlanResult(
+        supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        entries=[
+            module.ExecutionPlanEntry(
+                "identify",
+                module.MERCHANT_TYPE_INVENTORY,
+                "Blue Sword",
+                1,
+                module.PLAN_STATE_CONDITIONAL,
+                "Identify after acquiring the configured Identification Kit.",
+                model_id=200,
+            )
+        ],
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=id_model,
+                quantity=1,
+                label="Identification Kit",
+                cleanup=module.PurchaseTargetCleanup(
+                    rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                    rule_index=0,
+                    target_key=str(id_model),
+                    target_count=1,
+                    max_per_run=1,
+                    completes_target=True,
+                ),
+            )
+        ],
+        storage_exact=True,
+        has_actions=True,
+    )
+    second_plan = module.PlanResult(
+        supported_map=True,
+        identify_item_ids=[1001],
+        has_actions=True,
+    )
+    empty_plan = module.PlanResult(supported_map=True, has_actions=False)
+    build_count = {"value": 0}
+
+    def _build_plan(**_kwargs):
+        build_count["value"] += 1
+        if build_count["value"] == 1:
+            return first_plan
+        if build_count["value"] == 2:
+            return second_plan
+        return empty_plan
+
+    def _open_merchant(_coords):
+        if False:
+            yield None
+        return [9001]
+
+    def _buy_merchant(_model_id, quantity, **_kwargs):
+        events.append(f"buy:{int(quantity)}")
+        kit_available["value"] = True
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=int(quantity),
+            completed=int(quantity),
+            dispatched=int(quantity),
+        )
+
+    def _run_identify(**_kwargs):
+        events.append("identify")
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Identify before Execute",
+            measure_label="items",
+            attempted=1,
+            completed=1,
+        )
+
+    widget._build_plan = _build_plan
+    widget._open_merchant = _open_merchant
+    widget._buy_merchant_model = _buy_merchant
+    widget._run_identify_pass = _run_identify
+    widget._pause_inventory_plus = lambda: None
+
+    _drain_generator_return(widget._execute_now(local_only=True))
+
+    _expect(events == ["buy:1", "identify"], "Execute should source one configured ID kit before Identify.")
+    _expect(
+        widget.execution_currency_changing_work_completed,
+        "A verified early Merchant kit purchase should count as currency-changing work.",
+    )
+    _expect(
+        gold_balance_calls == ["after Merchant Rules trading"],
+        "An early-only verified ID-kit purchase followed by an empty plan should trigger gold balancing exactly once.",
+    )
+
+
+def _test_early_kit_identify_no_candidates_no_early_source(module) -> None:
+    widget = _make_widget(module)
+    id_model = int(module.ID_KIT_MODEL_IDS[0])
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], before_execute=True)
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            merchant_stock_targets=[module.MerchantStockTarget(model_id=id_model, target_count=1, max_per_run=1)],
+        )
+    ]
+    widget._collect_inventory_items = lambda: []
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+    widget._begin_execute_reservation_scope = lambda: False
+    widget._end_execute_reservation_scope = lambda _owned: None
+    widget._get_id_kit_id = lambda: 0
+
+    def _ready_lifecycle(*_args, **_kwargs):
+        if False:
+            yield None
+        return 1
+
+    widget._wait_for_merchant_rules_lifecycle = _ready_lifecycle
+    events: list[str] = []
+    plan = module.PlanResult(
+        supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=id_model,
+                quantity=1,
+                label="Identification Kit",
+                cleanup=module.PurchaseTargetCleanup(
+                    rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                    rule_index=0,
+                    target_key=str(id_model),
+                    target_count=1,
+                    max_per_run=1,
+                ),
+            )
+        ],
+        storage_exact=True,
+        has_actions=True,
+    )
+
+    def _unexpected_early_source(*_args, **_kwargs):
+        events.append("early")
+        if False:
+            yield None
+        return module.EarlyKitPrerequisiteOutcome(category="identification")
+
+    def _open_merchant(_coords):
+        if False:
+            yield None
+        return [9001]
+
+    def _buy_merchant(_model_id, quantity, **_kwargs):
+        events.append("late")
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=int(quantity),
+            completed=int(quantity),
+            dispatched=int(quantity),
+        )
+
+    def _run_identify(**_kwargs):
+        events.append("identify")
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(label="Identify before Execute", measure_label="items")
+
+    widget._build_plan = lambda **_kwargs: plan
+    widget._execute_early_kit_prerequisite = _unexpected_early_source
+    widget._open_merchant = _open_merchant
+    widget._buy_merchant_model = _buy_merchant
+    widget._run_identify_pass = _run_identify
+    widget._pause_inventory_plus = lambda: None
+
+    _drain_generator_return(widget._execute_now(local_only=True))
+
+    _expect(
+        events == ["identify", "late"],
+        "Identify-before-Execute with zero candidates must skip early kit sourcing and retain the later stock phase.",
+    )
+
+
+def _test_early_kit_xunlai_only_does_not_trigger_gold_balance(module) -> None:
+    widget = _make_widget(module)
+    gold_balance_calls = _install_gold_balance_trigger_spy(widget)
+    normal_model = int(module.NORMAL_SALVAGE_KIT_MODEL_IDS[0])
+    widget.salvage_settings = _salvage_settings(module, rarities=["gold"])
+    widget._collect_inventory_items = lambda: [
+        _make_item(
+            module,
+            item_id=2001,
+            model_id=700,
+            name="Gold Sword",
+            rarity="Gold",
+            identified=True,
+            salvageable=True,
+            is_weapon_like=True,
+        )
+    ]
+    widget._get_early_salvage_kit_categories = lambda *_args, **_kwargs: {"normal_salvage"}
+    kit_available = {"value": False}
+    widget._get_normal_salvage_kit_id = lambda: normal_model if kit_available["value"] else 0
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+    widget._begin_execute_reservation_scope = lambda: False
+    widget._end_execute_reservation_scope = lambda _owned: None
+
+    def _ready_lifecycle(*_args, **_kwargs):
+        if False:
+            yield None
+        return 1
+
+    widget._wait_for_merchant_rules_lifecycle = _ready_lifecycle
+    transfer = module.PlannedStorageTransfer(
+        direction=module.STORAGE_TRANSFER_WITHDRAW,
+        key=f"model:{normal_model}",
+        label="Salvage Kit",
+        item_id=900,
+        quantity=1,
+        model_id=normal_model,
+        xunlai_first_merchant_stock=True,
+    )
+    first_plan = module.PlanResult(
+        supported_map=True,
+        coords={
+            module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0),
+            module.MERCHANT_TYPE_STORAGE: (2.0, 2.0),
+        },
+        storage_transfers=[transfer],
+        storage_exact=True,
+        has_actions=True,
+    )
+    empty_plan = module.PlanResult(supported_map=True, has_actions=False)
+    build_count = {"value": 0}
+    events: list[str] = []
+
+    def _build_plan(**_kwargs):
+        build_count["value"] += 1
+        return first_plan if build_count["value"] == 1 else empty_plan
+
+    def _withdraw_storage(transfers, *, phase_label="Storage transfers"):
+        events.append(str(phase_label))
+        kit_available["value"] = True
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label=phase_label,
+            measure_label="items",
+            attempted=sum(max(0, int(item.quantity)) for item in transfers),
+            completed=1,
+        )
+
+    widget._build_plan = _build_plan
+    widget._execute_storage_transfers = _withdraw_storage
+    widget._pause_inventory_plus = lambda: None
+
+    _drain_generator_return(widget._execute_now(local_only=True))
+
+    _expect(events == ["Early normal_salvage kit withdrawal"], "The early prerequisite should use the configured Xunlai withdrawal.")
+    _expect(
+        not widget.execution_currency_changing_work_completed,
+        "An Xunlai-only early kit withdrawal must not count as currency-changing Merchant work.",
+    )
+    _expect(
+        not gold_balance_calls,
+        "An Xunlai-only early kit withdrawal must not trigger post-Merchant gold balancing.",
+    )
+
+
+def _test_early_kit_unverified_purchase_skips_gold_balance(module) -> None:
+    widget = _make_widget(module)
+    gold_balance_calls = _install_gold_balance_trigger_spy(widget)
+    id_model = int(module.ID_KIT_MODEL_IDS[0])
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], before_execute=True)
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            merchant_stock_targets=[module.MerchantStockTarget(model_id=id_model, target_count=1, max_per_run=1)],
+        )
+    ]
+    widget._collect_inventory_items = lambda: [
+        _make_item(module, item_id=1001, model_id=200, name="Blue Sword", rarity="Blue", identified=False),
+    ]
+    widget._get_id_kit_id = lambda: 0
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+    widget._begin_execute_reservation_scope = lambda: False
+    widget._end_execute_reservation_scope = lambda _owned: None
+
+    def _ready_lifecycle(*_args, **_kwargs):
+        if False:
+            yield None
+        return 1
+
+    widget._wait_for_merchant_rules_lifecycle = _ready_lifecycle
+    plan = module.PlanResult(
+        supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=id_model,
+                quantity=1,
+                label="Identification Kit",
+                cleanup=module.PurchaseTargetCleanup(
+                    rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                    rule_index=0,
+                    target_key=str(id_model),
+                    target_count=1,
+                    max_per_run=1,
+                ),
+            )
+        ],
+        storage_exact=True,
+        has_actions=True,
+    )
+
+    def _open_merchant(_coords):
+        if False:
+            yield None
+        return [9001]
+
+    def _ambiguous_buy(_model_id, _quantity, **_kwargs):
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=1,
+            completed=0,
+            timeout_failures=1,
+            dispatched=1,
+        )
+
+    def _run_identify(**_kwargs):
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(label="Identify before Execute", measure_label="items")
+
+    widget._build_plan = lambda **_kwargs: plan
+    widget._open_merchant = _open_merchant
+    widget._buy_merchant_model = _ambiguous_buy
+    widget._run_identify_pass = _run_identify
+    widget._pause_inventory_plus = lambda: None
+
+    _drain_generator_return(widget._execute_now(local_only=True))
+
+    _expect(
+        not widget.execution_currency_changing_work_completed,
+        "A dispatched but unverified early purchase must not count as completed currency-changing work.",
+    )
+    _expect(
+        not gold_balance_calls,
+        "An unverified early purchase must not invoke the successful-spending gold-balance path.",
+    )
+    _expect(
+        not widget.execution_completed_successfully,
+        "An unverified early purchase must not be marked as a safe successful execution completion.",
+    )
+    _expect(not plan.merchant_stock_buys, "An ambiguous early purchase must quarantine the later owning Merchant target.")
+
+
+def _test_normal_execution_gold_balance_is_not_double_triggered(module) -> None:
+    widget = _make_widget(module)
+    gold_balance_calls = _install_gold_balance_trigger_spy(widget)
+    id_model = int(module.ID_KIT_MODEL_IDS[0])
+    cleanup = module.PurchaseTargetCleanup(
+        rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+        rule_index=-1,
+        target_key=str(id_model),
+        target_count=1,
+        max_per_run=1,
+    )
+    planned_buy = module.PlannedMerchantBuy(
+        model_id=id_model,
+        quantity=1,
+        label="Identification Kit",
+        cleanup=cleanup,
+    )
+    plan = module.PlanResult(
+        supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[planned_buy],
+        storage_exact=True,
+        has_actions=True,
+    )
+    widget._collect_inventory_items = lambda: []
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+    widget._begin_execute_reservation_scope = lambda: False
+    widget._end_execute_reservation_scope = lambda _owned: None
+
+    def _ready_lifecycle(*_args, **_kwargs):
+        if False:
+            yield None
+        return 1
+
+    widget._wait_for_merchant_rules_lifecycle = _ready_lifecycle
+    events: list[str] = []
+
+    def _open_merchant(_coords):
+        if False:
+            yield None
+        return [9001]
+
+    def _buy_merchant(_model_id, quantity, **_kwargs):
+        events.append("buy")
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=int(quantity),
+            completed=int(quantity),
+            dispatched=int(quantity),
+        )
+
+    widget._build_plan = lambda **_kwargs: plan
+    widget._open_merchant = _open_merchant
+    widget._buy_merchant_model = _buy_merchant
+    widget._pause_inventory_plus = lambda: None
+
+    _drain_generator_return(widget._execute_now(local_only=True))
+
+    _expect(events == ["buy"], "The normal full execution path should perform the configured Merchant purchase once.")
+    _expect(
+        gold_balance_calls == ["after Merchant Rules trading"],
+        "Normal full execution should retain exactly one post-Merchant gold-balance trigger.",
+    )
+    _expect(widget.execution_completed_successfully, "Normal full execution should retain its successful completion state.")
+
+
+def _test_early_kit_salvage_rebuilds_when_kit_appears(module) -> None:
+    widget = _make_widget(module)
+    normal_model = int(module.NORMAL_SALVAGE_KIT_MODEL_IDS[0])
+    widget.salvage_settings = _salvage_settings(module, rarities=["gold"])
+    widget._collect_inventory_items = lambda: [
+        _make_item(
+            module,
+            item_id=2001,
+            model_id=700,
+            name="Gold Sword",
+            rarity="Gold",
+            identified=True,
+            salvageable=True,
+            is_weapon_like=True,
+        )
+    ]
+    widget._get_early_salvage_kit_categories = lambda *_args, **_kwargs: {"normal_salvage"}
+    kit_available = {"value": False}
+    widget._get_normal_salvage_kit_id = lambda: normal_model if kit_available["value"] else 0
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+    widget._begin_execute_reservation_scope = lambda: False
+    widget._end_execute_reservation_scope = lambda _owned: None
+
+    def _ready_lifecycle(*_args, **_kwargs):
+        if False:
+            yield None
+        return 1
+
+    widget._wait_for_merchant_rules_lifecycle = _ready_lifecycle
+    events: list[str] = []
+    first_plan = module.PlanResult(
+        supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=normal_model,
+                quantity=1,
+                label="Salvage Kit",
+                cleanup=module.PurchaseTargetCleanup(
+                    rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                    rule_index=0,
+                    target_key=str(normal_model),
+                    target_count=1,
+                    max_per_run=1,
+                ),
+            )
+        ],
+        storage_exact=True,
+        has_actions=True,
+    )
+    second_plan = module.PlanResult(
+        supported_map=True,
+        salvage_item_ids=[2001],
+        has_actions=True,
+    )
+    empty_plan = module.PlanResult(supported_map=True, has_actions=False)
+    build_count = {"value": 0}
+
+    def _build_plan(**_kwargs):
+        build_count["value"] += 1
+        if build_count["value"] == 1:
+            return first_plan
+        if build_count["value"] == 2:
+            return second_plan
+        return empty_plan
+
+    def _late_appearance_source(_plan, category, _state, _blocked_models):
+        events.append("early")
+        kit_available["value"] = True
+        if False:
+            yield None
+        return module.EarlyKitPrerequisiteOutcome(
+            category=category,
+            attempted=True,
+            completed=0,
+            source_label="Salvage Kit",
+        )
+
+    def _run_salvage(**_kwargs):
+        events.append("salvage")
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="MR Salvage",
+            measure_label="items",
+            attempted=1,
+            completed=1,
+        )
+
+    widget._build_plan = _build_plan
+    widget._execute_early_kit_prerequisite = _late_appearance_source
+    widget._run_salvage_pass = _run_salvage
+    widget._pause_inventory_plus = lambda: None
+
+    _drain_generator_return(widget._execute_now(local_only=True))
+
+    _expect(
+        events == ["early", "salvage"] and build_count["value"] >= 2,
+        "A live compatible Salvage Kit appearing with zero reported completion must rebuild before Salvage.",
+    )
+
+
+def _test_early_kit_salvage_execute_gate_and_cleanup(module) -> None:
+    widget = _make_widget(module)
+    gold_balance_calls = _install_gold_balance_trigger_spy(widget)
+    normal_model = int(module.NORMAL_SALVAGE_KIT_MODEL_IDS[0])
+    widget.salvage_settings = _salvage_settings(module, rarities=["gold"])
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MERCHANT_STOCK,
+            merchant_stock_targets=[module.MerchantStockTarget(model_id=normal_model, target_count=1, max_per_run=1)],
+        )
+    ]
+    widget._collect_inventory_items = lambda: [
+        _make_item(module, item_id=2001, model_id=700, name="Gold Sword", rarity="Gold", identified=True, salvageable=True, is_weapon_like=True),
+    ]
+    widget._get_early_salvage_kit_categories = lambda *_args, **_kwargs: {"normal_salvage"}
+    kit_available = {"value": False}
+    widget._get_normal_salvage_kit_id = lambda: normal_model if kit_available["value"] else 0
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+    widget._begin_execute_reservation_scope = lambda: False
+    widget._end_execute_reservation_scope = lambda _owned: None
+
+    def _ready_lifecycle(*_args, **_kwargs):
+        if False:
+            yield None
+        return 1
+
+    widget._wait_for_merchant_rules_lifecycle = _ready_lifecycle
+    events: list[str] = []
+    first_plan = module.PlanResult(
+        supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        entries=[
+            module.ExecutionPlanEntry(
+                "salvage",
+                module.MERCHANT_TYPE_INVENTORY,
+                "Gold Sword",
+                1,
+                module.PLAN_STATE_CONDITIONAL,
+                "Salvage after acquiring the configured normal Salvage Kit.",
+                model_id=700,
+            )
+        ],
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=normal_model,
+                quantity=1,
+                label="Salvage Kit",
+                cleanup=module.PurchaseTargetCleanup(
+                    rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                    rule_index=0,
+                    target_key=str(normal_model),
+                    target_count=1,
+                    max_per_run=1,
+                ),
+            )
+        ],
+        salvage_item_ids=[2001],
+        storage_exact=True,
+        has_actions=True,
+    )
+    second_plan = module.PlanResult(supported_map=True, salvage_item_ids=[2001], has_actions=True)
+    empty_plan = module.PlanResult(supported_map=True, has_actions=False)
+    build_count = {"value": 0}
+
+    def _build_plan(**_kwargs):
+        build_count["value"] += 1
+        if build_count["value"] == 1:
+            return first_plan
+        if build_count["value"] == 2:
+            return second_plan
+        return empty_plan
+
+    def _open_merchant(_coords):
+        if False:
+            yield None
+        return [9001]
+
+    def _buy_merchant(_model_id, quantity, **_kwargs):
+        events.append(f"buy:{int(quantity)}")
+        kit_available["value"] = True
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=int(quantity),
+            completed=int(quantity),
+        )
+
+    def _run_salvage(**_kwargs):
+        events.append("salvage")
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="MR Salvage",
+            measure_label="items",
+            attempted=1,
+            completed=1,
+        )
+
+    widget._build_plan = _build_plan
+    widget._open_merchant = _open_merchant
+    widget._buy_merchant_model = _buy_merchant
+    widget._run_salvage_pass = _run_salvage
+    widget._pause_inventory_plus = lambda: None
+
+    _drain_generator_return(widget._execute_now(local_only=True))
+
+    _expect(events == ["buy:1", "salvage"], "Execute should source one normal kit before Salvage.")
+    _expect(
+        gold_balance_calls == ["after Merchant Rules trading"],
+        "A verified early kit purchase followed by completed Salvage and an empty rebuild should trigger gold balancing once.",
+    )
+
+
+def _test_early_kit_deferred_cleanup_and_xunlai_budget(module) -> None:
+    widget = _make_widget(module)
+    id_model = int(module.ID_KIT_MODEL_IDS[0])
+    target = module.MerchantStockTarget(
+        model_id=id_model,
+        target_count=1,
+        max_per_run=0,
+        after_purchase=module.AFTER_PURCHASE_REMOVE_ENTRY,
+        check_xunlai_first=True,
+    )
+    widget.buy_rules = [module.BuyRule(enabled=True, kind=module.BUY_KIND_MERCHANT_STOCK, merchant_stock_targets=[target])]
+    cleanup = module.PurchaseTargetCleanup(
+        rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+        rule_index=0,
+        target_key=str(id_model),
+        target_count=1,
+        max_per_run=0,
+        after_purchase=module.AFTER_PURCHASE_REMOVE_ENTRY,
+        completes_target=True,
+    )
+    early_buy = module.PlannedMerchantBuy(id_model, 1, "Identification Kit", cleanup=cleanup)
+    state = module.EarlyKitExecutionState()
+    initial_plan = module.PlanResult(merchant_stock_buys=[early_buy], storage_exact=True)
+    widget._capture_early_kit_purchase_budgets(initial_plan, state)
+    _expect(
+        state.purchase_budget_by_target.get((0, str(id_model))) == 1,
+        "An unlimited target must still capture only the original rebuilt-plan authorization.",
+    )
+    widget._consume_early_kit_purchase_budget(state, early_buy, 1)
+    later_plan = module.PlanResult(merchant_stock_buys=[replace(early_buy, quantity=1)])
+    widget._clamp_early_kit_merchant_buys(later_plan, state)
+    _expect(not later_plan.merchant_stock_buys, "Consuming an unlimited early target must not recreate its authorization.")
+
+    cleanup_calls: list[str] = []
+    widget._apply_after_purchase_cleanup = lambda _cleanup, *, label="": cleanup_calls.append(str(label)) or True
+    had_inventory = hasattr(module.GLOBAL_CACHE, "Inventory")
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    try:
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(GetModelCount=lambda _model_id: 0)
+        widget._record_early_kit_deferred_cleanup(state, early_buy, 1)
+        widget._apply_deferred_early_kit_cleanups(state)
+        _expect(not cleanup_calls, "Reset/Remove cleanup must not fire after the early kit was consumed.")
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(GetModelCount=lambda _model_id: 1)
+        widget._apply_deferred_early_kit_cleanups(state)
+        _expect(len(cleanup_calls) == 1, "Deferred cleanup should fire only when the target remains satisfied.")
+    finally:
+        if had_inventory:
+            module.GLOBAL_CACHE.Inventory = original_inventory
+        elif hasattr(module.GLOBAL_CACHE, "Inventory"):
+            delattr(module.GLOBAL_CACHE, "Inventory")
+
+    xunlai_plan = module.PlanResult(
+        storage_exact=True,
+        storage_transfers=[
+            module.PlannedStorageTransfer(
+                direction=module.STORAGE_TRANSFER_WITHDRAW,
+                key=f"model:{id_model}",
+                label="Identification Kit",
+                item_id=900,
+                quantity=1,
+                model_id=id_model,
+                xunlai_first_merchant_stock=True,
+            )
+        ],
+    )
+    xunlai_state = module.EarlyKitExecutionState()
+    widget._capture_early_kit_purchase_budgets(xunlai_plan, xunlai_state)
+    rebuilt_buy = module.PlannedMerchantBuy(id_model, 1, "Identification Kit", cleanup=cleanup)
+    rebuilt_plan = module.PlanResult(merchant_stock_buys=[rebuilt_buy])
+    widget._clamp_early_kit_merchant_buys(rebuilt_plan, xunlai_state)
+    _expect(
+        not rebuilt_plan.merchant_stock_buys,
+        "A Xunlai-first withdrawal must not create later purchase allowance after the kit is consumed.",
+    )
+
+
+def _test_early_kit_deferred_cleanup_on_no_action_return(module) -> None:
+    widget = _make_widget(module)
+    normal_model = int(module.NORMAL_SALVAGE_KIT_MODEL_IDS[0])
+    widget.salvage_settings = _salvage_settings(module, rarities=["gold"])
+    widget._collect_inventory_items = lambda: [
+        _make_item(
+            module,
+            item_id=2001,
+            model_id=700,
+            name="Gold Sword",
+            rarity="Gold",
+            identified=True,
+            salvageable=True,
+            is_weapon_like=True,
+        )
+    ]
+    widget._get_early_salvage_kit_categories = lambda *_args, **_kwargs: {"normal_salvage"}
+    kit_available = {"value": False}
+    widget._get_normal_salvage_kit_id = lambda: normal_model if kit_available["value"] else 0
+    widget._get_preview_here_availability = lambda: {
+        module.MERCHANT_TYPE_MERCHANT: True,
+        module.MERCHANT_TYPE_STORAGE: True,
+    }
+    widget._get_locally_actionable_preview_counts = lambda *_args, **_kwargs: (0, 0)
+    widget._begin_execute_reservation_scope = lambda: False
+    widget._end_execute_reservation_scope = lambda _owned: None
+
+    def _ready_lifecycle(*_args, **_kwargs):
+        if False:
+            yield None
+        return 1
+
+    widget._wait_for_merchant_rules_lifecycle = _ready_lifecycle
+    cleanup = module.PurchaseTargetCleanup(
+        rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+        rule_index=0,
+        target_key=str(normal_model),
+        target_count=1,
+        max_per_run=1,
+        after_purchase=module.AFTER_PURCHASE_REMOVE_ENTRY,
+        completes_target=True,
+    )
+    first_plan = module.PlanResult(
+        supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=normal_model,
+                quantity=1,
+                label="Salvage Kit",
+                cleanup=cleanup,
+            )
+        ],
+        storage_exact=True,
+        has_actions=True,
+    )
+    empty_plan = module.PlanResult(supported_map=True, has_actions=False)
+    build_count = {"value": 0}
+
+    def _build_plan(**_kwargs):
+        build_count["value"] += 1
+        return first_plan if build_count["value"] == 1 else empty_plan
+
+    events: list[str] = []
+
+    def _open_merchant(_coords):
+        if False:
+            yield None
+        return [9001]
+
+    def _buy_merchant(_model_id, quantity, **_kwargs):
+        events.append("buy")
+        kit_available["value"] = True
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Merchant stock",
+            measure_label="items",
+            attempted=int(quantity),
+            completed=int(quantity),
+            dispatched=int(quantity),
+        )
+
+    def _run_salvage(**_kwargs):
+        events.append("salvage")
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(label="MR Salvage", measure_label="items")
+
+    cleanup_calls: list[str] = []
+    widget._build_plan = _build_plan
+    widget._open_merchant = _open_merchant
+    widget._buy_merchant_model = _buy_merchant
+    widget._run_salvage_pass = _run_salvage
+    widget._apply_after_purchase_cleanup = lambda _cleanup, *, label="": cleanup_calls.append(str(label)) or True
+    widget._pause_inventory_plus = lambda: None
+
+    had_inventory = hasattr(module.GLOBAL_CACHE, "Inventory")
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    try:
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(GetModelCount=lambda _model_id: 1)
+        _drain_generator_return(widget._execute_now(local_only=True))
+    finally:
+        if had_inventory:
+            module.GLOBAL_CACHE.Inventory = original_inventory
+        elif hasattr(module.GLOBAL_CACHE, "Inventory"):
+            delattr(module.GLOBAL_CACHE, "Inventory")
+
+    _expect(events == ["buy"], "A disappeared dependent candidate should not enter Salvage after the early prerequisite window.")
+    _expect(
+        len(cleanup_calls) == 1,
+        "A carried early kit that still satisfies its target must receive deferred Remove cleanup before the early return.",
+    )
+    _expect(
+        widget.execution_currency_changing_work_completed,
+        "An early-only verified Merchant kit purchase must count as currency-changing work before the early return.",
     )
 
 
@@ -31459,6 +32753,42 @@ def main() -> int:
             ),
             ("identify_exact_rarity_claims_before_destroy_and_cleanup", lambda: _test_identify_exact_rarity_claims_before_destroy_and_cleanup(module)),
             ("identify_no_kit_still_claims_selected_items", lambda: _test_identify_no_kit_still_claims_selected_items(module)),
+            ("early_kit_preview_and_budget_contract", lambda: _test_early_kit_preview_and_budget_contract(module)),
+            (
+                "early_kit_source_compatibility_and_xunlai_failure",
+                lambda: _test_early_kit_source_compatibility_and_xunlai_failure(module),
+            ),
+            (
+                "early_kit_dispatch_quarantine_and_retryability",
+                lambda: _test_early_kit_dispatch_quarantine_and_retryability(module),
+            ),
+            ("early_kit_identify_execute_gate", lambda: _test_early_kit_identify_execute_gate(module)),
+            (
+                "early_kit_identify_no_candidates_no_early_source",
+                lambda: _test_early_kit_identify_no_candidates_no_early_source(module),
+            ),
+            (
+                "early_kit_xunlai_only_does_not_trigger_gold_balance",
+                lambda: _test_early_kit_xunlai_only_does_not_trigger_gold_balance(module),
+            ),
+            (
+                "early_kit_unverified_purchase_skips_gold_balance",
+                lambda: _test_early_kit_unverified_purchase_skips_gold_balance(module),
+            ),
+            (
+                "normal_execution_gold_balance_is_not_double_triggered",
+                lambda: _test_normal_execution_gold_balance_is_not_double_triggered(module),
+            ),
+            (
+                "early_kit_salvage_rebuilds_when_kit_appears",
+                lambda: _test_early_kit_salvage_rebuilds_when_kit_appears(module),
+            ),
+            ("early_kit_salvage_execute_gate_and_cleanup", lambda: _test_early_kit_salvage_execute_gate_and_cleanup(module)),
+            ("early_kit_deferred_cleanup_and_xunlai_budget", lambda: _test_early_kit_deferred_cleanup_and_xunlai_budget(module)),
+            (
+                "early_kit_deferred_cleanup_on_no_action_return",
+                lambda: _test_early_kit_deferred_cleanup_on_no_action_return(module),
+            ),
             ("identify_on_inventory_change_queues_auto_pass", lambda: _test_identify_on_inventory_change_queues_auto_pass(module)),
             ("protected_salvage_destroy_overlap_blocks_both", lambda: _test_protected_salvage_destroy_overlap_blocks_both(module)),
             ("protected_items_profile_roundtrip", lambda: _test_protected_items_profile_roundtrip(module)),
