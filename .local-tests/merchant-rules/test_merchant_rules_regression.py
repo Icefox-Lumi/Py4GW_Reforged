@@ -14584,6 +14584,932 @@ def _test_xunlai_first_live_purchase_guard(module) -> None:
         module.GLOBAL_CACHE.Trading = original_trading
 
 
+def _test_target_buy_live_ceiling_for_merchant(module) -> None:
+    widget = _make_widget(module)
+    model_counts = {555: 2}
+
+    def read_count(model_id: int) -> int:
+        return model_counts.get(int(model_id), 0)
+
+    buys: list[tuple[int, int]] = []
+    cleanup_calls: list[int] = []
+    buy_behavior = {"external_target": None}
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    original_item = getattr(module.GLOBAL_CACHE, "Item", None)
+    original_trading = getattr(module.GLOBAL_CACHE, "Trading", None)
+    try:
+        def _buy_item(item_id: int, cost: int) -> None:
+            buys.append((int(item_id), int(cost)))
+            external_target = buy_behavior["external_target"]
+            if external_target is None:
+                model_counts[555] = model_counts.get(555, 0) + 1
+            else:
+                model_counts[555] = int(external_target)
+
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
+            IsStorageOpen=lambda: True,
+            GetGoldOnCharacter=lambda: 1000,
+            GetGoldInStorage=lambda: 0,
+            WithdrawGold=lambda _amount: None,
+            GetModelCount=lambda model_id: read_count(model_id),
+        )
+        module.GLOBAL_CACHE.Item = types.SimpleNamespace(
+            GetModelID=lambda item_id: 555 if int(item_id) == 501 else 0,
+            Properties=types.SimpleNamespace(GetValue=lambda item_id: 250 if int(item_id) == 501 else 0),
+        )
+        module.GLOBAL_CACHE.Trading = types.SimpleNamespace(
+            Merchant=types.SimpleNamespace(GetOfferedItems=lambda: [501], BuyItem=_buy_item),
+        )
+        widget._apply_after_purchase_cleanup = (
+            lambda cleanup, *, label="": cleanup_calls.append(int(cleanup.target_count)) or True
+        )
+
+        cleanup = module.PurchaseTargetCleanup(
+            target_count=4,
+            max_per_run=4,
+            after_purchase=module.AFTER_PURCHASE_RESET_QUANTITY,
+            completes_target=True,
+        )
+        outcome = _drain_generator_return(
+            widget._buy_merchant_model(555, 4, offered_items=[501], cleanup=cleanup)
+        )
+        _expect(
+            outcome.completed == 2 and len(buys) == 2 and model_counts[555] == 4,
+            "A stale merchant plan should buy only the current live shortage.",
+        )
+        _expect(cleanup_calls == [4], "Merchant cleanup should run after a verified purchase reaches the live target.")
+
+        buys.clear()
+        cleanup_calls.clear()
+        model_counts[555] = 4
+        satisfied_outcome = _drain_generator_return(
+            widget._buy_merchant_model(555, 3, offered_items=[501], cleanup=cleanup)
+        )
+        _expect(
+            satisfied_outcome.completed == 0 and not buys and not cleanup_calls,
+            "A satisfied merchant target should skip purchases and post-purchase cleanup.",
+        )
+
+        buys.clear()
+        model_counts[555] = 1
+        buy_behavior["external_target"] = 4
+        reached_outcome = _drain_generator_return(
+            widget._buy_merchant_model(555, 5, offered_items=[501], cleanup=cleanup)
+        )
+        _expect(
+            reached_outcome.completed == 1 and len(buys) == 1,
+            "A merchant loop should recheck the target after each verified purchase.",
+        )
+
+        buys.clear()
+        cleanup_calls.clear()
+        buy_behavior["external_target"] = None
+        model_counts[555] = 0
+        bounded_outcome = _drain_generator_return(
+            widget._buy_merchant_model(555, 2, offered_items=[501], cleanup=cleanup)
+        )
+        _expect(
+            bounded_outcome.completed == 2 and len(buys) == 2,
+            "A live inventory decrease must not expand the original merchant plan quantity.",
+        )
+
+        buys.clear()
+        module.GLOBAL_CACHE.Inventory.GetModelCount = lambda _model_id: (_ for _ in ()).throw(
+            RuntimeError("unreadable carried count")
+        )
+        unreadable_outcome = _drain_generator_return(
+            widget._buy_merchant_model(555, 3, offered_items=[501], cleanup=cleanup)
+        )
+        _expect(
+            unreadable_outcome.completed == 0
+            and unreadable_outcome.load_failures == 3
+            and not buys,
+            "An unreadable target count must fail closed without a blind merchant purchase.",
+        )
+    finally:
+        module.GLOBAL_CACHE.Inventory = original_inventory
+        module.GLOBAL_CACHE.Item = original_item
+        module.GLOBAL_CACHE.Trading = original_trading
+
+
+def _test_target_buy_live_ceiling_for_traders(module) -> None:
+    widget = _make_widget(module)
+    material_model_id = 946
+    scroll_model_id = min(module.SCROLL_TRADER_STOCK_MODEL_IDS)
+    trader_item_ids = {"material": 701, "rune": 702, "scroll": 703}
+    model_counts = {material_model_id: 17, scroll_model_id: 2}
+    rune_count = {"value": 1}
+    active_mode = {"value": "material"}
+    buys: list[tuple[str, int, int]] = []
+    quotes: list[tuple[str, int]] = []
+    cleanup_calls: list[str] = []
+    material_offer_quantity = {"value": 1}
+    material_gain = {"value": 10}
+    unreadable_material_count = {"value": False}
+    unreadable_rune_count = {"value": False}
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    original_item = getattr(module.GLOBAL_CACHE, "Item", None)
+    original_trading = getattr(module.GLOBAL_CACHE, "Trading", None)
+    original_merchant_yield = getattr(module.Routines.Yield, "Merchant", None)
+    try:
+        def _get_model_count(model_id: int) -> int:
+            if unreadable_material_count["value"] and int(model_id) == material_model_id:
+                raise RuntimeError("unreadable material count")
+            return model_counts.get(int(model_id), 0)
+
+        def _request_quote(item_id: int) -> None:
+            quotes.append((active_mode["value"], int(item_id)))
+
+        def _wait_for_quote(request_quote, item_id: int, **_kwargs):
+            request_quote(item_id)
+            if False:
+                yield None
+            return 500
+
+        def _wait_for_transaction(**_kwargs):
+            if False:
+                yield None
+            return True
+
+        def _buy_item(item_id: int, cost: int) -> None:
+            mode = active_mode["value"]
+            buys.append((mode, int(item_id), int(cost)))
+            if mode == "material":
+                model_counts[material_model_id] = model_counts.get(material_model_id, 0) + material_gain["value"]
+            elif mode == "rune":
+                rune_count["value"] += 1
+            else:
+                model_counts[scroll_model_id] = model_counts.get(scroll_model_id, 0) + 1
+
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
+            IsStorageOpen=lambda: True,
+            GetGoldOnCharacter=lambda: 1000,
+            GetGoldInStorage=lambda: 0,
+            WithdrawGold=lambda _amount: None,
+            GetModelCount=_get_model_count,
+        )
+        module.GLOBAL_CACHE.Item = types.SimpleNamespace(
+            GetModelID=lambda item_id: (
+                material_model_id
+                if int(item_id) == trader_item_ids["material"]
+                else scroll_model_id
+                if int(item_id) == trader_item_ids["scroll"]
+                else 0
+            ),
+            Properties=types.SimpleNamespace(
+                GetQuantity=lambda item_id: (
+                    material_offer_quantity["value"]
+                    if int(item_id) == trader_item_ids["material"]
+                    else 1
+                ),
+            ),
+        )
+        module.GLOBAL_CACHE.Trading = types.SimpleNamespace(
+            Trader=types.SimpleNamespace(
+                GetOfferedItems=lambda: list(trader_item_ids.values()),
+                RequestQuote=_request_quote,
+                BuyItem=_buy_item,
+            )
+        )
+        module.Routines.Yield.Merchant = types.SimpleNamespace(
+            _wait_for_quote=_wait_for_quote,
+            _wait_for_transaction=_wait_for_transaction,
+        )
+        widget._get_standalone_rune_identifiers_for_item_id = (
+            lambda item_id: ("rune_test",) if int(item_id) == trader_item_ids["rune"] else ()
+        )
+        widget._get_inventory_standalone_rune_identifier_count = (
+            lambda _identifier: (_ for _ in ()).throw(RuntimeError("unreadable rune count"))
+            if unreadable_rune_count["value"]
+            else rune_count["value"]
+        )
+        widget._apply_after_purchase_cleanup = (
+            lambda cleanup, *, label="": cleanup_calls.append(str(label)) or True
+        )
+
+        material_offer_quantity["value"] = 1
+        material_gain["value"] = 1
+        model_counts[material_model_id] = 0
+        authorization_cleanup = module.PurchaseTargetCleanup(
+            target_count=20,
+            after_purchase=module.AFTER_PURCHASE_RESET_QUANTITY,
+            completes_target=True,
+        )
+        authorization_outcome = _drain_generator_return(
+            widget._buy_planned_materials(
+                (0.0, 0.0),
+                [
+                    module.PlannedMaterialBuy(
+                        merchant_type=module.MERCHANT_TYPE_MATERIALS,
+                        model_id=material_model_id,
+                        quantity=20,
+                        label="Wood Plank",
+                        batch_size=10,
+                        cleanup=authorization_cleanup,
+                    )
+                ],
+                trader_items=[trader_item_ids["material"]],
+            )
+        )
+        _expect(
+            authorization_outcome.completed == 2
+            and len([buy for buy in buys if buy[0] == "material"]) == 2
+            and model_counts[material_model_id] == 2,
+            "Material authorization must be consumed by dispatched 10-unit lots, not by +1 verification gains.",
+        )
+        _expect(
+            not cleanup_calls,
+            "A partially verified material authorization must not trigger target cleanup below the target.",
+        )
+
+        buys.clear()
+        material_offer_quantity["value"] = 1
+        material_gain["value"] = 10
+        authorization_cap_outcome = _drain_generator_return(
+            widget._buy_planned_materials(
+                (0.0, 0.0),
+                [
+                    module.PlannedMaterialBuy(
+                        merchant_type=module.MERCHANT_TYPE_MATERIALS,
+                        model_id=material_model_id,
+                        quantity=5,
+                        label="Wood Plank",
+                        batch_size=10,
+                        cleanup=authorization_cleanup,
+                    )
+                ],
+                trader_items=[trader_item_ids["material"]],
+            )
+        )
+        _expect(
+            authorization_cap_outcome.completed == 0 and not buys,
+            "A material lot larger than remaining plan authorization must be rejected without dispatch.",
+        )
+
+        buys.clear()
+        material_gain["value"] = 10
+        material_offer_quantity["value"] = 1
+        model_counts[material_model_id] = 17
+        cleanup_calls.clear()
+        material_cleanup = module.PurchaseTargetCleanup(
+            target_count=20,
+            after_purchase=module.AFTER_PURCHASE_RESET_QUANTITY,
+            completes_target=True,
+        )
+        material_outcome = _drain_generator_return(
+            widget._buy_planned_materials(
+                (0.0, 0.0),
+                [
+                    module.PlannedMaterialBuy(
+                        merchant_type=module.MERCHANT_TYPE_MATERIALS,
+                        model_id=material_model_id,
+                        quantity=30,
+                        label="Wood Plank",
+                        batch_size=10,
+                        cleanup=material_cleanup,
+                    )
+                ],
+                trader_items=[trader_item_ids["material"]],
+            )
+        )
+        _expect(
+            material_outcome.completed == 10
+            and len([buy for buy in buys if buy[0] == "material"]) == 1
+            and model_counts[material_model_id] == 27,
+            "Material trader live checks should allow one supported lot for a sub-lot shortage and then stop.",
+        )
+        _expect(cleanup_calls == ["Wood Plank"], "Material cleanup should require a verified target-reaching lot.")
+
+        buys.clear()
+        cleanup_calls.clear()
+        unreadable_material_count["value"] = True
+        unreadable_material_outcome = _drain_generator_return(
+            widget._buy_planned_materials(
+                (0.0, 0.0),
+                [
+                    module.PlannedMaterialBuy(
+                        merchant_type=module.MERCHANT_TYPE_MATERIALS,
+                        model_id=material_model_id,
+                        quantity=30,
+                        label="Wood Plank",
+                        batch_size=10,
+                        cleanup=material_cleanup,
+                    )
+                ],
+                trader_items=[trader_item_ids["material"]],
+            )
+        )
+        _expect(
+            unreadable_material_outcome.completed == 0
+            and unreadable_material_outcome.load_failures == 30
+            and not buys
+            and not cleanup_calls,
+            "Material trader buys must fail closed when the live carried count is unreadable.",
+        )
+        unreadable_material_count["value"] = False
+
+        active_mode["value"] = "rune"
+        rune_cleanup = module.PurchaseTargetCleanup(
+            target_count=3,
+            after_purchase=module.AFTER_PURCHASE_RESET_QUANTITY,
+            completes_target=True,
+        )
+        rune_outcome = _drain_generator_return(
+            widget._buy_planned_rune_trader_items(
+                (0.0, 0.0),
+                [
+                    module.PlannedTraderBuy(
+                        identifier="rune_test",
+                        quantity=5,
+                        label="Test Rune",
+                        cleanup=rune_cleanup,
+                    )
+                ],
+                trader_items=[trader_item_ids["rune"]],
+            )
+        )
+        _expect(
+            rune_outcome.completed == 2
+            and len([buy for buy in buys if buy[0] == "rune"]) == 2
+            and rune_count["value"] == 3,
+            "Rune trader live checks should use the standalone rune identifier and stop at the target.",
+        )
+
+        buys.clear()
+        unreadable_rune_count["value"] = True
+        unreadable_rune_outcome = _drain_generator_return(
+            widget._buy_planned_rune_trader_items(
+                (0.0, 0.0),
+                [
+                    module.PlannedTraderBuy(
+                        identifier="rune_test",
+                        quantity=2,
+                        label="Test Rune",
+                        cleanup=rune_cleanup,
+                    )
+                ],
+                trader_items=[trader_item_ids["rune"]],
+            )
+        )
+        _expect(
+            unreadable_rune_outcome.completed == 0
+            and unreadable_rune_outcome.load_failures == 2
+            and not buys,
+            "Rune trader buys must fail closed when the live identifier count is unreadable.",
+        )
+        unreadable_rune_count["value"] = False
+
+        active_mode["value"] = "scroll"
+        scroll_cleanup = module.PurchaseTargetCleanup(
+            target_count=4,
+            after_purchase=module.AFTER_PURCHASE_RESET_QUANTITY,
+            completes_target=True,
+        )
+        scroll_outcome = _drain_generator_return(
+            widget._buy_planned_scroll_trader_items(
+                (0.0, 0.0),
+                [
+                    module.PlannedScrollTraderBuy(
+                        model_id=scroll_model_id,
+                        quantity=5,
+                        label="Test Scroll",
+                        cleanup=scroll_cleanup,
+                    )
+                ],
+                trader_items=[trader_item_ids["scroll"]],
+            )
+        )
+        _expect(
+            scroll_outcome.completed == 2
+            and len([buy for buy in buys if buy[0] == "scroll"]) == 2
+            and model_counts[scroll_model_id] == 4,
+            "Scroll trader live checks should re-read model count before each quoted purchase.",
+        )
+
+        buys.clear()
+        model_counts[scroll_model_id] = 4
+        satisfied_scroll_outcome = _drain_generator_return(
+            widget._buy_planned_scroll_trader_items(
+                (0.0, 0.0),
+                [
+                    module.PlannedScrollTraderBuy(
+                        model_id=scroll_model_id,
+                        quantity=2,
+                        label="Test Scroll",
+                        cleanup=scroll_cleanup,
+                    )
+                ],
+                trader_items=[trader_item_ids["scroll"]],
+            )
+        )
+        _expect(
+            satisfied_scroll_outcome.completed == 0 and not buys,
+            "A satisfied scroll target should not submit another trader transaction.",
+        )
+    finally:
+        module.GLOBAL_CACHE.Inventory = original_inventory
+        module.GLOBAL_CACHE.Item = original_item
+        module.GLOBAL_CACHE.Trading = original_trading
+        module.Routines.Yield.Merchant = original_merchant_yield
+
+
+def _test_material_trader_authorization_units(module) -> None:
+    widget = _make_widget(module)
+    common_model_id = int(module.ModelID.Iron_Ingot.value)
+    rare_model_id = int(module.ModelID.Leather_Square.value)
+    trader_item_ids = {common_model_id: 801, rare_model_id: 802}
+    state: dict[str, object] = {
+        "model_id": common_model_id,
+        "count": 0,
+        "gain": 0,
+        "raw_offer": 1,
+        "raw_offer_after_dispatch": None,
+        "depletion": 0,
+        "count_unavailable": False,
+        "verification_transaction_complete": True,
+        "dispatch_result": None,
+        "dispatch_raises": False,
+    }
+    dispatches: list[tuple[int, int]] = []
+    cleanup_calls: list[str] = []
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    original_item = getattr(module.GLOBAL_CACHE, "Item", None)
+    original_trading = getattr(module.GLOBAL_CACHE, "Trading", None)
+    original_merchant_yield = getattr(module.Routines.Yield, "Merchant", None)
+    try:
+        def _get_model_count(model_id: int) -> int:
+            if state["count_unavailable"]:
+                raise RuntimeError("unreadable carried count")
+            if int(model_id) == int(state["model_id"]):
+                return int(state["count"])
+            return 0
+
+        def _get_model_id(item_id: int) -> int:
+            safe_item_id = int(item_id)
+            for model_id, trader_item_id in trader_item_ids.items():
+                if safe_item_id == trader_item_id:
+                    return model_id
+            return 0
+
+        def _get_offer_quantity(item_id: int) -> int:
+            if int(item_id) in trader_item_ids.values():
+                return int(state["raw_offer"])
+            return 0
+
+        def _wait_for_quote(request_quote, item_id: int, **_kwargs):
+            request_quote(item_id)
+            if False:
+                yield None
+            return 500
+
+        def _wait_for_transaction(**_kwargs):
+            if False:
+                yield None
+            return bool(state["verification_transaction_complete"])
+
+        def _buy_item(item_id: int, cost: int):
+            if state["dispatch_raises"]:
+                raise RuntimeError("dispatch rejected")
+            if state["dispatch_result"] is False:
+                return False
+            dispatches.append((int(item_id), int(cost)))
+            state["count"] = int(state["count"]) + int(state["gain"])
+            state["count"] = max(0, int(state["count"]) - int(state["depletion"]))
+            if state["raw_offer_after_dispatch"] is not None:
+                state["raw_offer"] = int(state["raw_offer_after_dispatch"])
+            if state["count_unavailable_after_dispatch"]:
+                state["count_unavailable"] = True
+            return state["dispatch_result"]
+
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
+            IsStorageOpen=lambda: True,
+            GetGoldOnCharacter=lambda: 1000,
+            GetGoldInStorage=lambda: 0,
+            WithdrawGold=lambda _amount: None,
+            GetModelCount=_get_model_count,
+        )
+        module.GLOBAL_CACHE.Item = types.SimpleNamespace(
+            GetModelID=_get_model_id,
+            Properties=types.SimpleNamespace(GetQuantity=_get_offer_quantity),
+        )
+        module.GLOBAL_CACHE.Trading = types.SimpleNamespace(
+            Trader=types.SimpleNamespace(
+                GetOfferedItems=lambda: list(trader_item_ids.values()),
+                RequestQuote=lambda _item_id: None,
+                BuyItem=_buy_item,
+            )
+        )
+        module.Routines.Yield.Merchant = types.SimpleNamespace(
+            _wait_for_quote=_wait_for_quote,
+            _wait_for_transaction=_wait_for_transaction,
+        )
+        widget._apply_after_purchase_cleanup = (
+            lambda cleanup, *, label="": cleanup_calls.append(str(label)) or True
+        )
+
+        def _run_case(
+            *,
+            model_id: int,
+            starting_count: int,
+            target_count: int,
+            quantity: int,
+            batch_size: int,
+            gain: int,
+            raw_offer: int,
+            max_per_run: int = 0,
+            depletion: int = 0,
+            raw_offer_after_dispatch: int | None = None,
+            count_unavailable_after_dispatch: bool = False,
+            transaction_complete: bool = True,
+            dispatch_result=None,
+            dispatch_raises: bool = False,
+        ):
+            state.update(
+                {
+                    "model_id": model_id,
+                    "count": starting_count,
+                    "gain": gain,
+                    "raw_offer": raw_offer,
+                    "raw_offer_after_dispatch": raw_offer_after_dispatch,
+                    "depletion": depletion,
+                    "count_unavailable": False,
+                    "count_unavailable_after_dispatch": count_unavailable_after_dispatch,
+                    "verification_transaction_complete": transaction_complete,
+                    "dispatch_result": dispatch_result,
+                    "dispatch_raises": dispatch_raises,
+                }
+            )
+            dispatches.clear()
+            cleanup_calls.clear()
+            cleanup = module.PurchaseTargetCleanup(
+                target_count=target_count,
+                max_per_run=max_per_run,
+                after_purchase=module.AFTER_PURCHASE_RESET_QUANTITY,
+                completes_target=target_count > 0,
+            )
+            planned_buy = module.PlannedMaterialBuy(
+                merchant_type=(
+                    module.MERCHANT_TYPE_MATERIALS
+                    if model_id == common_model_id
+                    else module.MERCHANT_TYPE_RARE_MATERIALS
+                ),
+                model_id=model_id,
+                quantity=quantity,
+                label="Iron Ingot" if model_id == common_model_id else "Leather Square",
+                batch_size=batch_size,
+                cleanup=cleanup,
+            )
+            outcome = _drain_generator_return(
+                widget._buy_planned_materials(
+                    (0.0, 0.0),
+                    [planned_buy],
+                    trader_items=[trader_item_ids[model_id]],
+                )
+            )
+            return outcome, list(dispatches), int(state["count"]), list(cleanup_calls)
+
+        exact_outcome, exact_dispatches, exact_count, exact_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=20,
+            target_count=50,
+            quantity=20,
+            batch_size=10,
+            gain=10,
+            raw_offer=1,
+            max_per_run=20,
+        )
+        _expect(
+            exact_outcome.completed == 20
+            and len(exact_dispatches) == 2
+            and exact_count == 40
+            and not exact_cleanup,
+            "The live Iron contract must dispatch two 10-unit transactions from a 20-unit Max Per Run plan.",
+        )
+
+        high_target_outcome, high_target_dispatches, _high_target_count, _high_target_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=0,
+            target_count=1000,
+            quantity=20,
+            batch_size=10,
+            gain=10,
+            raw_offer=1,
+        )
+        _expect(
+            high_target_outcome.completed == 20 and len(high_target_dispatches) == 2,
+            "A high live target must still cap a 20-unit common-material authorization at two transactions.",
+        )
+
+        partial_outcome, partial_dispatches, partial_count, partial_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=20,
+            target_count=50,
+            quantity=20,
+            batch_size=10,
+            gain=1,
+            raw_offer=1,
+        )
+        _expect(
+            partial_outcome.completed == 2
+            and len(partial_dispatches) == 2
+            and partial_count == 22
+            and not partial_cleanup,
+            "A +1 net gain must not recreate the nine units of authorization missing from each 10-unit transaction.",
+        )
+
+        depletion_outcome, depletion_dispatches, depletion_count, _depletion_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=20,
+            target_count=50,
+            quantity=20,
+            batch_size=10,
+            gain=10,
+            raw_offer=1,
+            depletion=10,
+        )
+        _expect(
+            depletion_outcome.completed == 0
+            and len(depletion_dispatches) == 1
+            and depletion_count == 20,
+            "Concurrent depletion must stop after the consumed 10-unit authorization instead of restoring it.",
+        )
+
+        ambiguous_outcome, ambiguous_dispatches, ambiguous_count, _ambiguous_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=20,
+            target_count=50,
+            quantity=20,
+            batch_size=10,
+            gain=10,
+            raw_offer=1,
+            count_unavailable_after_dispatch=True,
+        )
+        _expect(
+            ambiguous_outcome.timeout_failures == 1
+            and len(ambiguous_dispatches) == 1
+            and ambiguous_count == 30,
+            "An accepted transaction with ambiguous verification must consume authorization and stop without retry.",
+        )
+
+        smaller_target_outcome, smaller_target_dispatches, smaller_target_count, smaller_target_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=20,
+            target_count=25,
+            quantity=10,
+            batch_size=10,
+            gain=10,
+            raw_offer=1,
+        )
+        _expect(
+            smaller_target_outcome.completed == 10
+            and len(smaller_target_dispatches) == 1
+            and smaller_target_count == 30
+            and smaller_target_cleanup == ["Iron Ingot"],
+            "A required 10-unit lot may legitimately finish a 25-unit live target at 30.",
+        )
+
+        changing_offer_outcome, changing_offer_dispatches, changing_offer_count, _changing_offer_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=20,
+            target_count=50,
+            quantity=20,
+            batch_size=10,
+            gain=10,
+            raw_offer=1,
+            raw_offer_after_dispatch=99,
+        )
+        _expect(
+            changing_offer_outcome.completed == 20
+            and len(changing_offer_dispatches) == 2
+            and changing_offer_count == 40,
+            "A changed raw trader pseudo-quantity must not reset or enlarge canonical unit authorization.",
+        )
+
+        oversized_outcome, oversized_dispatches, _oversized_count, _oversized_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=0,
+            target_count=50,
+            quantity=5,
+            batch_size=10,
+            gain=10,
+            raw_offer=1,
+        )
+        _expect(
+            oversized_outcome.completed == 0 and not oversized_dispatches,
+            "A common-material transaction must not dispatch when it exceeds remaining original authorization.",
+        )
+
+        mismatch_outcome, mismatch_dispatches, _mismatch_count, _mismatch_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=0,
+            target_count=50,
+            quantity=20,
+            batch_size=1,
+            gain=10,
+            raw_offer=1,
+        )
+        _expect(
+            mismatch_outcome.load_failures == 20 and not mismatch_dispatches,
+            "A plan batch size that disagrees with the model-aware transaction size must fail closed.",
+        )
+
+        failed_dispatch_outcome, failed_dispatches, _failed_dispatch_count, _failed_dispatch_cleanup = _run_case(
+            model_id=common_model_id,
+            starting_count=0,
+            target_count=50,
+            quantity=20,
+            batch_size=10,
+            gain=10,
+            raw_offer=1,
+            dispatch_result=False,
+        )
+        _expect(
+            failed_dispatch_outcome.timeout_failures == 1 and not failed_dispatches,
+            "A rejected BuyItem dispatch must not consume material authorization.",
+        )
+
+        rare_outcome, rare_dispatches, rare_count, _rare_cleanup = _run_case(
+            model_id=rare_model_id,
+            starting_count=0,
+            target_count=2,
+            quantity=2,
+            batch_size=1,
+            gain=1,
+            raw_offer=1,
+        )
+        _expect(
+            rare_outcome.completed == 2 and len(rare_dispatches) == 2 and rare_count == 2,
+            "Rare materials must use one material unit per accepted transaction.",
+        )
+    finally:
+        module.GLOBAL_CACHE.Inventory = original_inventory
+        module.GLOBAL_CACHE.Item = original_item
+        module.GLOBAL_CACHE.Trading = original_trading
+        module.Routines.Yield.Merchant = original_merchant_yield
+
+
+def _test_material_buy_max_per_run_planning_units(module) -> None:
+    widget = _make_widget(module)
+    iron_model_id = int(module.ModelID.Iron_Ingot.value)
+    widget.catalog_by_model_id[iron_model_id] = {
+        "model_id": iron_model_id,
+        "name": "Iron Ingot",
+        "material_type": "common",
+    }
+    widget.buy_rules = [
+        module.BuyRule(
+            enabled=True,
+            kind=module.BUY_KIND_MATERIAL_TARGET,
+            material_targets=[
+                module.MaterialTarget(model_id=iron_model_id, target_count=50, max_per_run=20),
+            ],
+        )
+    ]
+    widget.sell_rules = []
+    widget._get_supported_context = lambda *, passive=False: (
+        True,
+        "Ready",
+        {module.MERCHANT_TYPE_MATERIALS: (1.0, 1.0)},
+    )
+    widget._collect_inventory_items = lambda: [
+        _make_item(
+            module,
+            item_id=900,
+            model_id=iron_model_id,
+            name="Iron Ingot",
+            quantity=20,
+            is_material=True,
+        )
+    ]
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    try:
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(IsStorageOpen=lambda: True)
+        plan = widget._build_plan()
+    finally:
+        module.GLOBAL_CACHE.Inventory = original_inventory
+
+    _expect(
+        len(plan.material_buys) == 1
+        and plan.material_buys[0].quantity == 20
+        and plan.material_buys[0].batch_size == 10
+        and plan.material_buys[0].cleanup.target_count == 50
+        and plan.material_buys[0].cleanup.max_per_run == 20,
+        "Target 50 from carried 20 with Max Per Run 20 must rebuild a 20-unit common-material authorization.",
+    )
+
+
+def _test_rune_trader_rejects_incomplete_inventory(module) -> None:
+    widget = _make_widget(module)
+    trader_item_id = 802
+    inventory_ids = {"value": [901]}
+    buy_calls: list[tuple[int, int]] = []
+    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
+    original_item = getattr(module.GLOBAL_CACHE, "Item", None)
+    original_trading = getattr(module.GLOBAL_CACHE, "Trading", None)
+    original_merchant_yield = getattr(module.Routines.Yield, "Merchant", None)
+    try:
+        def _wait_for_quote(request_quote, item_id: int, **_kwargs):
+            request_quote(item_id)
+            if False:
+                yield None
+            return 500
+
+        def _wait_for_transaction(**_kwargs):
+            if False:
+                yield None
+            return True
+
+        def _build_item_info(item_id: int):
+            if int(item_id) == 901:
+                return None
+            if int(item_id) == 902:
+                return types.SimpleNamespace(
+                    standalone_kind=module.RUNE_STANDALONE_KIND,
+                    rune_identifiers=["rune_test"],
+                    quantity=1,
+                )
+            if int(item_id) == 903:
+                return types.SimpleNamespace(
+                    standalone_kind=module.RUNE_STANDALONE_KIND,
+                    rune_identifiers=["rune_test"],
+                    quantity=2,
+                )
+            return types.SimpleNamespace(standalone_kind="", rune_identifiers=[], quantity=1)
+
+        def _buy_item(item_id: int, cost: int) -> None:
+            buy_calls.append((int(item_id), int(cost)))
+            inventory_ids["value"] = [902]
+
+        module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
+            IsStorageOpen=lambda: True,
+            GetGoldOnCharacter=lambda: 1000,
+            GetGoldInStorage=lambda: 0,
+            WithdrawGold=lambda _amount: None,
+        )
+        module.GLOBAL_CACHE.Item = types.SimpleNamespace(
+            GetModelID=lambda _item_id: 0,
+            Properties=types.SimpleNamespace(GetValue=lambda _item_id: 0),
+        )
+        module.GLOBAL_CACHE.Trading = types.SimpleNamespace(
+            Trader=types.SimpleNamespace(
+                RequestQuote=lambda _item_id: None,
+                BuyItem=_buy_item,
+            )
+        )
+        module.Routines.Yield.Merchant = types.SimpleNamespace(
+            _wait_for_quote=_wait_for_quote,
+            _wait_for_transaction=_wait_for_transaction,
+        )
+        widget._get_standalone_rune_identifiers_for_item_id = (
+            lambda item_id: ("rune_test",) if int(item_id) == trader_item_id else ()
+        )
+        widget._get_inventory_item_ids = lambda: list(inventory_ids["value"])
+        widget._build_inventory_item_info = _build_item_info
+
+        cleanup = module.PurchaseTargetCleanup(target_count=3, completes_target=True)
+        unreadable_outcome = _drain_generator_return(
+            widget._buy_planned_rune_trader_items(
+                (0.0, 0.0),
+                [module.PlannedTraderBuy("rune_test", 2, "Test Rune", cleanup=cleanup)],
+                trader_items=[trader_item_id],
+            )
+        )
+        _expect(
+            unreadable_outcome.completed == 0
+            and unreadable_outcome.load_failures == 2
+            and not buy_calls
+            and widget._get_inventory_standalone_rune_identifier_count("rune_test") is None,
+            "An undecodable inventory record must remain unavailable instead of becoming rune count zero.",
+        )
+
+        inventory_ids["value"] = []
+        empty_count = widget._get_inventory_standalone_rune_identifier_count("rune_test")
+        _expect(empty_count == 0, "A genuinely empty inventory must remain a valid standalone rune count of zero.")
+        empty_outcome = _drain_generator_return(
+            widget._buy_planned_rune_trader_items(
+                (0.0, 0.0),
+                [module.PlannedTraderBuy("rune_test", 1, "Test Rune", cleanup=cleanup)],
+                trader_items=[trader_item_id],
+            )
+        )
+        _expect(
+            empty_outcome.completed == 1 and len(buy_calls) == 1,
+            "A valid zero rune count must still permit the planned Rune Trader purchase.",
+        )
+
+        inventory_ids["value"] = [902, 903]
+        readable_count = widget._get_inventory_standalone_rune_identifier_count("rune_test")
+        _expect(
+            readable_count == 3,
+            "Readable standalone rune carrier records must retain identifier-based stack counting.",
+        )
+    finally:
+        module.GLOBAL_CACHE.Inventory = original_inventory
+        module.GLOBAL_CACHE.Item = original_item
+        module.GLOBAL_CACHE.Trading = original_trading
+        module.Routines.Yield.Merchant = original_merchant_yield
+
+
 def _test_xunlai_first_execute_partial_withdrawal_blocks_purchase(module) -> None:
     widget = _make_widget(module)
     model_id = 555
@@ -30586,6 +31512,26 @@ def main() -> int:
             (
                 "xunlai_first_live_purchase_guard",
                 lambda: _test_xunlai_first_live_purchase_guard(module),
+            ),
+            (
+                "target_buy_live_ceiling_for_merchant",
+                lambda: _test_target_buy_live_ceiling_for_merchant(module),
+            ),
+            (
+                "target_buy_live_ceiling_for_traders",
+                lambda: _test_target_buy_live_ceiling_for_traders(module),
+            ),
+            (
+                "material_trader_authorization_units",
+                lambda: _test_material_trader_authorization_units(module),
+            ),
+            (
+                "material_buy_max_per_run_planning_units",
+                lambda: _test_material_buy_max_per_run_planning_units(module),
+            ),
+            (
+                "rune_trader_rejects_incomplete_inventory",
+                lambda: _test_rune_trader_rejects_incomplete_inventory(module),
             ),
             (
                 "xunlai_first_execute_partial_withdrawal_blocks_purchase",

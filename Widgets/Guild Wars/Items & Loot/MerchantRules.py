@@ -19711,11 +19711,44 @@ class MerchantRulesWidget:
             return ()
         return tuple(_normalize_rune_identifier(identifier) for identifier in item_info.rune_identifiers if _normalize_rune_identifier(identifier))
 
-    def _get_inventory_standalone_rune_identifier_count(self, identifier: str) -> int:
+    def _get_inventory_standalone_rune_identifier_count(self, identifier: str) -> int | None:
         safe_identifier = _normalize_rune_identifier(identifier)
         if not safe_identifier:
             return 0
-        return max(0, int(self._get_standalone_rune_identifier_counts(self._collect_inventory_items()).get(safe_identifier, 0)))
+        try:
+            inventory_item_ids = self._get_inventory_item_ids()
+        except Exception as exc:
+            self._debug_log(f"Rune inventory enumeration failed for identifier={safe_identifier}: {exc}")
+            return None
+        if not isinstance(inventory_item_ids, (list, tuple)):
+            self._debug_log(f"Rune inventory enumeration returned an unreadable result for identifier={safe_identifier}.")
+            return None
+
+        counts: dict[str, int] = {}
+        for item_id in inventory_item_ids:
+            try:
+                item_info = self._build_inventory_item_info(int(item_id))
+                if item_info is None:
+                    self._debug_log(
+                        f"Rune inventory record could not be decoded for identifier={safe_identifier}; count unavailable."
+                    )
+                    return None
+                standalone_kind = item_info.standalone_kind
+                rune_identifiers = item_info.rune_identifiers
+                quantity = max(0, int(item_info.quantity))
+                if standalone_kind != RUNE_STANDALONE_KIND:
+                    continue
+                for item_identifier in rune_identifiers:
+                    normalized_identifier = _normalize_rune_identifier(item_identifier)
+                    if not normalized_identifier:
+                        continue
+                    counts[normalized_identifier] = counts.get(normalized_identifier, 0) + quantity
+            except Exception as exc:
+                self._debug_log(
+                    f"Rune inventory record could not be read for identifier={safe_identifier}: {exc}"
+                )
+                return None
+        return max(0, int(counts.get(safe_identifier, 0)))
 
     def _wait_for_inventory_standalone_rune_identifier_count_at_least(
         self,
@@ -19730,6 +19763,8 @@ class MerchantRulesWidget:
         waited_ms = 0
         while waited_ms <= max(0, int(timeout_ms)):
             current_count = self._get_inventory_standalone_rune_identifier_count(safe_identifier)
+            if current_count is None:
+                return None
             if current_count >= safe_expected_count:
                 return current_count
             waited_ms += max(1, int(step_ms))
@@ -21797,6 +21832,25 @@ class MerchantRulesWidget:
         if cap > 0:
             capped_needed = min(capped_needed, cap)
         return capped_needed
+
+    @staticmethod
+    def _get_live_target_purchase_ceiling(
+        current_count: int | None,
+        target_count: int,
+        remaining_authorized: int,
+        *,
+        batch_size: int = 1,
+    ) -> int | None:
+        """Return the live shortage bounded by the already-authorized plan quantity."""
+        if current_count is None:
+            return None
+        safe_target = max(0, int(target_count))
+        safe_remaining = max(0, int(remaining_authorized))
+        live_shortage = max(0, safe_target - max(0, int(current_count)))
+        safe_batch_size = max(1, int(batch_size))
+        if live_shortage > 0 and safe_batch_size > 1:
+            live_shortage = ((live_shortage + safe_batch_size - 1) // safe_batch_size) * safe_batch_size
+        return min(safe_remaining, live_shortage)
 
     def _make_purchase_target_cleanup(
         self,
@@ -27103,6 +27157,12 @@ class MerchantRulesWidget:
         if safe_quantity <= 0:
             return outcome
 
+        effective_live_target_count = live_target_count
+        if effective_live_target_count is None and cleanup is not None:
+            cleanup_target_count = max(0, int(getattr(cleanup, "target_count", 0)))
+            if cleanup_target_count > 0:
+                effective_live_target_count = cleanup_target_count
+
         current_offers = self._get_merchant_offered_items(offered_items)
         matched_item_id = self._find_offered_model_item_id(current_offers, model_id)
         if matched_item_id <= 0:
@@ -27111,6 +27171,7 @@ class MerchantRulesWidget:
             return outcome
 
         self._debug_log(f"Merchant stock buy: model={model_id} quantity={safe_quantity}")
+        target_reached_after_purchase = False
         for _ in range(safe_quantity):
             current_offers = self._get_merchant_offered_items(current_offers)
             matched_item_id = self._find_offered_model_item_id(current_offers, model_id)
@@ -27153,30 +27214,39 @@ class MerchantRulesWidget:
                 )
                 break
 
-            before_count: int
-            if live_target_count is not None:
-                try:
-                    before_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(int(model_id))))
-                except Exception as exc:
-                    remaining = max(0, safe_quantity - outcome.completed)
+            try:
+                before_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(int(model_id))))
+            except Exception as exc:
+                remaining = max(0, safe_quantity - outcome.completed)
+                if effective_live_target_count is not None:
                     outcome.load_failures += remaining
                     self._debug_log(
-                        f"Xunlai-first merchant stock buy stopped because the live carried count "
-                        f"could not be read for model={model_id}: {exc}"
+                        f"Merchant stock buy stopped because the live carried count could not be read "
+                        f"for model={model_id}: {exc}"
                     )
-                    break
-                if before_count >= max(0, int(live_target_count)):
-                    self._debug_log(
-                        f"Xunlai-first merchant stock buy stopped at live target: model={model_id} "
-                        f"carried={before_count} target={max(0, int(live_target_count))}."
-                    )
-                    break
-            else:
-                try:
-                    before_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(int(model_id))))
-                except Exception as exc:
+                else:
                     outcome.load_failures += 1
                     self._debug_log(f"Merchant stock buy could not read inventory count for model={model_id}: {exc}")
+                break
+            if effective_live_target_count is not None:
+                remaining_authorized = max(0, safe_quantity - outcome.completed)
+                live_ceiling = self._get_live_target_purchase_ceiling(
+                    before_count,
+                    effective_live_target_count,
+                    remaining_authorized,
+                )
+                if live_ceiling is None:
+                    outcome.load_failures += remaining_authorized
+                    self._debug_log(
+                        f"Merchant stock buy stopped because the live carried count could not be read "
+                        f"for model={model_id}."
+                    )
+                    break
+                if live_ceiling <= 0:
+                    self._debug_log(
+                        f"Merchant stock buy stopped at live target: model={model_id} carried={before_count} "
+                        f"target={max(0, int(effective_live_target_count))}."
+                    )
                     break
             GLOBAL_CACHE.Trading.Merchant.BuyItem(matched_item_id, buy_price)
             queue_cleared = yield from self._wait_for_action_queue_empty("ACTION", timeout_ms=1500, step_ms=50)
@@ -27196,10 +27266,17 @@ class MerchantRulesWidget:
                 )
                 break
             outcome.completed += 1
+            if effective_live_target_count is not None and after_count >= max(0, int(effective_live_target_count)):
+                target_reached_after_purchase = True
             yield from Routines.Yield.wait(40)
 
-        if outcome.completed >= safe_quantity and cleanup is not None:
-            self._apply_after_purchase_cleanup(cleanup, label=self._format_model_label(model_id))
+        if cleanup is not None:
+            if effective_live_target_count is None:
+                cleanup_ready = outcome.completed >= safe_quantity
+            else:
+                cleanup_ready = outcome.completed > 0 and target_reached_after_purchase
+            if cleanup_ready:
+                self._apply_after_purchase_cleanup(cleanup, label=self._format_model_label(model_id))
 
         self._debug_log(
             f"Merchant stock buy completed: model={model_id} completed={outcome.completed}/{safe_quantity} "
@@ -27215,7 +27292,7 @@ class MerchantRulesWidget:
         phase_label: str = "Material buys",
         trader_items: list[int] | None = None,
     ) -> ExecutionPhaseOutcome:
-        """Execute planned material purchases with fresh quotes and verified inventory gains."""
+        """Execute planned material purchases with model-aware unit authorization and verified gains."""
 
         outcome = ExecutionPhaseOutcome(
             label=phase_label,
@@ -27232,7 +27309,11 @@ class MerchantRulesWidget:
                 self._debug_log(f"{phase_label} cannot verify material buys because GetModelCount is unavailable.")
                 return None
             try:
-                return max(0, int(get_model_count(int(model_id)) or 0))
+                raw_count = get_model_count(int(model_id))
+                if raw_count is None:
+                    self._debug_log(f"{phase_label} carried count read returned no value for model={model_id}.")
+                    return None
+                return max(0, int(cast(int, raw_count)))
             except Exception as exc:
                 self._debug_log(f"{phase_label} carried count read failed for model={model_id}: {exc}")
                 return None
@@ -27306,19 +27387,44 @@ class MerchantRulesWidget:
                 continue
 
             requested_units = max(0, int(planned_buy.quantity))
+            if requested_units <= 0:
+                continue
+            try:
+                transaction_units = int(self._get_material_batch_size(planned_buy.model_id))
+                planned_batch_size = int(planned_buy.batch_size)
+            except Exception as exc:
+                outcome.load_failures += requested_units
+                self._debug_log(
+                    f"{phase_label} stopped because material transaction units could not be resolved: "
+                    f"model={planned_buy.model_id} error={exc}"
+                )
+                continue
+            if transaction_units <= 0 or planned_batch_size <= 0 or transaction_units != planned_batch_size:
+                outcome.load_failures += requested_units
+                self._debug_log(
+                    f"{phase_label} stopped because material transaction units disagree with the plan: "
+                    f"model={planned_buy.model_id} transaction_units={transaction_units} "
+                    f"planned_batch_size={planned_batch_size}."
+                )
+                continue
+
             completed_for_target = 0
-            while completed_for_target < requested_units:
-                remaining_units = max(0, requested_units - completed_for_target)
+            dispatched_units = 0
+            target_count = max(0, int(getattr(planned_buy.cleanup, "target_count", 0)))
+            target_guard_active = target_count > 0
+            target_reached_after_purchase = False
+            while dispatched_units < requested_units:
+                remaining_authorized_units = max(0, requested_units - dispatched_units)
+                if transaction_units > remaining_authorized_units:
+                    self._debug_log(
+                        f"{phase_label} stopped before overbuy because one material transaction exceeds "
+                        f"remaining authorization: model={planned_buy.model_id} "
+                        f"transaction_units={transaction_units} remaining={remaining_authorized_units}."
+                    )
+                    break
                 offered_quantity = _read_trader_offer_quantity(trader_item_id, planned_buy.model_id)
                 if offered_quantity is None:
                     outcome.load_failures += 1
-                    break
-                if offered_quantity > remaining_units:
-                    outcome.unavailable += remaining_units
-                    self._debug_log(
-                        f"{phase_label} stopped before overbuy: model={planned_buy.model_id} "
-                        f"remaining={remaining_units} offer_quantity={offered_quantity}."
-                    )
                     break
 
                 quoted_value = yield from Routines.Yield.Merchant._wait_for_quote(  # pylint: disable=protected-access
@@ -27345,19 +27451,11 @@ class MerchantRulesWidget:
                         break
                     trader_item_id = self._find_offered_model_item_id(trader_items, planned_buy.model_id)
                     if trader_item_id <= 0:
-                        outcome.unavailable += remaining_units
+                        outcome.unavailable += remaining_authorized_units
                         break
                     offered_quantity = _read_trader_offer_quantity(trader_item_id, planned_buy.model_id)
                     if offered_quantity is None:
                         outcome.load_failures += 1
-                        break
-                    if offered_quantity > remaining_units:
-                        outcome.unavailable += remaining_units
-                        self._debug_log(
-                            f"{phase_label} stopped before overbuy after Xunlai top-up: "
-                            f"model={planned_buy.model_id} remaining={remaining_units} "
-                            f"offer_quantity={offered_quantity}."
-                        )
                         break
                     quoted_value = yield from Routines.Yield.Merchant._wait_for_quote(  # pylint: disable=protected-access
                         GLOBAL_CACHE.Trading.Trader.RequestQuote,
@@ -27386,9 +27484,86 @@ class MerchantRulesWidget:
 
                 before_count = _read_carried_material_count(planned_buy.model_id)
                 if before_count is None:
+                    outcome.load_failures += remaining_authorized_units if target_guard_active else 1
+                    break
+                if target_guard_active:
+                    live_ceiling = self._get_live_target_purchase_ceiling(
+                        before_count,
+                        target_count,
+                        remaining_authorized_units,
+                        batch_size=transaction_units,
+                    )
+                    if live_ceiling is None:
+                        outcome.load_failures += remaining_authorized_units
+                        self._debug_log(
+                            f"{phase_label} stopped because the live carried count could not be read "
+                            f"for model={planned_buy.model_id}."
+                        )
+                        break
+                    if live_ceiling <= 0:
+                        self._debug_log(
+                            f"{phase_label} stopped at live target: model={planned_buy.model_id} carried={before_count} "
+                            f"target={target_count}."
+                        )
+                        break
+                    if transaction_units > live_ceiling:
+                        outcome.unavailable += remaining_authorized_units
+                        self._debug_log(
+                            f"{phase_label} stopped before overbuy: model={planned_buy.model_id} "
+                            f"live_ceiling={live_ceiling} transaction_units={transaction_units} "
+                            f"offer_quantity={offered_quantity}."
+                        )
+                        break
+                final_offered_quantity = _read_trader_offer_quantity(trader_item_id, planned_buy.model_id)
+                if final_offered_quantity is None:
                     outcome.load_failures += 1
                     break
-                GLOBAL_CACHE.Trading.Trader.BuyItem(trader_item_id, quoted_value)
+                # The trader pseudo-item quantity is only a positive sanity signal; the model-aware
+                # transaction size is the material-unit authorization boundary.
+                if final_offered_quantity != transaction_units:
+                    self._debug_log(
+                        f"{phase_label} observed a trader offer pseudo-quantity different from the "
+                        f"canonical material transaction units: model={planned_buy.model_id} "
+                        f"transaction_units={transaction_units} offer_quantity={final_offered_quantity}."
+                    )
+                if target_guard_active:
+                    final_live_ceiling = self._get_live_target_purchase_ceiling(
+                        before_count,
+                        target_count,
+                        remaining_authorized_units,
+                        batch_size=transaction_units,
+                    )
+                    if final_live_ceiling is None or final_live_ceiling <= 0:
+                        self._debug_log(
+                            f"{phase_label} stopped at the final live target check: model={planned_buy.model_id}."
+                        )
+                        break
+                    if transaction_units > final_live_ceiling:
+                        outcome.unavailable += remaining_authorized_units
+                        self._debug_log(
+                            f"{phase_label} stopped before dispatch because the canonical transaction exceeds "
+                            f"the live target ceiling: model={planned_buy.model_id} "
+                            f"live_ceiling={final_live_ceiling} transaction_units={transaction_units} "
+                            f"offer_quantity={final_offered_quantity}."
+                        )
+                        break
+                try:
+                    dispatch_result = GLOBAL_CACHE.Trading.Trader.BuyItem(trader_item_id, quoted_value)
+                except Exception as exc:
+                    outcome.load_failures += 1
+                    self._debug_log(
+                        f"{phase_label} dispatch failed before authorization was consumed: "
+                        f"model={planned_buy.model_id} error={exc}"
+                    )
+                    break
+                if dispatch_result is False:
+                    outcome.timeout_failures += 1
+                    self._debug_log(
+                        f"{phase_label} dispatch was rejected before authorization was consumed: "
+                        f"model={planned_buy.model_id}."
+                    )
+                    break
+                dispatched_units += transaction_units
                 completed = yield from Routines.Yield.Merchant._wait_for_transaction(  # pylint: disable=protected-access
                     timeout_ms=750,
                     step_ms=10,
@@ -27405,20 +27580,29 @@ class MerchantRulesWidget:
                     outcome.timeout_failures += 1
                     self._debug_log(
                         f"{phase_label} buy verification failed: model={planned_buy.model_id} "
-                        f"before={before_count} after={after_count} expected_offer={offered_quantity}."
+                        f"before={before_count} after={after_count} "
+                        f"expected_transaction_units={transaction_units} offer_quantity={final_offered_quantity}."
                     )
                     break
-                counted_gain = min(verified_gain, remaining_units)
+                verification_remaining = max(0, requested_units - completed_for_target)
+                counted_gain = min(verified_gain, verification_remaining)
                 completed_for_target += counted_gain
                 outcome.completed += counted_gain
-                if verified_gain != offered_quantity:
+                if target_guard_active and after_count is not None and after_count >= target_count:
+                    target_reached_after_purchase = True
+                if verified_gain != transaction_units:
                     self._debug_log(
                         f"{phase_label} buy verified unusual gain: model={planned_buy.model_id} "
-                        f"gain={verified_gain} offer_quantity={offered_quantity}."
+                        f"gain={verified_gain} transaction_units={transaction_units} "
+                        f"offer_quantity={final_offered_quantity}."
                     )
                 yield from Routines.Yield.wait(40)
 
-            if completed_for_target >= requested_units:
+            if target_guard_active:
+                cleanup_ready = completed_for_target > 0 and target_reached_after_purchase
+            else:
+                cleanup_ready = requested_units > 0 and completed_for_target >= requested_units
+            if cleanup_ready:
                 self._apply_after_purchase_cleanup(planned_buy.cleanup, label=planned_buy.label)
 
         self._debug_log(
@@ -28055,6 +28239,9 @@ class MerchantRulesWidget:
                 continue
 
             completed_for_target = 0
+            target_count = max(0, int(getattr(planned_buy.cleanup, "target_count", 0)))
+            target_guard_active = target_count > 0
+            target_reached_after_purchase = False
             for _ in range(max(0, int(planned_buy.quantity))):
                 quoted_value = yield from Routines.Yield.Merchant._wait_for_quote(  # pylint: disable=protected-access
                     GLOBAL_CACHE.Trading.Trader.RequestQuote,
@@ -28112,7 +28299,39 @@ class MerchantRulesWidget:
                     )
                     break
 
-                before_count = self._get_inventory_standalone_rune_identifier_count(safe_identifier)
+                remaining_authorized = max(0, int(planned_buy.quantity) - completed_for_target)
+                try:
+                    before_count = self._get_inventory_standalone_rune_identifier_count(safe_identifier)
+                except Exception as exc:
+                    outcome.load_failures += remaining_authorized if target_guard_active else 1
+                    self._debug_log(
+                        f"{phase_label} stopped because the live rune count could not be read "
+                        f"for identifier={safe_identifier}: {exc}"
+                    )
+                    break
+                if before_count is None:
+                    outcome.load_failures += remaining_authorized if target_guard_active else 1
+                    self._debug_log(
+                        f"{phase_label} stopped because the live rune count could not be read "
+                        f"for identifier={safe_identifier}."
+                    )
+                    break
+                before_count = max(0, int(before_count))
+                if target_guard_active:
+                    live_ceiling = self._get_live_target_purchase_ceiling(
+                        before_count,
+                        target_count,
+                        remaining_authorized,
+                    )
+                    if live_ceiling is None:
+                        outcome.load_failures += remaining_authorized
+                        break
+                    if live_ceiling <= 0:
+                        self._debug_log(
+                            f"{phase_label} stopped at live target: identifier={safe_identifier} "
+                            f"carried={before_count} target={target_count}."
+                        )
+                        break
                 GLOBAL_CACHE.Trading.Trader.BuyItem(trader_item_id, quoted_value)
                 completed = yield from Routines.Yield.Merchant._wait_for_transaction(  # pylint: disable=protected-access
                     timeout_ms=750,
@@ -28121,13 +28340,21 @@ class MerchantRulesWidget:
                 if not completed:
                     outcome.timeout_failures += 1
                     break
-                after_count = yield from self._wait_for_inventory_standalone_rune_identifier_count_at_least(
-                    safe_identifier,
-                    before_count + 1,
-                    timeout_ms=1500,
-                    step_ms=50,
-                )
-                if after_count <= before_count:
+                try:
+                    after_count = yield from self._wait_for_inventory_standalone_rune_identifier_count_at_least(
+                        safe_identifier,
+                        before_count + 1,
+                        timeout_ms=1500,
+                        step_ms=50,
+                    )
+                except Exception as exc:
+                    outcome.load_failures += 1
+                    self._debug_log(
+                        f"{phase_label} stopped because the live rune count could not be verified "
+                        f"for identifier={safe_identifier}: {exc}"
+                    )
+                    break
+                if after_count is None or after_count <= before_count:
                     outcome.timeout_failures += 1
                     self._debug_log(
                         f"{phase_label} buy verification failed: identifier={safe_identifier} "
@@ -28136,9 +28363,15 @@ class MerchantRulesWidget:
                     break
                 outcome.completed += 1
                 completed_for_target += 1
+                if target_guard_active and after_count >= target_count:
+                    target_reached_after_purchase = True
                 yield from Routines.Yield.wait(40)
 
-            if completed_for_target >= max(0, int(planned_buy.quantity)):
+            if target_guard_active:
+                cleanup_ready = completed_for_target > 0 and target_reached_after_purchase
+            else:
+                cleanup_ready = int(planned_buy.quantity) > 0 and completed_for_target >= int(planned_buy.quantity)
+            if cleanup_ready:
                 self._apply_after_purchase_cleanup(planned_buy.cleanup, label=planned_buy.label)
 
         self._debug_log(
@@ -28207,6 +28440,9 @@ class MerchantRulesWidget:
                 continue
 
             completed_for_target = 0
+            target_count = max(0, int(getattr(planned_buy.cleanup, "target_count", 0)))
+            target_guard_active = target_count > 0
+            target_reached_after_purchase = False
             for _ in range(max(0, int(planned_buy.quantity))):
                 quoted_value = yield from Routines.Yield.Merchant._wait_for_quote(  # pylint: disable=protected-access
                     GLOBAL_CACHE.Trading.Trader.RequestQuote,
@@ -28259,12 +28495,31 @@ class MerchantRulesWidget:
                     )
                     break
 
+                remaining_authorized = max(0, int(planned_buy.quantity) - completed_for_target)
                 try:
                     before_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(safe_model_id)))
                 except Exception as exc:
-                    outcome.load_failures += 1
-                    self._debug_log(f"{phase_label} could not read inventory count for model={safe_model_id}: {exc}")
+                    outcome.load_failures += remaining_authorized if target_guard_active else 1
+                    self._debug_log(
+                        f"{phase_label} stopped because the live carried count could not be read "
+                        f"for model={safe_model_id}: {exc}"
+                    )
                     break
+                if target_guard_active:
+                    live_ceiling = self._get_live_target_purchase_ceiling(
+                        before_count,
+                        target_count,
+                        remaining_authorized,
+                    )
+                    if live_ceiling is None:
+                        outcome.load_failures += remaining_authorized
+                        break
+                    if live_ceiling <= 0:
+                        self._debug_log(
+                            f"{phase_label} stopped at live target: model={safe_model_id} carried={before_count} "
+                            f"target={target_count}."
+                        )
+                        break
                 GLOBAL_CACHE.Trading.Trader.BuyItem(trader_item_id, quoted_value)
                 completed = yield from Routines.Yield.Merchant._wait_for_transaction(  # pylint: disable=protected-access
                     timeout_ms=750,
@@ -28288,9 +28543,15 @@ class MerchantRulesWidget:
                     break
                 outcome.completed += 1
                 completed_for_target += 1
+                if target_guard_active and after_count >= target_count:
+                    target_reached_after_purchase = True
                 yield from Routines.Yield.wait(40)
 
-            if completed_for_target >= max(0, int(planned_buy.quantity)):
+            if target_guard_active:
+                cleanup_ready = completed_for_target > 0 and target_reached_after_purchase
+            else:
+                cleanup_ready = int(planned_buy.quantity) > 0 and completed_for_target >= int(planned_buy.quantity)
+            if cleanup_ready:
                 self._apply_after_purchase_cleanup(planned_buy.cleanup, label=planned_buy.label)
 
         self._debug_log(
@@ -30896,7 +31157,7 @@ class MerchantRulesWidget:
                             cleanup=merchant_buy.cleanup,
                             live_target_count=(
                                 int(merchant_buy.cleanup.target_count)
-                                if merchant_buy.check_xunlai_first
+                                if int(merchant_buy.cleanup.target_count) > 0
                                 else None
                             ),
                         )
