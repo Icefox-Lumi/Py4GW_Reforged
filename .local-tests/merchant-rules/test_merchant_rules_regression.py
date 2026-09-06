@@ -26156,6 +26156,589 @@ def _test_catalog_loads_without_deprecated_item_mirror(module) -> None:
             setattr(module, name, value)
 
 
+def _test_bounded_direct_name_search_expansion_contract(module) -> None:
+    expected_tome_model_ids = [
+        21800,
+        21797,
+        21802,
+        21803,
+        21805,
+        21801,
+        21796,
+        21804,
+        21790,
+        21798,
+        21799,
+        21787,
+        21792,
+        21793,
+        21795,
+        21791,
+        21786,
+        21794,
+        21788,
+        21789,
+    ]
+    usable_type_id = int(module.ItemType.Usable)
+    expected_tome_keys = [(usable_type_id, model_id) for model_id in expected_tome_model_ids]
+    expected_flat_tome_model_ids = [
+        21800,
+        21797,
+        21802,
+        21803,
+        21801,
+        21805,
+        21796,
+        21804,
+        21790,
+        21798,
+        21799,
+        21787,
+        21792,
+        21793,
+        21791,
+        21795,
+        21786,
+        21794,
+        21788,
+        21789,
+    ]
+
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+
+    previous_first_page = widget._search_exact_catalog("tome", limit=module.SEARCH_RESULT_LIMIT)
+    expanded_tome = widget._search_protected_item_catalog("tome")
+    expanded_tome_keys = [
+        (entry.get("item_type_id"), int(entry.get("model_id", 0)))
+        for entry in expanded_tome
+    ]
+    _expect(
+        expanded_tome_keys == expected_tome_keys,
+        "Exact Items tome search should expose all 20 Tome rows in the approved ranked order.",
+    )
+    _expect(
+        [
+            (entry.get("item_type_id"), int(entry.get("model_id", 0)))
+            for entry in previous_first_page
+        ] == expected_tome_keys[: module.SEARCH_RESULT_LIMIT],
+        "Exact Items expansion must preserve the previous ranked first 12 Tome rows.",
+    )
+    _expect(
+        all(entry.get("item_type_id") == usable_type_id for entry in expanded_tome)
+        and expanded_tome_keys[module.SEARCH_RESULT_LIMIT :] == expected_tome_keys[module.SEARCH_RESULT_LIMIT :],
+        "Exact Items expansion must append the eight hidden typed Tome rows without changing identity.",
+    )
+
+    explicit_sell_tome = widget._search_explicit_sell_item_catalog("tome")
+    _expect(
+        [int(entry.get("model_id", 0)) for entry in explicit_sell_tome] == expected_flat_tome_model_ids,
+        "Sell Specific Items tome search should expose all 20 eligible Tome models in ranked order.",
+    )
+
+    flat_tome_results = widget._expand_direct_primary_name_matches(
+        "tome",
+        widget._search_catalog("tome", limit=module.SEARCH_RESULT_LIMIT * 4),
+    )
+    _expect(
+        [int(entry.get("model_id", 0)) for entry in flat_tome_results] == expected_flat_tome_model_ids,
+        "Destroy, Salvage, and keep-out concrete-item searches should preserve flat Tome ranking order.",
+    )
+
+    for search_name, search_results in (
+        ("Exact Items", widget._search_protected_item_catalog("hammer", limit=100)),
+        ("Sell Specific Items", widget._search_explicit_sell_item_catalog("hammer", limit=100)),
+    ):
+        _expect(
+            len(search_results) <= module.SEARCH_RESULT_LIMIT * 4,
+            f"{search_name} search should never exceed the absolute 48-row result ceiling.",
+        )
+        _expect(
+            all(
+                index < module.SEARCH_RESULT_LIMIT
+                or "hammer" in module._normalize_catalog_search_text(entry.get("name", ""))
+                for index, entry in enumerate(search_results)
+            ),
+            f"{search_name} overflow should include only direct primary-name matches after the ordinary page.",
+        )
+
+    editor_widget = widget
+    editor_widget.protected_item_model_ids = [99999]
+    editor_widget.protected_item_targets = [
+        module.ExactProtectionTarget(model_id=expected_tome_model_ids[0], item_type_id=usable_type_id)
+    ]
+    editor_widget.protected_item_search_text = "tome"
+    editor_widget.protected_item_list_search_text = ""
+    for method_name in (
+        "_draw_section_heading",
+        "_draw_secondary_text",
+        "_draw_subsection_heading",
+        "_draw_helper_tooltip",
+        "_draw_hover_tooltip",
+        "_draw_protected_item_type_filter_controls",
+        "_draw_selected_exact_targets",
+    ):
+        setattr(editor_widget, method_name, lambda *_args, **_kwargs: None)
+
+    save_payloads: list[dict[str, object]] = []
+    dirty_messages: list[str] = []
+    editor_widget._save_profile = lambda: save_payloads.append(editor_widget._build_profile_payload()) or True
+    editor_widget._mark_preview_dirty = lambda message="": dirty_messages.append(str(message))
+
+    imgui = module.PyImGui
+    missing = object()
+    imgui_names = (
+        "begin_child",
+        "end_child",
+        "push_item_width",
+        "pop_item_width",
+        "input_text",
+        "separator",
+        "begin_disabled",
+        "end_disabled",
+        "button",
+        "small_button",
+        "push_style_color",
+        "pop_style_color",
+    )
+    original_imgui = {name: getattr(imgui, name, missing) for name in imgui_names}
+    small_button_labels: list[str] = []
+    disabled_states: list[bool] = []
+    try:
+        imgui.begin_child = lambda *_args, **_kwargs: False
+        imgui.end_child = lambda *_args, **_kwargs: None
+        imgui.push_item_width = lambda *_args, **_kwargs: None
+        imgui.pop_item_width = lambda *_args, **_kwargs: None
+        imgui.input_text = lambda _label, value: value
+        imgui.separator = lambda *_args, **_kwargs: None
+        imgui.begin_disabled = lambda disabled: disabled_states.append(bool(disabled))
+        imgui.end_disabled = lambda *_args, **_kwargs: None
+        imgui.button = lambda *_args, **_kwargs: False
+        imgui.small_button = lambda label, *_args, **_kwargs: small_button_labels.append(str(label)) or str(label).startswith(
+            "Confirm Add Shown"
+        )
+        imgui.push_style_color = lambda *_args, **_kwargs: None
+        imgui.pop_style_color = lambda *_args, **_kwargs: None
+
+        first_add_shown_label = "Add Shown (20)##merchant_rules_protected_items_add_all_matches"
+        editor_widget.pending_destructive_button_key = editor_widget._get_destructive_button_key(first_add_shown_label)
+        editor_widget.pending_destructive_button_expires_at_ms = int(time.time() * 1000) + 10_000
+        changed = editor_widget._draw_protected_items_editor()
+        _expect(changed, "The real Exact Items editor should report Add Shown mutation as changed.")
+        _expect(
+            "Confirm Add Shown (20)##merchant_rules_protected_items_add_all_matches" in small_button_labels,
+            "Exact Items Add Shown should derive its displayed count from the real 20-row visible target set.",
+        )
+        _expect(
+            len(editor_widget.protected_item_targets) == len(expected_tome_keys)
+            and len(save_payloads) == 1
+            and len(dirty_messages) == 1,
+            "The real Exact Items Add Shown branch should add visible targets and save once.",
+        )
+        payload = editor_widget._build_profile_payload()
+        _expect(
+            payload["version"] == 40
+            and payload["protected_item_model_ids"] == [99999]
+            and {
+                (int(target["item_type_id"]), int(target["model_id"]))
+                for target in payload["protected_item_targets"]
+            } == set(expected_tome_keys),
+            "Exact Items Add Shown must preserve broad legacy protections and profile v40 serialization.",
+        )
+
+        repeated_changed = editor_widget._draw_protected_items_editor()
+        _expect(
+            not repeated_changed
+            and len(editor_widget.protected_item_targets) == len(expected_tome_keys)
+            and len(save_payloads) == 1,
+            "Repeated Exact Items Add Shown should be idempotent and avoid a second save.",
+        )
+        _expect(any(disabled_states), "The repeated Add Shown button should be disabled when no typed targets remain addable.")
+
+        collision_editor = _make_widget(module)
+        collision_editor.protected_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+        collision_editor.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+        collision_editor.exact_catalog_by_item_key = {
+            (int(module.ItemType.Axe), 923): {
+                "model_id": 923,
+                "item_type_id": int(module.ItemType.Axe),
+                "name": "Collision Kaineng Axe",
+                "item_type": "Axe",
+            },
+            (int(module.ItemType.Materials_Zcoins), 923): {
+                "model_id": 923,
+                "item_type_id": int(module.ItemType.Materials_Zcoins),
+                "name": "Collision Monstrous Claw",
+                "item_type": "Materials_Zcoins",
+            },
+        }
+        collision_editor.exact_catalog_untyped_by_model_id = {}
+        collision_editor.protected_item_search_text = "collision"
+        collision_editor.protected_item_model_ids = []
+        collision_editor.protected_item_targets = []
+        collision_editor._save_profile = lambda: True
+        collision_editor._mark_preview_dirty = lambda *_args, **_kwargs: None
+        for method_name in (
+            "_draw_section_heading",
+            "_draw_secondary_text",
+            "_draw_subsection_heading",
+            "_draw_helper_tooltip",
+            "_draw_hover_tooltip",
+            "_draw_protected_item_type_filter_controls",
+            "_draw_selected_exact_targets",
+        ):
+            setattr(collision_editor, method_name, lambda *_args, **_kwargs: None)
+        collision_label = "Add Shown (2)##merchant_rules_protected_items_add_all_matches"
+        collision_editor.pending_destructive_button_key = collision_editor._get_destructive_button_key(collision_label)
+        collision_editor.pending_destructive_button_expires_at_ms = int(time.time() * 1000) + 10_000
+        collision_changed = collision_editor._draw_protected_items_editor()
+        collision_keys = {
+            (target.item_type_id, target.model_id) for target in collision_editor.protected_item_targets
+        }
+        _expect(
+            collision_changed
+            and collision_keys == {
+                (int(module.ItemType.Axe), 923),
+                (int(module.ItemType.Materials_Zcoins), 923),
+            }
+            and collision_editor.protected_item_model_ids == [],
+            "The real Add Shown path must preserve both typed model-923 collision siblings without a wildcard.",
+        )
+    finally:
+        for name, value in original_imgui.items():
+            if value is missing:
+                delattr(imgui, name)
+            else:
+                setattr(imgui, name, value)
+
+    synthetic_widget = _make_widget(module)
+    alias_only_entries = {
+        model_id: {
+            "model_id": model_id,
+            "name": f"Unrelated Alias Item {model_id}",
+            "item_type": "Trophy",
+            "alias_labels": {f"alias only {model_id}": f"Alias Only {model_id}"},
+        }
+        for model_id in range(50000, 50060)
+    }
+    synthetic_widget.catalog_by_model_id = alias_only_entries
+    alias_ranked = synthetic_widget._search_catalog("alias only", limit=module.SEARCH_RESULT_LIMIT * 4)
+    for requested_limit, expected_count in (
+        (5, 5),
+        (12, module.SEARCH_RESULT_LIMIT),
+        (13, module.SEARCH_RESULT_LIMIT),
+        (module.SEARCH_RESULT_LIMIT * 4, module.SEARCH_RESULT_LIMIT),
+        (module.SEARCH_RESULT_LIMIT * 4 + 1, module.SEARCH_RESULT_LIMIT),
+        (100, module.SEARCH_RESULT_LIMIT),
+    ):
+        alias_expanded = synthetic_widget._expand_direct_primary_name_matches(
+            "alias only",
+            alias_ranked,
+            limit=requested_limit,
+        )
+        _expect(
+            len(alias_expanded) == expected_count
+            and all("alias only" not in module._normalize_catalog_search_text(entry["name"]) for entry in alias_expanded),
+            f"Alias-only overflow should honor limit {requested_limit} without bypassing the ordinary 12-result cap.",
+        )
+
+    for query, field_name, field_value, model_start in (
+        ("type only", "item_type", "Type Only", 50300),
+        ("material only", "material_type", "Material Only", 50400),
+        ("503", "model_id", None, 50300),
+    ):
+        non_primary_widget = _make_widget(module)
+        non_primary_widget.catalog_by_model_id = {
+            model_id: {
+                "model_id": model_id,
+                "name": "Unrelated Primary Name" if field_name == "model_id" else f"Unrelated Primary Name {model_id}",
+                **({field_name: field_value} if field_value is not None else {}),
+            }
+            for model_id in range(model_start, model_start + 60)
+        }
+        non_primary_results = non_primary_widget._expand_direct_primary_name_matches(
+            query,
+            non_primary_widget._search_catalog(query, limit=module.SEARCH_RESULT_LIMIT * 4),
+            limit=100,
+        )
+        _expect(
+            len(non_primary_results) == module.SEARCH_RESULT_LIMIT
+            and all(query not in module._normalize_catalog_search_text(entry.get("name", "")) for entry in non_primary_results),
+            f"{field_name} and model-ID-only matches should remain capped at 12 for query {query!r}.",
+        )
+
+    exact_alias_widget = _make_widget(module)
+    exact_alias_widget.exact_catalog_by_item_key = {
+        (int(module.ItemType.Axe), model_id): {
+            "model_id": model_id,
+            "item_type_id": int(module.ItemType.Axe),
+            "name": f"Unrelated Exact Alias Item {model_id}",
+            "item_type": "Axe",
+            "alias_labels": {f"alias only {model_id}": f"Alias Only {model_id}"},
+        }
+        for model_id in range(50100, 50160)
+    }
+    exact_alias_widget.exact_catalog_untyped_by_model_id = {}
+    exact_alias_results = exact_alias_widget._search_protected_item_catalog("alias only", limit=100)
+    _expect(
+        len(exact_alias_results) == module.SEARCH_RESULT_LIMIT
+        and all(entry.get("item_type_id") == int(module.ItemType.Axe) for entry in exact_alias_results),
+        "Exact Items wrapper should cap alias-only overflow at 12 while retaining typed catalog rows.",
+    )
+
+    sell_alias_widget = _make_widget(module)
+    sell_alias_widget.catalog_by_model_id = {
+        model_id: {
+            "model_id": model_id,
+            "name": f"Unrelated Sell Alias Item {model_id}",
+            "item_type": "Trophy",
+            "alias_labels": {f"alias only {model_id}": f"Alias Only {model_id}"},
+        }
+        for model_id in range(50200, 50260)
+    }
+    sell_alias_results = sell_alias_widget._search_explicit_sell_item_catalog("alias only", limit=100)
+    _expect(
+        len(sell_alias_results) == module.SEARCH_RESULT_LIMIT,
+        "Sell Specific Items wrapper should cap alias-only overflow at 12 even for a limit of 100.",
+    )
+
+    ordered_candidates = [
+        {
+            "model_id": 60000 + rank,
+            "name": f"Alias Rank {rank}",
+            "alias_labels": {"overflow query": "Overflow Query"},
+        }
+        for rank in range(1, 13)
+    ] + [
+        {
+            "model_id": 60000 + rank,
+            "name": f"Overflow Query Item {rank}",
+        }
+        for rank in range(13, 61)
+    ]
+    expected_ordered_model_ids = list(range(60001, 60049))
+    for requested_limit in (5, module.SEARCH_RESULT_LIMIT, 13, module.SEARCH_RESULT_LIMIT * 4, module.SEARCH_RESULT_LIMIT * 4 + 1, 100):
+        ordered_expanded = synthetic_widget._expand_direct_primary_name_matches(
+            "overflow query",
+            ordered_candidates,
+            limit=requested_limit,
+        )
+        expected_ids = (
+            list(range(60001, 60006)) + list(range(60013, 60049))
+            if requested_limit < module.SEARCH_RESULT_LIMIT
+            else expected_ordered_model_ids
+        )
+        _expect(
+            [int(entry["model_id"]) for entry in ordered_expanded] == expected_ids,
+            f"Direct primary-name expansion should honor boundary limit {requested_limit} and retain ranked order.",
+        )
+        _expect(
+            len(ordered_expanded) <= module.SEARCH_RESULT_LIMIT * 4,
+            f"Direct primary-name expansion should never exceed 48 rows at limit {requested_limit}.",
+        )
+        _expect(
+            all(
+                expanded_entry is ordered_candidates[index]
+                for index, expanded_entry in enumerate(ordered_expanded[: min(requested_limit, module.SEARCH_RESULT_LIMIT)])
+            ),
+            "Direct-name expansion must retain the original ranked entry objects in the caller's ordinary page.",
+        )
+    ordered_expanded = synthetic_widget._expand_direct_primary_name_matches(
+        "overflow query",
+        ordered_candidates,
+    )
+    _expect(
+        all(
+            expanded_entry is ordered_candidates[index]
+            for index, expanded_entry in zip(
+                range(module.SEARCH_RESULT_LIMIT, module.SEARCH_RESULT_LIMIT * 4),
+                ordered_expanded[module.SEARCH_RESULT_LIMIT :],
+            )
+        ),
+        "Direct-name expansion must retain the original ranked overflow entry objects and their identities.",
+    )
+
+    collision_candidates = [
+        {"model_id": 61000 + rank, "name": f"Unrelated Rank {rank}"}
+        for rank in range(1, 13)
+    ] + [
+        {
+            "model_id": 923,
+            "item_type_id": int(module.ItemType.Axe),
+            "name": "Collision Kaineng Axe",
+        },
+        {
+            "model_id": 923,
+            "item_type_id": int(module.ItemType.Materials_Zcoins),
+            "name": "Collision Monstrous Claw",
+        },
+    ]
+    collision_expanded = synthetic_widget._expand_direct_primary_name_matches(
+        "collision",
+        collision_candidates,
+    )
+    collision_targets = [
+        module.ExactProtectionTarget(
+            model_id=int(entry["model_id"]),
+            item_type_id=int(entry["item_type_id"]),
+        )
+        for entry in collision_expanded
+        if int(entry.get("model_id", 0)) == 923
+    ]
+    _expect(
+        {(target.item_type_id, target.model_id) for target in collision_targets}
+        == {
+            (int(module.ItemType.Axe), 923),
+            (int(module.ItemType.Materials_Zcoins), 923),
+        },
+        "Expansion must preserve both typed rows when model 923 has cross-type collisions.",
+    )
+    collision_widget = _make_widget(module)
+    _expect(
+        all(collision_widget._add_exact_protection_target(target) for target in collision_targets),
+        "Both typed model 923 collision targets should be addable independently.",
+    )
+    _expect(
+        collision_widget.protected_item_model_ids == []
+        and {
+            (target.item_type_id, target.model_id)
+            for target in collision_widget.protected_item_targets
+        } == {
+            (int(module.ItemType.Axe), 923),
+            (int(module.ItemType.Materials_Zcoins), 923),
+        },
+        "Typed collision mutation must not create a broad legacy protection or collapse siblings.",
+    )
+    _expect(
+        collision_widget._set_protected_item_targets([collision_targets[0]])
+        and collision_widget.protected_item_targets == [collision_targets[0]],
+        "Removing one typed collision target must leave its sibling independently addressable.",
+    )
+
+    xunlai_widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, xunlai_widget)
+    xunlai_tome_model_ids = {
+        int(entry.get("model_id", 0))
+        for entry in xunlai_widget._search_cleanup_deposit_catalog("tome")
+    }
+    _expect(
+        len(xunlai_tome_model_ids) == len(expected_tome_model_ids)
+        and xunlai_tome_model_ids == set(expected_tome_model_ids),
+        "Existing Xunlai Tome expansion behavior should remain unchanged.",
+    )
+
+    production_source = Path(module.__file__).read_text(encoding="utf-8")
+    production_tree = ast.parse(production_source)
+    widget_class = next(
+        node
+        for node in production_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MerchantRulesWidget"
+    )
+    widget_methods = {
+        node.name: node
+        for node in widget_class.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def method_calls(method_name: str, attribute_name: str) -> list[ast.Call]:
+        method = widget_methods.get(method_name)
+        _expect(method is not None, f"MerchantRulesWidget should define {method_name} for integration coverage.")
+        return [
+            node
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == attribute_name
+        ]
+
+    def has_true_keyword(call: ast.Call, keyword_name: str) -> bool:
+        return any(
+            keyword.arg == keyword_name
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+            for keyword in call.keywords
+        )
+
+    expanded_callers = {
+        method_name
+        for method_name in widget_methods
+        if any(
+            has_true_keyword(call, "expand_direct_primary_matches")
+            for call in method_calls(method_name, "_draw_search_results")
+        )
+    }
+    _expect(
+        expanded_callers == {
+            "_draw_destroy_rule_editor",
+            "_draw_salvage_rule_editor",
+            "_draw_cleanup_protections_editor",
+        },
+        "Only Destroy Specific, Salvage Specific, and Protected Deposits keep-out should opt into generic expansion.",
+    )
+
+    exact_calls = method_calls("_draw_protected_items_editor", "_draw_protected_item_search_results")
+    _expect(
+        len(exact_calls) == 1,
+        "Exact Items should have exactly one approved typed search-results integration.",
+    )
+    sell_calls = method_calls("_draw_sell_rule_editor", "_draw_explicit_sell_item_search_results")
+    _expect(
+        len(sell_calls) == 1,
+        "Sell Specific Items should have exactly one approved explicit-search integration.",
+    )
+    for method_name in (
+        "_draw_destroy_rule_editor",
+        "_draw_salvage_rule_editor",
+        "_draw_cleanup_protections_editor",
+    ):
+        approved_calls = [
+            call
+            for call in method_calls(method_name, "_draw_search_results")
+            if has_true_keyword(call, "expand_direct_primary_matches")
+        ]
+        _expect(
+            len(approved_calls) == 1,
+            f"{method_name} should contain exactly one expanded generic picker call.",
+        )
+
+    for method_name in ("_draw_buy_rule_editor", "_draw_sell_rule_editor", "_draw_destroy_rule_editor"):
+        for call in method_calls(method_name, "_draw_material_search_results"):
+            _expect(
+                not has_true_keyword(call, "expand_direct_primary_matches"),
+                f"{method_name} material picker should remain on the ordinary search path.",
+            )
+    _expect(
+        not any(
+            has_true_keyword(call, "expand_direct_primary_matches")
+            for call in method_calls("_draw_sell_rule_editor", "_draw_explicit_sell_item_search_results")
+        ),
+        "Sell Specific Items should use its explicit bounded wrapper without a generic expansion flag.",
+    )
+    for unrelated_method in (
+        "_draw_sell_rule_protection_owner_editor",
+        "_draw_blacklist_search_results",
+        "_draw_salvage_upgrade_target_editor",
+        "_draw_cleanup_workspace",
+    ):
+        _expect(
+            not any(
+                keyword.arg == "expand_direct_primary_matches"
+                for node in ast.walk(widget_methods[unrelated_method])
+                if isinstance(node, ast.Call)
+                for keyword in node.keywords
+            ),
+            f"{unrelated_method} should remain outside the bounded direct-name expansion integration set.",
+        )
+    xunlai_calls = method_calls("_draw_cleanup_workspace", "_draw_cleanup_deposit_search_results")
+    _expect(
+        len(xunlai_calls) == 1
+        and not has_true_keyword(xunlai_calls[0], "expand_direct_primary_matches"),
+        "Xunlai cleanup search should remain on its existing dedicated search path.",
+    )
+
+
 def _test_cleanup_deposit_search_expands_direct_name_matches_generically(module) -> None:
     widget = _make_widget(module)
     widget.cleanup_item_type_filter_category = module.DEPOSIT_FILTER_ALL
@@ -33135,6 +33718,10 @@ def main() -> int:
             (
                 "catalog_loads_without_deprecated_item_mirror",
                 lambda: _test_catalog_loads_without_deprecated_item_mirror(module),
+            ),
+            (
+                "bounded_direct_name_search_expansion_contract",
+                lambda: _test_bounded_direct_name_search_expansion_contract(module),
             ),
             (
                 "cleanup_deposit_search_expands_direct_name_matches_generically",

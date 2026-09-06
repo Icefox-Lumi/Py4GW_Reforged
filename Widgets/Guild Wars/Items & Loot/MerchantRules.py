@@ -15985,17 +15985,44 @@ class MerchantRulesWidget:
         subcategory = _normalize_item_type_filter_subcategory(category, self.protected_item_type_filter_subcategory)
         self.protected_item_type_filter_category = category
         self.protected_item_type_filter_subcategory = subcategory
+        base_limit = min(max(1, int(limit)), SEARCH_RESULT_LIMIT)
+        expanded_limit = SEARCH_RESULT_LIMIT * 4
         if category == DEPOSIT_FILTER_ALL:
-            return self._search_exact_catalog(raw_query, limit=limit)
-        return self._search_exact_catalog_with_predicate(
+            ranked_results = self._search_exact_catalog(raw_query, limit=expanded_limit)
+        else:
+            ranked_results = self._search_exact_catalog_with_predicate(
+                raw_query,
+                entry_predicate=lambda entry: self._exact_catalog_entry_matches_filter(
+                    entry,
+                    category,
+                    subcategory,
+                ),
+                limit=expanded_limit,
+            )
+        return self._expand_direct_primary_name_matches(
             raw_query,
-            entry_predicate=lambda entry: self._exact_catalog_entry_matches_filter(
-                entry,
-                category,
-                subcategory,
-            ),
-            limit=limit,
+            ranked_results,
+            limit=base_limit,
         )
+
+    def _expand_direct_primary_name_matches(
+        self,
+        raw_query: str,
+        ranked_results: list[dict[str, object]],
+        *,
+        limit: int = SEARCH_RESULT_LIMIT,
+    ) -> list[dict[str, object]]:
+        query = _normalize_catalog_search_text(raw_query)
+        if not query:
+            return []
+
+        base_limit = min(max(1, int(limit)), SEARCH_RESULT_LIMIT)
+        expanded_limit = SEARCH_RESULT_LIMIT * 4
+        visible_results = list(ranked_results[:base_limit])
+        for entry in ranked_results[base_limit:expanded_limit]:
+            if query in _normalize_catalog_search_text(entry.get("name", "")):
+                visible_results.append(entry)
+        return visible_results[:expanded_limit]
 
     def _search_exact_catalog(
         self,
@@ -16227,10 +16254,17 @@ class MerchantRulesWidget:
         )
 
     def _search_explicit_sell_item_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
-        return self._search_catalog_with_predicate(
+        base_limit = min(max(1, int(limit)), SEARCH_RESULT_LIMIT)
+        expanded_limit = SEARCH_RESULT_LIMIT * 4
+        ranked_results = self._search_catalog_with_predicate(
             raw_query,
             entry_predicate=self._catalog_entry_matches_explicit_sell_item,
-            limit=limit,
+            limit=expanded_limit,
+        )
+        return self._expand_direct_primary_name_matches(
+            raw_query,
+            ranked_results,
+            limit=base_limit,
         )
 
     def _search_equipment_catalog(
@@ -17058,12 +17092,17 @@ class MerchantRulesWidget:
         query: str,
         existing_model_ids: set[int] | None = None,
         existing_badge_label: str = "",
+        *,
+        expand_direct_primary_matches: bool = False,
     ) -> tuple[int, list[int]]:
         normalized_query = str(query or "").strip()
         if not normalized_query:
             return 0, []
 
-        results = self._search_catalog(normalized_query)
+        search_limit = SEARCH_RESULT_LIMIT * 4 if expand_direct_primary_matches else SEARCH_RESULT_LIMIT
+        results = self._search_catalog(normalized_query, limit=search_limit)
+        if expand_direct_primary_matches:
+            results = self._expand_direct_primary_name_matches(normalized_query, results)
         visible_model_ids = _collect_model_ids_from_catalog_entries(results)
         existing_ids = {
             max(0, _safe_int(model_id, 0))
@@ -41043,6 +41082,7 @@ class MerchantRulesWidget:
                     self.destroy_model_search_cache.get(index, ""),
                     existing_destroy_model_ids,
                     "Already selected",
+                    expand_direct_primary_matches=True,
                 )
             addable_model_ids = [model_id for model_id in visible_model_ids if model_id not in rule.model_ids]
             if self._draw_add_all_matches_button(
@@ -41927,6 +41967,7 @@ class MerchantRulesWidget:
             self.salvage_model_search_cache.get(index, ""),
             existing_salvage_model_ids,
             "Already selected",
+            expand_direct_primary_matches=True,
         )
         addable_model_ids = [model_id for model_id in visible_model_ids if model_id not in rule.model_ids]
         if self._draw_add_all_matches_button(
@@ -42293,6 +42334,7 @@ class MerchantRulesWidget:
             self.cleanup_blacklist_search_text,
             existing_cleanup_blacklist_model_ids,
             "Already kept out",
+            expand_direct_primary_matches=True,
         )
         addable_cleanup_blacklist_model_ids = [
             int(model_id)
