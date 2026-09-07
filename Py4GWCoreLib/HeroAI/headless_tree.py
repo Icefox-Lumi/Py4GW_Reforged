@@ -32,13 +32,19 @@ class HeroAIHeadlessTree:
         self.cached_data = cached_data or CacheData()
         self.heroai_build = heroai_build or HeroAI_Build(self.cached_data)
         Settings().AutoCallTargets = True
-        self._build_contract_map_signature: tuple[int, int, int, int] | None = None
         self._loot_throttle_check = ThrottledTimer(250)
         self._looting_node: BehaviorTree.ActionNode | None = None
         self._status_selector: BehaviorTree.SelectorNode | None = None
         self._follow_state = FollowExecutionState()
         self._headless_looting_enabled = True
+        self._headless_combat_enabled = True
         self.tree = self._build_tree()
+
+    def SetCombatEnabled(self, enabled: bool) -> None:
+        self._headless_combat_enabled = bool(enabled)
+
+    def IsCombatEnabled(self) -> bool:
+        return bool(self._headless_combat_enabled)
 
     def _has_active_pick_up_loot_message(self) -> bool:
         account_email = Player.GetAccountEmail()
@@ -137,14 +143,19 @@ class HeroAIHeadlessTree:
         return BehaviorTree.NodeState.FAILURE
 
     def _handle_out_of_combat(self) -> bool:
+        if not self._headless_combat_enabled:
+            return False
+
         options = self.cached_data.account_options
         if not options or not options.Combat:
+            self.heroai_build.ResetTickExecution()
             return False
 
         if self.cached_data.IsHeadlessCombatPauseActive():
             return False
 
         if is_follow_recovery_active(self.cached_data, self._follow_state):
+            self.heroai_build.ResetTickExecution()
             return False
 
         player_agent_id = Player.GetAgentID()
@@ -152,22 +163,27 @@ class HeroAIHeadlessTree:
             return False
 
         self.heroai_build.set_cached_data(self.cached_data)
-        next(self.heroai_build.ProcessOOC(), None)
+        next(self.heroai_build.Tick(is_in_combat=False), None)
         return self.heroai_build.DidTickSucceed()
 
     def _handle_combat(self) -> bool:
+        if not self._headless_combat_enabled:
+            return False
+
         options = self.cached_data.account_options
         if not options or not options.Combat:
+            self.heroai_build.ResetTickExecution()
             return False
 
         if is_follow_recovery_active(self.cached_data, self._follow_state):
+            self.heroai_build.ResetTickExecution()
             return False
 
         if not self.cached_data.IsHeadlessCombatPauseActive():
             return False
 
         self.heroai_build.set_cached_data(self.cached_data)
-        next(self.heroai_build.ProcessCombat(), None)
+        next(self.heroai_build.Tick(is_in_combat=True), None)
         return self.heroai_build.DidTickSucceed()
 
     def _distance_to_destination(self) -> float:
@@ -214,31 +230,25 @@ class HeroAIHeadlessTree:
     def initialize(self) -> bool:
         if not Routines.Checks.Map.MapValid():
             self.heroai_build.ClearBuildContract()
-            self._build_contract_map_signature = None
             return False
 
         if not GLOBAL_CACHE.Party.IsPartyLoaded():
+            self.heroai_build.ResetTickExecution()
             return False
 
         if not Map.IsExplorable():
             self.heroai_build.ClearBuildContract()
-            self._build_contract_map_signature = None
             return False
 
         if Map.IsInCinematic():
+            self.heroai_build.ResetTickExecution()
             return False
 
-        self.heroai_build.set_cached_data(self.cached_data)
-        map_signature = (
-            int(Map.GetMapID()),
-            int(Map.GetRegion()[0]),
-            int(Map.GetDistrict()),
-            int(Map.GetLanguage()[0]),
-        )
-        if self._build_contract_map_signature != map_signature:
-            self.heroai_build.EnsureBuildContract(self.cached_data)
-            self._build_contract_map_signature = map_signature
+        player_agent_id = Player.GetAgentID()
+        if not Agent.IsAlive(player_agent_id) or Agent.IsKnockedDown(player_agent_id):
+            self.heroai_build.ResetTickExecution()
 
+        self.heroai_build.set_cached_data(self.cached_data)
         self.cached_data.UpdateCombat()
         return True
 
@@ -262,8 +272,8 @@ class HeroAIHeadlessTree:
     def reset(self) -> None:
         self.tree.reset()
         self.heroai_build.ClearBuildContract()
-        self._build_contract_map_signature = None
         self._follow_state = FollowExecutionState()
+        self._headless_combat_enabled = True
 
     def _build_tree(self):
         self._looting_node = BehaviorTree.ActionNode(
