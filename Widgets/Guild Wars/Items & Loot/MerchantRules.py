@@ -573,16 +573,12 @@ GOLD_BALANCE_VERIFY_TIMEOUT_MS = 2000
 GOLD_BALANCE_STEP_MS = 50
 GOLD_SESSION_SETTLE_MS = 150
 GOLD_BALANCE_STATUS_DISABLED = "disabled"
-GOLD_BALANCE_STATUS_BLOCKED = "blocked"
 GOLD_BALANCE_STATUS_TARGET_MET = "target_met"
 GOLD_BALANCE_STATUS_EXACT = "exact"
 GOLD_BALANCE_STATUS_PARTIAL = "partial"
 GOLD_BALANCE_STATUS_NO_PROGRESS = "no_progress"
 GOLD_BALANCE_STATUS_UNAVAILABLE = "unavailable"
 GOLD_BALANCE_STATUS_INVALID = "invalid"
-GOLD_BALANCE_INVENTORY_PLUS_MESSAGE = (
-    "Turn off Inventory+ before using gold balancing. If it was already working, your final gold may differ from your target."
-)
 GOLD_BALANCE_UNAVAILABLE_MESSAGE = "Gold balancing is unavailable right now."
 GOLD_BALANCE_XUNLAI_UNAVAILABLE_MESSAGE = "Gold balancing is unavailable because Xunlai could not be found nearby."
 GOLD_BALANCE_NO_PROGRESS_MESSAGE = "Gold could not be moved."
@@ -592,6 +588,45 @@ GOLD_BALANCE_WITHDRAW_FAILURE_MESSAGE = "Gold could not be withdrawn right now."
 GOLD_BALANCE_INVALID_MESSAGE = "Gold balancing stopped because the current gold amount changed."
 GOLD_BALANCE_QUEUE_FAILURE_MESSAGE = "Manual gold balancing could not start."
 GOLD_BALANCE_MANUAL_START_MESSAGE = "Balancing carried gold..."
+
+
+class _InventoryPlusPauseError(RuntimeError):
+    """Pause coordination failed and the protected operation must stop."""
+
+    pass
+
+
+@dataclass
+class _InventoryPlusPauseHandle:
+    """Resume only a legacy widget pause still owned by Merchant Rules."""
+
+    widget: object
+    current_widget: Callable[[], object | None]
+    optional_widgets_paused: Callable[[], bool]
+    active: bool = True
+
+    def resume(self) -> bool:
+        if not self.active:
+            return False
+        self.active = False
+        try:
+            if self.optional_widgets_paused():
+                return False
+            if self.current_widget() is not self.widget:
+                return False
+            # WidgetManager exposes no transition revision; same-object resume/pause ABA remains indistinguishable.
+            if getattr(self.widget, "enabled") is not True:
+                return False
+            if getattr(self.widget, "is_paused") is not True:
+                return False
+            resume = getattr(self.widget, "resume")
+        except Exception:
+            return False
+        try:
+            resume()
+        except Exception:
+            return False
+        return True
 GOLD_BALANCE_DISABLED_ACTION_MESSAGE = "Enable Maintain carried gold before balancing."
 MAX_WEAPON_REQUIREMENT = 13
 MODIFIER_IDENTIFIER_ATTRIBUTE_REQUIREMENT = 0x279
@@ -1613,7 +1648,7 @@ HELPER_TOOLTIP_TEXTS: dict[str, dict[str, str]] = {
             "Direct Deposit and Destroy actions affect only the clicked item or stack. "
             "ID and Salvage kit actions target eligible inventory items by rarity."
         ),
-        "why": "Leave this off if Inventory+ should own the inventory right-click menu.",
+        "why": "Leave this off if another inventory tool handles right-click actions.",
     },
     "inventory_right_click_live_actions": {
         "short": "Adds live Deposit This Item and Destroy This Item shortcuts.",
@@ -26360,30 +26395,98 @@ class MerchantRulesWidget:
         self.last_plan_build_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
         return plan
 
-    def _pause_inventory_plus(self):
-        widget_handler = get_widget_handler()
-        inv_widget = widget_handler.get_widget_info("Inventory Plus")
-        if inv_widget is None:
-            inv_widget = widget_handler.get_widget_info("InventoryPlus")
-        if inv_widget and inv_widget.enabled and not inv_widget.is_paused:
-            inv_widget.pause()
-            return inv_widget
-        return None
-
-    def _inventory_plus_is_enabled(self) -> bool:
+    def _get_inventory_plus_widget(self) -> object | None:
         try:
             widget_handler = get_widget_handler()
-            inv_widget = widget_handler.get_widget_info("Inventory Plus")
-            if inv_widget is None:
-                inv_widget = widget_handler.get_widget_info("InventoryPlus")
-            if inv_widget is None:
-                return False
-            enabled = getattr(inv_widget, "enabled")
-            if not isinstance(enabled, bool):
-                return True
-            return enabled
+            for widget_name in ("Inventory Plus", "InventoryPlus"):
+                inv_widget = widget_handler.get_widget_info(widget_name)
+                if inv_widget is not None:
+                    return inv_widget
+        except Exception as exc:
+            self._debug_log(f"Inventory Plus lookup skipped: {exc}")
+        return None
+
+    def _inventory_plus_can_be_paused(self, inv_widget: object | None) -> bool:
+        try:
+            return (
+                inv_widget is not None
+                and getattr(inv_widget, "enabled") is True
+                and getattr(inv_widget, "is_paused") is False
+            )
         except Exception:
+            return False
+
+    def _inventory_plus_optional_widgets_paused(self) -> bool:
+        try:
+            widget_handler = get_widget_handler()
+            return bool(getattr(widget_handler, "optional_widgets_paused", False))
+        except Exception as exc:
+            self._debug_log(f"Inventory Plus global pause state unavailable: {exc}")
             return True
+
+    def _rollback_inventory_plus_pause_failure(self, inv_widget: object, pause_error: Exception) -> None:
+        current_widget = self._get_inventory_plus_widget()
+        if current_widget is not inv_widget:
+            raise _InventoryPlusPauseError(
+                "Inventory Plus pause failed and its state changed before Merchant Rules could verify it."
+            ) from pause_error
+        if self._inventory_plus_optional_widgets_paused():
+            raise _InventoryPlusPauseError(
+                "Inventory Plus pause failed while optional widgets were globally paused."
+            ) from pause_error
+        try:
+            enabled = getattr(current_widget, "enabled")
+            paused = getattr(current_widget, "is_paused")
+        except Exception as state_error:
+            raise _InventoryPlusPauseError(
+                "Inventory Plus pause failed and its resulting state could not be read."
+            ) from state_error
+        if enabled is True and paused is False:
+            self._debug_log("Inventory Plus pause failed without changing its state.")
+            raise _InventoryPlusPauseError(
+                "Inventory Plus could not be paused safely; Merchant Rules stopped the operation."
+            ) from pause_error
+        if enabled is not True or paused is not True:
+            raise _InventoryPlusPauseError(
+                "Inventory Plus pause failed and its original state could not be restored safely."
+            ) from pause_error
+        try:
+            resume = cast(Callable[[], None], getattr(current_widget, "resume"))
+            resume()
+        except Exception as rollback_error:
+            raise _InventoryPlusPauseError(
+                "Inventory Plus pause failed and rollback could not restore its original state."
+            ) from rollback_error
+        if self._get_inventory_plus_widget() is not inv_widget or not self._inventory_plus_can_be_paused(inv_widget):
+            raise _InventoryPlusPauseError(
+                "Inventory Plus pause failed and rollback could not verify its original state."
+            ) from pause_error
+        self._debug_log("Inventory Plus pause failed; rollback restored its original state.")
+        raise _InventoryPlusPauseError(
+            "Inventory Plus could not be paused safely; its state was restored, so Merchant Rules stopped the operation."
+        ) from pause_error
+
+    def _pause_inventory_plus(self) -> _InventoryPlusPauseHandle | None:
+        if self._inventory_plus_optional_widgets_paused():
+            return None
+        inv_widget = self._get_inventory_plus_widget()
+        if inv_widget is None:
+            return None
+        if not self._inventory_plus_can_be_paused(inv_widget):
+            return None
+        try:
+            pause = cast(Callable[[], None], getattr(inv_widget, "pause"))
+            pause()
+        except Exception as exc:
+            self._rollback_inventory_plus_pause_failure(inv_widget, exc)
+            raise _InventoryPlusPauseError(
+                "Inventory Plus could not be paused safely; Merchant Rules stopped the operation."
+            ) from exc
+        return _InventoryPlusPauseHandle(
+            inv_widget,
+            self._get_inventory_plus_widget,
+            self._inventory_plus_optional_widgets_paused,
+        )
 
     def _read_gold_snapshot(self) -> tuple[int, int] | None:
         carried_gold = self._read_gold_amount("GetGoldOnCharacter")
@@ -26403,9 +26506,7 @@ class MerchantRulesWidget:
         target_label = self._format_gold_target(result.target_gold)
         if result.reason:
             self._debug_log(f"Gold balance internal detail: {result.reason}")
-        if result.status == GOLD_BALANCE_STATUS_BLOCKED:
-            summary = GOLD_BALANCE_INVENTORY_PLUS_MESSAGE
-        elif result.status == GOLD_BALANCE_STATUS_DISABLED:
+        if result.status == GOLD_BALANCE_STATUS_DISABLED:
             summary = "Gold balancing is disabled."
         elif result.status == GOLD_BALANCE_STATUS_TARGET_MET:
             summary = f"Carried gold already matches the {target_label} target."
@@ -26434,11 +26535,7 @@ class MerchantRulesWidget:
                 summary = GOLD_BALANCE_UNAVAILABLE_MESSAGE
         self.last_gold_balance_summary = summary
         self.status_message = summary
-        if result.status in {
-            GOLD_BALANCE_STATUS_BLOCKED,
-            GOLD_BALANCE_STATUS_INVALID,
-            GOLD_BALANCE_STATUS_UNAVAILABLE,
-        }:
+        if result.status in {GOLD_BALANCE_STATUS_INVALID, GOLD_BALANCE_STATUS_UNAVAILABLE}:
             self._debug_log(f"Gold balance skipped or stopped: {summary}")
         else:
             self._debug_log(f"Gold balance result: {summary}")
@@ -26728,16 +26825,6 @@ class MerchantRulesWidget:
                 status=GOLD_BALANCE_STATUS_DISABLED,
                 trigger=trigger,
                 target_gold=_normalize_gold_target(self.target_carried_gold),
-            )
-            self._publish_gold_balance_result(result)
-            return result
-
-        if self._inventory_plus_is_enabled():
-            result = GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_BLOCKED,
-                trigger=trigger,
-                target_gold=_normalize_gold_target(self.target_carried_gold),
-                reason="Inventory+ is enabled",
             )
             self._publish_gold_balance_result(result)
             return result
@@ -31132,9 +31219,10 @@ class MerchantRulesWidget:
             if consumable_craft_summary:
                 phase_summaries.append(consumable_craft_summary)
             if paused_inventory_plus is not None:
-                paused_inventory_plus.resume()
+                resumed = paused_inventory_plus.resume()
                 paused_inventory_plus = None
-                self._debug_log("Multi-stop execution: resumed Inventory Plus after consumable crafting.")
+                if resumed:
+                    self._debug_log("Multi-stop execution: resumed Inventory Plus after consumable crafting.")
 
             remaining_preview = self._build_plan(
                 projected_preview=True,
@@ -31218,8 +31306,8 @@ class MerchantRulesWidget:
                     ).strip()
             self.execution_running = False
             if paused_inventory_plus is not None:
-                paused_inventory_plus.resume()
-                self._debug_log("Multi-stop execution: resumed Inventory Plus.")
+                if paused_inventory_plus.resume():
+                    self._debug_log("Multi-stop execution: resumed Inventory Plus.")
             yield
 
     def _execute_now(
@@ -31763,7 +31851,8 @@ class MerchantRulesWidget:
                         self._debug_log(self.last_execution_summary)
                         return
 
-            paused_inventory_plus = self._pause_inventory_plus()
+            if paused_inventory_plus is None:
+                paused_inventory_plus = self._pause_inventory_plus()
             if paused_inventory_plus is not None:
                 self._debug_log("Execution: paused Inventory Plus for merchant handling.")
 
@@ -32194,8 +32283,8 @@ class MerchantRulesWidget:
             self.execution_running = False
             self._end_execute_reservation_scope(owned_reservation_scope)
             if paused_inventory_plus is not None:
-                paused_inventory_plus.resume()
-                self._debug_log("Execution: resumed Inventory Plus.")
+                if paused_inventory_plus.resume():
+                    self._debug_log("Execution: resumed Inventory Plus.")
             yield
 
     def _execute_cleanup_now(self, *, auto_triggered: bool = False):
@@ -32277,8 +32366,8 @@ class MerchantRulesWidget:
         finally:
             self.auto_cleanup_running = False
             if paused_inventory_plus is not None:
-                paused_inventory_plus.resume()
-                self._debug_log("Xunlai Deposits: resumed Inventory Plus.")
+                if paused_inventory_plus.resume():
+                    self._debug_log("Xunlai Deposits: resumed Inventory Plus.")
             yield
 
     def _update_auto_cleanup_runtime(self):
@@ -32334,16 +32423,6 @@ class MerchantRulesWidget:
             return
 
         self.gold_entry_attempted = True
-        if self._inventory_plus_is_enabled():
-            self._publish_gold_balance_result(
-                GoldBalanceResult(
-                    status=GOLD_BALANCE_STATUS_BLOCKED,
-                    trigger="outpost entry",
-                    target_gold=_normalize_gold_target(self.target_carried_gold),
-                    reason="Inventory+ is enabled",
-                )
-            )
-            return
         try:
             self._queue_merchant_rules_owned_work(
                 self._run_gold_balance_trigger("outpost entry")
@@ -32596,8 +32675,8 @@ class MerchantRulesWidget:
             outcome.timeout_failures += 1
         finally:
             if paused_inventory_plus is not None:
-                paused_inventory_plus.resume()
-                self._debug_log("MR Identify: resumed Inventory Plus.")
+                if paused_inventory_plus.resume():
+                    self._debug_log("MR Identify: resumed Inventory Plus.")
             self.identify_running = False
             self.identify_rescan_requested = False
             self.identify_poll_timer.Reset()
@@ -33797,8 +33876,8 @@ class MerchantRulesWidget:
             return ExecutionPhaseOutcome(label="MR Salvage", measure_label="items", timeout_failures=1)
         finally:
             if paused_inventory_plus is not None:
-                paused_inventory_plus.resume()
-                self._debug_log("MR Salvage: resumed Inventory Plus.")
+                if paused_inventory_plus.resume():
+                    self._debug_log("MR Salvage: resumed Inventory Plus.")
             self.salvage_running = False
             self.salvage_rescan_requested = False
             self.salvage_poll_timer.Reset()
@@ -35563,8 +35642,6 @@ class MerchantRulesWidget:
                 return "Run Deposits Now requires an outpost or Guild Hall."
             return ""
         if action == "gold_balance":
-            if self._inventory_plus_is_enabled():
-                return GOLD_BALANCE_INVENTORY_PLUS_MESSAGE
             if not self.gold_balance_enabled:
                 return GOLD_BALANCE_DISABLED_ACTION_MESSAGE
             if busy:
@@ -37090,7 +37167,7 @@ class MerchantRulesWidget:
         preview_label, preview_color, preview_detail = self._get_preview_state()
         actionable_entries, skipped_entries = self._split_preview_entries(self.preview_plan.entries)
         direct_count, conditional_count, skipped_count = self._get_preview_entry_counts(self.preview_plan.entries)
-        inventory_plus = get_widget_handler().get_widget_info("Inventory Plus")
+        inventory_plus = self._get_inventory_plus_widget()
 
         self._draw_section_heading("Status")
         self._draw_subsection_label("Map:")
@@ -37227,8 +37304,8 @@ class MerchantRulesWidget:
             if PyImGui.small_button("Open Rules##merchant_rules_open_rules"):
                 self._set_active_workspace(WORKSPACE_RULES)
 
-        if inventory_plus and inventory_plus.enabled:
-            self._draw_warning_text("Inventory Plus will pause while merchant actions run.")
+        if self._inventory_plus_can_be_paused(inventory_plus):
+            self._draw_warning_text("Inventory Plus will pause while Merchant Rules runs.")
         if self._is_destroy_auto_enabled():
             PyImGui.text_colored("Auto Destroy is active.", UI_COLOR_DANGER)
         if _normalize_salvage_settings(self.salvage_settings).on_inventory_change:
@@ -41500,8 +41577,9 @@ class MerchantRulesWidget:
             PyImGui.text_colored("Identify is running.", UI_COLOR_INFO)
         if self.last_identify_summary:
             self._draw_secondary_text(self.last_identify_summary)
-        if settings.on_inventory_change:
-            self._draw_secondary_text("Identify pauses Inventory Plus while it runs.")
+        inventory_plus = self._get_inventory_plus_widget()
+        if settings.on_inventory_change and self._inventory_plus_can_be_paused(inventory_plus):
+            self._draw_secondary_text("Inventory Plus will pause while Identify runs.")
 
         PyImGui.separator()
         self._draw_section_heading("Rarities to Identify")
@@ -42227,8 +42305,9 @@ class MerchantRulesWidget:
             self._draw_secondary_text(f"Run Salvage Now: {run_salvage_reason}")
         if self.last_salvage_summary:
             self._draw_secondary_text(self.last_salvage_summary)
-        if settings.on_inventory_change:
-            self._draw_secondary_text("Salvage pauses Inventory Plus while it runs.")
+        inventory_plus = self._get_inventory_plus_widget()
+        if settings.on_inventory_change and self._inventory_plus_can_be_paused(inventory_plus):
+            self._draw_secondary_text("Inventory Plus will pause while Salvage runs.")
 
         PyImGui.separator()
         self._draw_section_heading("Rules")
@@ -42653,12 +42732,6 @@ class MerchantRulesWidget:
             "Keep a chosen amount of gold on this character. Automatic options are optional."
         )
 
-        if self._inventory_plus_is_enabled():
-            self._draw_warning_text(GOLD_BALANCE_INVENTORY_PLUS_MESSAGE)
-            self._draw_secondary_text(
-                "Inventory+ can also move gold, so Merchant Rules will not balance gold while Inventory+ is turned on."
-            )
-
         gold_balance_enabled = PyImGui.checkbox(
             "Maintain carried gold##merchant_rules_gold_balance_enabled",
             bool(self.gold_balance_enabled),
@@ -42717,9 +42790,9 @@ class MerchantRulesWidget:
         )
         PyImGui.end_disabled()
         self._draw_helper_tooltip("gold_balance_manual_now")
-        if gold_balance_action_reason and gold_balance_action_reason != GOLD_BALANCE_INVENTORY_PLUS_MESSAGE:
+        if gold_balance_action_reason:
             self._draw_secondary_text(f"Balance Gold Now: {gold_balance_action_reason}")
-        if self.last_gold_balance_summary and self.last_gold_balance_summary != GOLD_BALANCE_INVENTORY_PLUS_MESSAGE:
+        if self.last_gold_balance_summary:
             self._draw_secondary_text(self.last_gold_balance_summary)
 
         PyImGui.separator()

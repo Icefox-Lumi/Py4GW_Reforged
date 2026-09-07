@@ -2784,11 +2784,6 @@ def _test_carried_gold_balance_core_cases(module) -> None:
             "Gold balancing is disabled.",
         ),
         (
-            module.GOLD_BALANCE_STATUS_BLOCKED,
-            "Inventory+ is enabled",
-            module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
-        ),
-        (
             module.GOLD_BALANCE_STATUS_TARGET_MET,
             "",
             "Carried gold already matches the 10 platinum target.",
@@ -2902,38 +2897,43 @@ def _test_carried_gold_manual_action_and_ui(module) -> None:
         '"Keep a chosen amount of gold on this character. Automatic options are optional."',
         carried_gold_heading_index,
     )
-    inventory_warning_index = source.index(
-        'self._draw_warning_text(GOLD_BALANCE_INVENTORY_PLUS_MESSAGE)',
-        carried_gold_heading_index,
-    )
     gold_control_index = source.index(
         'gold_balance_enabled = PyImGui.checkbox(',
-        inventory_warning_index,
+        carried_gold_heading_index,
     )
     balance_button_index = source.index(
         'Balance Gold Now##merchant_rules_gold_balance_now',
         carried_gold_heading_index,
     )
     result_summary_index = source.index(
-        'if self.last_gold_balance_summary and self.last_gold_balance_summary != GOLD_BALANCE_INVENTORY_PLUS_MESSAGE:',
+        'if self.last_gold_balance_summary:',
         balance_button_index,
     )
     _expect(
-        carried_gold_description_index < inventory_warning_index < gold_control_index,
-        "Inventory+ warning should appear directly below the Carried Gold description.",
+        carried_gold_description_index < gold_control_index,
+        "Carried Gold settings should appear directly below the description.",
     )
     _expect(
-        source.count('self._draw_warning_text(GOLD_BALANCE_INVENTORY_PLUS_MESSAGE)') == 1,
-        "The Inventory+ warning should be drawn only once in the Carried Gold section.",
+        "GOLD_BALANCE_INVENTORY_PLUS_MESSAGE" not in source,
+        "Carried Gold should not retain an Inventory+ warning message.",
     )
     _expect(
         balance_button_index < result_summary_index < item_heading_index,
         "Carried-gold balance results should remain below Balance Gold Now.",
     )
     _expect(
-        "if gold_balance_action_reason and gold_balance_action_reason != GOLD_BALANCE_INVENTORY_PLUS_MESSAGE:"
+        "if gold_balance_action_reason:"
         in source,
-        "The Inventory+ warning should not be repeated below Balance Gold Now.",
+        "Balance Gold Now should still show ordinary action-block reasons.",
+    )
+    _expect(
+        "Inventory+ can also move gold" not in source
+        and "Turn off Inventory+ before using gold balancing" not in source,
+        "Carried Gold should not retain obsolete Inventory+ warnings.",
+    )
+    _expect(
+        "Leave this off if another inventory tool handles right-click actions." in source,
+        "Right-click coexistence should use simple, tool-agnostic wording.",
     )
     manual_action_start = source.index("def _queue_manual_gold_balance")
     manual_action_end = source.index("def _record_execution_currency_change", manual_action_start)
@@ -3018,29 +3018,6 @@ def _test_carried_gold_manual_action_and_ui(module) -> None:
     finally:
         target_restore()
 
-    blocked_widget = _make_widget(module)
-    blocked_widget.gold_balance_enabled = True
-    blocked_queue: list[object] = []
-    original_handler = module.get_widget_handler
-    module.get_widget_handler = lambda: types.SimpleNamespace(
-        get_widget_info=lambda _name: types.SimpleNamespace(enabled=True, is_paused=True),
-    )
-    blocked_widget._queue_merchant_rules_owned_work = lambda generator: blocked_queue.append(generator)
-    try:
-        _expect(
-            blocked_widget._get_action_block_reason("gold_balance")
-            == module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
-            "Enabled Inventory+ should block manual gold balancing.",
-        )
-        _expect(
-            not blocked_widget._queue_manual_gold_balance(),
-            "Enabled Inventory+ should prevent the manual gold action.",
-        )
-        _expect(not blocked_queue, "Blocked manual gold balancing should submit no operation.")
-    finally:
-        module.get_widget_handler = original_handler
-
-
 def _test_protected_items_ui_copy_contract(module) -> None:
     source = Path(module.__file__).read_text(encoding="utf-8")
 
@@ -3096,35 +3073,29 @@ def _test_protected_items_ui_copy_contract(module) -> None:
     )
 
 
-def _test_carried_gold_inventory_plus_fail_closed(module) -> None:
+def _test_carried_gold_inventory_plus_does_not_block(module) -> None:
     original_handler = module.get_widget_handler
-    original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
-    had_inventory = hasattr(module.GLOBAL_CACHE, "Inventory")
     original_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
     had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
-    calls: list[int] = []
-    module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
-        GetGoldOnCharacter=lambda: 10000,
-        GetGoldInStorage=lambda: 0,
-        DepositGold=lambda amount: calls.append(int(amount)),
-        WithdrawGold=lambda amount: calls.append(-int(amount)),
-    )
+    state = {"character": 10000, "storage": 5000}
+    _calls, _open_calls, restore_inventory = _install_gold_test_inventory(module, state)
+    handler_state: dict[str, object] = {"widget": None, "raises": False}
 
-    def install_handler(widget_info=None, *, raises: bool = False) -> None:
-        if raises:
-            def get_widget_info(_name):
-                raise RuntimeError("Inventory+ state unavailable")
-        else:
-            def get_widget_info(_name):
-                return widget_info
-        module.get_widget_handler = lambda: types.SimpleNamespace(get_widget_info=get_widget_info)
+    def get_widget_info(name: str):
+        if handler_state["raises"]:
+            raise RuntimeError("Inventory+ state unavailable")
+        if name in {"Inventory Plus", "InventoryPlus"}:
+            return handler_state["widget"]
+        return None
+
+    module.get_widget_handler = lambda: types.SimpleNamespace(get_widget_info=get_widget_info)
 
     def assert_allowed(widget_info, label: str) -> None:
+        handler_state["widget"] = widget_info
+        handler_state["raises"] = False
         widget = _make_widget(module)
         widget.gold_balance_enabled = True
         widget.target_carried_gold = 10000
-        install_handler(widget_info)
-        _expect(not widget._inventory_plus_is_enabled(), f"{label} Inventory+ should allow gold balancing.")
         _expect(
             widget._get_action_block_reason("gold_balance") == "",
             f"{label} Inventory+ should leave Balance Gold Now available.",
@@ -3136,97 +3107,267 @@ def _test_carried_gold_inventory_plus_fail_closed(module) -> None:
         result = _drain_generator_return(queued[0])
         _expect(
             result.status == module.GOLD_BALANCE_STATUS_TARGET_MET,
-            f"{label} Inventory+ should not publish the blocking warning.",
+            f"{label} Inventory+ should leave the normal gold result path intact.",
         )
         _expect(
-            widget.status_message != module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
-            f"{label} Inventory+ should not show the blocking warning.",
+            "Inventory+" not in str(widget.status_message),
+            f"{label} Inventory+ should not show an obsolete gold warning.",
         )
 
     try:
         assert_allowed(None, "Absent")
         assert_allowed(types.SimpleNamespace(enabled=False, is_paused=True), "Registered-disabled")
+        assert_allowed(types.SimpleNamespace(enabled=True, is_paused=False), "Enabled")
+        assert_allowed(types.SimpleNamespace(enabled=True, is_paused=True), "Enabled-paused")
+        assert_allowed(types.SimpleNamespace(enabled="false", is_paused=False), "Invalid-enabled-state")
 
-        blocking_cases = (
-            (types.SimpleNamespace(enabled=True, is_paused=False), "Enabled"),
-            (types.SimpleNamespace(enabled=True, is_paused=True), "Enabled-paused"),
-            (types.SimpleNamespace(enabled="false", is_paused=False), "Invalid-enabled-state"),
-        )
-        for widget_info, label in blocking_cases:
-            widget = _make_widget(module)
-            widget.gold_balance_enabled = True
-            install_handler(widget_info)
-            _expect(widget._inventory_plus_is_enabled(), f"{label} Inventory+ should fail closed.")
-            _expect(
-                widget._get_action_block_reason("gold_balance") == module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
-                f"{label} Inventory+ should block Balance Gold Now with the exact warning.",
-            )
-            result = _drain_generator_return(widget._run_gold_balance_trigger(f"{label} conflict"))
-            _expect(result.status == module.GOLD_BALANCE_STATUS_BLOCKED, f"{label} Inventory+ should block gold balancing.")
-            _expect(calls == [], f"{label} Inventory+ conflict should submit no gold action.")
-            _expect(
-                widget.status_message == module.GOLD_BALANCE_INVENTORY_PLUS_MESSAGE,
-                f"{label} Inventory+ should expose the exact plain-language warning.",
-            )
-
+        handler_state["widget"] = None
+        handler_state["raises"] = True
         exception_widget = _make_widget(module)
         exception_widget.gold_balance_enabled = True
-        install_handler(raises=True)
-        _expect(exception_widget._inventory_plus_is_enabled(), "Inventory+ lookup exceptions should fail closed.")
-        exception_result = _drain_generator_return(exception_widget._run_gold_balance_trigger("lookup exception"))
+        exception_widget.target_carried_gold = 10000
+        exception_queue: list[object] = []
+        exception_widget._queue_merchant_rules_owned_work = lambda generator: exception_queue.append(generator)
         _expect(
-            exception_result.status == module.GOLD_BALANCE_STATUS_BLOCKED,
-            "Inventory+ lookup exceptions should block gold balancing.",
+            exception_widget._get_inventory_plus_widget() is None,
+            "Inventory+ lookup exceptions should be treated as no registered widget for retained pause compatibility.",
         )
-        _expect(calls == [], "Inventory+ lookup exceptions should submit no gold action.")
+        _expect(
+            exception_widget._get_action_block_reason("gold_balance") == "",
+            "Inventory+ lookup exceptions should not create a special gold block.",
+        )
+        _expect(exception_widget._queue_manual_gold_balance(), "Inventory+ lookup exceptions should not stop manual balancing.")
+        exception_result = _drain_generator_return(exception_queue[0])
+        _expect(
+            exception_result.status == module.GOLD_BALANCE_STATUS_TARGET_MET,
+            "Inventory+ lookup exceptions should leave the normal gold trigger available.",
+        )
 
         source = Path(module.__file__).read_text(encoding="utf-8")
         _expect(
-            source.count("self._inventory_plus_is_enabled()") == 4,
-            "The manual action, entry scheduler, shared trigger, and warning should use the same Inventory+ gate.",
+            "GOLD_BALANCE_STATUS_BLOCKED" not in source
+            and "GOLD_BALANCE_INVENTORY_PLUS_MESSAGE" not in source
+            and "_inventory_plus_is_enabled" not in source,
+            "Carried Gold should not retain an Inventory+-specific blocker or message.",
         )
-
-        module.GLOBAL_CACHE.Coroutines = []
-        entry_blocked_widget = _make_widget(module)
-        entry_blocked_widget.gold_balance_enabled = True
-        entry_blocked_widget.gold_balance_on_outpost_entry = True
-        install_handler(types.SimpleNamespace(enabled=True, is_paused=True))
-        entry_blocked_widget._update_auto_gold_runtime()
-        _expect(
-            not module.GLOBAL_CACHE.Coroutines,
-            "Enabled-paused Inventory+ should block the outpost-entry trigger before queueing.",
-        )
-
-        entry_allowed_widget = _make_widget(module)
-        entry_allowed_widget.gold_balance_enabled = True
-        entry_allowed_widget.gold_balance_on_outpost_entry = True
-        install_handler(types.SimpleNamespace(enabled=False, is_paused=True))
-        entry_allowed_widget._update_auto_gold_runtime()
-        _expect(
-            len(module.GLOBAL_CACHE.Coroutines) == 1,
-            "Registered-disabled Inventory+ should allow the outpost-entry trigger to queue.",
-        )
-        _drain_generator_return(module.GLOBAL_CACHE.Coroutines.pop(0))
 
         for trigger in ("after Merchant Rules trading", "manual merchant session close"):
             trigger_widget = _make_widget(module)
             trigger_widget.gold_balance_enabled = True
-            install_handler(types.SimpleNamespace(enabled=True, is_paused=False))
+            trigger_widget.target_carried_gold = 10000
+            handler_state["raises"] = False
+            handler_state["widget"] = types.SimpleNamespace(enabled=True, is_paused=True)
             trigger_result = _drain_generator_return(trigger_widget._run_gold_balance_trigger(trigger))
             _expect(
-                trigger_result.status == module.GOLD_BALANCE_STATUS_BLOCKED,
-                f"Enabled Inventory+ should block the {trigger} trigger through the shared gate.",
+                trigger_result.status == module.GOLD_BALANCE_STATUS_TARGET_MET,
+                f"Enabled-paused Inventory+ should not block the {trigger} trigger.",
             )
+
+        module.GLOBAL_CACHE.Coroutines = []
+        entry_widget = _make_widget(module)
+        entry_widget.gold_balance_enabled = True
+        entry_widget.target_carried_gold = 10000
+        entry_widget.gold_balance_on_outpost_entry = True
+        handler_state["widget"] = types.SimpleNamespace(enabled=True, is_paused=True)
+        entry_widget._update_auto_gold_runtime()
+        _expect(
+            len(module.GLOBAL_CACHE.Coroutines) == 1,
+            "Enabled-paused Inventory+ should not block outpost-entry balancing.",
+        )
+        _drain_generator_return(module.GLOBAL_CACHE.Coroutines.pop(0))
     finally:
         module.get_widget_handler = original_handler
-        if had_inventory:
-            module.GLOBAL_CACHE.Inventory = original_inventory
-        elif hasattr(module.GLOBAL_CACHE, "Inventory"):
-            delattr(module.GLOBAL_CACHE, "Inventory")
+        restore_inventory()
         if had_coroutines:
             module.GLOBAL_CACHE.Coroutines = original_coroutines
         elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
             delattr(module.GLOBAL_CACHE, "Coroutines")
+
+
+def _test_inventory_plus_pause_ownership(module) -> None:
+    class LegacyWidget:
+        def __init__(self, *, enabled: object = True, paused: bool = False) -> None:
+            self.enabled = enabled
+            self.is_paused = paused
+            self.pause_calls = 0
+            self.resume_calls = 0
+
+        def pause(self) -> None:
+            self.pause_calls += 1
+            self.is_paused = True
+
+        def resume(self) -> None:
+            self.resume_calls += 1
+            self.is_paused = False
+
+    original_handler = module.get_widget_handler
+    current = {"widget": None, "name": "InventoryPlus"}
+    global_state = {"paused": False}
+
+    def get_widget_info(name: str):
+        if name == current["name"]:
+            return current["widget"]
+        return None
+
+    module.get_widget_handler = lambda: types.SimpleNamespace(
+        get_widget_info=get_widget_info,
+        optional_widgets_paused=global_state["paused"],
+    )
+    try:
+        widget = _make_widget(module)
+
+        canonical = LegacyWidget()
+        current["widget"] = canonical
+        _expect(widget._get_inventory_plus_widget() is canonical, "Retained lookup should recognize InventoryPlus by its canonical filename.")
+        current["name"] = "Inventory Plus"
+        _expect(widget._get_inventory_plus_widget() is canonical, "Retained lookup should recognize the spaced Inventory Plus name.")
+        current["name"] = "InventoryPlus"
+        owned_pause = widget._pause_inventory_plus()
+        _expect(owned_pause is not None, "An enabled, unpaused InventoryPlus should be paused for Merchant Rules work.")
+        _expect(canonical.pause_calls == 1 and canonical.is_paused, "Merchant Rules should own the pause it creates.")
+        _expect(owned_pause.resume(), "Merchant Rules should resume a pause it still owns.")
+        _expect(canonical.resume_calls == 1 and not canonical.is_paused, "An owned pause should resume exactly once.")
+        _expect(not owned_pause.resume(), "An owned pause handle should not resume twice.")
+        _expect(canonical.resume_calls == 1, "Repeated cleanup should not call resume again.")
+
+        pre_paused = LegacyWidget(paused=True)
+        current["widget"] = pre_paused
+        _expect(widget._pause_inventory_plus() is None, "A widget paused before Merchant Rules should remain untouched.")
+        _expect(pre_paused.pause_calls == 0 and pre_paused.resume_calls == 0, "Merchant Rules should not own a pre-existing pause.")
+
+        disabled = LegacyWidget(enabled=False)
+        current["widget"] = disabled
+        _expect(widget._pause_inventory_plus() is None, "A disabled InventoryPlus should not be paused.")
+
+        changed_to_disabled = LegacyWidget()
+        current["widget"] = changed_to_disabled
+        disabled_handle = widget._pause_inventory_plus()
+        _expect(disabled_handle is not None, "An enabled InventoryPlus should produce an owned pause handle.")
+        changed_to_disabled.enabled = False
+        _expect(not disabled_handle.resume(), "Cleanup should not resume a widget disabled during the operation.")
+        _expect(changed_to_disabled.resume_calls == 0, "Disabled state changes must not reactivate callbacks.")
+
+        changed_to_running = LegacyWidget()
+        current["widget"] = changed_to_running
+        running_handle = widget._pause_inventory_plus()
+        _expect(running_handle is not None, "A second enabled InventoryPlus should produce an owned pause handle.")
+        changed_to_running.is_paused = False
+        _expect(not running_handle.resume(), "Cleanup should not resume a widget already resumed during the operation.")
+        _expect(changed_to_running.resume_calls == 0, "An externally resumed widget must not be resumed again.")
+
+        replaced = LegacyWidget()
+        current["widget"] = replaced
+        replaced_handle = widget._pause_inventory_plus()
+        replacement = LegacyWidget()
+        current["widget"] = replacement
+        _expect(not replaced_handle.resume(), "Cleanup should not resume a widget replaced in the registry.")
+        _expect(replaced.resume_calls == 0, "Registry replacement must invalidate the old pause owner.")
+
+        global_state["paused"] = True
+        globally_paused = LegacyWidget()
+        current["widget"] = globally_paused
+        _expect(widget._pause_inventory_plus() is None, "Merchant Rules should not acquire a local pause during a global optional-widget pause.")
+        _expect(globally_paused.pause_calls == 0, "A global optional-widget pause must remain the sole pause owner.")
+        global_state["paused"] = False
+
+        globally_owned = LegacyWidget()
+        current["widget"] = globally_owned
+        global_handle = widget._pause_inventory_plus()
+        _expect(global_handle is not None, "A normal widget should still be locally pausable after a global pause ends.")
+        global_state["paused"] = True
+        _expect(not global_handle.resume(), "Cleanup must not resume a local pause after a global optional-widget pause takes over.")
+        _expect(globally_owned.resume_calls == 0 and globally_owned.is_paused, "Global pause ownership must preserve the widget's paused state.")
+        _expect(global_state["paused"], "Merchant Rules cleanup must not clear the global optional-widget pause state.")
+        global_state["paused"] = False
+
+        class FailingBeforeStateChangeWidget(LegacyWidget):
+            def pause(self) -> None:
+                self.pause_calls += 1
+                raise RuntimeError("pause failed before state change")
+
+        before_state_failure = FailingBeforeStateChangeWidget()
+        current["widget"] = before_state_failure
+        _expect_raises(
+            module._InventoryPlusPauseError,
+            lambda: widget._pause_inventory_plus(),
+            "A pause failure before state change must fail closed rather than return None.",
+        )
+        _expect(
+            not before_state_failure.is_paused and before_state_failure.resume_calls == 0,
+            "A pause failure before state change should leave the widget running without attempting rollback.",
+        )
+
+        class PartiallyFailingWidget(LegacyWidget):
+            def __init__(self, *, fail_resume: bool = False) -> None:
+                super().__init__()
+                self.fail_resume = fail_resume
+
+            def pause(self) -> None:
+                self.pause_calls += 1
+                self.is_paused = True
+                raise RuntimeError("pause callback failed after state change")
+
+            def resume(self) -> None:
+                self.resume_calls += 1
+                if self.fail_resume:
+                    raise RuntimeError("rollback callback failed")
+                self.is_paused = False
+
+        partial_success = PartiallyFailingWidget()
+        current["widget"] = partial_success
+        partial_success_errors = []
+
+        def _run_partial_success() -> None:
+            try:
+                widget._pause_inventory_plus()
+            except module._InventoryPlusPauseError as exc:
+                partial_success_errors.append(exc)
+                raise
+
+        _expect_raises(
+            module._InventoryPlusPauseError,
+            _run_partial_success,
+            "A pause failure with a successful rollback must still fail closed rather than return None.",
+        )
+        _expect(
+            partial_success.pause_calls == 1 and partial_success.resume_calls == 1 and not partial_success.is_paused,
+            "A partially applied pause should be rolled back before the coordination failure is reported.",
+        )
+        _expect(
+            partial_success_errors and isinstance(partial_success_errors[0].__cause__, RuntimeError),
+            "A successful rollback failure must retain the original pause error as its cause.",
+        )
+
+        partial_failure = PartiallyFailingWidget(fail_resume=True)
+        current["widget"] = partial_failure
+        _expect_raises(
+            module._InventoryPlusPauseError,
+            lambda: widget._pause_inventory_plus(),
+            "A failed rollback must be a distinct protected-operation failure.",
+        )
+        _expect(partial_failure.is_paused and partial_failure.resume_calls == 1, "A failed rollback must not be reported as an absent pause.")
+
+        unprovable = PartiallyFailingWidget()
+
+        def _replace_registry_during_pause() -> None:
+            unprovable.pause_calls += 1
+            unprovable.is_paused = True
+            current["widget"] = LegacyWidget()
+            raise RuntimeError("pause callback changed registry")
+
+        unprovable.pause = _replace_registry_during_pause
+        current["widget"] = unprovable
+        _expect_raises(
+            module._InventoryPlusPauseError,
+            lambda: widget._pause_inventory_plus(),
+            "A pause failure with an unprovable widget identity must stop protected work.",
+        )
+        _expect(unprovable.is_paused and unprovable.resume_calls == 0, "An unprovable pause failure must not resume a stale widget.")
+
+        current["widget"] = None
+        _expect(widget._pause_inventory_plus() is None, "No registered InventoryPlus should be a no-op.")
+    finally:
+        module.get_widget_handler = original_handler
 
 
 def _test_gold_entry_is_independent_and_one_shot(module) -> None:
@@ -4593,6 +4734,77 @@ def _test_inventory_shortcut_live_actions_target_clicked_item(module) -> None:
             module.GLOBAL_CACHE.Coroutines = original_coroutines
         elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
             delattr(module.GLOBAL_CACHE, "Coroutines")
+
+
+def _test_inventory_shortcut_deposit_stops_after_pause_failure(module) -> None:
+    widget = _make_inventory_shortcut_test_widget(module)
+    item = _make_item(module, item_id=739, model_id=930739, name="Pause Failure Test Item", quantity=2)
+    transfer_calls: list[object] = []
+
+    class FailingPauseWidget:
+        def __init__(self) -> None:
+            self.enabled = True
+            self.is_paused = False
+            self.pause_calls = 0
+            self.resume_calls = 0
+
+        def pause(self) -> None:
+            self.pause_calls += 1
+            self.is_paused = True
+            raise RuntimeError("pause callback failed after state change")
+
+        def resume(self) -> None:
+            self.resume_calls += 1
+            self.is_paused = False
+
+    inventory_plus = FailingPauseWidget()
+    original_handler = module.get_widget_handler
+
+    def get_widget_info(name: str):
+        if name in {"Inventory Plus", "InventoryPlus"}:
+            return inventory_plus
+        return None
+
+    def fake_execute_storage_transfers(transfers, **_kwargs):
+        transfer_calls.extend(transfers)
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(
+            label="Right-click Deposit",
+            measure_label="items",
+            attempted=len(transfers),
+            completed=len(transfers),
+        )
+
+    module.get_widget_handler = lambda: types.SimpleNamespace(
+        get_widget_info=get_widget_info,
+        optional_widgets_paused=False,
+    )
+    widget._get_inventory_shortcut_live_item_for_action = lambda _item_id, _model_id: (item, "")
+    widget._execute_storage_transfers = fake_execute_storage_transfers
+    try:
+        _drain_generator_return(
+            widget._run_inventory_shortcut_live_deposit(
+                item.item_id,
+                item.model_id,
+                item.quantity,
+                item.name,
+            )
+        )
+        _expect(
+            not transfer_calls,
+            "Right-click deposit must not start its transfer executor after pause coordination fails.",
+        )
+        _expect(
+            inventory_plus.pause_calls == 1 and inventory_plus.resume_calls == 1 and not inventory_plus.is_paused,
+            "Right-click deposit should roll back the failed pause before reporting the coordination error.",
+        )
+        _expect(
+            "could not be paused safely" in widget.last_error.lower(),
+            "Right-click deposit should handle the pause coordination failure through its normal error path.",
+        )
+    finally:
+        module.get_widget_handler = original_handler
 
 
 def _test_inventory_shortcut_deposit_all_matching_split_material_stacks(module) -> None:
@@ -13965,7 +14177,15 @@ def _test_early_kit_identify_execute_gate(module) -> None:
     )
     second_plan = module.PlanResult(
         supported_map=True,
+        coords={module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
         identify_item_ids=[1001],
+        merchant_stock_buys=[
+            module.PlannedMerchantBuy(
+                model_id=777,
+                quantity=1,
+                label="Test Stock",
+            )
+        ],
         has_actions=True,
     )
     empty_plan = module.PlanResult(supported_map=True, has_actions=False)
@@ -13975,7 +14195,7 @@ def _test_early_kit_identify_execute_gate(module) -> None:
         build_count["value"] += 1
         if build_count["value"] == 1:
             return first_plan
-        if build_count["value"] == 2:
+        if build_count["value"] in (2, 3):
             return second_plan
         return empty_plan
 
@@ -14012,19 +14232,54 @@ def _test_early_kit_identify_execute_gate(module) -> None:
     widget._open_merchant = _open_merchant
     widget._buy_merchant_model = _buy_merchant
     widget._run_identify_pass = _run_identify
-    widget._pause_inventory_plus = lambda: None
+    class LegacyWidget:
+        def __init__(self) -> None:
+            self.enabled = True
+            self.is_paused = False
+            self.pause_calls = 0
+            self.resume_calls = 0
 
-    _drain_generator_return(widget._execute_now(local_only=True))
+        def pause(self) -> None:
+            self.pause_calls += 1
+            self.is_paused = True
 
-    _expect(events == ["buy:1", "identify"], "Execute should source one configured ID kit before Identify.")
-    _expect(
-        widget.execution_currency_changing_work_completed,
-        "A verified early Merchant kit purchase should count as currency-changing work.",
+        def resume(self) -> None:
+            self.resume_calls += 1
+            self.is_paused = False
+
+    original_handler = module.get_widget_handler
+    inventory_plus = LegacyWidget()
+
+    def get_widget_info(name: str):
+        if name in {"Inventory Plus", "InventoryPlus"}:
+            return inventory_plus
+        return None
+
+    module.get_widget_handler = lambda: types.SimpleNamespace(
+        get_widget_info=get_widget_info,
+        optional_widgets_paused=False,
     )
-    _expect(
-        gold_balance_calls == ["after Merchant Rules trading"],
-        "An early-only verified ID-kit purchase followed by an empty plan should trigger gold balancing exactly once.",
-    )
+    try:
+        _drain_generator_return(widget._execute_now(local_only=True))
+
+        _expect(
+            events == ["buy:1", "identify", "buy:1"],
+            "Execute should source one configured ID kit before Identify and retain the plan for a later merchant action.",
+        )
+        _expect(
+            inventory_plus.pause_calls == 1 and inventory_plus.resume_calls == 1 and not inventory_plus.is_paused,
+            "Full Execute should preserve the early owned InventoryPlus pause through later merchant handling and resume it once.",
+        )
+        _expect(
+            widget.execution_currency_changing_work_completed,
+            "A verified early Merchant kit purchase should count as currency-changing work.",
+        )
+        _expect(
+            gold_balance_calls == ["after Merchant Rules trading"],
+            "Verified Execute purchases should trigger gold balancing exactly once.",
+        )
+    finally:
+        module.get_widget_handler = original_handler
 
 
 def _test_early_kit_identify_no_candidates_no_early_source(module) -> None:
@@ -33296,8 +33551,12 @@ def main() -> int:
                 lambda: _test_carried_gold_manual_action_and_ui(module),
             ),
             (
-                "carried_gold_inventory_plus_fail_closed",
-                lambda: _test_carried_gold_inventory_plus_fail_closed(module),
+                "carried_gold_inventory_plus_does_not_block",
+                lambda: _test_carried_gold_inventory_plus_does_not_block(module),
+            ),
+            (
+                "inventory_plus_pause_ownership",
+                lambda: _test_inventory_plus_pause_ownership(module),
             ),
             (
                 "gold_entry_is_independent_and_one_shot",
@@ -33379,6 +33638,10 @@ def main() -> int:
             (
                 "inventory_shortcut_live_actions_target_clicked_item",
                 lambda: _test_inventory_shortcut_live_actions_target_clicked_item(module),
+            ),
+            (
+                "inventory_shortcut_deposit_stops_after_pause_failure",
+                lambda: _test_inventory_shortcut_deposit_stops_after_pause_failure(module),
             ),
             (
                 "inventory_shortcut_deposit_all_matching_split_material_stacks",
