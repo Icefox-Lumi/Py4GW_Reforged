@@ -26156,6 +26156,503 @@ def _test_catalog_loads_without_deprecated_item_mirror(module) -> None:
             setattr(module, name, value)
 
 
+def _test_ranked_search_cache_contract(module) -> None:
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+
+    flat_build_calls: list[str] = []
+    exact_build_calls: list[str] = []
+    original_flat_builder = widget._build_ranked_catalog_search_results
+    original_exact_builder = widget._build_ranked_exact_catalog_search_results
+
+    def counted_flat_builder(query: str):
+        flat_build_calls.append(query)
+        return original_flat_builder(query)
+
+    def counted_exact_builder(query: str):
+        exact_build_calls.append(query)
+        return original_exact_builder(query)
+
+    widget._build_ranked_catalog_search_results = counted_flat_builder
+    widget._build_ranked_exact_catalog_search_results = counted_exact_builder
+
+    first_flat = widget._search_catalog("  sword  ", limit=module.SEARCH_RESULT_LIMIT)
+    normalized_flat = widget._search_catalog("SWORD.PNG", limit=module.SEARCH_RESULT_LIMIT * 4)
+    smaller_flat = widget._search_catalog("sword", limit=5)
+    _expect(
+        len(flat_build_calls) == 1 and flat_build_calls == ["sword"],
+        "Repeated normalized flat queries should build one ranked result tuple.",
+    )
+    _expect(
+        len(normalized_flat) >= len(first_flat)
+        and all(left is right for left, right in zip(first_flat, normalized_flat[: len(first_flat)]))
+        and [entry.get("model_id") for entry in smaller_flat]
+        == [entry.get("model_id") for entry in normalized_flat[:5]],
+        "Flat cache hits should preserve entry identity, ordering, and independent limits.",
+    )
+    first_flat.pop()
+    _expect(
+        len(widget._search_catalog("sword", limit=module.SEARCH_RESULT_LIMIT)) == module.SEARCH_RESULT_LIMIT,
+        "Returning a caller list must not expose a mutable ranked cache tuple.",
+    )
+
+    widget._search_catalog("tome", limit=module.SEARCH_RESULT_LIMIT)
+    widget._search_catalog("sword", limit=module.SEARCH_RESULT_LIMIT * 4)
+    _expect(
+        flat_build_calls == ["sword", "tome"],
+        "A different normalized flat query should build separately while a retained query should hit.",
+    )
+
+    first_exact = widget._search_exact_catalog("  sword  ", limit=module.SEARCH_RESULT_LIMIT)
+    normalized_exact = widget._search_exact_catalog("SWORD.PNG", limit=module.SEARCH_RESULT_LIMIT * 4)
+    smaller_exact = widget._search_exact_catalog("sword", limit=5)
+    _expect(
+        len(exact_build_calls) == 1 and exact_build_calls == ["sword"],
+        "Repeated normalized Exact queries should build one separate ranked result tuple.",
+    )
+    _expect(
+        len(normalized_exact) >= len(first_exact)
+        and all(left is right for left, right in zip(first_exact, normalized_exact[: len(first_exact)]))
+        and [entry.get("model_id") for entry in smaller_exact]
+        == [entry.get("model_id") for entry in normalized_exact[:5]],
+        "Exact cache hits should preserve typed entry identity, ordering, and independent limits.",
+    )
+    widget._search_exact_catalog("tome", limit=module.SEARCH_RESULT_LIMIT)
+    widget._search_exact_catalog("sword", limit=module.SEARCH_RESULT_LIMIT * 4)
+    _expect(
+        exact_build_calls == ["sword", "tome"],
+        "Exact and flat ranked caches should remain isolated while retaining their own queries.",
+    )
+    _expect(
+        all(isinstance(value, tuple) for value in widget._flat_ranked_search_cache.values())
+        and all(isinstance(value, tuple) for value in widget._exact_ranked_search_cache.values()),
+        "Ranked search caches should store immutable tuples of original entry references.",
+    )
+
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+    tome_exact = widget._search_protected_item_catalog("tome")
+    _expect(
+        len(tome_exact) == 20,
+        "Exact Tome search should retain all 20 expected typed rows through the ranked cache.",
+    )
+    all_collision = widget._search_protected_item_catalog("923")
+    exact_calls_before_category = len(exact_build_calls)
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_EQUIPMENT
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_EQUIPMENT_WEAPONS
+    weapon_collision = widget._search_protected_item_catalog("923")
+    weapon_keys = {
+        (entry.get("item_type_id"), int(entry.get("model_id", 0)))
+        for entry in weapon_collision
+    }
+    _expect(
+        len(all_collision) > len(weapon_collision)
+        and (int(module.ItemType.Axe), 923) in weapon_keys
+        and (int(module.ItemType.Materials_Zcoins), 923) not in weapon_keys
+        and len(exact_build_calls) == exact_calls_before_category,
+        "Exact category changes should re-filter cached ranking without rebuilding it.",
+    )
+
+    widget.cleanup_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+    widget.cleanup_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+    xunlai_all = widget._search_cleanup_deposit_catalog("tome")
+    flat_calls_before_category = len(flat_build_calls)
+    widget.cleanup_item_type_filter_category = module.DEPOSIT_FILTER_EQUIPMENT
+    widget.cleanup_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+    xunlai_filtered = widget._search_cleanup_deposit_catalog("tome")
+    _expect(
+        len(xunlai_all) == 20
+        and not xunlai_filtered
+        and len(flat_build_calls) == flat_calls_before_category,
+        "Xunlai category changes should re-filter cached flat ranking without rebuilding it.",
+    )
+
+    predicate_widget = _make_widget(module)
+    predicate_widget.catalog_by_model_id = {
+        51001: {"model_id": 51001, "name": "Predicate Alpha"},
+        51002: {"model_id": 51002, "name": "Predicate Beta"},
+    }
+    predicate_build_calls: list[str] = []
+    original_predicate_builder = predicate_widget._build_ranked_catalog_search_results
+
+    def counted_predicate_builder(query: str):
+        predicate_build_calls.append(query)
+        return original_predicate_builder(query)
+
+    predicate_widget._build_ranked_catalog_search_results = counted_predicate_builder
+    allowed_model_ids = {51001}
+
+    def mutable_predicate(entry: dict[str, object]) -> bool:
+        return int(entry.get("model_id", 0)) in allowed_model_ids
+
+    first_predicate = predicate_widget._search_catalog_with_predicate(
+        "predicate",
+        entry_predicate=mutable_predicate,
+    )
+    allowed_model_ids.clear()
+    second_predicate = predicate_widget._search_catalog_with_predicate(
+        "predicate",
+        entry_predicate=mutable_predicate,
+    )
+    _expect(
+        [int(entry["model_id"]) for entry in first_predicate] == [51001]
+        and not second_predicate
+        and predicate_build_calls == ["predicate"],
+        "Mutable eligibility predicates should remain downstream of the cached ranked query.",
+    )
+
+    generation_widget = _make_widget(module)
+    generation_widget.catalog_by_model_id = {
+        52001: {"model_id": 52001, "name": "Generation Old"},
+    }
+    generation_build_calls: list[str] = []
+    original_generation_builder = generation_widget._build_ranked_catalog_search_results
+
+    def counted_generation_builder(query: str):
+        generation_build_calls.append(query)
+        return original_generation_builder(query)
+
+    generation_widget._build_ranked_catalog_search_results = counted_generation_builder
+    old_results = generation_widget._search_catalog("generation", limit=48)
+    generation_widget.catalog_by_model_id = {
+        52001: {"model_id": 52001, "name": "Generation New"},
+        52002: {"model_id": 52002, "name": "Generation Added"},
+    }
+    generation_widget._catalog_generation += 1
+    new_results = generation_widget._search_catalog("generation", limit=48)
+    _expect(
+        [int(entry["model_id"]) for entry in old_results] == [52001]
+        and [int(entry["model_id"]) for entry in new_results] == [52001, 52002]
+        and generation_build_calls == ["generation", "generation"],
+        "A catalog generation change must force a fresh ranked calculation and expose new entries.",
+    )
+
+    eviction_widget = _make_widget(module)
+    eviction_build_calls: list[str] = []
+    original_eviction_builder = eviction_widget._build_ranked_catalog_search_results
+
+    def counted_eviction_builder(query: str):
+        eviction_build_calls.append(query)
+        return original_eviction_builder(query)
+
+    eviction_widget._build_ranked_catalog_search_results = counted_eviction_builder
+    for index in range(module.RANKED_SEARCH_CACHE_CAPACITY):
+        eviction_widget._search_catalog(f"eviction {index}")
+    eviction_widget._search_catalog("eviction 0")
+    eviction_widget._search_catalog(f"eviction {module.RANKED_SEARCH_CACHE_CAPACITY}")
+    _expect(
+        len(eviction_widget._flat_ranked_search_cache) == module.RANKED_SEARCH_CACHE_CAPACITY
+        and (eviction_widget._catalog_generation, "eviction 0") in eviction_widget._flat_ranked_search_cache
+        and (eviction_widget._catalog_generation, "eviction 1") not in eviction_widget._flat_ranked_search_cache,
+        "Flat ranked query eviction should be bounded and least-recently-used.",
+    )
+    eviction_widget._search_catalog("eviction 1")
+    _expect(
+        eviction_build_calls.count("eviction 1") == 2,
+        "Returning to an evicted query should compute it again instead of crossing cached results.",
+    )
+
+    protected_first = widget._search_protected_item_catalog("tome")
+    protected_second = widget._search_protected_item_catalog("tome")
+    _expect(
+        [
+            (entry.get("item_type_id"), int(entry.get("model_id", 0)))
+            for entry in protected_first
+        ]
+        == [
+            (entry.get("item_type_id"), int(entry.get("model_id", 0)))
+            for entry in protected_second
+        ],
+        "Add Shown should receive the same ordered visible typed target set on a cache hit.",
+    )
+
+
+def _test_ranked_search_cache_mutation_invalidation_contract(module) -> None:
+    widget = _make_widget(module)
+    widget.catalog_loaded = True
+    widget.catalog_by_model_id = {}
+    widget.exact_catalog_by_item_key = {
+        (int(module.ItemType.Usable), 60001): {
+            "item_type_id": int(module.ItemType.Usable),
+            "model_id": 60001,
+            "name": "Late Arrival",
+            "item_type": "Usable",
+        }
+    }
+    widget.exact_catalog_untyped_by_model_id = {}
+    flat_build_calls: list[str] = []
+    exact_build_calls: list[str] = []
+    original_flat_builder = widget._build_ranked_catalog_search_results
+    original_exact_builder = widget._build_ranked_exact_catalog_search_results
+
+    def counted_flat_builder(query: str):
+        flat_build_calls.append(query)
+        return original_flat_builder(query)
+
+    def counted_exact_builder(query: str):
+        exact_build_calls.append(query)
+        return original_exact_builder(query)
+
+    widget._build_ranked_catalog_search_results = counted_flat_builder
+    widget._build_ranked_exact_catalog_search_results = counted_exact_builder
+
+    _expect(not widget._search_catalog("late arrival"), "The live-mutation fixture should begin without the late-arrival flat entry.")
+    _expect(widget._search_exact_catalog("late arrival"), "The live-mutation fixture should warm an Exact ranked cache entry.")
+    generation_before_group = widget._catalog_generation
+    loaded_entries = widget._load_catalog_group(
+        [{"model_id": 60001, "name": "Late Arrival", "item_type": "Trophy"}],
+        source="mutation_test",
+        priority=10,
+    )
+    _expect(
+        loaded_entries and int(loaded_entries[0].get("model_id", 0)) == 60001,
+        "The live group mutation should use the production catalog-group loader.",
+    )
+    _expect(
+        widget._catalog_generation == generation_before_group + 1
+        and not widget._flat_ranked_search_cache
+        and not widget._exact_ranked_search_cache,
+        "A published catalog-group mutation should advance one generation and invalidate both ranked caches.",
+    )
+    late_flat_results = widget._search_catalog("late arrival")
+    late_exact_results = widget._search_exact_catalog("late arrival")
+    _expect(
+        [int(entry.get("model_id", 0)) for entry in late_flat_results] == [60001]
+        and late_flat_results[0] is widget.catalog_by_model_id[60001]
+        and [int(entry.get("model_id", 0)) for entry in late_exact_results] == [60001]
+        and flat_build_calls == ["late arrival", "late arrival"]
+        and exact_build_calls == ["late arrival", "late arrival"],
+        "A group mutation must expose the newly searchable entry and rebuild both cache families on demand.",
+    )
+
+    replacement_widget = _make_widget(module)
+    replacement_widget.catalog_loaded = True
+    old_entry = {
+        "model_id": 60002,
+        "name": "Replacement Old",
+        "item_type": "Trophy",
+        "priority": 50,
+    }
+    replacement_widget.catalog_by_model_id = {60002: old_entry}
+    replacement_build_calls: list[str] = []
+    original_replacement_builder = replacement_widget._build_ranked_catalog_search_results
+
+    def counted_replacement_builder(query: str):
+        replacement_build_calls.append(query)
+        return original_replacement_builder(query)
+
+    replacement_widget._build_ranked_catalog_search_results = counted_replacement_builder
+    old_results = replacement_widget._search_catalog("replacement old")
+    generation_before_replacement = replacement_widget._catalog_generation
+    replacement_widget._register_catalog_entry(
+        60002,
+        "Replacement New",
+        item_type="Trophy",
+        source="mutation_test",
+        priority=10,
+    )
+    new_entry = replacement_widget.catalog_by_model_id[60002]
+    _expect(
+        replacement_widget._catalog_generation == generation_before_replacement + 1
+        and not replacement_widget._flat_ranked_search_cache
+        and new_entry is not old_entry,
+        "Replacing a published catalog entry should invalidate the ranked cache and publish a fresh dictionary object.",
+    )
+    new_results = replacement_widget._search_catalog("replacement new")
+    old_after_replacement = replacement_widget._search_catalog("replacement old")
+    _expect(
+        [int(entry.get("model_id", 0)) for entry in old_results] == [60002]
+        and not old_after_replacement
+        and len(new_results) == 1
+        and new_results[0] is new_entry
+        and replacement_build_calls == ["replacement old", "replacement new", "replacement old"],
+        "A registration replacement must remove the old searchable name, expose the new name, and avoid stale dict references.",
+    )
+    generation_before_noop = replacement_widget._catalog_generation
+    replacement_widget._search_catalog("replacement new")
+    builds_before_noop = len(replacement_build_calls)
+    replacement_widget._register_catalog_entry(
+        60002,
+        "Ignored Lower-Priority Replacement",
+        item_type="Trophy",
+        source="mutation_test",
+        priority=1000,
+    )
+    replacement_widget._search_catalog("replacement new")
+    _expect(
+        replacement_widget._catalog_generation == generation_before_noop
+        and len(replacement_build_calls) == builds_before_noop,
+        "A rejected lower-priority registration should be a no-op for generation and cache state.",
+    )
+
+    root = SCRIPT_DIR / "_merchant_rules_regression_tmp" / "ranked_cache_mutation_contract"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        catalog_path = root / "catalog.json"
+        drop_data_path = root / "drop.json"
+        item_handling_path = root / "items.json"
+        runes_path = root / "runes.json"
+        catalog_path.write_text(
+            json.dumps({"materials": {"common": [{"model_id": 62005, "name": "Reload Item"}]}}),
+            encoding="utf-8",
+        )
+        drop_data_path.write_text(
+            json.dumps([{"model_id": 62001, "name": "Wrapper Drop", "group": "Trophy"}]),
+            encoding="utf-8",
+        )
+        item_handling_path.write_text(
+            json.dumps({"items": [{"model_id": 62002, "name": "Wrapper Item", "item_type": "Trophy"}]}),
+            encoding="utf-8",
+        )
+        runes_path.write_text(
+            json.dumps(
+                {
+                    "wrapper_rune": {
+                        "Identifier": "Wrapper Rune",
+                        "Names": {"English": "Wrapper Rune"},
+                        "ModType": "Suffix",
+                        "ModelId": 62003,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def make_loader():
+            return module.CatalogLoader(
+                catalog_path=str(catalog_path),
+                drop_data_path=str(drop_data_path),
+                item_handling_path=str(item_handling_path),
+                runes_catalog_path=str(runes_path),
+                mod_db=types.SimpleNamespace(weapon_mods={}, runes={}),
+                mod_db_load_error="",
+                model_id_members=lambda: [("FallbackWrapper", 62004)],
+                armor_upgrade_identity=lambda _identifier: (None, ""),
+                scroll_trader_stock_model_ids=frozenset(),
+            )
+
+        specialized_widget = _make_widget(module)
+        specialized_widget.catalog_loaded = True
+        specialized_widget.catalog_by_model_id = {}
+        specialized_loader = make_loader()
+        specialized_widget._get_catalog_loader = lambda: specialized_loader
+        for method_name, query, expected_model_id in (
+            ("_load_drop_data_catalog", "wrapper drop", 62001),
+            ("_load_item_handling_catalog", "wrapper item", 62002),
+            ("_load_rune_model_catalog", "wrapper rune", 62003),
+            ("_load_model_id_fallback_catalog", "fallback wrapper", 62004),
+        ):
+            _expect(not specialized_widget._search_catalog(query), f"{method_name} should begin with a cold query cache.")
+            generation_before_wrapper = specialized_widget._catalog_generation
+            loaded_count = getattr(specialized_widget, method_name)()
+            _expect(
+                loaded_count > 0
+                and specialized_widget._catalog_generation == generation_before_wrapper + 1
+                and not specialized_widget._flat_ranked_search_cache
+                and not specialized_widget._exact_ranked_search_cache,
+                f"{method_name} should invalidate both ranked caches after a published mutation.",
+            )
+            matches = specialized_widget._search_catalog(query)
+            _expect(
+                expected_model_id in {int(entry.get("model_id", 0)) for entry in matches},
+                f"{method_name} should publish its newly loaded searchable entry.",
+            )
+
+        generation_before_wrapper_noop = specialized_widget._catalog_generation
+        specialized_widget._search_catalog("wrapper drop")
+        specialized_widget._load_drop_data_catalog()
+        _expect(
+            specialized_widget._catalog_generation == generation_before_wrapper_noop,
+            "Repeated equal-priority drop-data loading should not churn the catalog generation when registration is rejected.",
+        )
+
+        alias_widget = _make_widget(module)
+        alias_widget.catalog_loaded = True
+        alias_widget.catalog_by_model_id = {
+            62006: {
+                "model_id": 62006,
+                "name": "Alias Holder",
+                "alias_labels": {"Fresh_Token": "Fresh Token"},
+            }
+        }
+        alias_widget.exact_catalog_by_item_key = {
+            (int(module.ItemType.Usable), 62006): {
+                "item_type_id": int(module.ItemType.Usable),
+                "model_id": 62006,
+                "name": "Fresh Token",
+                "alias_labels": {"Fresh_Token": "Fresh Token"},
+            }
+        }
+        alias_widget.exact_catalog_untyped_by_model_id = {}
+        alias_loader = make_loader()
+        alias_widget._get_catalog_loader = lambda: alias_loader
+        alias_build_calls: list[str] = []
+        alias_exact_build_calls: list[str] = []
+        original_alias_builder = alias_widget._build_ranked_catalog_search_results
+        original_alias_exact_builder = alias_widget._build_ranked_exact_catalog_search_results
+
+        def counted_alias_builder(query: str):
+            alias_build_calls.append(query)
+            return original_alias_builder(query)
+
+        def counted_alias_exact_builder(query: str):
+            alias_exact_build_calls.append(query)
+            return original_alias_exact_builder(query)
+
+        alias_widget._build_ranked_catalog_search_results = counted_alias_builder
+        alias_widget._build_ranked_exact_catalog_search_results = counted_alias_exact_builder
+        _expect(not alias_widget._search_catalog("fresh token"), "An unnormalized alias should not accidentally match before the alias-index rebuild.")
+        _expect(alias_widget._search_exact_catalog("fresh token"), "The alias fixture should warm an Exact cache entry before rebuilding aliases.")
+        generation_before_alias_rebuild = alias_widget._catalog_generation
+        alias_widget._rebuild_catalog_alias_index()
+        _expect(
+            alias_widget._catalog_generation == generation_before_alias_rebuild + 1
+            and not alias_widget._flat_ranked_search_cache
+            and not alias_widget._exact_ranked_search_cache
+            and alias_widget.catalog_alias_to_model_ids.get("fresh token") == [62006]
+            and "fresh token" in alias_widget.catalog_by_model_id[62006].get("alias_labels", {}),
+            "Alias-index normalization changes entry search metadata and must invalidate both ranked caches.",
+        )
+        alias_matches = alias_widget._search_catalog("fresh token")
+        alias_exact_matches = alias_widget._search_exact_catalog("fresh token")
+        _expect(
+            [int(entry.get("model_id", 0)) for entry in alias_matches] == [62006]
+            and [int(entry.get("model_id", 0)) for entry in alias_exact_matches] == [62006]
+            and alias_build_calls == ["fresh token", "fresh token"]
+            and alias_exact_build_calls == ["fresh token", "fresh token"],
+            "A rebuilt alias should become searchable only after both invalidated ranked queries are rebuilt.",
+        )
+        generation_before_alias_noop = alias_widget._catalog_generation
+        alias_widget._search_catalog("fresh token")
+        alias_widget._rebuild_catalog_alias_index()
+        _expect(
+            alias_widget._catalog_generation == generation_before_alias_noop,
+            "Rebuilding an already-normalized alias index should not churn generation or ranking caches.",
+        )
+
+        reload_widget = _make_widget(module)
+        reload_widget.catalog_loaded = True
+        reload_widget._get_catalog_loader = lambda: make_loader()
+        reload_widget._search_catalog("reload item")
+        generation_before_reload = reload_widget._catalog_generation
+        reload_widget._load_catalog()
+        _expect(
+            reload_widget.catalog_loaded
+            and not reload_widget._catalog_building
+            and reload_widget._catalog_generation == generation_before_reload + 1
+            and not reload_widget._flat_ranked_search_cache
+            and not reload_widget._exact_ranked_search_cache,
+            "A full catalog reload should remain one unpublished batch followed by one generation advance.",
+        )
+        _expect(
+            62005 in {int(entry.get("model_id", 0)) for entry in reload_widget._search_catalog("reload item")},
+            "A reloaded catalog should remain searchable after ranked caches are cleared.",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_bounded_direct_name_search_expansion_contract(module) -> None:
     expected_tome_model_ids = [
         21800,
@@ -33718,6 +34215,14 @@ def main() -> int:
             (
                 "catalog_loads_without_deprecated_item_mirror",
                 lambda: _test_catalog_loads_without_deprecated_item_mirror(module),
+            ),
+            (
+                "ranked_search_cache_contract",
+                lambda: _test_ranked_search_cache_contract(module),
+            ),
+            (
+                "ranked_search_cache_mutation_invalidation_contract",
+                lambda: _test_ranked_search_cache_mutation_invalidation_contract(module),
             ),
             (
                 "bounded_direct_name_search_expansion_contract",

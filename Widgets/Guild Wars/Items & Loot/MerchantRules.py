@@ -16,6 +16,7 @@ import time
 import traceback
 import unicodedata
 from collections import Counter
+from collections import OrderedDict
 from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Iterable
@@ -150,6 +151,7 @@ ITEM_HANDLING_ITEMS_CATALOG_PATH = os.path.join(
 MODS_DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Sources", "marks_sources", "mods_data")
 RUNES_CATALOG_PATH = os.path.join(MODS_DATA_DIR, "runes.json")
 SEARCH_RESULT_LIMIT = 12
+RANKED_SEARCH_CACHE_CAPACITY = 16
 PROFILE_FILENAME_MAX_STEM_LENGTH = 180
 PROFILE_FILENAME_INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 PROFILE_FILENAME_RESERVED_NAMES = frozenset(
@@ -7593,6 +7595,13 @@ class MerchantRulesWidget:
             tuple[int, str, bool, bool], dict[str, object]
         ] = {}
         self._catalog_generation = 0
+        self._catalog_building = False
+        self._flat_ranked_search_cache: OrderedDict[
+            tuple[int, str], tuple[dict[str, object], ...]
+        ] = OrderedDict()
+        self._exact_ranked_search_cache: OrderedDict[
+            tuple[int, str], tuple[dict[str, object], ...]
+        ] = OrderedDict()
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
         )
@@ -14265,6 +14274,59 @@ class MerchantRulesWidget:
         self._cleanup_deposit_filter_targets_cache_key = None
         self._cleanup_deposit_filter_targets_cache = []
 
+    def _clear_ranked_search_caches(self) -> None:
+        self._flat_ranked_search_cache.clear()
+        self._exact_ranked_search_cache.clear()
+
+    @staticmethod
+    def _catalog_entry_search_signature(entry: dict[str, object]) -> tuple[object, ...]:
+        alias_labels = entry.get("alias_labels", {})
+        alias_signature: tuple[str, ...] = ()
+        if isinstance(alias_labels, dict):
+            alias_signature = tuple(sorted(str(raw_alias) for raw_alias in alias_labels))
+        return (
+            str(entry.get("name", "")).strip(),
+            max(0, _safe_int(entry.get("model_id", 0), 0)),
+            _normalize_catalog_search_text(entry.get("item_type", "")),
+            _normalize_catalog_search_text(entry.get("material_type", "")),
+            _normalize_catalog_search_text(entry.get("category", "")),
+            _normalize_catalog_search_text(entry.get("sub_category", "")),
+            _safe_int(entry.get("item_type_id", -1), -1),
+            alias_signature,
+        )
+
+    def _capture_catalog_search_state(
+        self,
+    ) -> dict[int, tuple[dict[str, object], tuple[object, ...]]]:
+        return {
+            int(model_id): (entry, self._catalog_entry_search_signature(entry))
+            for model_id, entry in self.catalog_by_model_id.items()
+        }
+
+    def _catalog_search_state_changed(
+        self,
+        previous_state: dict[int, tuple[dict[str, object], tuple[object, ...]]],
+    ) -> bool:
+        if len(previous_state) != len(self.catalog_by_model_id):
+            return True
+        for model_id, entry in self.catalog_by_model_id.items():
+            previous_entry_state = previous_state.get(int(model_id))
+            if previous_entry_state is None:
+                return True
+            previous_entry, previous_signature = previous_entry_state
+            if entry is not previous_entry or self._catalog_entry_search_signature(entry) != previous_signature:
+                return True
+        return False
+
+    def _invalidate_ranked_search_caches_for_catalog_mutation(self) -> None:
+        """Invalidate ranked results after a published searchable-catalog mutation."""
+        if self._catalog_building:
+            # _load_catalog publishes one fresh result after all source loaders finish.
+            return
+        if self.catalog_loaded:
+            self._catalog_generation += 1
+        self._clear_ranked_search_caches()
+
     def _invalidate_cleanup_target_display_cache(self) -> None:
         self._cleanup_target_display_cache_key = None
         self._cleanup_target_display_cache = None
@@ -14282,18 +14344,23 @@ class MerchantRulesWidget:
         source: str = "",
         priority: int = 100,
         extra: dict[str, object] | None = None,
-    ):
-        result = CatalogLoadResult(catalog_by_model_id=self.catalog_by_model_id)
-        CatalogLoader.register_catalog_entry(
-            result,
-            model_id,
-            name,
-            item_type,
-            material_type,
-            source,
-            priority,
-            extra,
-        )
+    ) -> None:
+        previous_state = self._capture_catalog_search_state()
+        try:
+            result = CatalogLoadResult(catalog_by_model_id=self.catalog_by_model_id)
+            CatalogLoader.register_catalog_entry(
+                result,
+                model_id,
+                name,
+                item_type,
+                material_type,
+                source,
+                priority,
+                extra,
+            )
+        finally:
+            if self._catalog_search_state_changed(previous_state):
+                self._invalidate_ranked_search_caches_for_catalog_mutation()
 
     def _load_catalog_group(
         self,
@@ -14303,76 +14370,113 @@ class MerchantRulesWidget:
         default_item_type: str = "",
         default_material_type: str = "",
     ) -> list[dict[str, object]]:
-        return self._get_catalog_loader().load_catalog_group(
-            self.catalog_by_model_id,
-            entries,
-            source,
-            priority,
-            default_item_type,
-            default_material_type,
-        )
+        previous_state = self._capture_catalog_search_state()
+        try:
+            return self._get_catalog_loader().load_catalog_group(
+                self.catalog_by_model_id,
+                entries,
+                source,
+                priority,
+                default_item_type,
+                default_material_type,
+            )
+        finally:
+            if self._catalog_search_state_changed(previous_state):
+                self._invalidate_ranked_search_caches_for_catalog_mutation()
 
     def _load_drop_data_catalog(self) -> int:
-        return self._get_catalog_loader().load_drop_data_catalog(self.catalog_by_model_id)
+        previous_state = self._capture_catalog_search_state()
+        try:
+            return self._get_catalog_loader().load_drop_data_catalog(self.catalog_by_model_id)
+        finally:
+            if self._catalog_search_state_changed(previous_state):
+                self._invalidate_ranked_search_caches_for_catalog_mutation()
 
     def _load_item_handling_catalog(self) -> int:
-        return self._get_catalog_loader().load_item_handling_catalog(self.catalog_by_model_id)
+        previous_state = self._capture_catalog_search_state()
+        try:
+            return self._get_catalog_loader().load_item_handling_catalog(self.catalog_by_model_id)
+        finally:
+            if self._catalog_search_state_changed(previous_state):
+                self._invalidate_ranked_search_caches_for_catalog_mutation()
 
     def _load_rune_model_catalog(self) -> int:
-        return self._get_catalog_loader().load_rune_model_catalog(self.catalog_by_model_id)
+        previous_state = self._capture_catalog_search_state()
+        try:
+            return self._get_catalog_loader().load_rune_model_catalog(self.catalog_by_model_id)
+        finally:
+            if self._catalog_search_state_changed(previous_state):
+                self._invalidate_ranked_search_caches_for_catalog_mutation()
 
     def _load_model_id_fallback_catalog(self) -> int:
-        return self._get_catalog_loader().load_model_id_fallback_catalog(self.catalog_by_model_id)
+        previous_state = self._capture_catalog_search_state()
+        try:
+            return self._get_catalog_loader().load_model_id_fallback_catalog(self.catalog_by_model_id)
+        finally:
+            if self._catalog_search_state_changed(previous_state):
+                self._invalidate_ranked_search_caches_for_catalog_mutation()
 
-    def _rebuild_catalog_alias_index(self):
-        aliases, display_names = self._get_catalog_loader().rebuild_catalog_alias_index(self.catalog_by_model_id)
-        self.catalog_alias_to_model_ids = aliases
-        self.catalog_alias_display_names = display_names
+    def _rebuild_catalog_alias_index(self) -> None:
+        previous_state = self._capture_catalog_search_state()
+        try:
+            aliases, display_names = self._get_catalog_loader().rebuild_catalog_alias_index(self.catalog_by_model_id)
+            self.catalog_alias_to_model_ids = aliases
+            self.catalog_alias_display_names = display_names
+        finally:
+            if self._catalog_search_state_changed(previous_state):
+                self._invalidate_ranked_search_caches_for_catalog_mutation()
 
     def _load_catalog(self):
-        self.catalog_by_model_id = {}
-        self.exact_catalog_by_item_key = {}
-        self.exact_catalog_untyped_by_model_id = {}
-        self.catalog_alias_to_model_ids = {}
-        self.catalog_alias_display_names = {}
-        self.common_salvage_model_ids_by_item_key = {}
-        self.catalog_common_material_ids = []
-        self.catalog_merchant_essentials = []
-        self.catalog_rare_materials = []
-        self.catalog_stats = {}
-        self.catalog_load_error = ""
+        self._catalog_building = True
+        try:
+            self.catalog_loaded = False
+            self._clear_ranked_search_caches()
+            self.catalog_by_model_id = {}
+            self.exact_catalog_by_item_key = {}
+            self.exact_catalog_untyped_by_model_id = {}
+            self.catalog_alias_to_model_ids = {}
+            self.catalog_alias_display_names = {}
+            self.common_salvage_model_ids_by_item_key = {}
+            self.catalog_common_material_ids = []
+            self.catalog_merchant_essentials = []
+            self.catalog_rare_materials = []
+            self.catalog_stats = {}
+            self.catalog_load_error = ""
 
-        result: CatalogLoadResult = self._get_catalog_loader().load()
-        self.catalog_by_model_id = result.catalog_by_model_id
-        self.exact_catalog_by_item_key = result.exact_catalog_by_item_key
-        self.exact_catalog_untyped_by_model_id = result.exact_catalog_untyped_by_model_id
-        self._rebuild_equipment_typed_entry_index()
-        self.catalog_alias_to_model_ids = result.catalog_alias_to_model_ids
-        self.catalog_alias_display_names = result.catalog_alias_display_names
-        self.common_salvage_model_ids_by_item_key = result.common_salvage_model_ids_by_item_key
-        self.catalog_common_material_ids = result.catalog_common_material_ids
-        self.catalog_merchant_essentials = result.catalog_merchant_essentials
-        self.catalog_rare_materials = result.catalog_rare_materials
-        self.catalog_stats = result.catalog_stats
-        self.catalog_load_error = result.catalog_load_error
-        self.weapon_mod_entries = result.weapon_mod_entries
-        self.rune_entries = result.rune_entries
-        self.armor_upgrade_entries = result.armor_upgrade_entries
-        self.weapon_mod_names = result.weapon_mod_names
-        self.weapon_mod_generic_names = result.weapon_mod_generic_names
-        self.weapon_mod_variant_names = result.weapon_mod_variant_names
-        self.rune_names = result.rune_names
-        self.rune_buy_entries = result.rune_buy_entries
-        self.rune_buy_entries_by_identifier = result.rune_buy_entries_by_identifier
-        self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
-        self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
-        self.rune_buy_professions = result.rune_buy_professions
-        self._catalog_generation += 1
-        self._invalidate_cleanup_deposit_filter_targets_cache()
-        self._invalidate_cleanup_target_display_cache()
-        self.catalog_loaded = True
-        if self.catalog_load_error:
-            ConsoleLog(MODULE_NAME, self.catalog_load_error, Console.MessageType.Warning)
+            result: CatalogLoadResult = self._get_catalog_loader().load()
+            self.catalog_by_model_id = result.catalog_by_model_id
+            self.exact_catalog_by_item_key = result.exact_catalog_by_item_key
+            self.exact_catalog_untyped_by_model_id = result.exact_catalog_untyped_by_model_id
+            self._rebuild_equipment_typed_entry_index()
+            self.catalog_alias_to_model_ids = result.catalog_alias_to_model_ids
+            self.catalog_alias_display_names = result.catalog_alias_display_names
+            self.common_salvage_model_ids_by_item_key = result.common_salvage_model_ids_by_item_key
+            self.catalog_common_material_ids = result.catalog_common_material_ids
+            self.catalog_merchant_essentials = result.catalog_merchant_essentials
+            self.catalog_rare_materials = result.catalog_rare_materials
+            self.catalog_stats = result.catalog_stats
+            self.catalog_load_error = result.catalog_load_error
+            self.weapon_mod_entries = result.weapon_mod_entries
+            self.rune_entries = result.rune_entries
+            self.armor_upgrade_entries = result.armor_upgrade_entries
+            self.weapon_mod_names = result.weapon_mod_names
+            self.weapon_mod_generic_names = result.weapon_mod_generic_names
+            self.weapon_mod_variant_names = result.weapon_mod_variant_names
+            self.rune_names = result.rune_names
+            self.rune_buy_entries = result.rune_buy_entries
+            self.rune_buy_entries_by_identifier = result.rune_buy_entries_by_identifier
+            self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
+            self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
+            self.rune_buy_professions = result.rune_buy_professions
+            self._catalog_generation += 1
+            self._invalidate_cleanup_deposit_filter_targets_cache()
+            self._invalidate_cleanup_target_display_cache()
+            self.catalog_loaded = True
+            if self.catalog_load_error:
+                ConsoleLog(MODULE_NAME, self.catalog_load_error, Console.MessageType.Warning)
+        finally:
+            self._catalog_building = False
+            self._clear_ranked_search_caches()
 
     def _load_outpost_entries(self):
         outposts = dict(zip(Map.GetOutpostIDs(), Map.GetOutpostNames()))
@@ -16024,15 +16128,34 @@ class MerchantRulesWidget:
                 visible_results.append(entry)
         return visible_results[:expanded_limit]
 
-    def _search_exact_catalog(
+    def _get_ranked_search_cache_entry(
         self,
-        raw_query: str,
-        limit: int = SEARCH_RESULT_LIMIT,
-    ) -> list[dict[str, object]]:
-        query = _normalize_catalog_search_text(raw_query)
-        if not query:
-            return []
+        cache: OrderedDict[tuple[int, str], tuple[dict[str, object], ...]],
+        query: str,
+    ) -> tuple[dict[str, object], ...] | None:
+        cache_key = (int(self._catalog_generation), query)
+        cached_results = cache.get(cache_key)
+        if cached_results is None:
+            return None
+        cache.move_to_end(cache_key)
+        return cached_results
 
+    def _store_ranked_search_cache_entry(
+        self,
+        cache: OrderedDict[tuple[int, str], tuple[dict[str, object], ...]],
+        query: str,
+        ranked_results: tuple[dict[str, object], ...],
+    ) -> None:
+        cache_key = (int(self._catalog_generation), query)
+        cache[cache_key] = ranked_results
+        cache.move_to_end(cache_key)
+        while len(cache) > RANKED_SEARCH_CACHE_CAPACITY:
+            cache.popitem(last=False)
+
+    def _build_ranked_exact_catalog_search_results(
+        self,
+        query: str,
+    ) -> tuple[dict[str, object], ...]:
         matches: list[tuple[tuple[object, ...], dict[str, object]]] = []
         for entry in self._iter_exact_catalog_entries():
             name = str(entry.get("name", "")).strip()
@@ -16080,7 +16203,29 @@ class MerchantRulesWidget:
             matches.append((score, entry))
 
         matches.sort(key=lambda match: match[0])
-        return [entry for _, entry in matches[: max(1, int(limit))]]
+        return tuple(entry for _, entry in matches)
+
+    def _search_exact_catalog(
+        self,
+        raw_query: str,
+        limit: int = SEARCH_RESULT_LIMIT,
+    ) -> list[dict[str, object]]:
+        query = _normalize_catalog_search_text(raw_query)
+        if not query:
+            return []
+
+        ranked_results = self._get_ranked_search_cache_entry(
+            self._exact_ranked_search_cache,
+            query,
+        )
+        if ranked_results is None:
+            ranked_results = self._build_ranked_exact_catalog_search_results(query)
+            self._store_ranked_search_cache_entry(
+                self._exact_ranked_search_cache,
+                query,
+                ranked_results,
+            )
+        return list(ranked_results[: max(1, int(limit))])
 
     def _search_exact_catalog_with_predicate(
         self,
@@ -16155,12 +16300,11 @@ class MerchantRulesWidget:
                 visible_results.append(entry)
         return visible_results[:expanded_limit]
 
-    def _search_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
-        query = _normalize_catalog_search_text(raw_query)
-        if not query:
-            return []
-
-        matches: list[tuple[tuple[int, int, int, int, int, int, int], dict[str, object]]] = []
+    def _build_ranked_catalog_search_results(
+        self,
+        query: str,
+    ) -> tuple[dict[str, object], ...]:
+        matches: list[tuple[tuple[int, int, int, int, int, int, int, int], dict[str, object]]] = []
         for entry in self.catalog_by_model_id.values():
             name = str(entry.get("name", "")).strip()
             model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
@@ -16203,7 +16347,25 @@ class MerchantRulesWidget:
             matches.append((score, entry))
 
         matches.sort(key=lambda match: match[0])
-        return [entry for _, entry in matches[: max(1, int(limit))]]
+        return tuple(entry for _, entry in matches)
+
+    def _search_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
+        query = _normalize_catalog_search_text(raw_query)
+        if not query:
+            return []
+
+        ranked_results = self._get_ranked_search_cache_entry(
+            self._flat_ranked_search_cache,
+            query,
+        )
+        if ranked_results is None:
+            ranked_results = self._build_ranked_catalog_search_results(query)
+            self._store_ranked_search_cache_entry(
+                self._flat_ranked_search_cache,
+                query,
+                ranked_results,
+            )
+        return list(ranked_results[: max(1, int(limit))])
 
     def _search_catalog_with_predicate(
         self,
