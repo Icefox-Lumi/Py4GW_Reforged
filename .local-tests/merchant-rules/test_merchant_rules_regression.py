@@ -24644,7 +24644,10 @@ def _test_typed_exact_catalog_collision_contract(module) -> None:
         "Every valid ItemHandling (ItemType, ModelID) key should be represented in the Exact catalog.",
     )
     collision_models = {model_id for model_id, item_types in model_types.items() if len(item_types) > 1}
-    _expect(len(collision_models) == 69, "The current ItemHandling data should expose 69 positive cross-type collisions.")
+    _expect(
+        len(collision_models) == 66,
+        "The current ItemHandling data should expose 66 positive cross-type collisions after Present cleanup.",
+    )
     _expect(
         all(
             sum(1 for item_key in widget.exact_catalog_by_item_key if item_key[1] == model_id) == len(item_types)
@@ -24836,6 +24839,89 @@ def _test_typed_exact_catalog_collision_contract(module) -> None:
         == [module.ExactProtectionTarget(model_id=salvage_key[1], item_type_id=int(module.ItemType.Salvage))],
         "ItemType 0 must normalize as a typed Salvage target, not as a wildcard.",
     )
+
+
+def _test_verified_usable_present_identity_cleanup(module) -> None:
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+
+    expected_rows: dict[int, tuple[int, int, str]] = {
+        21491: (int(module.ItemType.Usable), 277354, "Wintersday Gift"),
+        28434: (int(module.ItemType.Usable), 336288, "Trick-or-Treat Bag"),
+        31148: (int(module.ItemType.Usable), 344023, "Gift of the Traveler"),
+    }
+    raw_catalog = json.loads(
+        (REPO_ROOT / "Sources" / "frenkeyLib" / "ItemHandling" / "Items" / "items.json").read_text(encoding="utf-8")
+    )
+    source_rows_by_model: dict[int, list[dict[str, object]]] = {model_id: [] for model_id in expected_rows}
+    for row in module._iter_item_handling_catalog_entries(raw_catalog):
+        model_id = int(row.get("model_id", 0) or 0)
+        if model_id in source_rows_by_model:
+            source_rows_by_model[model_id].append(row)
+
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+    present_type_id = int(module.ItemType.Present)
+    for model_id, (expected_type_id, expected_model_file_id, expected_name) in expected_rows.items():
+        source_rows = source_rows_by_model[model_id]
+        _expect(
+            len(source_rows) == 1, f"Shared ItemHandling data should retain one canonical row for model {model_id}."
+        )
+        source_row = source_rows[0]
+        source_model_file_id = source_row.get("model_file_id")
+        _expect(
+            _item_handling_type_id(module, source_row.get("item_type")) == expected_type_id
+            and isinstance(source_model_file_id, int)
+            and source_model_file_id == expected_model_file_id
+            and str(source_row.get("name", "") or "") == expected_name,
+            f"Shared ItemHandling row {model_id} should retain its verified Usable identity and model file.",
+        )
+
+        expected_key = (expected_type_id, model_id)
+        model_keys = {
+            (int(item_key[0]), int(item_key[1]))
+            for item_key in widget.exact_catalog_by_item_key
+            if int(item_key[1]) == model_id
+        }
+        _expect(
+            model_keys == {expected_key} and (present_type_id, model_id) not in widget.exact_catalog_by_item_key,
+            f"Exact catalog model {model_id} should expose only its verified Usable key, never Present.",
+        )
+        exact_entry = widget.exact_catalog_by_item_key.get(expected_key)
+        _expect(exact_entry is not None, f"Verified Usable Exact key {expected_key} should be indexed.")
+        if exact_entry is None:
+            continue
+        _expect(
+            int(exact_entry.get("item_type_id", -1) or -1) == expected_type_id
+            and str(exact_entry.get("item_type", "") or "") == "Usable",
+            f"Exact catalog entry {expected_key} should preserve the native Usable type.",
+        )
+
+        for query in (str(model_id), expected_name):
+            results = widget._search_protected_item_catalog(query, limit=module.SEARCH_RESULT_LIMIT)
+            result_keys = {
+                (entry.get("item_type_id"), int(entry.get("model_id", 0) or 0))
+                for entry in results
+            }
+            _expect(
+                result_keys == {expected_key},
+                f"Exact search for {query!r} should return only verified Usable result {expected_key}.",
+            )
+            cached_target_keys = {
+                (entry.get("item_type_id"), int(entry.get("model_id", 0) or 0))
+                for ranked_results in widget._exact_ranked_search_cache.values()
+                for entry in ranked_results
+                if int(entry.get("model_id", 0) or 0) == model_id
+            }
+            _expect(
+                cached_target_keys == {expected_key},
+                f"Ranked Exact cache must not reintroduce removed Present identity {(present_type_id, model_id)}.",
+            )
+            repeated_results = widget._search_protected_item_catalog(query, limit=module.SEARCH_RESULT_LIMIT)
+            _expect(
+                len(repeated_results) == 1 and repeated_results[0] is results[0],
+                f"Repeated Exact search for {query!r} should reuse the verified cached entry without stale identity.",
+            )
 
 
 def _test_typed_exact_profile_matching_and_shortcut_contract(module) -> None:
@@ -33493,6 +33579,10 @@ def main() -> int:
             (
                 "typed_exact_catalog_collision_contract",
                 lambda: _test_typed_exact_catalog_collision_contract(module),
+            ),
+            (
+                "verified_usable_present_identity_cleanup",
+                lambda: _test_verified_usable_present_identity_cleanup(module),
             ),
             (
                 "typed_exact_profile_matching_and_shortcut_contract",
