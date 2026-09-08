@@ -95,6 +95,7 @@ from Sources.icefox.MerchantRules.catalog import make_weapon_mod_variant_choice_
 from Sources.icefox.MerchantRules.catalog import iter_item_handling_catalog_entries as _catalog_iter_item_handling_catalog_entries
 from Sources.icefox.MerchantRules.catalog import iter_model_id_members as _iter_model_id_enum_members
 from Sources.icefox.MerchantRules.catalog import normalize_catalog_search_text as _normalize_catalog_search_text
+from Sources.icefox.MerchantRules.catalog import strip_catalog_display_markup as _strip_item_display_markup
 from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_component_kind as _normalize_weapon_mod_component_kind
 from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_target_item_type as _normalize_weapon_mod_target_item_type
 from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_variant_parts as _normalize_weapon_mod_variant_parts
@@ -5296,19 +5297,6 @@ def resolve_agent_xy_from_step(
             f"Could not resolve {safe_agent_kind} within {max_dist:.0f} at index {step_idx}",
         )
     return None
-
-
-def _strip_item_display_markup(raw_value: object) -> str:
-    text = str(raw_value or "").strip()
-    if not text:
-        return ""
-    previous = None
-    while previous != text:
-        previous = text
-        text = re.sub(r"<c=@[^>]+>(.*?)</c>", r"\1", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
 
 
 def _is_common_crafting_material_model(model_id: object) -> bool:

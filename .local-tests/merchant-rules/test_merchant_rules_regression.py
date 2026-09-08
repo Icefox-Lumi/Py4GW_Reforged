@@ -26497,6 +26497,94 @@ def _test_catalog_loads_without_deprecated_item_mirror(module) -> None:
             setattr(module, name, value)
 
 
+def _test_catalog_item_name_markup_normalization(module) -> None:
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+
+    material_type_id = int(module.ItemType.Materials_Zcoins)
+    expected_names = {
+        31202: "Copper Zaishen Coin",
+        31203: "Gold Zaishen Coin",
+        31204: "Silver Zaishen Coin",
+    }
+    expected_keys = {(material_type_id, model_id) for model_id in expected_names}
+
+    for model_id, expected_name in expected_names.items():
+        entry = widget.exact_catalog_by_item_key.get((material_type_id, model_id))
+        _expect(entry is not None, f"Zaishen Coin typed key {(material_type_id, model_id)} should remain in the Exact catalog.")
+        _expect(entry.get("name") == expected_name, f"Zaishen Coin {model_id} should have a plain catalog display name.")
+        _expect(
+            "<c=" not in str(entry.get("name", "")).casefold()
+            and "</c>" not in str(entry.get("name", "")).casefold(),
+            f"Zaishen Coin {model_id} should not retain raw color markup in its catalog name.",
+        )
+        label = widget._format_exact_catalog_entry_label(entry)
+        _expect(
+            label.startswith(f"{expected_name} ({model_id})")
+            and "<c=" not in label.casefold()
+            and "</c>" not in label.casefold(),
+            f"Exact Items should display the plain Zaishen Coin name for model {model_id}.",
+        )
+        aliases = entry.get("alias_labels", {})
+        _expect(
+            isinstance(aliases, dict)
+            and module._normalize_catalog_search_text(expected_name) in aliases
+            and all("<c=" not in str(value).casefold() and "</c>" not in str(value).casefold() for value in aliases.values()),
+            f"Zaishen Coin {model_id} should retain clean primary aliases.",
+        )
+
+    search_results = widget._search_protected_item_catalog("zaishen coin")
+    search_keys = [(entry.get("item_type_id"), int(entry.get("model_id", 0))) for entry in search_results]
+    _expect(
+        len(search_results) == 3 and set(search_keys) == expected_keys,
+        "Zaishen Coin search should return exactly the three typed identities.",
+    )
+
+    catalog_loader = module.CatalogLoader(
+        catalog_path="",
+        drop_data_path="",
+        item_handling_path="",
+        runes_catalog_path="",
+        mod_db=types.SimpleNamespace(weapon_mods={}, runes={}),
+        mod_db_load_error="",
+        model_id_members=lambda: [],
+        armor_upgrade_identity=lambda _identifier: (None, ""),
+        scroll_trader_stock_model_ids=frozenset(),
+    )
+    synthetic_flat: dict[int, dict[str, object]] = {}
+    synthetic_exact: dict[tuple[int, int], dict[str, object]] = {}
+    synthetic_model_id = 987654
+    fallback_model_id = 987655
+    loaded_count = catalog_loader._index_loader.load_item_handling_catalog(
+        synthetic_flat,
+        {
+            "synthetic": [
+                {
+                    "model_id": synthetic_model_id,
+                    "name": "<c=#12AB34>Synthetic Markup Item</c>",
+                    "item_type": "Trophy",
+                    "skin": "Synthetic Markup Item.png",
+                },
+                {
+                    "model_id": fallback_model_id,
+                    "name": "<c=#12AB34></c>",
+                    "item_type": "Trophy",
+                },
+            ]
+        },
+        exact_catalog_by_item_key=synthetic_exact,
+    )
+    _expect(loaded_count == 2, "Synthetic catalog normalization rows should remain loadable.")
+    synthetic_key = (int(module.ItemType.Trophy), synthetic_model_id)
+    fallback_key = (int(module.ItemType.Trophy), fallback_model_id)
+    _expect(synthetic_exact[synthetic_key]["name"] == "Synthetic Markup Item", "Synthetic color markup should be removed at catalog load.")
+    _expect(
+        synthetic_exact[synthetic_key]["alias_labels"] == {"synthetic markup item": "Synthetic Markup Item"},
+        "Synthetic aliases should use the cleaned primary name.",
+    )
+    _expect(synthetic_exact[fallback_key]["name"] == f"Model {fallback_model_id}", "All-markup names should retain a model fallback.")
+
+
 def _test_ranked_search_cache_contract(module) -> None:
     widget = _make_widget(module)
     _load_real_merchant_rules_catalog_for_test(module, widget)
@@ -34564,6 +34652,10 @@ def main() -> int:
             (
                 "item_handling_catalog_migration_loads_primary_catalog_and_modelid_fallback",
                 lambda: _test_item_handling_catalog_migration_loads_primary_catalog_and_modelid_fallback(module),
+            ),
+            (
+                "catalog_item_name_markup_normalization",
+                lambda: _test_catalog_item_name_markup_normalization(module),
             ),
             (
                 "catalog_loads_without_deprecated_item_mirror",

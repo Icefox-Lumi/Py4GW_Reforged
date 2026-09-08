@@ -105,19 +105,46 @@ def _normalize_catalog_search_text(raw_value: object) -> str:
     return text.strip()
 
 
+def _strip_catalog_display_markup(raw_value: object) -> str:
+    text = str(raw_value or '').strip()
+    if not text:
+        return ''
+    previous = None
+    while previous != text:
+        previous = text
+        text = re.sub(r'<c=@[^>]+>(.*?)</c>', r'\1', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def _normalize_catalog_display_name(raw_value: object, model_id: object = 0) -> str:
+    raw_text = str(raw_value or '').strip()
+    if not raw_text:
+        return ''
+
+    clean_text = _strip_catalog_display_markup(raw_text)
+    if clean_text:
+        return clean_text
+
+    safe_model_id = max(0, _safe_int(model_id, 0))
+    return f'Model {safe_model_id}' if safe_model_id > 0 else ''
+
+
 def _build_catalog_alias_labels(name: object, skin: object = '', wiki_url: object = '') -> dict[str, str]:
     alias_labels: dict[str, str] = {}
 
     def _add_alias(raw_alias: object, display_label: object = '') -> None:
-        normalized = _normalize_catalog_search_text(raw_alias)
+        clean_alias = _strip_catalog_display_markup(raw_alias)
+        normalized = _normalize_catalog_search_text(clean_alias)
         if not normalized:
             return
-        display = str(display_label or raw_alias or '').strip()
+        display = _strip_catalog_display_markup(display_label or clean_alias)
         if not display:
             display = normalized.title()
         alias_labels.setdefault(normalized, display)
 
-    safe_name = str(name or '').strip()
+    safe_name = _normalize_catalog_display_name(name)
     if safe_name:
         _add_alias(safe_name, safe_name)
 
@@ -372,7 +399,7 @@ class _CatalogIndexLoader:
         extra: dict[str, object] | None = None,
     ) -> None:
         safe_model_id = max(0, _safe_int(model_id, 0))
-        safe_name = str(name or '').strip()
+        safe_name = _normalize_catalog_display_name(name, safe_model_id)
         if safe_model_id <= 0 or not safe_name:
             return
 
@@ -409,7 +436,7 @@ class _CatalogIndexLoader:
     ) -> None:
         safe_item_type_id = _safe_int(item_type_id, -1)
         safe_model_id = max(0, _safe_int(model_id, 0))
-        safe_name = str(name or '').strip()
+        safe_name = _normalize_catalog_display_name(name, safe_model_id)
         if safe_item_type_id < 0 or safe_model_id <= 0 or not safe_name:
             return
         try:
@@ -454,9 +481,13 @@ class _CatalogIndexLoader:
             if model_id <= 0:
                 continue
 
+            name = _normalize_catalog_display_name(
+                entry.get('name', '') or f'Model {model_id}',
+                model_id,
+            ) or f'Model {model_id}'
             loaded_entry = {
                 'model_id': model_id,
-                'name': str(entry.get('name', '') or f'Model {model_id}'),
+                'name': name,
                 'item_type': str(entry.get('item_type', default_item_type) or default_item_type),
                 'material_type': str(entry.get('material_type', default_material_type) or default_material_type),
             }
@@ -491,7 +522,7 @@ class _CatalogIndexLoader:
             if not isinstance(row, dict):
                 continue
             model_id = _resolve_model_id_value(row.get('model_id', 0))
-            name = str(row.get('name', '')).strip()
+            name = _normalize_catalog_display_name(row.get('name', ''), model_id)
             if model_id <= 0 or not name:
                 continue
             self.register_catalog_entry(
@@ -521,7 +552,10 @@ class _CatalogIndexLoader:
         resolve_priority = priority_resolver or self.item_priority_resolver
         for entry in _iter_item_handling_catalog_entries(raw_catalog):
             model_id = _resolve_model_id_value(entry.get('model_id', entry.get('ModelID', 0)))
-            name = str(entry.get('name') or entry.get('Name') or '').strip()
+            name = _normalize_catalog_display_name(
+                entry.get('name') or entry.get('Name') or '',
+                model_id,
+            )
             if model_id <= 0 or not name:
                 continue
 
@@ -613,9 +647,13 @@ class _CatalogIndexLoader:
                 continue
 
             names = raw_entry.get('Names', {})
-            display_name = str(names.get('English', '') or '').strip() if isinstance(names, dict) else ''
+            raw_display_name = names.get('English', '') if isinstance(names, dict) else ''
+            display_name = _normalize_catalog_display_name(raw_display_name, model_id)
             if not display_name:
-                display_name = str(raw_entry.get('Identifier', raw_identifier) or '').strip()
+                display_name = _normalize_catalog_display_name(
+                    raw_entry.get('Identifier', raw_identifier),
+                    model_id,
+                )
             if not display_name:
                 continue
 
@@ -711,7 +749,7 @@ class _CatalogIndexLoader:
                 ):
                     # Keep the ItemHandling record and provenance, but use an unambiguous
                     # rich rune/insignia name as the shared Merchant Rules display label.
-                    current['name'] = rich_name
+                    current['name'] = _normalize_catalog_display_name(rich_name, model_id) or current.get('name', '')
 
                 current_alias_labels = current.get('alias_labels', {})
                 if not isinstance(current_alias_labels, dict):
@@ -777,7 +815,7 @@ class _CatalogIndexLoader:
             and rich_kind in normalized_rich_name.split()
             and len(identifiers) == 1
         ):
-            entry['name'] = rich_name
+            entry['name'] = _normalize_catalog_display_name(rich_name, entry.get('model_id', 0)) or entry.get('name', '')
 
     def load_model_id_fallback_catalog(
         self,
@@ -836,13 +874,16 @@ class _CatalogIndexLoader:
             normalized_alias_labels: dict[str, str] = {}
             if isinstance(alias_labels, dict):
                 for raw_alias, display_name in alias_labels.items():
-                    normalized_alias = _normalize_catalog_search_text(raw_alias)
+                    normalized_alias = _normalize_catalog_search_text(_strip_catalog_display_markup(raw_alias))
                     if normalized_alias:
+                        clean_display_name = _strip_catalog_display_markup(display_name)
                         normalized_alias_labels[normalized_alias] = (
-                            str(display_name or '').strip() or normalized_alias.title()
+                            clean_display_name or normalized_alias.title()
                         )
 
-            name = str(entry.get('name', '')).strip()
+            name = _normalize_catalog_display_name(entry.get('name', ''), model_id)
+            if name:
+                entry['name'] = name
             normalized_name = _normalize_catalog_search_text(name)
             if normalized_name and normalized_name not in normalized_alias_labels:
                 normalized_alias_labels[normalized_name] = name
@@ -1353,12 +1394,15 @@ class MerchantRulesCatalogLoader:
             normalized_alias_labels: dict[str, str] = {}
             if isinstance(alias_labels, dict):
                 for raw_alias, display_name in alias_labels.items():
-                    normalized_alias = _normalize_catalog_search_text(raw_alias)
+                    normalized_alias = _normalize_catalog_search_text(_strip_catalog_display_markup(raw_alias))
                     if normalized_alias:
+                        clean_display_name = _strip_catalog_display_markup(display_name)
                         normalized_alias_labels[normalized_alias] = (
-                            str(display_name or '').strip() or normalized_alias.title()
+                            clean_display_name or normalized_alias.title()
                         )
-            name = str(entry.get('name', '')).strip()
+            name = _normalize_catalog_display_name(entry.get('name', ''), entry.get('model_id', 0))
+            if name:
+                entry['name'] = name
             normalized_name = _normalize_catalog_search_text(name)
             if normalized_name and normalized_name not in normalized_alias_labels:
                 normalized_alias_labels[normalized_name] = name
@@ -1577,6 +1621,7 @@ make_weapon_mod_variant_choice_key = _make_weapon_mod_variant_choice_key
 iter_item_handling_catalog_entries = _iter_item_handling_catalog_entries
 iter_model_id_members = _iter_model_id_members
 normalize_catalog_search_text = _normalize_catalog_search_text
+strip_catalog_display_markup = _strip_catalog_display_markup
 normalize_weapon_mod_component_kind = _normalize_weapon_mod_component_kind
 normalize_weapon_mod_target_item_type = _normalize_weapon_mod_target_item_type
 normalize_weapon_mod_variant_parts = _normalize_weapon_mod_variant_parts
