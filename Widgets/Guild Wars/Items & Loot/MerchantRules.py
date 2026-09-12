@@ -14767,16 +14767,11 @@ class MerchantRulesWidget:
             return ""
         return label
 
-    def _get_meaningful_model_attribute_labels(self, model_id: int) -> list[str]:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        if safe_model_id <= 0:
-            return []
-        item_type = self._get_model_item_type(safe_model_id)
+    def _get_meaningful_catalog_entry_attribute_labels(self, entry: dict[str, object]) -> list[str]:
+        item_type = str(entry.get("item_type", "")).strip()
+        if not item_type:
+            item_type = self._humanize_exact_item_type(entry.get("item_type_id"))
         if not _is_weapon_catalog_item_type(item_type):
-            return []
-
-        entry = self._get_model_entry(safe_model_id)
-        if entry is None:
             return []
 
         raw_attributes = entry.get("attributes", [])
@@ -14795,6 +14790,20 @@ class MerchantRulesWidget:
             seen_labels.add(normalized_label)
             labels.append(humanized_label)
         return labels
+
+    def _get_meaningful_model_attribute_labels(self, model_id: int) -> list[str]:
+        safe_model_id = max(0, _safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return []
+        item_type = self._get_model_item_type(safe_model_id)
+        if not _is_weapon_catalog_item_type(item_type):
+            return []
+
+        entry = self._get_model_entry(safe_model_id)
+        if entry is None:
+            return []
+
+        return self._get_meaningful_catalog_entry_attribute_labels(entry)
 
     def _get_model_attribute_suffix_from_model_id(self, model_id: int) -> str:
         safe_model_id = max(0, _safe_int(model_id, 0))
@@ -15154,12 +15163,23 @@ class MerchantRulesWidget:
             return item_type.title()
         return "Item"
 
+    def _get_single_exact_catalog_entry_attribute_suffix(self, entry: dict[str, object]) -> str:
+        if not _is_valid_exact_item_type_id(entry.get("item_type_id")):
+            return ""
+        attribute_labels = self._get_meaningful_catalog_entry_attribute_labels(entry)
+        if len(attribute_labels) == 1:
+            return attribute_labels[0]
+        return ""
+
     def _format_exact_catalog_entry_label(self, entry: dict[str, object]) -> str:
         safe_model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
         name = str(entry.get("name", "")).strip() or f"Model {safe_model_id}"
         descriptor = self._get_exact_catalog_entry_descriptor(entry)
         if entry.get("item_type_id") is None:
             return f"{name} ({safe_model_id}) — {descriptor} · Broad match"
+        attribute_suffix = self._get_single_exact_catalog_entry_attribute_suffix(entry)
+        if attribute_suffix:
+            descriptor = f"{descriptor} · {attribute_suffix}"
         return f"{name} ({safe_model_id}) — {descriptor}"
 
     def _get_exact_catalog_entries_for_model(self, model_id: object) -> list[dict[str, object]]:

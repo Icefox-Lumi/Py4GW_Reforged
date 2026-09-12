@@ -131,7 +131,12 @@ def _normalize_catalog_display_name(raw_value: object, model_id: object = 0) -> 
     return f'Model {safe_model_id}' if safe_model_id > 0 else ''
 
 
-def _build_catalog_alias_labels(name: object, skin: object = '', wiki_url: object = '') -> dict[str, str]:
+def _build_catalog_alias_labels(
+    name: object,
+    skin: object = '',
+    wiki_url: object = '',
+    attributes: object = (),
+) -> dict[str, str]:
     alias_labels: dict[str, str] = {}
 
     def _add_alias(raw_alias: object, display_label: object = '') -> None:
@@ -160,6 +165,14 @@ def _build_catalog_alias_labels(name: object, skin: object = '', wiki_url: objec
         wiki_label = unquote(wiki_stem).replace('_', ' ').strip()
         if wiki_label:
             _add_alias(wiki_label, wiki_label)
+
+    if isinstance(attributes, (list, tuple, set)) and safe_name:
+        for raw_attribute in attributes:
+            attribute_label = _humanize_model_id_enum_name(raw_attribute)
+            if not attribute_label or attribute_label.casefold() == 'none':
+                continue
+            qualified_label = f'{safe_name} {attribute_label}'
+            _add_alias(qualified_label, qualified_label)
 
     return alias_labels
 
@@ -586,7 +599,7 @@ class _CatalogIndexLoader:
                                 common_salvage_ambiguous_item_keys.add(item_key)
 
             extra: dict[str, object] = {
-                'alias_labels': _build_catalog_alias_labels(name, skin, wiki_url),
+                'alias_labels': _build_catalog_alias_labels(name, skin, wiki_url, attributes),
                 'attributes': attributes,
             }
             if skin:

@@ -26497,6 +26497,171 @@ def _test_catalog_loads_without_deprecated_item_mirror(module) -> None:
             setattr(module, name, value)
 
 
+def _test_item_handling_attribute_alias_search_contract(module) -> None:
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+
+    cases = (
+        (2494, module.ItemType.Staff, "Hourglass Staff", "RestorationMagic", "Restoration Magic", "Hourglass Staff Restoration Magic"),
+        (2021, module.ItemType.Offhand, "Storm Ember", "AirMagic", "Air Magic", "Storm Ember Air Magic"),
+        (2432, module.ItemType.Wand, "Peacock's Wrath", "FastCasting", "Fast Casting", "Peacock's Wrath Fast Casting"),
+        (1986, module.ItemType.Daggers, "Storm Daggers", "DaggerMastery", "Dagger Mastery", "Storm Daggers Dagger Mastery"),
+    )
+
+    for model_id, item_type, name, attribute, attribute_label, qualified_alias in cases:
+        item_type_id = int(item_type)
+        flat_entry = widget.catalog_by_model_id.get(model_id, {})
+        exact_entry = widget.exact_catalog_by_item_key.get((item_type_id, model_id))
+        _expect(exact_entry is not None, f"Typed ItemHandling entry {(item_type_id, model_id)} should be indexed exactly.")
+        _expect(flat_entry.get("name") == name, f"Flat catalog should preserve the base name for model {model_id}.")
+        _expect(exact_entry.get("name") == name, f"Exact catalog should preserve the base name for model {model_id}.")
+        _expect(flat_entry.get("attributes") == [attribute], f"Flat catalog should preserve structured attributes for model {model_id}.")
+        _expect(exact_entry.get("attributes") == [attribute], f"Exact catalog should preserve structured attributes for model {model_id}.")
+
+        normalized_alias = module._normalize_catalog_search_text(qualified_alias)
+        aliases = exact_entry.get("alias_labels", {})
+        _expect(
+            isinstance(aliases, dict)
+            and aliases.get(normalized_alias) == qualified_alias,
+            f"Typed model {model_id} should expose its qualified human-readable attribute alias.",
+        )
+        _expect(
+            module._normalize_catalog_search_text(attribute) not in aliases,
+            f"Typed model {model_id} should not create a broad standalone attribute alias.",
+        )
+
+        search_cases = (
+            (widget._search_catalog, qualified_alias, "flat"),
+            (widget._search_catalog, attribute_label, "flat attribute"),
+            (widget._search_exact_catalog, qualified_alias, "Exact Items"),
+            (widget._search_exact_catalog, attribute_label, "Exact attribute"),
+            (widget._search_weapon_catalog, qualified_alias, "Equipment"),
+            (widget._search_weapon_catalog, attribute_label, "Equipment attribute"),
+        )
+        for search_function, query, search_name in search_cases:
+            results = search_function(query, limit=max(1, len(widget.catalog_by_model_id)))
+            _expect(
+                model_id in {int(entry.get("model_id", 0)) for entry in results},
+                f"{search_name} search should find model {model_id} by {query!r}.",
+            )
+
+        base_results = widget._search_catalog(name, limit=max(1, len(widget.catalog_by_model_id)))
+        exact_base_results = widget._search_exact_catalog(name, limit=max(1, len(widget.exact_catalog_by_item_key)))
+        equipment_base_results = widget._search_weapon_catalog(name, limit=max(1, len(widget.catalog_by_model_id)))
+        _expect(
+            model_id in {int(entry.get("model_id", 0)) for entry in base_results},
+            f"Flat base-name search should still find model {model_id}.",
+        )
+        _expect(
+            model_id in {int(entry.get("model_id", 0)) for entry in exact_base_results},
+            f"Exact base-name search should still find model {model_id}.",
+        )
+        _expect(
+            model_id in {int(entry.get("model_id", 0)) for entry in equipment_base_results},
+            f"Equipment base-name search should still find model {model_id}.",
+        )
+
+
+def _test_exact_typed_attribute_display_contract(module) -> None:
+    widget = _make_widget(module)
+    _load_real_merchant_rules_catalog_for_test(module, widget)
+
+    typed_cases = (
+        (2494, module.ItemType.Staff, "Hourglass Staff", "Restoration Magic"),
+        (2021, module.ItemType.Offhand, "Storm Ember", "Air Magic"),
+        (2432, module.ItemType.Wand, "Peacock's Wrath", "Fast Casting"),
+        (1986, module.ItemType.Daggers, "Storm Daggers", "Dagger Mastery"),
+    )
+    for model_id, item_type, name, attribute_label in typed_cases:
+        item_key = (int(item_type), model_id)
+        entry = widget.exact_catalog_by_item_key.get(item_key)
+        _expect(entry is not None, f"Exact display fixture {item_key} should be present.")
+        search_results = widget._search_exact_catalog(
+            f"{name} {attribute_label}",
+            limit=max(1, len(widget.exact_catalog_by_item_key)),
+        )
+        _expect(
+            item_key in {
+                (int(result.get("item_type_id", -1)), int(result.get("model_id", 0)))
+                for result in search_results
+            },
+            f"Exact search should return the typed identity {item_key} for its qualified attribute query.",
+        )
+        expected_label = f"{name} ({model_id}) — {widget._get_exact_catalog_entry_descriptor(entry)} · {attribute_label}"
+        _expect(
+            widget._format_exact_catalog_entry_label(entry) == expected_label,
+            f"Exact typed label should include the matched row's own attribute for model {model_id}.",
+        )
+        _expect(
+            widget._format_exact_protection_target_label(
+                module.ExactProtectionTarget(model_id=model_id, item_type_id=int(item_type))
+            )
+            == expected_label,
+            f"Exact protection target label should include the matched row's own attribute for model {model_id}.",
+        )
+
+    empty_attribute_cases = (
+        (2366, module.ItemType.Staff, "Crystal Flame Staff"),
+        (2394, module.ItemType.Wand, "Onyx Scepter"),
+        (25866, module.ItemType.Storybook, "Zho's Journal"),
+    )
+    for model_id, item_type, name in empty_attribute_cases:
+        entry = widget.exact_catalog_by_item_key.get((int(item_type), model_id))
+        _expect(entry is not None, f"Empty-attribute display fixture {(int(item_type), model_id)} should be present.")
+        expected_label = f"{name} ({model_id}) — {widget._get_exact_catalog_entry_descriptor(entry)}"
+        _expect(
+            widget._format_exact_catalog_entry_label(entry) == expected_label,
+            f"Exact label should not invent an attribute suffix for model {model_id}.",
+        )
+
+    collision_model_id = 987656
+    widget.catalog_by_model_id[collision_model_id] = {
+        "model_id": collision_model_id,
+        "name": "Shared Collision Item",
+        "item_type": "Axe",
+        "attributes": ["AxeMastery"],
+    }
+    sword_entry = {
+        "item_type_id": int(module.ItemType.Sword),
+        "model_id": collision_model_id,
+        "name": "Shared Collision Item",
+        "item_type": "Sword",
+        "attributes": ["Swordsmanship"],
+    }
+    staff_entry = {
+        "item_type_id": int(module.ItemType.Staff),
+        "model_id": collision_model_id,
+        "name": "Shared Collision Item",
+        "item_type": "Staff",
+        "attributes": ["RestorationMagic"],
+    }
+    widget.exact_catalog_by_item_key = {
+        **widget.exact_catalog_by_item_key,
+        (int(module.ItemType.Sword), collision_model_id): sword_entry,
+        (int(module.ItemType.Staff), collision_model_id): staff_entry,
+    }
+    sword_label = widget._format_exact_protection_target_label(
+        module.ExactProtectionTarget(model_id=collision_model_id, item_type_id=int(module.ItemType.Sword))
+    )
+    staff_label = widget._format_exact_protection_target_label(
+        module.ExactProtectionTarget(model_id=collision_model_id, item_type_id=int(module.ItemType.Staff))
+    )
+    _expect(
+        sword_label == "Shared Collision Item (987656) — Weapon · Sword · Swordsmanship",
+        "A typed collision label must use only the Sword row's attribute instead of flat or sibling metadata.",
+    )
+    _expect(
+        staff_label == "Shared Collision Item (987656) — Weapon · Staff · Restoration Magic",
+        "A typed collision label must use only the Staff row's attribute instead of flat or sibling metadata.",
+    )
+
+    legacy_target = module.ExactProtectionTarget(model_id=2473, item_type_id=None)
+    _expect(
+        widget._format_exact_protection_target_label(legacy_target) == "Broad legacy protection — ID 2473",
+        "Broad legacy protections must retain their model-wide label without a friendly-name or attribute suffix.",
+    )
+
+
 def _test_catalog_item_name_markup_normalization(module) -> None:
     widget = _make_widget(module)
     _load_real_merchant_rules_catalog_for_test(module, widget)
@@ -34652,6 +34817,14 @@ def main() -> int:
             (
                 "item_handling_catalog_migration_loads_primary_catalog_and_modelid_fallback",
                 lambda: _test_item_handling_catalog_migration_loads_primary_catalog_and_modelid_fallback(module),
+            ),
+            (
+                "item_handling_attribute_alias_search_contract",
+                lambda: _test_item_handling_attribute_alias_search_contract(module),
+            ),
+            (
+                "exact_typed_attribute_display_contract",
+                lambda: _test_exact_typed_attribute_display_contract(module),
             ),
             (
                 "catalog_item_name_markup_normalization",
