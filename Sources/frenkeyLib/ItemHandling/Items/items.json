@@ -15363,6 +15363,24 @@
             "skin": "Corrosive Spider Leg.png",
             "sub_category": null,
             "wiki_url": "https://wiki.guildwars.com/wiki/Corrosive_Spider_Leg"
+        },
+        "21509": {
+            "acquisition": "",
+            "attributes": [],
+            "category": null,
+            "common_salvage": null,
+            "description": "",
+            "item_type": "Trophy",
+            "model_file_id": 277394,
+            "model_id": 21509,
+            "name": "Glob of Frozen Ectoplasm",
+            "name_encoded": "",
+            "nick_index": null,
+            "profession": null,
+            "rare_salvage": null,
+            "skin": null,
+            "sub_category": null,
+            "wiki_url": ""
         }
     },
     "Axe": {
@@ -58269,6 +58287,24 @@
             "skin": null,
             "sub_category": "",
             "wiki_url": ""
+        },
+        "2470": {
+            "acquisition": "",
+            "attributes": [],
+            "category": null,
+            "common_salvage": null,
+            "description": "",
+            "item_type": "Shield",
+            "model_file_id": -1,
+            "model_id": 2470,
+            "name": "Japan 1st Anniversary Shield",
+            "name_encoded": "",
+            "nick_index": null,
+            "profession": null,
+            "rare_salvage": null,
+            "skin": null,
+            "sub_category": null,
+            "wiki_url": ""
         }
     },
     "Staff": {
@@ -79909,6 +79945,26 @@
             "skin": "Desolation Sword.png",
             "sub_category": null,
             "wiki_url": "https://wiki.guildwars.com/wiki/Desolation_Sword"
+        },
+        "2117": {
+            "acquisition": "",
+            "attributes": [
+                "Swordsmanship"
+            ],
+            "category": null,
+            "common_salvage": null,
+            "description": "",
+            "item_type": "Sword",
+            "model_file_id": -1,
+            "model_id": 2117,
+            "name": "Greater Granite Edge",
+            "name_encoded": "",
+            "nick_index": null,
+            "profession": null,
+            "rare_salvage": null,
+            "skin": null,
+            "sub_category": null,
+            "wiki_url": ""
         }
     },
     "Daggers": {
@@ -82388,6 +82444,26 @@
             "rare_salvage": null,
             "skin": null,
             "sub_category": "",
+            "wiki_url": ""
+        },
+        "27982": {
+            "acquisition": "",
+            "attributes": [
+                "DaggerMastery"
+            ],
+            "category": null,
+            "common_salvage": null,
+            "description": "",
+            "item_type": "Daggers",
+            "model_file_id": 230808,
+            "model_id": 27982,
+            "name": "Claws of the Broodmother",
+            "name_encoded": "",
+            "nick_index": null,
+            "profession": null,
+            "rare_salvage": null,
+            "skin": null,
+            "sub_category": null,
             "wiki_url": ""
         }
     },
