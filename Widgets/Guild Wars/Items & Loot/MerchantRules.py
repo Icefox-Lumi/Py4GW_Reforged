@@ -7662,6 +7662,7 @@ class MerchantRulesWidget:
         self.rune_buy_professions: list[str] = []
         self.outpost_entries: list[dict[str, object]] = []
         self.shared_profile_refresh_timer = ThrottledTimer(SHARED_PROFILE_REFRESH_INTERVAL_MS)
+        self._runtime_inventory_signature_provider: Callable[[], tuple[tuple[int, int], ...]] | None = None
         self.instant_destroy_poll_timer = ThrottledTimer(INSTANT_DESTROY_POLL_MS)
         self.instant_destroy_rescan_requested = False
         self.instant_destroy_last_signature: tuple[tuple[int, int], ...] = ()
@@ -11141,6 +11142,7 @@ class MerchantRulesWidget:
                 0,
                 int(self.merchant_rules_lifecycle_generation),
             ) + 1
+            self._clear_inventory_monitor_signatures()
             if not lifecycle_map_changed:
                 self._clear_inventory_shortcut_material_storage_count_cache("map/session state changed")
                 self._clear_inventory_shortcut_xunlai_display_cache()
@@ -11772,11 +11774,25 @@ class MerchantRulesWidget:
         self._advance_multibox_batch()
         self._update_manual_gold_session_runtime()
         self._update_manual_vendor_runtime()
-        self._update_identify_runtime()
-        self._update_auto_cleanup_runtime()
-        self._update_auto_gold_runtime()
-        self._update_salvage_runtime()
-        self._update_instant_destroy_runtime()
+
+        runtime_inventory_signature: tuple[tuple[int, int], ...] | None = None
+
+        def get_runtime_inventory_signature() -> tuple[tuple[int, int], ...]:
+            nonlocal runtime_inventory_signature
+            if runtime_inventory_signature is None:
+                runtime_inventory_signature = self._get_inventory_signature()
+            return runtime_inventory_signature
+
+        previous_signature_provider = self._runtime_inventory_signature_provider
+        self._runtime_inventory_signature_provider = get_runtime_inventory_signature
+        try:
+            self._update_identify_runtime()
+            self._update_auto_cleanup_runtime()
+            self._update_auto_gold_runtime()
+            self._update_salvage_runtime()
+            self._update_instant_destroy_runtime()
+        finally:
+            self._runtime_inventory_signature_provider = previous_signature_provider
 
     def _draw_main_window(self):
         if self.expand_main_window_on_next_show:
@@ -13877,15 +13893,13 @@ class MerchantRulesWidget:
         self.cleanup_item_type_filter_subcategory = DEPOSIT_FILTER_ALL
         self.instant_destroy_running = False
         self.instant_destroy_rescan_requested = False
-        self.instant_destroy_last_signature = ()
+        self._clear_inventory_monitor_signatures()
         self.instant_destroy_poll_timer.Reset()
         self.identify_running = False
         self.identify_rescan_requested = False
-        self.identify_last_signature = ()
         self.identify_poll_timer.Reset()
         self.salvage_running = False
         self.salvage_rescan_requested = False
-        self.salvage_last_signature = ()
         self.salvage_poll_timer.Reset()
         self.manual_vendor_running = False
         self.manual_vendor_handled_signature = ""
@@ -32439,18 +32453,25 @@ class MerchantRulesWidget:
             self.gold_entry_attempted = False
             raise
 
+    def _clear_inventory_monitor_signatures(self) -> None:
+        self.identify_last_signature = ()
+        self.salvage_last_signature = ()
+        self.instant_destroy_last_signature = ()
+
+    def _get_runtime_inventory_signature(self) -> tuple[tuple[int, int], ...]:
+        if self._runtime_inventory_signature_provider is not None:
+            return self._runtime_inventory_signature_provider()
+        return self._get_inventory_signature()
+
     def _get_inventory_signature(self, items: list[InventoryItemInfo] | None = None) -> tuple[tuple[int, int], ...]:
         if items is None:
-            return tuple(
-                sorted(
-                    (
-                        int(item_id),
-                        max(0, int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id))),
-                    )
-                    for item_id in self._get_inventory_item_ids()
-                    if int(item_id) > 0
-                )
-            )
+            signature: list[tuple[int, int]] = []
+            for item in GLOBAL_CACHE.ItemArray.GetRawItemArray(list(INVENTORY_BAG_IDS)):
+                item_id = int(item.item_id)
+                if item_id <= 0:
+                    continue
+                signature.append((item_id, max(0, int(item.quantity))))
+            return tuple(sorted(signature))
         return tuple(
             sorted(
                 (
@@ -32696,6 +32717,11 @@ class MerchantRulesWidget:
         self.identify_rescan_requested = True
 
     def _update_identify_runtime(self):
+        settings = _normalize_identify_settings(self.identify_settings)
+        if not bool(settings.on_inventory_change) or not any(bool(value) for value in settings.rarities.values()):
+            self.identify_rescan_requested = False
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason():
             return
@@ -32714,26 +32740,16 @@ class MerchantRulesWidget:
         ):
             return
 
-        current_signature = self._get_inventory_signature()
-        settings = _normalize_identify_settings(self.identify_settings)
-        if not bool(settings.on_inventory_change):
-            self.identify_rescan_requested = False
-            self.identify_last_signature = current_signature
-            return
-        if not self._has_enabled_identify_settings():
-            self.identify_rescan_requested = False
-            self.identify_last_signature = current_signature
+        should_rescan = bool(self.identify_rescan_requested)
+        if not should_rescan and not self.identify_poll_timer.IsExpired():
             return
 
-        should_rescan = bool(self.identify_rescan_requested)
-        if not should_rescan:
-            if current_signature == self.identify_last_signature:
-                return
-            if not self.identify_poll_timer.IsExpired():
-                return
+        current_signature = self._get_runtime_inventory_signature()
+        self.identify_poll_timer.Reset()
+        if not should_rescan and current_signature == self.identify_last_signature:
+            return
 
         self.identify_rescan_requested = False
-        self.identify_poll_timer.Reset()
         self._queue_identify_now(auto_triggered=True)
 
     def _request_salvage_rescan(self):
@@ -33893,6 +33909,13 @@ class MerchantRulesWidget:
             yield
 
     def _update_salvage_runtime(self):
+        settings = _normalize_salvage_settings(self.salvage_settings)
+        if not bool(settings.on_inventory_change) or not any(
+            bool(rule.enabled) and _salvage_rule_has_selectors(rule) for rule in settings.rules
+        ):
+            self.salvage_rescan_requested = False
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason():
             return
@@ -33910,25 +33933,16 @@ class MerchantRulesWidget:
         ):
             return
 
-        current_signature = self._get_inventory_signature()
-        if not bool(_normalize_salvage_settings(self.salvage_settings).on_inventory_change):
-            self.salvage_rescan_requested = False
-            self.salvage_last_signature = current_signature
-            return
-        if not self._has_enabled_salvage_settings():
-            self.salvage_rescan_requested = False
-            self.salvage_last_signature = current_signature
+        should_rescan = bool(self.salvage_rescan_requested)
+        if not should_rescan and not self.salvage_poll_timer.IsExpired():
             return
 
-        should_rescan = bool(self.salvage_rescan_requested)
-        if not should_rescan:
-            if current_signature == self.salvage_last_signature:
-                return
-            if not self.salvage_poll_timer.IsExpired():
-                return
+        current_signature = self._get_runtime_inventory_signature()
+        self.salvage_poll_timer.Reset()
+        if not should_rescan and current_signature == self.salvage_last_signature:
+            return
 
         self.salvage_rescan_requested = False
-        self.salvage_poll_timer.Reset()
         self._queue_salvage_now(auto_triggered=True)
 
     def _is_destroy_auto_enabled(self) -> bool:
@@ -34067,6 +34081,10 @@ class MerchantRulesWidget:
         )
 
     def _update_instant_destroy_runtime(self):
+        if not self._is_destroy_auto_enabled():
+            self.instant_destroy_rescan_requested = False
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason():
             return
@@ -34084,21 +34102,16 @@ class MerchantRulesWidget:
         ):
             return
 
-        current_signature = self._get_inventory_signature()
-        if not self._is_destroy_auto_enabled():
-            self.instant_destroy_rescan_requested = False
-            self.instant_destroy_last_signature = current_signature
+        should_rescan = bool(self.instant_destroy_rescan_requested)
+        if not should_rescan and not self.instant_destroy_poll_timer.IsExpired():
             return
 
-        should_rescan = bool(self.instant_destroy_rescan_requested)
-        if not should_rescan:
-            if current_signature == self.instant_destroy_last_signature:
-                return
-            if not self.instant_destroy_poll_timer.IsExpired():
-                return
+        current_signature = self._get_runtime_inventory_signature()
+        self.instant_destroy_poll_timer.Reset()
+        if not should_rescan and current_signature == self.instant_destroy_last_signature:
+            return
 
         self.instant_destroy_rescan_requested = False
-        self.instant_destroy_poll_timer.Reset()
         self._queue_merchant_rules_owned_work(
             self._run_instant_destroy_pass(),
             reset_values_before_start=(("instant_destroy_rescan_requested", True),),

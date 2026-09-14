@@ -15069,6 +15069,593 @@ def _test_identify_on_inventory_change_queues_auto_pass(module) -> None:
     _expect(not widget.identify_rescan_requested, "Auto identify queueing should consume the pending rescan flag.")
 
 
+def _stub_inventory_monitor_tick_shell(widget) -> None:
+    widget._ensure_initialized = lambda: None
+    widget._update_service_resolution_lifecycle = lambda: None
+    widget._apply_pending_multibox_profile_reload_if_idle = lambda: None
+    widget._advance_multibox_batch = lambda: None
+    widget._update_manual_gold_session_runtime = lambda: None
+    widget._update_manual_vendor_runtime = lambda: None
+    widget._update_auto_cleanup_runtime = lambda: None
+    widget._update_auto_gold_runtime = lambda: None
+    widget._merchant_rules_has_pending_or_active_work = lambda: False
+
+
+def _test_disabled_inventory_monitors_skip_tick_inventory_and_lifecycle(module) -> None:
+    widget = _make_widget(module)
+    widget.identify_settings = _identify_settings(module)
+    widget.salvage_settings = _salvage_settings(module)
+    widget.destroy_auto_enabled = False
+    widget.destroy_instant_enabled = False
+    _stub_inventory_monitor_tick_shell(widget)
+
+    calls = {"signature": 0, "lifecycle": 0}
+
+    def _get_signature(items=None):
+        calls["signature"] += 1
+        return ()
+
+    def _refresh_lifecycle(**_kwargs):
+        calls["lifecycle"] += 1
+        return 0
+
+    widget._get_inventory_signature = _get_signature
+    widget._refresh_merchant_rules_lifecycle_state = _refresh_lifecycle
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+
+    widget._tick_runtime()
+
+    _expect(calls["signature"] == 0, "Disabled automatic inventory monitors must not build an idle signature.")
+    _expect(calls["lifecycle"] == 0, "Disabled automatic inventory monitors must skip feature-specific lifecycle work.")
+
+
+def _test_due_inventory_monitors_share_one_tick_signature(module) -> None:
+    widget = _make_widget(module)
+    expected_signature = ((10, 2), (20, 1))
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.salvage_settings = _salvage_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.destroy_auto_enabled = True
+    widget.identify_last_signature = expected_signature
+    widget.salvage_last_signature = expected_signature
+    widget.instant_destroy_last_signature = expected_signature
+    for timer_name in ("identify_poll_timer", "salvage_poll_timer", "instant_destroy_poll_timer"):
+        timer = widget.__dict__[timer_name]
+        timer.IsExpired = lambda: True
+        timer.Reset = lambda: None
+    _stub_inventory_monitor_tick_shell(widget)
+    widget._refresh_merchant_rules_lifecycle_state = lambda: 0
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+
+    signature_calls: list[str] = []
+    queued: list[str] = []
+
+    def _get_signature(items=None):
+        signature_calls.append("signature")
+        return expected_signature
+
+    widget._get_inventory_signature = _get_signature
+    widget._queue_identify_now = lambda **_kwargs: queued.append("identify")
+    widget._queue_salvage_now = lambda **_kwargs: queued.append("salvage")
+    widget._queue_merchant_rules_owned_work = lambda *_args, **_kwargs: queued.append("destroy")
+
+    widget._tick_runtime()
+
+    _expect(
+        signature_calls == ["signature"],
+        "Due Identify, Salvage, and Destroy monitors must share one signature per tick.",
+    )
+    _expect(not queued, "Unchanged shared inventory must not queue any automatic item action.")
+
+
+def _test_inventory_monitor_polling_and_forced_rescan(module) -> None:
+    class ControlledTimer:
+        def __init__(self):
+            self.expired = False
+            self.reset_count = 0
+
+        def IsExpired(self) -> bool:
+            return self.expired
+
+        def Reset(self) -> None:
+            self.expired = False
+            self.reset_count += 1
+
+    expected_signature = ((10, 2),)
+    monitors = (
+        (
+            "identify",
+            "identify_poll_timer",
+            "identify_rescan_requested",
+            "_update_identify_runtime",
+        ),
+        (
+            "salvage",
+            "salvage_poll_timer",
+            "salvage_rescan_requested",
+            "_update_salvage_runtime",
+        ),
+        (
+            "destroy",
+            "instant_destroy_poll_timer",
+            "instant_destroy_rescan_requested",
+            "_update_instant_destroy_runtime",
+        ),
+    )
+
+    for monitor_name, timer_name, rescan_flag, updater_name in monitors:
+        widget = _make_widget(module)
+        if monitor_name == "identify":
+            widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+            widget.identify_last_signature = expected_signature
+            widget._queue_identify_now = lambda **_kwargs: queued.append("identify")
+        elif monitor_name == "salvage":
+            widget.salvage_settings = _salvage_settings(module, rarities=["blue"], on_inventory_change=True)
+            widget.salvage_last_signature = expected_signature
+            widget._queue_salvage_now = lambda **_kwargs: queued.append("salvage")
+        else:
+            widget.destroy_auto_enabled = True
+            widget.instant_destroy_last_signature = expected_signature
+            widget._queue_merchant_rules_owned_work = lambda *_args, **_kwargs: queued.append("destroy")
+
+        widget._refresh_merchant_rules_lifecycle_state = lambda: 0
+        widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+        widget._merchant_rules_has_pending_or_active_work = lambda: False
+        signature_calls: list[str] = []
+        queued: list[str] = []
+        widget._get_inventory_signature = lambda items=None: signature_calls.append("signature") or expected_signature
+        timer = ControlledTimer()
+        setattr(widget, timer_name, timer)
+        updater = getattr(widget, updater_name)
+
+        updater()
+        _expect(not signature_calls, f"{monitor_name} must not observe inventory before its poll interval is due.")
+
+        timer.expired = True
+        updater()
+        _expect(
+            signature_calls == ["signature"], f"{monitor_name} must observe inventory when its poll interval is due."
+        )
+        _expect(timer.reset_count == 1, f"{monitor_name} must restart polling after an unchanged observation.")
+        updater()
+        _expect(len(signature_calls) == 1, f"{monitor_name} must not observe again before the next poll interval.")
+
+        setattr(widget, rescan_flag, True)
+        updater()
+        _expect(len(signature_calls) == 2, f"{monitor_name} forced rescans must bypass the normal poll delay.")
+        _expect(queued == [monitor_name], f"{monitor_name} forced rescans must queue their automatic pass immediately.")
+        _expect(not getattr(widget, rescan_flag), f"{monitor_name} must consume the forced rescan request.")
+
+
+def _test_inventory_signature_uses_raw_bag_entries_stably(module) -> None:
+    widget = _make_widget(module)
+    first_entries = [
+        types.SimpleNamespace(item_id=30, quantity=4),
+        types.SimpleNamespace(item_id=4, quantity=-2),
+        types.SimpleNamespace(item_id=0, quantity=8),
+    ]
+    snapshots = (first_entries, list(reversed(first_entries)))
+    raw_calls: list[tuple[int, ...]] = []
+    quantity_calls: list[int] = []
+    previous_item_array = getattr(module.GLOBAL_CACHE, "ItemArray", None)
+    had_item_array = hasattr(module.GLOBAL_CACHE, "ItemArray")
+    previous_item = getattr(module.GLOBAL_CACHE, "Item", None)
+    had_item = hasattr(module.GLOBAL_CACHE, "Item")
+
+    def _get_raw_items(bag_ids):
+        raw_calls.append(tuple(int(bag_id) for bag_id in bag_ids))
+        return snapshots[min(len(raw_calls) - 1, len(snapshots) - 1)]
+
+    module.GLOBAL_CACHE.ItemArray = types.SimpleNamespace(GetRawItemArray=_get_raw_items)
+    module.GLOBAL_CACHE.Item = types.SimpleNamespace(
+        Properties=types.SimpleNamespace(
+            GetQuantity=lambda item_id: quantity_calls.append(int(item_id)) or 99,
+        )
+    )
+    try:
+        first_signature = widget._get_inventory_signature()
+        second_signature = widget._get_inventory_signature()
+    finally:
+        if had_item_array:
+            module.GLOBAL_CACHE.ItemArray = previous_item_array
+        else:
+            delattr(module.GLOBAL_CACHE, "ItemArray")
+        if had_item:
+            module.GLOBAL_CACHE.Item = previous_item
+        else:
+            delattr(module.GLOBAL_CACHE, "Item")
+
+    expected_signature = ((4, 0), (30, 4))
+    _expect(
+        first_signature == expected_signature,
+        "The signature must retain item IDs, nonnegative quantities, and stable sorting.",
+    )
+    _expect(
+        second_signature == expected_signature, "Bag ordering changes must not change the logical inventory signature."
+    )
+    _expect(raw_calls == [(1, 2, 3, 4), (1, 2, 3, 4)], "Each signature must enumerate inventory bags 1-4 once.")
+    _expect(not quantity_calls, "The raw signature path must not call GetQuantity per carried item.")
+
+
+def _test_inventory_monitor_baselines_reset_on_lifecycle(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 100,
+        "map_uptime": 2000,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 2000,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    try:
+        widget = _make_widget(module)
+        _prime_initialized_widget(module, widget)
+        signature = ((10, 2),)
+        widget.identify_last_signature = signature
+        widget.salvage_last_signature = signature
+        widget.instant_destroy_last_signature = signature
+
+        state["map_id"] = 101
+        widget._refresh_merchant_rules_lifecycle_state()
+        _expect(
+            not widget.identify_last_signature
+            and not widget.salvage_last_signature
+            and not widget.instant_destroy_last_signature,
+            "A map lifecycle transition must invalidate all inventory monitor baselines.",
+        )
+
+        widget.identify_last_signature = signature
+        widget.salvage_last_signature = signature
+        widget.instant_destroy_last_signature = signature
+        widget._reset_runtime_after_profile_load(log_profile_load_summary=False)
+        _expect(
+            not widget.identify_last_signature
+            and not widget.salvage_last_signature
+            and not widget.instant_destroy_last_signature,
+            "Profile/account runtime reset must invalidate all inventory monitor baselines.",
+        )
+    finally:
+        _restore_lifecycle_test_state(module, originals)
+
+
+def _test_inventory_monitor_tick_signature_is_shared_but_not_cached_across_ticks(module) -> None:
+    class ControlledTimer:
+        def __init__(self, expired: bool = False) -> None:
+            self.expired = expired
+            self.reset_count = 0
+
+        def IsExpired(self) -> bool:
+            return self.expired
+
+        def Reset(self) -> None:
+            self.expired = False
+            self.reset_count += 1
+
+    widget = _make_widget(module)
+    first_signature = ((10, 2),)
+    second_signature = ((10, 2), (20, 1))
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.salvage_settings = _salvage_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.destroy_auto_enabled = True
+    widget.identify_last_signature = first_signature
+    widget.salvage_last_signature = first_signature
+    widget.instant_destroy_last_signature = first_signature
+
+    timers = {
+        "identify_poll_timer": ControlledTimer(expired=True),
+        "salvage_poll_timer": ControlledTimer(expired=True),
+        "instant_destroy_poll_timer": ControlledTimer(),
+    }
+    for timer_name, timer in timers.items():
+        setattr(widget, timer_name, timer)
+
+    _stub_inventory_monitor_tick_shell(widget)
+    widget._refresh_merchant_rules_lifecycle_state = lambda: 0
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+
+    signatures = [first_signature, second_signature]
+    observed_signatures: list[tuple[tuple[int, int], ...]] = []
+    queued: list[str] = []
+
+    def _get_signature(items=None):
+        signature = signatures[len(observed_signatures)]
+        observed_signatures.append(signature)
+        return signature
+
+    widget._get_inventory_signature = _get_signature
+    widget._queue_identify_now = lambda **_kwargs: queued.append("identify")
+    widget._queue_salvage_now = lambda **_kwargs: queued.append("salvage")
+    widget._queue_merchant_rules_owned_work = lambda *_args, **_kwargs: queued.append("destroy")
+
+    widget._tick_runtime()
+    _expect(
+        observed_signatures == [first_signature],
+        "The first tick should observe once for due Identify and Salvage while Destroy is not due.",
+    )
+    _expect(not queued, "The first tick's unchanged signature should not queue an automatic item action.")
+    _expect(timers["instant_destroy_poll_timer"].reset_count == 0, "A not-due Destroy monitor must keep its timer.")
+
+    timers["identify_poll_timer"].expired = True
+    timers["instant_destroy_poll_timer"].expired = True
+    widget._tick_runtime()
+
+    _expect(
+        observed_signatures == [first_signature, second_signature],
+        "A later tick must build one fresh signature for its different due set.",
+    )
+    _expect(
+        queued == ["identify", "destroy"],
+        "The second tick's changed signature should reach its due Identify and Destroy monitors.",
+    )
+    _expect(
+        timers["salvage_poll_timer"].reset_count == 1,
+        "Salvage must remain not due on the second tick and keep its first reset only.",
+    )
+
+
+def _test_forced_inventory_monitor_rescan_respects_shared_work_ownership(module) -> None:
+    class ControlledTimer:
+        def __init__(self, expired: bool = False) -> None:
+            self.expired = expired
+            self.reset_count = 0
+
+        def IsExpired(self) -> bool:
+            return self.expired
+
+        def Reset(self) -> None:
+            self.expired = False
+            self.reset_count += 1
+
+    expected_signature = ((10, 2),)
+    widget = _make_widget(module)
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.salvage_settings = _salvage_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.identify_last_signature = expected_signature
+    widget.salvage_last_signature = expected_signature
+    identify_timer = ControlledTimer(expired=True)
+    salvage_timer = ControlledTimer()
+    widget.identify_poll_timer = identify_timer
+    widget.salvage_poll_timer = salvage_timer
+    widget.salvage_rescan_requested = True
+    _stub_inventory_monitor_tick_shell(widget)
+    widget._refresh_merchant_rules_lifecycle_state = lambda: 0
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+
+    signature_calls: list[str] = []
+    queued: list[str] = []
+    widget._get_inventory_signature = lambda items=None: signature_calls.append("signature") or expected_signature
+    widget._queue_identify_now = lambda **_kwargs: queued.append("identify")
+    widget._queue_salvage_now = lambda **_kwargs: queued.append("salvage")
+
+    widget._tick_runtime()
+
+    _expect(signature_calls == ["signature"], "A due monitor and a forced monitor should share one tick signature.")
+    _expect(queued == ["salvage"], "A forced Salvage rescan must run immediately despite its unexpired timer.")
+    _expect(not widget.salvage_rescan_requested, "The forced Salvage rescan should be consumed after queueing.")
+    _expect(identify_timer.reset_count == 1, "The due Identify poll should be reset after observing inventory.")
+    _expect(salvage_timer.reset_count == 1, "The forced Salvage observation should restart its poll timer.")
+
+    widget = _make_widget(module)
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.salvage_settings = _salvage_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.identify_rescan_requested = True
+    widget.salvage_rescan_requested = True
+    identify_timer = ControlledTimer()
+    salvage_timer = ControlledTimer(expired=True)
+    widget.identify_poll_timer = identify_timer
+    widget.salvage_poll_timer = salvage_timer
+    _stub_inventory_monitor_tick_shell(widget)
+    widget._refresh_merchant_rules_lifecycle_state = lambda: 0
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+
+    ownership = {"pending": False}
+    signature_calls = []
+    queued = []
+    widget._merchant_rules_has_pending_or_active_work = lambda: bool(ownership["pending"])
+    widget._get_inventory_signature = lambda items=None: signature_calls.append("signature") or expected_signature
+
+    def _queue_identify(**_kwargs):
+        queued.append("identify")
+        ownership["pending"] = True
+
+    widget._queue_identify_now = _queue_identify
+    widget._queue_salvage_now = lambda **_kwargs: queued.append("salvage")
+
+    widget._tick_runtime()
+
+    _expect(signature_calls == ["signature"], "The owning forced monitor should be the only monitor to observe.")
+    _expect(queued == ["identify"], "Identify ownership should prevent a competing Salvage queue.")
+    _expect(not widget.identify_rescan_requested, "The owning Identify rescan should be consumed after queueing.")
+    _expect(widget.salvage_rescan_requested, "A blocked Salvage rescan must remain pending for its next eligible tick.")
+    _expect(
+        salvage_timer.IsExpired() and salvage_timer.reset_count == 0,
+        "Ownership must not consume or reset another monitor's due poll timer.",
+    )
+
+
+def _test_disabled_inventory_changes_do_not_reuse_pre_lifecycle_monitor_baseline(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 100,
+        "map_uptime": 5000,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 5000,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    try:
+        widget = _make_widget(module)
+        _prime_initialized_widget(module, widget)
+        old_signature = ((10, 2),)
+        widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+        widget.identify_last_signature = old_signature
+
+        class ControlledTimer:
+            def __init__(self) -> None:
+                self.expired = False
+                self.reset_count = 0
+
+            def IsExpired(self) -> bool:
+                return self.expired
+
+            def Reset(self) -> None:
+                self.expired = False
+                self.reset_count += 1
+
+        timer = ControlledTimer()
+        widget.identify_poll_timer = timer
+        _stub_inventory_monitor_tick_shell(widget)
+        widget._ensure_initialized = lambda: widget._refresh_merchant_rules_lifecycle_state()
+
+        current_signature = {"value": ((20, 1),)}
+        signature_calls: list[tuple[tuple[int, int], ...]] = []
+        queued: list[str] = []
+
+        def _get_signature(items=None):
+            signature = current_signature["value"]
+            signature_calls.append(signature)
+            return signature
+
+        widget._get_inventory_signature = _get_signature
+        widget._queue_identify_now = lambda **_kwargs: queued.append("identify")
+
+        widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=False)
+        widget._tick_runtime()
+        _expect(not signature_calls, "Inventory changes while Identify is disabled must not trigger a monitor scan.")
+        _expect(
+            widget.identify_last_signature == old_signature,
+            "Disabling the feature should leave its old baseline available for lifecycle invalidation to clear.",
+        )
+
+        state["map_uptime"] = 100
+        current_signature["value"] = old_signature
+        widget._tick_runtime()
+        _expect(
+            not widget.identify_last_signature,
+            "Central lifecycle tracking must invalidate the baseline even while the monitor is disabled.",
+        )
+        _expect(not signature_calls, "Lifecycle invalidation while disabled must not itself scan inventory.")
+
+        state["map_uptime"] = 5000
+        widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+        timer.expired = True
+        widget._tick_runtime()
+
+        _expect(
+            signature_calls == [old_signature], "The re-enabled monitor should make one fresh eligible observation."
+        )
+        _expect(queued == ["identify"], "A cleared lifecycle baseline must not suppress the re-enabled rescan.")
+    finally:
+        _restore_lifecycle_test_state(module, originals)
+
+
+def _test_inventory_signature_failure_retries_without_consuming_monitor_state(module) -> None:
+    widget = _make_widget(module)
+    widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+    widget.identify_last_signature = ((10, 2),)
+    widget.identify_poll_timer.IsExpired = lambda: True
+    timer_reset_calls: list[str] = []
+    widget.identify_poll_timer.Reset = lambda: timer_reset_calls.append("reset")
+    _stub_inventory_monitor_tick_shell(widget)
+    widget._refresh_merchant_rules_lifecycle_state = lambda: 0
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+
+    raw_calls: list[tuple[int, ...]] = []
+    complete_entries = [
+        types.SimpleNamespace(item_id=10, quantity=2),
+        types.SimpleNamespace(item_id=20, quantity=1),
+    ]
+
+    def _get_raw_items(bag_ids):
+        raw_calls.append(tuple(int(bag_id) for bag_id in bag_ids))
+        if len(raw_calls) == 1:
+
+            def _partial_then_fail():
+                yield types.SimpleNamespace(item_id=10, quantity=2)
+                raise RuntimeError("raw inventory enumeration failed")
+
+            return _partial_then_fail()
+        return complete_entries
+
+    previous_item_array = getattr(module.GLOBAL_CACHE, "ItemArray", None)
+    had_item_array = hasattr(module.GLOBAL_CACHE, "ItemArray")
+    module.GLOBAL_CACHE.ItemArray = types.SimpleNamespace(GetRawItemArray=_get_raw_items)
+    signature_calls: list[str] = []
+    queued: list[str] = []
+    widget._queue_identify_now = lambda **_kwargs: queued.append("identify")
+    original_get_signature = widget._get_inventory_signature
+
+    def _tracked_signature(items=None):
+        signature_calls.append("signature")
+        return original_get_signature(items)
+
+    widget._get_inventory_signature = _tracked_signature
+    try:
+        _expect_raises(
+            RuntimeError,
+            lambda: widget._tick_runtime(),
+            "A partial raw signature failure must propagate without authorizing automatic work.",
+        )
+        _expect(not queued, "A failed or partial signature must never queue an automatic item action.")
+        _expect(not widget.identify_rescan_requested, "A normal failed poll must not invent a forced rescan request.")
+        _expect(not timer_reset_calls, "A failed signature must leave the normal poll due for retry.")
+        _expect(
+            widget._runtime_inventory_signature_provider is None,
+            "The per-tick signature provider must be restored after a failed observation.",
+        )
+
+        widget._tick_runtime()
+        _expect(
+            raw_calls == [(1, 2, 3, 4), (1, 2, 3, 4)],
+            "The next eligible tick must retry full raw bag enumeration after a failure.",
+        )
+        _expect(
+            signature_calls == ["signature", "signature"], "Each tick should attempt its own signature exactly once."
+        )
+        _expect(queued == ["identify"], "The complete retry signature should authorize one automatic Identify pass.")
+        _expect(timer_reset_calls == ["reset"], "Only a successful observation should consume the poll interval.")
+
+        widget.identify_rescan_requested = True
+        widget.identify_poll_timer.IsExpired = lambda: False
+        raw_calls.clear()
+        signature_calls.clear()
+        timer_reset_calls.clear()
+        raw_failure = {"fail": True}
+
+        def _get_raw_items_forced(bag_ids):
+            raw_calls.append(tuple(int(bag_id) for bag_id in bag_ids))
+            if raw_failure["fail"]:
+                raw_failure["fail"] = False
+                raise RuntimeError("forced raw inventory read failed")
+            return complete_entries
+
+        module.GLOBAL_CACHE.ItemArray = types.SimpleNamespace(GetRawItemArray=_get_raw_items_forced)
+        _expect_raises(
+            RuntimeError,
+            lambda: widget._tick_runtime(),
+            "A forced signature failure must not consume its pending request.",
+        )
+        _expect(widget.identify_rescan_requested, "A failed forced signature must retain the immediate rescan request.")
+        _expect(not timer_reset_calls, "A failed forced signature must not consume its timer state.")
+        _expect(queued == ["identify"], "A failed forced signature must not enqueue additional work.")
+
+        widget._tick_runtime()
+        _expect(not widget.identify_rescan_requested, "The successful forced retry should consume its request.")
+        _expect(raw_calls == [(1, 2, 3, 4), (1, 2, 3, 4)], "A forced retry should enumerate once per attempt.")
+        _expect(queued == ["identify", "identify"], "A successful forced retry should queue immediately.")
+        _expect(timer_reset_calls == ["reset"], "The successful forced retry should restart polling once.")
+    finally:
+        if had_item_array:
+            module.GLOBAL_CACHE.ItemArray = previous_item_array
+        elif hasattr(module.GLOBAL_CACHE, "ItemArray"):
+            delattr(module.GLOBAL_CACHE, "ItemArray")
+
+
 def _test_protected_salvage_destroy_overlap_blocks_both(module) -> None:
     widget = _make_widget(module)
     widget.salvage_settings = _salvage_settings(module, rarities=["gold"])
@@ -34476,6 +35063,42 @@ def main() -> int:
                 lambda: _test_early_kit_deferred_cleanup_on_no_action_return(module),
             ),
             ("identify_on_inventory_change_queues_auto_pass", lambda: _test_identify_on_inventory_change_queues_auto_pass(module)),
+            (
+                "disabled_inventory_monitors_skip_tick_inventory_and_lifecycle",
+                lambda: _test_disabled_inventory_monitors_skip_tick_inventory_and_lifecycle(module),
+            ),
+            (
+                "due_inventory_monitors_share_one_tick_signature",
+                lambda: _test_due_inventory_monitors_share_one_tick_signature(module),
+            ),
+            (
+                "inventory_monitor_polling_and_forced_rescan",
+                lambda: _test_inventory_monitor_polling_and_forced_rescan(module),
+            ),
+            (
+                "inventory_signature_uses_raw_bag_entries_stably",
+                lambda: _test_inventory_signature_uses_raw_bag_entries_stably(module),
+            ),
+            (
+                "inventory_monitor_baselines_reset_on_lifecycle",
+                lambda: _test_inventory_monitor_baselines_reset_on_lifecycle(module),
+            ),
+            (
+                "inventory_monitor_tick_signature_is_shared_but_not_cached_across_ticks",
+                lambda: _test_inventory_monitor_tick_signature_is_shared_but_not_cached_across_ticks(module),
+            ),
+            (
+                "forced_inventory_monitor_rescan_respects_shared_work_ownership",
+                lambda: _test_forced_inventory_monitor_rescan_respects_shared_work_ownership(module),
+            ),
+            (
+                "disabled_inventory_changes_do_not_reuse_pre_lifecycle_monitor_baseline",
+                lambda: _test_disabled_inventory_changes_do_not_reuse_pre_lifecycle_monitor_baseline(module),
+            ),
+            (
+                "inventory_signature_failure_retries_without_consuming_monitor_state",
+                lambda: _test_inventory_signature_failure_retries_without_consuming_monitor_state(module),
+            ),
             ("protected_salvage_destroy_overlap_blocks_both", lambda: _test_protected_salvage_destroy_overlap_blocks_both(module)),
             ("protected_items_profile_roundtrip", lambda: _test_protected_items_profile_roundtrip(module)),
             ("profile_safety_summary_logging_helpers", lambda: _test_profile_safety_summary_logging_helpers(module)),
