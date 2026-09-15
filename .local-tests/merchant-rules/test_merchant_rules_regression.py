@@ -15584,8 +15584,10 @@ def _test_inventory_monitor_polling_and_forced_rescan(module) -> None:
         def __init__(self):
             self.expired = False
             self.reset_count = 0
+            self.expiration_check_count = 0
 
         def IsExpired(self) -> bool:
+            self.expiration_check_count += 1
             return self.expired
 
         def Reset(self) -> None:
@@ -15629,33 +15631,103 @@ def _test_inventory_monitor_polling_and_forced_rescan(module) -> None:
             widget.instant_destroy_last_signature = expected_signature
             widget._queue_merchant_rules_owned_work = lambda *_args, **_kwargs: queued.append("destroy")
 
-        widget._refresh_merchant_rules_lifecycle_state = lambda: 0
-        widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
-        widget._merchant_rules_has_pending_or_active_work = lambda: False
+        events: list[str] = []
+        widget._refresh_merchant_rules_lifecycle_state = lambda: events.append("refresh") or 0
+        widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: events.append("readiness") or ""
+        widget._merchant_rules_has_pending_or_active_work = lambda: events.append("ownership") or False
         signature_calls: list[str] = []
         queued: list[str] = []
-        widget._get_inventory_signature = lambda items=None: signature_calls.append("signature") or expected_signature
+
+        def _get_signature(items=None):
+            events.append("signature")
+            signature_calls.append("signature")
+            return expected_signature
+
+        widget._get_inventory_signature = _get_signature
         timer = ControlledTimer()
         setattr(widget, timer_name, timer)
         updater = getattr(widget, updater_name)
 
         updater()
         _expect(not signature_calls, f"{monitor_name} must not observe inventory before its poll interval is due.")
+        _expect(not events, f"{monitor_name} non-due frames must skip lifecycle/readiness and ownership preflight.")
+        _expect(timer.expiration_check_count == 1, f"{monitor_name} must check its timer on a non-due frame.")
 
         timer.expired = True
         updater()
         _expect(
             signature_calls == ["signature"], f"{monitor_name} must observe inventory when its poll interval is due."
         )
+        _expect(
+            events == ["refresh", "readiness", "ownership", "signature"],
+            f"{monitor_name} due observations must retain lifecycle/readiness preflight before inventory access.",
+        )
         _expect(timer.reset_count == 1, f"{monitor_name} must restart polling after an unchanged observation.")
         updater()
         _expect(len(signature_calls) == 1, f"{monitor_name} must not observe again before the next poll interval.")
+        _expect(
+            events == ["refresh", "readiness", "ownership", "signature"],
+            f"{monitor_name} subsequent non-due frames must skip repeated preflight.",
+        )
 
+        expiration_checks_before_forced = timer.expiration_check_count
         setattr(widget, rescan_flag, True)
         updater()
         _expect(len(signature_calls) == 2, f"{monitor_name} forced rescans must bypass the normal poll delay.")
+        _expect(
+            timer.expiration_check_count == expiration_checks_before_forced,
+            f"{monitor_name} forced rescans must bypass the timer check itself.",
+        )
+        _expect(
+            events
+            == [
+                "refresh",
+                "readiness",
+                "ownership",
+                "signature",
+                "refresh",
+                "readiness",
+                "ownership",
+                "signature",
+            ],
+            f"{monitor_name} forced observations must immediately repeat preflight before inventory access.",
+        )
         _expect(queued == [monitor_name], f"{monitor_name} forced rescans must queue their automatic pass immediately.")
         _expect(not getattr(widget, rescan_flag), f"{monitor_name} must consume the forced rescan request.")
+        _expect(timer.reset_count == 2, f"{monitor_name} forced observations must restart polling after observation.")
+
+        events.clear()
+        widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: events.append("readiness") or "not ready"
+        timer.expired = True
+        signature_count_before_blocked_due = len(signature_calls)
+        updater()
+        _expect(
+            events == ["refresh", "readiness"], f"{monitor_name} due work must fail closed before inventory access."
+        )
+        _expect(
+            len(signature_calls) == signature_count_before_blocked_due,
+            f"{monitor_name} blocked due work must not observe inventory.",
+        )
+        _expect(timer.expired and timer.reset_count == 2, f"{monitor_name} blocked due work must retain its due timer.")
+
+        events.clear()
+        timer.expired = False
+        expiration_checks_before_blocked_force = timer.expiration_check_count
+        setattr(widget, rescan_flag, True)
+        updater()
+        _expect(events == ["refresh", "readiness"], f"{monitor_name} forced work must retain readiness validation.")
+        _expect(
+            timer.expiration_check_count == expiration_checks_before_blocked_force,
+            f"{monitor_name} blocked forced work must still bypass its timer.",
+        )
+        _expect(
+            getattr(widget, rescan_flag),
+            f"{monitor_name} must retain a forced rescan while lifecycle/readiness validation blocks it.",
+        )
+        _expect(
+            len(signature_calls) == signature_count_before_blocked_due and timer.reset_count == 2,
+            f"{monitor_name} blocked forced work must not observe inventory or reset its timer.",
+        )
 
 
 def _test_inventory_signature_uses_raw_bag_entries_stably(module) -> None:
@@ -15736,6 +15808,33 @@ def _test_inventory_monitor_baselines_reset_on_lifecycle(module) -> None:
             and not widget.salvage_last_signature
             and not widget.instant_destroy_last_signature,
             "A map lifecycle transition must invalidate all inventory monitor baselines.",
+        )
+
+        widget.identify_last_signature = signature
+        widget.salvage_last_signature = signature
+        widget.instant_destroy_last_signature = signature
+        state["map_ready"] = False
+        widget._refresh_merchant_rules_lifecycle_state()
+        _expect(
+            not widget.identify_last_signature
+            and not widget.salvage_last_signature
+            and not widget.instant_destroy_last_signature,
+            "Map readiness loss must invalidate all inventory monitor baselines centrally.",
+        )
+
+        state["map_ready"] = True
+        state["map_uptime"] = 2000
+        widget._refresh_merchant_rules_lifecycle_state()
+        widget.identify_last_signature = signature
+        widget.salvage_last_signature = signature
+        widget.instant_destroy_last_signature = signature
+        state["map_uptime"] = 100
+        widget._refresh_merchant_rules_lifecycle_state()
+        _expect(
+            not widget.identify_last_signature
+            and not widget.salvage_last_signature
+            and not widget.instant_destroy_last_signature,
+            "A same-map instance uptime rollback must invalidate all inventory monitor baselines.",
         )
 
         widget.identify_last_signature = signature

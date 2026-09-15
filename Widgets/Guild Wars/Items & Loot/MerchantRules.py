@@ -32747,6 +32747,10 @@ class MerchantRulesWidget:
             self.identify_rescan_requested = False
             return
 
+        should_rescan = bool(self.identify_rescan_requested)
+        if not should_rescan and not self.identify_poll_timer.IsExpired():
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason():
             return
@@ -32763,10 +32767,6 @@ class MerchantRulesWidget:
             or self.gold_balance_running
             or self.manual_vendor_running
         ):
-            return
-
-        should_rescan = bool(self.identify_rescan_requested)
-        if not should_rescan and not self.identify_poll_timer.IsExpired():
             return
 
         current_signature = self._get_runtime_inventory_signature()
@@ -33941,6 +33941,10 @@ class MerchantRulesWidget:
             self.salvage_rescan_requested = False
             return
 
+        should_rescan = bool(self.salvage_rescan_requested)
+        if not should_rescan and not self.salvage_poll_timer.IsExpired():
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason():
             return
@@ -33956,10 +33960,6 @@ class MerchantRulesWidget:
             or self.auto_cleanup_running
             or self.manual_vendor_running
         ):
-            return
-
-        should_rescan = bool(self.salvage_rescan_requested)
-        if not should_rescan and not self.salvage_poll_timer.IsExpired():
             return
 
         current_signature = self._get_runtime_inventory_signature()
@@ -34110,6 +34110,10 @@ class MerchantRulesWidget:
             self.instant_destroy_rescan_requested = False
             return
 
+        should_rescan = bool(self.instant_destroy_rescan_requested)
+        if not should_rescan and not self.instant_destroy_poll_timer.IsExpired():
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason():
             return
@@ -34125,10 +34129,6 @@ class MerchantRulesWidget:
             or self.auto_cleanup_running
             or self.manual_vendor_running
         ):
-            return
-
-        should_rescan = bool(self.instant_destroy_rescan_requested)
-        if not should_rescan and not self.instant_destroy_poll_timer.IsExpired():
             return
 
         current_signature = self._get_runtime_inventory_signature()
