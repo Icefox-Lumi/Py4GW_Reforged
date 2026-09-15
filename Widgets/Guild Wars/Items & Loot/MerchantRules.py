@@ -7585,6 +7585,7 @@ class MerchantRulesWidget:
         self.merchant_session_starting_gold: int | None = None
         self.merchant_session_id = 0
         self.manual_session_close_retry: tuple[int, int] | None = None
+        self._manual_gold_observation_was_enabled: bool = False
         self.execution_currency_changing_work_completed = False
         self.execution_completed_successfully = False
         self.inventory_modifier_cache: dict[int, InventoryModifierCacheEntry] = {}
@@ -30458,6 +30459,18 @@ class MerchantRulesWidget:
         yield from self._run_gold_balance_trigger("manual merchant session close")
 
     def _update_manual_gold_session_runtime(self) -> None:
+        observation_enabled = bool(self.gold_balance_enabled and self.gold_balance_after_manual_session)
+        was_enabled = self._manual_gold_observation_was_enabled
+        self._manual_gold_observation_was_enabled = observation_enabled
+        if not observation_enabled:
+            if was_enabled:
+                self.merchant_session_id += 1
+                self.merchant_session_open = False
+                self.merchant_session_mr_owned = False
+                self.merchant_session_starting_gold = None
+                self.manual_session_close_retry = None
+            return
+
         session_open = self._is_qualifying_merchant_session_open()
         if session_open:
             if not self.merchant_session_open:
@@ -31114,6 +31127,14 @@ class MerchantRulesWidget:
             yield
 
     def _update_manual_vendor_runtime(self):
+        if not (
+            self.auto_sell_on_manual_vendor_interaction
+            or self.auto_buy_on_manual_vendor_interaction
+            or self.auto_sell_to_any_merchant
+        ):
+            self.manual_vendor_handled_signature = ""
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason(require_service=True):
             return
@@ -32393,12 +32414,18 @@ class MerchantRulesWidget:
             yield
 
     def _update_auto_cleanup_runtime(self):
+        if not self.auto_cleanup_on_outpost_entry:
+            return
+        # _tick_runtime refreshes lifecycle state before observers and resets this latch on transitions.
+        if self.auto_cleanup_zone_attempted:
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason(require_service=True):
             return
         if self._merchant_rules_has_pending_or_active_work():
             return
-        if not self.auto_cleanup_on_outpost_entry or not self._has_cleanup_sources():
+        if not self._has_cleanup_sources():
             return
         if not (Map.IsOutpost() or Map.IsGuildHall()):
             return
@@ -32413,17 +32440,18 @@ class MerchantRulesWidget:
             or self.manual_vendor_running
         ):
             return
-        if self.auto_cleanup_zone_attempted:
-            return
-
         self.auto_cleanup_zone_attempted = True
         self._queue_cleanup_now(auto_triggered=True)
 
     def _update_auto_gold_runtime(self):
+        if not self.gold_balance_enabled or not self.gold_balance_on_outpost_entry:
+            return
+        # _tick_runtime refreshes lifecycle state before observers and resets this latch on transitions.
+        if self.gold_entry_attempted:
+            return
+
         self._refresh_merchant_rules_lifecycle_state()
         if self._merchant_rules_lifecycle_block_reason(require_service=True):
-            return
-        if not self.gold_balance_enabled or not self.gold_balance_on_outpost_entry:
             return
         if not (Map.IsOutpost() or Map.IsGuildHall()):
             return
@@ -32441,9 +32469,6 @@ class MerchantRulesWidget:
             or self.manual_vendor_running
         ):
             return
-        if self.gold_entry_attempted:
-            return
-
         self.gold_entry_attempted = True
         try:
             self._queue_merchant_rules_owned_work(

@@ -2017,6 +2017,52 @@ def _test_helper_tooltips_profile_defaults_and_roundtrip(module, temp_root: Path
     )
 
 
+def _test_manual_vendor_disabled_skips_observer_work(module) -> None:
+    widget = _make_widget(module)
+    widget.auto_sell_on_manual_vendor_interaction = False
+    widget.auto_buy_on_manual_vendor_interaction = False
+    widget.auto_sell_to_any_merchant = False
+    widget.manual_vendor_handled_signature = "stale-vendor-signature"
+    calls = {
+        "lifecycle_refresh": 0,
+        "lifecycle_validation": 0,
+        "pending_work": 0,
+        "settings_normalization": 0,
+        "merchant_detection": 0,
+        "context_classification": 0,
+        "queue": 0,
+    }
+
+    widget._refresh_merchant_rules_lifecycle_state = lambda **_kwargs: calls.__setitem__(
+        "lifecycle_refresh", calls["lifecycle_refresh"] + 1
+    )
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: calls.__setitem__(
+        "lifecycle_validation", calls["lifecycle_validation"] + 1
+    )
+    widget._merchant_rules_has_pending_or_active_work = lambda **_kwargs: calls.__setitem__(
+        "pending_work", calls["pending_work"] + 1
+    )
+    widget._manual_vendor_settings_enabled = lambda: calls.__setitem__(
+        "settings_normalization", calls["settings_normalization"] + 1
+    )
+    widget._is_merchant_window_open = lambda: calls.__setitem__("merchant_detection", calls["merchant_detection"] + 1)
+    widget._get_current_manual_vendor_context = lambda: calls.__setitem__(
+        "context_classification", calls["context_classification"] + 1
+    )
+    widget._queue_merchant_rules_owned_work = lambda *_args, **_kwargs: calls.__setitem__("queue", calls["queue"] + 1)
+
+    widget._update_manual_vendor_runtime()
+
+    _expect(
+        not any(calls.values()),
+        f"Disabled manual vendor automation must return before observer work; calls={calls}.",
+    )
+    _expect(
+        widget.manual_vendor_handled_signature == "",
+        "Disabling all manual vendor modes must clear only the handled-context observer signature.",
+    )
+
+
 def _test_manual_vendor_runtime_queues_once_per_signature(module) -> None:
     widget = _make_widget(module)
     widget.auto_sell_on_manual_vendor_interaction = True
@@ -3404,6 +3450,169 @@ def _test_gold_entry_is_independent_and_one_shot(module) -> None:
             delattr(module.GLOBAL_CACHE, "Coroutines")
 
 
+def _test_auto_cleanup_disabled_and_handled_observers_skip_work(module) -> None:
+    widget = _make_widget(module)
+    calls = {
+        "lifecycle_refresh": 0,
+        "lifecycle_validation": 0,
+        "pending_work": 0,
+        "cleanup_sources": 0,
+        "effective_targets": 0,
+        "queue": 0,
+    }
+    widget._refresh_merchant_rules_lifecycle_state = lambda **_kwargs: calls.__setitem__(
+        "lifecycle_refresh", calls["lifecycle_refresh"] + 1
+    )
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: calls.__setitem__(
+        "lifecycle_validation", calls["lifecycle_validation"] + 1
+    )
+    widget._merchant_rules_has_pending_or_active_work = lambda **_kwargs: calls.__setitem__(
+        "pending_work", calls["pending_work"] + 1
+    )
+    widget._has_cleanup_sources = lambda: calls.__setitem__("cleanup_sources", calls["cleanup_sources"] + 1)
+    widget._get_effective_cleanup_targets = lambda *_args, **_kwargs: calls.__setitem__(
+        "effective_targets", calls["effective_targets"] + 1
+    )
+    widget._queue_cleanup_now = lambda **_kwargs: calls.__setitem__("queue", calls["queue"] + 1)
+
+    widget.auto_cleanup_on_outpost_entry = False
+    widget.auto_cleanup_zone_attempted = False
+    widget._update_auto_cleanup_runtime()
+    _expect(
+        not any(calls.values()),
+        f"Disabled Xunlai deposits must return before lifecycle, source, or target work; calls={calls}.",
+    )
+
+    widget.auto_cleanup_on_outpost_entry = True
+    widget.auto_cleanup_zone_attempted = True
+    widget._update_auto_cleanup_runtime()
+    _expect(
+        not any(calls.values()),
+        f"A completed Xunlai attempt must return before repeated observer work; calls={calls}.",
+    )
+
+
+def _test_auto_cleanup_latch_resets_on_new_instance(module) -> None:
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 100,
+        "map_uptime": 500,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 500,
+    }
+    originals = _install_lifecycle_test_state(module, state)
+    try:
+        widget = _make_widget(module)
+        widget.auto_cleanup_on_outpost_entry = True
+        widget._merchant_rules_lifecycle_map_ready_snapshot = True
+        widget._merchant_rules_lifecycle_map_snapshot = 100
+        widget._merchant_rules_lifecycle_uptime_snapshot_ms = 500
+        widget.auto_cleanup_zone_token = "100:500"
+        calls = {"lifecycle_refresh": 0, "readiness": 0, "sources": 0, "queue": 0}
+        original_refresh = widget._refresh_merchant_rules_lifecycle_state
+
+        def track_refresh() -> int:
+            calls["lifecycle_refresh"] += 1
+            return original_refresh()
+
+        widget._refresh_merchant_rules_lifecycle_state = track_refresh
+        widget._merchant_rules_lifecycle_block_reason = (
+            lambda **_kwargs: calls.__setitem__("readiness", calls["readiness"] + 1) or ""
+        )
+        widget._merchant_rules_has_pending_or_active_work = lambda **_kwargs: False
+        widget._has_cleanup_sources = lambda: calls.__setitem__("sources", calls["sources"] + 1) or True
+        widget._queue_cleanup_now = lambda **_kwargs: calls.__setitem__("queue", calls["queue"] + 1)
+
+        widget._update_auto_cleanup_runtime()
+        _expect(
+            widget.auto_cleanup_zone_attempted
+            and calls
+            == {
+                "lifecycle_refresh": 1,
+                "readiness": 1,
+                "sources": 1,
+                "queue": 1,
+            },
+            f"An eligible Xunlai entry should schedule exactly one attempt; calls={calls}.",
+        )
+        widget._update_auto_cleanup_runtime()
+        _expect(
+            calls == {"lifecycle_refresh": 1, "readiness": 1, "sources": 1, "queue": 1},
+            f"The same completed Xunlai entry must not repeat observer work; calls={calls}.",
+        )
+
+        state["map_uptime"] = 100
+        original_refresh()
+        _expect(
+            not widget.auto_cleanup_zone_attempted and widget.auto_cleanup_zone_token == "100:100",
+            "A new map instance must reset the Xunlai entry latch and token.",
+        )
+        widget._update_auto_cleanup_runtime()
+        _expect(
+            calls == {"lifecycle_refresh": 2, "readiness": 2, "sources": 2, "queue": 2},
+            f"A legitimate new instance must permit one fresh Xunlai attempt; calls={calls}.",
+        )
+    finally:
+        _restore_lifecycle_test_state(module, originals)
+
+
+def _test_auto_gold_disabled_and_handled_observers_skip_work(module) -> None:
+    widget = _make_widget(module)
+    original_is_outpost = module.Map.IsOutpost
+    original_is_guild_hall = module.Map.IsGuildHall
+    calls = {
+        "lifecycle_refresh": 0,
+        "lifecycle_validation": 0,
+        "map_outpost": 0,
+        "map_guild_hall": 0,
+        "pending_work": 0,
+        "queue": 0,
+    }
+    widget._refresh_merchant_rules_lifecycle_state = lambda **_kwargs: calls.__setitem__(
+        "lifecycle_refresh", calls["lifecycle_refresh"] + 1
+    )
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: calls.__setitem__(
+        "lifecycle_validation", calls["lifecycle_validation"] + 1
+    )
+    widget._merchant_rules_has_pending_or_active_work = lambda **_kwargs: calls.__setitem__(
+        "pending_work", calls["pending_work"] + 1
+    )
+    widget._queue_merchant_rules_owned_work = lambda *_args, **_kwargs: calls.__setitem__("queue", calls["queue"] + 1)
+    module.Map.IsOutpost = lambda: calls.__setitem__("map_outpost", calls["map_outpost"] + 1) or True
+    module.Map.IsGuildHall = lambda: calls.__setitem__("map_guild_hall", calls["map_guild_hall"] + 1) or False
+    try:
+        widget.gold_balance_enabled = False
+        widget.gold_balance_on_outpost_entry = True
+        widget._update_auto_gold_runtime()
+        _expect(
+            not any(calls.values()),
+            f"Disabled outpost gold balancing must return before lifecycle/readiness work; calls={calls}.",
+        )
+
+        widget.gold_balance_enabled = True
+        widget.gold_balance_on_outpost_entry = False
+        widget._update_auto_gold_runtime()
+        _expect(
+            not any(calls.values()),
+            f"An inactive outpost-gold trigger must return before observer work; calls={calls}.",
+        )
+
+        widget.gold_balance_on_outpost_entry = True
+        widget.gold_entry_attempted = True
+        widget._update_auto_gold_runtime()
+        _expect(
+            not any(calls.values()),
+            f"A handled outpost entry must return before repeated lifecycle/map work; calls={calls}.",
+        )
+    finally:
+        module.Map.IsOutpost = original_is_outpost
+        module.Map.IsGuildHall = original_is_guild_hall
+
+
 def _test_gold_entry_latch_resets_on_new_instance(module) -> None:
     widget = _make_widget(module)
     widget.initialized = True
@@ -3416,13 +3625,30 @@ def _test_gold_entry_latch_resets_on_new_instance(module) -> None:
     widget.gold_entry_attempted = True
     widget.gold_entry_zone_token = "100:500"
     original_uptime = module.Map.GetInstanceUptime
+    original_is_outpost = module.Map.IsOutpost
+    original_is_guild_hall = module.Map.IsGuildHall
     module.Map.GetInstanceUptime = lambda: 100
+    module.Map.IsOutpost = lambda: True
+    module.Map.IsGuildHall = lambda: False
+    widget.gold_balance_enabled = True
+    widget.gold_balance_on_outpost_entry = True
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+    widget._merchant_rules_has_pending_or_active_work = lambda **_kwargs: False
+    queued_work: list[object] = []
+    widget._queue_merchant_rules_owned_work = lambda generator, **_kwargs: queued_work.append(generator)
     try:
         widget._ensure_initialized()
         _expect(not widget.gold_entry_attempted, "A reconnect/new instance should create a fresh gold entry opportunity.")
         _expect(widget.gold_entry_zone_token == "100:100", "The gold entry token should follow the new map instance.")
+        widget._update_auto_gold_runtime()
+        _expect(
+            widget.gold_entry_attempted and len(queued_work) == 1,
+            "The next legitimate map instance should allow one fresh outpost-gold attempt.",
+        )
     finally:
         module.Map.GetInstanceUptime = original_uptime
+        module.Map.IsOutpost = original_is_outpost
+        module.Map.IsGuildHall = original_is_guild_hall
 
 
 def _configure_test_merchant_session(module, open_state: bool):
@@ -3438,6 +3664,212 @@ def _configure_test_merchant_session(module, open_state: bool):
         module.Frame.configure(module.FrameId.Merchant, exists=False, created=False, visible=False)
 
     return restore
+
+
+def _test_manual_gold_observer_gate_and_state_reset(module) -> None:
+    widget = _make_widget(module)
+    widget._read_gold_amount = lambda *_args, **_kwargs: 500
+    original_qualifying_lookup = widget._is_qualifying_merchant_session_open
+    guard = module._MerchantRulesSalvageFrameGuard
+    original_visibility_descriptor = guard.__dict__["is_frame_effectively_visible"]
+    calls = {"session_lookup": 0, "merchant_frame_visibility": 0, "queued_work": 0}
+
+    def track_visibility(cls, frame: object) -> bool:
+        calls["merchant_frame_visibility"] += 1
+        return original_visibility_descriptor.__func__(cls, frame)
+
+    def track_session_lookup() -> bool:
+        calls["session_lookup"] += 1
+        return original_qualifying_lookup()
+
+    guard.is_frame_effectively_visible = classmethod(track_visibility)
+    widget._is_qualifying_merchant_session_open = track_session_lookup
+    widget._queue_merchant_rules_owned_work = lambda *_args, **_kwargs: calls.__setitem__(
+        "queued_work", calls["queued_work"] + 1
+    )
+    restore_session = _configure_test_merchant_session(module, True)
+    try:
+        widget.gold_balance_enabled = False
+        widget.gold_balance_after_manual_session = True
+        widget._manual_gold_observation_was_enabled = True
+        widget.merchant_session_open = True
+        widget.merchant_session_mr_owned = True
+        widget.merchant_session_starting_gold = 400
+        widget.merchant_session_id = 7
+        widget.manual_session_close_retry = (7, 400)
+        widget._update_manual_gold_session_runtime()
+        _expect(
+            calls["session_lookup"] == 0 and calls["merchant_frame_visibility"] == 0,
+            f"Disabled manual-session balancing must skip session and frame lookup; calls={calls}.",
+        )
+        _expect(
+            not widget.merchant_session_open
+            and not widget.merchant_session_mr_owned
+            and widget.merchant_session_starting_gold is None
+            and widget.manual_session_close_retry is None
+            and widget.merchant_session_id == 8,
+            "Disabling the observer must clear its remembered session and invalidate delayed close work.",
+        )
+
+        widget.gold_balance_enabled = True
+        widget._update_manual_gold_session_runtime()
+        _expect(
+            calls["session_lookup"] == 1
+            and calls["merchant_frame_visibility"] == 1
+            and widget.merchant_session_open,
+            f"Enabling manual-session balancing must restore live merchant detection; calls={calls}.",
+        )
+
+        widget.gold_balance_after_manual_session = False
+        widget.manual_session_close_retry = (widget.merchant_session_id, 500)
+        previous_session_id = widget.merchant_session_id
+        widget._update_manual_gold_session_runtime()
+        _expect(
+            calls["session_lookup"] == 1 and calls["merchant_frame_visibility"] == 1,
+            f"Disabling the manual-session trigger must skip the next merchant/frame lookup; calls={calls}.",
+        )
+        _expect(
+            not widget.merchant_session_open
+            and not widget.merchant_session_mr_owned
+            and widget.merchant_session_starting_gold is None
+            and widget.manual_session_close_retry is None
+            and widget.merchant_session_id == previous_session_id + 1,
+            "Disabling the manual-session trigger must clear only stale observer state.",
+        )
+
+        widget.gold_balance_after_manual_session = True
+
+        def closed_session_lookup() -> bool:
+            calls["session_lookup"] += 1
+            return False
+
+        widget._is_qualifying_merchant_session_open = closed_session_lookup
+        widget._update_manual_gold_session_runtime()
+        _expect(
+            not widget.merchant_session_open and not widget.manual_session_close_retry,
+            "Re-enabling with no open merchant must not inherit or close the stale previous session.",
+        )
+        _expect(
+            calls["queued_work"] == 0,
+            f"Re-enabling a cleared observer must not queue a stale session balance; calls={calls}.",
+        )
+    finally:
+        restore_session()
+        guard.is_frame_effectively_visible = original_visibility_descriptor
+
+
+def _test_manual_gold_queued_close_is_invalidated_by_disable(module) -> None:
+    widget = _make_widget(module)
+    widget.gold_balance_enabled = True
+    widget.gold_balance_after_manual_session = True
+    gold_state = {"character": 500}
+    widget._read_gold_amount = lambda *_args, **_kwargs: gold_state["character"]
+    trigger_calls: list[str] = []
+
+    def record_gold_balance_trigger(trigger: str):
+        trigger_calls.append(str(trigger))
+        if False:
+            yield None
+
+    widget._run_gold_balance_trigger = record_gold_balance_trigger
+    original_lookup = widget._is_qualifying_merchant_session_open
+    lookup_calls = 0
+
+    def track_session_lookup() -> bool:
+        nonlocal lookup_calls
+        lookup_calls += 1
+        return original_lookup()
+
+    widget._is_qualifying_merchant_session_open = track_session_lookup
+    original_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
+    had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
+    original_wait = module.Routines.Yield.wait
+    module.GLOBAL_CACHE.Coroutines = []
+    settle_pause = object()
+
+    def paused_wait(_delay_ms: int):
+        yield settle_pause
+
+    module.Routines.Yield.wait = paused_wait
+    restore_session = _configure_test_merchant_session(module, True)
+    try:
+        widget._update_manual_gold_session_runtime()
+        _expect(widget.merchant_session_open, "An enabled observer should begin the qualifying merchant session.")
+        starting_session_id = widget.merchant_session_id
+
+        gold_state["character"] = 900
+        module.MerchantWindow.IsOpen = staticmethod(lambda: False)
+        widget._update_manual_gold_session_runtime()
+        _expect(
+            len(module.GLOBAL_CACHE.Coroutines) == 1
+            and widget.manual_session_close_retry is None
+            and not widget.merchant_session_open
+            and not widget.merchant_session_mr_owned
+            and widget.merchant_session_starting_gold is None,
+            "Closing a changed manual session must successfully queue real owned work and clear retry/session state.",
+        )
+        queued_close = module.GLOBAL_CACHE.Coroutines[0]
+        _expect(
+            isinstance(queued_close, module._MerchantRulesOwnedGenerator),
+            "The delayed close must be queued through the production Merchant Rules owned-work wrapper.",
+        )
+        yielded = next(queued_close)
+        while yielded is not settle_pause:
+            yielded = next(queued_close)
+
+        queued_session_id = widget.merchant_session_id
+        _expect(
+            queued_session_id == starting_session_id,
+            "Queueing delayed close work must retain the captured session ID until observation is disabled.",
+        )
+
+        lookups_before_disable = lookup_calls
+        widget.gold_balance_enabled = False
+        widget._update_manual_gold_session_runtime()
+        disabled_session_id = widget.merchant_session_id
+        _expect(
+            disabled_session_id == queued_session_id + 1,
+            "Disabling observation must invalidate queued work even after the retry marker has been cleared.",
+        )
+        _expect(
+            not widget.merchant_session_open
+            and not widget.merchant_session_mr_owned
+            and widget.merchant_session_starting_gold is None
+            and widget.manual_session_close_retry is None,
+            "Disabling observation must leave all remembered manual-session state clear.",
+        )
+
+        widget._update_manual_gold_session_runtime()
+        _expect(
+            widget.merchant_session_id == disabled_session_id and lookup_calls == lookups_before_disable,
+            "Further disabled ticks must neither churn the session ID nor perform merchant/frame detection.",
+        )
+
+        widget.gold_balance_enabled = True
+        widget._update_manual_gold_session_runtime()
+        _expect(
+            lookup_calls == lookups_before_disable + 1 and not widget.merchant_session_open,
+            "Re-enabling must resume normal observation from a clean, closed-session state.",
+        )
+        _drain_generator_return(queued_close)
+        _expect(
+            not trigger_calls,
+            f"Old queued work must remain invalid after disable-then-re-enable; triggers={trigger_calls}.",
+        )
+
+        module.MerchantWindow.IsOpen = staticmethod(lambda: True)
+        widget._update_manual_gold_session_runtime()
+        _expect(
+            widget.merchant_session_open and widget.merchant_session_starting_gold == 900,
+            "Re-enabled observation must detect a later legitimate merchant session.",
+        )
+    finally:
+        restore_session()
+        module.Routines.Yield.wait = original_wait
+        if had_coroutines:
+            module.GLOBAL_CACHE.Coroutines = original_coroutines
+        elif hasattr(module.GLOBAL_CACHE, "Coroutines"):
+            delattr(module.GLOBAL_CACHE, "Coroutines")
 
 
 def _test_manual_gold_session_close_and_sticky_ownership(module) -> None:
@@ -34444,6 +34876,10 @@ def main() -> int:
                 "equipment_collision_fallback_shared_downstream_paths",
                 lambda: _test_equipment_collision_fallback_shared_downstream_paths(module),
             ),
+            (
+                "manual_vendor_disabled_skips_observer_work",
+                lambda: _test_manual_vendor_disabled_skips_observer_work(module),
+            ),
             ("manual_vendor_runtime_queues_once_per_signature", lambda: _test_manual_vendor_runtime_queues_once_per_signature(module)),
             ("manual_vendor_matching_sell_uses_current_merchant_only", lambda: _test_manual_vendor_matching_sell_uses_current_merchant_only(module)),
             ("manual_vendor_any_merchant_material_fallback", lambda: _test_manual_vendor_any_merchant_material_fallback(module)),
@@ -34493,8 +34929,28 @@ def main() -> int:
                 lambda: _test_gold_entry_is_independent_and_one_shot(module),
             ),
             (
+                "auto_cleanup_disabled_and_handled_observers_skip_work",
+                lambda: _test_auto_cleanup_disabled_and_handled_observers_skip_work(module),
+            ),
+            (
+                "auto_cleanup_latch_resets_on_new_instance",
+                lambda: _test_auto_cleanup_latch_resets_on_new_instance(module),
+            ),
+            (
+                "auto_gold_disabled_and_handled_observers_skip_work",
+                lambda: _test_auto_gold_disabled_and_handled_observers_skip_work(module),
+            ),
+            (
                 "gold_entry_latch_resets_on_new_instance",
                 lambda: _test_gold_entry_latch_resets_on_new_instance(module),
+            ),
+            (
+                "manual_gold_observer_gate_and_state_reset",
+                lambda: _test_manual_gold_observer_gate_and_state_reset(module),
+            ),
+            (
+                "manual_gold_queued_close_is_invalidated_by_disable",
+                lambda: _test_manual_gold_queued_close_is_invalidated_by_disable(module),
             ),
             (
                 "manual_gold_session_close_and_sticky_ownership",
