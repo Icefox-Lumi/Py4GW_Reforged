@@ -32,7 +32,7 @@ import sys
 import time
 import traceback
 import types
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import replace
 from pathlib import Path
 
@@ -15728,6 +15728,275 @@ def _test_inventory_monitor_polling_and_forced_rescan(module) -> None:
             len(signature_calls) == signature_count_before_blocked_due and timer.reset_count == 2,
             f"{monitor_name} blocked forced work must not observe inventory or reset its timer.",
         )
+
+
+def _test_active_inventory_monitor_pass_preserves_new_forced_rescan(module, monitor_name: str) -> None:
+    class ControlledTimer:
+        def __init__(self) -> None:
+            self.expired = False
+            self.reset_count = 0
+            self.expiration_check_count = 0
+
+        def IsExpired(self) -> bool:
+            self.expiration_check_count += 1
+            return self.expired
+
+        def Reset(self) -> None:
+            self.expired = False
+            self.reset_count += 1
+
+    widget = _make_widget(module)
+    timer_name = {
+        "identify": "identify_poll_timer",
+        "salvage": "salvage_poll_timer",
+        "destroy": "instant_destroy_poll_timer",
+    }[monitor_name]
+    flag_name = {
+        "identify": "identify_rescan_requested",
+        "salvage": "salvage_rescan_requested",
+        "destroy": "instant_destroy_rescan_requested",
+    }[monitor_name]
+    updater_name = {
+        "identify": "_update_identify_runtime",
+        "salvage": "_update_salvage_runtime",
+        "destroy": "_update_instant_destroy_runtime",
+    }[monitor_name]
+    expected_signature = ((10, 1),)
+    timer = ControlledTimer()
+    setattr(widget, timer_name, timer)
+    widget._wait_for_merchant_rules_lifecycle = lambda: _return_generator(1)
+    widget._collect_inventory_items = lambda: [
+        types.SimpleNamespace(
+            item_id=10,
+            quantity=1,
+            rarity="blue",
+            identified=False,
+        )
+    ]
+    widget._get_inventory_signature = lambda _items=None: expected_signature
+    widget._refresh_merchant_rules_lifecycle_state = lambda: 0
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+    widget._merchant_rules_has_pending_or_active_work = lambda: False
+    widget._pause_inventory_plus = lambda: None
+    widget._mark_preview_dirty = lambda *_args, **_kwargs: None
+    observer_signature_calls: list[str] = []
+    queued: list[str] = []
+    follow_up_passes: list[Generator[object, None, object]] = []
+    widget._get_runtime_inventory_signature = (
+        lambda: observer_signature_calls.append(monitor_name) or expected_signature
+    )
+
+    def _pause_once(result: object) -> Generator[object, None, object]:
+        yield "pass paused after candidate capture"
+        return result
+
+    run_pass: Callable[[], Generator[object, None, object]]
+    request_rescan: Callable[[], None]
+    if monitor_name == "identify":
+        widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+        widget._identify_one_item = lambda *_args, **_kwargs: _pause_once("blocked")
+
+        def _queue_identify(**_kwargs) -> None:
+            queued.append("identify")
+            follow_up_passes.append(run_pass())
+
+        def run_pass() -> Generator[object, None, object]:
+            return widget._run_identify_pass(auto_triggered=True)
+
+        request_rescan = widget._request_identify_rescan
+    elif monitor_name == "salvage":
+        widget.salvage_settings = _salvage_settings(module, rarities=["blue"], on_inventory_change=True)
+        widget._has_enabled_salvage_settings = lambda: True
+        widget._collect_enabled_sell_rules = lambda: []
+        widget._collect_salvage_candidates = lambda *_args, **_kwargs: (
+            [types.SimpleNamespace(item_id=10)],
+            {},
+        )
+        widget._reserve_execute_item_ids = lambda *_args, **_kwargs: None
+        widget._salvage_candidate_with_stack_drain = lambda *_args, **_kwargs: _pause_once(
+            module.ExecutionPhaseOutcome(label="MR Salvage", measure_label="items")
+        )
+
+        def _queue_salvage(**_kwargs) -> None:
+            queued.append("salvage")
+            follow_up_passes.append(run_pass())
+
+        def run_pass() -> Generator[object, None, object]:
+            return widget._run_salvage_pass(auto_triggered=True)
+
+        request_rescan = widget._request_salvage_rescan
+    else:
+        widget.destroy_auto_enabled = True
+        widget._collect_enabled_destroy_rules = lambda: [object()]
+        widget._collect_enabled_sell_rules = lambda: []
+
+        def _plan_destroy_actions(plan, *_args, **_kwargs):
+            plan.destroy_actions.append(types.SimpleNamespace(item_id=10))
+
+        widget._plan_destroy_actions = _plan_destroy_actions
+        widget._execute_destroy_phase = lambda *_args, **_kwargs: _pause_once(
+            module.ExecutionPhaseOutcome(label="Destroy", measure_label="items")
+        )
+        run_pass = widget._run_instant_destroy_pass
+        request_rescan = widget._request_instant_destroy_rescan
+
+        def _queue_destroy(generator, **_kwargs) -> None:
+            queued.append("destroy")
+            follow_up_passes.append(generator)
+
+    if monitor_name == "identify":
+        widget._queue_identify_now = _queue_identify
+    elif monitor_name == "salvage":
+        widget._queue_salvage_now = _queue_salvage
+    else:
+        widget._queue_merchant_rules_owned_work = _queue_destroy
+
+    updater = getattr(widget, updater_name)
+    # A completed pass with no newer request must not create an extra observation.
+    setattr(widget, flag_name, True)
+    initial_pass = run_pass()
+    _expect(
+        next(initial_pass) == "pass paused after candidate capture",
+        f"{monitor_name} pass did not reach its active phase.",
+    )
+    _expect(
+        not getattr(widget, flag_name),
+        f"{monitor_name} must consume the request covered by its fresh pass at the start boundary.",
+    )
+    _drain_generator_return(initial_pass)
+    _expect(
+        not getattr(widget, flag_name), f"{monitor_name} without a new request must finish with no request pending."
+    )
+    updater()
+    _expect(
+        not observer_signature_calls and not queued,
+        f"{monitor_name} without a new request must not create a redundant follow-up pass.",
+    )
+
+    # The real pass generator pauses only after it has captured settings and candidates/plans.
+    active_pass = run_pass()
+    _expect(
+        next(active_pass) == "pass paused after candidate capture",
+        f"{monitor_name} pass did not reach its active phase.",
+    )
+    request_rescan()
+    expiration_checks_before_busy_request = timer.expiration_check_count
+    updater()
+    _expect(
+        getattr(widget, flag_name),
+        f"{monitor_name} must retain a new request while the owning pass blocks a second pass.",
+    )
+    _expect(
+        not observer_signature_calls and not queued,
+        f"{monitor_name} busy ownership must prevent an overlapping observation or queue.",
+    )
+    _expect(
+        timer.expiration_check_count == expiration_checks_before_busy_request,
+        f"{monitor_name} forced request must bypass the timer even while ownership blocks it.",
+    )
+
+    _drain_generator_return(active_pass)
+    _expect(
+        getattr(widget, flag_name),
+        f"{monitor_name} finalization must preserve a request raised after the pass captured its work.",
+    )
+    expiration_checks_before_follow_up = timer.expiration_check_count
+    updater()
+    _expect(
+        observer_signature_calls == [monitor_name] and queued == [monitor_name] and len(follow_up_passes) == 1,
+        f"{monitor_name} must perform and queue exactly one forced follow-up observation and pass.",
+    )
+    _expect(not getattr(widget, flag_name), f"{monitor_name} must consume the follow-up request when it queues.")
+    _expect(
+        timer.expiration_check_count == expiration_checks_before_follow_up,
+        f"{monitor_name} forced follow-up must bypass the timer check.",
+    )
+
+    _expect(
+        next(follow_up_passes[0]) == "pass paused after candidate capture",
+        f"{monitor_name} queued follow-up did not reach its fresh pass phase.",
+    )
+    _expect(not getattr(widget, flag_name), f"{monitor_name} follow-up pass must start with its request consumed.")
+    _drain_generator_return(follow_up_passes[0])
+
+    updater()
+    _expect(
+        observer_signature_calls == [monitor_name] and queued == [monitor_name],
+        f"{monitor_name} must not duplicate follow-up work after recording its signature and resetting the timer.",
+    )
+    _expect(timer.reset_count == 4, f"{monitor_name} must reset its timer for three passes and one observation.")
+
+
+def _return_generator(value: object) -> Generator[object, None, object]:
+    if False:
+        yield None
+    return value
+
+
+def _test_identify_active_pass_preserves_new_forced_rescan(module) -> None:
+    _test_active_inventory_monitor_pass_preserves_new_forced_rescan(module, "identify")
+
+
+def _test_salvage_active_pass_preserves_new_forced_rescan(module) -> None:
+    _test_active_inventory_monitor_pass_preserves_new_forced_rescan(module, "salvage")
+
+
+def _test_destroy_active_pass_preserves_new_forced_rescan(module) -> None:
+    _test_active_inventory_monitor_pass_preserves_new_forced_rescan(module, "destroy")
+
+
+def _test_unstarted_rescan_retry_respects_profile_and_lifecycle_generations(module) -> None:
+    def _seed_current_lifecycle(widget) -> None:
+        widget.merchant_rules_lifecycle_generation = 7
+        widget.map_ready_snapshot = True
+        widget.map_snapshot = 100
+        widget._merchant_rules_lifecycle_map_ready_snapshot = True
+        widget._merchant_rules_lifecycle_map_snapshot = 100
+        widget._merchant_rules_lifecycle_uptime_snapshot_ms = 5000
+        widget._refresh_merchant_rules_lifecycle_state = lambda **_kwargs: widget.merchant_rules_lifecycle_generation
+        widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: ""
+
+    widget = _make_widget(module)
+    _seed_current_lifecycle(widget)
+    widget.identify_rescan_requested = False
+    stale_profile_work = widget._track_merchant_rules_owned_work(
+        _return_generator(None),
+        reset_values_before_start=(("identify_rescan_requested", True),),
+    )
+    widget.merchant_rules_profile_generation += 1
+    stale_profile_work.close()
+    _expect(
+        not widget.identify_rescan_requested,
+        "An unstarted retry from a replaced profile must not restore its old Identify rescan request.",
+    )
+
+    widget = _make_widget(module)
+    _seed_current_lifecycle(widget)
+    widget.identify_rescan_requested = False
+    stale_lifecycle_work = widget._track_merchant_rules_owned_work(
+        _return_generator(None),
+        reset_values_before_start=(("identify_rescan_requested", True),),
+    )
+    widget.merchant_rules_lifecycle_generation += 1
+    stale_lifecycle_work.close()
+    _expect(
+        not widget.identify_rescan_requested,
+        "An unstarted retry from an obsolete lifecycle generation must not restore its old Identify rescan request.",
+    )
+
+    widget = _make_widget(module)
+    _seed_current_lifecycle(widget)
+    widget.identify_rescan_requested = False
+    widget._merchant_rules_lifecycle_block_reason = lambda **_kwargs: "temporarily waiting"
+    waiting_work = widget._track_merchant_rules_owned_work(
+        _return_generator(None),
+        reset_values_before_start=(("identify_rescan_requested", True),),
+    )
+    waiting_work.close()
+    _expect(
+        widget.identify_rescan_requested,
+        "A temporarily blocked retry in the same profile and lifecycle generation must remain pending.",
+    )
 
 
 def _test_inventory_signature_uses_raw_bag_entries_stably(module) -> None:
@@ -35629,6 +35898,22 @@ def main() -> int:
             (
                 "inventory_monitor_polling_and_forced_rescan",
                 lambda: _test_inventory_monitor_polling_and_forced_rescan(module),
+            ),
+            (
+                "identify_active_pass_preserves_new_forced_rescan",
+                lambda: _test_identify_active_pass_preserves_new_forced_rescan(module),
+            ),
+            (
+                "salvage_active_pass_preserves_new_forced_rescan",
+                lambda: _test_salvage_active_pass_preserves_new_forced_rescan(module),
+            ),
+            (
+                "destroy_active_pass_preserves_new_forced_rescan",
+                lambda: _test_destroy_active_pass_preserves_new_forced_rescan(module),
+            ),
+            (
+                "unstarted_rescan_retry_respects_profile_and_lifecycle_generations",
+                lambda: _test_unstarted_rescan_retry_respects_profile_and_lifecycle_generations(module),
             ),
             (
                 "inventory_signature_uses_raw_bag_entries_stably",

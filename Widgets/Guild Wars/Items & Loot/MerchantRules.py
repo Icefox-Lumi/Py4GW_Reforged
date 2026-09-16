@@ -22,6 +22,7 @@ from collections.abc import Generator
 from collections.abc import Iterable
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
+from typing import Any
 from typing import cast
 
 import PyImGui
@@ -748,7 +749,7 @@ class _MerchantRulesOwnedGenerator:
 
     def __init__(
         self,
-        owner,
+        owner: Any,
         generator,
         generation: int,
         release: Callable[[], None],
@@ -907,8 +908,30 @@ class _MerchantRulesOwnedGenerator:
                     pass
             reset_values = self._reset_values_before_start
             self._reset_values_before_start = ()
-            if not self._started:
+            if not self._started and reset_values:
+                rescan_fields = {
+                    "identify_rescan_requested",
+                    "salvage_rescan_requested",
+                    "instant_destroy_rescan_requested",
+                }
+                should_restore_rescan = True
+                if any(field_name in rescan_fields for field_name, _value in reset_values):
+                    try:
+                        should_restore_rescan = (
+                            int(owner.merchant_rules_profile_generation) == self._generation
+                        )
+                        if should_restore_rescan and self._lifecycle_generation is not None:
+                            lifecycle_generation = int(owner.merchant_rules_lifecycle_generation)
+                            if lifecycle_generation != self._lifecycle_generation:
+                                should_restore_rescan = bool(
+                                    self._allow_initial_lifecycle_transition
+                                    and self._pending_initial_lifecycle_transition_generation is None
+                                )
+                    except Exception:
+                        should_restore_rescan = False
                 for field_name, value in reset_values:
+                    if field_name in rescan_fields and not should_restore_rescan:
+                        continue
                     try:
                         setattr(owner, field_name, value)
                     except Exception:
@@ -32629,6 +32652,8 @@ class MerchantRulesWidget:
         if lifecycle_generation is None:
             return ExecutionPhaseOutcome(label=summary_subject, measure_label="items")
         self.identify_running = True
+        if auto_triggered:
+            self.identify_rescan_requested = False
         self.last_error = ""
         self.last_identify_summary = ""
         paused_inventory_plus = None
@@ -32732,7 +32757,6 @@ class MerchantRulesWidget:
                 if paused_inventory_plus.resume():
                     self._debug_log("MR Identify: resumed Inventory Plus.")
             self.identify_running = False
-            self.identify_rescan_requested = False
             self.identify_poll_timer.Reset()
             self.identify_last_signature = self._get_inventory_signature()
             yield
@@ -33783,6 +33807,8 @@ class MerchantRulesWidget:
         if lifecycle_generation is None:
             return ExecutionPhaseOutcome(label="MR Salvage", measure_label="items")
         self.salvage_running = True
+        if auto_triggered:
+            self.salvage_rescan_requested = False
         self.last_error = ""
         self.last_salvage_summary = ""
         paused_inventory_plus = None
@@ -33928,7 +33954,6 @@ class MerchantRulesWidget:
                 if paused_inventory_plus.resume():
                     self._debug_log("MR Salvage: resumed Inventory Plus.")
             self.salvage_running = False
-            self.salvage_rescan_requested = False
             self.salvage_poll_timer.Reset()
             self.salvage_last_signature = self._get_inventory_signature()
             yield
@@ -33998,6 +34023,8 @@ class MerchantRulesWidget:
             return
 
         self.instant_destroy_running = True
+        if require_auto_enabled:
+            self.instant_destroy_rescan_requested = False
         paused_inventory_plus = None
         subject = str(summary_subject or "Auto Destroy").strip() or "Auto Destroy"
         try:
@@ -34082,7 +34109,6 @@ class MerchantRulesWidget:
             if paused_inventory_plus is not None:
                 paused_inventory_plus.resume()
             self.instant_destroy_running = False
-            self.instant_destroy_rescan_requested = False
             self.instant_destroy_poll_timer.Reset()
             self.instant_destroy_last_signature = self._get_inventory_signature()
             yield
