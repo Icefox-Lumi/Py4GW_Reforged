@@ -20,6 +20,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Iterable
+from copy import deepcopy
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
@@ -57,6 +58,10 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import SUPPO
 
 from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_SCHEMA
+from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_SCHEMA_VERSION
+from Sources.icefox.MerchantRules.profiles import CharacterProfileAssociation
 from Sources.icefox.MerchantRules.profiles import LIVE_CONFIG_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import LOADED_PROFILE_STATE_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA
@@ -72,6 +77,9 @@ from Sources.icefox.MerchantRules.profiles import ProfileIdentity
 from Sources.icefox.MerchantRules.profiles import ProfileStore
 from Sources.icefox.MerchantRules.profiles import ProfileSummary
 from Sources.icefox.MerchantRules.profiles import LoadedProfileProvenance
+from Sources.icefox.MerchantRules.profiles import character_profile_association_from_json
+from Sources.icefox.MerchantRules.profiles import character_profile_association_to_json
+from Sources.icefox.MerchantRules.profiles import normalize_character_profile_state_root
 from Sources.icefox.MerchantRules.profiles import SHARED_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import is_valid_profile_id
 from Sources.icefox.MerchantRules.profiles import new_profile_id
@@ -136,6 +144,8 @@ INVENTORY_SHORTCUT_LIVE_ACTION_OPEN_XUNLAI = "open_xunlai_storage"
 INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 
 PROFILE_VERSION = 40
+CHARACTER_PROFILE_CONFIRMATION_TICKS = 2
+CHARACTER_PROFILE_RETRY_INTERVAL_SECONDS = 1.0
 MERCHANT_RULES_OWNED_ACTION_QUEUES = frozenset({"ACTION", "IDENTIFY", "SALVAGE"})
 # Live configuration remains account-scoped. Saved profiles use one standalone
 # JsonFactory document per filename, while the legacy documents remain migration input.
@@ -7410,6 +7420,23 @@ class MerchantRulesWidget:
         self.active_profile_display_name = ""
         self.loaded_profile_provenance: LoadedProfileProvenance | None = None
         self.loaded_profile_provenance_warning = ""
+        self._character_profile_ready = False
+        self._character_profile_resolved_identity: tuple[str, str] | None = None
+        self._character_profile_resolved_observation: tuple[str, str] | None = None
+        self._character_profile_resolved_profile_identity: ProfileIdentity | None = None
+        self._character_profile_candidate_identity: tuple[str, str] | None = None
+        self._character_profile_candidate_observation: tuple[str, str] | None = None
+        self._character_profile_candidate_ticks = 0
+        self._character_profile_resolution_target: tuple[str, str] | None = None
+        self._character_profile_pending_association: CharacterProfileAssociation | None = None
+        self._character_profile_pending_profile: ProfileSummary | None = None
+        self._character_profile_pending_needs_persist = False
+        self._character_profile_pending_is_new_blank = False
+        self._character_profile_pending_message = ""
+        self._character_profile_last_attempt_at = 0.0
+        self._character_profile_resolution_error = ""
+        self._character_profile_last_failure_signature: tuple[str, str, str] | None = None
+        self._character_profile_resolution_started = False
         self.new_profile_session = False
         self.profile_warning = ""
         self.profile_notice = ""
@@ -7539,6 +7566,7 @@ class MerchantRulesWidget:
         self._merchant_rules_planned_travel_active = False
         self._merchant_rules_planned_lifecycle_generation: int | None = None
         self.pending_multibox_profile_reload: tuple[str, str, str] | None = None
+        self._pending_multibox_profile_reload_payload: dict[str, object] | None = None
         self._merchant_rules_staged_multibox_reload_requests: set[tuple[str, str, str]] = set()
         self.execute_reservation_scope_active = False
         self.execute_reserved_item_ids: set[int] = set()
@@ -7929,6 +7957,10 @@ class MerchantRulesWidget:
         """Account-scoped provenance for the exact saved profile last loaded explicitly."""
         return JsonFactory(LOADED_PROFILE_STATE_DOC_NAME)
 
+    def _character_profile_state_doc(self) -> JsonFactory:
+        """Account-scoped character-to-profile associations, separate from load provenance."""
+        return JsonFactory(CHARACTER_PROFILE_STATE_DOC_NAME, "account")
+
     def _get_live_profile_display_name(self) -> str:
         config_path = str(self.config_path or "").strip()
         if config_path:
@@ -7950,6 +7982,19 @@ class MerchantRulesWidget:
             return f"[{self._profile_scope_badge(provenance.source_identity.scope)}] {display_name}"
         profile_name = str(self.active_profile_display_name or "").strip()
         return profile_name or self._get_live_profile_display_name()
+
+    def _get_character_profile_status_text(self) -> str:
+        if self._character_profile_resolution_error:
+            return "Unavailable; automatic actions are paused"
+        if not self._character_profile_ready:
+            return "Loading character assignment"
+        profile_identity = self._character_profile_resolved_profile_identity
+        if profile_identity is None:
+            return "Unassigned; using safe blank settings"
+        profile = self._get_profile_by_identity(profile_identity)
+        if profile is None:
+            return "Assigned saved profile (currently unavailable)"
+        return f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}"
 
     def _get_profile_safety_summary_text(self) -> str:
         protected_item_count = self._get_exact_protection_target_count()
@@ -11166,6 +11211,16 @@ class MerchantRulesWidget:
                 0,
                 int(self.merchant_rules_lifecycle_generation),
             ) + 1
+            # Initial lifecycle discovery starts before character resolution; once the
+            # resolver has established trust, every later ready boundary invalidates it.
+            if (
+                self._character_profile_resolution_started
+                and self._merchant_rules_lifecycle_map_ready_snapshot
+            ):
+                self._character_profile_candidate_identity = None
+                self._character_profile_candidate_observation = None
+                self._character_profile_candidate_ticks = 0
+                self._mark_character_profile_unresolved()
             self._clear_inventory_monitor_signatures()
             if not lifecycle_map_changed:
                 self._clear_inventory_shortcut_material_storage_count_cache("map/session state changed")
@@ -11202,7 +11257,537 @@ class MerchantRulesWidget:
             # native-facing work based on a weaker substitute.
             return False
 
-    def _merchant_rules_lifecycle_block_reason(self, *, require_service: bool = False) -> str:
+    def _mark_character_profile_unresolved(self, message: str = "") -> None:
+        self._character_profile_ready = False
+        self.preview_ready = False
+        self.preview_plan = PlanResult()
+        self._clear_preview_projection_state()
+        self._clear_preview_inventory_diff()
+        self._clear_profile_confirmation_state()
+        status = str(message or "").strip()
+        if not status:
+            status = "Waiting for this character to finish loading."
+        self.status_message = status
+
+    def _get_current_character_observation(self) -> tuple[str, str] | None:
+        try:
+            raw_uuid = Player.GetPlayerUUID()
+            uuid_words = tuple(raw_uuid)
+            if len(uuid_words) != 4:
+                return None
+            normalized_words: list[int] = []
+            for raw_word in uuid_words:
+                word = int(raw_word)
+                if word < -0x80000000 or word > 0xFFFFFFFF:
+                    return None
+                normalized_words.append(word & 0xFFFFFFFF)
+            if not any(normalized_words):
+                return None
+            uuid_key = "uuid-" + "-".join(f"{word:08x}" for word in normalized_words)
+        except Exception:
+            return None
+
+        try:
+            character_name = str(Player.GetName() or "").strip()
+        except Exception:
+            character_name = ""
+        return uuid_key, character_name
+
+    def _read_character_profile_state_root(self, doc: JsonFactory) -> dict[str, object] | None:
+        if not doc.is_ready():
+            raise OSError("The account-scoped character profile state is not ready.")
+        if not doc.reload():
+            try:
+                document_path = str(doc.path() or "").strip()
+                if not document_path:
+                    raise OSError("The character profile state path is not available.")
+                if not os.path.lexists(document_path):
+                    return None
+            except Exception as exc:
+                raise OSError("The character profile state path could not be checked.") from exc
+            raise OSError("The character profile state could not be refreshed.")
+        raw_state = doc.get_json("", None)
+        if raw_state is None:
+            if doc.has(""):
+                raise ValueError("The character profile state root is malformed.")
+            return None
+        if raw_state == {}:
+            return {}
+        return normalize_character_profile_state_root(raw_state)
+
+    def _read_character_profile_association_state(
+        self,
+        character_uuid_key: str,
+    ) -> tuple[CharacterProfileAssociation | None, bool]:
+        doc = self._character_profile_state_doc()
+        root = self._read_character_profile_state_root(doc)
+        if root is None or root == {}:
+            return None, False
+        characters = root.get("characters", {})
+        if not isinstance(characters, dict):
+            raise ValueError("The character profile state entries are malformed.")
+        if character_uuid_key not in characters:
+            return None, False
+        try:
+            return character_profile_association_from_json(characters[character_uuid_key]), False
+        except Exception as exc:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    "The current character's saved profile association is malformed; "
+                    f"it will be removed after safe blank settings are verified. Technical detail: {exc}"
+                ),
+                Console.MessageType.Warning,
+            )
+            return None, True
+
+    def _load_character_profile_association(
+        self,
+        character_uuid_key: str,
+    ) -> CharacterProfileAssociation | None:
+        association, _malformed = self._read_character_profile_association_state(character_uuid_key)
+        return association
+
+    def _persist_character_profile_association(
+        self,
+        character_uuid_key: str,
+        association: CharacterProfileAssociation,
+    ) -> None:
+        doc = self._character_profile_state_doc()
+        root = self._read_character_profile_state_root(doc)
+        if root not in (None, {}):
+            normalize_character_profile_state_root(root)
+        serialized_entry = character_profile_association_to_json(association)
+        if not doc.has("schema"):
+            doc.set_str("schema", CHARACTER_PROFILE_STATE_SCHEMA)
+        if not doc.has("schema_version"):
+            doc.set_int("schema_version", CHARACTER_PROFILE_STATE_SCHEMA_VERSION)
+        doc.set_json(f"characters/{character_uuid_key}", serialized_entry)
+        if not doc.save():
+            doc.reload()
+            raise OSError("JsonFactory could not flush the character profile association.")
+        if not doc.reload():
+            raise OSError("The character profile association was saved but could not be reloaded.")
+        verified_root = doc.get_json("", None)
+        normalized_root = normalize_character_profile_state_root(verified_root)
+        verified_characters = normalized_root.get("characters", {})
+        if not isinstance(verified_characters, dict):
+            raise RuntimeError("The saved character profile state entries are malformed.")
+        verified_association = character_profile_association_from_json(verified_characters.get(character_uuid_key))
+        expected_association = character_profile_association_from_json(serialized_entry)
+        if verified_association != expected_association:
+            raise RuntimeError("The character profile association failed post-save verification.")
+
+    def _delete_character_profile_association(self, character_uuid_key: str) -> None:
+        """Remove a stale current-character leaf after its safe replacement is live."""
+
+        doc = self._character_profile_state_doc()
+        root = self._read_character_profile_state_root(doc)
+        if root is None or root == {}:
+            return
+        characters = root.get("characters", {})
+        if not isinstance(characters, dict):
+            raise ValueError("The character profile state entries are malformed.")
+        if character_uuid_key not in characters:
+            return
+
+        expected_root = deepcopy(root)
+        expected_characters = expected_root.get("characters", {})
+        if not isinstance(expected_characters, dict):
+            raise ValueError("The character profile state entries are malformed.")
+        expected_characters.pop(character_uuid_key, None)
+
+        if not doc.delete(f"characters/{character_uuid_key}"):
+            raise OSError("The stale character profile association could not be removed.")
+        if not doc.save():
+            doc.reload()
+            raise OSError("JsonFactory could not flush the removed character profile association.")
+        if not doc.reload():
+            raise OSError("The removed character profile association could not be reloaded.")
+
+        verified_raw = doc.get_json("", None)
+        if verified_raw is None:
+            raise RuntimeError("The character profile state disappeared while removing a stale association.")
+        verified_root = normalize_character_profile_state_root(verified_raw)
+        verified_characters = verified_root.get("characters", {})
+        if not isinstance(verified_characters, dict):
+            raise RuntimeError("The saved character profile state entries are malformed.")
+        if character_uuid_key in verified_characters:
+            raise RuntimeError("The stale character profile association remained after removal.")
+        if verified_root != expected_root:
+            raise RuntimeError("Unrelated character profile state changed while removing a stale association.")
+
+    def _refresh_character_profile_scope(self, scope: str) -> None:
+        if not self._refresh_profile_entries(scope, reload_document=True):
+            raise OSError(f"{self._profile_scope_label(scope)} could not be refreshed.")
+        if (
+            self.profile_document_reload_failed[scope]
+            or self.saved_profile_failure_signatures[scope]
+            or self.profile_scan_conflicts[scope]
+            or self.saved_profile_scan_warnings[scope]
+        ):
+            raise OSError(f"Some {self._profile_scope_label(scope)} could not be verified during refresh.")
+
+    def _set_character_profile_resolution_failure(self, exc: Exception) -> None:
+        self._mark_character_profile_unresolved(
+            "Merchant Rules could not finish loading this character's profile. " "Automatic actions are paused."
+        )
+        failure_text = self._format_exception_chain_for_log(exc)
+        target = self._character_profile_resolution_target or self._character_profile_candidate_identity
+        target_context = repr((target, self._character_profile_candidate_observation))
+        try:
+            document_path = str(self._character_profile_state_doc().path() or "").strip() or "<unbound>"
+        except Exception:
+            document_path = "<unavailable>"
+        failure_signature = (target_context, document_path, failure_text)
+        self._character_profile_resolution_error = str(exc or type(exc).__name__)
+        self._character_profile_last_attempt_at = time.monotonic()
+        if failure_signature != self._character_profile_last_failure_signature:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    "Character profile resolution remains blocked. "
+                    f"Technical detail: {failure_text}"
+                ),
+                Console.MessageType.Warning,
+            )
+            self._character_profile_last_failure_signature = failure_signature
+
+    def _retain_profile_load_for_character_retry(
+        self,
+        profile: ProfileSummary,
+        exc: Exception,
+    ) -> None:
+        resolved_identity = self._character_profile_resolved_identity
+        resolved_observation = self._character_profile_resolved_observation
+        if resolved_identity is None:
+            self._set_character_profile_resolution_failure(exc)
+            return
+        self._character_profile_resolution_target = resolved_identity
+        self._character_profile_pending_association = CharacterProfileAssociation(
+            profile_identity=profile.identity,
+            character_name_snapshot=(resolved_observation[1] if resolved_observation else ""),
+        )
+        self._character_profile_pending_profile = profile
+        self._character_profile_pending_needs_persist = True
+        self._character_profile_pending_is_new_blank = False
+        self._character_profile_pending_message = (
+            f"Loaded {self._profile_scope_badge(profile.scope).title()} profile "
+            f"'{profile.display_name}' for this character."
+        )
+        self._set_character_profile_resolution_failure(exc)
+
+    def _clear_character_profile_pending_target(self) -> None:
+        self._character_profile_pending_association = None
+        self._character_profile_pending_profile = None
+        self._character_profile_pending_needs_persist = False
+        self._character_profile_pending_is_new_blank = False
+        self._character_profile_pending_message = ""
+
+    def _prepare_character_profile_pending_target(
+        self,
+        character_uuid_key: str,
+    ) -> tuple[ProfileSummary | None, CharacterProfileAssociation | None, bool]:
+        if self._character_profile_pending_association is not None:
+            identity = self._character_profile_pending_association.profile_identity
+            if self._character_profile_pending_profile is not None:
+                return (
+                    self._character_profile_pending_profile,
+                    self._character_profile_pending_association,
+                    False,
+                )
+            self._refresh_character_profile_scope(identity.scope)
+            profile = self._get_profile_by_identity(identity)
+            if profile is not None:
+                self._character_profile_pending_profile = profile
+                return profile, self._character_profile_pending_association, False
+            self._character_profile_pending_association = None
+
+        association, malformed = self._read_character_profile_association_state(character_uuid_key)
+        if association is None:
+            self._character_profile_pending_association = None
+            self._character_profile_pending_profile = None
+            self._character_profile_pending_needs_persist = False
+            self._character_profile_pending_is_new_blank = False
+            self._character_profile_pending_message = (
+                "This character has no saved profile assigned; using safe blank settings."
+                if not malformed
+                else "This character's saved profile association was stale; using safe blank settings."
+            )
+            return None, None, malformed
+
+        identity = association.profile_identity
+        self._refresh_character_profile_scope(identity.scope)
+        profile = self._get_profile_by_identity(identity)
+        if profile is not None:
+            self._character_profile_pending_association = association
+            self._character_profile_pending_profile = profile
+            self._character_profile_pending_needs_persist = False
+            self._character_profile_pending_is_new_blank = False
+            return profile, association, False
+
+        self._character_profile_pending_association = None
+        self._character_profile_pending_profile = None
+        self._character_profile_pending_needs_persist = False
+        self._character_profile_pending_is_new_blank = False
+        self._character_profile_pending_message = (
+            "This character's saved profile could not be found; using safe blank settings."
+        )
+        return None, None, True
+
+    def _apply_verified_profile_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        expected_serialized_payload: str,
+        operation_description: str = "the verified profile payload",
+        status_message: str = "",
+        preserve_workspace_state: bool = True,
+        profile_display_name: str = "",
+        log_profile_load_summary: bool = False,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> None:
+        normalized_payload = self._normalize_profile_payload(deepcopy(payload))
+        live_doc = self._live_config_doc()
+        self._write_profile_payload_for_account(self.account_key, normalized_payload)
+        if not live_doc.save():
+            rollback_loaded = live_doc.reload()
+            rollback_detail = (
+                "" if rollback_loaded else " Merchant Rules also could not restore the previous current settings."
+            )
+            raise OSError(
+                f"Merchant Rules could not save {operation_description} as the current settings." f"{rollback_detail}"
+            )
+        if not live_doc.reload():
+            raise OSError("Merchant Rules could not verify the saved current settings.")
+        if not self.reload_profile_from_disk(
+            status_message=status_message,
+            preserve_workspace_state=preserve_workspace_state,
+            log_profile_load_summary=log_profile_load_summary,
+            profile_display_name=profile_display_name,
+            include_remote_dispatch=include_remote_dispatch,
+            include_pending_reload=include_pending_reload,
+        ):
+            raise OSError(f"Merchant Rules could not apply {operation_description}.")
+        loaded_payload_serialized = self._serialize_shareable_profile_payload(self._build_shareable_profile_payload())
+        if loaded_payload_serialized != expected_serialized_payload:
+            raise RuntimeError(f"The current settings do not match {operation_description} after loading.")
+
+    def _apply_saved_profile_summary(
+        self,
+        profile: ProfileSummary,
+        *,
+        status_message: str = "",
+        preserve_workspace_state: bool = True,
+        log_profile_load_summary: bool = False,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> None:
+        self._apply_verified_profile_payload(
+            profile.payload,
+            expected_serialized_payload=profile.serialized_payload,
+            operation_description="the selected profile",
+            status_message=status_message,
+            preserve_workspace_state=preserve_workspace_state,
+            profile_display_name=f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}",
+            log_profile_load_summary=log_profile_load_summary,
+            include_remote_dispatch=include_remote_dispatch,
+            include_pending_reload=include_pending_reload,
+        )
+
+    def _character_profile_gate_block_reason(self) -> str:
+        if self._character_profile_resolution_error:
+            return "Merchant Rules could not finish loading this character's profile. " "Automatic actions are paused."
+        if not self._character_profile_ready:
+            return "Waiting for this character to finish loading."
+        resolved_identity = self._character_profile_resolved_identity
+        resolved_observation = self._character_profile_resolved_observation
+        current_account = self._get_account_key()
+        current_observation = self._get_current_character_observation()
+        if (
+            resolved_identity is None
+            or resolved_observation is None
+            or not current_account
+            or resolved_identity[0] != current_account
+            or current_observation is None
+            or current_observation != resolved_observation
+        ):
+            return "Waiting for this character to finish loading."
+        return ""
+
+    def _is_character_profile_observation_current(
+        self,
+        identity: tuple[str, str],
+        observation: tuple[str, str],
+    ) -> bool:
+        return bool(
+            self._get_account_key() == identity[0]
+            and observation[0] == identity[1]
+            and self._get_current_character_observation() == observation
+        )
+
+    def _advance_character_profile_resolution(self) -> None:
+        self._character_profile_resolution_started = True
+        lifecycle_reason = self._merchant_rules_lifecycle_block_reason(
+            require_character_profile=False,
+        )
+        if lifecycle_reason:
+            self._character_profile_candidate_identity = None
+            self._character_profile_candidate_observation = None
+            self._character_profile_candidate_ticks = 0
+            self._mark_character_profile_unresolved()
+            return
+
+        current_account = self._get_account_key()
+        observation = self._get_current_character_observation()
+        if not current_account or observation is None:
+            self._character_profile_candidate_identity = None
+            self._character_profile_candidate_observation = None
+            self._character_profile_candidate_ticks = 0
+            self._mark_character_profile_unresolved()
+            return
+
+        identity = (current_account, observation[0])
+        if (
+            self._character_profile_candidate_identity == identity
+            and self._character_profile_candidate_observation == observation
+        ):
+            self._character_profile_candidate_ticks += 1
+        else:
+            self._character_profile_candidate_identity = identity
+            self._character_profile_candidate_observation = observation
+            self._character_profile_candidate_ticks = 1
+
+        if (
+            self._character_profile_resolved_identity != identity
+            or self._character_profile_resolved_observation != observation
+        ):
+            self._mark_character_profile_unresolved()
+
+        if self._character_profile_candidate_ticks < CHARACTER_PROFILE_CONFIRMATION_TICKS:
+            return
+
+        if identity == self._character_profile_resolved_identity and self._character_profile_resolution_target is None:
+            self._character_profile_resolved_observation = observation
+            self._character_profile_ready = True
+            self._character_profile_resolution_error = ""
+            self._character_profile_last_failure_signature = None
+            return
+
+        if self._character_profile_resolution_target != identity:
+            self.merchant_rules_profile_generation = (
+                max(
+                    0,
+                    int(self.merchant_rules_profile_generation),
+                )
+                + 1
+            )
+            self._clear_multibox_batch_runtime()
+            self._character_profile_resolution_target = identity
+            self._clear_character_profile_pending_target()
+            self._character_profile_resolution_error = ""
+            self._character_profile_last_failure_signature = None
+            self._character_profile_last_attempt_at = 0.0
+            self._mark_character_profile_unresolved()
+
+        if self._merchant_rules_has_pending_or_active_work(
+            include_remote_dispatch=False,
+            include_pending_reload=False,
+        ):
+            self.status_message = "Waiting for Merchant Rules to finish current work."
+            return
+
+        if not self.initialized or self.account_key != current_account:
+            self.status_message = "Waiting for this character to finish loading."
+            return
+
+        if time.monotonic() - self._character_profile_last_attempt_at < CHARACTER_PROFILE_RETRY_INTERVAL_SECONDS:
+            return
+
+        try:
+            profile, association, remove_stale_association = self._prepare_character_profile_pending_target(
+                observation[0]
+            )
+            if profile is None or association is None:
+                blank_payload = self._normalize_profile_payload(
+                    self._build_default_profile_payload(include_rule_templates=False)
+                )
+                self._apply_verified_profile_payload(
+                    blank_payload,
+                    expected_serialized_payload=self._serialize_shareable_profile_payload(blank_payload),
+                    operation_description="safe blank settings",
+                    status_message=(
+                        self._character_profile_pending_message
+                        or "This character has no saved profile assigned; using safe blank settings."
+                    ),
+                    preserve_workspace_state=True,
+                    profile_display_name="",
+                    log_profile_load_summary=False,
+                    include_remote_dispatch=False,
+                    include_pending_reload=False,
+                )
+                if not self._is_character_profile_observation_current(identity, observation):
+                    raise RuntimeError("The current character changed while safe blank settings were loading.")
+                if remove_stale_association:
+                    self._delete_character_profile_association(observation[0])
+                if not self._is_character_profile_observation_current(identity, observation):
+                    raise RuntimeError("The current character changed before its blank settings could be confirmed.")
+                resolved_profile_identity = None
+            else:
+                self._apply_saved_profile_summary(
+                    profile,
+                    preserve_workspace_state=True,
+                    log_profile_load_summary=False,
+                    include_remote_dispatch=False,
+                    include_pending_reload=False,
+                )
+                if not self._is_character_profile_observation_current(identity, observation):
+                    raise RuntimeError("The current character changed while its saved profile was loading.")
+                if self._character_profile_pending_needs_persist:
+                    self._persist_character_profile_association(observation[0], association)
+                if not self._is_character_profile_observation_current(identity, observation):
+                    raise RuntimeError("The current character changed before its profile could be confirmed.")
+                resolved_profile_identity = association.profile_identity
+
+            self._character_profile_resolved_identity = identity
+            self._character_profile_resolved_observation = observation
+            self._character_profile_resolved_profile_identity = resolved_profile_identity
+            self._character_profile_ready = True
+            self._character_profile_resolution_target = None
+            self._character_profile_resolution_error = ""
+            self._character_profile_last_failure_signature = None
+            self._character_profile_last_attempt_at = 0.0
+            if self._character_profile_pending_message:
+                self.status_message = self._character_profile_pending_message
+            elif profile is not None:
+                self.status_message = (
+                    f"Loaded {self._profile_scope_badge(profile.scope).title()} profile "
+                    f"'{profile.display_name}' for this character."
+                )
+            else:
+                self.status_message = "This character has no saved profile assigned; using safe blank settings."
+            identify_settings = _normalize_identify_settings(self.identify_settings)
+            self.identify_rescan_requested = bool(
+                identify_settings.on_inventory_change
+                and any(bool(value) for value in identify_settings.rarities.values())
+            )
+            salvage_settings = _normalize_salvage_settings(self.salvage_settings)
+            self.salvage_rescan_requested = bool(
+                salvage_settings.on_inventory_change
+                and any(bool(rule.enabled) and _salvage_rule_has_selectors(rule) for rule in salvage_settings.rules)
+            )
+            self.instant_destroy_rescan_requested = bool(self.destroy_auto_enabled)
+            self._clear_character_profile_pending_target()
+        except Exception as exc:
+            self._set_character_profile_resolution_failure(exc)
+
+    def _merchant_rules_lifecycle_block_reason(
+        self,
+        *,
+        require_service: bool = False,
+        require_character_profile: bool = True,
+    ) -> str:
         try:
             if not Map.IsMapReady():
                 return "Wait for the current map to finish loading."
@@ -11248,6 +11833,8 @@ class MerchantRulesWidget:
                     return "Merchant Rules services require an outpost or Guild Hall."
             except Exception:
                 return "Merchant Rules service readiness could not be verified."
+        if require_character_profile:
+            return self._character_profile_gate_block_reason()
         return ""
 
     def _merchant_rules_lifecycle_is_current(self, generation: int | None = None) -> bool:
@@ -11583,6 +12170,18 @@ class MerchantRulesWidget:
         reset_flags: tuple[str, ...] = (),
         reset_values_before_start: tuple[tuple[str, object], ...] = (),
     ):
+        character_profile_block_reason = self._character_profile_gate_block_reason()
+        if character_profile_block_reason:
+            self.status_message = character_profile_block_reason
+            close = getattr(generator, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except BaseException:
+                    pass
+            for flag_name in reset_flags:
+                setattr(self, flag_name, False)
+            return None
         try:
             owned_generator = self._track_merchant_rules_owned_work(
                 generator,
@@ -11621,14 +12220,54 @@ class MerchantRulesWidget:
             str(getattr(message, "ReceiverEmail", "") or Player.GetAccountEmail() or "").strip(),
         )
 
+    def _read_validated_multibox_profile_payload(self) -> dict[str, object]:
+        live_doc = self._live_config_doc()
+        if not live_doc.reload():
+            raise OSError("Merchant Rules could not refresh the synchronized live config.")
+        raw_payload = live_doc.get_json("", None)
+        if raw_payload in (None, {}):
+            raise ValueError("The synchronized Merchant Rules live config is empty.")
+        if not isinstance(raw_payload, dict):
+            raise ValueError("The synchronized Merchant Rules live config is malformed.")
+        raw_version = _safe_int(raw_payload.get("version", 0), 0)
+        if raw_version > PROFILE_VERSION:
+            raise ValueError(
+                f"The synchronized Merchant Rules live config version {raw_version} is newer than "
+                f"version {PROFILE_VERSION}."
+            )
+        return deepcopy(self._normalize_profile_payload(raw_payload))
+
+    def _capture_multibox_profile_reload_payload(self) -> dict[str, object] | None:
+        try:
+            return self._read_validated_multibox_profile_payload()
+        except Exception as exc:
+            self.profile_warning = (
+                "Merchant Rules could not validate the synchronized live config; "
+                "the reload request was not retained."
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                f"{self.profile_warning} Technical detail: {exc}",
+                Console.MessageType.Warning,
+            )
+            return None
+
+    def _clear_pending_multibox_profile_reload(self) -> None:
+        self.pending_multibox_profile_reload = None
+        self._pending_multibox_profile_reload_payload = None
+
     def _stage_multibox_profile_reload(self, request_key: tuple[str, str, str]) -> None:
         normalized_key: tuple[str, str, str] = (
             str(request_key[0] or "").strip(),
             str(request_key[1] or "").strip(),
             str(request_key[2] or "").strip(),
         )
+        payload = self._capture_multibox_profile_reload_payload()
+        if payload is None:
+            return
         self._merchant_rules_staged_multibox_reload_requests.add(normalized_key)
         self.pending_multibox_profile_reload = normalized_key
+        self._pending_multibox_profile_reload_payload = payload
 
     def _release_staged_multibox_profile_reload(self, request_key: tuple[str, str, str]) -> None:
         normalized_key: tuple[str, str, str] = (
@@ -11639,7 +12278,7 @@ class MerchantRulesWidget:
         was_staged = normalized_key in self._merchant_rules_staged_multibox_reload_requests
         self._merchant_rules_staged_multibox_reload_requests.discard(normalized_key)
         if was_staged and self.pending_multibox_profile_reload == normalized_key:
-            self.pending_multibox_profile_reload = None
+            self._clear_pending_multibox_profile_reload()
 
     def track_merchant_rules_remote_dispatch(self, message, generator):
         opcode = self._get_multibox_message_opcode(message)
@@ -11721,21 +12360,55 @@ class MerchantRulesWidget:
             or bool(self.multibox_running_email)
             or (include_pending_reload and self.pending_multibox_profile_reload is not None)
             or (
-                self.pending_multibox_profile_reload is not None
+                include_pending_reload
+                and self.pending_multibox_profile_reload is not None
                 and self.pending_multibox_profile_reload in self._merchant_rules_staged_multibox_reload_requests
             )
         )
 
-    def _get_profile_application_block_message(self, action: str) -> str:
-        if not self._merchant_rules_has_pending_or_active_work():
+    def _get_profile_application_block_message(
+        self,
+        action: str,
+        *,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> str:
+        if not self._merchant_rules_has_pending_or_active_work(
+            include_remote_dispatch=include_remote_dispatch,
+            include_pending_reload=include_pending_reload,
+        ):
             return ""
         return f"Wait for Merchant Rules to finish its current work before {action}."
 
-    def _apply_multibox_profile_reload(self, *, preserve_workspace_state: bool = False):
+    def _apply_multibox_profile_reload(
+        self,
+        *,
+        preserve_workspace_state: bool = False,
+        profile_payload: dict[str, object] | None = None,
+    ):
+        if self._character_profile_gate_block_reason():
+            return False
         if self._merchant_rules_has_pending_or_active_work():
             return False
         self._clear_loaded_profile_provenance("multibox synchronization")
         try:
+            if profile_payload is not None:
+                normalized_payload = self._normalize_profile_payload(deepcopy(profile_payload))
+                self._write_live_profile_payload(
+                    normalized_payload,
+                    create_backup=False,
+                    force_save=True,
+                )
+                live_doc = self._live_config_doc()
+                if not live_doc.reload():
+                    raise OSError("Merchant Rules could not verify the deferred synchronized live config.")
+                persisted_payload = live_doc.get_json("", None)
+                if not isinstance(persisted_payload, dict):
+                    raise RuntimeError("The deferred synchronized live config is malformed after saving.")
+                if self._serialize_profile_payload(persisted_payload) != self._serialize_profile_payload(
+                    normalized_payload
+                ):
+                    raise RuntimeError("The deferred synchronized live config failed post-save verification.")
             return self.reload_profile_from_disk(
                 status_message="Merchant Rules live config reloaded by multibox sync.",
                 preserve_window_geometry=bool(preserve_workspace_state),
@@ -11755,27 +12428,69 @@ class MerchantRulesWidget:
         sender_email: str = "",
         receiver_email: str = "",
     ) -> bool:
-        if self._merchant_rules_has_pending_or_active_work():
-            self.pending_multibox_profile_reload = (
-                str(request_id or ""),
-                str(sender_email or ""),
-                str(receiver_email or ""),
+        request_key = (
+            str(request_id or "").strip(),
+            str(sender_email or "").strip(),
+            str(receiver_email or "").strip(),
+        )
+        if (
+            self._character_profile_gate_block_reason()
+            or self._merchant_rules_has_pending_or_active_work()
+        ):
+            payload = (
+                deepcopy(self._pending_multibox_profile_reload_payload)
+                if self.pending_multibox_profile_reload == request_key
+                and self._pending_multibox_profile_reload_payload is not None
+                else self._capture_multibox_profile_reload_payload()
             )
+            if payload is None:
+                return False
+            self.pending_multibox_profile_reload = request_key
+            self._pending_multibox_profile_reload_payload = payload
             return False
-        self.pending_multibox_profile_reload = None
-        return bool(self._apply_multibox_profile_reload(preserve_workspace_state=False))
+        pending_payload = (
+            deepcopy(self._pending_multibox_profile_reload_payload)
+            if self.pending_multibox_profile_reload == request_key
+            and self._pending_multibox_profile_reload_payload is not None
+            else None
+        )
+        self._clear_pending_multibox_profile_reload()
+        return bool(
+            self._apply_multibox_profile_reload(
+                preserve_workspace_state=False,
+                profile_payload=pending_payload,
+            )
+        )
 
     def _apply_pending_multibox_profile_reload_if_idle(self) -> bool:
         pending_reload = self.pending_multibox_profile_reload
+        if self._character_profile_gate_block_reason():
+            return False
         if pending_reload is None or self._merchant_rules_has_pending_or_active_work(include_pending_reload=False):
             return False
         if pending_reload in self._merchant_rules_staged_multibox_reload_requests:
             return False
 
-        self.pending_multibox_profile_reload = None
+        pending_payload = (
+            deepcopy(self._pending_multibox_profile_reload_payload)
+            if self._pending_multibox_profile_reload_payload is not None
+            else None
+        )
+        self._clear_pending_multibox_profile_reload()
         request_id, sender_email, receiver_email = pending_reload
+        if pending_payload is None:
+            self.profile_warning = (
+                "Merchant Rules discarded a deferred synchronized reload because its payload was unavailable."
+            )
+            ConsoleLog(MODULE_NAME, self.profile_warning, Console.MessageType.Warning)
+            return False
         try:
-            applied = bool(self._apply_multibox_profile_reload(preserve_workspace_state=True))
+            applied = bool(
+                self._apply_multibox_profile_reload(
+                    preserve_workspace_state=True,
+                    profile_payload=pending_payload,
+                )
+            )
             if applied:
                 self._debug_log(
                     "Deferred Merchant Rules multibox profile reload applied: "
@@ -11790,7 +12505,11 @@ class MerchantRulesWidget:
             return False
 
     def _tick_runtime(self):
+        profile_was_ready = bool(self._character_profile_ready)
         self._ensure_initialized()
+        self._advance_character_profile_resolution()
+        if not profile_was_ready or not self._character_profile_ready:
+            return
         self._update_service_resolution_lifecycle()
         self._apply_pending_multibox_profile_reload_if_idle()
         if self.inventory_shortcuts_material_storage_count_cache_captured_at_ms > 0 and not self._is_storage_open():
@@ -13340,37 +14059,47 @@ class MerchantRulesWidget:
                 ),
             )
 
+    def _create_blank_saved_profile(
+        self,
+        scope: str,
+        display_name: str,
+        *,
+        refresh_scope: bool = True,
+    ) -> ProfileSummary:
+        if scope not in PROFILE_SCOPES:
+            raise ValueError("The saved profile scope is invalid.")
+        if refresh_scope:
+            self._prepare_scope_for_new_profile(scope)
+        profile_name = self._ensure_profile_name_available(scope, display_name)
+        profile_id = new_profile_id()
+        filename = self._allocate_profile_filename(scope, profile_name)
+        wrapper = self._build_shared_profile_wrapper(
+            profile_name,
+            profile_id=profile_id,
+            payload=self._build_default_profile_payload(
+                include_rule_templates=False,
+            ),
+        )
+        profile = self._persist_profile_wrapper(
+            scope,
+            profile_id,
+            wrapper,
+            filename=filename,
+        )
+        self._select_profile_after_action(scope, profile_id)
+        self._clear_profile_confirmation_state()
+        return profile
+
     def _create_blank_profile(self, scope: str):
         self._ensure_initialized()
         requested_profile_name = self.profile_name_inputs[scope]
         try:
-            self._prepare_scope_for_new_profile(scope)
-            profile_name = self._ensure_profile_name_available(
-                scope,
-                requested_profile_name,
-            )
-            profile_id = new_profile_id()
-            filename = self._allocate_profile_filename(scope, profile_name)
-            wrapper = self._build_shared_profile_wrapper(
-                profile_name,
-                profile_id=profile_id,
-                payload=self._build_default_profile_payload(
-                    include_rule_templates=False,
-                ),
-            )
-            self._persist_profile_wrapper(
-                scope,
-                profile_id,
-                wrapper,
-                filename=filename,
-            )
-            self._select_profile_after_action(scope, profile_id)
-            self._clear_profile_confirmation_state()
+            profile = self._create_blank_saved_profile(scope, requested_profile_name)
             self._set_saved_profile_feedback(
                 scope,
                 notice=(
                     f"Created blank {self._profile_scope_badge(scope).title()} profile "
-                    f"'{profile_name}'."
+                    f"'{profile.display_name}'."
                 ),
             )
         except Exception as exc:
@@ -13485,9 +14214,7 @@ class MerchantRulesWidget:
         except Exception as exc:
             self._set_saved_profile_feedback(
                 scope,
-                warning=(
-                    f"Failed to replace {self._profile_scope_badge(scope).title()} profile: {exc}"
-                ),
+                warning=(f"Failed to replace {self._profile_scope_badge(scope).title()} profile: {exc}"),
             )
 
     def _load_selected_profile(
@@ -13497,7 +14224,17 @@ class MerchantRulesWidget:
     ):
         if self._get_profile_application_block_message("loading another profile"):
             return False
+        gate_reason = self._character_profile_gate_block_reason()
+        if gate_reason:
+            self.status_message = gate_reason
+            self._set_saved_profile_feedback(scope, warning=gate_reason)
+            return False
         self._ensure_initialized()
+        gate_reason = self._character_profile_gate_block_reason()
+        if gate_reason:
+            self.status_message = gate_reason
+            self._set_saved_profile_feedback(scope, warning=gate_reason)
+            return False
         selected_profile = self._get_selected_profile(scope)
         if selected_profile is None:
             self._set_saved_profile_feedback(
@@ -13506,40 +14243,41 @@ class MerchantRulesWidget:
             )
             return
 
-        live_doc = self._live_config_doc()
+        current: ProfileSummary | None = None
+        application_started = False
         try:
             current = self._resolve_profile_for_action(
                 selected_profile.identity,
                 expected_fingerprint=expected_fingerprint,
                 reload_shared=True,
             )
-            self._write_profile_payload_for_account(
-                self.account_key,
-                current.payload,
-            )
-            if not live_doc.save():
-                rollback_loaded = live_doc.reload()
-                rollback_detail = (
-                    ""
-                    if rollback_loaded
-                    else " Merchant Rules also could not restore the previous current settings."
-                )
-                raise OSError(
-                    "Merchant Rules could not save the selected profile as the current settings."
-                    f"{rollback_detail}"
-                )
-            self.reload_profile_from_disk(
+            observation = self._get_current_character_observation()
+            resolved_identity = self._character_profile_resolved_identity
+            if observation is None or resolved_identity is None or observation[0] != resolved_identity[1]:
+                raise RuntimeError("The current character is still loading.")
+            application_started = True
+            self._apply_saved_profile_summary(
+                current,
                 status_message="",
                 preserve_workspace_state=True,
                 log_profile_load_summary=False,
             )
-            loaded_payload_serialized = self._serialize_shareable_profile_payload(
-                self._build_shareable_profile_payload()
+            if not self._is_character_profile_observation_current(
+                resolved_identity,
+                observation,
+            ):
+                raise RuntimeError("The current character changed while the selected profile was loading.")
+            association = CharacterProfileAssociation(
+                profile_identity=current.identity,
+                character_name_snapshot=observation[1],
             )
-            if loaded_payload_serialized != current.serialized_payload:
-                raise RuntimeError(
-                    "The current settings do not match the selected profile after loading."
-                )
+            self._persist_character_profile_association(observation[0], association)
+            if not self._is_character_profile_observation_current(
+                resolved_identity,
+                observation,
+            ):
+                raise RuntimeError("The current character changed before its profile could be confirmed.")
+            self._character_profile_resolved_profile_identity = current.identity
             badge = self._profile_scope_badge(scope)
             provenance_warning = ""
             self.loaded_profile_provenance = None
@@ -13547,9 +14285,7 @@ class MerchantRulesWidget:
             try:
                 self._record_loaded_profile_provenance(current)
             except Exception as provenance_exc:
-                clear_succeeded = self._clear_loaded_profile_provenance(
-                    "a loaded-profile provenance write failure"
-                )
+                clear_succeeded = self._clear_loaded_profile_provenance("a loaded-profile provenance write failure")
                 provenance_warning = (
                     "The profile loaded successfully, but Merchant Rules could not update this account's "
                     "record of the last profile loaded."
@@ -13562,9 +14298,7 @@ class MerchantRulesWidget:
                     f"{provenance_warning} Technical detail: {provenance_exc}",
                     Console.MessageType.Warning,
                 )
-            self.status_message = (
-                f"Loaded {badge.title()} profile '{current.display_name}' for this account."
-            )
+            self.status_message = f"Loaded {badge.title()} profile '{current.display_name}' for this character."
             self._log_profile_loaded_summary()
             self._refresh_profile_entries(scope)
             self._select_profile_after_action(scope, current.key)
@@ -13582,9 +14316,14 @@ class MerchantRulesWidget:
                 ),
             )
         except Exception as exc:
-            warning = (
-                f"Failed to load {self._profile_scope_badge(scope).title()} profile: {exc}"
-            )
+            if application_started and current is not None:
+                self._retain_profile_load_for_character_retry(current, exc)
+                warning = (
+                    "Merchant Rules could not finish loading this character's profile. "
+                    f"Automatic actions are paused. The saved profile remains selected for retry: {exc}"
+                )
+            else:
+                warning = f"Failed to load {self._profile_scope_badge(scope).title()} profile: {exc}"
             self.status_message = warning
             self._set_saved_profile_feedback(scope, warning=warning)
 
@@ -13595,11 +14334,7 @@ class MerchantRulesWidget:
     ):
         self._ensure_initialized()
         source = self._get_selected_profile(source_scope)
-        destination_scope = (
-            PROFILE_SCOPE_ACCOUNT
-            if source_scope == PROFILE_SCOPE_SHARED
-            else PROFILE_SCOPE_SHARED
-        )
+        destination_scope = PROFILE_SCOPE_ACCOUNT if source_scope == PROFILE_SCOPE_SHARED else PROFILE_SCOPE_SHARED
         if source is None:
             self._set_saved_profile_feedback(
                 source_scope,
@@ -13962,10 +14697,16 @@ class MerchantRulesWidget:
         preserve_window_geometry: bool | None = None,
         profile_display_name: str = "",
         log_profile_load_summary: bool = True,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
     ):
         """Reload the active profile and optionally preserve workspace state."""
 
-        if self._get_profile_application_block_message("reloading the active profile"):
+        if self._get_profile_application_block_message(
+            "reloading the active profile",
+            include_remote_dispatch=include_remote_dispatch,
+            include_pending_reload=include_pending_reload,
+        ):
             return False
         if preserve_window_geometry is not None:
             preserve_workspace_state = bool(preserve_window_geometry)
@@ -14001,12 +14742,26 @@ class MerchantRulesWidget:
         account_changed = current_account != self.account_key
         if account_changed:
             if self._merchant_rules_generation_account_key != current_account:
-                self.merchant_rules_profile_generation = max(
-                    0,
-                    int(self.merchant_rules_profile_generation),
-                ) + 1
+                self.merchant_rules_profile_generation = (
+                    max(
+                        0,
+                        int(self.merchant_rules_profile_generation),
+                    )
+                    + 1
+                )
                 self._merchant_rules_generation_account_key = current_account
-            if self._merchant_rules_has_pending_or_active_work():
+                self._clear_multibox_batch_runtime()
+                self._mark_character_profile_unresolved()
+                self._character_profile_candidate_identity = None
+                self._character_profile_candidate_observation = None
+                self._character_profile_candidate_ticks = 0
+                if (
+                    self._character_profile_resolution_target is not None
+                    and self._character_profile_resolution_target[0] != current_account
+                ):
+                    self._character_profile_resolution_target = None
+                    self._clear_character_profile_pending_target()
+            if self._merchant_rules_has_pending_or_active_work(include_pending_reload=False):
                 self._debug_log("Deferred account profile application until Merchant Rules work is idle.")
                 return
             self.account_key = current_account
@@ -14025,7 +14780,7 @@ class MerchantRulesWidget:
                 self._refresh_profile_entries(scope)
 
         if not self.initialized or account_changed:
-            if self._merchant_rules_has_pending_or_active_work():
+            if self._merchant_rules_has_pending_or_active_work(include_pending_reload=False):
                 self._debug_log("Deferred initial or account profile application until Merchant Rules work is idle.")
                 return
             self.config_path = self._live_config_doc().resolved_path()
@@ -14036,12 +14791,10 @@ class MerchantRulesWidget:
 
     def _rebuild_text_caches(self):
         self.sell_model_text_cache = {
-            index: _format_model_ids(rule.model_ids)
-            for index, rule in enumerate(self.sell_rules)
+            index: _format_model_ids(rule.model_ids) for index, rule in enumerate(self.sell_rules)
         }
         self.destroy_model_text_cache = {
-            index: _format_model_ids(rule.model_ids)
-            for index, rule in enumerate(self.destroy_rules)
+            index: _format_model_ids(rule.model_ids) for index, rule in enumerate(self.destroy_rules)
         }
 
     def _refresh_rule_ui_caches(self):
@@ -33066,7 +33819,6 @@ class MerchantRulesWidget:
         self.execute_xunlai_first_keep_by_model.clear()
         self.execute_reservation_scope_active = False
 
-
     def _get_active_salvage_popup(self) -> _MerchantRulesActiveSalvagePopup | None:
         try:
             return _MerchantRulesSalvageFrameGuard.get_active_salvage_popup()
@@ -35123,7 +35875,6 @@ class MerchantRulesWidget:
         if open_folder_clicked:
             self._open_profile_config_folder()
 
-
     def _draw_runtime_diagnostics_section(self):
         total_lookups = max(0, int(self.inventory_modifier_cache_hits) + int(self.inventory_modifier_cache_misses))
         hit_rate = self._get_modifier_cache_hit_rate()
@@ -35977,6 +36728,10 @@ class MerchantRulesWidget:
         status instead of treating the batch as an all-or-nothing operation.
         """
 
+        lifecycle_reason = self._merchant_rules_lifecycle_block_reason()
+        if lifecycle_reason:
+            self.status_message = lifecycle_reason
+            return
         if self._merchant_rules_has_pending_or_active_work():
             return
         selected_emails = self._get_selected_multibox_emails()
@@ -36035,6 +36790,10 @@ class MerchantRulesWidget:
     def _start_multibox_batch(self, action: str, opcode: int):
         """Create a request-scoped preview or execute batch for selected active followers."""
 
+        lifecycle_reason = self._merchant_rules_lifecycle_block_reason()
+        if lifecycle_reason:
+            self.status_message = lifecycle_reason
+            return
         if self._merchant_rules_has_pending_or_active_work():
             return
         selected_emails = self._get_selected_multibox_emails()
@@ -36985,7 +37744,9 @@ class MerchantRulesWidget:
 
         child_height = min(180, 40 + (26 * len(accounts)))
         if PyImGui.begin_child("merchant_rules_multibox_accounts", (0, child_height), True, PyImGui.WindowFlags.NoFlag):
-            if PyImGui.begin_table("merchant_rules_multibox_accounts_table", 4, PyImGui.TableFlags.RowBg | PyImGui.TableFlags.BordersInnerV):
+            if PyImGui.begin_table(
+                "merchant_rules_multibox_accounts_table", 4, PyImGui.TableFlags.RowBg | PyImGui.TableFlags.BordersInnerV
+            ):
                 PyImGui.table_setup_column("Use", PyImGui.TableColumnFlags.WidthFixed, 48.0)
                 PyImGui.table_setup_column("Account", PyImGui.TableColumnFlags.WidthStretch)
                 PyImGui.table_setup_column("Context", PyImGui.TableColumnFlags.WidthFixed, 180.0)
@@ -37009,9 +37770,15 @@ class MerchantRulesWidget:
                         self._draw_secondary_text(account_email, wrapped=False)
 
                     PyImGui.table_set_column_index(2)
-                    self._draw_inline_badge("Same Map" if self._is_same_map_as_account(account) else "Other Map", UI_COLOR_SUCCESS if self._is_same_map_as_account(account) else UI_COLOR_MUTED)
+                    self._draw_inline_badge(
+                        "Same Map" if self._is_same_map_as_account(account) else "Other Map",
+                        UI_COLOR_SUCCESS if self._is_same_map_as_account(account) else UI_COLOR_MUTED,
+                    )
                     PyImGui.same_line(0, 6)
-                    self._draw_inline_badge("Party" if self._is_same_party_as_account(account) else "No Party", UI_COLOR_INFO if self._is_same_party_as_account(account) else UI_COLOR_MUTED)
+                    self._draw_inline_badge(
+                        "Party" if self._is_same_party_as_account(account) else "No Party",
+                        UI_COLOR_INFO if self._is_same_party_as_account(account) else UI_COLOR_MUTED,
+                    )
 
                     PyImGui.table_set_column_index(3)
                     if status is None:
@@ -37031,9 +37798,9 @@ class MerchantRulesWidget:
                 PyImGui.end_table()
         PyImGui.end_child()
 
-        multibox_block_message = self._get_profile_application_block_message(
-            "starting another multibox operation"
-        )
+        multibox_block_message = self._merchant_rules_lifecycle_block_reason()
+        if not multibox_block_message:
+            multibox_block_message = self._get_profile_application_block_message("starting another multibox operation")
         no_selection = not selected_emails
         multibox_disabled = no_selection or bool(multibox_block_message)
         PyImGui.begin_disabled(multibox_disabled)
@@ -37050,9 +37817,7 @@ class MerchantRulesWidget:
         PyImGui.begin_disabled(multibox_disabled)
         preview_clicked = PyImGui.button("Preview Selected")
         PyImGui.end_disabled()
-        self._draw_hover_tooltip(
-            "Builds a plan on each selected account without moving its character or items."
-        )
+        self._draw_hover_tooltip("Builds a plan on each selected account without moving its character or items.")
         PyImGui.same_line(0, 8)
         PyImGui.begin_disabled(multibox_disabled)
         execute_clicked = PyImGui.button("Execute Selected")
@@ -44675,9 +45440,10 @@ class MerchantRulesWidget:
         if is_loaded_source and include_loaded_source:
             badges.append(
                 (
-                    "Last Loaded",
+                    "Last Explicit Load",
                     UI_COLOR_INFO,
-                    "This is the saved profile you most recently loaded for this account.",
+                    "This account-level history records your most recent Load Selected action. "
+                    "Each character can remember a different profile.",
                 )
             )
 
@@ -44748,14 +45514,29 @@ class MerchantRulesWidget:
     ):
         self._draw_section_heading("Current Settings")
         self._draw_hover_tooltip(
-            "These are the Merchant Rules settings currently used by this account. "
-            "The last loaded profile is the saved profile you loaded most recently. "
-            "Other profiles may have the same settings without having been loaded."
+            "These are the Merchant Rules settings currently used by this character. "
+            "Each character remembers its own profile. Last Explicit Load is an account-wide history "
+            "of the most recent Load Selected action."
         )
         self._draw_selected_profile_detail_line(
             "Current Account:",
             str(self.account_key or "Unknown"),
             UI_COLOR_INFO,
+        )
+        character_profile_color = (
+            UI_COLOR_DANGER
+            if self._character_profile_resolution_error
+            else UI_COLOR_SUCCESS
+            if self._character_profile_ready
+            else UI_COLOR_MUTED
+        )
+        self._draw_selected_profile_detail_line(
+            "Character Assignment:",
+            self._get_character_profile_status_text(),
+            character_profile_color,
+        )
+        self._draw_hover_tooltip(
+            "This per-character assignment is independent of the account-wide Last Explicit Load history."
         )
 
         provenance = self.loaded_profile_provenance
@@ -44764,17 +45545,18 @@ class MerchantRulesWidget:
         )
         if provenance is None:
             self._draw_selected_profile_detail_line(
-                "Last Loaded Profile:",
+                "Last Explicit Load:",
                 "Unknown",
                 UI_COLOR_MUTED,
             )
             self._draw_hover_tooltip(
-                "Merchant Rules does not have a record of which profile was last loaded for this account."
+                "This account does not have a record of the most recent Load Selected action. "
+                "Character profile selection is stored separately."
             )
             if matching_profiles:
                 self._draw_selected_profile_detail_line(
                     "Status:",
-                    "Current settings match one or more saved profiles, but the last loaded profile is unknown",
+                    "Current settings match saved profiles, but the most recent explicit load is unknown",
                     UI_COLOR_SUCCESS,
                 )
             else:
@@ -44790,7 +45572,7 @@ class MerchantRulesWidget:
                 if source is not None
                 else provenance.display_name_snapshot
             )
-            self._draw_colored_text("Last Loaded Profile:", UI_COLOR_WARNING_SOFT, wrapped=False)
+            self._draw_colored_text("Last Explicit Load:", UI_COLOR_WARNING_SOFT, wrapped=False)
             PyImGui.same_line(0, 6)
             self._draw_colored_text(
                 f"[{self._profile_scope_badge(provenance.source_identity.scope)}] {source_name}",
@@ -44798,7 +45580,8 @@ class MerchantRulesWidget:
                 wrapped=False,
             )
             self._draw_hover_tooltip(
-                "This is the saved profile you most recently loaded for this account."
+                "This account-level history records the most recent Load Selected action. "
+                "It may belong to another character."
             )
 
             source_document_unavailable = self.profile_document_reload_failed[

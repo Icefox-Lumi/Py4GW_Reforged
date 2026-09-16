@@ -145,6 +145,7 @@ def _install_stub_modules(project_root: Path) -> None:
         _save_calls: dict[object, int] = {}
         _save_results: dict[object, bool] = {}
         _reload_overrides: dict[object, object] = {}
+        _reload_results: dict[object, bool] = {}
         _operation_log: list[tuple[str, str]] = []
         _apply_calls: list[tuple[str, str, object, str]] = []
 
@@ -157,12 +158,24 @@ def _install_stub_modules(project_root: Path) -> None:
             normalized_name = str(name or "").replace("\\", "/")
             return normalized_name.startswith("Widgets/MerchantRules/Profiles/") and normalized_name.casefold().endswith(".json")
 
+        @classmethod
+        def _is_character_profile_state_name(cls, name: str) -> bool:
+            normalized_name = str(name or "").replace("\\", "/")
+            return normalized_name == "Widgets/MerchantRules/CharacterProfileState.json"
+
         def _standalone_physical_path(self) -> Path:
             owner = "global" if self.scope == "global" else "merchant.rules@example.com"
             return project_root / "json" / owner / Path(self.name.replace("/", os.sep))
 
         def _is_standalone_profile(self) -> bool:
             return self._is_standalone_profile_name(self.name)
+
+        def _character_profile_state_physical_path(self) -> Path:
+            player = sys.modules.get("Py4GWCoreLib")
+            player_api = getattr(player, "Player", None)
+            account_email = getattr(player_api, "GetAccountEmail", lambda: "")()
+            owner = str(account_email or "merchant.rules@example.com")
+            return project_root / "json" / owner / Path(self.name.replace("/", os.sep))
 
         @classmethod
         def reset(cls) -> None:
@@ -172,6 +185,7 @@ def _install_stub_modules(project_root: Path) -> None:
             cls._save_calls.clear()
             cls._save_results.clear()
             cls._reload_overrides.clear()
+            cls._reload_results.clear()
             cls._operation_log.clear()
             cls._apply_calls.clear()
             for owner in ("global", "merchant.rules@example.com"):
@@ -179,6 +193,11 @@ def _install_stub_modules(project_root: Path) -> None:
                     project_root / "json" / owner / "Widgets" / "MerchantRules" / "Profiles",
                     ignore_errors=True,
                 )
+            for physical_path in (project_root / "json").glob("*/Widgets/MerchantRules/CharacterProfileState.json"):
+                try:
+                    physical_path.unlink()
+                except FileNotFoundError:
+                    pass
 
         @staticmethod
         def _copy(value):
@@ -189,6 +208,11 @@ def _install_stub_modules(project_root: Path) -> None:
             return [segment for segment in str(path or "").strip().strip("/").split("/") if segment]
 
         def _storage_key(self):
+            if self.scope == "account" and self.name == "Widgets/MerchantRules/CharacterProfileState.json":
+                player = sys.modules.get("Py4GWCoreLib")
+                player_api = getattr(player, "Player", None)
+                account_email = getattr(player_api, "GetAccountEmail", lambda: "")()
+                return (str(account_email or ""), self.name)
             return self.name if self.scope == "account" else (self.scope, self.name)
 
         def _root(self):
@@ -282,8 +306,14 @@ def _install_stub_modules(project_root: Path) -> None:
                 return False
             if storage_key in self._documents:
                 self._persisted_documents[storage_key] = self._copy(self._documents[storage_key])
-                if self._is_standalone_profile():
-                    physical_path = self._standalone_physical_path()
+                if self._is_standalone_profile() or (
+                    self.scope == "account" and self._is_character_profile_state_name(self.name)
+                ):
+                    physical_path = (
+                        self._standalone_physical_path()
+                        if self._is_standalone_profile()
+                        else self._character_profile_state_physical_path()
+                    )
                     physical_path.parent.mkdir(parents=True, exist_ok=True)
                     physical_path.write_text(
                         json.dumps(self._documents[storage_key], indent=2, sort_keys=True),
@@ -291,17 +321,31 @@ def _install_stub_modules(project_root: Path) -> None:
                     )
             else:
                 self._persisted_documents.pop(storage_key, None)
+                if self.scope == "account" and self._is_character_profile_state_name(self.name):
+                    try:
+                        self._character_profile_state_physical_path().unlink()
+                    except FileNotFoundError:
+                        pass
             return True
 
         def reload(self) -> bool:
             storage_key = self._storage_key()
             self._operation_log.append(("reload", self.name))
+            reload_result = self._reload_results.get(storage_key, self._reload_results.get(self.name, True))
+            if not bool(reload_result):
+                return False
             if storage_key in self._reload_overrides:
                 self._documents[storage_key] = self._copy(self._reload_overrides[storage_key])
             elif self.name in self._reload_overrides:
                 self._documents[storage_key] = self._copy(self._reload_overrides[self.name])
-            elif self._is_standalone_profile():
-                physical_path = self._standalone_physical_path()
+            elif self._is_standalone_profile() or (
+                self.scope == "account" and self._is_character_profile_state_name(self.name)
+            ):
+                physical_path = (
+                    self._standalone_physical_path()
+                    if self._is_standalone_profile()
+                    else self._character_profile_state_physical_path()
+                )
                 if not physical_path.is_file():
                     self._documents.pop(storage_key, None)
                     self._persisted_documents.pop(storage_key, None)
@@ -322,6 +366,8 @@ def _install_stub_modules(project_root: Path) -> None:
             return True
 
         def path(self) -> str:
+            if self.scope == "account" and self._is_character_profile_state_name(self.name):
+                return str(self._character_profile_state_physical_path())
             owner = "global" if self.scope == "global" else "merchant.rules@example.com"
             return str(project_root / "json" / owner / self.name)
 
@@ -469,6 +515,7 @@ def _install_stub_modules(project_root: Path) -> None:
     core.Player = types.SimpleNamespace(
         GetAccountEmail=lambda: "merchant.rules@example.com",
         GetName=lambda: "Merchant Rules Tester",
+        GetPlayerUUID=lambda: (1, 2, 3, 4),
         GetXY=lambda: (0.0, 0.0),
         IsPlayerLoaded=lambda: True,
         GetAgentID=lambda: 1,
@@ -881,6 +928,18 @@ def _make_widget(module, *, use_json_factory: bool = False):
     widget._log_plan_summary = lambda *_args, **_kwargs: None
     widget._get_multibox_accounts = lambda: []
     widget._get_multibox_display_name_from_email = lambda account_email: str(account_email or "").strip()
+    widget.map_ready_snapshot = bool(module.Map.IsMapReady())
+    widget.map_snapshot = int(module.Map.GetMapID() or 0)
+    widget.map_instance_uptime_snapshot_ms = int(module.Map.GetInstanceUptime() or 0)
+    widget._merchant_rules_lifecycle_map_ready_snapshot = widget.map_ready_snapshot
+    widget._merchant_rules_lifecycle_map_snapshot = widget.map_snapshot
+    widget._merchant_rules_lifecycle_uptime_snapshot_ms = widget.map_instance_uptime_snapshot_ms
+    widget.merchant_rules_lifecycle_generation = max(1, int(widget.merchant_rules_lifecycle_generation))
+    observation = widget._get_current_character_observation()
+    if observation is not None:
+        widget._character_profile_resolved_identity = (widget._get_account_key(), observation[0])
+        widget._character_profile_resolved_observation = observation
+        widget._character_profile_ready = True
     return widget
 
 
@@ -928,6 +987,11 @@ def _prime_initialized_widget(module, widget):
     widget._merchant_rules_lifecycle_map_snapshot = widget.map_snapshot
     widget._merchant_rules_lifecycle_uptime_snapshot_ms = widget.map_instance_uptime_snapshot_ms
     widget.merchant_rules_lifecycle_generation = max(1, int(widget.merchant_rules_lifecycle_generation))
+    observation = widget._get_current_character_observation()
+    if observation is not None:
+        widget._character_profile_resolved_identity = (widget.account_key, observation[0])
+        widget._character_profile_resolved_observation = observation
+        widget._character_profile_ready = True
     return widget
 
 
@@ -16345,6 +16409,16 @@ def _test_disabled_inventory_changes_do_not_reuse_pre_lifecycle_monitor_baseline
         widget.identify_settings = _identify_settings(module, rarities=["blue"], on_inventory_change=True)
         timer.expired = True
         widget._tick_runtime()
+        _expect(
+            not signature_calls and not queued,
+            "The monitor must wait for the second consecutive ready character observation.",
+        )
+        widget._tick_runtime()
+        _expect(
+            not signature_calls and not queued,
+            "Resolving a character profile must not run observers in that same update tick.",
+        )
+        widget._tick_runtime()
 
         _expect(
             signature_calls == [old_signature], "The re-enabled monitor should make one fresh eligible observation."
@@ -18929,6 +19003,9 @@ def _test_consumable_crafter_plan_title_gate_blocks_low_rank(module) -> None:
     try:
         module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(IsStorageOpen=lambda: False)
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (100, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=0),
         )
@@ -18989,6 +19066,9 @@ def _test_consumable_crafter_plan_caps_by_skill_gold_and_material_storage(module
             GetGoldInStorage=lambda: 250,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (2, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -19057,6 +19137,9 @@ def _test_consumable_crafter_craft_amount_mode_ignores_existing_xunlai_output(mo
             GetGoldInStorage=lambda: 0,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (5, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -19113,6 +19196,9 @@ def _test_consumable_crafter_maintain_mode_counts_existing_xunlai_output(module)
             GetGoldInStorage=lambda: 0,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (5, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -19173,6 +19259,9 @@ def _test_consumable_crafter_plan_reserves_shared_material_storage_across_target
             GetGoldInStorage=lambda: 0,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (6, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -19252,6 +19341,9 @@ def _test_consumable_crafter_partial_cap_reports_remaining_material_shortage(mod
             GetGoldInStorage=lambda: 0,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (5, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -19330,6 +19422,9 @@ def _test_consumable_crafter_resource_priority_follows_target_order(module) -> N
             GetGoldInStorage=lambda: 0,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (6, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -19389,6 +19484,9 @@ def _test_consumable_crafter_preview_warns_when_free_inventory_slots_are_low(mod
             GetFreeSlotCount=lambda: 1,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (1, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -19448,6 +19546,9 @@ def _test_consumable_crafter_execution_prepares_materials_before_opening_crafter
         widget._open_consumable_crafter = _open
         widget._collect_crafting_ingredients_from_inventory = lambda _recipe: ([101, 102], [50, 50], [])
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (5, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -22111,6 +22212,9 @@ def _test_consumable_multistop_preview_routes_embark_before_destination(module) 
             GetFreeSlotCount=lambda: 10,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             GetSkillPointData=lambda: (5, 100),
             GetTitle=lambda _title_id: types.SimpleNamespace(current_points=999999),
         )
@@ -22190,6 +22294,9 @@ def _test_consumable_multistop_execute_crafts_then_runs_destination_work(module)
             GetFreeSlotCount=lambda: 10,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             IsPlayerLoaded=lambda: True,
             GetAgentID=lambda: 1,
             GetInstanceUptime=lambda: 2000,
@@ -22321,6 +22428,9 @@ def _test_consumable_multistop_execute_stops_at_embark_when_only_consumables(mod
             GetFreeSlotCount=lambda: 10,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             IsPlayerLoaded=lambda: True,
             GetAgentID=lambda: 1,
             GetInstanceUptime=lambda: 2000,
@@ -22401,6 +22511,9 @@ def _test_consumable_multistop_execute_here_stays_local(module) -> None:
             GetFreeSlotCount=lambda: 10,
         )
         module.Player = types.SimpleNamespace(
+            GetAccountEmail=lambda: "merchant.rules@example.com",
+            GetName=lambda: "Merchant Rules Tester",
+            GetPlayerUUID=lambda: (1, 2, 3, 4),
             IsPlayerLoaded=lambda: True,
             GetAgentID=lambda: 1,
             GetInstanceUptime=lambda: 2000,
@@ -31351,14 +31464,20 @@ def _test_lifecycle_readiness_gate_contract(module) -> None:
         state["party_ready"] = True
         state["outpost"] = False
         _expect(
-            not widget._merchant_rules_lifecycle_block_reason()
-            and "outpost" in widget._merchant_rules_lifecycle_block_reason(require_service=True).lower(),
+            not widget._merchant_rules_lifecycle_block_reason(require_character_profile=False)
+            and "outpost" in widget._merchant_rules_lifecycle_block_reason(
+                require_service=True,
+                require_character_profile=False,
+            ).lower(),
             "Common work may be ready outside a service map, but service operations must remain blocked.",
         )
         state["outpost"] = True
         _expect(
-            not widget._merchant_rules_lifecycle_block_reason()
-            and not widget._merchant_rules_lifecycle_block_reason(require_service=True),
+            not widget._merchant_rules_lifecycle_block_reason(require_character_profile=False)
+            and not widget._merchant_rules_lifecycle_block_reason(
+                require_service=True,
+                require_character_profile=False,
+            ),
             "A settled map, party, player, and service context must satisfy the lifecycle contract.",
         )
     finally:
@@ -31993,6 +32112,9 @@ def _test_account_identity_transition_generation_contract(module) -> None:
 
 def _test_multibox_profile_reload_defers_latest_until_owned_work_is_idle(module) -> None:
     widget = _make_widget(module)
+    live_doc = widget._live_config_doc()
+    live_doc.set_json("", widget._build_default_profile_payload(include_rule_templates=False))
+    _expect(live_doc.save(), "The deferred reload fixture should persist a valid live profile payload.")
     reload_calls: list[tuple[str, bool]] = []
     provenance_clears: list[str] = []
     unrelated_coroutine = object()
@@ -32037,6 +32159,10 @@ def _test_multibox_profile_reload_defers_latest_until_owned_work_is_idle(module)
             "Multiple deferred multibox reloads should retain only the newest request.",
         )
         _expect(
+            isinstance(widget._pending_multibox_profile_reload_payload, dict),
+            "A deferred multibox reload should retain the validated payload alongside its newest request.",
+        )
+        _expect(
             widget.status_message == "Remote execution completed successfully.",
             "Deferring a multibox profile reload must not overwrite existing multibox completion details.",
         )
@@ -32057,6 +32183,10 @@ def _test_multibox_profile_reload_defers_latest_until_owned_work_is_idle(module)
             and provenance_clears == ["multibox synchronization"]
             and widget.pending_multibox_profile_reload is None,
             "A deferred multibox reload should apply exactly once with existing geometry and provenance behavior.",
+        )
+        _expect(
+            widget._pending_multibox_profile_reload_payload is None,
+            "An applied deferred multibox reload must clear its captured payload with the request marker.",
         )
         _expect(
             not widget._apply_pending_multibox_profile_reload_if_idle() and len(reload_calls) == 1,
@@ -32456,7 +32586,7 @@ def _test_owned_action_leases_survive_parent_generator_and_preserve_unrelated_wo
 
 
 def _test_remote_dispatch_is_owned_before_system_message_first_tick(module) -> None:
-    widget = _make_widget(module)
+    widget = _prime_initialized_widget(module, _make_widget(module))
     events: list[str] = []
     message = types.SimpleNamespace(
         Params=(float(module.MERCHANT_RULES_OPCODE_EXECUTE), 0.0, 0.0, 0.0),
@@ -33057,6 +33187,1536 @@ def _test_supported_context_cache_partial_and_negative_entries_refresh_correctly
 
 def _reset_jsonfactory_persistence_fixture(module) -> None:
     module.JsonFactory.reset()
+
+
+def _make_unresolved_character_profile_widget(module):
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    widget._character_profile_ready = False
+    widget._character_profile_resolved_identity = None
+    widget._character_profile_resolved_observation = None
+    widget._character_profile_resolved_profile_identity = None
+    widget._character_profile_candidate_identity = None
+    widget._character_profile_candidate_observation = None
+    widget._character_profile_candidate_ticks = 0
+    widget._character_profile_resolution_target = None
+    widget._character_profile_pending_association = None
+    widget._character_profile_pending_profile = None
+    widget._character_profile_pending_needs_persist = False
+    widget._character_profile_pending_is_new_blank = False
+    widget._character_profile_pending_message = ""
+    widget._character_profile_last_attempt_at = 0.0
+    widget._character_profile_resolution_error = ""
+    widget._character_profile_resolution_started = False
+    return widget
+
+
+def _character_profile_state_root(widget) -> dict[str, object] | None:
+    doc = widget._character_profile_state_doc()
+    _expect(doc.scope == "account", "Character associations must use the account JsonFactory scope.")
+    root = widget._read_character_profile_state_root(doc)
+    return root
+
+
+def _advance_character_profile(widget, ticks: int = 2) -> None:
+    for _ in range(max(0, int(ticks))):
+        widget._advance_character_profile_resolution()
+
+
+def _test_character_profile_memory_switches_and_profile_operations(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    original_uuid = module.Player.GetPlayerUUID
+    original_name = module.Player.GetName
+    original_account_email = module.Player.GetAccountEmail
+    uuid_state = {"value": (101, 202, 303, 404)}
+    name_state = {"value": "Character A"}
+    account_state = {"value": "merchant.rules@example.com"}
+    module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+    module.Player.GetName = lambda: name_state["value"]
+    module.Player.GetAccountEmail = lambda: account_state["value"]
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        missing_state_doc = widget._character_profile_state_doc()
+        _expect(
+            not missing_state_doc.reload() and not os.path.lexists(missing_state_doc.path()),
+            "The missing first-run character-state fixture must model native reload=False without a filesystem entry.",
+        )
+        widget.favorite_outpost_ids = [777]
+        _advance_character_profile(widget, 1)
+        _expect(
+            not widget._character_profile_ready
+            and "waiting" in widget._character_profile_gate_block_reason().casefold(),
+            "One ready UUID/name observation must not open the character-profile gate.",
+        )
+        _advance_character_profile(widget, 1)
+        identity_a = widget._character_profile_resolved_profile_identity
+        _expect(
+            widget._character_profile_ready
+            and identity_a is None
+            and not widget.profile_entries[module.PROFILE_SCOPE_ACCOUNT]
+            and not widget.profile_entries[module.PROFILE_SCOPE_SHARED],
+            "An unmapped existing character must use safe blank settings without creating a saved profile.",
+        )
+        _expect(
+            not widget.favorite_outpost_ids,
+            "First-run resolution must replace inherited account live settings with the canonical blank payload.",
+        )
+        uuid_key_a = widget._get_current_character_observation()[0]
+        _expect(
+            _character_profile_state_root(widget) is None,
+            "An unmapped character must remain absent from the account-scoped association state.",
+        )
+
+        shared_scope = module.PROFILE_SCOPE_SHARED
+        widget.favorite_outpost_ids = [1]
+        widget.profile_name_inputs[shared_scope] = "Profile A"
+        widget._save_current_as_new_profile(shared_scope)
+        profile_a = widget._get_selected_profile(shared_scope)
+        _expect(profile_a is not None, "Save As New should create Profile A for the explicit-load fixture.")
+        _expect(
+            _character_profile_state_root(widget) is None,
+            "Creating or selecting a saved profile must not assign it to the character automatically.",
+        )
+        widget._copy_selected_profile_to_other_scope(shared_scope, profile_a.fingerprint)
+        copied_profile = widget._get_selected_profile(module.PROFILE_SCOPE_ACCOUNT)
+        _expect(
+            copied_profile is not None
+            and copied_profile.key != profile_a.key
+            and _character_profile_state_root(widget) is None,
+            "Copying a saved profile must allocate a fresh profile ID without assigning it to the character.",
+        )
+        widget.profile_name_inputs[module.PROFILE_SCOPE_ACCOUNT] = "Operator Blank"
+        widget._create_blank_profile(module.PROFILE_SCOPE_ACCOUNT)
+        _expect(
+            _character_profile_state_root(widget) is None,
+            "Creating another blank profile must not assign it to the current character.",
+        )
+        widget.profile_name_inputs[shared_scope] = "Profile A Renamed"
+        widget._rename_selected_profile(shared_scope, profile_a.fingerprint)
+        profile_a = widget._get_profile_by_identity(profile_a.identity)
+        _expect(
+            profile_a is not None and profile_a.display_name == "Profile A Renamed",
+            "Rename should preserve the saved profile's opaque identity.",
+        )
+        widget._set_selected_profile_key(shared_scope, profile_a.key)
+        widget._load_selected_profile(shared_scope, profile_a.fingerprint)
+        association_a = _character_profile_state_root(widget)["characters"][uuid_key_a]
+        _expect(
+            widget.favorite_outpost_ids == [1]
+            and _character_profile_state_root(widget)["characters"][uuid_key_a]["source_key"]
+            == profile_a.key,
+            "Load Selected should apply the profile first and then associate it with Character A only.",
+        )
+        widget.profile_name_inputs[shared_scope] = "A Renamed After Load"
+        widget._rename_selected_profile(shared_scope, profile_a.fingerprint)
+        profile_a = widget._get_profile_by_identity(profile_a.identity)
+        _expect(
+            profile_a is not None
+            and profile_a.display_name == "A Renamed After Load"
+            and _character_profile_state_root(widget)["characters"][uuid_key_a]["source_key"]
+            == profile_a.key,
+            "Renaming an associated profile must retain its exact character mapping.",
+        )
+        association_a = _character_profile_state_root(widget)["characters"][uuid_key_a]
+
+        profile_path = _standalone_profile_path(widget, shared_scope, profile_a.filename)
+        externally_renamed_path = profile_path.with_name("External Filename Rename.json")
+        profile_path.rename(externally_renamed_path)
+        _expect(
+            widget._refresh_profile_entries(shared_scope, reload_document=True)
+            and widget._get_profile_by_identity(profile_a.identity).filename == externally_renamed_path.name,
+            "A saved profile should remain discoverable after an external filename change with its embedded ID intact.",
+        )
+
+        uuid_state["value"] = (501, 602, 703, 804)
+        name_state["value"] = "Character B"
+        _advance_character_profile(widget, 1)
+        _expect(
+            not widget._character_profile_ready
+            and widget.favorite_outpost_ids == [1]
+            and widget._character_profile_gate_block_reason(),
+            "A to B must close the gate before replacing A's live settings.",
+        )
+        _advance_character_profile(widget, 1)
+        identity_b = widget._character_profile_resolved_profile_identity
+        uuid_key_b = widget._get_current_character_observation()[0]
+        _expect(
+            widget._character_profile_ready
+            and identity_b is None
+            and not widget.favorite_outpost_ids,
+            "A new unmapped character must use safe blank settings without creating or assigning a profile.",
+        )
+        state_root = _character_profile_state_root(widget)
+        _expect(
+            uuid_key_a in state_root["characters"]
+            and uuid_key_b not in state_root["characters"]
+            and state_root["characters"][uuid_key_a]["source_key"] == profile_a.key
+            and len(state_root["characters"]) == 1,
+            "A's explicit association must survive while B remains unassigned.",
+        )
+
+        widget.favorite_outpost_ids = [2]
+        widget.target_carried_gold = 30000
+        widget.identify_settings.on_inventory_change = True
+        widget.identify_settings.rarities["gold"] = True
+        widget.salvage_settings.on_inventory_change = False
+        widget.destroy_auto_enabled = True
+        account_scope = module.PROFILE_SCOPE_ACCOUNT
+        widget.profile_name_inputs[account_scope] = "Profile B"
+        widget._save_current_as_new_profile(account_scope)
+        profile_b = widget._get_selected_profile(account_scope)
+        _expect(profile_b is not None, "Character B's selected profile should be available for explicit load.")
+        widget._load_selected_profile(account_scope, profile_b.fingerprint)
+        association_b = _character_profile_state_root(widget)["characters"][uuid_key_b]
+        _expect(
+            association_b["source_key"] == profile_b.key
+            and _character_profile_state_root(widget)["characters"][uuid_key_a] == association_a,
+            "Manual Load Selected on B must update B's mapping without changing A's mapping.",
+        )
+        widget.target_carried_gold = 25000
+        widget._save_current_over_selected_profile(account_scope, profile_b.fingerprint)
+        _expect(
+            _character_profile_state_root(widget)["characters"][uuid_key_b] == association_b,
+            "Saving over a selected profile must not change the character association.",
+        )
+        _expect(widget._restore_profile_from_backup(), "Restore Backup should restore the last known good live settings.")
+        _expect(
+            _character_profile_state_root(widget)["characters"][uuid_key_b] == association_b,
+            "Restore Backup must not change the current character association.",
+        )
+
+        # Multibox changes the live copy; it does not replace the saved-profile association.
+        character_state_before_sync = _character_profile_state_root(widget)
+        _expect(
+            widget._request_multibox_profile_reload(
+                request_id="character-profile-sync",
+                sender_email="leader@example.com",
+                receiver_email="merchant.rules@example.com",
+            ),
+            "A resolved character may accept its normal deferred multibox live-config reload.",
+        )
+        _expect(
+            _character_profile_state_root(widget) == character_state_before_sync,
+            "Multibox live-config reload must not rewrite character associations.",
+        )
+
+        uuid_state["value"] = (101, 202, 303, 404)
+        name_state["value"] = "Character A"
+        _advance_character_profile(widget, 2)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity == profile_a.identity
+            and widget.favorite_outpost_ids == [1],
+            "B to A must restore A's profile through its stable ID, including after an external filename rename.",
+        )
+
+        uuid_state["value"] = (501, 602, 703, 804)
+        name_state["value"] = "Character B"
+        _advance_character_profile(widget, 2)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity == profile_b.identity
+            and widget.favorite_outpost_ids == [2]
+            and widget.target_carried_gold == 25000
+            and widget.identify_rescan_requested
+            and not widget.salvage_rescan_requested
+            and widget.instant_destroy_rescan_requested,
+            "A to B must restore B's profile and request only its enabled automatic rescans.",
+        )
+
+        profile_generation_before_travel = widget.merchant_rules_profile_generation
+        resolved_profile_before_travel = widget._character_profile_resolved_profile_identity
+        original_map_id = module.Map.GetMapID
+        original_map_ready = module.Map.IsMapReady
+        apply_calls: list[str] = []
+        original_apply_saved_profile = widget._apply_saved_profile_summary
+        widget._apply_saved_profile_summary = lambda profile, **kwargs: (
+            apply_calls.append(profile.key),
+            original_apply_saved_profile(profile, **kwargs),
+        )[1]
+        module.Map.GetMapID = lambda: 101
+        try:
+            widget._refresh_merchant_rules_lifecycle_state()
+            _advance_character_profile(widget, 2)
+            module.Map.IsMapReady = lambda: False
+            widget._refresh_merchant_rules_lifecycle_state()
+            _advance_character_profile(widget, 1)
+            _expect(
+                not widget._character_profile_ready,
+                "A temporary lifecycle readiness loss must close character readiness during travel.",
+            )
+            module.Map.IsMapReady = lambda: True
+            widget._refresh_merchant_rules_lifecycle_state()
+            _advance_character_profile(widget, 2)
+        finally:
+            module.Map.GetMapID = original_map_id
+            module.Map.IsMapReady = original_map_ready
+            widget._apply_saved_profile_summary = original_apply_saved_profile
+        _expect(
+            widget._character_profile_ready
+            and widget.merchant_rules_profile_generation == profile_generation_before_travel
+            and widget._character_profile_resolved_profile_identity == resolved_profile_before_travel
+            and not apply_calls,
+            "Ordinary same-character map travel must reopen without reloading the saved profile.",
+        )
+
+        module.Player.GetAccountEmail = lambda: "second.account@example.com"
+        second_account_doc = widget._character_profile_state_doc()
+        _expect(
+            not second_account_doc.reload()
+            and second_account_doc.get_json("", None) is None
+            and not second_account_doc.has(""),
+            "A different account must see an independent empty character-association document.",
+        )
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+        module.Player.GetName = original_name
+        module.Player.GetAccountEmail = original_account_email
+
+
+def _test_character_profile_state_refresh_failure_blocks_and_deduplicates(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    original_uuid = module.Player.GetPlayerUUID
+    original_console_log = module.ConsoleLog
+    logs: list[str] = []
+    module.Player.GetPlayerUUID = lambda: (1201, 1202, 1203, 1204)
+    module.ConsoleLog = lambda _module_name, message, *_args, **_kwargs: logs.append(str(message))
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        state_doc = widget._character_profile_state_doc()
+        current_uuid_key = widget._get_current_character_observation()[0]
+        existing_state = {
+            "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+            "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION,
+            "characters": {
+                "uuid-other-character": {
+                    "source_scope": module.PROFILE_SCOPE_SHARED,
+                    "source_key": "profile_" + "c" * 32,
+                    "character_name_snapshot": "Other Character",
+                }
+            },
+            "other_data": "preserve me",
+        }
+        state_doc.set_json("", existing_state)
+        _expect(state_doc.save(), "The existing state fixture should persist before refresh failure injection.")
+        state_path = Path(state_doc.path())
+        state_bytes_before_failure = state_path.read_bytes()
+        state_key = state_doc._storage_key()
+        module.JsonFactory._reload_results[state_key] = False
+
+        _advance_character_profile(widget, 2)
+        _expect(
+            not widget._character_profile_ready
+            and widget._character_profile_pending_profile is None
+            and not widget.profile_entries[module.PROFILE_SCOPE_ACCOUNT]
+            and state_path.read_bytes() == state_bytes_before_failure
+            and state_doc.get_json("", None) == existing_state,
+            "An existing state file whose refresh fails must remain intact, avoid blank creation, and keep the gate closed.",
+        )
+        _expect(
+            not widget._load_selected_profile(module.PROFILE_SCOPE_ACCOUNT, ""),
+            "Manual Load Selected must remain blocked while character-state refresh is unresolved.",
+        )
+        first_log_count = len([line for line in logs if "Character profile resolution remains blocked." in line])
+        _expect(first_log_count == 1, "The first resolver refresh failure should log one diagnostic.")
+
+        for _ in range(2):
+            widget._character_profile_last_attempt_at = 0.0
+            _advance_character_profile(widget, 1)
+        repeated_log_count = len([line for line in logs if "Character profile resolution remains blocked." in line])
+        _expect(
+            repeated_log_count == 1 and widget._character_profile_resolution_error,
+            "Identical resolver retries should update the UI error without repeating the same diagnostic log.",
+        )
+
+        module.JsonFactory._reload_results[state_key] = True
+        future_state = {
+            "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+            "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION + 1,
+            "characters": {},
+            "future_field": {"keep": True},
+        }
+        state_doc.set_json("", future_state)
+        _expect(state_doc.save(), "The changed-error future-schema fixture should persist before retry.")
+        widget._character_profile_last_attempt_at = 0.0
+        _advance_character_profile(widget, 1)
+        changed_log_count = len([line for line in logs if "Character profile resolution remains blocked." in line])
+        _expect(
+            changed_log_count == 2
+            and not widget._character_profile_ready
+            and state_doc.get_json("", None) == future_state,
+            "A changed resolver error should log once while an unsupported future state remains preserved and blocked.",
+        )
+
+        recovered_state = {
+            "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+            "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION,
+            "characters": {
+                "uuid-other-character": existing_state["characters"]["uuid-other-character"],
+            },
+            "other_data": "preserve me",
+        }
+        state_doc.set_json("", recovered_state)
+        _expect(state_doc.save(), "The supported recovery state fixture should persist before recovery.")
+        widget._character_profile_last_attempt_at = 0.0
+        _advance_character_profile(widget, 1)
+        recovered_root = _character_profile_state_root(widget)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_last_failure_signature is None
+            and widget._character_profile_resolved_profile_identity is None
+            and current_uuid_key not in recovered_root["characters"]
+            and recovered_root["characters"]["uuid-other-character"] == existing_state["characters"]["uuid-other-character"],
+            "A successful retry should resolve safely, preserve unrelated state, and clear the stored failure signature.",
+        )
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+        module.ConsoleLog = original_console_log
+
+
+def _test_character_profile_memory_fails_closed_and_recovers(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    original_uuid = module.Player.GetPlayerUUID
+    uuid_state = {"value": (901, 902, 903, 904)}
+    module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        state_doc = widget._character_profile_state_doc()
+        future_state = {
+            "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+            "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION + 1,
+            "characters": {},
+            "future_field": {"keep": True},
+        }
+        state_doc.set_json("", future_state)
+        _expect(state_doc.save(), "The future-schema fixture should persist before resolution starts.")
+        _advance_character_profile(widget, 2)
+        _expect(
+            not widget._character_profile_ready
+            and state_doc.get_json("", {}) == future_state
+            and not widget.profile_entries[module.PROFILE_SCOPE_ACCOUNT],
+            "An unsupported future state schema must remain intact and block without creating a blank.",
+        )
+
+        _reset_jsonfactory_persistence_fixture(module)
+        widget = _make_unresolved_character_profile_widget(module)
+        state_doc = widget._character_profile_state_doc()
+        malformed_entry_state = {
+            "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+            "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION,
+            "characters": {
+                widget._get_current_character_observation()[0]: {
+                    "source_scope": "invalid-scope",
+                    "source_key": "not-a-profile-id",
+                },
+                "uuid-other-character": {
+                    "source_scope": module.PROFILE_SCOPE_SHARED,
+                    "source_key": "profile_" + "a" * 32,
+                    "character_name_snapshot": "Other Character",
+                },
+            },
+            "other_data": "preserve me",
+        }
+        state_doc.set_json("", malformed_entry_state)
+        _expect(state_doc.save(), "The malformed-entry fixture should persist before resolution starts.")
+        _advance_character_profile(widget, 2)
+        replaced_root = _character_profile_state_root(widget)
+        current_uuid_key = widget._get_current_character_observation()[0]
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity is None
+            and replaced_root["other_data"] == "preserve me"
+            and replaced_root["characters"]["uuid-other-character"]
+            == malformed_entry_state["characters"]["uuid-other-character"]
+            and current_uuid_key not in replaced_root["characters"],
+            "A malformed current-character entry must be removed after safe blank settings are verified while other state survives.",
+        )
+
+        _reset_jsonfactory_persistence_fixture(module)
+        widget = _make_unresolved_character_profile_widget(module)
+        scan_uuid_key = widget._get_current_character_observation()[0]
+        failed_scan_state = {
+            "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+            "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION,
+            "characters": {
+                scan_uuid_key: {
+                    "source_scope": module.PROFILE_SCOPE_SHARED,
+                    "source_key": "profile_" + "b" * 32,
+                    "character_name_snapshot": "Remembered Character",
+                }
+            },
+        }
+        failed_scan_doc = widget._character_profile_state_doc()
+        failed_scan_doc.set_json("", failed_scan_state)
+        _expect(failed_scan_doc.save(), "The failed-scan association fixture should persist before resolution.")
+        shared_path = _standalone_profile_path(widget, module.PROFILE_SCOPE_SHARED, "Unreadable.json")
+        shared_path.parent.mkdir(parents=True, exist_ok=True)
+        shared_path.write_text("{not valid json", encoding="utf-8")
+        _advance_character_profile(widget, 2)
+        _expect(
+            not widget._character_profile_ready
+            and widget._character_profile_pending_profile is None
+            and _character_profile_state_root(widget) == failed_scan_state,
+            "A failed saved-profile scope scan must block without being mistaken for a missing remembered ID.",
+        )
+
+        _reset_jsonfactory_persistence_fixture(module)
+        widget = _make_unresolved_character_profile_widget(module)
+        valid_missing_key = "profile_" + "f" * 32
+        missing_root = {
+            "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+            "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION,
+            "characters": {
+                widget._get_current_character_observation()[0]: {
+                    "source_scope": module.PROFILE_SCOPE_SHARED,
+                    "source_key": valid_missing_key,
+                    "character_name_snapshot": "Old Name",
+                }
+            },
+        }
+        missing_state_doc = widget._character_profile_state_doc()
+        missing_state_doc.set_json("", missing_root)
+        _expect(missing_state_doc.save(), "The missing-profile fixture should persist before resolution starts.")
+        _advance_character_profile(widget, 2)
+        current_uuid_key = widget._get_current_character_observation()[0]
+        missing_recovered_root = _character_profile_state_root(widget)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity is None
+            and current_uuid_key not in missing_recovered_root["characters"]
+            and not widget.profile_entries[module.PROFILE_SCOPE_ACCOUNT]
+            and not widget.profile_entries[module.PROFILE_SCOPE_SHARED],
+            "A cleanly confirmed missing exact profile ID must be removed after safe blank settings are verified.",
+        )
+
+        # A missing UUID never falls back to the diagnostic name or existing live settings.
+        original_name = module.Player.GetName
+        original_apply = widget._apply_saved_profile_summary
+        apply_calls: list[str] = []
+        widget._apply_saved_profile_summary = lambda profile, **kwargs: (
+            apply_calls.append(profile.key),
+            original_apply(profile, **kwargs),
+        )[1]
+        module.Player.GetPlayerUUID = lambda: (0, 0, 0, 0)
+        try:
+            _advance_character_profile(widget, 1)
+            _expect(
+                not widget._character_profile_ready
+                and "waiting" in widget._character_profile_gate_block_reason().casefold(),
+                "An all-zero UUID must keep character actions blocked even when the name is available.",
+            )
+            selected = widget._get_selected_profile(module.PROFILE_SCOPE_ACCOUNT)
+            if selected is not None:
+                widget._set_selected_profile_key(module.PROFILE_SCOPE_ACCOUNT, selected.key)
+            widget._queue_execute_now()
+            _expect(
+                widget.merchant_rules_owned_work_count == 0
+                and not widget._load_selected_profile(
+                    module.PROFILE_SCOPE_ACCOUNT,
+                    selected.fingerprint if selected is not None else "",
+                ),
+                "Manual Execute and Load Selected must remain blocked while the UUID is unavailable.",
+            )
+        finally:
+            module.Player.GetName = original_name
+            module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+        _advance_character_profile(widget, 2)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity is None
+            and apply_calls == [],
+            "A temporarily unavailable UUID should recover the already-resolved unassigned state without reapplying it.",
+        )
+        widget._apply_saved_profile_summary = original_apply
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+
+
+def _test_character_profile_memory_retries_without_duplicate_blanks(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    original_uuid = module.Player.GetPlayerUUID
+    module.Player.GetPlayerUUID = lambda: (1101, 1102, 1103, 1104)
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        live_save_key = module.PROFILE_BACKEND.LIVE_CONFIG_DOC_NAME
+        previous_live_save_result = module.JsonFactory._save_results.get(live_save_key, None)
+        module.JsonFactory._save_results[live_save_key] = False
+        try:
+            _advance_character_profile(widget, 2)
+        finally:
+            if previous_live_save_result is None:
+                module.JsonFactory._save_results.pop(live_save_key, None)
+            else:
+                module.JsonFactory._save_results[live_save_key] = previous_live_save_result
+        existing_ids = {
+            profile.key
+            for scope in module.PROFILE_SCOPES
+            for profile in widget.profile_entries[scope]
+        }
+        _expect(
+            not widget._character_profile_ready
+            and widget._character_profile_pending_profile is None
+            and widget._character_profile_pending_association is None
+            and not existing_ids
+            and _character_profile_state_root(widget) is None,
+            "A blank live-config application failure must leave the gate closed without creating a profile or association.",
+        )
+        widget._character_profile_last_attempt_at = 0.0
+        _advance_character_profile(widget, 1)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity is None
+            and {
+                profile.key
+                for scope in module.PROFILE_SCOPES
+                for profile in widget.profile_entries[scope]
+            } == existing_ids
+            and _character_profile_state_root(widget) is None,
+            "Retry after a blank live-apply failure must resolve unassigned without creating a profile.",
+        )
+
+        _reset_jsonfactory_persistence_fixture(module)
+        widget = _make_unresolved_character_profile_widget(module)
+        current_uuid_key = widget._get_current_character_observation()[0]
+        stale_state = {
+            "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+            "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION,
+            "characters": {
+                current_uuid_key: {
+                    "source_scope": "invalid-scope",
+                    "source_key": "not-a-profile-id",
+                },
+                "uuid-other-character": {
+                    "source_scope": module.PROFILE_SCOPE_SHARED,
+                    "source_key": "profile_" + "a" * 32,
+                    "character_name_snapshot": "Other Character",
+                },
+            },
+            "other_data": "preserve me",
+        }
+        state_doc = widget._character_profile_state_doc()
+        state_doc.set_json("", stale_state)
+        _expect(state_doc.save(), "The stale-association fixture should persist before delete failure injection.")
+        original_delete_association = module.JsonFactory.delete
+
+        def _fail_character_state_delete(document, path):
+            if document.name == module.CHARACTER_PROFILE_STATE_DOC_NAME:
+                return False
+            return original_delete_association(document, path)
+
+        module.JsonFactory.delete = _fail_character_state_delete
+        try:
+            _advance_character_profile(widget, 2)
+        finally:
+            module.JsonFactory.delete = original_delete_association
+        existing_ids = {
+            profile.key
+            for scope in module.PROFILE_SCOPES
+            for profile in widget.profile_entries[scope]
+        }
+        _expect(
+            not widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity is None
+            and not widget._character_profile_pending_profile
+            and not existing_ids
+            and _character_profile_state_root(widget) == stale_state,
+            "A stale-association delete failure must keep the stale state intact and the gate closed.",
+        )
+        widget._character_profile_last_attempt_at = 0.0
+        _advance_character_profile(widget, 1)
+        recovered_stale_root = _character_profile_state_root(widget)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity is None
+            and current_uuid_key not in recovered_stale_root["characters"]
+            and recovered_stale_root["characters"]["uuid-other-character"]
+            == stale_state["characters"]["uuid-other-character"]
+            and not widget.profile_entries[module.PROFILE_SCOPE_ACCOUNT]
+            and not widget.profile_entries[module.PROFILE_SCOPE_SHARED],
+            "Retry after a stale-association delete failure must remove only the current leaf after blank verification.",
+        )
+
+        for failure_mode in ("save", "reload"):
+            _reset_jsonfactory_persistence_fixture(module)
+            widget = _make_unresolved_character_profile_widget(module)
+            current_uuid_key = widget._get_current_character_observation()[0]
+            stale_state = {
+                "schema": module.CHARACTER_PROFILE_STATE_SCHEMA,
+                "schema_version": module.CHARACTER_PROFILE_STATE_SCHEMA_VERSION,
+                "characters": {
+                    current_uuid_key: {
+                        "source_scope": "invalid-scope",
+                        "source_key": "not-a-profile-id",
+                    },
+                    "uuid-other-character": {
+                        "source_scope": module.PROFILE_SCOPE_SHARED,
+                        "source_key": "profile_" + "b" * 32,
+                        "character_name_snapshot": "Other Character",
+                    },
+                },
+            }
+            state_doc = widget._character_profile_state_doc()
+            state_doc.set_json("", stale_state)
+            _expect(state_doc.save(), f"The stale {failure_mode} fixture should persist before failure injection.")
+            state_key = state_doc._storage_key()
+            original_reload = module.JsonFactory.reload
+            previous_save_result = module.JsonFactory._save_results.get(state_key, None)
+            reload_count = {"value": 0}
+
+            def _fail_stale_state_reload(document):
+                if document.name == module.CHARACTER_PROFILE_STATE_DOC_NAME:
+                    reload_count["value"] += 1
+                    if reload_count["value"] == 3:
+                        return False
+                return original_reload(document)
+
+            try:
+                if failure_mode == "save":
+                    module.JsonFactory._save_results[state_key] = False
+                else:
+                    module.JsonFactory.reload = _fail_stale_state_reload
+                _advance_character_profile(widget, 2)
+            finally:
+                module.JsonFactory.reload = original_reload
+                if previous_save_result is None:
+                    module.JsonFactory._save_results.pop(state_key, None)
+                else:
+                    module.JsonFactory._save_results[state_key] = previous_save_result
+            _expect(
+                not widget._character_profile_ready,
+                f"A stale-association {failure_mode} verification failure must keep the character blocked.",
+            )
+            widget._character_profile_last_attempt_at = 0.0
+            _advance_character_profile(widget, 1)
+            recovered_root = _character_profile_state_root(widget)
+            _expect(
+                widget._character_profile_ready
+                and widget._character_profile_resolved_profile_identity is None
+                and current_uuid_key not in recovered_root["characters"]
+                and recovered_root["characters"]["uuid-other-character"]
+                == stale_state["characters"]["uuid-other-character"],
+                f"A later retry after stale-association {failure_mode} failure must resolve unassigned safely.",
+            )
+
+        _reset_jsonfactory_persistence_fixture(module)
+        uuid_state = {"value": (1801, 1802, 1803, 1804)}
+        module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+        widget = _make_unresolved_character_profile_widget(module)
+        _advance_character_profile(widget, 2)
+        widget.favorite_outpost_ids = [1]
+        widget.profile_name_inputs[module.PROFILE_SCOPE_SHARED] = "Remembered Profile"
+        widget._save_current_as_new_profile(module.PROFILE_SCOPE_SHARED)
+        remembered_profile = widget._get_selected_profile(module.PROFILE_SCOPE_SHARED)
+        _expect(remembered_profile is not None, "The mapped retry fixture should have an explicit saved profile.")
+        widget._load_selected_profile(module.PROFILE_SCOPE_SHARED, remembered_profile.fingerprint)
+        _expect(
+            widget._character_profile_resolved_profile_identity == remembered_profile.identity,
+            "The mapped retry fixture should explicitly assign its saved profile.",
+        )
+        remembered_identity = remembered_profile.identity
+        uuid_state["value"] = (1901, 1902, 1903, 1904)
+        new_uuid_key = widget._get_current_character_observation()[0]
+        widget._persist_character_profile_association(
+            new_uuid_key,
+            module.CharacterProfileAssociation(
+                remembered_identity,
+                "Remembered Character",
+            ),
+        )
+        live_save_key = module.PROFILE_BACKEND.LIVE_CONFIG_DOC_NAME
+        previous_live_save_result = module.JsonFactory._save_results.get(live_save_key, None)
+        module.JsonFactory._save_results[live_save_key] = False
+        try:
+            _advance_character_profile(widget, 2)
+        finally:
+            if previous_live_save_result is None:
+                module.JsonFactory._save_results.pop(live_save_key, None)
+            else:
+                module.JsonFactory._save_results[live_save_key] = previous_live_save_result
+        _expect(
+            not widget._character_profile_ready
+            and widget._character_profile_pending_association.profile_identity == remembered_identity
+            and _character_profile_state_root(widget)["characters"][new_uuid_key]["source_key"]
+            == remembered_identity.key,
+            "A mapped profile whose live apply fails must remain blocked with the same saved association and target.",
+        )
+        widget._character_profile_last_attempt_at = 0.0
+        _advance_character_profile(widget, 1)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity == remembered_identity
+            and len(
+                {
+                    profile.key
+                    for scope in module.PROFILE_SCOPES
+                    for profile in widget.profile_entries[scope]
+                }
+            ) == 1,
+            "Retry after applying an already-mapped profile must reuse its stable ID without creating a blank.",
+        )
+
+        _reset_jsonfactory_persistence_fixture(module)
+        module.Player.GetPlayerUUID = lambda: (2001, 2002, 2003, 2004)
+        widget = _make_unresolved_character_profile_widget(module)
+        _advance_character_profile(widget, 2)
+        original_root = _character_profile_state_root(widget)
+        _expect(original_root is None, "The manual retry fixture should begin without a character association.")
+        widget.favorite_outpost_ids = [2]
+        widget.profile_name_inputs[module.PROFILE_SCOPE_SHARED] = "Manual Retry Profile"
+        widget._save_current_as_new_profile(module.PROFILE_SCOPE_SHARED)
+        manual_profile = widget._get_selected_profile(module.PROFILE_SCOPE_SHARED)
+        _expect(manual_profile is not None, "The manual profile fixture should be saved before loading.")
+        original_persist_association = widget._persist_character_profile_association
+
+        def _fail_manual_association_write(*_args, **_kwargs):
+            raise OSError("injected manual association write failure")
+
+        widget._persist_character_profile_association = _fail_manual_association_write
+        try:
+            widget._load_selected_profile(
+                module.PROFILE_SCOPE_SHARED,
+                manual_profile.fingerprint,
+            )
+        finally:
+            widget._persist_character_profile_association = original_persist_association
+        current_uuid_key = widget._get_current_character_observation()[0]
+        _expect(
+            not widget._character_profile_ready
+            and widget._character_profile_pending_association.profile_identity == manual_profile.identity
+            and _character_profile_state_root(widget) is None,
+            "A manual profile load must keep the gate closed and leave an unassigned character unmapped when its write fails.",
+        )
+        widget._character_profile_last_attempt_at = 0.0
+        _advance_character_profile(widget, 1)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity == manual_profile.identity
+            and _character_profile_state_root(widget)["characters"][current_uuid_key]["source_key"]
+            == manual_profile.key,
+            "Manual Load Selected should retry and associate only after its persisted profile load is verified.",
+        )
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+
+
+def _test_character_profile_transition_restarts_for_latest_uuid(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    original_uuid = module.Player.GetPlayerUUID
+    original_name = module.Player.GetName
+    uuid_state = {"value": (1201, 1202, 1203, 1204)}
+    name_state = {"value": "Character A"}
+    module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+    module.Player.GetName = lambda: name_state["value"]
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        _advance_character_profile(widget, 2)
+
+        uuid_state["value"] = (1301, 1302, 1303, 1304)
+        name_state["value"] = "Character B"
+        _advance_character_profile(widget, 1)
+        _expect(not widget._character_profile_ready, "The first B observation must remain unresolved.")
+
+        uuid_state["value"] = (1401, 1402, 1403, 1404)
+        name_state["value"] = "Character C"
+        _advance_character_profile(widget, 1)
+        _expect(
+            not widget._character_profile_ready
+            and widget._character_profile_candidate_ticks == 1,
+            "A new UUID during B resolution must discard B's incomplete confirmation.",
+        )
+        uuid_key_c = widget._get_current_character_observation()[0]
+        original_apply = widget._apply_verified_profile_payload
+
+        def _apply_and_interrupt(payload, **kwargs):
+            original_apply(payload, **kwargs)
+            uuid_state["value"] = (1501, 1502, 1503, 1504)
+            name_state["value"] = "Character D"
+
+        widget._apply_verified_profile_payload = _apply_and_interrupt
+        try:
+            _advance_character_profile(widget, 1)
+        finally:
+            widget._apply_verified_profile_payload = original_apply
+        state_after_interruption = _character_profile_state_root(widget)
+        _expect(
+            not widget._character_profile_ready
+            and (
+                state_after_interruption is None
+                or uuid_key_c not in state_after_interruption["characters"]
+            ),
+            "A UUID change during blank settings application must not associate the interrupted character.",
+        )
+        _advance_character_profile(widget, 2)
+        state_root = _character_profile_state_root(widget)
+        uuid_key_d = widget._get_current_character_observation()[0]
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity is None
+            and (state_root is None or not state_root["characters"])
+            and uuid_key_d != uuid_key_c,
+            "Only the newest UUID observed after an interrupted blank application should resolve unassigned.",
+        )
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+        module.Player.GetName = original_name
+
+
+def _test_character_profile_change_invalidates_owned_work_and_multibox(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    original_uuid = module.Player.GetPlayerUUID
+    original_name = module.Player.GetName
+    uuid_state = {"value": (1501, 1502, 1503, 1504)}
+    name_state = {"value": "Character A"}
+    module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+    module.Player.GetName = lambda: name_state["value"]
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        _advance_character_profile(widget, 2)
+        events: list[str] = []
+        active_work_cases = (
+            ("identify", "identify_running"),
+            ("salvage", "salvage_running"),
+            ("destroy", "instant_destroy_running"),
+            ("merchant", "execution_running"),
+            ("xunlai", "storage_scan_running"),
+            ("cleanup", "auto_cleanup_running"),
+            ("gold", "gold_balance_running"),
+        )
+        active_generators = []
+        for label, flag_name in active_work_cases:
+            setattr(widget, flag_name, True)
+
+            def _work(case_label=label):
+                events.append(f"{case_label}:started")
+                yield f"{case_label}:paused"
+                events.append(f"{case_label}:finished")
+
+            tracked = widget._track_merchant_rules_owned_work(
+                _work(),
+                reset_flags=(flag_name,),
+            )
+            _expect(
+                next(tracked) == f"{label}:paused",
+                f"The {label} work fixture should pause while its current character remains resolved.",
+            )
+            active_generators.append((label, tracked))
+
+        old_rescan_flags = (
+            ("identify_rescan_requested", True),
+            ("salvage_rescan_requested", True),
+            ("instant_destroy_rescan_requested", True),
+        )
+        queued_rescan_generators = []
+        for field_name, old_value in old_rescan_flags:
+            setattr(widget, field_name, old_value)
+
+            def _queued_rescan():
+                if False:
+                    yield None
+
+            queued = widget._track_merchant_rules_owned_work(
+                _queued_rescan(),
+                reset_values_before_start=((field_name, old_value),),
+            )
+            setattr(widget, field_name, False)
+            queued_rescan_generators.append(queued)
+
+        callback_events: list[str] = []
+        stale_callback = widget._track_merchant_rules_owned_action(
+            lambda: callback_events.append("executed")
+        )
+        old_generation = widget.merchant_rules_profile_generation
+        widget.multibox_active_action = "preview"
+        widget.multibox_active_request_id = "old-character-preview"
+        widget.multibox_active_profile_generation = old_generation
+        widget.multibox_running_accounts = {"follower@example.com": 1}
+        widget.multibox_pending_accounts = ["next@example.com"]
+        uuid_state["value"] = (1601, 1602, 1603, 1604)
+        name_state["value"] = "Character B"
+        _advance_character_profile(widget, 2)
+        _expect(
+            widget.merchant_rules_profile_generation > old_generation
+            and not widget._character_profile_ready
+            and not widget.multibox_running_accounts
+            and not widget.multibox_pending_accounts,
+            "A confirmed character change must invalidate active follower batches while holding the gate closed.",
+        )
+        _expect(
+            widget.handle_multibox_result(
+                "follower@example.com",
+                request_id="old-character-preview",
+                opcode=module.MERCHANT_RULES_OPCODE_PREVIEW_RESULT,
+                primary_count=0,
+                secondary_count=0,
+                success_flag=True,
+                status_label="Complete",
+                summary="stale",
+                detail="stale",
+            ) is False,
+            "A late follower result from the old profile generation must be rejected.",
+        )
+        stale_callback()
+        for _label, tracked in active_generators:
+            try:
+                next(tracked)
+            except StopIteration:
+                pass
+        for queued in queued_rescan_generators:
+            queued.close()
+        _expect(
+            widget.merchant_rules_owned_work_count == 0
+            and widget.merchant_rules_owned_action_count == 0
+            and not any(getattr(widget, field_name) for field_name, _value in old_rescan_flags)
+            and not callback_events
+            and not any(event.endswith(":finished") for event in events),
+            "Old Identify/Salvage/Destroy, merchant, Xunlai, cleanup, gold, and delayed callback work must not run for B.",
+        )
+        _advance_character_profile(widget, 1)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity is None
+            and _character_profile_state_root(widget) is None,
+            "Character resolution should resume unassigned after stale owned work markers release.",
+        )
+
+        module.Player.GetPlayerUUID = lambda: (0, 0, 0, 0)
+        sends: list[str] = []
+        widget._send_multibox_command = lambda *_args, **_kwargs: sends.append("sent")
+        widget._start_multibox_batch("preview", module.MERCHANT_RULES_OPCODE_PREVIEW)
+        widget._start_multibox_batch("execute", module.MERCHANT_RULES_OPCODE_EXECUTE)
+        widget._start_multibox_sync()
+        _expect(
+            not sends
+            and "waiting" in widget.status_message.casefold(),
+            "Leader-side multibox work must not fan out stale settings while UUID identity is unavailable.",
+        )
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+        module.Player.GetName = original_name
+
+
+def _test_character_profile_resolution_tick_boundary(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    original_uuid = module.Player.GetPlayerUUID
+    module.Player.GetPlayerUUID = lambda: (1701, 1702, 1703, 1704)
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        observer_calls: list[str] = []
+        for observer_name in (
+            "_update_manual_gold_session_runtime",
+            "_update_manual_vendor_runtime",
+            "_update_identify_runtime",
+            "_update_auto_cleanup_runtime",
+            "_update_auto_gold_runtime",
+            "_update_salvage_runtime",
+            "_update_instant_destroy_runtime",
+        ):
+            setattr(widget, observer_name, lambda name=observer_name: observer_calls.append(name))
+        widget._tick_runtime()
+        _expect(not observer_calls, "Observers must remain paused during the first ready UUID/name sample.")
+        widget._tick_runtime()
+        _expect(
+            widget._character_profile_ready and not observer_calls,
+            "The tick that completes character resolution must not run newly enabled observers.",
+        )
+        widget._tick_runtime()
+        _expect(
+            observer_calls
+            == [
+                "_update_manual_gold_session_runtime",
+                "_update_manual_vendor_runtime",
+                "_update_identify_runtime",
+                "_update_auto_cleanup_runtime",
+                "_update_auto_gold_runtime",
+                "_update_salvage_runtime",
+                "_update_instant_destroy_runtime",
+            ],
+            "Observers may resume on the update tick after character resolution completes.",
+        )
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+
+
+def _test_character_profile_direct_ready_jump_closes_gate(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 100,
+        "map_uptime": 2000,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 2000,
+    }
+    lifecycle_originals = _install_lifecycle_test_state(module, state)
+    original_uuid = module.Player.GetPlayerUUID
+    original_name = module.Player.GetName
+    uuid_state = {"value": (1801, 1802, 1803, 1804)}
+    name_state = {"value": "Character A"}
+    module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+    module.Player.GetName = lambda: name_state["value"]
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        _advance_character_profile(widget, 2)
+        _expect(widget._character_profile_ready, "Character A must be fully resolved before the direct jump.")
+
+        observer_calls: list[str] = []
+        for observer_name in (
+            "_update_manual_gold_session_runtime",
+            "_update_manual_vendor_runtime",
+            "_update_identify_runtime",
+            "_update_auto_cleanup_runtime",
+            "_update_auto_gold_runtime",
+            "_update_salvage_runtime",
+            "_update_instant_destroy_runtime",
+        ):
+            setattr(widget, observer_name, lambda name=observer_name: observer_calls.append(name))
+        send_calls: list[str] = []
+        widget._get_multibox_accounts = lambda: [types.SimpleNamespace(AccountEmail="follower@example.com")]
+        widget.multibox_selected_accounts = {"follower@example.com": True}
+        widget._send_multibox_command = lambda *_args, **_kwargs: send_calls.append("sent") or True
+
+        previous_lifecycle_generation = widget.merchant_rules_lifecycle_generation
+        state.update(map_id=200, map_uptime=3000, player_uptime=3000)
+        # UUID/name intentionally remain A on the first ready destination frame.
+        widget._tick_runtime()
+        _expect(
+            not widget._character_profile_ready
+            and widget.merchant_rules_lifecycle_generation > previous_lifecycle_generation
+            and widget._character_profile_candidate_ticks == 1
+            and not observer_calls,
+            "A direct ready-to-ready map jump must close the character gate before stale A can be trusted.",
+        )
+        for action in ("preview", "execute", "cleanup", "identify", "salvage", "destroy"):
+            _expect(
+                widget._get_action_block_reason(action),
+                f"{action} must remain blocked while the destination character identity is unresolved.",
+            )
+        _expect(not widget._scan_preview(), "Preview entry must stay blocked during the stale destination frame.")
+        widget._start_multibox_sync()
+        widget._start_multibox_batch("preview", module.MERCHANT_RULES_OPCODE_PREVIEW)
+        _expect(not send_calls, "Outgoing multibox work must remain behind the closed character gate.")
+
+        uuid_state["value"] = (1901, 1902, 1903, 1904)
+        name_state["value"] = "Character B"
+        widget._tick_runtime()
+        _expect(not widget._character_profile_ready and not observer_calls, "The first B sample must remain unresolved.")
+        widget._tick_runtime()
+        _expect(widget._character_profile_ready and not observer_calls, "B resolution must not run observers on its completion tick.")
+        widget._tick_runtime()
+        _expect(
+            observer_calls
+            == [
+                "_update_manual_gold_session_runtime",
+                "_update_manual_vendor_runtime",
+                "_update_identify_runtime",
+                "_update_auto_cleanup_runtime",
+                "_update_auto_gold_runtime",
+                "_update_salvage_runtime",
+                "_update_instant_destroy_runtime",
+            ],
+            "Observers may resume only on the tick after fresh B confirmation completes.",
+        )
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+        module.Player.GetName = original_name
+        _restore_lifecycle_test_state(module, lifecycle_originals)
+
+
+def _test_character_profile_same_direct_ready_jump_reconfirms_without_reload(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 100,
+        "map_uptime": 2000,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 2000,
+    }
+    lifecycle_originals = _install_lifecycle_test_state(module, state)
+    original_uuid = module.Player.GetPlayerUUID
+    original_name = module.Player.GetName
+    module.Player.GetPlayerUUID = lambda: (2001, 2002, 2003, 2004)
+    module.Player.GetName = lambda: "Character A"
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        _advance_character_profile(widget, 2)
+        association_before = json.loads(json.dumps(_character_profile_state_root(widget)))
+        profile_identity_before = widget._character_profile_resolved_profile_identity
+        profile_generation_before = widget.merchant_rules_profile_generation
+        apply_calls: list[str] = []
+        original_apply = widget._apply_saved_profile_summary
+
+        def _record_apply(profile, **kwargs):
+            apply_calls.append(profile.identity.key)
+            return original_apply(profile, **kwargs)
+
+        widget._apply_saved_profile_summary = _record_apply
+        observer_calls: list[str] = []
+        widget._update_manual_gold_session_runtime = lambda: observer_calls.append("manual_gold")
+
+        state.update(map_id=201, map_uptime=3000, player_uptime=3000)
+        widget._tick_runtime()
+        _expect(
+            not widget._character_profile_ready and not observer_calls,
+            "A same-character direct ready-to-ready jump must close readiness before reconfirmation.",
+        )
+        widget._tick_runtime()
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity == profile_identity_before
+            and widget.merchant_rules_profile_generation == profile_generation_before
+            and not apply_calls
+            and _character_profile_state_root(widget) == association_before
+            and not observer_calls,
+            "Fresh same-character confirmation must reopen the gate without reloading or changing its association.",
+        )
+        widget._tick_runtime()
+        _expect(observer_calls == ["manual_gold"], "Same-character observers may resume on the following tick.")
+    finally:
+        module.Player.GetPlayerUUID = original_uuid
+        module.Player.GetName = original_name
+        _restore_lifecycle_test_state(module, lifecycle_originals)
+
+
+def _test_character_profile_resolution_allows_deferred_reload(module) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    state: dict[str, object] = {
+        "map_ready": True,
+        "map_id": 100,
+        "map_uptime": 2000,
+        "outpost": True,
+        "guild_hall": False,
+        "party_ready": True,
+        "player_loaded": True,
+        "player_agent": 1,
+        "player_uptime": 2000,
+    }
+    lifecycle_originals = _install_lifecycle_test_state(module, state)
+    original_uuid = module.Player.GetPlayerUUID
+    original_name = module.Player.GetName
+    uuid_state = {"value": (2101, 2102, 2103, 2104)}
+    name_state = {"value": "Character A"}
+    module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+    module.Player.GetName = lambda: name_state["value"]
+    old_work = None
+    try:
+        widget = _make_unresolved_character_profile_widget(module)
+        _advance_character_profile(widget, 2)
+        _expect(widget._character_profile_ready, "Character A must be resolved before staging deferred work.")
+
+        widget.favorite_outpost_ids = [2]
+        widget.profile_name_inputs[module.PROFILE_SCOPE_ACCOUNT] = "Remembered B"
+        widget._save_current_as_new_profile(module.PROFILE_SCOPE_ACCOUNT)
+        profile_b = widget._get_selected_profile(module.PROFILE_SCOPE_ACCOUNT)
+        _expect(profile_b is not None, "The deferred reload fixture must create a remembered B profile.")
+        uuid_state["value"] = (2201, 2202, 2203, 2204)
+        name_state["value"] = "Character B"
+        observation_b = widget._get_current_character_observation()
+        _expect(observation_b is not None, "The B identity fixture must be available for association setup.")
+        widget._persist_character_profile_association(
+            observation_b[0],
+            module.CharacterProfileAssociation(
+                profile_identity=profile_b.identity,
+                character_name_snapshot=observation_b[1],
+            ),
+        )
+        association_b_before = json.loads(json.dumps(_character_profile_state_root(widget)["characters"][observation_b[0]]))
+        uuid_state["value"] = (2101, 2102, 2103, 2104)
+        name_state["value"] = "Character A"
+
+        leader_widget = _make_widget(module, use_json_factory=True)
+        leader_widget.account_key = "leader@example.com"
+        follower_email = "merchant.rules@example.com"
+        sync_outpost_entries = list(widget.outpost_entries) + [
+            {"id": 98, "name": "Sync Harbor Old"},
+            {"id": 99, "name": "Sync Harbor New"},
+            {"id": 123, "name": "Sync Harbor Cancelled"},
+        ]
+        widget.outpost_entries = sync_outpost_entries
+        leader_widget.outpost_entries = list(sync_outpost_entries)
+
+        def _write_leader_payload(favorite_id: int) -> dict[str, object]:
+            leader_widget.favorite_outpost_ids = [favorite_id]
+            payload = leader_widget._build_profile_payload()
+            _expect(
+                leader_widget._write_profile_payload_for_account(follower_email, payload) == follower_email,
+                "The leader fixture should write its normalized payload through the account overlay.",
+            )
+            target_payload = module.JsonFactory._account_documents.get(
+                (follower_email, module.LIVE_CONFIG_DOC_NAME)
+            )
+            _expect(
+                isinstance(target_payload, dict)
+                and target_payload.get("favorite_outpost_ids") == [favorite_id],
+                "The follower fixture should receive the leader payload before its reload request.",
+            )
+            follower_doc = widget._live_config_doc()
+            follower_doc.set_json("", target_payload)
+            _expect(follower_doc.save(), "The follower fixture should persist the received leader payload.")
+            return payload
+
+        def _stage_leader_reload(request_id: str, favorite_id: int, *, drain: bool = True):
+            payload = _write_leader_payload(favorite_id)
+            message = types.SimpleNamespace(
+                SenderEmail="leader@example.com",
+                ReceiverEmail=follower_email,
+                Params=(float(module.MERCHANT_RULES_OPCODE_RELOAD_PROFILE), 0.0, 0.0, 0.0),
+                ExtraData=(request_id, "Sync", "", ""),
+            )
+            tracked = widget.track_merchant_rules_remote_dispatch(
+                message,
+                widget._handle_shared_multibox_message(message),
+            )
+            if drain:
+                _drain_generator_return(tracked)
+            return message, tracked, payload
+
+        def _old_work():
+            yield "old work paused"
+
+        old_work = widget._track_merchant_rules_owned_work(_old_work())
+        _expect(next(old_work) == "old work paused", "The old A operation should be active while the reload is received.")
+        _stage_leader_reload("deferred-a-to-b-old", 98)
+        _stage_leader_reload("deferred-a-to-b", 99)
+        _expect(
+            widget.pending_multibox_profile_reload == ("deferred-a-to-b", "leader@example.com", follower_email)
+            and not widget._merchant_rules_staged_multibox_reload_requests,
+            "A multibox reload received during old owned work must retain the newest request.",
+        )
+        _expect(
+            isinstance(widget._pending_multibox_profile_reload_payload, dict)
+            and widget._pending_multibox_profile_reload_payload.get("favorite_outpost_ids") == [99],
+            "A newer deferred sync must replace the older captured payload instead of replaying stale settings.",
+        )
+
+        reload_calls: list[dict[str, object]] = []
+        original_reload = widget.reload_profile_from_disk
+
+        def _record_reload(**kwargs):
+            reload_calls.append(dict(kwargs))
+            return original_reload(**kwargs)
+
+        widget.reload_profile_from_disk = _record_reload
+        uuid_state["value"] = (2201, 2202, 2203, 2204)
+        name_state["value"] = "Character B"
+        _advance_character_profile(widget, 1)
+        _advance_character_profile(widget, 1)
+        _expect(
+            not widget._character_profile_ready
+            and widget._character_profile_resolution_target is not None
+            and widget.merchant_rules_owned_work_count == 1,
+            "B must wait for genuinely conflicting old owned work while retaining its resolution target.",
+        )
+        _drain_generator_return(old_work)
+        old_work = None
+        _expect(widget.merchant_rules_owned_work_count == 0, "Draining old A work must release its ownership marker.")
+        _advance_character_profile(widget, 1)
+        _expect(
+            widget._character_profile_ready
+            and widget._character_profile_resolved_profile_identity == profile_b.identity
+            and widget.favorite_outpost_ids == [2]
+            and widget.merchant_rules_owned_work_count == 0
+            and widget.merchant_rules_owned_action_count == 0
+            and widget.merchant_rules_remote_dispatch_count == 0,
+            "B profile resolution must complete despite the inert pending multibox reload.",
+        )
+        live_doc = widget._live_config_doc()
+        _expect(live_doc.reload(), "The B profile fixture should reload its remembered live settings.")
+        remembered_b_payload = live_doc.get_json("", {})
+        _expect(
+            isinstance(remembered_b_payload, dict)
+            and remembered_b_payload.get("favorite_outpost_ids") == [2]
+            and widget._pending_multibox_profile_reload_payload.get("favorite_outpost_ids") == [99],
+            "B's remembered profile should be live before the deferred leader payload is applied.",
+        )
+        _expect(
+            any(
+                call.get("include_remote_dispatch") is False and call.get("include_pending_reload") is False
+                for call in reload_calls
+            ),
+            "Resolver profile application must carry its remote and pending-reload exclusions into the verified reload path.",
+        )
+        widget._tick_runtime()
+        _expect(live_doc.reload(), "The deferred leader sync should leave a readable persisted live config.")
+        deferred_payload = live_doc.get_json("", {})
+        _expect(
+            widget.pending_multibox_profile_reload is None
+            and widget._pending_multibox_profile_reload_payload is None
+            and widget.favorite_outpost_ids == [99]
+            and isinstance(deferred_payload, dict)
+            and deferred_payload.get("favorite_outpost_ids") == [99]
+            and any(
+                call.get("status_message") == "Merchant Rules live config reloaded by multibox sync."
+                for call in reload_calls
+            )
+            and _character_profile_state_root(widget)["characters"][observation_b[0]] == association_b_before
+            and widget._character_profile_resolved_profile_identity == profile_b.identity
+            and widget.merchant_rules_owned_work_count == 0
+            and widget.merchant_rules_owned_action_count == 0
+            and widget.merchant_rules_remote_dispatch_count == 0,
+            "The deferred leader payload should apply once after B resolves, without changing B's association or leaking work.",
+        )
+
+        leader_widget.favorite_outpost_ids = [123]
+        _write_leader_payload(123)
+        cancelled_message = types.SimpleNamespace(
+            SenderEmail="leader@example.com",
+            ReceiverEmail=follower_email,
+            Params=(float(module.MERCHANT_RULES_OPCODE_RELOAD_PROFILE), 0.0, 0.0, 0.0),
+            ExtraData=("cancelled-deferred", "Sync", "", ""),
+        )
+        cancelled_reload = widget.track_merchant_rules_remote_dispatch(
+            cancelled_message,
+            widget._handle_shared_multibox_message(cancelled_message),
+        )
+        _expect(
+            widget.pending_multibox_profile_reload == ("cancelled-deferred", "leader@example.com", follower_email)
+            and isinstance(widget._pending_multibox_profile_reload_payload, dict)
+            and widget._pending_multibox_profile_reload_payload.get("favorite_outpost_ids") == [123]
+            and ("cancelled-deferred", "leader@example.com", follower_email)
+            in widget._merchant_rules_staged_multibox_reload_requests,
+            "A staged cancellation fixture should retain its request and payload until the wrapper closes.",
+        )
+        cancelled_reload.close()
+        _expect(
+            widget.pending_multibox_profile_reload is None
+            and widget._pending_multibox_profile_reload_payload is None
+            and not widget._merchant_rules_staged_multibox_reload_requests
+            and widget.favorite_outpost_ids == [99],
+            "Cancelling a deferred reload must clear both markers without applying its detached payload.",
+        )
+
+        live_doc.set_json("", {"version": int(module.PROFILE_VERSION) + 1})
+        _expect(live_doc.save(), "The invalid deferred reload fixture should persist its future-version payload.")
+        widget.merchant_rules_owned_work_count = 1
+        invalid_message = types.SimpleNamespace(
+            SenderEmail="leader@example.com",
+            ReceiverEmail=follower_email,
+            Params=(float(module.MERCHANT_RULES_OPCODE_RELOAD_PROFILE), 0.0, 0.0, 0.0),
+            ExtraData=("invalid-deferred", "Sync", "", ""),
+        )
+        invalid_reload = widget.track_merchant_rules_remote_dispatch(
+            invalid_message,
+            widget._handle_shared_multibox_message(invalid_message),
+        )
+        _drain_generator_return(invalid_reload)
+        widget.merchant_rules_owned_work_count = 0
+        _expect(
+            widget.pending_multibox_profile_reload is None
+            and widget._pending_multibox_profile_reload_payload is None
+            and not widget._merchant_rules_staged_multibox_reload_requests
+            and widget.favorite_outpost_ids == [99],
+            "An invalid deferred payload must fail closed without retaining a request or changing runtime settings.",
+        )
+    finally:
+        if old_work is not None:
+            old_work.close()
+        module.Player.GetPlayerUUID = original_uuid
+        module.Player.GetName = original_name
+        _restore_lifecycle_test_state(module, lifecycle_originals)
+
+
+def _test_character_profile_resolution_allows_inert_remote_lease(module) -> None:
+    for opcode in (module.MERCHANT_RULES_OPCODE_PREVIEW, module.MERCHANT_RULES_OPCODE_EXECUTE):
+        _reset_jsonfactory_persistence_fixture(module)
+        state: dict[str, object] = {
+            "map_ready": True,
+            "map_id": 100,
+            "map_uptime": 2000,
+            "outpost": True,
+            "guild_hall": False,
+            "party_ready": True,
+            "player_loaded": True,
+            "player_agent": 1,
+            "player_uptime": 2000,
+        }
+        lifecycle_originals = _install_lifecycle_test_state(module, state)
+        original_uuid = module.Player.GetPlayerUUID
+        original_name = module.Player.GetName
+        uuid_state = {"value": (2301, 2302, 2303, 2304)}
+        name_state = {"value": "Character A"}
+        module.Player.GetPlayerUUID = lambda: uuid_state["value"]
+        module.Player.GetName = lambda: name_state["value"]
+        old_work = None
+        remote_lease = None
+        try:
+            widget = _make_unresolved_character_profile_widget(module)
+            _advance_character_profile(widget, 2)
+
+            def _old_work():
+                yield "old work paused"
+
+            old_work = widget._track_merchant_rules_owned_work(_old_work())
+            next(old_work)
+            uuid_state["value"] = (2401, 2402, 2403, 2404)
+            name_state["value"] = "Character B"
+            _advance_character_profile(widget, 1)
+            _advance_character_profile(widget, 1)
+            _expect(
+                widget._character_profile_resolution_target is not None and not widget._character_profile_ready,
+                f"Opcode {opcode} must leave a closed B gate while genuinely conflicting A work is active.",
+            )
+            _drain_generator_return(old_work)
+            old_work = None
+
+            remote_events: list[str] = []
+
+            def _remote_work():
+                remote_events.append("started")
+                yield "remote paused"
+                remote_events.append("finished")
+
+            message = types.SimpleNamespace(
+                Params=(float(opcode), 0.0, 0.0, 0.0),
+                ExtraData=(f"remote-during-b-{opcode}", "", "", ""),
+            )
+            remote_lease = widget.track_merchant_rules_remote_dispatch(message, _remote_work())
+            _expect(
+                widget.merchant_rules_remote_dispatch_count == 1
+                and not remote_events
+                and widget._merchant_rules_has_pending_or_active_work()
+                and not widget._merchant_rules_has_pending_or_active_work(
+                    include_remote_dispatch=False,
+                    include_pending_reload=False,
+                ),
+                f"Opcode {opcode} should hold an inert outer lease without making resolver-owned work busy.",
+            )
+            _advance_character_profile(widget, 1)
+            _expect(
+                widget._character_profile_ready
+                and widget.merchant_rules_remote_dispatch_count == 1
+                and not remote_events
+                and widget.merchant_rules_owned_work_count == 0
+                and widget.merchant_rules_owned_action_count == 0,
+                f"Opcode {opcode} lease must not deadlock B profile application while the gate is closed.",
+            )
+            try:
+                next(remote_lease)
+            except StopIteration:
+                # B's verified profile application advances the profile generation, so this
+                # pre-application outer lease is intentionally invalidated before it starts.
+                remote_lease = None
+                _expect(
+                    not remote_events and widget.merchant_rules_remote_dispatch_count == 0,
+                    f"Opcode {opcode} stale lease invalidation must release exactly once without starting remote work.",
+                )
+            else:
+                raise AssertionError(
+                    f"Opcode {opcode} lease should be invalidated by B profile generation before it starts."
+                )
+        finally:
+            if remote_lease is not None:
+                remote_lease.close()
+            if old_work is not None:
+                old_work.close()
+            module.Player.GetPlayerUUID = original_uuid
+            module.Player.GetName = original_name
+            _restore_lifecycle_test_state(module, lifecycle_originals)
 
 
 def _minimal_profile_payload(
@@ -36436,6 +38096,50 @@ def main() -> int:
             (
                 "jsonfactory_standalone_profile_lifecycle",
                 lambda: _test_jsonfactory_standalone_profile_lifecycle(module),
+            ),
+            (
+                "character_profile_memory_switches_and_profile_operations",
+                lambda: _test_character_profile_memory_switches_and_profile_operations(module),
+            ),
+            (
+                "character_profile_state_refresh_failure_blocks_and_deduplicates",
+                lambda: _test_character_profile_state_refresh_failure_blocks_and_deduplicates(module),
+            ),
+            (
+                "character_profile_memory_fails_closed_and_recovers",
+                lambda: _test_character_profile_memory_fails_closed_and_recovers(module),
+            ),
+            (
+                "character_profile_memory_retries_without_duplicate_blanks",
+                lambda: _test_character_profile_memory_retries_without_duplicate_blanks(module),
+            ),
+            (
+                "character_profile_transition_restarts_for_latest_uuid",
+                lambda: _test_character_profile_transition_restarts_for_latest_uuid(module),
+            ),
+            (
+                "character_profile_change_invalidates_owned_work_and_multibox",
+                lambda: _test_character_profile_change_invalidates_owned_work_and_multibox(module),
+            ),
+            (
+                "character_profile_resolution_tick_boundary",
+                lambda: _test_character_profile_resolution_tick_boundary(module),
+            ),
+            (
+                "character_profile_direct_ready_jump_closes_gate",
+                lambda: _test_character_profile_direct_ready_jump_closes_gate(module),
+            ),
+            (
+                "character_profile_same_direct_ready_jump_reconfirms_without_reload",
+                lambda: _test_character_profile_same_direct_ready_jump_reconfirms_without_reload(module),
+            ),
+            (
+                "character_profile_resolution_allows_deferred_reload",
+                lambda: _test_character_profile_resolution_allows_deferred_reload(module),
+            ),
+            (
+                "character_profile_resolution_allows_inert_remote_lease",
+                lambda: _test_character_profile_resolution_allows_inert_remote_lease(module),
             ),
             (
                 "jsonfactory_create_blank_profile",
