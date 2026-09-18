@@ -9891,7 +9891,10 @@ try:
         ratio_name = "powerstone_member_ratio" if str(key or "") == "powerstone_of_courage" else "dp_member_ratio"
         ratio = max(0.0, min(1.0, float(rule.get(ratio_name, 0.0) or 0.0)))
         ratio_count = int((float(state_count) * ratio) + 0.999)
-        return max(int(cfg.mbdp_party_min_members), int(ratio_count))
+        # Party-wide eligibility is enforced by _mbdp_prepare_party_context.
+        # Built-in modes use their own DP breadth ratio after that gate; the
+        # Custom legacy builder intentionally keeps its separate member gates.
+        return max(1, int(ratio_count))
 
     def _mbdp_party_candidate_score(key: str, ctx: dict, priority_idx: int) -> tuple[bool, int, str]:
         item_key = str(key or "")
