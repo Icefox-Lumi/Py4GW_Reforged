@@ -23,6 +23,7 @@ PYCONS_SYNC_OPCODE_SET_SELF_MBDP_TARGET = 3
 # file access): each account announces its own flags; the leader-toggle is a message.
 PYCONS_SYNC_OPCODE_ANNOUNCE_TEAM_FLAGS = 4
 PYCONS_SYNC_OPCODE_SET_TEAM_OPT_IN = 5
+PYCONS_SYNC_OPCODE_SET_MBDP_CONTROL_POLICY = 6
 PYCONS_SYNC_SELECTION_ENABLED_STATE_ONCE_KEY = "sync_selection_enabled_state_once"
 
 _PYCONS_CONFIG_DIR = os.path.normpath(os.path.join("Widgets", "Config", "Pycons"))
@@ -244,7 +245,8 @@ class _DictSection:
 
 
 try:
-    from typing import Any, cast
+    from typing import Any, NamedTuple, cast
+    import hashlib
     import re
     import unicodedata
     import PyImGui
@@ -363,6 +365,9 @@ try:
     CONSET_REMOTE_EFFECT_WAIT_MS = 1200
     TEAM_SETTINGS_CACHE_MS = 3000
     MBDP_SELF_TARGET_SETTLE_MS = 1200
+    MBDP_CONTROL_PROTOCOL_VERSION = 1
+    MBDP_CONTROL_HEARTBEAT_MS = 2500
+    MBDP_CONTROL_LEASE_TTL_MS = 8000
 
     # In-town speed effects use explicit ids so fallback timing matches the visible effect.
     SUGAR_JOLT_SHORT_EFFECT_ID = 1916
@@ -1223,9 +1228,12 @@ try:
             ),
         },
         "team_consume_opt_in": {
-            "short": "Opt in to team broadcasts.",
-            "long": "When enabled, this account can use matching items when another account broadcasts a team call. If disabled, this account ignores those calls.",
-            "why": "Use this on follower accounts that should help with shared consumables.",
+            "short": "Lets this account follow the team's Morale/DP settings and respond to team item requests.",
+            "long": (
+                "Lets this account follow the team's Morale/DP settings and respond to team item requests. "
+                "Turn this off to keep this account independent."
+            ),
+            "why": "Use this on accounts that should follow the team's shared settings.",
         },
         "advanced_intervals": {
             "short": "Show timing controls for each item.",
@@ -1413,9 +1421,19 @@ try:
             "why": "Off is safer. Turn on only when everyone in the party expects these items to be used.",
         },
         "mbdp_receiver_require_enabled": {
-            "short": "Followers only use requested items enabled on that account.",
-            "long": "When on, a follower only reacts to an item-use call if that exact item is enabled locally. When off, a team call can make the follower use the item even if its local toggle is off.",
+            "short": "Require local enablement for incoming team item calls.",
+            "long": "When on, this account only reacts to an explicit remote item-use call if that exact item is selected and enabled locally. When off, an eligible team call can make this account use the item even if its local toggle is off.",
             "why": "On is safer and prevents accidental follower spending.",
+        },
+        "mbdp_team_control_enabled": {
+            "short": "Control followers' Morale/DP settings and item use.",
+            "long": "Opted-in followers temporarily use this account's Morale/DP settings and allowed items. Their own saved settings are not changed.",
+            "why": "Useful when the team should follow one account's Morale/DP settings.",
+        },
+        "mbdp_team_control_respect_follower_item_enablement": {
+            "short": "Followers only use MB/DP items enabled in their own settings.",
+            "long": "When on, followers only use MB/DP items enabled in their own settings. When off, followers can use MB/DP items enabled by the leader, even if those items are turned off in their own settings.",
+            "why": "Turn this on to keep each follower's item choices as a final safety check.",
         },
         "mbdp_prefer_seal_for_recharge": {
             "short": "Prefer Seal over Pumpkin for self +10 morale upkeep.",
@@ -1821,6 +1839,8 @@ try:
         "mbdp_enabled",
         "mbdp_allow_partywide_in_human_parties",
         "mbdp_receiver_require_enabled",
+        "mbdp_team_control_enabled",
+        "mbdp_team_control_respect_follower_item_enablement",
         "mbdp_strict_party_plus10",
         "mbdp_prefer_seal_for_recharge",
         "resurrection_scroll_enabled",
@@ -1861,6 +1881,8 @@ try:
         "mbdp_enabled",
         "mbdp_allow_partywide_in_human_parties",
         "mbdp_receiver_require_enabled",
+        "mbdp_team_control_enabled",
+        "mbdp_team_control_respect_follower_item_enablement",
         "mbdp_strict_party_plus10",
         "mbdp_self_dp_minor_threshold",
         "mbdp_self_dp_major_threshold",
@@ -2002,6 +2024,10 @@ try:
             "mbdp_enabled": bool(MBDP_DEFAULTS["mbdp_enabled"]),
             "mbdp_allow_partywide_in_human_parties": bool(MBDP_DEFAULTS["mbdp_allow_partywide_in_human_parties"]),
             "mbdp_receiver_require_enabled": bool(MBDP_DEFAULTS["mbdp_receiver_require_enabled"]),
+            "mbdp_team_control_enabled": bool(MBDP_DEFAULTS["mbdp_team_control_enabled"]),
+            "mbdp_team_control_respect_follower_item_enablement": bool(
+                MBDP_DEFAULTS["mbdp_team_control_respect_follower_item_enablement"]
+            ),
             "mbdp_strict_party_plus10": bool(MBDP_DEFAULTS["mbdp_strict_party_plus10"]),
             "mbdp_self_dp_minor_threshold": int(MBDP_DEFAULTS["mbdp_self_dp_minor_threshold"]),
             "mbdp_self_dp_major_threshold": int(MBDP_DEFAULTS["mbdp_self_dp_major_threshold"]),
@@ -3086,6 +3112,8 @@ try:
             cfg.mbdp_enabled = True
             cfg.mbdp_allow_partywide_in_human_parties = False
             cfg.mbdp_receiver_require_enabled = True
+            cfg.mbdp_team_control_enabled = False
+            cfg.mbdp_team_control_respect_follower_item_enablement = True
             cfg.mbdp_self_dp_minor_threshold = -30
             cfg.mbdp_self_dp_major_threshold = -45
             cfg.mbdp_self_morale_target_effective = 0
@@ -3111,6 +3139,8 @@ try:
             cfg.team_consume_opt_in = False
             cfg.mbdp_allow_partywide_in_human_parties = False
             cfg.mbdp_receiver_require_enabled = True
+            cfg.mbdp_team_control_enabled = False
+            cfg.mbdp_team_control_respect_follower_item_enablement = True
             cfg.mbdp_party_target_effective = max(-60, min(10, int(getattr(cfg, "force_team_morale_value", 0))))
             cfg.mbdp_strict_party_plus10 = True
             cfg.mbdp_party_min_members = 2
@@ -3536,6 +3566,8 @@ try:
         "mbdp_enabled": True,
         "mbdp_allow_partywide_in_human_parties": False,
         "mbdp_receiver_require_enabled": True,
+        "mbdp_team_control_enabled": False,
+        "mbdp_team_control_respect_follower_item_enablement": True,
         "mbdp_self_dp_minor_threshold": -30,
         "mbdp_self_dp_major_threshold": -45,
         "mbdp_self_morale_target_effective": 0,
@@ -4147,6 +4179,7 @@ try:
         _runtime_sync_from_cfg_full()
         _clear_one_shot_synced_enabled_defaults_if_needed()
         _team_flags_cache.clear()
+        _mbdp_control_stop_broadcast("account configuration rebound", clear_local_lease=True)
         try:
             _local_team_flags_refresh_timer.Stop()
         except Exception:
@@ -4346,6 +4379,16 @@ try:
             self.mbdp_enabled = ini_handler.read_bool(INI_SECTION, "mbdp_enabled", bool(MBDP_DEFAULTS["mbdp_enabled"]))
             self.mbdp_allow_partywide_in_human_parties = ini_handler.read_bool(INI_SECTION, "mbdp_allow_partywide_in_human_parties", bool(MBDP_DEFAULTS["mbdp_allow_partywide_in_human_parties"]))
             self.mbdp_receiver_require_enabled = ini_handler.read_bool(INI_SECTION, "mbdp_receiver_require_enabled", bool(MBDP_DEFAULTS["mbdp_receiver_require_enabled"]))
+            self.mbdp_team_control_enabled = ini_handler.read_bool(
+                INI_SECTION,
+                "mbdp_team_control_enabled",
+                bool(MBDP_DEFAULTS["mbdp_team_control_enabled"]),
+            )
+            self.mbdp_team_control_respect_follower_item_enablement = ini_handler.read_bool(
+                INI_SECTION,
+                "mbdp_team_control_respect_follower_item_enablement",
+                bool(MBDP_DEFAULTS["mbdp_team_control_respect_follower_item_enablement"]),
+            )
             def _dp_threshold_to_effective(v: int) -> tuple[int, bool]:
                 iv = int(v)
                 # Legacy format stored DP thresholds as 0..60. New format stores effective trigger as -60..0.
@@ -4567,6 +4610,11 @@ try:
             set_key("mbdp_enabled", bool(self.mbdp_enabled))
             set_key("mbdp_allow_partywide_in_human_parties", bool(self.mbdp_allow_partywide_in_human_parties))
             set_key("mbdp_receiver_require_enabled", bool(self.mbdp_receiver_require_enabled))
+            set_key("mbdp_team_control_enabled", bool(self.mbdp_team_control_enabled))
+            set_key(
+                "mbdp_team_control_respect_follower_item_enablement",
+                bool(self.mbdp_team_control_respect_follower_item_enablement),
+            )
             set_key("mbdp_self_dp_minor_threshold", int(self.mbdp_self_dp_minor_threshold))
             set_key("mbdp_self_dp_major_threshold", int(self.mbdp_self_dp_major_threshold))
             set_key("mbdp_self_morale_target_effective", int(self.mbdp_self_morale_target_effective))
@@ -4641,6 +4689,10 @@ try:
         cfg.mbdp_enabled = bool(MBDP_DEFAULTS["mbdp_enabled"])
         cfg.mbdp_allow_partywide_in_human_parties = bool(MBDP_DEFAULTS["mbdp_allow_partywide_in_human_parties"])
         cfg.mbdp_receiver_require_enabled = bool(MBDP_DEFAULTS["mbdp_receiver_require_enabled"])
+        cfg.mbdp_team_control_enabled = bool(MBDP_DEFAULTS["mbdp_team_control_enabled"])
+        cfg.mbdp_team_control_respect_follower_item_enablement = bool(
+            MBDP_DEFAULTS["mbdp_team_control_respect_follower_item_enablement"]
+        )
         cfg.mbdp_self_dp_minor_threshold = int(MBDP_DEFAULTS["mbdp_self_dp_minor_threshold"])
         cfg.mbdp_self_dp_major_threshold = int(MBDP_DEFAULTS["mbdp_self_dp_major_threshold"])
         cfg.mbdp_self_morale_target_effective = int(MBDP_DEFAULTS["mbdp_self_morale_target_effective"])
@@ -4698,6 +4750,38 @@ try:
             self.profile_status_error = False
             self.profile_pending_save_over_id = ""
             self.profile_pending_delete_id = ""
+            self.mbdp_control_lease: Any = None
+            self.mbdp_control_status = "Using local MB/DP settings"
+            self.mbdp_control_last_broadcast_ms = 0
+            self.mbdp_control_last_lease_check_ms = 0
+            self.mbdp_control_last_recipients = []
+            self.mbdp_control_last_scope = ""
+            self.mbdp_control_generation = 0
+            self.mbdp_control_sequence = 0
+            self.mbdp_control_session_id = ""
+
+    class _MBDPSelfPolicy(NamedTuple):
+        target_effective: int
+        min_morale_gain: int
+        prefer_seal: bool
+        allowed_items: frozenset[str]
+        respect_follower_item_enablement: bool
+        source_email: str
+
+    class _MBDPControlLease(NamedTuple):
+        protocol_version: int
+        sender_email: str
+        party_id: int
+        map_id: int
+        map_region: int
+        map_district: int
+        map_language: int
+        scope_signature: str
+        session_id: str
+        sequence: int
+        received_ms: int
+        expires_ms: int
+        policy: _MBDPSelfPolicy
 
     _rt = _RuntimeState()
     # Aliases preserved so UI code and existing access patterns remain identical.
@@ -5244,6 +5328,7 @@ try:
             _runtime_sync_from_cfg_full()
             cleared_one_shot_enabled_defaults = _clear_one_shot_synced_enabled_defaults_if_needed()
             _team_flags_cache.clear()
+            _mbdp_control_stop_broadcast("Pycons config reloaded", clear_local_lease=True)
             try:
                 _local_team_flags_refresh_timer.Stop()
             except Exception:
@@ -7095,6 +7180,457 @@ try:
         except Exception as e:
             return [], f"recipient_query_error={e}"
 
+    def _mbdp_control_scope() -> dict | None:
+        """Return the party/map scope bound to a temporary MB/DP control lease."""
+        try:
+            local_email = str(Player.GetAccountEmail() or "").strip()
+            if not local_email:
+                return None
+            account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(local_email)
+            if not account:
+                return None
+            map_data = getattr(getattr(account, "AgentData", None), "Map", None)
+            if not map_data:
+                return None
+
+            party_id = _acc_party_id(account)
+            map_id = int(getattr(map_data, "MapID", 0) or 0)
+            map_region = int(getattr(map_data, "Region", 0) or 0)
+            map_district = int(getattr(map_data, "District", 0) or 0)
+            map_language = int(getattr(map_data, "Language", 0) or 0)
+            if party_id <= 0 or map_id <= 0:
+                return None
+
+            party_accounts = GLOBAL_CACHE.ShMem.GetPlayersFromParty(
+                party_id,
+                map_id,
+                map_region,
+                map_district,
+                map_language,
+            ) or []
+            party_emails = {
+                _normalize_sync_account_email(_acc_email(acc))
+                for acc in party_accounts
+                if _normalize_sync_account_email(_acc_email(acc))
+            }
+            party_emails.add(_normalize_sync_account_email(local_email))
+            scope_members = "|".join(sorted(party_emails))
+            scope_material = "|".join(
+                (
+                    str(int(party_id)),
+                    str(int(map_id)),
+                    str(int(map_region)),
+                    str(int(map_district)),
+                    str(int(map_language)),
+                    scope_members,
+                )
+            )
+            return {
+                "party_id": int(party_id),
+                "map_id": int(map_id),
+                "map_region": int(map_region),
+                "map_district": int(map_district),
+                "map_language": int(map_language),
+                "scope_signature": hashlib.sha256(scope_material.encode("utf-8")).hexdigest()[:16],
+            }
+        except Exception:
+            return None
+
+    def _mbdp_control_scope_text(scope: dict) -> str:
+        return ",".join(
+            (
+                str(int(scope.get("party_id", 0) or 0)),
+                str(int(scope.get("map_id", 0) or 0)),
+                str(int(scope.get("map_region", 0) or 0)),
+                str(int(scope.get("map_district", 0) or 0)),
+                str(int(scope.get("map_language", 0) or 0)),
+                str(scope.get("scope_signature", "") or "").strip().lower(),
+            )
+        )
+
+    def _mbdp_control_parse_scope(scope_text: str) -> dict | None:
+        parts = [part.strip() for part in str(scope_text or "").split(",")]
+        if len(parts) != 6:
+            return None
+        try:
+            party_id = int(parts[0])
+            map_id = int(parts[1])
+            map_region = int(parts[2])
+            map_district = int(parts[3])
+            map_language = int(parts[4])
+        except Exception:
+            return None
+        signature = str(parts[5] or "").lower()
+        if party_id <= 0 or map_id <= 0 or not re.fullmatch(r"[0-9a-f]{16}", signature):
+            return None
+        return {
+            "party_id": int(party_id),
+            "map_id": int(map_id),
+            "map_region": int(map_region),
+            "map_district": int(map_district),
+            "map_language": int(map_language),
+            "scope_signature": signature,
+        }
+
+    def _mbdp_control_scopes_match(left: dict | None, right: dict | None) -> bool:
+        if not left or not right:
+            return False
+        fields = (
+            "party_id",
+            "map_id",
+            "map_region",
+            "map_district",
+            "map_language",
+            "scope_signature",
+        )
+        return all(
+            str(left.get(field, "")).strip().lower() == str(right.get(field, "")).strip().lower()
+            for field in fields
+        )
+
+    def _mbdp_control_policy_from_local_config(source_email: str = "") -> _MBDPSelfPolicy:
+        allowed_items = frozenset(
+            str(key)
+            for key in MBDP_SELF_TARGET_KEYS
+            if bool(cfg.selected.get(key, False)) and _runtime_regular_enabled(key)
+        )
+        return _MBDPSelfPolicy(
+            target_effective=max(-60, min(10, int(getattr(cfg, "mbdp_self_morale_target_effective", 0) or 0))),
+            min_morale_gain=max(0, min(10, int(getattr(cfg, "mbdp_self_min_morale_gain", 0) or 0))),
+            prefer_seal=bool(getattr(cfg, "mbdp_prefer_seal_for_recharge", False)),
+            allowed_items=allowed_items,
+            respect_follower_item_enablement=bool(
+                getattr(cfg, "mbdp_team_control_respect_follower_item_enablement", True)
+            ),
+            source_email=str(source_email or "").strip(),
+        )
+
+    def _mbdp_control_policy_mask(policy: _MBDPSelfPolicy) -> int:
+        mask = 0
+        allowed_items = getattr(policy, "allowed_items", frozenset())
+        for index, key in enumerate(MBDP_SELF_TARGET_KEYS):
+            if str(key) in allowed_items:
+                mask |= 1 << int(index)
+        return int(mask)
+
+    def _mbdp_control_encode_policy(policy: _MBDPSelfPolicy) -> str:
+        return ",".join(
+            (
+                str(max(-60, min(10, int(policy.target_effective)))),
+                str(max(0, min(10, int(policy.min_morale_gain)))),
+                "1" if bool(policy.prefer_seal) else "0",
+                "1" if bool(policy.respect_follower_item_enablement) else "0",
+                str(_mbdp_control_policy_mask(policy)),
+            )
+        )
+
+    def _mbdp_control_decode_policy(payload: str, source_email: str = "") -> _MBDPSelfPolicy | None:
+        parts = [part.strip() for part in str(payload or "").split(",")]
+        if len(parts) != 5:
+            return None
+        try:
+            target_effective = int(parts[0])
+            min_morale_gain = int(parts[1])
+            prefer_seal = int(parts[2])
+            respect_follower_item_enablement = int(parts[3])
+            item_mask = int(parts[4])
+        except Exception:
+            return None
+        max_mask = (1 << len(MBDP_SELF_TARGET_KEYS)) - 1
+        if (
+            target_effective < -60
+            or target_effective > 10
+            or min_morale_gain < 0
+            or min_morale_gain > 10
+            or prefer_seal not in (0, 1)
+            or respect_follower_item_enablement not in (0, 1)
+            or item_mask < 0
+            or item_mask > max_mask
+        ):
+            return None
+        allowed_items = frozenset(
+            str(key)
+            for index, key in enumerate(MBDP_SELF_TARGET_KEYS)
+            if item_mask & (1 << int(index))
+        )
+        return _MBDPSelfPolicy(
+            target_effective=int(target_effective),
+            min_morale_gain=int(min_morale_gain),
+            prefer_seal=bool(prefer_seal),
+            allowed_items=allowed_items,
+            respect_follower_item_enablement=bool(respect_follower_item_enablement),
+            source_email=str(source_email or "").strip(),
+        )
+
+    def _mbdp_control_session_generation(session_id: str) -> tuple[int, int] | None:
+        parts = str(session_id or "").strip().split("-")
+        if len(parts) != 3:
+            return None
+        try:
+            return int(parts[0], 16), int(parts[1], 16)
+        except Exception:
+            return None
+
+    def _mbdp_control_revoke_matches(
+        lease,
+        sender_email: str,
+        remote_scope: dict | None,
+        current_scope: dict | None,
+        protocol_version: int,
+        sequence: int,
+        session_id: str,
+    ) -> tuple[bool, str]:
+        """Validate a coordinator revocation against the lease it would clear."""
+        if lease is None:
+            return False, "no active lease"
+        if int(protocol_version) != int(MBDP_CONTROL_PROTOCOL_VERSION):
+            return False, "protocol mismatch"
+        if int(sequence) <= 0:
+            return False, "invalid sequence"
+        if not _mbdp_control_scopes_match(remote_scope, current_scope):
+            return False, "scope does not match this client"
+
+        lease_scope = {
+            "party_id": int(getattr(lease, "party_id", 0) or 0),
+            "map_id": int(getattr(lease, "map_id", 0) or 0),
+            "map_region": int(getattr(lease, "map_region", 0) or 0),
+            "map_district": int(getattr(lease, "map_district", 0) or 0),
+            "map_language": int(getattr(lease, "map_language", 0) or 0),
+            "scope_signature": str(getattr(lease, "scope_signature", "") or "").strip().lower(),
+        }
+        if not _mbdp_control_scopes_match(remote_scope, lease_scope):
+            return False, "scope does not match the current lease"
+        if _normalize_sync_account_email(sender_email) != _normalize_sync_account_email(
+            str(getattr(lease, "sender_email", "") or "")
+        ):
+            return False, "sender does not own the current lease"
+
+        incoming_session = str(session_id or "").strip()
+        lease_session = str(getattr(lease, "session_id", "") or "").strip()
+        if not incoming_session or incoming_session != lease_session:
+            return False, "session or generation mismatch"
+        if int(protocol_version) != int(getattr(lease, "protocol_version", 0) or 0):
+            return False, "lease protocol mismatch"
+        if int(sequence) <= int(getattr(lease, "sequence", 0) or 0):
+            return False, "stale or out-of-order revoke"
+        return True, "accepted"
+
+    def _mbdp_self_policy_allows_item(
+        key: str,
+        allowed_items,
+        respect_follower_item_enablement: bool,
+        local_selected: bool,
+        local_runtime_enabled: bool,
+    ) -> bool:
+        if str(key or "") not in (allowed_items or ()):
+            return False
+        if bool(respect_follower_item_enablement) and not (
+            bool(local_selected) and bool(local_runtime_enabled)
+        ):
+            return False
+        return True
+
+    def _mbdp_control_clear_lease(reason: str = "") -> None:
+        if getattr(_rt, "mbdp_control_lease", None) is not None and str(reason or ""):
+            _debug(f"MB/DP control lease cleared: {str(reason)}.")
+        _rt.mbdp_control_lease = None
+        _rt.mbdp_control_status = "Using local MB/DP settings"
+
+    def _mbdp_control_reset_sender_transport() -> None:
+        _rt.mbdp_control_session_id = ""
+        _rt.mbdp_control_sequence = 0
+        _rt.mbdp_control_last_broadcast_ms = 0
+        _rt.mbdp_control_last_recipients = []
+        _rt.mbdp_control_last_scope = ""
+
+    def _mbdp_control_reset_transport(reason: str = "") -> None:
+        _mbdp_control_clear_lease(reason)
+        _mbdp_control_reset_sender_transport()
+        _rt.mbdp_control_last_lease_check_ms = 0
+
+    def _mbdp_control_send_revoke(reason: str = "") -> int:
+        session_id = str(getattr(_rt, "mbdp_control_session_id", "") or "").strip()
+        scope_text = str(getattr(_rt, "mbdp_control_last_scope", "") or "").strip()
+        sender_email = str(Player.GetAccountEmail() or "").strip()
+        recipients = list(
+            dict.fromkeys(
+                str(email or "").strip()
+                for email in (getattr(_rt, "mbdp_control_last_recipients", []) or [])
+                if str(email or "").strip()
+            )
+        )
+        if not session_id or not scope_text or not sender_email or not recipients:
+            return 0
+
+        revoke_sequence = max(1, int(getattr(_rt, "mbdp_control_sequence", 0) or 0) + 1)
+        sent_count = 0
+        for recipient_email in recipients:
+            try:
+                message_index = GLOBAL_CACHE.ShMem.SendMessage(
+                    sender_email,
+                    str(recipient_email),
+                    SharedCommandType.Pycons,
+                    (
+                        float(PYCONS_SYNC_OPCODE_SET_MBDP_CONTROL_POLICY),
+                        float(MBDP_CONTROL_PROTOCOL_VERSION),
+                        float(revoke_sequence),
+                        0.0,
+                    ),
+                    (
+                        scope_text,
+                        session_id,
+                        "",
+                        "",
+                    ),
+                )
+                if int(message_index) != -1:
+                    sent_count += 1
+            except Exception as exc:
+                _debug(f"MB/DP control revoke send failed for {recipient_email}: {exc}", Console.MessageType.Warning)
+        _debug(
+            f"MB/DP control revoke: session={session_id} sequence={revoke_sequence} "
+            f"sent={sent_count}/{len(recipients)}{f' ({reason})' if str(reason or '') else ''}."
+        )
+        return int(sent_count)
+
+    def _mbdp_control_stop_broadcast(reason: str = "", *, clear_local_lease: bool = False) -> None:
+        if str(getattr(_rt, "mbdp_control_session_id", "") or ""):
+            _mbdp_control_send_revoke(reason)
+        if bool(clear_local_lease):
+            _mbdp_control_reset_transport(reason)
+        else:
+            _mbdp_control_reset_sender_transport()
+
+    def _mbdp_control_refresh_lease() -> _MBDPSelfPolicy | None:
+        lease = getattr(_rt, "mbdp_control_lease", None)
+        if lease is None:
+            return None
+        if cfg is None or not bool(getattr(cfg, "mbdp_enabled", False)):
+            _mbdp_control_clear_lease("local MB/DP is OFF")
+            return None
+        if not bool(getattr(cfg, "team_consume_opt_in", False)):
+            _mbdp_control_clear_lease("follower team opt-in is OFF")
+            return None
+        now = int(_now_ms())
+        if now >= int(getattr(lease, "expires_ms", 0) or 0):
+            _mbdp_control_clear_lease("lease heartbeat expired")
+            return None
+        current_scope = _mbdp_control_scope()
+        if not _mbdp_control_scopes_match(
+            {
+                "party_id": lease.party_id,
+                "map_id": lease.map_id,
+                "map_region": lease.map_region,
+                "map_district": lease.map_district,
+                "map_language": lease.map_language,
+                "scope_signature": lease.scope_signature,
+            },
+            current_scope,
+        ):
+            _mbdp_control_clear_lease("party or map scope changed")
+            return None
+        coordinator_email = _current_coordinator_email(_get_same_party_accounts())
+        if _normalize_sync_account_email(coordinator_email) != _normalize_sync_account_email(lease.sender_email):
+            _mbdp_control_clear_lease("coordinator changed")
+            return None
+        return lease.policy
+
+    def _mbdp_control_effective_self_policy() -> _MBDPSelfPolicy:
+        lease_policy = _mbdp_control_refresh_lease()
+        if lease_policy is not None:
+            return lease_policy
+        return _mbdp_control_policy_from_local_config()
+
+    def _mbdp_control_broadcast_tick() -> None:
+        if cfg is None:
+            return
+        if not (
+            bool(getattr(cfg, "team_broadcast", False))
+            and bool(getattr(cfg, "mbdp_enabled", False))
+            and bool(getattr(cfg, "mbdp_team_control_enabled", False))
+        ):
+            if str(getattr(_rt, "mbdp_control_session_id", "") or ""):
+                _debug("MB/DP control broadcast stopped by local coordinator settings.")
+            _mbdp_control_stop_broadcast("local coordinator settings changed")
+            return
+        now = int(_now_ms())
+        if str(getattr(_rt, "mbdp_control_session_id", "") or "") and (
+            now - int(getattr(_rt, "mbdp_control_last_broadcast_ms", 0) or 0)
+        ) < int(MBDP_CONTROL_HEARTBEAT_MS):
+            return
+        scope = _mbdp_control_scope()
+        same_party_accounts = _get_same_party_accounts()
+        local_email = str(Player.GetAccountEmail() or "").strip()
+        coordinator_email = _current_coordinator_email(same_party_accounts)
+        active = bool(
+            scope
+            and local_email
+            and bool(getattr(cfg, "team_broadcast", False))
+            and bool(getattr(cfg, "mbdp_enabled", False))
+            and bool(getattr(cfg, "mbdp_team_control_enabled", False))
+            and _normalize_sync_account_email(coordinator_email) == _normalize_sync_account_email(local_email)
+        )
+        if not active:
+            if str(getattr(_rt, "mbdp_control_session_id", "") or ""):
+                _debug("MB/DP control broadcast stopped; this account is no longer the active coordinator.")
+            _mbdp_control_stop_broadcast("coordinator or scope changed")
+            return
+        assert scope is not None
+
+        if not str(getattr(_rt, "mbdp_control_session_id", "") or ""):
+            _rt.mbdp_control_generation = int(getattr(_rt, "mbdp_control_generation", 0) or 0) + 1
+            _rt.mbdp_control_session_id = f"{now:x}-{int(_rt.mbdp_control_generation):x}-{id(_rt):x}"
+            _rt.mbdp_control_sequence = 0
+            _debug(f"MB/DP control coordinator session started: {_rt.mbdp_control_session_id}.")
+
+        _rt.mbdp_control_sequence = int(getattr(_rt, "mbdp_control_sequence", 0) or 0) + 1
+        policy = _mbdp_control_policy_from_local_config(local_email)
+        policy_payload = _mbdp_control_encode_policy(policy)
+        recipients, recipient_reason = _get_team_broadcast_recipients()
+        _rt.mbdp_control_last_recipients = list(
+            dict.fromkeys(
+                list(getattr(_rt, "mbdp_control_last_recipients", []) or [])
+                + [str(email or "").strip() for email in recipients if str(email or "").strip()]
+            )
+        )
+        _rt.mbdp_control_last_scope = _mbdp_control_scope_text(scope)
+        sent_count = 0
+        for recipient_email in recipients:
+            try:
+                message_index = GLOBAL_CACHE.ShMem.SendMessage(
+                    local_email,
+                    str(recipient_email),
+                    SharedCommandType.Pycons,
+                    (
+                        float(PYCONS_SYNC_OPCODE_SET_MBDP_CONTROL_POLICY),
+                        float(MBDP_CONTROL_PROTOCOL_VERSION),
+                        float(_rt.mbdp_control_sequence),
+                        1.0,
+                    ),
+                    (
+                        _mbdp_control_scope_text(scope),
+                        str(_rt.mbdp_control_session_id),
+                        policy_payload,
+                        "",
+                    ),
+                )
+                if int(message_index) != -1:
+                    sent_count += 1
+            except Exception as exc:
+                _debug(f"MB/DP control policy send failed for {recipient_email}: {exc}", Console.MessageType.Warning)
+        _rt.mbdp_control_last_broadcast_ms = int(now)
+        _debug(
+            f"MB/DP control heartbeat: seq={_rt.mbdp_control_sequence} sent={sent_count}/{len(recipients)} "
+            f"({recipient_reason})."
+        )
+
+    def _mbdp_control_tick() -> None:
+        now = int(_now_ms())
+        if now - int(getattr(_rt, "mbdp_control_last_lease_check_ms", 0) or 0) >= 500:
+            _rt.mbdp_control_last_lease_check_ms = int(now)
+            _mbdp_control_refresh_lease()
+        _mbdp_control_broadcast_tick()
+
     def _get_conset_fallback_recipients():
         recipients, reason = _get_team_broadcast_recipients()
         if not recipients:
@@ -8108,6 +8644,145 @@ try:
             success_flag=False,
         )
 
+    def _pycons_handle_mbdp_control_policy(message, sender_email: str, receiver_email: str) -> bool:
+        local_email = str(Player.GetAccountEmail() or "").strip()
+        sender = str(sender_email or "").strip()
+        receiver = str(receiver_email or "").strip()
+        if receiver and local_email and _normalize_sync_account_email(receiver) != _normalize_sync_account_email(local_email):
+            return False
+        if not local_email or not sender or cfg is None:
+            return False
+        if not bool(getattr(cfg, "team_consume_opt_in", False)):
+            _mbdp_control_clear_lease("follower team opt-in is OFF")
+            _debug(f"MB/DP control policy rejected from {sender}: follower is not opted in.")
+            return True
+        if not bool(getattr(cfg, "mbdp_enabled", False)):
+            _mbdp_control_clear_lease("local MB/DP is OFF")
+            _debug(f"MB/DP control policy rejected from {sender}: local MB/DP is OFF.")
+            return True
+
+        params = getattr(message, "Params", [0, 0, 0, 0]) or [0, 0, 0, 0]
+        try:
+            protocol_version = int(float(params[1]))
+            sequence = int(float(params[2]))
+            active_flag = int(float(params[3]))
+        except Exception:
+            _debug(f"MB/DP control policy rejected from {sender}: invalid message parameters.")
+            return True
+        if protocol_version != int(MBDP_CONTROL_PROTOCOL_VERSION) or sequence <= 0 or active_flag not in (0, 1):
+            _debug(
+                f"MB/DP control policy rejected from {sender}: protocol={protocol_version} "
+                f"sequence={sequence} active={active_flag}."
+            )
+            return True
+
+        scope_text, session_id, policy_payload, _unused = _pycons_message_extra_data(message)
+        remote_scope = _mbdp_control_parse_scope(scope_text)
+        current_scope = _mbdp_control_scope()
+        if remote_scope is None or current_scope is None:
+            _debug(f"MB/DP control policy rejected from {sender}: invalid or unavailable scope.")
+            return True
+
+        session = str(session_id or "").strip()
+        if not session or len(session) > 96:
+            _debug(f"MB/DP control policy rejected from {sender}: invalid session id.")
+            return True
+
+        if active_flag == 0:
+            revoke_matches, revoke_reason = _mbdp_control_revoke_matches(
+                getattr(_rt, "mbdp_control_lease", None),
+                sender,
+                remote_scope,
+                current_scope,
+                protocol_version,
+                sequence,
+                session,
+            )
+            if not revoke_matches:
+                _debug(f"MB/DP control revoke rejected from {sender}: {revoke_reason}.")
+                return True
+            _mbdp_control_clear_lease("coordinator policy revoked")
+            _debug(
+                f"Accepted MB/DP control revoke from {sender}: session={session} sequence={sequence}."
+            )
+            return True
+
+        coordinator_email = _current_coordinator_email(_get_same_party_accounts())
+        if _normalize_sync_account_email(coordinator_email) != _normalize_sync_account_email(sender):
+            _debug(
+                f"MB/DP control policy rejected from {sender}: current coordinator is "
+                f"{coordinator_email or 'none'}."
+            )
+            return True
+        if not _mbdp_control_scopes_match(remote_scope, current_scope):
+            _mbdp_control_clear_lease("party or map scope changed")
+            _debug(f"MB/DP control policy rejected from {sender}: scope does not match this client.")
+            return True
+
+        policy = _mbdp_control_decode_policy(policy_payload, source_email=sender)
+        if policy is None:
+            _debug(f"MB/DP control policy rejected from {sender}: invalid policy payload.")
+            return True
+
+        current_lease = getattr(_rt, "mbdp_control_lease", None)
+        if (
+            current_lease is not None
+            and _normalize_sync_account_email(current_lease.sender_email) == _normalize_sync_account_email(sender)
+            and str(current_lease.session_id or "") != session
+        ):
+            current_generation = _mbdp_control_session_generation(str(current_lease.session_id or ""))
+            incoming_generation = _mbdp_control_session_generation(session)
+            if (
+                current_generation is not None
+                and incoming_generation is not None
+                and incoming_generation < current_generation
+            ):
+                _debug(
+                    f"MB/DP control policy rejected as stale session: sender={sender} "
+                    f"session={session} current={current_lease.session_id}."
+                )
+                return True
+        if (
+            current_lease is not None
+            and _normalize_sync_account_email(current_lease.sender_email) == _normalize_sync_account_email(sender)
+            and str(current_lease.session_id or "") == session
+            and int(sequence) <= int(current_lease.sequence)
+        ):
+            _debug(
+                f"MB/DP control policy rejected as out-of-order: sender={sender} "
+                f"session={session} sequence={sequence} current={current_lease.sequence}."
+            )
+            return True
+
+        now = int(_now_ms())
+        _rt.mbdp_control_lease = _MBDPControlLease(
+            protocol_version=int(protocol_version),
+            sender_email=sender,
+            party_id=int(remote_scope["party_id"]),
+            map_id=int(remote_scope["map_id"]),
+            map_region=int(remote_scope["map_region"]),
+            map_district=int(remote_scope["map_district"]),
+            map_language=int(remote_scope["map_language"]),
+            scope_signature=str(remote_scope["scope_signature"]),
+            session_id=session,
+            sequence=int(sequence),
+            received_ms=int(now),
+            expires_ms=int(now + MBDP_CONTROL_LEASE_TTL_MS),
+            policy=policy,
+        )
+        try:
+            sender_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(sender)
+        except Exception:
+            sender_account = None
+        sender_name = _pycons_sync_account_display_name(sender_account) if sender_account is not None else sender
+        _rt.mbdp_control_status = f"Following {sender_name}'s Morale/DP settings"
+        _debug(
+            f"Accepted MB/DP control lease from {sender}: session={session} sequence={sequence} "
+            f"target={_fmt_effective(policy.target_effective)} items={','.join(sorted(policy.allowed_items)) or 'none'} "
+            f"respect_local={bool(policy.respect_follower_item_enablement)}."
+        )
+        return True
+
     def pycons_handle_shared_message(message) -> bool:
         request_id, status_label, summary, detail = _pycons_message_extra_data(message)
         sender_email = str(getattr(message, "SenderEmail", "") or "").strip()
@@ -8127,6 +8802,9 @@ try:
                         success_flag=success_flag,
                     )
                 )
+
+            if opcode == PYCONS_SYNC_OPCODE_SET_MBDP_CONTROL_POLICY:
+                return _pycons_handle_mbdp_control_policy(message, sender_email, receiver_email)
 
             if opcode == PYCONS_SYNC_OPCODE_SET_SELF_MBDP_TARGET:
                 return _pycons_handle_self_target_request(message, sender_email, receiver_email, request_id)
@@ -9376,12 +10054,47 @@ try:
             return True
         return False
 
-    def _find_item_enabled_and_available(key: str):
+    def _find_item_enabled_and_available(key: str, policy: _MBDPSelfPolicy | None = None):
         spec = MB_DP_BY_KEY.get(key)
         if not spec:
             return None, 0
-        if not bool(cfg.selected.get(key, False)) or not _runtime_regular_enabled(key):
+        if policy is None:
+            if not bool(cfg.selected.get(key, False)) or not _runtime_regular_enabled(key):
+                return None, 0
+        elif not _mbdp_self_policy_allows_item(
+            key,
+            policy.allowed_items,
+            policy.respect_follower_item_enablement,
+            bool(cfg.selected.get(key, False)),
+            _runtime_regular_enabled(key),
+        ):
+            if str(policy.source_email or ""):
+                reason = (
+                    "leader allowlist"
+                    if str(key) not in policy.allowed_items
+                    else "follower local enablement"
+                )
+                wt = _warn_timer_for(f"mbdp_control_item_block_{key}")
+                if wt.IsStopped() or wt.HasElapsed(8000):
+                    wt.Start()
+                    _debug(
+                        f"MB/DP SELF item blocked by coordinator policy: {key} ({reason})."
+                    )
             return None, 0
+        elif (
+            str(policy.source_email or "")
+            and not bool(policy.respect_follower_item_enablement)
+            and (
+                not bool(cfg.selected.get(key, False))
+                or not _runtime_regular_enabled(key)
+            )
+        ):
+            wt = _warn_timer_for(f"mbdp_control_item_force_{key}")
+            if wt.IsStopped() or wt.HasElapsed(8000):
+                wt.Start()
+                _debug(
+                    f"MB/DP SELF item allowed by coordinator policy despite follower local OFF: {key}."
+                )
         model_id = int(spec.get("model_id", 0) or 0)
         if model_id <= 0:
             return None, 0
@@ -9405,11 +10118,15 @@ try:
             return 0
         return cur
 
-    def _mbdp_self_item_rank(key: str) -> int:
+    def _mbdp_self_item_rank(key: str, policy: _MBDPSelfPolicy | None = None) -> int:
         key = str(key or "")
         morale_order = (
             ("seal_of_the_dragon_empire", "pumpkin_cookie")
-            if bool(getattr(cfg, "mbdp_prefer_seal_for_recharge", False))
+            if bool(
+                policy.prefer_seal
+                if policy is not None
+                else getattr(cfg, "mbdp_prefer_seal_for_recharge", False)
+            )
             else ("pumpkin_cookie", "seal_of_the_dragon_empire")
         )
         rank = {
@@ -9421,10 +10138,10 @@ try:
             rank[str(morale_key)] = 20 + int(idx)
         return int(rank.get(key, 99))
 
-    def _mbdp_self_target_candidates() -> list[dict]:
+    def _mbdp_self_target_candidates(policy: _MBDPSelfPolicy | None = None) -> list[dict]:
         candidates = []
         for key in MBDP_SELF_TARGET_KEYS:
-            spec, item_id = _find_item_enabled_and_available(key)
+            spec, item_id = _find_item_enabled_and_available(key, policy)
             if not spec or item_id <= 0:
                 continue
             t = _timer_for(key)
@@ -9442,15 +10159,20 @@ try:
                 "spec": spec,
                 "item_id": int(item_id),
                 "count": int(max(1, min(8, int(count)))),
-                "rank": _mbdp_self_item_rank(key),
+                "rank": _mbdp_self_item_rank(key, policy),
             })
         return candidates
 
-    def _mbdp_self_plan_score(final_eff: int, target_eff: int, plan: list[str]) -> tuple:
+    def _mbdp_self_plan_score(
+        final_eff: int,
+        target_eff: int,
+        plan: list[str],
+        policy: _MBDPSelfPolicy | None = None,
+    ) -> tuple:
         final_eff = max(-60, min(10, int(final_eff)))
         target_eff = max(-60, min(10, int(target_eff)))
         strong_count = sum(1 for key in plan if str(key) in MBDP_SELF_STRONG_DP_KEYS)
-        first_rank = _mbdp_self_item_rank(plan[0]) if plan else 999
+        first_rank = _mbdp_self_item_rank(plan[0], policy) if plan else 999
         return (
             abs(int(target_eff) - int(final_eff)),
             max(0, int(target_eff) - int(final_eff)),
@@ -9458,10 +10180,15 @@ try:
             int(strong_count),
             len(plan),
             int(first_rank),
-            tuple(_mbdp_self_item_rank(k) for k in plan),
+            tuple(_mbdp_self_item_rank(k, policy) for k in plan),
         )
 
-    def _mbdp_find_self_target_plan(current_eff: int, target_eff: int, candidates: list[dict]) -> list[str]:
+    def _mbdp_find_self_target_plan(
+        current_eff: int,
+        target_eff: int,
+        candidates: list[dict],
+        policy: _MBDPSelfPolicy | None = None,
+    ) -> list[str]:
         current_eff = max(-60, min(10, int(current_eff)))
         target_eff = max(-60, min(10, int(target_eff)))
         if current_eff >= target_eff or not candidates:
@@ -9469,10 +10196,20 @@ try:
 
         by_key = {str(c.get("key", "") or ""): c for c in candidates if str(c.get("key", "") or "")}
         counts = {key: int(max(0, int(c.get("count", 0) or 0))) for key, c in by_key.items()}
-        ordered_keys = sorted(by_key.keys(), key=_mbdp_self_item_rank)
+        ordered_keys = sorted(by_key.keys(), key=lambda key: _mbdp_self_item_rank(key, policy))
         max_depth = int(min(8, max(1, sum(counts.values()))))
-        min_morale_gain = max(0, min(10, int(getattr(cfg, "mbdp_self_min_morale_gain", 0) or 0)))
-        baseline_score = _mbdp_self_plan_score(current_eff, target_eff, [])
+        min_morale_gain = max(
+            0,
+            min(
+                10,
+                int(
+                    policy.min_morale_gain
+                    if policy is not None
+                    else getattr(cfg, "mbdp_self_min_morale_gain", 0)
+                ),
+            ),
+        )
+        baseline_score = _mbdp_self_plan_score(current_eff, target_eff, [], policy)
         best_score = None
         best_plan: list[str] = []
 
@@ -9480,7 +10217,7 @@ try:
             nonlocal best_score, best_plan
             if not plan:
                 return
-            score = _mbdp_self_plan_score(eff, target_eff, plan)
+            score = _mbdp_self_plan_score(eff, target_eff, plan, policy)
             if score >= baseline_score:
                 return
             if best_score is None or score < best_score:
@@ -9568,10 +10305,10 @@ try:
             states.append(st)
         return states
 
-    def _coordinator_gate(same_party_accounts: list) -> bool:
-        self_email = str(Player.GetAccountEmail() or "")
+    def _current_coordinator_email(same_party_accounts: list | None = None) -> str:
+        accounts = list(same_party_accounts or _get_same_party_accounts())
         broadcasters = []
-        for acc in same_party_accounts:
+        for acc in accounts:
             email = _acc_email(acc)
             if not email:
                 continue
@@ -9579,10 +10316,23 @@ try:
             if is_broadcaster:
                 broadcasters.append(acc)
         if not broadcasters:
-            return False
-        broadcasters.sort(key=lambda x: (_acc_party_position(x), _acc_email(x)))
-        leader_email = _acc_email(broadcasters[0])
-        return bool(self_email and leader_email and self_email == leader_email)
+            return ""
+        broadcasters.sort(
+            key=lambda x: (
+                _acc_party_position(x),
+                _normalize_sync_account_email(_acc_email(x)),
+            )
+        )
+        return str(_acc_email(broadcasters[0]) or "").strip()
+
+    def _coordinator_gate(same_party_accounts: list) -> bool:
+        self_email = str(Player.GetAccountEmail() or "").strip()
+        leader_email = _current_coordinator_email(same_party_accounts)
+        return bool(
+            self_email
+            and leader_email
+            and _normalize_sync_account_email(self_email) == _normalize_sync_account_email(leader_email)
+        )
 
     def _mbdp_tick_precheck() -> bool:
         if not bool(cfg.mbdp_enabled):
@@ -9600,7 +10350,8 @@ try:
             return False
         return True
 
-    def _mbdp_run_self_phase() -> bool:
+    def _mbdp_run_self_phase(policy: _MBDPSelfPolicy | None = None) -> bool:
+        effective_policy = policy if policy is not None else _mbdp_control_effective_self_policy()
         self_state = _morale_state(int(Player.GetMorale() or 0))
         self_dp = int(self_state["dp"])
         self_eff = int(self_state["effective"])
@@ -9613,7 +10364,7 @@ try:
             _debug("MB/DP SELF skip: morale state is unavailable.")
             return False
 
-        target_eff = max(-60, min(10, int(getattr(cfg, "mbdp_self_morale_target_effective", 0) or 0)))
+        target_eff = max(-60, min(10, int(effective_policy.target_effective)))
         if self_eff >= target_eff:
             return False
 
@@ -9622,12 +10373,18 @@ try:
         if last_self_use > 0 and (int(now) - int(last_self_use)) < int(MBDP_SELF_TARGET_SETTLE_MS):
             return False
 
-        candidates = _mbdp_self_target_candidates()
-        plan = _mbdp_find_self_target_plan(self_eff, target_eff, candidates)
+        candidates = _mbdp_self_target_candidates(effective_policy)
+        plan = _mbdp_find_self_target_plan(self_eff, target_eff, candidates, effective_policy)
         if not plan:
+            source_suffix = (
+                f" under coordinator={effective_policy.source_email}"
+                if effective_policy.source_email
+                else ""
+            )
             _debug(
                 f"MB/DP SELF skip: no safe self-use item moves eff={_fmt_effective(self_eff)} "
-                f"toward target={_fmt_effective(target_eff)}."
+                f"toward target={_fmt_effective(target_eff)}"
+                f"{source_suffix}."
             )
             return False
 
@@ -9645,6 +10402,7 @@ try:
         _debug(
             f"MB/DP SELF fire {spec['label']}: eff={_fmt_effective(self_eff)} "
             f"target={_fmt_effective(target_eff)} projected={_fmt_effective(projected)} plan={plan_text}"
+            f" source={effective_policy.source_email or 'local'}"
         )
         if _use_item_id(item_id, spec["key"]):
             t = _timer_for(spec["key"])
@@ -10029,7 +10787,8 @@ try:
     def _tick_morale_dp_v2() -> bool:
         if not _mbdp_tick_precheck():
             return False
-        if _mbdp_run_self_phase():
+        effective_policy = _mbdp_control_effective_self_policy()
+        if _mbdp_run_self_phase(effective_policy):
             return True
         ctx = _mbdp_prepare_party_context()
         if not ctx:
@@ -12176,7 +12935,10 @@ try:
                 _debug(f"Failed to write team_broadcast: {e}", Console.MessageType.Warning)
         _show_setting_tooltip("team_broadcast")
 
-        changed, v = ui_checkbox("Opt in to team broadcasts (consume when others broadcast)##pycons_team_optin", bool(cfg.team_consume_opt_in))
+        changed, v = ui_checkbox(
+            "Allow team leader control##pycons_team_optin",
+            bool(cfg.team_consume_opt_in),
+        )
         if changed:
             cfg.team_consume_opt_in = bool(v)
             _mark_mbdp_preset_custom()
@@ -12185,7 +12947,7 @@ try:
             try:
                 ini_handler = _get_ini_handler()
                 ini_handler.write_key(INI_SECTION, "team_consume_opt_in", str(bool(v)))
-                _log(f"Team call response setting changed to: {bool(v)}.", Console.MessageType.Info)
+                _log(f"Team participation setting changed to: {bool(v)}.", Console.MessageType.Info)
             except Exception as e:
                 _debug(f"Failed to write team_consume_opt_in: {e}", Console.MessageType.Warning)
         _show_setting_tooltip("team_consume_opt_in")
@@ -12849,6 +13611,34 @@ try:
                 _mark_mbdp_preset_custom()
             _show_setting_tooltip("mbdp_enabled")
 
+            _section_text("Follower Morale/DP settings:", "settings_mbdp", secondary=True)
+
+            changed, v = ui_checkbox(
+                "Control followers' Morale/DP settings and item use##pycons_mbdp_team_control_enabled",
+                bool(getattr(cfg, "mbdp_team_control_enabled", False)),
+            )
+            if changed:
+                cfg.mbdp_team_control_enabled = bool(v)
+                cfg.mark_dirty()
+                _mark_mbdp_preset_custom()
+            _show_setting_tooltip("mbdp_team_control_enabled")
+
+            changed, v = ui_checkbox(
+                "Followers only use items enabled in their settings##pycons_mbdp_team_control_respect_enablement",
+                bool(getattr(cfg, "mbdp_team_control_respect_follower_item_enablement", True)),
+            )
+            if changed:
+                cfg.mbdp_team_control_respect_follower_item_enablement = bool(v)
+                cfg.mark_dirty()
+                _mark_mbdp_preset_custom()
+            _show_setting_tooltip("mbdp_team_control_respect_follower_item_enablement")
+            if not bool(getattr(cfg, "mbdp_team_control_respect_follower_item_enablement", True)):
+                _text_meta_wrapped(
+                    "Followers can use MB/DP items enabled by the leader, even if those items are turned off in their own settings."
+                )
+            if getattr(_rt, "mbdp_control_lease", None) is not None:
+                _text_meta_wrapped(str(getattr(_rt, "mbdp_control_status", "Following the team's Morale/DP settings")))
+
             PyImGui.separator()
 
             _section_text("Party-wide MB/DP safety:", "settings_mbdp")
@@ -12860,7 +13650,10 @@ try:
                 _mark_mbdp_preset_custom()
             _show_setting_tooltip("mbdp_allow_partywide_in_human_parties")
 
-            changed, v = ui_checkbox("Followers only use items enabled on that account##pycons_mbdp_receiver_require_enabled", bool(cfg.mbdp_receiver_require_enabled))
+            changed, v = ui_checkbox(
+                "Require local enablement for incoming team item calls##pycons_mbdp_receiver_require_enabled",
+                bool(cfg.mbdp_receiver_require_enabled),
+            )
             if changed:
                 cfg.mbdp_receiver_require_enabled = bool(v)
                 cfg.mark_dirty()
@@ -13670,6 +14463,8 @@ try:
         if _local_team_flags_refresh_timer.IsStopped() or _local_team_flags_refresh_timer.HasElapsed(1000):
             _local_team_flags_refresh_timer.Start()
             _refresh_local_team_flags_from_ini()
+
+        _mbdp_control_tick()
 
         _drain_scheduled_refresh_queue()
         _update_movement_tracker()
