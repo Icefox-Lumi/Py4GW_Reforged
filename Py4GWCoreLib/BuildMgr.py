@@ -1486,13 +1486,64 @@ class BuildMgr:
             return (yield from result)
         return result
 
+    def _temporary_hbs_log_can_process(
+        self,
+        allowed: bool,
+        *,
+        is_in_combat: bool,
+    ) -> None:
+        """Observe only process-gate rejection and recovery transitions."""
+        try:
+            from Py4GWCoreLib.HeroAI import dispatch_diagnostics
+
+            owner = dispatch_diagnostics.get_active_owner()
+            if owner == "unknown":
+                return
+
+            build = str(getattr(self, "build_name", self.__class__.__name__))
+            phase = "combat" if is_in_combat else "ooc"
+
+            def capture_state() -> dict[str, Any]:
+                from Py4GWCoreLib import Agent, Player, Routines
+
+                player_id = int(Player.GetAgentID() or 0)
+                fields = dispatch_diagnostics.cached_state_fields(
+                    getattr(self, "_cached_data", None)
+                )
+                fields.update(
+                    {
+                        "map_valid": bool(Routines.Checks.Map.MapValid()),
+                        "explorable": bool(Routines.Checks.Map.IsExplorable()),
+                        "can_act": bool(Routines.Checks.Player.CanAct()),
+                        "dead": bool(Agent.IsDead(player_id)),
+                        "agent_casting": bool(Agent.IsCasting(player_id)),
+                        "player_id": player_id,
+                    }
+                )
+                return fields
+
+            dispatch_diagnostics.observe_build_process(
+                owner,
+                build,
+                phase,
+                allowed,
+                capture_state,
+            )
+        except Exception:
+            return
+
     def _process_phase(self, handler: BuildHandler | None, is_in_combat: bool) -> BuildCoroutine:
         # Whiteboard owner self-clear — release my (skill, target) slots on
         # the cast-finish transition so sibling accounts can reuse them
         # immediately. Lives here (not in Tick) because HeroAI's BT path
         # calls ProcessCombat/ProcessOOC directly and bypasses Tick.
         self._whiteboard_owner_self_clear()
-        if not self.CanProcess():
+        can_process = self.CanProcess()
+        self._temporary_hbs_log_can_process(
+            can_process,
+            is_in_combat=is_in_combat,
+        )
+        if not can_process:
             reasons: list[str] = []
             from Py4GWCoreLib import Agent, Player, Routines
 
