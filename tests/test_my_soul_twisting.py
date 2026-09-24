@@ -163,6 +163,8 @@ def _effect(
 def _snapshot(**overrides: Any) -> Any:
     values: dict[str, Any] = {
         "tick_ms": 1000,
+        "map_id": 42,
+        "instance_uptime_ms": 5000,
         "context": ST._EncounterContext.PREPARATION,
         "deployment_ready": True,
         "normal_cast_state": True,
@@ -234,6 +236,12 @@ def _controller(*, equipped: set[int] | None = None) -> Any:
     controller._diagnostic_functional_presence = {}
     controller._diagnostic_functional_spawn_since = {}
     controller._diagnostic_last_heartbeat_ms = 0
+    controller._core_rebuild_debounce_skill_id = None
+    controller._core_rebuild_debounce_started_ms = None
+    controller._core_rebuild_debounce_expired = False
+    controller._core_rebuild_debounce_presence = None
+    controller._core_rebuild_debounce_scope = None
+    controller._core_rebuild_debounce_instance_uptime_ms = None
     return controller
 
 
@@ -524,6 +532,393 @@ def test_mercenary_core_out_of_coverage_is_rebuilt(monkeypatch: Any) -> None:
     assert status.functional_out_of_coverage
     assert action.skill_id == ST.Shelter_ID
     assert action.reason == "rebuild_out_of_coverage_Shelter"
+
+
+def test_moving_alive_out_of_coverage_core_is_deferred_without_skipping_ahead() -> None:
+    controller = _controller()
+    snapshot = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={
+            ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),),
+        },
+    )
+
+    action = controller._select_action(snapshot)
+
+    assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert action.skill_id == ST.Shelter_ID
+    assert action.reason == "movement_debounce_Shelter"
+    assert controller._core_rebuild_debounce_skill_id == ST.Shelter_ID
+    assert controller._core_rebuild_debounce_started_ms == 1000
+
+
+def test_movement_stopping_makes_the_deferred_rebuild_eligible() -> None:
+    controller = _controller()
+    moving = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(moving).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    stopped = replace(moving, tick_ms=1100, player_moving=False)
+    action = controller._select_action(stopped)
+
+    assert action.kind is ST._ActionKind.CORE_DEPLOYMENT
+    assert action.skill_id == ST.Shelter_ID
+    assert action.reason == "rebuild_out_of_coverage_Shelter"
+    assert controller._core_rebuild_debounce_skill_id is None
+
+
+def test_movement_debounce_expires_while_movement_continues() -> None:
+    controller = _controller()
+    moving = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(moving).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    after_grace = replace(
+        moving,
+        tick_ms=1000 + ST.CORE_REBUILD_MOVEMENT_DEBOUNCE_MS,
+    )
+    action = controller._select_action(after_grace)
+
+    assert action.kind is ST._ActionKind.CORE_DEPLOYMENT
+    assert action.skill_id == ST.Shelter_ID
+    assert action.reason == "rebuild_out_of_coverage_Shelter"
+    assert controller._core_rebuild_debounce_expired
+
+
+def test_leader_only_movement_starts_the_same_debounce() -> None:
+    controller = _controller()
+    snapshot = _snapshot(
+        leader_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+
+    action = controller._select_action(snapshot)
+
+    assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert action.reason == "movement_debounce_Shelter"
+
+
+def test_debounce_releases_only_at_or_after_exact_grace_expiry() -> None:
+    controller = _controller()
+    moving = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(moving).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    just_before = replace(
+        moving,
+        tick_ms=1000 + ST.CORE_REBUILD_MOVEMENT_DEBOUNCE_MS - 1,
+    )
+    assert controller._select_action(just_before).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    exact = replace(
+        moving,
+        tick_ms=1000 + ST.CORE_REBUILD_MOVEMENT_DEBOUNCE_MS,
+    )
+    assert controller._select_action(exact).kind is ST._ActionKind.CORE_DEPLOYMENT
+
+    just_after = replace(
+        exact,
+        tick_ms=exact.tick_ms + 1,
+    )
+    assert controller._select_action(just_after).kind is ST._ActionKind.CORE_DEPLOYMENT
+
+
+def test_debounce_cannot_cross_lifecycle_when_numeric_ids_are_reused() -> None:
+    controller = _controller()
+    lifecycle_a = _snapshot(
+        tick_ms=1000,
+        map_id=42,
+        instance_uptime_ms=5000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(lifecycle_a).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    lifecycle_b = replace(
+        lifecycle_a,
+        tick_ms=2000,
+        instance_uptime_ms=100,
+    )
+    action = controller._select_action(lifecycle_b)
+
+    assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert action.reason == "movement_debounce_Shelter"
+    assert controller._core_rebuild_debounce_started_ms == 2000
+    assert controller._core_rebuild_debounce_instance_uptime_ms == 100
+
+
+def test_invalid_lifecycle_clears_and_never_starts_a_debounce() -> None:
+    controller = _controller()
+    valid = _snapshot(
+        tick_ms=500,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(valid).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    for tick_ms in (1000, 1900, 2800):
+        invalid = replace(
+            valid,
+            tick_ms=tick_ms,
+            map_id=0,
+            instance_uptime_ms=0,
+        )
+        action = controller._select_action(invalid)
+        assert action.kind is ST._ActionKind.CORE_DEPLOYMENT
+        assert action.skill_id == ST.Shelter_ID
+        assert action.reason == "rebuild_out_of_coverage_Shelter"
+        assert controller._core_rebuild_debounce_skill_id is None
+        assert controller._core_rebuild_debounce_started_ms is None
+        assert controller._core_rebuild_debounce_instance_uptime_ms is None
+
+
+def test_invalid_to_valid_lifecycle_starts_a_fresh_grace_window() -> None:
+    controller = _controller()
+    invalid = _snapshot(
+        tick_ms=1000,
+        map_id=0,
+        instance_uptime_ms=0,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(invalid).kind is ST._ActionKind.CORE_DEPLOYMENT
+    assert controller._select_action(replace(invalid, tick_ms=2800)).kind is ST._ActionKind.CORE_DEPLOYMENT
+
+    valid = replace(
+        invalid,
+        tick_ms=4000,
+        map_id=42,
+        instance_uptime_ms=100,
+    )
+    action = controller._select_action(valid)
+    assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert action.reason == "movement_debounce_Shelter"
+    assert controller._core_rebuild_debounce_started_ms == 4000
+
+    before_expiry = replace(valid, tick_ms=4000 + ST.CORE_REBUILD_MOVEMENT_DEBOUNCE_MS - 1)
+    assert controller._select_action(before_expiry).kind is ST._ActionKind.BLOCKED_NO_ACTION
+    exact_expiry = replace(valid, tick_ms=4000 + ST.CORE_REBUILD_MOVEMENT_DEBOUNCE_MS)
+    assert controller._select_action(exact_expiry).kind is ST._ActionKind.CORE_DEPLOYMENT
+
+
+def test_map_id_change_resets_debounce_with_reused_numeric_ids() -> None:
+    controller = _controller()
+    first_map = _snapshot(
+        tick_ms=1000,
+        map_id=42,
+        instance_uptime_ms=5000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(first_map).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    second_map = replace(
+        first_map,
+        tick_ms=1100,
+        map_id=43,
+        instance_uptime_ms=5100,
+    )
+    action = controller._select_action(second_map)
+    assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert action.reason == "movement_debounce_Shelter"
+    assert controller._core_rebuild_debounce_started_ms == 1100
+    assert controller._core_rebuild_debounce_instance_uptime_ms == 5100
+
+
+def test_same_lifecycle_keeps_the_original_debounce_timestamp() -> None:
+    controller = _controller()
+    moving = _snapshot(
+        tick_ms=1000,
+        instance_uptime_ms=5000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(moving).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    repeated = replace(moving, tick_ms=1500, instance_uptime_ms=5500)
+    assert controller._select_action(repeated).kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert controller._core_rebuild_debounce_started_ms == 1000
+
+
+def test_changed_out_of_coverage_spirit_restarts_the_debounce() -> None:
+    controller = _controller()
+    first_spirit = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={
+            ST.Shelter_ID: (
+                _observation(ST.Shelter_ID, agent_id=101, covers=False),
+            )
+        },
+    )
+    assert controller._select_action(first_spirit).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    expired = replace(
+        first_spirit,
+        tick_ms=1000 + ST.CORE_REBUILD_MOVEMENT_DEBOUNCE_MS,
+    )
+    assert controller._select_action(expired).kind is ST._ActionKind.CORE_DEPLOYMENT
+
+    replacement = replace(
+        expired,
+        tick_ms=2000,
+        core_spirits={
+            ST.Shelter_ID: (
+                _observation(ST.Shelter_ID, agent_id=102, covers=False),
+            )
+        },
+    )
+    action = controller._select_action(replacement)
+
+    assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert action.skill_id == ST.Shelter_ID
+    assert action.reason == "movement_debounce_Shelter"
+    assert controller._core_rebuild_debounce_started_ms == 2000
+    assert not controller._core_rebuild_debounce_expired
+
+
+def test_coverage_recovery_clears_defer_without_unnecessary_rebuild() -> None:
+    controller = _controller()
+    moving = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(moving).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    covered = replace(
+        moving,
+        tick_ms=1100,
+        core_spirits={
+            skill_id: (_observation(skill_id),) for skill_id in ST._CORE_SKILLS
+        },
+    )
+    action = controller._select_action(covered)
+
+    assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert action.reason == "core_package_online_no_action"
+    assert controller._core_rebuild_debounce_skill_id is None
+    assert not controller._core_rebuild_debounce_expired
+
+
+def test_absent_or_dead_core_does_not_start_movement_debounce() -> None:
+    snapshots = (
+        _snapshot(tick_ms=1000, player_moving=True, core_spirits={}),
+        _snapshot(
+            tick_ms=1000,
+            player_moving=True,
+            core_spirits={
+                ST.Shelter_ID: (
+                    _observation(ST.Shelter_ID, alive=False, covers=False),
+                )
+            },
+        ),
+    )
+
+    for snapshot in snapshots:
+        controller = _controller()
+        action = controller._select_action(snapshot)
+        assert action.kind is ST._ActionKind.CORE_DEPLOYMENT
+        assert action.skill_id == ST.Shelter_ID
+        assert action.reason == "missing_functional_coverage_Shelter"
+        assert controller._core_rebuild_debounce_skill_id is None
+
+
+def test_debounce_state_does_not_leak_into_a_later_core_package() -> None:
+    controller = _controller()
+    moving = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(moving).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    recovered_package = replace(
+        moving,
+        tick_ms=1100,
+        core_spirits={
+            skill_id: (_observation(skill_id),) for skill_id in ST._CORE_SKILLS
+        },
+    )
+    assert (
+        controller._select_action(recovered_package).reason
+        == "core_package_online_no_action"
+    )
+    assert controller._core_rebuild_debounce_skill_id is None
+
+    later_repair = replace(
+        moving,
+        tick_ms=1200,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    action = controller._select_action(later_repair)
+    assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
+    assert action.skill_id == ST.Shelter_ID
+    assert action.reason == "movement_debounce_Shelter"
+    assert controller._core_rebuild_debounce_started_ms == 1200
+
+
+def test_movement_debounce_diagnostics_are_transition_bounded(monkeypatch: Any) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(
+        ST.PySystem.Console,
+        "Log",
+        lambda _channel, message, _message_type: messages.append(message),
+        raising=False,
+    )
+    controller = _controller()
+    moving = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+
+    controller._select_action(moving)
+    controller._select_action(replace(moving, tick_ms=1050))
+    controller._select_action(replace(moving, tick_ms=1100))
+    controller._select_action(replace(moving, tick_ms=1150, player_moving=False))
+
+    joined = "\n".join(messages)
+    assert joined.count("state=started") == 1
+    assert "reason=movement_stabilized" in joined
+
+
+def test_expired_defer_still_uses_fresh_coverage_revalidation() -> None:
+    controller = _controller()
+    moving = _snapshot(
+        tick_ms=1000,
+        player_moving=True,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID, covers=False),)},
+    )
+    assert controller._select_action(moving).kind is ST._ActionKind.BLOCKED_NO_ACTION
+
+    eligible = replace(
+        moving,
+        tick_ms=1000 + ST.CORE_REBUILD_MOVEMENT_DEBOUNCE_MS,
+    )
+    action = controller._select_action(eligible)
+    assert action.kind is ST._ActionKind.CORE_DEPLOYMENT
+
+    recovered = replace(
+        eligible,
+        tick_ms=eligible.tick_ms + 50,
+        core_spirits={ST.Shelter_ID: (_observation(ST.Shelter_ID),)},
+    )
+    valid, reason = controller._revalidate_action(action, recovered)
+
+    assert not valid
+    assert reason == "functional_core_became_covered_before_cast"
+    assert controller._core_rebuild_debounce_skill_id is None
 
 
 def test_positive_other_party_root_can_satisfy_coverage(monkeypatch: Any) -> None:

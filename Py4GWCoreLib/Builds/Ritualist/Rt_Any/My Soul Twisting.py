@@ -13,6 +13,7 @@ from Py4GWCoreLib import AgentArray
 from Py4GWCoreLib import Allegiance
 from Py4GWCoreLib import BuildMgr
 from Py4GWCoreLib import GLOBAL_CACHE
+from Py4GWCoreLib import Map
 from Py4GWCoreLib import Player
 from Py4GWCoreLib import Profession
 from Py4GWCoreLib import Routines
@@ -74,6 +75,9 @@ SPIRITS_GIFT_REFRESH_MS = 500
 PORTABLE_MIN_ENERGY_FRACTION = 0.50
 SOUL_TWISTING_PYTHON_COST = 10
 SOUL_TWISTING_LIVE_MIN_COST = 5
+# A moving party can briefly leave an otherwise healthy core spirit behind.
+# Keep this debounce local and easy to tune from live-test observations.
+CORE_REBUILD_MOVEMENT_DEBOUNCE_MS = 900
 DIAGNOSTIC_HEARTBEAT_MS = 5000
 
 _CORE_SKILLS = (Shelter_ID, Union_ID, Displacement_ID)
@@ -154,6 +158,8 @@ class _CoreStatus:
 @dataclass(frozen=True, slots=True)
 class _SoulTwistingSnapshot:
     tick_ms: int = 0
+    map_id: int = 0
+    instance_uptime_ms: int = 0
     context: _EncounterContext = _EncounterContext.TRAVEL_READY
     local_in_aggro: bool = False
     leader_in_aggro: bool = False
@@ -283,6 +289,14 @@ class My_Soul_Twisting(BuildMgr):
         self._diagnostic_functional_presence: dict[int, bool] = {}
         self._diagnostic_functional_spawn_since: dict[int, int | None] = {}
         self._diagnostic_last_heartbeat_ms = 0
+        self._core_rebuild_debounce_skill_id: int | None = None
+        self._core_rebuild_debounce_started_ms: int | None = None
+        self._core_rebuild_debounce_expired = False
+        self._core_rebuild_debounce_presence: tuple[tuple[int, int], ...] | None = None
+        self._core_rebuild_debounce_scope: tuple[
+            int, int, tuple[int, ...], int
+        ] | None = None
+        self._core_rebuild_debounce_instance_uptime_ms: int | None = None
 
     def ScoreMatch(
         self,
@@ -429,6 +443,18 @@ class My_Soul_Twisting(BuildMgr):
             return False
 
     @staticmethod
+    def _read_instance_lifecycle() -> tuple[int, int]:
+        try:
+            map_id = int(Map.GetMapID() or 0)
+        except Exception:
+            map_id = 0
+        try:
+            instance_uptime_ms = max(0, int(Map.GetInstanceUptime() or 0))
+        except Exception:
+            instance_uptime_ms = 0
+        return map_id, instance_uptime_ms
+
+    @staticmethod
     def _read_agent_owner_id(agent_id: int) -> int:
         try:
             return int(Agent.GetOwnerID(agent_id) or 0)
@@ -561,6 +587,7 @@ class My_Soul_Twisting(BuildMgr):
 
     def _build_snapshot(self) -> _SoulTwistingSnapshot:
         tick_ms = self._now_ms()
+        map_id, instance_uptime_ms = self._read_instance_lifecycle()
         player_agent_id = self._read_local_agent_id()
         local_native_root_id = self._read_agent_owner_id(player_agent_id)
         party_root_ids = self._read_party_root_ids(
@@ -631,6 +658,8 @@ class My_Soul_Twisting(BuildMgr):
 
         return _SoulTwistingSnapshot(
             tick_ms=tick_ms,
+            map_id=map_id,
+            instance_uptime_ms=instance_uptime_ms,
             context=context,
             local_in_aggro=local_in_aggro,
             leader_in_aggro=leader_in_aggro,
@@ -746,9 +775,216 @@ class My_Soul_Twisting(BuildMgr):
         except Exception:
             return True
 
+    def _clear_core_rebuild_debounce(
+        self, *, reason: str, tick_ms: int | None = None
+    ) -> None:
+        skill_id = self._core_rebuild_debounce_skill_id
+        started_ms = self._core_rebuild_debounce_started_ms
+        presence = self._core_rebuild_debounce_presence
+        if skill_id is None:
+            self._core_rebuild_debounce_started_ms = None
+            self._core_rebuild_debounce_expired = False
+            self._core_rebuild_debounce_presence = None
+            self._core_rebuild_debounce_scope = None
+            self._core_rebuild_debounce_instance_uptime_ms = None
+            return
+
+        current_tick_ms = self._now_ms() if tick_ms is None else tick_ms
+        elapsed_ms = (
+            None
+            if started_ms is None
+            else max(0, int(current_tick_ms) - int(started_ms))
+        )
+        self._emit_event(
+            "core-rebuild-debounce",
+            signature=("reset", skill_id, started_ms, reason),
+            state="reset",
+            skill=_CORE_SKILL_NAMES.get(skill_id, str(skill_id)),
+            reason=reason,
+            started_at=started_ms,
+            elapsed_ms=elapsed_ms,
+            spirit_ids=()
+            if presence is None
+            else tuple(agent_id for agent_id, _owner_id in presence),
+        )
+        self._core_rebuild_debounce_skill_id = None
+        self._core_rebuild_debounce_started_ms = None
+        self._core_rebuild_debounce_expired = False
+        self._core_rebuild_debounce_presence = None
+        self._core_rebuild_debounce_scope = None
+        self._core_rebuild_debounce_instance_uptime_ms = None
+
+    def _start_core_rebuild_debounce(
+        self,
+        snapshot: _SoulTwistingSnapshot,
+        skill_id: int,
+        presence: tuple[tuple[int, int], ...],
+    ) -> None:
+        scope = (
+            snapshot.player_agent_id,
+            snapshot.leader_agent_id,
+            tuple(sorted(snapshot.party_root_ids)),
+            snapshot.map_id,
+        )
+        self._core_rebuild_debounce_skill_id = skill_id
+        self._core_rebuild_debounce_started_ms = snapshot.tick_ms
+        self._core_rebuild_debounce_expired = False
+        self._core_rebuild_debounce_presence = presence
+        self._core_rebuild_debounce_scope = scope
+        self._core_rebuild_debounce_instance_uptime_ms = snapshot.instance_uptime_ms
+        self._emit_event(
+            "core-rebuild-debounce",
+            signature=("start", skill_id, snapshot.tick_ms),
+            state="started",
+            skill=_CORE_SKILL_NAMES.get(skill_id, str(skill_id)),
+            started_at=snapshot.tick_ms,
+            grace_ms=CORE_REBUILD_MOVEMENT_DEBOUNCE_MS,
+            player_moving=int(snapshot.player_moving),
+            leader_moving=int(snapshot.leader_moving),
+            spirit_ids=tuple(agent_id for agent_id, _owner_id in presence),
+        )
+
+    @staticmethod
+    def _core_rebuild_presence(
+        status: _CoreStatus,
+    ) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            sorted(
+                (
+                    observation.agent_id,
+                    observation.owner_id,
+                )
+                for observation in status.observations
+                if (
+                    observation.root_category is _SpiritCategory.PARTY_ROOT_MATCH
+                    and observation.alive
+                    and observation.spawned
+                    and not observation.covers_leader
+                )
+            )
+        )
+
+    def _should_defer_core_rebuild(
+        self,
+        snapshot: _SoulTwistingSnapshot,
+        skill_id: int,
+        status: _CoreStatus,
+    ) -> bool:
+        current_skill_id = self._core_rebuild_debounce_skill_id
+        if snapshot.map_id <= 0 or snapshot.instance_uptime_ms <= 0:
+            self._clear_core_rebuild_debounce(
+                reason="lifecycle_changed", tick_ms=snapshot.tick_ms
+            )
+            return False
+
+        if current_skill_id is not None and current_skill_id != skill_id:
+            self._clear_core_rebuild_debounce(
+                reason="need_changed", tick_ms=snapshot.tick_ms
+            )
+
+        if not status.functional_exists:
+            if current_skill_id == skill_id:
+                self._clear_core_rebuild_debounce(
+                    reason="nonfunctional", tick_ms=snapshot.tick_ms
+                )
+            return False
+        if not status.functional_out_of_coverage:
+            if current_skill_id == skill_id:
+                self._clear_core_rebuild_debounce(
+                    reason="coverage_recovered", tick_ms=snapshot.tick_ms
+                )
+            return False
+
+        scope = (
+            snapshot.player_agent_id,
+            snapshot.leader_agent_id,
+            tuple(sorted(snapshot.party_root_ids)),
+            snapshot.map_id,
+        )
+        if (
+            current_skill_id == skill_id
+            and self._core_rebuild_debounce_scope != scope
+        ):
+            self._clear_core_rebuild_debounce(
+                reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+            )
+            current_skill_id = None
+
+        started_instance_uptime_ms = self._core_rebuild_debounce_instance_uptime_ms
+        if (
+            current_skill_id == skill_id
+            and started_instance_uptime_ms is not None
+            and snapshot.instance_uptime_ms < started_instance_uptime_ms
+        ):
+            self._clear_core_rebuild_debounce(
+                reason="lifecycle_changed", tick_ms=snapshot.tick_ms
+            )
+            current_skill_id = None
+
+        presence = self._core_rebuild_presence(status)
+        if (
+            current_skill_id == skill_id
+            and self._core_rebuild_debounce_presence != presence
+        ):
+            self._clear_core_rebuild_debounce(
+                reason="package_changed", tick_ms=snapshot.tick_ms
+            )
+            current_skill_id = None
+
+        moving = snapshot.player_moving or snapshot.leader_moving
+        if not moving:
+            if current_skill_id == skill_id:
+                self._clear_core_rebuild_debounce(
+                    reason="movement_stabilized", tick_ms=snapshot.tick_ms
+                )
+            return False
+
+        if self._core_rebuild_debounce_skill_id != skill_id:
+            self._start_core_rebuild_debounce(snapshot, skill_id, presence)
+        else:
+            started_ms = self._core_rebuild_debounce_started_ms
+            if started_ms is None or snapshot.tick_ms < started_ms:
+                self._clear_core_rebuild_debounce(
+                    reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+                )
+                self._start_core_rebuild_debounce(snapshot, skill_id, presence)
+
+        if self._core_rebuild_debounce_expired:
+            return False
+
+        started_ms = self._core_rebuild_debounce_started_ms
+        if started_ms is None:
+            return False
+        elapsed_ms = snapshot.tick_ms - started_ms
+        if elapsed_ms >= CORE_REBUILD_MOVEMENT_DEBOUNCE_MS:
+            self._core_rebuild_debounce_expired = True
+            self._emit_event(
+                "core-rebuild-debounce",
+                signature=("expired", skill_id, started_ms),
+                state="ended",
+                skill=_CORE_SKILL_NAMES.get(skill_id, str(skill_id)),
+                reason="grace_expired",
+                started_at=started_ms,
+                elapsed_ms=elapsed_ms,
+                grace_ms=CORE_REBUILD_MOVEMENT_DEBOUNCE_MS,
+            )
+            return False
+        return True
+
     def _select_action(self, snapshot: _SoulTwistingSnapshot) -> _SoulTwistingAction:
+        if snapshot.map_id <= 0 or snapshot.instance_uptime_ms <= 0:
+            self._clear_core_rebuild_debounce(
+                reason="lifecycle_changed", tick_ms=snapshot.tick_ms
+            )
+        if not snapshot.deployment_ready:
+            self._clear_core_rebuild_debounce(
+                reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+            )
         if snapshot.deployment_ready:
             if not snapshot.soul_twisting.equipped:
+                self._clear_core_rebuild_debounce(
+                    reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+                )
                 return _SoulTwistingAction(
                     kind=_ActionKind.BLOCKED_NO_ACTION,
                     reason="soul_twisting_unavailable",
@@ -756,6 +992,9 @@ class My_Soul_Twisting(BuildMgr):
             if not self._effect_is_ready(
                 snapshot.soul_twisting, SOUL_TWISTING_READY_MS
             ):
+                self._clear_core_rebuild_debounce(
+                    reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+                )
                 return _SoulTwistingAction(
                     kind=_ActionKind.SOUL_TWISTING_READINESS,
                     skill_id=Soul_Twisting_ID,
@@ -764,23 +1003,53 @@ class My_Soul_Twisting(BuildMgr):
 
             equipped_core = self._equipped_core_skills()
             if not equipped_core:
+                self._clear_core_rebuild_debounce(
+                    reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+                )
                 return _SoulTwistingAction(
                     kind=_ActionKind.BLOCKED_NO_ACTION,
                     reason="no_core_skill_equipped",
                 )
+            if (
+                self._core_rebuild_debounce_skill_id is not None
+                and self._core_rebuild_debounce_skill_id not in equipped_core
+            ):
+                self._clear_core_rebuild_debounce(
+                    reason="need_changed", tick_ms=snapshot.tick_ms
+                )
             for skill_id in equipped_core:
                 status = _core_status(snapshot, skill_id)
-                if not status.functional_covers:
-                    reason = (
-                        f"rebuild_out_of_coverage_{_CORE_SKILL_NAMES[skill_id]}"
-                        if status.functional_exists
-                        else f"missing_functional_coverage_{_CORE_SKILL_NAMES[skill_id]}"
-                    )
+                if status.functional_covers:
+                    if self._core_rebuild_debounce_skill_id == skill_id:
+                        self._clear_core_rebuild_debounce(
+                            reason="coverage_recovered", tick_ms=snapshot.tick_ms
+                        )
+                    continue
+                if self._should_defer_core_rebuild(snapshot, skill_id, status):
+                    # The deferred need remains the priority; do not fall through
+                    # to a later core type while movement is still settling.
                     return _SoulTwistingAction(
-                        kind=_ActionKind.CORE_DEPLOYMENT,
+                        kind=_ActionKind.BLOCKED_NO_ACTION,
                         skill_id=skill_id,
-                        reason=reason,
+                        reason=(
+                            "movement_debounce_"
+                            f"{_CORE_SKILL_NAMES[skill_id]}"
+                        ),
                     )
+                reason = (
+                    f"rebuild_out_of_coverage_{_CORE_SKILL_NAMES[skill_id]}"
+                    if status.functional_exists
+                    else f"missing_functional_coverage_{_CORE_SKILL_NAMES[skill_id]}"
+                )
+                return _SoulTwistingAction(
+                    kind=_ActionKind.CORE_DEPLOYMENT,
+                    skill_id=skill_id,
+                    reason=reason,
+                )
+            if self._core_rebuild_debounce_skill_id is not None:
+                self._clear_core_rebuild_debounce(
+                    reason="coverage_recovered", tick_ms=snapshot.tick_ms
+                )
             if self._armor_is_castable():
                 return _SoulTwistingAction(
                     kind=_ActionKind.POST_DEPLOYMENT,
@@ -814,6 +1083,9 @@ class My_Soul_Twisting(BuildMgr):
         snapshot: _SoulTwistingSnapshot,
     ) -> tuple[bool, str]:
         if not snapshot.normal_cast_state:
+            self._clear_core_rebuild_debounce(
+                reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+            )
             return False, "normal_cast_state_closed"
         if action.kind is _ActionKind.SOUL_TWISTING_READINESS:
             if not snapshot.soul_twisting.equipped:
@@ -846,18 +1118,37 @@ class My_Soul_Twisting(BuildMgr):
 
         if action.kind is _ActionKind.CORE_DEPLOYMENT:
             if not snapshot.deployment_ready:
+                self._clear_core_rebuild_debounce(
+                    reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+                )
                 return False, "deployment_window_closed"
             if not snapshot.soul_twisting.equipped:
+                self._clear_core_rebuild_debounce(
+                    reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+                )
                 return False, "soul_twisting_not_equipped"
             if not self._effect_is_ready(
                 snapshot.soul_twisting, SOUL_TWISTING_READY_MS
             ):
+                self._clear_core_rebuild_debounce(
+                    reason="runtime_invalidated", tick_ms=snapshot.tick_ms
+                )
                 return False, "soul_twisting_not_ready"
             if not self._is_skill_equipped(action.skill_id):
+                self._clear_core_rebuild_debounce(
+                    reason="need_changed", tick_ms=snapshot.tick_ms
+                )
                 return False, "core_skill_not_equipped"
             status = _core_status(snapshot, action.skill_id)
             if status.functional_covers:
+                self._clear_core_rebuild_debounce(
+                    reason="coverage_recovered", tick_ms=snapshot.tick_ms
+                )
                 return False, "functional_core_became_covered_before_cast"
+            if not status.functional_exists:
+                self._clear_core_rebuild_debounce(
+                    reason="nonfunctional", tick_ms=snapshot.tick_ms
+                )
             return True, "ready"
 
         if action.kind is _ActionKind.POST_DEPLOYMENT:
@@ -894,6 +1185,7 @@ class My_Soul_Twisting(BuildMgr):
     def _run_policy(self, phase: str) -> BuildCoroutine:
         can_cast = self._normal_cast_state()
         if not can_cast:
+            self._clear_core_rebuild_debounce(reason="runtime_invalidated")
             self._emit_event(
                 "blocked",
                 signature=(phase, "normal-cast-state"),
@@ -964,6 +1256,10 @@ class My_Soul_Twisting(BuildMgr):
             return False
 
         after_snapshot = self._build_snapshot()
+        if action.kind is _ActionKind.CORE_DEPLOYMENT:
+            self._clear_core_rebuild_debounce(
+                reason="rebuild_completed", tick_ms=after_snapshot.tick_ms
+            )
         self._emit_snapshot_diagnostics(after_snapshot, phase=phase)
         self._emit_event(
             "result",
