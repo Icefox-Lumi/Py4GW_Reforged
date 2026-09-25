@@ -6,24 +6,25 @@ from dataclasses import field
 from enum import Enum
 from typing import Any
 
+import PyAgentEvents
 import PySystem
 
+from Py4GWCoreLib import GLOBAL_CACHE
 from Py4GWCoreLib import Agent
 from Py4GWCoreLib import AgentArray
 from Py4GWCoreLib import Allegiance
 from Py4GWCoreLib import BuildMgr
-from Py4GWCoreLib import GLOBAL_CACHE
 from Py4GWCoreLib import Map
 from Py4GWCoreLib import Player
 from Py4GWCoreLib import Profession
+from Py4GWCoreLib import Range
 from Py4GWCoreLib import Routines
 from Py4GWCoreLib import SpiritModelID
 from Py4GWCoreLib import Utils
+from Py4GWCoreLib.BuildMgr import BuildCoroutine
 from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 from Py4GWCoreLib.Builds.Skills import SkillsTemplate
-from Py4GWCoreLib.BuildMgr import BuildCoroutine
 from Py4GWCoreLib.Skill import Skill
-
 
 Soul_Twisting_ID = Skill.GetID("Soul_Twisting")
 Boon_of_Creation_ID = Skill.GetID("Boon_of_Creation")
@@ -78,7 +79,33 @@ SOUL_TWISTING_LIVE_MIN_COST = 5
 # A moving party can briefly leave an otherwise healthy core spirit behind.
 # Keep this debounce local and easy to tune from live-test observations.
 CORE_REBUILD_MOVEMENT_DEBOUNCE_MS = 900
-DIAGNOSTIC_HEARTBEAT_MS = 5000
+ARMOR_DEPLOYMENT_LOOKBACK_MS = 3000
+ARMOR_REQUEST_TO_ACTIVATION_MS = 500
+ARMOR_ACTIVATION_TO_FINISH_MS = 1500
+ARMOR_REQUEST_TO_FINISH_MS = 1750
+ARMOR_FINISH_TO_CANDIDATE_MS = 2000
+ARMOR_CANDIDATE_SETTLE_MS = 1000
+ARMOR_DEPLOYMENT_PROBE_MAX_MS = (
+    ARMOR_REQUEST_TO_FINISH_MS
+    + ARMOR_FINISH_TO_CANDIDATE_MS
+    + ARMOR_CANDIDATE_SETTLE_MS
+)
+ARMOR_DEPLOYMENT_EPOCH_MS = 15000
+ARMOR_ASSOCIATION_RADIUS = 128.0
+_DEPLOYMENT_EVENT_TYPE_NAMES = (
+    "SKILL_ACTIVATE_PACKET",
+    "SKILL_ACTIVATED",
+    "SKILL_STOPPED",
+    "SKILL_FINISHED",
+    "INTERRUPTED",
+)
+_DEPLOYMENT_ACTIVATION_TYPES = frozenset(
+    {"SKILL_ACTIVATE_PACKET", "SKILL_ACTIVATED"}
+)
+_DEPLOYMENT_TERMINAL_TYPES = frozenset(
+    {"SKILL_STOPPED", "SKILL_FINISHED", "INTERRUPTED"}
+)
+_DEPLOYMENT_MAX_RECORDED_EVENTS = 16
 
 _CORE_SKILLS = (Shelter_ID, Union_ID, Displacement_ID)
 _CORE_SKILL_NAMES = {
@@ -168,6 +195,7 @@ class _SoulTwistingSnapshot:
     effective_in_aggro: bool = False
     close_to_aggro: bool = False
     player_agent_id: int = 0
+    player_alive: bool = True
     local_native_root_id: int = 0
     party_root_ids: frozenset[int] = frozenset()
     player_position: Position | None = None
@@ -182,10 +210,13 @@ class _SoulTwistingSnapshot:
     leader_moving: bool = False
     distance_to_leader: float | None = None
     normal_cast_state: bool = True
+    map_explorable: bool = True
+    map_loading: bool = False
     deployment_ready: bool = False
     soul_twisting: _EffectObservation = _EffectObservation()
     boon_of_creation: _EffectObservation = _EffectObservation()
     spirits_gift: _EffectObservation = _EffectObservation()
+    core_spirits_readable: bool = True
     core_spirits: dict[int, tuple[_SpiritObservation, ...]] = field(
         default_factory=dict
     )
@@ -196,6 +227,92 @@ class _SoulTwistingAction:
     kind: _ActionKind
     skill_id: int = 0
     reason: str = ""
+    target_agent_id: int = 0
+
+
+@dataclass(slots=True)
+class _DeploymentEventRecord:
+    event_type: str
+    timestamp_ms: int
+    caster_agent_id: int
+    skill_id: int
+    target_agent_id: int
+    float_value: float
+    controlled: bool
+    association: str
+
+
+@dataclass(slots=True)
+class _DeploymentCandidate:
+    agent_id: int
+    first_seen_at_ms: int
+    first_spawned_at_ms: int | None
+    first_alive: bool
+    first_position: Position | None
+    first_distance_from_origin: float | None
+    last_seen_at_ms: int
+    last_spawned: bool
+    last_alive: bool
+    spawned_evidence_checked: bool = False
+    qualified_at_ms: int | None = None
+    qualification_fingerprint: tuple[int, int, str] | None = None
+
+
+@dataclass(slots=True)
+class _ArmorDeploymentProbe:
+    skill_id: int
+    model_id: int
+    requested_at_ms: int
+    map_id: int
+    instance_uptime_ms: int
+    player_agent_id: int
+    cast_origin: Position
+    pre_agent_ids: frozenset[int]
+    baseline_event_keys: frozenset[tuple[int, int, int, int, int, float]] = (
+        frozenset()
+    )
+    seen_event_keys: set[tuple[int, int, int, int, int, float]] = field(
+        default_factory=set
+    )
+    event_records: list[_DeploymentEventRecord] = field(default_factory=list)
+    foreign_event_casters: set[int] = field(default_factory=set)
+    activate_packet_at_ms: int | None = None
+    activation_at_ms: int | None = None
+    terminal_at_ms: int | None = None
+    terminal_event_type: str | None = None
+    finish_at_ms: int | None = None
+    wrapper_result: bool | None = None
+    candidates: dict[int, _DeploymentCandidate] = field(default_factory=dict)
+    qualifying_candidate_id: int | None = None
+    qualifying_at_ms: int | None = None
+    settle_until_ms: int | None = None
+    invalid_reason: str | None = None
+    token_issued: bool = False
+    current_observations: tuple[_SpiritObservation, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _ArmorDeploymentToken:
+    skill_id: int
+    model_id: int
+    witness_agent_id: int
+    map_id: int
+    instance_uptime_ms: int
+    player_agent_id: int
+    request_at_ms: int
+    finish_at_ms: int
+    witness_fingerprint: tuple[int, int, str]
+
+
+@dataclass(slots=True)
+class _ArmorDeploymentEpoch:
+    epoch_id: int
+    map_id: int
+    instance_uptime_ms: int
+    player_agent_id: int
+    started_at_ms: int
+    expires_at_ms: int
+    tokens: dict[int, _ArmorDeploymentToken] = field(default_factory=dict)
 
 
 def _classify_context(
@@ -279,16 +396,13 @@ class My_Soul_Twisting(BuildMgr):
         self.skills: SkillsTemplate = SkillsTemplate(self)
 
         self._diagnostic_last_signatures: dict[str, tuple[Any, ...]] = {}
-        self._diagnostic_online = False
-        self._diagnostic_previous_close: bool | None = None
-        self._diagnostic_previous_leader_combat = False
-        self._diagnostic_previous_deployment = False
-        self._diagnostic_close_since: int | None = None
-        self._diagnostic_leader_combat_since: int | None = None
-        self._diagnostic_deployment_since: int | None = None
-        self._diagnostic_functional_presence: dict[int, bool] = {}
-        self._diagnostic_functional_spawn_since: dict[int, int | None] = {}
-        self._diagnostic_last_heartbeat_ms = 0
+        self._armor_deployment_probes: dict[int, _ArmorDeploymentProbe] = {}
+        self._armor_deployment_active_cast: _ArmorDeploymentProbe | None = None
+        self._armor_deployment_last_terminal_cast: _ArmorDeploymentProbe | None = None
+        self._armor_deployment_epoch: _ArmorDeploymentEpoch | None = None
+        self._armor_deployment_epoch_counter = 0
+        self._armor_deployment_lifecycle: tuple[int, int] | None = None
+        self._armor_deployment_player_agent_id = 0
         self._core_rebuild_debounce_skill_id: int | None = None
         self._core_rebuild_debounce_started_ms: int | None = None
         self._core_rebuild_debounce_expired = False
@@ -519,14 +633,16 @@ class My_Soul_Twisting(BuildMgr):
         leader_valid: bool,
         leader_alive: bool,
         leader_position: Position | None,
-    ) -> dict[int, tuple[_SpiritObservation, ...]]:
+    ) -> tuple[dict[int, tuple[_SpiritObservation, ...]], bool]:
         observations: dict[int, list[_SpiritObservation]] = {
             skill_id: [] for skill_id in _CORE_SKILLS
         }
+        scan_readable = True
         try:
             spirit_array = list(AgentArray.GetSpiritPetArray() or [])
         except Exception:
             spirit_array = []
+            scan_readable = False
 
         for spirit_id_value in spirit_array:
             try:
@@ -581,14 +697,24 @@ class My_Soul_Twisting(BuildMgr):
                     )
                 )
             except Exception:
+                scan_readable = False
                 continue
 
-        return {skill_id: tuple(values) for skill_id, values in observations.items()}
+        return (
+            {skill_id: tuple(values) for skill_id, values in observations.items()},
+            scan_readable,
+        )
 
     def _build_snapshot(self) -> _SoulTwistingSnapshot:
         tick_ms = self._now_ms()
         map_id, instance_uptime_ms = self._read_instance_lifecycle()
         player_agent_id = self._read_local_agent_id()
+        try:
+            player_alive = bool(
+                player_agent_id > 0 and Agent.IsAlive(player_agent_id)
+            )
+        except Exception:
+            player_alive = False
         local_native_root_id = self._read_agent_owner_id(player_agent_id)
         party_root_ids = self._read_party_root_ids(
             player_agent_id, local_native_root_id
@@ -648,7 +774,15 @@ class My_Soul_Twisting(BuildMgr):
             player_agent_id
         )
         normal_cast_state = self._normal_cast_state()
-        core_spirits = self._scan_core_spirits(
+        try:
+            map_explorable = bool(Map.IsExplorable())
+        except Exception:
+            map_explorable = map_id > 0
+        try:
+            map_loading = bool(Map.IsMapLoading())
+        except Exception:
+            map_loading = False
+        core_spirits, core_spirits_readable = self._scan_core_spirits(
             party_root_ids=party_root_ids,
             player_position=player_position,
             leader_valid=leader_valid,
@@ -668,6 +802,7 @@ class My_Soul_Twisting(BuildMgr):
             effective_in_aggro=effective_in_aggro,
             close_to_aggro=close_to_aggro,
             player_agent_id=player_agent_id,
+            player_alive=player_alive,
             local_native_root_id=local_native_root_id,
             party_root_ids=party_root_ids,
             player_position=player_position,
@@ -682,6 +817,8 @@ class My_Soul_Twisting(BuildMgr):
             leader_moving=leader_moving,
             distance_to_leader=distance_to_leader,
             normal_cast_state=normal_cast_state,
+            map_explorable=map_explorable,
+            map_loading=map_loading,
             deployment_ready=(
                 context is not _EncounterContext.TRAVEL_READY
                 and normal_cast_state
@@ -694,6 +831,7 @@ class My_Soul_Twisting(BuildMgr):
             soul_twisting=self._read_effect(Soul_Twisting_ID),
             boon_of_creation=self._read_effect(Boon_of_Creation_ID),
             spirits_gift=self._read_effect(Spirits_Gift_ID),
+            core_spirits_readable=core_spirits_readable,
             core_spirits=core_spirits,
         )
 
@@ -774,6 +912,67 @@ class My_Soul_Twisting(BuildMgr):
             return bool(self.CanCastSkillID(Armor_of_Unfeeling_ID))
         except Exception:
             return True
+
+    def _armor_qualifying_core_types(
+        self, snapshot: _SoulTwistingSnapshot
+    ) -> tuple[int, ...]:
+        if not snapshot.core_spirits_readable:
+            return ()
+        epoch = self._armor_deployment_epoch
+        if epoch is None:
+            return ()
+        qualifying: list[int] = []
+        for skill_id, token in epoch.tokens.items():
+            if self._armor_token_witness(token, snapshot) is not None:
+                qualifying.append(skill_id)
+        return tuple(sorted(qualifying, key=_CORE_SKILLS.index))
+
+    def _armor_eligibility(
+        self, snapshot: _SoulTwistingSnapshot
+    ) -> tuple[bool, tuple[int, ...], str]:
+        if not self._armor_is_castable():
+            return False, (), "armor_not_castable"
+        if not snapshot.deployment_ready:
+            return False, (), "deployment_window_closed"
+        if not snapshot.core_spirits_readable:
+            return False, (), "core_scan_unreadable"
+        if snapshot.player_agent_id <= 0 or snapshot.player_position is None:
+            return False, (), "player_identity_or_position_unreadable"
+        if self._armor_deployment_probes:
+            return False, (), "deployment_probe_pending"
+        epoch = self._armor_deployment_epoch
+        if epoch is None:
+            return False, (), "no_active_deployment_epoch"
+        if snapshot.tick_ms >= epoch.expires_at_ms:
+            self._reset_armor_deployment_state(reason="deployment_epoch_expired")
+            return False, (), "deployment_epoch_expired"
+        if (
+            snapshot.map_id != epoch.map_id
+            or snapshot.instance_uptime_ms < epoch.instance_uptime_ms
+            or snapshot.player_agent_id != epoch.player_agent_id
+        ):
+            self._reset_armor_deployment_state(reason="lifecycle_or_player_changed")
+            return False, (), "lifecycle_or_player_changed"
+        if not self._all_core_useful(snapshot):
+            return False, (), "core_package_no_longer_useful"
+
+        qualifying_types = self._armor_qualifying_core_types(snapshot)
+        if len(qualifying_types) < 2:
+            return False, qualifying_types, "fewer_than_two_valid_deployment_tokens"
+        for skill_id in qualifying_types:
+            token = epoch.tokens[skill_id]
+            observation = self._armor_token_witness(token, snapshot)
+            if observation is None:
+                self._invalidate_armor_token(
+                    skill_id, reason="witness_invalid_before_dispatch"
+                )
+                return False, (), "deployment_witness_invalid"
+            if (
+                observation.distance_from_player is None
+                or observation.distance_from_player > Range.Earshot.value
+            ):
+                return False, qualifying_types, "deployment_witness_out_of_earshot"
+        return True, qualifying_types, "ready"
 
     def _clear_core_rebuild_debounce(
         self, *, reason: str, tick_ms: int | None = None
@@ -1050,11 +1249,24 @@ class My_Soul_Twisting(BuildMgr):
                 self._clear_core_rebuild_debounce(
                     reason="coverage_recovered", tick_ms=snapshot.tick_ms
                 )
-            if self._armor_is_castable():
+            armor_eligible, armor_token_types, armor_reason = (
+                self._armor_eligibility(snapshot)
+            )
+            if armor_eligible:
+                self._emit_event(
+                    "armor-selected",
+                    signature=(snapshot.tick_ms, armor_token_types),
+                    target_agent_id=0,
+                    token_types=tuple(
+                        _CORE_SKILL_NAMES[skill_id] for skill_id in armor_token_types
+                    ),
+                    reason=armor_reason,
+                )
                 return _SoulTwistingAction(
                     kind=_ActionKind.POST_DEPLOYMENT,
                     skill_id=Armor_of_Unfeeling_ID,
-                    reason="post_deployment_armor_maintenance",
+                    reason="armor_epoch_ready",
+                    target_agent_id=0,
                 )
             portable_action = self._select_portable_action(snapshot, allow_active=True)
             if portable_action is not None:
@@ -1156,6 +1368,13 @@ class My_Soul_Twisting(BuildMgr):
                 return False, "deployment_window_closed"
             if not self._all_core_useful(snapshot):
                 return False, "core_package_no_longer_useful"
+            armor_eligible, _token_types, armor_reason = self._armor_eligibility(
+                snapshot
+            )
+            if not armor_eligible:
+                return False, armor_reason
+            if action.target_agent_id != 0:
+                return False, "armor_target_must_be_zero"
             return True, "ready"
 
         return False, "no_action"
@@ -1164,23 +1383,1191 @@ class My_Soul_Twisting(BuildMgr):
         self,
         action: _SoulTwistingAction,
     ) -> Generator[None, None, bool]:
-        if (
-            action.kind is _ActionKind.POST_DEPLOYMENT
-            and action.skill_id == Armor_of_Unfeeling_ID
-        ):
-            try:
-                result = yield from self.skills.Ritualist.Communing.Armor_of_Unfeeling()
-            except Exception:
-                result = False
-            return bool(result)
-
         result = yield from self.CastSkillID(
             skill_id=action.skill_id,
-            target_agent_id=0,
+            target_agent_id=action.target_agent_id,
             log=False,
             aftercast_delay=250,
         )
         return bool(result)
+
+    @staticmethod
+    def _armor_core_ids(
+        snapshot: _SoulTwistingSnapshot, skill_id: int
+    ) -> frozenset[int]:
+        return frozenset(
+            int(observation.agent_id)
+            for observation in snapshot.core_spirits.get(skill_id, ())
+        )
+
+    @staticmethod
+    def _deployment_event_key(event: Any) -> tuple[int, int, int, int, int, float]:
+        return (
+            int(getattr(event, "timestamp", 0)),
+            int(getattr(event, "event_type", 0)),
+            int(getattr(event, "agent_id", 0)),
+            int(getattr(event, "value", 0)),
+            int(getattr(event, "target_id", 0)),
+            float(getattr(event, "float_value", 0.0)),
+        )
+
+    @staticmethod
+    def _deployment_event_type_values() -> dict[str, int]:
+        event_type_module = getattr(PyAgentEvents, "PyEventType", None)
+        if event_type_module is None:
+            return {}
+        return {
+            name: int(getattr(event_type_module, name))
+            for name in _DEPLOYMENT_EVENT_TYPE_NAMES
+            if getattr(event_type_module, name, None) is not None
+        }
+
+    @staticmethod
+    def _deployment_event_type_name(event_type: int) -> str:
+        for name, value in My_Soul_Twisting._deployment_event_type_values().items():
+            if value == event_type:
+                return name
+        return f"TYPE_{event_type}"
+
+    @staticmethod
+    def _peek_deployment_events() -> list[Any] | None:
+        try:
+            return list(PyAgentEvents.peek_events() or [])
+        except Exception:
+            return None
+
+    @staticmethod
+    def _armor_witness_fingerprint(
+        observation: _SpiritObservation,
+    ) -> tuple[int, int, str]:
+        return (
+            int(observation.model_id),
+            int(observation.owner_id),
+            observation.root_category.value,
+        )
+
+    def _armor_token_witness(
+        self,
+        token: _ArmorDeploymentToken,
+        snapshot: _SoulTwistingSnapshot,
+    ) -> _SpiritObservation | None:
+        if not snapshot.core_spirits_readable:
+            return None
+        observation = next(
+            (
+                candidate
+                for candidate in snapshot.core_spirits.get(token.skill_id, ())
+                if candidate.agent_id == token.witness_agent_id
+            ),
+            None,
+        )
+        if observation is None:
+            return None
+        if (
+            observation.skill_id != token.skill_id
+            or observation.model_id != token.model_id
+            or observation.root_category is not _SpiritCategory.PARTY_ROOT_MATCH
+            or not observation.alive
+            or not observation.spawned
+            or observation.position is None
+            or self._armor_witness_fingerprint(observation)
+            != token.witness_fingerprint
+        ):
+            return None
+        return observation
+
+    def _invalidate_armor_token(self, skill_id: int, *, reason: str) -> None:
+        epoch = self._armor_deployment_epoch
+        if epoch is None:
+            return
+        token = epoch.tokens.pop(skill_id, None)
+        if token is None:
+            return
+        self._emit_event(
+            "armor-deployment-token-invalidated",
+            signature=(epoch.epoch_id, skill_id, token.witness_agent_id, reason),
+            epoch_id=epoch.epoch_id,
+            skill=_CORE_SKILL_NAMES[skill_id],
+            witness_agent_id=token.witness_agent_id,
+            reason=reason,
+        )
+        if not epoch.tokens:
+            self._armor_deployment_epoch = None
+            self._emit_event(
+                "armor-deployment-epoch-closed",
+                signature=(epoch.epoch_id, reason),
+                epoch_id=epoch.epoch_id,
+                reason=reason,
+            )
+
+    def _invalidate_armor_deployment_probe(
+        self,
+        probe: _ArmorDeploymentProbe,
+        *,
+        reason: str,
+    ) -> None:
+        if probe.invalid_reason is None:
+            probe.invalid_reason = reason
+            self._emit_event(
+                "armor-deployment-probe-invalidated",
+                signature=(probe.requested_at_ms, probe.skill_id, reason),
+                skill=_CORE_SKILL_NAMES[probe.skill_id],
+                request_at=probe.requested_at_ms,
+                reason=reason,
+            )
+        if self._armor_deployment_probes.get(probe.skill_id) is probe:
+            del self._armor_deployment_probes[probe.skill_id]
+        if self._armor_deployment_active_cast is probe:
+            self._armor_deployment_active_cast = None
+        if self._armor_deployment_last_terminal_cast is probe:
+            self._armor_deployment_last_terminal_cast = None
+
+    def _reset_armor_deployment_state(self, *, reason: str) -> None:
+        had_state = bool(
+            self._armor_deployment_probes or self._armor_deployment_epoch is not None
+        )
+        for probe in tuple(self._armor_deployment_probes.values()):
+            if probe.invalid_reason is None:
+                probe.invalid_reason = reason
+        self._armor_deployment_probes.clear()
+        self._armor_deployment_active_cast = None
+        self._armor_deployment_last_terminal_cast = None
+        self._armor_deployment_epoch = None
+        if had_state:
+            self._emit_event(
+                "armor-deployment-state-reset",
+                signature=(reason,),
+                reason=reason,
+            )
+
+    def _observe_armor_deployment_lifecycle(
+        self, snapshot: _SoulTwistingSnapshot
+    ) -> bool:
+        lifecycle = (int(snapshot.map_id), int(snapshot.instance_uptime_ms))
+        previous_lifecycle = self._armor_deployment_lifecycle
+        previous_player_id = self._armor_deployment_player_agent_id
+        if previous_lifecycle is not None and (
+            lifecycle[0] != previous_lifecycle[0]
+            or lifecycle[1] < previous_lifecycle[1]
+        ):
+            self._reset_armor_deployment_state(reason="map_or_instance_changed")
+        if previous_player_id and snapshot.player_agent_id != previous_player_id:
+            self._reset_armor_deployment_state(reason="player_agent_id_changed")
+        self._armor_deployment_lifecycle = lifecycle
+        self._armor_deployment_player_agent_id = snapshot.player_agent_id
+
+        if (
+            snapshot.map_id <= 0
+            or snapshot.instance_uptime_ms <= 0
+            or snapshot.player_agent_id <= 0
+            or not snapshot.map_explorable
+            or snapshot.map_loading
+            or not snapshot.player_alive
+        ):
+            self._reset_armor_deployment_state(reason="runtime_not_ready")
+            return False
+        if not snapshot.core_spirits_readable:
+            self._reset_armor_deployment_state(reason="core_scan_unreadable")
+            return False
+        return True
+
+    def _record_deployment_event(
+        self,
+        probe: _ArmorDeploymentProbe,
+        key: tuple[int, int, int, int, int, float],
+        *,
+        controlled: bool,
+        association: str,
+        allow_baseline: bool = False,
+    ) -> bool:
+        if (
+            (not allow_baseline and key in probe.baseline_event_keys)
+            or key in probe.seen_event_keys
+        ):
+            return False
+        probe.seen_event_keys.add(key)
+        event_type = self._deployment_event_type_name(key[1])
+        record = _DeploymentEventRecord(
+            event_type=event_type,
+            timestamp_ms=key[0],
+            caster_agent_id=key[2],
+            skill_id=key[3],
+            target_agent_id=key[4],
+            float_value=key[5],
+            controlled=controlled,
+            association=association,
+        )
+        if len(probe.event_records) < _DEPLOYMENT_MAX_RECORDED_EVENTS:
+            probe.event_records.append(record)
+            self._emit_event(
+                "armor-deployment-event",
+                signature=(probe.requested_at_ms, key, controlled),
+                skill=_CORE_SKILL_NAMES[probe.skill_id],
+                event_type=event_type,
+                event_timestamp=key[0],
+                event_delay_ms=key[0] - probe.requested_at_ms,
+                caster_agent_id=key[2],
+                skill_id=key[3],
+                target_agent_id=key[4],
+                float_value=f"{key[5]:.3f}",
+                controlled=int(controlled),
+                association=association,
+            )
+        return True
+
+    def _foreign_activation_in_lookback(
+        self,
+        events: list[Any],
+        *,
+        skill_id: int,
+        player_agent_id: int,
+        requested_at_ms: int,
+    ) -> int | None:
+        type_values = self._deployment_event_type_values()
+        activation_values = {
+            type_values[name]
+            for name in _DEPLOYMENT_ACTIVATION_TYPES
+            if name in type_values
+        }
+        for event in events:
+            key = self._deployment_event_key(event)
+            if (
+                key[1] in activation_values
+                and key[3] == skill_id
+                and key[2] != player_agent_id
+                and requested_at_ms - ARMOR_DEPLOYMENT_LOOKBACK_MS
+                <= key[0]
+                <= requested_at_ms
+            ):
+                return key[2]
+        return None
+
+    def _record_armor_deployment_request(
+        self, skill_id: int, snapshot: _SoulTwistingSnapshot
+    ) -> _ArmorDeploymentProbe | None:
+        if skill_id not in _CORE_SKILLS:
+            return None
+        if self._armor_deployment_lifecycle is None:
+            self._armor_deployment_lifecycle = (
+                int(snapshot.map_id),
+                int(snapshot.instance_uptime_ms),
+            )
+            self._armor_deployment_player_agent_id = snapshot.player_agent_id
+        self._invalidate_armor_token(
+            skill_id, reason="replacement_deployment_requested"
+        )
+        previous_probe = self._armor_deployment_probes.get(skill_id)
+        if previous_probe is not None:
+            self._invalidate_armor_deployment_probe(
+                previous_probe, reason="replacement_deployment_requested"
+            )
+        if (
+            not snapshot.core_spirits_readable
+            or snapshot.player_position is None
+            or snapshot.map_id <= 0
+            or snapshot.instance_uptime_ms <= 0
+            or snapshot.player_agent_id <= 0
+            or not snapshot.map_explorable
+            or snapshot.map_loading
+            or not snapshot.player_alive
+        ):
+            self._emit_event(
+                "armor-deployment-probe-rejected",
+                signature=(skill_id, snapshot.tick_ms, "request_snapshot_unreadable"),
+                skill=_CORE_SKILL_NAMES[skill_id],
+                request_at=snapshot.tick_ms,
+                reason="request_snapshot_unreadable",
+            )
+            return None
+
+        events = self._peek_deployment_events()
+        if events is None:
+            self._emit_event(
+                "armor-deployment-probe-rejected",
+                signature=(skill_id, snapshot.tick_ms, "event_buffer_read_failed"),
+                skill=_CORE_SKILL_NAMES[skill_id],
+                request_at=snapshot.tick_ms,
+                reason="event_buffer_read_failed",
+            )
+            return None
+        foreign_caster = self._foreign_activation_in_lookback(
+            events,
+            skill_id=skill_id,
+            player_agent_id=snapshot.player_agent_id,
+            requested_at_ms=snapshot.tick_ms,
+        )
+        if foreign_caster is not None:
+            self._emit_event(
+                "armor-deployment-probe-rejected",
+                signature=(skill_id, snapshot.tick_ms, foreign_caster),
+                skill=_CORE_SKILL_NAMES[skill_id],
+                request_at=snapshot.tick_ms,
+                reason="foreign_activation_in_lookback",
+                foreign_caster_agent_id=foreign_caster,
+            )
+            return None
+
+        relevant_values = set(self._deployment_event_type_values().values())
+        baseline_event_keys: set[tuple[int, int, int, int, int, float]] = set()
+        for event in events:
+            key = self._deployment_event_key(event)
+            if key[1] in relevant_values:
+                baseline_event_keys.add(key)
+        probe = _ArmorDeploymentProbe(
+            skill_id=skill_id,
+            model_id=_CORE_MODEL_BY_SKILL[skill_id],
+            requested_at_ms=snapshot.tick_ms,
+            map_id=snapshot.map_id,
+            instance_uptime_ms=snapshot.instance_uptime_ms,
+            player_agent_id=snapshot.player_agent_id,
+            cast_origin=snapshot.player_position,
+            pre_agent_ids=self._armor_core_ids(snapshot, skill_id),
+            baseline_event_keys=frozenset(baseline_event_keys),
+        )
+        self._armor_deployment_probes[skill_id] = probe
+        self._emit_event(
+            "armor-deployment-request",
+            signature=(
+                skill_id,
+                snapshot.tick_ms,
+                tuple(sorted(probe.pre_agent_ids)),
+            ),
+            skill=_CORE_SKILL_NAMES[skill_id],
+            expected_model=probe.model_id,
+            request_at=probe.requested_at_ms,
+            map_id=probe.map_id,
+            instance_uptime_ms=probe.instance_uptime_ms,
+            player_agent_id=probe.player_agent_id,
+            cast_origin=self._format_position(probe.cast_origin),
+            pre_existing_same_model_ids=tuple(sorted(probe.pre_agent_ids)),
+        )
+        return probe
+
+    def _record_armor_deployment_result(
+        self,
+        skill_id: int,
+        result: bool,
+        snapshot: _SoulTwistingSnapshot,
+    ) -> None:
+        probe = self._armor_deployment_probes.get(skill_id)
+        if probe is None:
+            return
+        probe.wrapper_result = bool(result)
+        self._emit_event(
+            "armor-deployment-wrapper-result",
+            signature=(probe.requested_at_ms, skill_id, bool(result)),
+            skill=_CORE_SKILL_NAMES[skill_id],
+            request_at=probe.requested_at_ms,
+            wrapper_result=int(bool(result)),
+            observed_at=snapshot.tick_ms,
+            evidence_effect="telemetry_only",
+        )
+
+    def _process_deployment_events(
+        self,
+        snapshot: _SoulTwistingSnapshot,
+        events: list[Any],
+    ) -> None:
+        type_values = self._deployment_event_type_values()
+        if not type_values:
+            for probe in tuple(self._armor_deployment_probes.values()):
+                self._invalidate_armor_deployment_probe(
+                    probe, reason="event_types_unavailable"
+                )
+            return
+        relevant_values = set(type_values.values())
+        ordered_events = sorted(
+            (
+                (index, event, self._deployment_event_key(event))
+                for index, event in enumerate(events)
+                if self._deployment_event_key(event)[1] in relevant_values
+                and self._deployment_event_key(event)[0] <= snapshot.tick_ms
+            ),
+            key=lambda item: (item[2][0], item[0]),
+        )
+        snapshot_terminal_counts: dict[
+            tuple[int, int, int, int, int, float], int
+        ] = {}
+        for _index, _event, key in ordered_events:
+            if (
+                self._deployment_event_type_name(key[1])
+                in _DEPLOYMENT_TERMINAL_TYPES
+            ):
+                snapshot_terminal_counts[key] = (
+                    snapshot_terminal_counts.get(key, 0) + 1
+                )
+        for _index, _event, key in ordered_events:
+            event_type = self._deployment_event_type_name(key[1])
+            if event_type in _DEPLOYMENT_ACTIVATION_TYPES:
+                raw_skill_id = key[3]
+                if raw_skill_id == 0:
+                    continue
+                last_terminal_cast = self._armor_deployment_last_terminal_cast
+                if (
+                    last_terminal_cast is not None
+                    and last_terminal_cast.terminal_at_ms is not None
+                    and key[2] == last_terminal_cast.player_agent_id
+                    and key[0] > last_terminal_cast.terminal_at_ms
+                ):
+                    self._armor_deployment_last_terminal_cast = None
+                for probe in tuple(self._armor_deployment_probes.values()):
+                    if probe.invalid_reason is not None:
+                        continue
+                    if (
+                        key[2] != probe.player_agent_id
+                        and raw_skill_id == probe.skill_id
+                        and key[0]
+                        >= probe.requested_at_ms - ARMOR_DEPLOYMENT_LOOKBACK_MS
+                    ):
+                        if self._record_deployment_event(
+                            probe,
+                            key,
+                            controlled=False,
+                            association="foreign-caster-lookback",
+                            allow_baseline=True,
+                        ):
+                            probe.foreign_event_casters.add(key[2])
+                        self._invalidate_armor_deployment_probe(
+                            probe, reason="foreign_expected_skill_activation"
+                        )
+                        continue
+                    if (
+                        key in probe.baseline_event_keys
+                        or key in probe.seen_event_keys
+                    ):
+                        continue
+                    if key[0] < probe.requested_at_ms:
+                        continue
+                    if raw_skill_id == probe.skill_id:
+                        controlled = key[2] == probe.player_agent_id
+                        if not controlled:
+                            if self._record_deployment_event(
+                                probe,
+                                key,
+                                controlled=False,
+                                association="foreign-caster",
+                            ):
+                                probe.foreign_event_casters.add(key[2])
+                            self._invalidate_armor_deployment_probe(
+                                probe,
+                                reason="foreign_expected_skill_activation",
+                            )
+                            continue
+                        if probe.terminal_at_ms is not None:
+                            self._record_deployment_event(
+                                probe,
+                                key,
+                                controlled=True,
+                                association="after-terminal",
+                            )
+                            self._invalidate_armor_deployment_probe(
+                                probe,
+                                reason="activation_after_terminal",
+                            )
+                            continue
+                        if (
+                            self._armor_deployment_active_cast is not None
+                            and self._armor_deployment_active_cast is not probe
+                            and self._armor_deployment_active_cast.invalid_reason is None
+                        ):
+                            self._invalidate_armor_deployment_probe(
+                                self._armor_deployment_active_cast,
+                                reason="intervening_controlled_skill_activation",
+                            )
+                        if event_type == "SKILL_ACTIVATE_PACKET":
+                            self._record_deployment_event(
+                                probe,
+                                key,
+                                controlled=True,
+                                association="expected-skill",
+                            )
+                            if probe.activate_packet_at_ms is not None:
+                                self._invalidate_armor_deployment_probe(
+                                    probe, reason="duplicate_activation_packet"
+                                )
+                                continue
+                            probe.activate_packet_at_ms = key[0]
+                            self._armor_deployment_active_cast = probe
+                        else:
+                            if probe.activate_packet_at_ms is None:
+                                self._record_deployment_event(
+                                    probe,
+                                    key,
+                                    controlled=True,
+                                    association="activation-before-packet",
+                                )
+                                self._invalidate_armor_deployment_probe(
+                                    probe, reason="activation_before_packet"
+                                )
+                                continue
+                            self._record_deployment_event(
+                                probe,
+                                key,
+                                controlled=True,
+                                association="expected-skill",
+                            )
+                            if probe.activation_at_ms is not None:
+                                self._invalidate_armor_deployment_probe(
+                                    probe, reason="duplicate_activation"
+                                )
+                                continue
+                            probe.activation_at_ms = key[0]
+                            self._armor_deployment_active_cast = probe
+                    elif (
+                        key[2] == probe.player_agent_id
+                        and probe.terminal_at_ms is None
+                    ):
+                        self._record_deployment_event(
+                            probe,
+                            key,
+                            controlled=True,
+                            association="intervening-skill",
+                        )
+                        self._invalidate_armor_deployment_probe(
+                            probe, reason="intervening_controlled_skill_activation"
+                        )
+                continue
+
+            if event_type not in _DEPLOYMENT_TERMINAL_TYPES:
+                continue
+            for probe in tuple(self._armor_deployment_probes.values()):
+                if probe.invalid_reason is not None or key[0] < probe.requested_at_ms:
+                    continue
+                if (
+                    key in probe.baseline_event_keys
+                    or key in probe.seen_event_keys
+                ):
+                    continue
+                controlled = key[2] == probe.player_agent_id
+                raw_skill_matches = key[3] in (0, probe.skill_id)
+                active_for_probe = self._armor_deployment_active_cast is probe
+                raw_zero_owner: _ArmorDeploymentProbe | None = None
+                if key[3] == 0 and controlled:
+                    active_cast = self._armor_deployment_active_cast
+                    if (
+                        active_cast is not None
+                        and active_cast.invalid_reason is None
+                        and active_cast.activate_packet_at_ms is not None
+                        and active_cast.activate_packet_at_ms <= key[0]
+                        and active_cast.player_agent_id == key[2]
+                    ):
+                        raw_zero_owner = active_cast
+                    else:
+                        last_terminal_cast = self._armor_deployment_last_terminal_cast
+                        if (
+                            last_terminal_cast is not None
+                            and last_terminal_cast.terminal_at_ms is not None
+                            and last_terminal_cast.invalid_reason is None
+                            and self._armor_deployment_probes.get(
+                                last_terminal_cast.skill_id
+                            )
+                            is last_terminal_cast
+                            and last_terminal_cast.player_agent_id == key[2]
+                            and last_terminal_cast.player_agent_id
+                            == snapshot.player_agent_id
+                            and last_terminal_cast.map_id == snapshot.map_id
+                            and last_terminal_cast.instance_uptime_ms
+                            <= snapshot.instance_uptime_ms
+                            and self._armor_deployment_lifecycle is not None
+                            and self._armor_deployment_lifecycle[0]
+                            == snapshot.map_id
+                            and self._armor_deployment_lifecycle[1]
+                            <= snapshot.instance_uptime_ms
+                            and self._armor_deployment_player_agent_id
+                            == snapshot.player_agent_id
+                            and last_terminal_cast.requested_at_ms
+                            <= key[0]
+                            and snapshot.tick_ms
+                            - last_terminal_cast.requested_at_ms
+                            <= ARMOR_DEPLOYMENT_PROBE_MAX_MS
+                        ):
+                            raw_zero_owner = last_terminal_cast
+                        elif last_terminal_cast is not None:
+                            self._armor_deployment_last_terminal_cast = None
+                    if raw_zero_owner is None:
+                        continue
+                    if raw_zero_owner is not probe:
+                        self._record_deployment_event(
+                            probe,
+                            key,
+                            controlled=True,
+                            association="other-controlled-cast",
+                        )
+                        continue
+                if (
+                    snapshot_terminal_counts.get(key, 0) > 1
+                    and key not in probe.baseline_event_keys
+                    and key[2] == probe.player_agent_id
+                    and (
+                        (key[3] == 0 and raw_zero_owner is probe)
+                        or key[3] == probe.skill_id
+                        or active_for_probe
+                    )
+                ):
+                    self._record_deployment_event(
+                        probe,
+                        key,
+                        controlled=True,
+                        association="duplicate-terminal-in-snapshot",
+                    )
+                    self._invalidate_armor_deployment_probe(
+                        probe, reason="duplicate_terminal_in_snapshot"
+                    )
+                    continue
+                if (
+                    not controlled
+                    and key[3] == probe.skill_id
+                ):
+                    if self._record_deployment_event(
+                        probe,
+                        key,
+                        controlled=False,
+                        association="foreign-caster",
+                    ):
+                        probe.foreign_event_casters.add(key[2])
+                    continue
+                if not controlled:
+                    continue
+                if event_type == "SKILL_FINISHED" and key[3] != 0:
+                    if key[3] == probe.skill_id or active_for_probe:
+                        self._record_deployment_event(
+                            probe,
+                            key,
+                            controlled=True,
+                            association="nonzero-finish",
+                        )
+                        self._invalidate_armor_deployment_probe(
+                            probe, reason="finish_value_nonzero"
+                        )
+                    continue
+                if (
+                    key[3] == 0
+                    and probe.activation_at_ms is None
+                ):
+                    continue
+                if probe.terminal_at_ms is not None and raw_skill_matches:
+                    self._record_deployment_event(
+                        probe,
+                        key,
+                        controlled=True,
+                        association="after-terminal",
+                    )
+                    self._invalidate_armor_deployment_probe(
+                        probe, reason="conflicting_or_duplicate_terminal"
+                    )
+                    continue
+                if (
+                    not raw_skill_matches
+                    or (
+                        key[3] == 0
+                        and (
+                            not active_for_probe
+                            or probe.activation_at_ms is None
+                        )
+                    )
+                    or (key[3] == probe.skill_id and not active_for_probe)
+                ):
+                    if active_for_probe or key[3] == probe.skill_id:
+                        self._record_deployment_event(
+                            probe,
+                            key,
+                            controlled=True,
+                            association="uncertain-skill",
+                        )
+                        self._invalidate_armor_deployment_probe(
+                            probe, reason="terminal_association_uncertain"
+                        )
+                    continue
+                self._record_deployment_event(
+                    probe,
+                    key,
+                    controlled=True,
+                    association=(
+                        "active-controlled-cast"
+                        if key[3] == 0
+                        else "expected-skill"
+                    ),
+                )
+                if probe.terminal_at_ms is not None:
+                    self._invalidate_armor_deployment_probe(
+                        probe, reason="conflicting_or_duplicate_terminal"
+                    )
+                    continue
+                probe.terminal_at_ms = key[0]
+                probe.terminal_event_type = event_type
+                self._armor_deployment_last_terminal_cast = probe
+                if event_type == "SKILL_FINISHED":
+                    probe.finish_at_ms = key[0]
+                    if self._armor_deployment_active_cast is probe:
+                        self._armor_deployment_active_cast = None
+                else:
+                    self._invalidate_armor_deployment_probe(
+                        probe, reason=event_type.lower()
+                    )
+
+    def _update_deployment_candidates(
+        self,
+        probe: _ArmorDeploymentProbe,
+        snapshot: _SoulTwistingSnapshot,
+    ) -> None:
+        observations = snapshot.core_spirits.get(probe.skill_id, ())
+        current_ids: set[int] = set()
+        for observation in observations:
+            if (
+                observation.model_id != probe.model_id
+                or observation.agent_id in probe.pre_agent_ids
+            ):
+                continue
+            agent_id = int(observation.agent_id)
+            current_ids.add(agent_id)
+            current_distance = self._safe_distance(
+                probe.cast_origin, observation.position
+            )
+            candidate = probe.candidates.get(agent_id)
+            if candidate is None:
+                candidate = _DeploymentCandidate(
+                    agent_id=agent_id,
+                    first_seen_at_ms=snapshot.tick_ms,
+                    first_spawned_at_ms=(
+                        snapshot.tick_ms if observation.spawned else None
+                    ),
+                    first_alive=observation.alive,
+                    first_position=observation.position,
+                    first_distance_from_origin=current_distance,
+                    last_seen_at_ms=snapshot.tick_ms,
+                    last_spawned=observation.spawned,
+                    last_alive=observation.alive,
+                )
+                probe.candidates[agent_id] = candidate
+                self._emit_event(
+                    "armor-deployment-candidate",
+                    signature=(probe.requested_at_ms, probe.skill_id, agent_id),
+                    skill=_CORE_SKILL_NAMES[probe.skill_id],
+                    candidate_agent_id=agent_id,
+                    first_visible_at=snapshot.tick_ms,
+                    first_visible_delay_ms=(
+                        snapshot.tick_ms - probe.requested_at_ms
+                    ),
+                    alive=int(observation.alive),
+                    spawned=int(observation.spawned),
+                    position=self._format_position(observation.position),
+                    distance_from_origin=(
+                        "na"
+                        if candidate.first_distance_from_origin is None
+                        else f"{candidate.first_distance_from_origin:.0f}"
+                    ),
+                )
+            else:
+                if observation.spawned and not candidate.last_spawned:
+                    candidate.first_spawned_at_ms = (
+                        candidate.first_spawned_at_ms or snapshot.tick_ms
+                    )
+                    self._emit_event(
+                        "armor-deployment-candidate-state",
+                        signature=(
+                            probe.requested_at_ms,
+                            agent_id,
+                            "spawned",
+                        ),
+                        skill=_CORE_SKILL_NAMES[probe.skill_id],
+                        candidate_agent_id=agent_id,
+                        state="spawned",
+                        spawned_at=snapshot.tick_ms,
+                        spawned_delay_ms=(
+                            snapshot.tick_ms - probe.requested_at_ms
+                        ),
+                    )
+                candidate.last_seen_at_ms = snapshot.tick_ms
+                candidate.last_spawned = observation.spawned
+                candidate.last_alive = observation.alive
+            if observation.alive and observation.spawned:
+                if observation.position is None or current_distance is None:
+                    self._invalidate_armor_deployment_probe(
+                        probe, reason="candidate_position_unreadable"
+                    )
+                    return
+                if not candidate.spawned_evidence_checked:
+                    if current_distance > ARMOR_ASSOCIATION_RADIUS:
+                        self._invalidate_armor_deployment_probe(
+                            probe, reason="candidate_out_of_association_radius"
+                        )
+                        return
+                    candidate.spawned_evidence_checked = True
+            if (
+                probe.finish_at_ms is not None
+                and probe.qualifying_at_ms is None
+                and candidate.qualified_at_ms is None
+                and snapshot.tick_ms - probe.finish_at_ms
+                > ARMOR_FINISH_TO_CANDIDATE_MS
+            ):
+                self._invalidate_armor_deployment_probe(
+                    probe, reason="candidate_missing_or_late"
+                )
+                return
+            currently_qualifying = (
+                observation.root_category is _SpiritCategory.PARTY_ROOT_MATCH
+                and observation.alive
+                and observation.spawned
+                and observation.position is not None
+                and current_distance is not None
+                and current_distance <= ARMOR_ASSOCIATION_RADIUS
+            )
+            if candidate.qualified_at_ms is not None and not currently_qualifying:
+                self._invalidate_armor_deployment_probe(
+                    probe, reason="candidate_qualification_lost"
+                )
+                return
+            if candidate.qualified_at_ms is not None and (
+                candidate.qualification_fingerprint is None
+                or self._armor_witness_fingerprint(observation)
+                != candidate.qualification_fingerprint
+            ):
+                self._invalidate_armor_deployment_probe(
+                    probe, reason="candidate_identity_changed"
+                )
+                return
+            if (
+                probe.finish_at_ms is not None
+                and probe.qualifying_at_ms is None
+                and candidate.qualified_at_ms is None
+                and snapshot.tick_ms >= probe.finish_at_ms
+                and currently_qualifying
+            ):
+                candidate.qualified_at_ms = snapshot.tick_ms
+                candidate.qualification_fingerprint = (
+                    self._armor_witness_fingerprint(observation)
+                )
+                probe.qualifying_candidate_id = agent_id
+                probe.qualifying_at_ms = snapshot.tick_ms
+                probe.settle_until_ms = (
+                    snapshot.tick_ms + ARMOR_CANDIDATE_SETTLE_MS
+                )
+                self._emit_event(
+                    "armor-deployment-candidate-state",
+                    signature=(
+                        probe.requested_at_ms,
+                        agent_id,
+                        "qualified",
+                    ),
+                    skill=_CORE_SKILL_NAMES[probe.skill_id],
+                    candidate_agent_id=agent_id,
+                    state="qualified",
+                    qualifying_at=snapshot.tick_ms,
+                    settle_until=probe.settle_until_ms,
+                    distance_from_origin=f"{self._safe_distance(probe.cast_origin, observation.position):.0f}",
+                )
+
+        disappeared = set(probe.candidates) - current_ids
+        if disappeared:
+            self._invalidate_armor_deployment_probe(
+                probe, reason="candidate_disappeared"
+            )
+            return
+        if len(probe.candidates) > 1:
+            self._invalidate_armor_deployment_probe(
+                probe, reason="multiple_new_same_model_candidates"
+            )
+
+    def _check_deployment_probe_timing(
+        self,
+        probe: _ArmorDeploymentProbe,
+        now_ms: int,
+    ) -> None:
+        if probe.invalid_reason is not None:
+            return
+        request_delay = now_ms - probe.requested_at_ms
+        if request_delay < 0:
+            return
+        # Candidate discovery has its own finish-based deadline. Once a
+        # candidate qualifies, let its explicit ambiguity-settling phase finish
+        # even when the next observer runs after the coarse request window.
+        if (
+            probe.qualifying_at_ms is None
+            and request_delay > ARMOR_DEPLOYMENT_PROBE_MAX_MS
+        ):
+            self._invalidate_armor_deployment_probe(
+                probe, reason="deployment_probe_window_expired"
+            )
+            return
+        if (
+            probe.activate_packet_at_ms is not None
+            and probe.activate_packet_at_ms - probe.requested_at_ms
+            > ARMOR_REQUEST_TO_ACTIVATION_MS
+        ):
+            self._invalidate_armor_deployment_probe(
+                probe, reason="activation_packet_out_of_bounds"
+            )
+            return
+        if (
+            probe.activation_at_ms is None
+            or probe.activate_packet_at_ms is None
+        ):
+            if request_delay > ARMOR_REQUEST_TO_ACTIVATION_MS:
+                self._invalidate_armor_deployment_probe(
+                    probe, reason="activation_sequence_missing_or_late"
+                )
+            return
+        activation_delay = probe.activation_at_ms - probe.requested_at_ms
+        if (
+            activation_delay < 0
+            or activation_delay > ARMOR_REQUEST_TO_ACTIVATION_MS
+        ):
+            self._invalidate_armor_deployment_probe(
+                probe, reason="activation_out_of_bounds"
+            )
+            return
+        if probe.finish_at_ms is None:
+            if (
+                now_ms - probe.activation_at_ms > ARMOR_ACTIVATION_TO_FINISH_MS
+                or request_delay > ARMOR_REQUEST_TO_FINISH_MS
+            ):
+                self._invalidate_armor_deployment_probe(
+                    probe, reason="finish_missing_or_late"
+                )
+            return
+        finish_delay = probe.finish_at_ms - probe.activation_at_ms
+        request_finish_delay = probe.finish_at_ms - probe.requested_at_ms
+        if (
+            finish_delay < 0
+            or finish_delay > ARMOR_ACTIVATION_TO_FINISH_MS
+            or request_finish_delay < 0
+            or request_finish_delay > ARMOR_REQUEST_TO_FINISH_MS
+        ):
+            self._invalidate_armor_deployment_probe(
+                probe, reason="finish_out_of_bounds"
+            )
+            return
+        if probe.qualifying_at_ms is None:
+            if (
+                now_ms - probe.finish_at_ms
+                > ARMOR_FINISH_TO_CANDIDATE_MS
+            ):
+                self._invalidate_armor_deployment_probe(
+                    probe, reason="candidate_missing_or_late"
+                )
+            return
+        if probe.settle_until_ms is not None and now_ms >= probe.settle_until_ms:
+            self._issue_armor_deployment_token(probe, now_ms)
+
+    def _issue_armor_deployment_token(
+        self,
+        probe: _ArmorDeploymentProbe,
+        now_ms: int,
+    ) -> None:
+        if (
+            probe.invalid_reason is not None
+            or probe.token_issued
+            or probe.qualifying_candidate_id is None
+            or probe.qualifying_at_ms is None
+            or probe.finish_at_ms is None
+            or probe.settle_until_ms is None
+            or now_ms < probe.settle_until_ms
+        ):
+            return
+        candidate = probe.candidates.get(probe.qualifying_candidate_id)
+        if candidate is None:
+            self._invalidate_armor_deployment_probe(
+                probe, reason="qualifying_candidate_missing"
+            )
+            return
+        observation = next(
+            (
+                item
+                for item in probe.current_observations
+                if item.agent_id == candidate.agent_id
+            ),
+            None,
+        )
+        if observation is None:
+            self._invalidate_armor_deployment_probe(
+                probe, reason="qualifying_candidate_not_current"
+            )
+            return
+        qualification_fingerprint = candidate.qualification_fingerprint
+        if (
+            qualification_fingerprint is None
+            or self._armor_witness_fingerprint(observation)
+            != qualification_fingerprint
+        ):
+            self._invalidate_armor_deployment_probe(
+                probe, reason="candidate_identity_changed"
+            )
+            return
+        current_distance = self._safe_distance(
+            probe.cast_origin, observation.position
+        )
+        if not (
+            observation.model_id == probe.model_id
+            and observation.root_category is _SpiritCategory.PARTY_ROOT_MATCH
+            and observation.alive
+            and observation.spawned
+            and observation.position is not None
+            and current_distance is not None
+            and current_distance <= ARMOR_ASSOCIATION_RADIUS
+        ):
+            self._invalidate_armor_deployment_probe(
+                probe, reason="qualifying_candidate_not_current"
+            )
+            return
+        probe_epoch_expires_at_ms = (
+            probe.finish_at_ms + ARMOR_DEPLOYMENT_EPOCH_MS
+        )
+        if now_ms >= probe_epoch_expires_at_ms:
+            self._invalidate_armor_deployment_probe(
+                probe, reason="deployment_epoch_expired_before_token"
+            )
+            return
+        epoch = self._armor_deployment_epoch
+        if epoch is not None and now_ms >= epoch.expires_at_ms:
+            if probe.finish_at_ms < epoch.expires_at_ms:
+                self._invalidate_armor_deployment_probe(
+                    probe, reason="deployment_epoch_expired_before_token"
+                )
+                return
+            epoch = None
+        if (
+            epoch is None
+            or epoch.map_id != probe.map_id
+            or epoch.instance_uptime_ms > probe.instance_uptime_ms
+            or epoch.player_agent_id != probe.player_agent_id
+        ):
+            self._armor_deployment_epoch_counter += 1
+            epoch = _ArmorDeploymentEpoch(
+                epoch_id=self._armor_deployment_epoch_counter,
+                map_id=probe.map_id,
+                instance_uptime_ms=probe.instance_uptime_ms,
+                player_agent_id=probe.player_agent_id,
+                started_at_ms=probe.finish_at_ms,
+                expires_at_ms=probe_epoch_expires_at_ms,
+            )
+            self._armor_deployment_epoch = epoch
+            self._emit_event(
+                "armor-deployment-epoch-started",
+                signature=(epoch.epoch_id, epoch.started_at_ms),
+                epoch_id=epoch.epoch_id,
+                started_at=epoch.started_at_ms,
+                expires_at=epoch.expires_at_ms,
+            )
+        token = _ArmorDeploymentToken(
+            skill_id=probe.skill_id,
+            model_id=probe.model_id,
+            witness_agent_id=candidate.agent_id,
+            map_id=probe.map_id,
+            instance_uptime_ms=probe.instance_uptime_ms,
+            player_agent_id=probe.player_agent_id,
+            request_at_ms=probe.requested_at_ms,
+            finish_at_ms=probe.finish_at_ms,
+            witness_fingerprint=qualification_fingerprint,
+        )
+        epoch.tokens[probe.skill_id] = token
+        probe.token_issued = True
+        self._emit_event(
+            "armor-deployment-summary",
+            signature=(probe.requested_at_ms, probe.skill_id, candidate.agent_id),
+            skill=_CORE_SKILL_NAMES[probe.skill_id],
+            expected_model=probe.model_id,
+            player_agent_id=probe.player_agent_id,
+            request_at=probe.requested_at_ms,
+            activation_at=probe.activation_at_ms,
+            activation_delay_ms=(
+                "na"
+                if probe.activation_at_ms is None
+                else probe.activation_at_ms - probe.requested_at_ms
+            ),
+            finish_at=probe.finish_at_ms,
+            finish_delay_ms=probe.finish_at_ms - probe.requested_at_ms,
+            stopped_or_interrupted="no",
+            candidate_ids=tuple(sorted(probe.candidates)),
+            witness_agent_id=candidate.agent_id,
+            first_visible_delay_ms=(
+                candidate.first_seen_at_ms - probe.requested_at_ms
+            ),
+            spawned_delay_ms=(
+                "na"
+                if candidate.first_spawned_at_ms is None
+                else candidate.first_spawned_at_ms - probe.requested_at_ms
+            ),
+            distance_from_origin=(
+                "na"
+                if candidate.first_distance_from_origin is None
+                else f"{candidate.first_distance_from_origin:.0f}"
+            ),
+            ambiguity="no",
+            wrapper_result=(
+                "na" if probe.wrapper_result is None else int(probe.wrapper_result)
+            ),
+            epoch_id=epoch.epoch_id,
+            epoch_expires_at=epoch.expires_at_ms,
+            evidence="deployment_token_not_ownership",
+        )
+        if self._armor_deployment_probes.get(probe.skill_id) is probe:
+            del self._armor_deployment_probes[probe.skill_id]
+        if self._armor_deployment_active_cast is probe:
+            self._armor_deployment_active_cast = None
+        if self._armor_deployment_last_terminal_cast is probe:
+            self._armor_deployment_last_terminal_cast = None
+
+    def _observe_armor_deployment(
+        self, snapshot: _SoulTwistingSnapshot
+    ) -> None:
+        if not self._observe_armor_deployment_lifecycle(snapshot):
+            return
+        if not self._armor_deployment_probes:
+            for skill_id, token in tuple(
+                (skill_id, token)
+                for skill_id, token in (
+                    ()
+                    if self._armor_deployment_epoch is None
+                    else self._armor_deployment_epoch.tokens.items()
+                )
+            ):
+                if self._armor_token_witness(token, snapshot) is None:
+                    self._invalidate_armor_token(
+                        skill_id, reason="witness_invalidated"
+                    )
+            return
+        events = self._peek_deployment_events()
+        if events is None:
+            self._reset_armor_deployment_state(reason="event_buffer_read_failed")
+            return
+        self._process_deployment_events(snapshot, events)
+        for probe in tuple(self._armor_deployment_probes.values()):
+            if probe.invalid_reason is not None:
+                continue
+            probe.current_observations = snapshot.core_spirits.get(
+                probe.skill_id, ()
+            )
+            self._update_deployment_candidates(probe, snapshot)
+            self._check_deployment_probe_timing(probe, snapshot.tick_ms)
+        if self._armor_deployment_epoch is not None:
+            for skill_id, token in tuple(
+                self._armor_deployment_epoch.tokens.items()
+            ):
+                if self._armor_token_witness(token, snapshot) is None:
+                    self._invalidate_armor_token(
+                        skill_id, reason="witness_invalidated"
+                    )
+
+    def _consume_armor_deployment_epoch(
+        self, snapshot: _SoulTwistingSnapshot
+    ) -> bool:
+        eligible, _token_types, _reason = self._armor_eligibility(snapshot)
+        if not eligible:
+            return False
+        epoch = self._armor_deployment_epoch
+        if epoch is None:
+            return False
+        self._emit_event(
+            "armor-deployment-epoch-consumed",
+            signature=(epoch.epoch_id, snapshot.tick_ms),
+            epoch_id=epoch.epoch_id,
+            consumed_at=snapshot.tick_ms,
+            token_types=tuple(
+                _CORE_SKILL_NAMES[skill_id] for skill_id in sorted(epoch.tokens)
+            ),
+        )
+        self._armor_deployment_epoch = None
+        return True
 
     def _run_policy(self, phase: str) -> BuildCoroutine:
         can_cast = self._normal_cast_state()
@@ -1198,17 +2585,17 @@ class My_Soul_Twisting(BuildMgr):
             return False
 
         snapshot = self._build_snapshot()
-        self._emit_snapshot_diagnostics(snapshot, phase=phase)
+        self._observe_armor_deployment(snapshot)
         action = self._select_action(snapshot)
         self._emit_action(action, phase=phase)
         if action.kind is _ActionKind.BLOCKED_NO_ACTION:
             return False
 
-        # Core actions always reobserve the encounter, leader geometry, ST, and
-        # functional coverage immediately before casting.  The same seam
-        # protects the portable actions from a stale effect snapshot.
+        # Reobserve all runtime gates immediately before the cast.  The
+        # deployment evidence observer is passive and only reads the event
+        # buffer, so readiness and Phase 1/2A policy stay on their normal path.
         latest_snapshot = self._build_snapshot()
-        self._emit_snapshot_diagnostics(latest_snapshot, phase=phase)
+        self._observe_armor_deployment(latest_snapshot)
         valid, rejection_reason = self._revalidate_action(action, latest_snapshot)
         if not valid:
             self._emit_event(
@@ -1230,9 +2617,39 @@ class My_Soul_Twisting(BuildMgr):
                 request_at=latest_snapshot.tick_ms,
                 reason=action.reason,
             )
+            self._record_armor_deployment_request(
+                action.skill_id, latest_snapshot
+            )
+
+        if action.kind is _ActionKind.POST_DEPLOYMENT:
+            if not self._consume_armor_deployment_epoch(latest_snapshot):
+                self._emit_event(
+                    "rejection",
+                    signature=(phase, action.kind.value, "epoch-consume-failed"),
+                    phase=phase,
+                    action=action.kind.value,
+                    skill=action.skill_id,
+                    reason="deployment_epoch_changed_before_dispatch",
+                )
+                return False
+            self._emit_event(
+                "armor-dispatched",
+                signature=(phase, latest_snapshot.tick_ms),
+                phase=phase,
+                target_agent_id=0,
+                evidence="deployment_epoch_consumed",
+            )
 
         result = yield from self._execute_action(action)
         if not result:
+            if action.kind is _ActionKind.CORE_DEPLOYMENT:
+                failed_snapshot = self._build_snapshot()
+                self._record_armor_deployment_result(
+                    action.skill_id,
+                    False,
+                    failed_snapshot,
+                )
+                self._observe_armor_deployment(failed_snapshot)
             cast_gate_reason = "shared_or_mechanical_cast_gate"
             if action.reason.startswith("rebuild_out_of_coverage_"):
                 cast_gate_reason = (
@@ -1257,10 +2674,16 @@ class My_Soul_Twisting(BuildMgr):
 
         after_snapshot = self._build_snapshot()
         if action.kind is _ActionKind.CORE_DEPLOYMENT:
+            self._record_armor_deployment_result(
+                action.skill_id,
+                True,
+                after_snapshot,
+            )
+        if action.kind is _ActionKind.CORE_DEPLOYMENT:
             self._clear_core_rebuild_debounce(
                 reason="rebuild_completed", tick_ms=after_snapshot.tick_ms
             )
-        self._emit_snapshot_diagnostics(after_snapshot, phase=phase)
+        self._observe_armor_deployment(after_snapshot)
         self._emit_event(
             "result",
             signature=(
@@ -1297,54 +2720,10 @@ class My_Soul_Twisting(BuildMgr):
         return (yield from self._run_policy("combat"))
 
     @staticmethod
-    def _quantized_remaining(effect: _EffectObservation) -> int:
-        return int(effect.remaining_ms // 500) * 500
-
-    @staticmethod
     def _format_position(position: Position | None) -> str:
         if position is None:
             return "na"
         return f"{position[0]:.0f},{position[1]:.0f}"
-
-    def _format_core_summary(self, snapshot: _SoulTwistingSnapshot) -> str:
-        summary: list[str] = []
-        for skill_id in _CORE_SKILLS:
-            observations = snapshot.core_spirits.get(skill_id, ())
-            if not observations:
-                summary.append(f"{_CORE_SKILL_NAMES[skill_id]}:none")
-                continue
-            entries = []
-            for observation in observations:
-                distance_player = (
-                    "na"
-                    if observation.distance_from_player is None
-                    else f"{observation.distance_from_player:.0f}"
-                )
-                distance_leader = (
-                    "na"
-                    if observation.distance_from_leader is None
-                    else f"{observation.distance_from_leader:.0f}"
-                )
-                if (
-                    observation.root_category is _SpiritCategory.PARTY_ROOT_MATCH
-                    and observation.alive
-                    and observation.spawned
-                ):
-                    coverage = (
-                        "functional-covering"
-                        if observation.covers_leader
-                        else "functional-out-of-coverage"
-                    )
-                else:
-                    coverage = "ignored"
-                entries.append(
-                    f"a={observation.agent_id}/root={observation.owner_id}"
-                    f"/category={observation.root_category.value}/coverage={coverage}"
-                    f"/alive={int(observation.alive)}/spawned={int(observation.spawned)}"
-                    f"/hp={observation.hp_fraction:.2f}/dplayer={distance_player}/dleader={distance_leader}"
-                )
-            summary.append(f"{_CORE_SKILL_NAMES[skill_id]}:[{';'.join(entries)}]")
-        return " ".join(summary)
 
     def _emit_event(
         self,
@@ -1382,227 +2761,6 @@ class My_Soul_Twisting(BuildMgr):
             skill=action.skill_id,
             reason=action.reason,
         )
-
-    def _emit_snapshot_diagnostics(
-        self, snapshot: _SoulTwistingSnapshot, *, phase: str
-    ) -> None:
-        if not self._diagnostic_online:
-            self._diagnostic_online = True
-            self._emit_event(
-                "package",
-                signature=("online",),
-                package="online",
-                build="My Soul Twisting",
-            )
-
-        if snapshot.close_to_aggro and self._diagnostic_previous_close is not True:
-            self._diagnostic_close_since = snapshot.tick_ms
-        elif not snapshot.close_to_aggro:
-            self._diagnostic_close_since = None
-        if snapshot.leader_in_aggro and not self._diagnostic_previous_leader_combat:
-            self._diagnostic_leader_combat_since = snapshot.tick_ms
-        elif not snapshot.leader_in_aggro:
-            self._diagnostic_leader_combat_since = None
-        if snapshot.deployment_ready and not self._diagnostic_previous_deployment:
-            self._diagnostic_deployment_since = snapshot.tick_ms
-        elif not snapshot.deployment_ready:
-            self._diagnostic_deployment_since = None
-
-        self._emit_event(
-            "phase",
-            signature=(phase, snapshot.context.value, snapshot.player_moving),
-            phase=phase,
-            context=snapshot.context.value,
-            player_moving=int(snapshot.player_moving),
-        )
-        self._emit_event(
-            "encounter",
-            signature=(
-                snapshot.context.value,
-                snapshot.local_in_aggro,
-                snapshot.leader_in_aggro,
-                snapshot.party_in_aggro,
-                snapshot.in_aggro,
-                snapshot.effective_in_aggro,
-                snapshot.close_to_aggro,
-                self._diagnostic_close_since,
-                self._diagnostic_leader_combat_since,
-            ),
-            context=snapshot.context.value,
-            local=int(snapshot.local_in_aggro),
-            leader=int(snapshot.leader_in_aggro),
-            party=int(snapshot.party_in_aggro),
-            in_aggro=int(snapshot.in_aggro),
-            effective=int(snapshot.effective_in_aggro),
-            close=int(snapshot.close_to_aggro),
-            close_since=self._diagnostic_close_since,
-            leader_combat_since=self._diagnostic_leader_combat_since,
-        )
-        self._emit_event(
-            "geometry",
-            signature=(
-                self._format_position(snapshot.player_position),
-                self._format_position(snapshot.leader_position),
-                snapshot.leader_agent_id,
-                snapshot.leader_valid,
-                snapshot.leader_alive,
-                snapshot.normal_cast_state,
-                None
-                if snapshot.distance_to_leader is None
-                else round(snapshot.distance_to_leader),
-                snapshot.deployment_ready,
-            ),
-            player=self._format_position(snapshot.player_position),
-            leader=self._format_position(snapshot.leader_position),
-            leader_id=snapshot.leader_agent_id,
-            leader_valid=int(snapshot.leader_valid),
-            leader_alive=int(snapshot.leader_alive),
-            leader_moving=int(snapshot.leader_moving),
-            normal_cast=int(snapshot.normal_cast_state),
-            distance_to_leader=(
-                "na"
-                if snapshot.distance_to_leader is None
-                else f"{snapshot.distance_to_leader:.0f}"
-            ),
-            radius=SPIRIT_PROTECTION_RADIUS,
-            margin=SPIRIT_COVERAGE_SAFETY_MARGIN,
-            deployment=int(snapshot.deployment_ready),
-            deployment_since=self._diagnostic_deployment_since,
-        )
-        readiness_signature = (
-            snapshot.soul_twisting.equipped,
-            snapshot.soul_twisting.present,
-            self._quantized_remaining(snapshot.soul_twisting),
-            snapshot.boon_of_creation.equipped,
-            snapshot.boon_of_creation.present,
-            self._quantized_remaining(snapshot.boon_of_creation),
-            snapshot.spirits_gift.equipped,
-            snapshot.spirits_gift.present,
-            self._quantized_remaining(snapshot.spirits_gift),
-            round(snapshot.player_energy_fraction, 2),
-        )
-        self._emit_event(
-            "readiness",
-            signature=readiness_signature,
-            st_equipped=int(snapshot.soul_twisting.equipped),
-            st_present=int(snapshot.soul_twisting.present),
-            st_remaining=snapshot.soul_twisting.remaining_ms,
-            st_ready=int(
-                self._effect_is_ready(snapshot.soul_twisting, SOUL_TWISTING_READY_MS)
-            ),
-            boon_equipped=int(snapshot.boon_of_creation.equipped),
-            boon_present=int(snapshot.boon_of_creation.present),
-            boon_remaining=snapshot.boon_of_creation.remaining_ms,
-            gift_equipped=int(snapshot.spirits_gift.equipped),
-            gift_present=int(snapshot.spirits_gift.present),
-            gift_remaining=snapshot.spirits_gift.remaining_ms,
-            energy_fraction=f"{snapshot.player_energy_fraction:.2f}",
-            energy_before=f"{snapshot.current_energy:.2f}",
-            energy_max=f"{snapshot.maximum_energy:.2f}",
-            st_python_cost=SOUL_TWISTING_PYTHON_COST,
-            st_live_min_cost=SOUL_TWISTING_LIVE_MIN_COST,
-        )
-
-        core_signature: list[Any] = []
-        for skill_id in _CORE_SKILLS:
-            observations = snapshot.core_spirits.get(skill_id, ())
-            status = _core_status(snapshot, skill_id)
-            present = status.functional_exists
-            previous_present = self._diagnostic_functional_presence.get(skill_id, False)
-            if present and not previous_present:
-                self._diagnostic_functional_spawn_since[skill_id] = snapshot.tick_ms
-            elif not present:
-                self._diagnostic_functional_spawn_since[skill_id] = None
-            self._diagnostic_functional_presence[skill_id] = present
-            core_signature.append(
-                (
-                    skill_id,
-                    tuple(
-                        (
-                            observation.agent_id,
-                            observation.owner_id,
-                            observation.root_category.value,
-                            observation.alive,
-                            observation.spawned,
-                            round(observation.hp_fraction, 2),
-                            None
-                            if observation.distance_from_player is None
-                            else round(observation.distance_from_player),
-                            None
-                            if observation.distance_from_leader is None
-                            else round(observation.distance_from_leader),
-                            observation.covers_leader,
-                        )
-                        for observation in observations
-                    ),
-                    status.functional_exists,
-                    status.functional_covers,
-                    status.functional_out_of_coverage,
-                )
-            )
-        self._emit_event(
-            "core",
-            signature=(
-                snapshot.player_agent_id,
-                snapshot.local_native_root_id,
-                tuple(sorted(snapshot.party_root_ids)),
-                tuple(core_signature),
-            ),
-            player_agent_id=snapshot.player_agent_id,
-            local_native_root_id=snapshot.local_native_root_id,
-            party_root_ids=tuple(sorted(snapshot.party_root_ids)),
-            summary=self._format_core_summary(snapshot),
-            radius=SPIRIT_PROTECTION_RADIUS,
-            functional_exists=tuple(
-                _CORE_SKILL_NAMES[skill_id]
-                for skill_id in _CORE_SKILLS
-                if _core_status(snapshot, skill_id).functional_exists
-            ),
-            functional_covers=tuple(
-                _CORE_SKILL_NAMES[skill_id]
-                for skill_id in _CORE_SKILLS
-                if _core_status(snapshot, skill_id).functional_covers
-            ),
-            spawn_since=tuple(
-                (
-                    _CORE_SKILL_NAMES[skill_id],
-                    self._diagnostic_functional_spawn_since.get(skill_id),
-                )
-                for skill_id in _CORE_SKILLS
-            ),
-            functional_out_of_coverage=tuple(
-                _CORE_SKILL_NAMES[skill_id]
-                for skill_id in _CORE_SKILLS
-                if _core_status(snapshot, skill_id).functional_out_of_coverage
-            ),
-        )
-
-        if (
-            snapshot.tick_ms - self._diagnostic_last_heartbeat_ms
-            >= DIAGNOSTIC_HEARTBEAT_MS
-        ):
-            self._diagnostic_last_heartbeat_ms = snapshot.tick_ms
-            self._emit_event(
-                "heartbeat",
-                signature=(
-                    snapshot.tick_ms // DIAGNOSTIC_HEARTBEAT_MS,
-                    phase,
-                    snapshot.context.value,
-                ),
-                force=True,
-                phase=phase,
-                context=snapshot.context.value,
-                deployment=int(snapshot.deployment_ready),
-                leader_distance=(
-                    "na"
-                    if snapshot.distance_to_leader is None
-                    else f"{snapshot.distance_to_leader:.0f}"
-                ),
-            )
-
-        self._diagnostic_previous_close = snapshot.close_to_aggro
-        self._diagnostic_previous_leader_combat = snapshot.leader_in_aggro
-        self._diagnostic_previous_deployment = snapshot.deployment_ready
 
 
 __all__ = ["My_Soul_Twisting"]
