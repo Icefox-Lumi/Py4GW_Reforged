@@ -140,6 +140,7 @@ class _ActionKind(str, Enum):
     SOUL_TWISTING_READINESS = "soul-twisting-readiness"
     CORE_DEPLOYMENT = "core-deployment"
     POST_DEPLOYMENT = "post-deployment"
+    BREATH_PARTY_SUPPORT = "breath-party-support"
     BLOCKED_NO_ACTION = "blocked/no-action"
 
 
@@ -216,6 +217,8 @@ class _SoulTwistingSnapshot:
     soul_twisting: _EffectObservation = _EffectObservation()
     boon_of_creation: _EffectObservation = _EffectObservation()
     spirits_gift: _EffectObservation = _EffectObservation()
+    breath_party_health_eligible: bool = False
+    breath_party_has_burning: bool = False
     core_spirits_readable: bool = True
     core_spirits: dict[int, tuple[_SpiritObservation, ...]] = field(
         default_factory=dict
@@ -538,6 +541,37 @@ class My_Soul_Twisting(BuildMgr):
             equipped=True, present=True, remaining_ms=remaining_ms
         )
 
+    def _read_breath_eligibility(self) -> tuple[bool, bool]:
+        # The shared NoAttribute coroutine casts immediately; MyST must snapshot
+        # and revalidate eligibility before its normal action dispatch.
+        if not self._is_skill_equipped(Breath_of_the_Great_Dwarf_ID):
+            return False, False
+
+        try:
+            custom_skill = self.GetCustomSkill(Breath_of_the_Great_Dwarf_ID)
+            health_eligible = bool(
+                self.EvaluatePartyWideThreshold(
+                    Breath_of_the_Great_Dwarf_ID,
+                    custom_skill,
+                )
+            )
+        except Exception:
+            health_eligible = False
+
+        try:
+            ally_array = Routines.Targeting.GetAllAlliesArray(
+                Range.SafeCompass.value
+            )
+            burning_id = Skill.GetID("Burning")
+            party_has_burning = any(
+                Routines.Checks.Agents.HasEffect(agent_id, burning_id)
+                for agent_id in (ally_array or [])
+            )
+        except Exception:
+            party_has_burning = False
+
+        return health_eligible, party_has_burning
+
     def _read_energy(self, player_agent_id: int) -> tuple[float, float, float]:
         try:
             fraction = min(1.0, max(0.0, float(Agent.GetEnergy(player_agent_id))))
@@ -789,6 +823,9 @@ class My_Soul_Twisting(BuildMgr):
             leader_alive=leader_alive,
             leader_position=leader_position,
         )
+        breath_party_health_eligible, breath_party_has_burning = (
+            self._read_breath_eligibility()
+        )
 
         return _SoulTwistingSnapshot(
             tick_ms=tick_ms,
@@ -831,6 +868,8 @@ class My_Soul_Twisting(BuildMgr):
             soul_twisting=self._read_effect(Soul_Twisting_ID),
             boon_of_creation=self._read_effect(Boon_of_Creation_ID),
             spirits_gift=self._read_effect(Spirits_Gift_ID),
+            breath_party_health_eligible=breath_party_health_eligible,
+            breath_party_has_burning=breath_party_has_burning,
             core_spirits_readable=core_spirits_readable,
             core_spirits=core_spirits,
         )
@@ -860,6 +899,61 @@ class My_Soul_Twisting(BuildMgr):
             _core_status(snapshot, skill_id).functional_covers
             for skill_id in equipped_core
         )
+
+    @staticmethod
+    def _breath_is_eligible(snapshot: _SoulTwistingSnapshot) -> bool:
+        return (
+            snapshot.breath_party_health_eligible
+            or snapshot.breath_party_has_burning
+        )
+
+    def _select_breath_action(
+        self, snapshot: _SoulTwistingSnapshot
+    ) -> _SoulTwistingAction | None:
+        if not self._is_skill_equipped(Breath_of_the_Great_Dwarf_ID):
+            return None
+        if not self._breath_is_eligible(snapshot):
+            return None
+
+        if snapshot.breath_party_health_eligible and snapshot.breath_party_has_burning:
+            reason = "party_health_threshold_and_burning"
+        elif snapshot.breath_party_health_eligible:
+            reason = "party_health_threshold"
+        else:
+            reason = "burning_in_party"
+        return _SoulTwistingAction(
+            kind=_ActionKind.BREATH_PARTY_SUPPORT,
+            skill_id=Breath_of_the_Great_Dwarf_ID,
+            reason=reason,
+            target_agent_id=0,
+        )
+
+    def _breath_higher_priority_reason(
+        self, snapshot: _SoulTwistingSnapshot
+    ) -> str | None:
+        if not snapshot.soul_twisting.equipped:
+            return "soul_twisting_higher_priority"
+        if not self._effect_is_ready(
+            snapshot.soul_twisting, SOUL_TWISTING_READY_MS
+        ):
+            return "soul_twisting_higher_priority"
+
+        equipped_core = self._equipped_core_skills()
+        if not equipped_core:
+            return "core_maintenance_higher_priority"
+        for skill_id in equipped_core:
+            if not _core_status(snapshot, skill_id).functional_covers:
+                return (
+                    "core_maintenance_higher_priority_"
+                    f"{_CORE_SKILL_NAMES[skill_id]}"
+                )
+
+        armor_eligible, _token_types, _armor_reason = (
+            self._armor_eligibility_observation(snapshot)
+        )
+        if armor_eligible:
+            return "armor_higher_priority"
+        return None
 
     def _select_portable_action(
         self,
@@ -928,7 +1022,10 @@ class My_Soul_Twisting(BuildMgr):
         return tuple(sorted(qualifying, key=_CORE_SKILLS.index))
 
     def _armor_eligibility(
-        self, snapshot: _SoulTwistingSnapshot
+        self,
+        snapshot: _SoulTwistingSnapshot,
+        *,
+        allow_lifecycle_mutation: bool = True,
     ) -> tuple[bool, tuple[int, ...], str]:
         if not self._armor_is_castable():
             return False, (), "armor_not_castable"
@@ -944,14 +1041,18 @@ class My_Soul_Twisting(BuildMgr):
         if epoch is None:
             return False, (), "no_active_deployment_epoch"
         if snapshot.tick_ms >= epoch.expires_at_ms:
-            self._reset_armor_deployment_state(reason="deployment_epoch_expired")
+            if allow_lifecycle_mutation:
+                self._reset_armor_deployment_state(reason="deployment_epoch_expired")
             return False, (), "deployment_epoch_expired"
         if (
             snapshot.map_id != epoch.map_id
             or snapshot.instance_uptime_ms < epoch.instance_uptime_ms
             or snapshot.player_agent_id != epoch.player_agent_id
         ):
-            self._reset_armor_deployment_state(reason="lifecycle_or_player_changed")
+            if allow_lifecycle_mutation:
+                self._reset_armor_deployment_state(
+                    reason="lifecycle_or_player_changed"
+                )
             return False, (), "lifecycle_or_player_changed"
         if not self._all_core_useful(snapshot):
             return False, (), "core_package_no_longer_useful"
@@ -963,9 +1064,10 @@ class My_Soul_Twisting(BuildMgr):
             token = epoch.tokens[skill_id]
             observation = self._armor_token_witness(token, snapshot)
             if observation is None:
-                self._invalidate_armor_token(
-                    skill_id, reason="witness_invalid_before_dispatch"
-                )
+                if allow_lifecycle_mutation:
+                    self._invalidate_armor_token(
+                        skill_id, reason="witness_invalid_before_dispatch"
+                    )
                 return False, (), "deployment_witness_invalid"
             if (
                 observation.distance_from_player is None
@@ -973,6 +1075,14 @@ class My_Soul_Twisting(BuildMgr):
             ):
                 return False, qualifying_types, "deployment_witness_out_of_earshot"
         return True, qualifying_types, "ready"
+
+    def _armor_eligibility_observation(
+        self, snapshot: _SoulTwistingSnapshot
+    ) -> tuple[bool, tuple[int, ...], str]:
+        return self._armor_eligibility(
+            snapshot,
+            allow_lifecycle_mutation=False,
+        )
 
     def _clear_core_rebuild_debounce(
         self, *, reason: str, tick_ms: int | None = None
@@ -1268,6 +1378,9 @@ class My_Soul_Twisting(BuildMgr):
                     reason="armor_epoch_ready",
                     target_agent_id=0,
                 )
+            breath_action = self._select_breath_action(snapshot)
+            if breath_action is not None:
+                return breath_action
             portable_action = self._select_portable_action(snapshot, allow_active=True)
             if portable_action is not None:
                 return portable_action
@@ -1375,6 +1488,27 @@ class My_Soul_Twisting(BuildMgr):
                 return False, armor_reason
             if action.target_agent_id != 0:
                 return False, "armor_target_must_be_zero"
+            return True, "ready"
+
+        if action.kind is _ActionKind.BREATH_PARTY_SUPPORT:
+            if not snapshot.deployment_ready:
+                return False, "deployment_window_closed"
+            if action.skill_id != Breath_of_the_Great_Dwarf_ID:
+                return False, "unsupported_breath_action"
+            if action.target_agent_id != 0:
+                return False, "breath_target_must_be_zero"
+            if not self._is_skill_equipped(Breath_of_the_Great_Dwarf_ID):
+                return False, "breath_not_equipped"
+            higher_priority_reason = self._breath_higher_priority_reason(snapshot)
+            if higher_priority_reason is not None:
+                return False, higher_priority_reason
+            if not self._breath_is_eligible(snapshot):
+                return False, "breath_criteria_no_longer_met"
+            try:
+                if not self.CanCastSkillID(Breath_of_the_Great_Dwarf_ID):
+                    return False, "breath_not_castable"
+            except Exception:
+                return False, "breath_castability_unreadable"
             return True, "ready"
 
         return False, "no_action"

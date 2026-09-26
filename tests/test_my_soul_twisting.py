@@ -197,6 +197,8 @@ def _snapshot(**overrides: Any) -> Any:
         "soul_twisting": _effect(remaining_ms=10000),
         "boon_of_creation": _effect(remaining_ms=10000),
         "spirits_gift": _effect(remaining_ms=10000),
+        "breath_party_health_eligible": False,
+        "breath_party_has_burning": False,
         "core_spirits": {},
     }
     values.update(overrides)
@@ -1175,6 +1177,391 @@ def test_summon_is_excluded_from_core_policy_actions() -> None:
     action = controller._select_action(_snapshot(core_spirits={}))
     assert action.kind is ST._ActionKind.BLOCKED_NO_ACTION
     assert action.skill_id == 0
+
+
+def _run_policy_with_snapshots(
+    controller: Any,
+    snapshots: tuple[Any, ...],
+    *,
+    observe: Any = None,
+) -> tuple[Any, list[dict[str, Any]]]:
+    snapshot_iterator = iter(snapshots)
+    calls: list[dict[str, Any]] = []
+    controller._normal_cast_state = lambda: True
+    controller._build_snapshot = lambda: next(snapshot_iterator)
+    controller._observe_armor_deployment = (
+        (lambda snapshot: None) if observe is None else observe
+    )
+
+    def cast_skill(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        yield
+        return True
+
+    controller.CastSkillID = cast_skill
+    result = _finish_generator(controller._run_policy("combat"))
+    return result, calls
+
+
+def test_breath_selects_on_party_health_threshold_without_burning() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    action = controller._select_action(
+        _full_core_snapshot(
+            breath_party_health_eligible=True,
+            breath_party_has_burning=False,
+        )
+    )
+    assert action.kind is ST._ActionKind.BREATH_PARTY_SUPPORT
+    assert action.skill_id == ST.Breath_of_the_Great_Dwarf_ID
+    assert action.reason == "party_health_threshold"
+
+
+def test_breath_selects_on_nearby_burning_above_health_threshold() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    action = controller._select_action(
+        _full_core_snapshot(
+            breath_party_health_eligible=False,
+            breath_party_has_burning=True,
+        )
+    )
+    assert action.kind is ST._ActionKind.BREATH_PARTY_SUPPORT
+    assert action.reason == "burning_in_party"
+
+
+def test_breath_health_path_does_not_require_burning_during_revalidation() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    controller.CanCastSkillID = (
+        lambda skill_id: skill_id == ST.Breath_of_the_Great_Dwarf_ID
+    )
+    snapshot = _full_core_snapshot(
+        breath_party_health_eligible=True,
+        breath_party_has_burning=False,
+    )
+    action = controller._select_action(snapshot)
+    valid, reason = controller._revalidate_action(action, snapshot)
+    assert valid
+    assert reason == "ready"
+
+
+def test_breath_dispatch_is_targetless() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    calls: list[dict[str, Any]] = []
+
+    def breath_cast(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        yield
+        return True
+
+    controller.CastSkillID = breath_cast
+    action = ST._SoulTwistingAction(
+        kind=ST._ActionKind.BREATH_PARTY_SUPPORT,
+        skill_id=ST.Breath_of_the_Great_Dwarf_ID,
+        target_agent_id=0,
+    )
+    assert _finish_generator(controller._execute_action(action)) is True
+    assert calls[0]["skill_id"] == ST.Breath_of_the_Great_Dwarf_ID
+    assert calls[0]["target_agent_id"] == 0
+
+
+def test_breath_does_not_preempt_soul_twisting_readiness() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    action = controller._select_action(
+        _full_core_snapshot(
+            soul_twisting=_effect(present=False, remaining_ms=0),
+            breath_party_health_eligible=True,
+        )
+    )
+    assert action.kind is ST._ActionKind.SOUL_TWISTING_READINESS
+    assert action.skill_id == ST.Soul_Twisting_ID
+
+
+def test_breath_does_not_preempt_core_maintenance() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    action = controller._select_action(
+        _snapshot(
+            breath_party_health_eligible=True,
+            breath_party_has_burning=True,
+            core_spirits={},
+        )
+    )
+    assert action.kind is ST._ActionKind.CORE_DEPLOYMENT
+    assert action.skill_id == ST.Shelter_ID
+
+
+def test_breath_does_not_preempt_eligible_armor() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {
+            ST.Soul_Twisting_ID,
+            ST.Armor_of_Unfeeling_ID,
+            ST.Breath_of_the_Great_Dwarf_ID,
+        }
+    )
+    controller.CanCastSkillID = lambda skill_id: skill_id in {
+        ST.Armor_of_Unfeeling_ID,
+        ST.Breath_of_the_Great_Dwarf_ID,
+    }
+    _seed_epoch(controller)
+    action = controller._select_action(
+        _full_core_snapshot(
+            breath_party_health_eligible=True,
+            breath_party_has_burning=True,
+        )
+    )
+    assert action.kind is ST._ActionKind.POST_DEPLOYMENT
+    assert action.skill_id == ST.Armor_of_Unfeeling_ID
+    assert action.target_agent_id == 0
+
+
+def test_breath_precedes_boon_of_creation() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {
+            ST.Soul_Twisting_ID,
+            ST.Breath_of_the_Great_Dwarf_ID,
+            ST.Boon_of_Creation_ID,
+        }
+    )
+    action = controller._select_action(
+        _full_core_snapshot(
+            breath_party_health_eligible=True,
+            boon_of_creation=_effect(present=False, remaining_ms=0),
+        )
+    )
+    assert action.kind is ST._ActionKind.BREATH_PARTY_SUPPORT
+    assert action.skill_id == ST.Breath_of_the_Great_Dwarf_ID
+
+
+def test_breath_precedes_spirits_gift() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {
+            ST.Soul_Twisting_ID,
+            ST.Breath_of_the_Great_Dwarf_ID,
+            ST.Spirits_Gift_ID,
+        }
+    )
+    action = controller._select_action(
+        _full_core_snapshot(
+            breath_party_has_burning=True,
+            spirits_gift=_effect(present=False, remaining_ms=0),
+        )
+    )
+    assert action.kind is ST._ActionKind.BREATH_PARTY_SUPPORT
+    assert action.skill_id == ST.Breath_of_the_Great_Dwarf_ID
+
+
+def test_breath_not_equipped_leaves_boon_downstream_unchanged() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Boon_of_Creation_ID}
+    )
+    action = controller._select_action(
+        _full_core_snapshot(
+            breath_party_health_eligible=True,
+            breath_party_has_burning=True,
+            boon_of_creation=_effect(present=False, remaining_ms=0),
+        )
+    )
+    assert action.kind is ST._ActionKind.PORTABLE_READINESS
+    assert action.skill_id == ST.Boon_of_Creation_ID
+
+
+def test_breath_ineligible_leaves_boon_downstream_unchanged() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {
+            ST.Soul_Twisting_ID,
+            ST.Breath_of_the_Great_Dwarf_ID,
+            ST.Boon_of_Creation_ID,
+        }
+    )
+    action = controller._select_action(
+        _full_core_snapshot(
+            breath_party_health_eligible=False,
+            breath_party_has_burning=False,
+            boon_of_creation=_effect(present=False, remaining_ms=0),
+        )
+    )
+    assert action.kind is ST._ActionKind.PORTABLE_READINESS
+    assert action.skill_id == ST.Boon_of_Creation_ID
+
+
+def test_breath_revalidation_preserves_castability_gate() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    snapshot = _full_core_snapshot(breath_party_health_eligible=True)
+    action = controller._select_action(snapshot)
+    valid, reason = controller._revalidate_action(action, snapshot)
+    assert not valid
+    assert reason == "breath_not_castable"
+
+
+def test_breath_revalidation_observes_expired_armor_without_mutating_state() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {
+            ST.Soul_Twisting_ID,
+            ST.Armor_of_Unfeeling_ID,
+            ST.Breath_of_the_Great_Dwarf_ID,
+        }
+    )
+    controller.CanCastSkillID = lambda skill_id: skill_id in {
+        ST.Armor_of_Unfeeling_ID,
+        ST.Breath_of_the_Great_Dwarf_ID,
+    }
+    epoch = _seed_epoch(controller, finish_at=1000, expires_at=1500)
+    tokens_before = dict(epoch.tokens)
+    probes_before = dict(controller._armor_deployment_probes)
+    active_cast_before = controller._armor_deployment_active_cast
+    terminal_cast_before = controller._armor_deployment_last_terminal_cast
+    lifecycle_before = controller._armor_deployment_lifecycle
+    player_before = controller._armor_deployment_player_agent_id
+    action = ST._SoulTwistingAction(
+        kind=ST._ActionKind.BREATH_PARTY_SUPPORT,
+        skill_id=ST.Breath_of_the_Great_Dwarf_ID,
+        target_agent_id=0,
+    )
+    valid, reason = controller._revalidate_action(
+        action,
+        _full_core_snapshot(
+            tick_ms=2000,
+            breath_party_health_eligible=True,
+        ),
+    )
+    assert valid
+    assert reason == "ready"
+    assert controller._armor_deployment_epoch is epoch
+    assert epoch.tokens == tokens_before
+    assert controller._armor_deployment_probes == probes_before
+    assert controller._armor_deployment_active_cast is active_cast_before
+    assert controller._armor_deployment_last_terminal_cast is terminal_cast_before
+    assert controller._armor_deployment_lifecycle == lifecycle_before
+    assert controller._armor_deployment_player_agent_id == player_before
+
+
+def test_breath_final_revalidation_rejects_new_soul_twisting_need() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    controller.CanCastSkillID = (
+        lambda skill_id: skill_id == ST.Breath_of_the_Great_Dwarf_ID
+    )
+    snapshot_a = _full_core_snapshot(breath_party_health_eligible=True)
+    snapshot_b = replace(
+        snapshot_a,
+        soul_twisting=_effect(present=False, remaining_ms=0),
+    )
+    result, calls = _run_policy_with_snapshots(
+        controller, (snapshot_a, snapshot_b)
+    )
+    assert result is False
+    assert calls == []
+    assert controller._diagnostic_last_signatures["rejection"][-1] == (
+        "soul_twisting_higher_priority"
+    )
+
+
+def test_breath_final_revalidation_rejects_new_shelter_maintenance() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    controller.CanCastSkillID = (
+        lambda skill_id: skill_id == ST.Breath_of_the_Great_Dwarf_ID
+    )
+    snapshot_a = _full_core_snapshot(breath_party_health_eligible=True)
+    core_spirits = dict(snapshot_a.core_spirits)
+    core_spirits[ST.Shelter_ID] = ()
+    snapshot_b = replace(snapshot_a, core_spirits=core_spirits)
+    result, calls = _run_policy_with_snapshots(
+        controller, (snapshot_a, snapshot_b)
+    )
+    assert result is False
+    assert calls == []
+    assert controller._diagnostic_last_signatures["rejection"][-1] == (
+        "core_maintenance_higher_priority_Shelter"
+    )
+
+
+def test_breath_final_revalidation_rejects_new_armor_eligibility() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {
+            ST.Soul_Twisting_ID,
+            ST.Armor_of_Unfeeling_ID,
+            ST.Breath_of_the_Great_Dwarf_ID,
+        }
+    )
+    controller.CanCastSkillID = lambda skill_id: skill_id in {
+        ST.Armor_of_Unfeeling_ID,
+        ST.Breath_of_the_Great_Dwarf_ID,
+    }
+    snapshot_a = _full_core_snapshot(breath_party_health_eligible=True)
+    snapshot_b = _full_core_snapshot(
+        tick_ms=2500,
+        breath_party_health_eligible=True,
+    )
+    observed_snapshots = 0
+
+    def observe(_snapshot: Any) -> None:
+        nonlocal observed_snapshots
+        if observed_snapshots == 1:
+            _seed_epoch(controller)
+        observed_snapshots += 1
+
+    result, calls = _run_policy_with_snapshots(
+        controller,
+        (snapshot_a, snapshot_b),
+        observe=observe,
+    )
+    assert result is False
+    assert calls == []
+    assert controller._diagnostic_last_signatures["rejection"][-1] == (
+        "armor_higher_priority"
+    )
+
+
+def test_breath_final_revalidation_allows_unchanged_priority_state() -> None:
+    controller = _controller(
+        equipped=set(ST._CORE_SKILLS)
+        | {ST.Soul_Twisting_ID, ST.Breath_of_the_Great_Dwarf_ID}
+    )
+    controller.CanCastSkillID = (
+        lambda skill_id: skill_id == ST.Breath_of_the_Great_Dwarf_ID
+    )
+    snapshot_a = _full_core_snapshot(breath_party_health_eligible=True)
+    snapshot_b = replace(snapshot_a, tick_ms=2500)
+    result, calls = _run_policy_with_snapshots(
+        controller, (snapshot_a, snapshot_b, snapshot_b)
+    )
+    assert result is True
+    assert len(calls) == 1
+    assert calls[0]["skill_id"] == ST.Breath_of_the_Great_Dwarf_ID
+    assert calls[0]["target_agent_id"] == 0
+
+
 def _production_controller() -> Any:
     controller = _controller(
         equipped=set(ST._CORE_SKILLS) | {ST.Armor_of_Unfeeling_ID}
@@ -1483,12 +1870,13 @@ def _full_core_snapshot(
     tick_ms: int = 2000,
     displacement_id: int = 30,
     player_position: tuple[float, float] = (0.0, 0.0),
+    **overrides: Any,
 ) -> Any:
     distance_from_player = abs(player_position[0])
-    return _snapshot(
-        tick_ms=tick_ms,
-        player_position=player_position,
-        core_spirits={
+    values: dict[str, Any] = {
+        "tick_ms": tick_ms,
+        "player_position": player_position,
+        "core_spirits": {
             ST.Shelter_ID: (
                 _observation(
                     ST.Shelter_ID,
@@ -1511,7 +1899,9 @@ def _full_core_snapshot(
                 ),
             ),
         },
-    )
+    }
+    values.update(overrides)
+    return _snapshot(**values)
 
 
 def test_production_has_no_superseded_armor_experiment() -> None:
