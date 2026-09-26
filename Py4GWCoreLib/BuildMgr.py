@@ -65,6 +65,9 @@ class BuildMgr:
         self._local_combat_handler: BuildHandler | None = None
         self._custom_skill_data_handler: CustomSkillClass | None = None
         self._cached_data: Any = None
+        self._wb_prev_cast_pending = False
+        self._wb_posted_this_cast = False
+        self._wb_posted_claim: tuple[int, str, int, int, int] | None = None
 
         self.minimum_required_match = len(self.required_skills)
         self.tick_state = None
@@ -1533,10 +1536,9 @@ class BuildMgr:
             return
 
     def _process_phase(self, handler: BuildHandler | None, is_in_combat: bool) -> BuildCoroutine:
-        # Whiteboard owner self-clear — release my (skill, target) slots on
-        # the cast-finish transition so sibling accounts can reuse them
-        # immediately. Lives here (not in Tick) because HeroAI's BT path
-        # calls ProcessCombat/ProcessOOC directly and bypasses Tick.
+        # Release the posted whiteboard claim on the cast-finish transition.
+        # Lives here (not in Tick) because HeroAI's BT path calls
+        # ProcessCombat/ProcessOOC directly and bypasses Tick.
         self._whiteboard_owner_self_clear()
         can_process = self.CanProcess()
         self._temporary_hbs_log_can_process(
@@ -1793,6 +1795,7 @@ class BuildMgr:
             email = Player.GetAccountEmail() or ""
             if not email:
                 return
+            group_id = int(GLOBAL_CACHE.ShMem.GetAccountGroupByEmail(email))
             activation_ms = 0
             aftercast_ms = 0
             try:
@@ -1806,17 +1809,30 @@ class BuildMgr:
             cast_window_ms = max(500, activation_ms + aftercast_ms)
             now = PySystem.get_tick_count64()
             expires_at = int(now) + cast_window_ms + int(SHMEM_INTENT_DEFAULT_PING_BUDGET_MS)
-            GLOBAL_CACHE.ShMem.PostIntent(
-                email, int(skill_id), int(target_agent_id), int(expires_at)
+            claim_index = int(
+                GLOBAL_CACHE.ShMem.PostIntent(
+                    email,
+                    int(skill_id),
+                    int(target_agent_id),
+                    int(expires_at),
+                    isolation_group_id=group_id,
+                )
+            )
+            if claim_index < 0:
+                return
+            self._wb_posted_claim = (
+                claim_index,
+                email,
+                int(skill_id),
+                int(target_agent_id),
+                group_id,
             )
             self._wb_posted_this_cast = True
         except Exception:
             pass
 
     def _whiteboard_owner_self_clear(self) -> None:
-        """On the local-cast-pending True->False transition, zero my intent
-        slots so sibling accounts can reuse the (skill, target) immediately.
-        """
+        """On the local-cast-pending True->False transition, release my posted claim."""
         try:
             pending = self._is_local_cast_pending()
             prev = getattr(self, "_wb_prev_cast_pending", False)
@@ -1825,11 +1841,20 @@ class BuildMgr:
                 return
             if not getattr(self, "_wb_posted_this_cast", False):
                 return
-            from Py4GWCoreLib import GLOBAL_CACHE, Player
-            email = Player.GetAccountEmail() or ""
-            if email:
-                GLOBAL_CACHE.ShMem.ClearIntentsByOwner(email)
+            claim = getattr(self, "_wb_posted_claim", None)
+            if claim is not None:
+                from Py4GWCoreLib import GLOBAL_CACHE
+
+                index, owner_email, skill_id, target_agent_id, group_id = claim
+                GLOBAL_CACHE.ShMem.ClearIntentIfMatch(
+                    index,
+                    owner_email,
+                    skill_id,
+                    target_agent_id,
+                    group_id,
+                )
             self._wb_posted_this_cast = False
+            self._wb_posted_claim = None
         except Exception:
             pass
 
@@ -2137,9 +2162,7 @@ class BuildMgr:
         yield from self._process_phase(self._local_combat_handler, is_in_combat=True)
 
     def Tick(self, is_in_combat: bool):
-        # Clear whiteboard intent slots on the cast-finish transition so
-        # sibling accounts can reuse the (skill, target) as soon as my
-        # local cast window has closed.
+        # Release the posted whiteboard claim when the local cast window closes.
         self._whiteboard_owner_self_clear()
         if is_in_combat:
             yield from self.ProcessCombat()

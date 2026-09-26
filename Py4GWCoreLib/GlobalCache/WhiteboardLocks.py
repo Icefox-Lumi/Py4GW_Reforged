@@ -10,6 +10,8 @@ from Py4GWCoreLib.enums_src.Whiteboard_enums import (
 )
 
 from ..py4gwcorelib_src.FrameCache import frame_cache
+from .shared_memory_src.IntentSync import tick_elapsed
+from .shared_memory_src.IntentSync import tick_is_expired
 
 
 MINION_LOCK_KEY = 0
@@ -198,9 +200,9 @@ def get_resurrection_lock_owner(dead_ally_agent_id: int, now_tick: int | None = 
                 continue
             if int(intent.IsolationGroupID) != int(group_id):
                 continue
-            if int(intent.ExpiresAtTick) <= int(now_tick):
+            if tick_is_expired(int(now_tick), int(intent.ExpiresAtTick)):
                 continue
-            candidate = (int(intent.PostedAtTick), int(slot_index), intent.OwnerEmail or "")
+            candidate = (-tick_elapsed(int(now_tick), int(intent.PostedAtTick)), int(slot_index), intent.OwnerEmail or "")
             if winner is None or candidate < winner:
                 winner = candidate
 
@@ -307,7 +309,7 @@ def read_resurrection_scroll_states() -> dict[str, tuple[bool, bool]]:
         for _slot_index, intent in GLOBAL_CACHE.ShMem.GetAllAccounts().GetAllIntents():
             if int(intent.KindID) != int(WhiteboardLockKind.RESURRECTION_SCROLL_STATE):
                 continue
-            if int(intent.ExpiresAtTick) <= now:
+            if tick_is_expired(now, int(intent.ExpiresAtTick)):
                 continue
             owner = intent.OwnerEmail or ""
             if not owner:
@@ -387,7 +389,7 @@ def post_hex_removal_lock(hexed_ally_agent_id: int, skill_id: int = 0, aftercast
                 continue
             if int(intent.IsolationGroupID) != int(group_id):
                 continue
-            if int(intent.ExpiresAtTick) <= now:
+            if tick_is_expired(now, int(intent.ExpiresAtTick)):
                 continue
             return int(slot_index)
 
@@ -494,7 +496,7 @@ def post_buff_target_lock(
                 continue
             if int(intent.IsolationGroupID) != int(group_id):
                 continue
-            if int(intent.ExpiresAtTick) <= now:
+            if tick_is_expired(now, int(intent.ExpiresAtTick)):
                 continue
             return int(slot_index)
 
@@ -634,7 +636,7 @@ def post_loot_lock(item_agent_id: int, minimum_ms: int = LOOT_LOCK_MIN_DURATION_
                 continue
             if int(intent.IsolationGroupID) != int(group_id):
                 continue
-            if int(intent.ExpiresAtTick) <= now:
+            if tick_is_expired(now, int(intent.ExpiresAtTick)):
                 continue
             return int(slot_index)
 

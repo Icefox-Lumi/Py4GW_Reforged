@@ -38,6 +38,7 @@ target = target_agent_id
 - `Py4GWCoreLib/enums_src/Whiteboard_enums.py` - lock kinds, modes, reentry policy, and claim strength.
 - `Py4GWCoreLib/GlobalCache/shared_memory_src/IntentStruct.py` - shared-memory slot schema.
 - `Py4GWCoreLib/GlobalCache/shared_memory_src/AllAccounts.py` - slot allocator, lock readers, sweeper, debug logger.
+- `Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py` - Windows Intent-table mutex and uint32 tick helpers.
 - `Py4GWCoreLib/GlobalCache/shared_memory_src/Globals.py` - capacity and sweep constants.
 - `Py4GWCoreLib/GlobalCache/SharedMemory.py` - `GLOBAL_CACHE.ShMem` wrappers and sweep tick.
 - `Py4GWCoreLib/GlobalCache/Whiteboard.py` - opt-in registry for `(kind, key)` consumers.
@@ -62,8 +63,8 @@ whiteboard locks.
 | `SkillID` | Compatibility name. Generic callers should treat this as `KeyID`. |
 | `TargetAgentID` | Compatibility name. Generic callers should treat this as `TargetID`. |
 | `IsolationGroupID` | Team scope. Different groups do not block each other. |
-| `PostedAtTick` | `Py4GW.Game.get_tick_count64()` when the lock was posted. |
-| `ExpiresAtTick` | Mandatory deadline. Readers ignore locks at or past this tick. |
+| `PostedAtTick` | Low 32 bits of `Py4GW.Game.get_tick_count64()` when the lock was posted. |
+| `ExpiresAtTick` | Low 32 bits of the full-width deadline. Leases must be less than `2^31` ms. |
 | `Active` | Slot allocation flag. |
 
 Capacity:
@@ -141,18 +142,26 @@ them, but a caller must explicitly query soft claims by passing
 
 ## Expiry Model
 
-All whiteboard locks expire by time. This is the only universal cleanup path
-and is mandatory because clients can disconnect, map, fail a cast, or stop a
-routine without clearing their slot.
+All whiteboard locks expire by time. Stored timestamps use uint32 modular
+arithmetic; a deadline is expired at/past the current tick, and a lease must be
+less than `2^31` milliseconds so its future/past direction remains unambiguous.
+This is the only universal cleanup path and is mandatory because clients can
+disconnect, map, fail a cast, or stop a routine without clearing their slot.
 
 There are three cleanup paths:
 
-1. Reader-side expiry: `now_tick >= ExpiresAtTick` is treated as empty.
+1. Reader-side expiry: a wrap-safe modular comparison treats a deadline at or
+   behind `now_tick` as empty.
 2. Owner clear: `ClearIntentsByOwner(owner_email)` clears all locks owned by an account.
 3. Periodic sweep: `SweepExpiredIntents(now_tick)` compacts expired slots every `SHMEM_INTENT_SWEEP_INTERVAL_MS`.
 
-The existing BuildMgr skill-target flow also clears owner locks when local cast
-pending transitions from true to false.
+The BuildMgr skill-target flow retains and exact-clears its posted claim when
+local cast pending transitions from true to false.
+
+Every Python Intent-table mutation uses one Windows named mutex. Its name is a
+stable hash of `SHMEM_SHARED_MEMORY_FILE_NAME`, so clients attached to the same
+shared region serialize slot allocation and mutation. Posts publish `Active`
+last; clears deactivate the slot before resetting its payload.
 
 ## Public API
 
@@ -166,6 +175,7 @@ External callers should use `GLOBAL_CACHE.ShMem`.
 | `IsLockSatisfied(kind_id, key_id, target_id, group_id, exclude_email, now_tick, required_holders, claim_strength?)` | Barrier helper. |
 | `PostIntent(owner_email, skill_id, target_agent_id, expires_at_tick, group?)` | Compatibility wrapper for exclusive skill-target locks. |
 | `IsIntentClaimed(skill_id, target_agent_id, group_id, exclude_email, now_tick)` | Compatibility read gate for exclusive skill-target locks. |
+| `ClearIntentIfMatch(index, owner_email, skill_id, target_id, group_id)` | Clear one exact BuildMgr skill-target claim, including its fixed PostIntent policy. |
 | `ClearIntentsByOwner(owner_email)` | Clear all locks owned by an account. Name kept for compatibility. |
 | `SweepExpiredIntents(now_tick)` | Clear expired slots. Name kept for compatibility. |
 | `GetAllIntents()` | Debug snapshot of active slots. |
@@ -318,14 +328,13 @@ Example lines now include kind and mode:
 - Existing skill-target coordination only covers paths routed through
   `BuildMgr.CastSkillID`. HeroAI's direct `SkillBar.UseSkill` path must be
   wired separately for non-BuildMgr locks such as minion corpse claims.
-- There is still a frame-grain race window: two clients can pass a read gate
-  before either posts. The lock reduces collisions; it does not provide a
-  kernel-level compare-and-swap.
-- `ClearIntentsByOwner` clears every lock owned by that account, not only one
-  kind. That matches current cast cleanup but may need narrower clear helpers
-  if long-lived cooldown locks are added.
-- Shared-memory layout changed when generic lock fields were added. All live
-  clients must restart together before testing.
+- Two clients can still pass a conflict read before either posts. The mutex
+  protects table allocation and mutation, but does not make check-plus-post an
+  atomic reservation.
+- This Core update preserves the shared-memory layout, but coordinated clients
+  must reload or restart together so every live writer uses the mutex. Clients
+  must also keep matching schemas because the earlier generic-lock fields
+  changed the shared-memory layout.
 
 ## Verification
 
@@ -336,6 +345,7 @@ python -m py_compile `
   "Py4GWCoreLib/enums_src/Whiteboard_enums.py" `
   "Py4GWCoreLib/enums.py" `
   "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentStruct.py" `
+  "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py" `
   "Py4GWCoreLib/GlobalCache/shared_memory_src/AllAccounts.py" `
   "Py4GWCoreLib/GlobalCache/SharedMemory.py" `
   "Py4GWCoreLib/BuildMgr.py"

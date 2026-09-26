@@ -508,6 +508,23 @@ class Py4GWSharedMemoryManager:
         """Zero every intent slot whose OwnerEmail matches."""
         return self.GetAllAccounts().ClearIntentsByOwner(owner_email)
 
+    def ClearIntentIfMatch(
+        self,
+        index: int,
+        owner_email: str,
+        skill_id: int,
+        target_agent_id: int,
+        group_id: int,
+    ) -> bool:
+        """Clear one matching skill-target claim."""
+        return self.GetAllAccounts().ClearIntentIfMatch(
+            index,
+            owner_email,
+            skill_id,
+            target_agent_id,
+            group_id,
+        )
+
     @frame_cache(category="SharedMemory", source_lib="IsIntentClaimed")
     def IsIntentClaimed(
         self,

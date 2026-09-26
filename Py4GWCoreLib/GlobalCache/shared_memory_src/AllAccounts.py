@@ -1,5 +1,4 @@
 import ctypes
-from operator import index
 import PySystem
 from PyParty import HeroPartyMember, PetInfo
 from ctypes import Structure, c_float
@@ -19,6 +18,7 @@ from .Globals import (
     SHMEM_MAX_CHAR_LEN,
     SHMEM_MAX_NUMBER_OF_SKILLS,
     SHMEM_MAX_INTENTS,
+    SHMEM_SHARED_MEMORY_FILE_NAME,
 )
 
 from .SharedMessageStruct import SharedMessageStruct
@@ -26,6 +26,11 @@ from .HeroAIOptionStruct import HeroAIOptionStruct
 from .AccountStruct import AccountStruct
 from .KeyStruct import KeyStruct
 from .IntentStruct import IntentStruct
+from .IntentSync import intent_table_lock
+from .IntentSync import is_valid_future_lease
+from .IntentSync import normalize_tick
+from .IntentSync import tick_elapsed
+from .IntentSync import tick_is_expired
 
 # Master toggle for all whiteboard/lock debug logs.
 # Default is silent. Flip this single flag when you want visibility again.
@@ -67,8 +72,10 @@ class AllAccounts(Structure):
             self.AccountData[i].reset()
             self.Inbox[i].reset()
             self.HeroAIOptions[i].reset()
-        for i in range(SHMEM_MAX_INTENTS):
-            self.Intents[i].reset()
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if acquired:
+                for i in range(SHMEM_MAX_INTENTS):
+                    self.Intents[i].reset()
             
     #region Account
     def GetAccountData(self, index: int) -> AccountStruct:
@@ -1132,38 +1139,101 @@ class AllAccounts(Structure):
                 out.append((i, intent))
         return out
 
+    def _reset_intent_unlocked(self, index: int) -> None:
+        """Reset one slot while its caller owns the Intent-table mutex."""
+        self.Intents[index].reset()
+
+    def _clear_intent_unlocked(self, index: int, reason: str, now_tick: int | None = None) -> None:
+        """Log and reset one slot while its caller owns the Intent-table mutex."""
+        intent = self.Intents[index]
+        if intent.Active:
+            now = int(PySystem.get_tick_count64()) if now_tick is None else int(now_tick)
+            lifetime = tick_elapsed(now, int(intent.PostedAtTick))
+            self._wb_log(
+                int(intent.KindID),
+                f"CLEAR slot={index} email='{intent.OwnerEmail}' "
+                f"{self._wb_lock_display(intent)} lifetime={lifetime}ms reason={reason}",
+            )
+        self._reset_intent_unlocked(index)
+
     def ClearIntent(self, index: int) -> None:
         """Zero a single intent slot."""
         if not (0 <= index < SHMEM_MAX_INTENTS):
             return
-        intent = self.Intents[index]
-        if intent.Active:
-            lifetime = int(PySystem.get_tick_count64()) - int(intent.PostedAtTick)
-            self._wb_log(
-                int(intent.KindID),
-                f"CLEAR slot={index} email='{intent.OwnerEmail}' "
-                f"{self._wb_lock_display(intent)} lifetime={lifetime}ms reason=explicit",
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if acquired:
+                self._clear_intent_unlocked(index, "explicit")
+
+    def ClearIntentIfMatch(
+        self,
+        index: int,
+        owner_email: str,
+        skill_id: int,
+        target_agent_id: int,
+        group_id: int,
+    ) -> bool:
+        """Clear the matching PostIntent claim while holding the table mutex."""
+        if not owner_email or not (0 <= index < SHMEM_MAX_INTENTS):
+            return False
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return False
+            return self._clear_intent_if_match_unlocked(
+                index,
+                owner_email,
+                skill_id,
+                target_agent_id,
+                group_id,
             )
-        intent.reset()
+
+    def _clear_intent_if_match_unlocked(
+        self,
+        index: int,
+        owner_email: str,
+        skill_id: int,
+        target_agent_id: int,
+        group_id: int,
+    ) -> bool:
+        """Validate and clear a PostIntent claim while the caller owns the mutex."""
+        intent = self.Intents[index]
+        if not intent.Active:
+            return False
+        if intent.OwnerEmail != owner_email:
+            return False
+        if int(intent.KindID) != int(WhiteboardLockKind.SKILL_TARGET):
+            return False
+        if int(intent.SkillID) != int(skill_id):
+            return False
+        if int(intent.TargetAgentID) != int(target_agent_id):
+            return False
+        if int(intent.IsolationGroupID) != int(group_id):
+            return False
+        if int(intent.LockMode) != int(WhiteboardLockMode.EXCLUSIVE):
+            return False
+        if int(intent.MaxHolders) != 1:
+            return False
+        if int(intent.ReentryPolicy) != int(WhiteboardReentryPolicy.OWNER_REENTRANT):
+            return False
+        if int(intent.ClaimStrength) != int(WhiteboardClaimStrength.HARD):
+            return False
+        self._clear_intent_unlocked(index, "exact_release")
+        return True
 
     def ClearIntentsByOwner(self, owner_email: str) -> int:
         """Zero every whiteboard slot whose OwnerEmail matches. Returns count cleared."""
         if not owner_email:
             return 0
-        count = 0
-        now = int(PySystem.get_tick_count64())
-        for i in range(SHMEM_MAX_INTENTS):
-            intent = self.Intents[i]
-            if intent.Active and intent.OwnerEmail == owner_email:
-                lifetime = now - int(intent.PostedAtTick)
-                self._wb_log(
-                    int(intent.KindID),
-                    f"CLEAR slot={i} email='{owner_email}' "
-                    f"{self._wb_lock_display(intent)} lifetime={lifetime}ms reason=owner_clear",
-                )
-                intent.reset()
-                count += 1
-        return count
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return 0
+            count = 0
+            now = int(PySystem.get_tick_count64())
+            for i in range(SHMEM_MAX_INTENTS):
+                intent = self.Intents[i]
+                if intent.Active and intent.OwnerEmail == owner_email:
+                    self._clear_intent_unlocked(i, "owner_clear", now)
+                    count += 1
+            return count
 
     def ClearLockByOwnerKindTarget(
         self,
@@ -1180,29 +1250,26 @@ class AllAccounts(Structure):
         """
         if not owner_email:
             return 0
-        count = 0
-        now = int(PySystem.get_tick_count64())
-        for i in range(SHMEM_MAX_INTENTS):
-            intent = self.Intents[i]
-            if not intent.Active:
-                continue
-            if intent.OwnerEmail != owner_email:
-                continue
-            if int(intent.KindID) != int(kind_id):
-                continue
-            if int(intent.TargetAgentID) != int(target_id):
-                continue
-            if int(intent.IsolationGroupID) != int(group_id):
-                continue
-            lifetime = now - int(intent.PostedAtTick)
-            self._wb_log(
-                int(intent.KindID),
-                f"CLEAR slot={i} email='{owner_email}' "
-                f"{self._wb_lock_display(intent)} lifetime={lifetime}ms reason=owner_clear",
-            )
-            intent.reset()
-            count += 1
-        return count
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return 0
+            count = 0
+            now = int(PySystem.get_tick_count64())
+            for i in range(SHMEM_MAX_INTENTS):
+                intent = self.Intents[i]
+                if not intent.Active:
+                    continue
+                if intent.OwnerEmail != owner_email:
+                    continue
+                if int(intent.KindID) != int(kind_id):
+                    continue
+                if int(intent.TargetAgentID) != int(target_id):
+                    continue
+                if int(intent.IsolationGroupID) != int(group_id):
+                    continue
+                self._clear_intent_unlocked(i, "owner_clear", now)
+                count += 1
+            return count
 
     def PostLock(
         self,
@@ -1222,10 +1289,7 @@ class AllAccounts(Structure):
         Every lock is a lease. Past or missing expiry is rejected so no caller
         can create a permanent lock.
         """
-        now = int(PySystem.get_tick_count64())
         if not owner_email or kind_id <= 0 or target_id < 0:
-            return -1
-        if int(expires_at_tick) <= now:
             return -1
         if int(max_holders) <= 0:
             max_holders = 1
@@ -1235,36 +1299,43 @@ class AllAccounts(Structure):
                 isolation_group_id = 0
             else:
                 isolation_group_id = int(self.AccountData[owner_slot].IsolationGroupID)
-        for i in range(SHMEM_MAX_INTENTS):
-            intent = self.Intents[i]
-            if intent.Active:
-                continue
-            intent.OwnerEmail = owner_email
-            intent.KindID = int(kind_id)
-            intent.LockMode = int(lock_mode)
-            intent.ReentryPolicy = int(reentry_policy)
-            intent.ClaimStrength = int(claim_strength)
-            intent.MaxHolders = int(max_holders)
-            intent.SkillID = int(key_id)
-            intent.TargetAgentID = int(target_id)
-            intent.IsolationGroupID = int(isolation_group_id)
-            intent.PostedAtTick = now
-            intent.ExpiresAtTick = int(expires_at_tick)
-            intent.Active = True
-            budget = int(expires_at_tick) - now
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return -1
+            now = int(PySystem.get_tick_count64())
+            if not is_valid_future_lease(now, int(expires_at_tick)):
+                return -1
+            for i in range(SHMEM_MAX_INTENTS):
+                intent = self.Intents[i]
+                if intent.Active:
+                    continue
+                intent.Active = False
+                intent.OwnerEmail = owner_email
+                intent.KindID = int(kind_id)
+                intent.LockMode = int(lock_mode)
+                intent.ReentryPolicy = int(reentry_policy)
+                intent.ClaimStrength = int(claim_strength)
+                intent.MaxHolders = int(max_holders)
+                intent.SkillID = int(key_id)
+                intent.TargetAgentID = int(target_id)
+                intent.IsolationGroupID = int(isolation_group_id)
+                intent.PostedAtTick = normalize_tick(now)
+                intent.ExpiresAtTick = normalize_tick(int(expires_at_tick))
+                intent.Active = True
+                budget = int(expires_at_tick) - now
+                self._wb_log(
+                    int(intent.KindID),
+                    f"POST  slot={i} email='{owner_email}' "
+                    f"{self._wb_lock_display(intent)} holders={int(max_holders)} "
+                    f"expires_in={budget}ms",
+                )
+                return i
             self._wb_log(
-                int(intent.KindID),
-                f"POST  slot={i} email='{owner_email}' "
-                f"{self._wb_lock_display(intent)} holders={int(max_holders)} "
-                f"expires_in={budget}ms",
+                int(kind_id),
+                f"POST-FAIL email='{owner_email}' kind={self._wb_kind_display(kind_id)} "
+                f"key={int(key_id)} target={int(target_id)} reason=full"
             )
-            return i
-        self._wb_log(
-            int(kind_id),
-            f"POST-FAIL email='{owner_email}' kind={self._wb_kind_display(kind_id)} "
-            f"key={int(key_id)} target={int(target_id)} reason=full"
-        )
-        return -1
+            return -1
 
     def CountLocks(
         self,
@@ -1285,7 +1356,7 @@ class AllAccounts(Structure):
             intent = self.Intents[i]
             if not intent.Active:
                 continue
-            if now_tick >= int(intent.ExpiresAtTick):
+            if tick_is_expired(now_tick, int(intent.ExpiresAtTick)):
                 continue
             if int(intent.KindID) != int(kind_id):
                 continue
@@ -1417,16 +1488,14 @@ class AllAccounts(Structure):
 
     def SweepExpiredIntents(self, now_tick: int) -> int:
         """Compact pass: zero expired slots. Returns count cleared."""
-        count = 0
-        for i in range(SHMEM_MAX_INTENTS):
-            intent = self.Intents[i]
-            if intent.Active and now_tick >= int(intent.ExpiresAtTick):
-                lifetime = int(now_tick) - int(intent.PostedAtTick)
-                self._wb_log(
-                    int(intent.KindID),
-                    f"SWEEP slot={i} email='{intent.OwnerEmail}' "
-                    f"{self._wb_lock_display(intent)} lifetime={lifetime}ms reason=expired",
-                )
-                intent.reset()
-                count += 1
-        return count
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return 0
+            count = 0
+            now = normalize_tick(now_tick)
+            for i in range(SHMEM_MAX_INTENTS):
+                intent = self.Intents[i]
+                if intent.Active and tick_is_expired(now, int(intent.ExpiresAtTick)):
+                    self._clear_intent_unlocked(i, "expired", now)
+                    count += 1
+            return count

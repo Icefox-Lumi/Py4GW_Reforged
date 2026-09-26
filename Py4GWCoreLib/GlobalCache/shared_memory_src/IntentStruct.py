@@ -43,7 +43,8 @@ class IntentStruct(Structure):
     Active: bool
 
     def reset(self) -> None:
-        """Reset all fields to zero / default values."""
+        """Deactivate the slot before resetting its payload fields."""
+        self.Active = False
         self.OwnerEmail = ""
         self.KindID = 0
         self.LockMode = 0
@@ -55,4 +56,3 @@ class IntentStruct(Structure):
         self.IsolationGroupID = 0
         self.PostedAtTick = 0
         self.ExpiresAtTick = 0
-        self.Active = False
