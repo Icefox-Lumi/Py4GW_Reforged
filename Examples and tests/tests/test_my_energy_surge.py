@@ -3,14 +3,17 @@
 import importlib.util
 import sys
 import types
+from contextlib import contextmanager
+from enum import IntEnum
 from pathlib import Path
 from typing import Any
+from typing import cast
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = ROOT / "Py4GWCoreLib" / "Builds" / "Skills"
 POLICY_PATH = ROOT / "Py4GWCoreLib" / "Builds" / "Mesmer" / "Me_Any" / "My Energy Surge.py"
 SMART_NAME = "Py4GWCoreLib.Builds.Skills.SmartMesmer"
-POLICY_NAME = "Py4GWCoreLib.Builds.Mesmer.Me_Any.My_Energy_Surge"
+POLICY_NAME = "policy_test.my_energy_surge"
 
 
 def _install_package(name: str, path: Path) -> None:
@@ -19,11 +22,9 @@ def _install_package(name: str, path: Path) -> None:
     sys.modules[name] = package
 
 
-_install_package("Py4GWCoreLib", ROOT / "Py4GWCoreLib")
-_install_package("Py4GWCoreLib.Builds", ROOT / "Py4GWCoreLib" / "Builds")
-_install_package("Py4GWCoreLib.Builds.Skills", SKILLS_DIR)
-_install_package("Py4GWCoreLib.Builds.Mesmer", ROOT / "Py4GWCoreLib" / "Builds" / "Mesmer")
-_install_package("Py4GWCoreLib.Builds.Mesmer.Me_Any", POLICY_PATH.parent)
+class _Profession(IntEnum):
+    _None = 0
+    Mesmer = 5
 
 
 def _load_module(name: str, path: Path) -> Any:
@@ -35,8 +36,46 @@ def _load_module(name: str, path: Path) -> Any:
     return module
 
 
-smart_mesmer = _load_module(SMART_NAME, SKILLS_DIR / "SmartMesmer.py")
-policy = _load_module(POLICY_NAME, POLICY_PATH)
+@contextmanager
+def _isolated_policy_modules() -> Any:
+    def is_owned(name: str) -> bool:
+        return (
+            name == "PySystem"
+            or name.startswith("Py4GWCoreLib")
+            or name == POLICY_NAME
+            or name.startswith("policy_test.")
+        )
+
+    original = {name: module for name, module in sys.modules.items() if is_owned(name)}
+    try:
+        for name in tuple(sys.modules):
+            if is_owned(name):
+                sys.modules.pop(name, None)
+        yield
+    finally:
+        for name in tuple(sys.modules):
+            if is_owned(name):
+                sys.modules.pop(name, None)
+        sys.modules.update(original)
+
+
+with _isolated_policy_modules():
+    _install_package("Py4GWCoreLib", ROOT / "Py4GWCoreLib")
+    _install_package("Py4GWCoreLib.Builds", ROOT / "Py4GWCoreLib" / "Builds")
+    _install_package("Py4GWCoreLib.Builds.Skills", SKILLS_DIR)
+    _install_package("Py4GWCoreLib.Builds.Mesmer", ROOT / "Py4GWCoreLib" / "Builds" / "Mesmer")
+    _install_package("Py4GWCoreLib.Builds.Mesmer.Me_Any", POLICY_PATH.parent)
+    sys.modules["PySystem"] = cast(
+        Any,
+        types.SimpleNamespace(
+            get_tick_count64=lambda: 0,
+            Console=types.SimpleNamespace(MessageType=types.SimpleNamespace(Info=0)),
+        ),
+    )
+    setattr(sys.modules["Py4GWCoreLib"], "Profession", _Profession)
+
+    smart_mesmer = _load_module(SMART_NAME, SKILLS_DIR / "SmartMesmer.py")
+    policy = _load_module(POLICY_NAME, POLICY_PATH)
 
 CombatSnapshot = smart_mesmer.CombatSnapshot
 EnemyObservation = smart_mesmer.EnemyObservation
@@ -196,6 +235,24 @@ def test_invalid_local_resolved_drain_fails_closed() -> None:
         decision = _evaluate((_enemy(10, 0.0),), local_drain=invalid_drain)
         assert decision.selected is None
         assert decision.reason is DecisionReason.INVALID_LOCAL_DRAIN
+
+
+def test_progression_parser_selects_energy_loss_or_drain_field_in_any_order() -> None:
+    expected = ((0, 1.0), (8, 6.0))
+    for field_name in ("Energyloss", "Energy Loss", "Energy_Drain"):
+        parsed = policy.My_Energy_Surge._progression_entry(
+            [
+                ("Domination Magic", "TotalDamage", {0: 99.0, 8: 99.0}),
+                ("Domination Magic", field_name, {8: 6.0, 0: 1.0}),
+            ]
+        )
+        assert parsed == expected
+
+
+def test_progression_parser_rejects_unrelated_damage_only_data() -> None:
+    parsed = policy.My_Energy_Surge._progression_entry([("Domination Magic", "TotalDamage", {0: 99.0, 8: 99.0})])
+
+    assert parsed is None
 
 
 def test_low_hp_target_is_excluded_and_exact_ten_percent_is_low_hp() -> None:
