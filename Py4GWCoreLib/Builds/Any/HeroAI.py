@@ -1,8 +1,12 @@
 from collections.abc import Iterator
 from typing import Any
 
-from Py4GWCoreLib import Agent, Map, Player, Profession, Routines
+from Py4GWCoreLib import Agent
 from Py4GWCoreLib import BuildMgr
+from Py4GWCoreLib import Map
+from Py4GWCoreLib import Player
+from Py4GWCoreLib import Profession
+from Py4GWCoreLib import Routines
 from Py4GWCoreLib.BuildMgr import BuildRegistry
 
 
@@ -64,7 +68,18 @@ class HeroAI_Build(BuildMgr):
             *current_skills,
         )
 
-    def _reset_contract(self) -> None:
+    def _dispose_contract(self, reason: str) -> None:
+        contract_build = self._contract_build
+        if contract_build is None or contract_build is self:
+            return
+        dispose = getattr(contract_build, "Dispose", None)
+        if not callable(dispose):
+            dispose = getattr(contract_build, "dispose", None)
+        if callable(dispose):
+            dispose(reason)
+
+    def _reset_contract(self, reason: str = "contract_reset") -> None:
+        self._dispose_contract(reason)
         self._contract_signature = None
         self._contract_build = None
 
@@ -85,7 +100,7 @@ class HeroAI_Build(BuildMgr):
 
     def ClearBuildContract(self) -> None:
         self.ResetTickExecution()
-        self._reset_contract()
+        self._reset_contract("contract_cleared")
 
     def EnsureBuildContract(self, cached_data=None):
         if cached_data is not None:
@@ -93,7 +108,7 @@ class HeroAI_Build(BuildMgr):
         cached_data = self._get_cached_data()
 
         if not Map.IsExplorable():
-            self._reset_contract()
+            self._reset_contract("map_unavailable")
             return None
 
         contract_signature = self._get_contract_signature()
@@ -109,7 +124,7 @@ class HeroAI_Build(BuildMgr):
             return self
 
         if self._build_registry is None:
-            self._reset_contract()
+            self._reset_contract("registry_unavailable")
             return None
 
         current_primary_value, current_secondary_value = Agent.GetProfessions(Player.GetAgentID())
@@ -117,6 +132,7 @@ class HeroAI_Build(BuildMgr):
         current_secondary = Profession(current_secondary_value)
         current_skills = self._get_current_skills()
 
+        previous_build = self._contract_build
         resolved_build = None
         best_score = -1
         for build in self._build_registry._iter_matchable_builds():
@@ -137,12 +153,26 @@ class HeroAI_Build(BuildMgr):
         if resolved_build is self:
             self.set_cached_data(cached_data)
 
+        if previous_build is not None and previous_build is not self and previous_build is not resolved_build:
+            dispose = getattr(previous_build, "Dispose", None)
+            if not callable(dispose):
+                dispose = getattr(previous_build, "dispose", None)
+            if callable(dispose):
+                dispose("contract_replaced")
+
         self._contract_signature = contract_signature
         self._contract_build = resolved_build
+        if resolved_build is not self:
+            activate = getattr(resolved_build, "OnContractActivated", None)
+            if callable(activate):
+                activate(cached_data)
         return resolved_build
 
     def GetBuildContract(self):
         return self._contract_build
+
+    def _is_contract_runtime_available(self) -> bool:
+        return Routines.Checks.Map.MapValid() and Map.IsExplorable()
 
     def _prepare_combat(self):
         cached_data = self._get_cached_data()
@@ -163,6 +193,12 @@ class HeroAI_Build(BuildMgr):
     def _get_phase_cached_data(self):
         cached_data = self._get_cached_data()
         if cached_data is None:
+            if self._contract_build is not None:
+                self.ClearBuildContract()
+            return None
+        if not self._is_contract_runtime_available():
+            if self._contract_build is not None:
+                self.ClearBuildContract()
             return None
         return self._prepare_combat()
 

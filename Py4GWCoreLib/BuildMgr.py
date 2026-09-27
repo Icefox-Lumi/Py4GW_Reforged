@@ -92,6 +92,17 @@ class BuildMgr:
         """
         self._cached_data = cached_data
 
+    def OnContractActivated(self, cached_data: Any = None) -> None:
+        """Notify a cached build that it is the active runtime contract again."""
+
+        if cached_data is not None:
+            self.set_cached_data(cached_data)
+
+    def Dispose(self, reason: str = "contract_disposed") -> None:
+        """Hook for build-owned pending work when its runtime contract leaves."""
+
+        del reason
+
     def GetEffectAndBuffIds(self, agent_id: int) -> list[int]:
         from Py4GWCoreLib.HeroAI.utils import GetEffectAndBuffIds
 
