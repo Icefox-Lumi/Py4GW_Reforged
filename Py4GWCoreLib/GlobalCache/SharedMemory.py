@@ -44,6 +44,8 @@ from .shared_memory_src.HeroAIOptionStruct import HeroAIOptionStruct
 from .shared_memory_src.AgentDataStruct import AgentDataStruct
 from .shared_memory_src.AccountStruct import AccountStruct
 from .shared_memory_src.AllAccounts import AllAccounts
+from .shared_memory_src.AllAccounts import InterruptClaimResult
+from .shared_memory_src.AllAccounts import InterruptLockReceipt
 from Py4GWCoreLib.HeroAI.follow.leader_publish import FollowFormationPublisher
 from ..py4gwcorelib_src.FrameCache import frame_cache
 
@@ -476,6 +478,27 @@ class Py4GWSharedMemoryManager:
         return self.GetAllAccounts().PostIntent(
             owner_email, skill_id, target_agent_id, expires_at_tick, isolation_group_id
         )
+
+    def TryPostInterruptLock(
+        self,
+        owner_email: str,
+        enemy_skill_id: int,
+        target_agent_id: int,
+        expires_at_tick: int,
+        isolation_group_id: int,
+    ) -> InterruptClaimResult:
+        """Atomically claim one fixed-contract interrupt lease."""
+        return self.GetAllAccounts().TryPostInterruptLock(
+            owner_email,
+            enemy_skill_id,
+            target_agent_id,
+            expires_at_tick,
+            isolation_group_id,
+        )
+
+    def ClearInterruptLockIfMatch(self, receipt: InterruptLockReceipt) -> bool:
+        """Clear an interrupt lease only when its exact receipt still matches."""
+        return self.GetAllAccounts().ClearInterruptLockIfMatch(receipt)
 
     def PostLock(
         self,

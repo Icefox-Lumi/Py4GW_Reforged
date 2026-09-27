@@ -10,9 +10,13 @@ import inspect
 import os
 import subprocess
 import sys
+import threading
 import time
 import types
 import unittest
+from contextlib import contextmanager
+from dataclasses import dataclass
+from dataclasses import replace
 from enum import IntEnum
 from importlib.util import module_from_spec
 from importlib.util import spec_from_file_location
@@ -42,7 +46,19 @@ OTHER_TARGET_ID = 987
 GROUP_ID = 4
 OTHER_GROUP_ID = 5
 SKILL_TARGET_KIND = 1
+INTERRUPT_KIND = 11
 NOW = 0x1_0000_0100
+
+
+class _ObservableConsole:
+    records: list[tuple[str, str, tuple[object, ...]]] = []
+
+    class MessageType:
+        Error = "error"
+
+
+def _record_console_log(module: str, message: str, *args: object, **_kwargs: object) -> None:
+    _ObservableConsole.records.append((module, str(message), args))
 
 
 def _read_integer_constant(name: str) -> int:
@@ -62,9 +78,84 @@ INTENT_COUNT = _read_integer_constant("SHMEM_MAX_INTENTS")
 
 
 class _Clock:
+    value = NOW
+    Console = _ObservableConsole
+
     @staticmethod
     def get_tick_count64() -> int:
-        return NOW
+        return _Clock.value
+
+
+class _LiveClock:
+    value = NOW
+    sequence: list[int] = []
+    exception: Exception | None = None
+    calls = 0
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.value = NOW
+        cls.sequence = []
+        cls.exception = None
+        cls.calls = 0
+
+    @classmethod
+    def get_uncached_tick_count64(cls) -> int:
+        cls.calls += 1
+        if cls.exception is not None:
+            raise cls.exception
+        if cls.sequence:
+            return cls.sequence.pop(0)
+        return cls.value
+
+
+class _FakeTiming:
+    monotonic_value = 0.0
+    advance_clock = True
+    advance_live_clock = True
+    sleep_calls = 0
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.monotonic_value = 0.0
+        cls.advance_clock = True
+        cls.advance_live_clock = True
+        cls.sleep_calls = 0
+
+    @classmethod
+    def monotonic(cls) -> float:
+        return cls.monotonic_value
+
+    @classmethod
+    def sleep(cls, seconds: float) -> None:
+        cls.sleep_calls += 1
+        cls.monotonic_value += seconds
+        if cls.advance_clock:
+            _Clock.value += max(1, int(seconds * 1000))
+        if cls.advance_live_clock:
+            _LiveClock.value += max(1, int(seconds * 1000))
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptLockReceipt:
+    slot_index: int
+    owner_email: str
+    kind_id: int
+    enemy_skill_id: int
+    target_agent_id: int
+    isolation_group_id: int
+    lock_mode: int
+    max_holders: int
+    reentry_policy: int
+    claim_strength: int
+    posted_at_tick64: int
+    expires_at_tick64: int
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptClaimResult:
+    receipt: InterruptLockReceipt | None
+    reason: str
 
 
 def _load_module(name: str, path: Path) -> types.ModuleType:
@@ -179,9 +270,19 @@ def _load_whiteboard_enums() -> dict[str, type[IntEnum]]:
 
 
 WHITEBOARD_ENUMS = _load_whiteboard_enums()
+LOCK_EXCLUSIVE = 1
+LOCK_SHARED = 2
+REENTRY_OWNER = 1
+REENTRY_NONREENTRANT = 2
+CLAIM_HARD = 1
+CLAIM_SOFT = 2
 
 
 class _DummyStruct:
+    AccountEmail: str
+    IsAccount: bool
+    IsolationGroupID: int
+
     def reset(self) -> None:
         pass
 
@@ -191,6 +292,8 @@ def _load_accounts_class(shared_memory_name: str) -> type[Any]:
     class_node = next(item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == "AllAccounts")
     method_names = {
         "reset",
+        "_find_account_slot_by_email",
+        "SetAccountGroupByEmail",
         "_wb_log",
         "_wb_kind_display",
         "_wb_mode_display",
@@ -200,13 +303,18 @@ def _load_accounts_class(shared_memory_name: str) -> type[Any]:
         "_reset_intent_unlocked",
         "_clear_intent_unlocked",
         "_clear_intent_if_match_unlocked",
+        "_log_interrupt_clock_failure",
+        "_get_interrupt_issuance_tick",
+        "_is_valid_interrupt_receipt",
         "ClearIntent",
         "ClearIntentIfMatch",
+        "ClearInterruptLockIfMatch",
         "ClearIntentsByOwner",
         "ClearLockByOwnerKindTarget",
         "PostLock",
         "CountLocks",
         "PostIntent",
+        "TryPostInterruptLock",
         "SweepExpiredIntents",
     }
     methods = [
@@ -218,12 +326,22 @@ def _load_accounts_class(shared_memory_name: str) -> type[Any]:
         "ctypes": ctypes,
         "IntentStruct": INTENT_STRUCT,
         "PySystem": _Clock,
+        "get_uncached_tick_count64": _LiveClock.get_uncached_tick_count64,
         "SHMEM_MAX_INTENTS": INTENT_COUNT,
-        "SHMEM_MAX_PLAYERS": 1,
+        "SHMEM_MAX_PLAYERS": 4,
         "SHMEM_SHARED_MEMORY_FILE_NAME": shared_memory_name,
+        "SHMEM_MAX_EMAIL_LEN": SHMEM_MAX_EMAIL_LEN,
         "WHITEBOARD_DEBUG": False,
-        "ConsoleLog": lambda *_args: None,
+        "ConsoleLog": _record_console_log,
         "SHMEM_MODULE_NAME": "test",
+        "InterruptClaimResult": InterruptClaimResult,
+        "InterruptLockReceipt": InterruptLockReceipt,
+        "_INTERRUPT_ISSUANCE_WAIT_SECONDS": 0.050,
+        "_INTERRUPT_ISSUANCE_SLEEP_SECONDS": 0.001,
+        "_INTERRUPT_CLOCK_DIAGNOSTIC_COOLDOWN_SECONDS": 5.0,
+        "_INTERRUPT_CLOCK_DIAGNOSTIC_MAX_SIGNATURES": 16,
+        "_INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED": {},
+        "time": _FakeTiming,
         "intent_table_lock": INTENT_SYNC.intent_table_lock,
         "is_valid_future_lease": INTENT_SYNC.is_valid_future_lease,
         "normalize_tick": INTENT_SYNC.normalize_tick,
@@ -237,10 +355,17 @@ def _load_accounts_class(shared_memory_name: str) -> type[Any]:
 
     def initialize(self: Any, intents: Any) -> None:
         setattr(self, "Intents", intents)
-        setattr(self, "Keys", [_DummyStruct()])
-        setattr(self, "AccountData", [_DummyStruct()])
-        setattr(self, "Inbox", [_DummyStruct()])
-        setattr(self, "HeroAIOptions", [_DummyStruct()])
+        account_data = []
+        for _ in range(4):
+            account = _DummyStruct()
+            account.AccountEmail = ""
+            account.IsAccount = False
+            account.IsolationGroupID = 0
+            account_data.append(account)
+        setattr(self, "Keys", [_DummyStruct() for _ in range(4)])
+        setattr(self, "AccountData", account_data)
+        setattr(self, "Inbox", [_DummyStruct() for _ in range(4)])
+        setattr(self, "HeroAIOptions", [_DummyStruct() for _ in range(4)])
 
     return type(
         "IntentAccounts",
@@ -274,13 +399,36 @@ _SHARED_MEMORY_CLEAR_IF_MATCH = _load_method(
     "Py4GWSharedMemoryManager",
     "ClearIntentIfMatch",
 )
+_SHARED_MEMORY_TRY_INTERRUPT = _load_method(
+    SHARED_MEMORY_PATH,
+    "Py4GWSharedMemoryManager",
+    "TryPostInterruptLock",
+    {"InterruptClaimResult": InterruptClaimResult},
+)
+_SHARED_MEMORY_CLEAR_INTERRUPT = _load_method(
+    SHARED_MEMORY_PATH,
+    "Py4GWSharedMemoryManager",
+    "ClearInterruptLockIfMatch",
+    {"InterruptLockReceipt": InterruptLockReceipt},
+)
 _BUILD_MGR_POST = _load_method(BUILD_MGR_PATH, "BuildMgr", "_whiteboard_post_intent", {"PySystem": _Clock})
 _BUILD_MGR_CLEAR = _load_method(BUILD_MGR_PATH, "BuildMgr", "_whiteboard_owner_self_clear")
 
 
 def _new_accounts(shared_memory_name: str | None = None) -> Any:
     identity = shared_memory_name or f"Py4GW_IntentUnitTest_{uuid4().hex}"
-    return _load_accounts_class(identity)(INTENT_ARRAY())
+    accounts = _load_accounts_class(identity)(INTENT_ARRAY())
+    _register_owner(accounts, OWNER, GROUP_ID, 0)
+    _register_owner(accounts, OTHER_OWNER, GROUP_ID, 1)
+    _register_owner(accounts, "group-five@example.com", OTHER_GROUP_ID, 2)
+    return accounts
+
+
+def _register_owner(accounts: Any, owner_email: str, group_id: int, index: int) -> None:
+    account = getattr(accounts, "AccountData")[index]
+    account.AccountEmail = owner_email
+    account.IsAccount = True
+    account.IsolationGroupID = group_id
 
 
 def _seed_intent(
@@ -315,6 +463,60 @@ def _seed_intent(
     intent.Active = True
 
 
+def _seed_interrupt_intent(
+    accounts: Any,
+    index: int,
+    *,
+    owner_email: str = OWNER,
+    enemy_skill_id: int = SKILL_ID,
+    target_agent_id: int = TARGET_ID,
+    group_id: int = GROUP_ID,
+    posted_at_tick: int = NOW - 100,
+    expires_at_tick: int = NOW + 5000,
+    lock_mode: int = LOCK_EXCLUSIVE,
+    max_holders: int = 1,
+    reentry_policy: int = REENTRY_NONREENTRANT,
+    claim_strength: int = CLAIM_HARD,
+) -> None:
+    _seed_intent(
+        accounts,
+        index,
+        owner_email=owner_email,
+        kind_id=INTERRUPT_KIND,
+        skill_id=enemy_skill_id,
+        target_agent_id=target_agent_id,
+        group_id=group_id,
+        posted_at_tick=posted_at_tick,
+        expires_at_tick=expires_at_tick,
+        lock_mode=lock_mode,
+        max_holders=max_holders,
+        reentry_policy=reentry_policy,
+        claim_strength=claim_strength,
+    )
+
+
+def _claim_interrupt(
+    accounts: Any,
+    *,
+    owner_email: str = OWNER,
+    enemy_skill_id: int = SKILL_ID,
+    target_agent_id: int = TARGET_ID,
+    group_id: int = GROUP_ID,
+    expires_at_tick: int | None = None,
+) -> InterruptClaimResult:
+    expires = _Clock.get_tick_count64() + 5000 if expires_at_tick is None else expires_at_tick
+    return cast(
+        InterruptClaimResult,
+        getattr(accounts, "TryPostInterruptLock")(
+            owner_email,
+            enemy_skill_id,
+            target_agent_id,
+            expires,
+            group_id,
+        ),
+    )
+
+
 def _clear_identity(accounts: Any, index: int = 0, **overrides: object) -> bool:
     identity: dict[str, object] = {
         "owner_email": OWNER,
@@ -335,8 +537,28 @@ def _close_shared_table(memory: Any) -> None:
     memory.close()
 
 
-def _mutation_result(accounts: Any, operation: str, owner_email: str = OWNER, key_id: int = SKILL_ID) -> object:
+def _mutation_result(
+    accounts: Any,
+    operation: str,
+    owner_email: str = OWNER,
+    key_id: int = SKILL_ID,
+    receipt: InterruptLockReceipt | None = None,
+) -> object:
     now = _Clock.get_tick_count64()
+    if operation == "post_interrupt":
+        result = getattr(accounts, "TryPostInterruptLock")(
+            owner_email,
+            key_id,
+            TARGET_ID,
+            now + 60_000,
+            GROUP_ID,
+        )
+        receipt = result.receipt
+        return result.reason, receipt is not None, receipt.slot_index if receipt is not None else -1
+    if operation == "clear_interrupt":
+        if receipt is None:
+            return False
+        return bool(getattr(accounts, "ClearInterruptLockIfMatch")(receipt))
     if operation == "post_lock":
         return getattr(accounts, "PostLock")(
             owner_email,
@@ -374,6 +596,7 @@ def _intent_worker(
     ready_event_name: str,
     start_event_name: str,
     started_event_name: str,
+    receipt_payload: str,
 ) -> None:
     from multiprocessing import shared_memory
 
@@ -383,12 +606,16 @@ def _intent_worker(
     memory = shared_memory.SharedMemory(name=shared_memory_name)
     intents = INTENT_ARRAY.from_buffer(cast(Any, memory.buf))
     accounts = _load_accounts_class(mutex_identity)(intents)
+    _register_owner(accounts, owner_email, GROUP_ID, 0)
     try:
         _test_kernel32.SetEvent(ready_handle)
         if int(_test_kernel32.WaitForSingleObject(start_handle, 5000)) != _WAIT_OBJECT_0:
             raise TimeoutError("parent did not release worker start gate")
         _test_kernel32.SetEvent(started_handle)
-        result = _mutation_result(accounts, operation, owner_email, key_id)
+        receipt = None
+        if receipt_payload:
+            receipt = InterruptLockReceipt(*cast(tuple[Any, ...], ast.literal_eval(receipt_payload)))
+        result = _mutation_result(accounts, operation, owner_email, key_id, receipt)
         print(repr(result), flush=True)
     finally:
         del accounts
@@ -400,7 +627,7 @@ def _intent_worker(
 
 
 def _run_child_mode() -> bool:
-    if len(sys.argv) != 10 or sys.argv[1] != "--intent-worker":
+    if len(sys.argv) != 11 or sys.argv[1] != "--intent-worker":
         return False
     _intent_worker(
         sys.argv[2],
@@ -411,6 +638,7 @@ def _run_child_mode() -> bool:
         sys.argv[7],
         sys.argv[8],
         sys.argv[9],
+        sys.argv[10],
     )
     return True
 
@@ -425,10 +653,29 @@ def _start_intent_worker(
     operation: str,
     owner_email: str,
     key_id: int,
+    receipt: InterruptLockReceipt | None = None,
 ) -> tuple[Any, _NamedEvent, _NamedEvent, _NamedEvent]:
     ready = _NamedEvent(_new_event_name())
     start = _NamedEvent(_new_event_name())
     started = _NamedEvent(_new_event_name())
+    receipt_payload = ""
+    if receipt is not None:
+        receipt_payload = repr(
+            (
+                receipt.slot_index,
+                receipt.owner_email,
+                receipt.kind_id,
+                receipt.enemy_skill_id,
+                receipt.target_agent_id,
+                receipt.isolation_group_id,
+                receipt.lock_mode,
+                receipt.max_holders,
+                receipt.reentry_policy,
+                receipt.claim_strength,
+                receipt.posted_at_tick64,
+                receipt.expires_at_tick64,
+            )
+        )
     command = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -441,6 +688,7 @@ def _start_intent_worker(
         ready.name,
         start.name,
         started.name,
+        receipt_payload,
     ]
     process = subprocess.Popen(
         command,
@@ -459,6 +707,8 @@ def _finish_worker(process: Any) -> tuple[int, str, str]:
 
 class _SharedMemoryWrapper:
     ClearIntentIfMatch = _SHARED_MEMORY_CLEAR_IF_MATCH
+    TryPostInterruptLock = _SHARED_MEMORY_TRY_INTERRUPT
+    ClearInterruptLockIfMatch = _SHARED_MEMORY_CLEAR_INTERRUPT
 
     def __init__(self, accounts: object, group_id: int = GROUP_ID) -> None:
         self.accounts = accounts
@@ -596,8 +846,679 @@ class _ReadOnlySharedMemory:
 
 class IntentSynchronizationTests(unittest.TestCase):
     def setUp(self) -> None:
+        _Clock.value = NOW
+        _LiveClock.reset()
+        _FakeTiming.reset()
+        _ObservableConsole.records.clear()
         self.shared_memory_name = f"Py4GW_IntentTest_{uuid4().hex}"
         self.accounts = _new_accounts(self.shared_memory_name)
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_public_surface_is_uncached_and_fixed(self) -> None:
+        wrapper = _SharedMemoryWrapper(self.accounts)
+        result = wrapper.TryPostInterruptLock(
+            OWNER,
+            SKILL_ID,
+            TARGET_ID,
+            NOW + 5000,
+            GROUP_ID,
+        )
+        self.assertEqual(result.reason, "claimed")
+        self.assertIsNotNone(result.receipt)
+        self.assertTrue(wrapper.ClearInterruptLockIfMatch(result.receipt))
+        self.assertEqual(
+            list(inspect.signature(self.accounts.TryPostInterruptLock).parameters),
+            [
+                "owner_email",
+                "enemy_skill_id",
+                "target_agent_id",
+                "expires_at_tick",
+                "isolation_group_id",
+            ],
+        )
+
+        tree = ast.parse(SHARED_MEMORY_PATH.read_text(encoding="utf-8"))
+        manager = next(item for item in tree.body if isinstance(item, ast.ClassDef))
+        for method_name in ("TryPostInterruptLock", "ClearInterruptLockIfMatch"):
+            method = next(
+                item for item in manager.body if isinstance(item, ast.FunctionDef) and item.name == method_name
+            )
+            self.assertFalse(method.decorator_list, method_name)
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_claim_uses_live_progress_when_frame_clock_is_frozen(self) -> None:
+        _Clock.value = NOW
+        _LiveClock.value = NOW
+        _FakeTiming.advance_clock = False
+        _FakeTiming.advance_live_clock = True
+
+        result = _claim_interrupt(self.accounts, expires_at_tick=NOW + 5000)
+
+        self.assertEqual(result.reason, "claimed")
+        receipt = cast(InterruptLockReceipt, result.receipt)
+        self.assertEqual(_Clock.value, NOW)
+        self.assertGreater(receipt.posted_at_tick64, NOW)
+        self.assertGreater(_LiveClock.value, NOW)
+        self.assertEqual(
+            self.accounts.Intents[receipt.slot_index].PostedAtTick,
+            receipt.posted_at_tick64 & 0xFFFFFFFF,
+        )
+        self.assertEqual(receipt.expires_at_tick64, NOW + 5000)
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_same_frame_repost_gets_new_receipt_and_rejects_stale_clear(self) -> None:
+        _Clock.value = NOW
+        _LiveClock.value = NOW
+        _FakeTiming.advance_clock = False
+        _FakeTiming.advance_live_clock = True
+        expires_at_tick = NOW + 5000
+
+        first = _claim_interrupt(self.accounts, expires_at_tick=expires_at_tick)
+        first_receipt = cast(InterruptLockReceipt, first.receipt)
+        self.assertTrue(self.accounts.ClearInterruptLockIfMatch(first_receipt))
+
+        replacement = _claim_interrupt(self.accounts, expires_at_tick=expires_at_tick)
+        replacement_receipt = cast(InterruptLockReceipt, replacement.receipt)
+
+        self.assertEqual(replacement.reason, "claimed")
+        self.assertEqual(first_receipt.slot_index, replacement_receipt.slot_index)
+        self.assertEqual(first_receipt.expires_at_tick64, replacement_receipt.expires_at_tick64)
+        self.assertNotEqual(first_receipt.posted_at_tick64, replacement_receipt.posted_at_tick64)
+        self.assertFalse(self.accounts.ClearInterruptLockIfMatch(first_receipt))
+        self.assertTrue(self.accounts.Intents[replacement_receipt.slot_index].Active)
+        self.assertTrue(self.accounts.ClearInterruptLockIfMatch(replacement_receipt))
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_lease_expiry_during_publication_fails_closed_without_mutation(self) -> None:
+        _LiveClock.sequence = [NOW, NOW + 1, NOW + 101]
+
+        result = _claim_interrupt(self.accounts, expires_at_tick=NOW + 100)
+
+        self.assertEqual(result.reason, "invalid")
+        self.assertIsNone(result.receipt)
+        self.assertFalse(any(intent.Active for intent in self.accounts.Intents))
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_live_clock_exception_fails_closed_without_mutation(self) -> None:
+        _LiveClock.exception = RuntimeError("GetTickCount64 test failure")
+
+        result = _claim_interrupt(self.accounts)
+
+        self.assertEqual(result.reason, "issuance_tick_unavailable")
+        self.assertIsNone(result.receipt)
+        self.assertEqual(_LiveClock.calls, 1)
+        self.assertFalse(any(intent.Active for intent in self.accounts.Intents))
+        self.assertEqual(len(_ObservableConsole.records), 1)
+        self.assertIn("stage=entry", _ObservableConsole.records[0][1])
+        self.assertIn("RuntimeError", _ObservableConsole.records[0][1])
+        self.assertIn("GetTickCount64 test failure", _ObservableConsole.records[0][1])
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_clock_failure_diagnostics_are_bounded_and_distinct(self) -> None:
+        _seed_intent(self.accounts, 1, owner_email=OTHER_OWNER, skill_id=OTHER_SKILL_ID)
+        unrelated_before = (
+            self.accounts.Intents[1].Active,
+            self.accounts.Intents[1].OwnerEmail,
+            self.accounts.Intents[1].KindID,
+            self.accounts.Intents[1].SkillID,
+            self.accounts.Intents[1].TargetAgentID,
+            self.accounts.Intents[1].IsolationGroupID,
+            self.accounts.Intents[1].PostedAtTick,
+            self.accounts.Intents[1].ExpiresAtTick,
+        )
+        _LiveClock.exception = RuntimeError("persistent GetTickCount64 failure")
+
+        for _ in range(20):
+            result = _claim_interrupt(self.accounts)
+            self.assertEqual(result.reason, "issuance_tick_unavailable")
+            self.assertIsNone(result.receipt)
+
+        self.assertEqual(len(_ObservableConsole.records), 1)
+        self.assertIn("stage=entry", _ObservableConsole.records[0][1])
+        self.assertIn("RuntimeError", _ObservableConsole.records[0][1])
+        self.assertIn("persistent GetTickCount64 failure", _ObservableConsole.records[0][1])
+        self.assertEqual(
+            unrelated_before,
+            (
+                self.accounts.Intents[1].Active,
+                self.accounts.Intents[1].OwnerEmail,
+                self.accounts.Intents[1].KindID,
+                self.accounts.Intents[1].SkillID,
+                self.accounts.Intents[1].TargetAgentID,
+                self.accounts.Intents[1].IsolationGroupID,
+                self.accounts.Intents[1].PostedAtTick,
+                self.accounts.Intents[1].ExpiresAtTick,
+            ),
+        )
+
+        _LiveClock.exception = None
+        claimed = _claim_interrupt(self.accounts)
+        self.assertEqual(claimed.reason, "claimed")
+        receipt = cast(InterruptLockReceipt, claimed.receipt)
+        _LiveClock.exception = OSError("release GetTickCount64 failure")
+        self.assertFalse(self.accounts.ClearInterruptLockIfMatch(receipt))
+        self.assertTrue(self.accounts.Intents[receipt.slot_index].Active)
+        self.assertEqual(len(_ObservableConsole.records), 2)
+        self.assertIn("stage=release", _ObservableConsole.records[1][1])
+        self.assertIn("OSError", _ObservableConsole.records[1][1])
+        self.assertIn("release GetTickCount64 failure", _ObservableConsole.records[1][1])
+        self.assertEqual(
+            unrelated_before,
+            (
+                self.accounts.Intents[1].Active,
+                self.accounts.Intents[1].OwnerEmail,
+                self.accounts.Intents[1].KindID,
+                self.accounts.Intents[1].SkillID,
+                self.accounts.Intents[1].TargetAgentID,
+                self.accounts.Intents[1].IsolationGroupID,
+                self.accounts.Intents[1].PostedAtTick,
+                self.accounts.Intents[1].ExpiresAtTick,
+            ),
+        )
+
+        diagnostic_globals = self.accounts._log_interrupt_clock_failure.__globals__
+        for index in range(32):
+            self.accounts._log_interrupt_clock_failure(
+                f"stage-{index}",
+                RuntimeError(f"unique failure {index}"),
+            )
+        self.assertEqual(
+            len(diagnostic_globals["_INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED"]),
+            diagnostic_globals["_INTERRUPT_CLOCK_DIAGNOSTIC_MAX_SIGNATURES"],
+        )
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_kind_one_post_intent_remains_independent_of_d0_live_clock(self) -> None:
+        _LiveClock.exception = RuntimeError("D0-only live clock failure")
+
+        index = self.accounts.PostIntent(OWNER, SKILL_ID, TARGET_ID, NOW + 5000, GROUP_ID)
+
+        self.assertEqual(index, 0)
+        row = self.accounts.Intents[index]
+        self.assertTrue(row.Active)
+        self.assertEqual(row.KindID, SKILL_TARGET_KIND)
+        self.assertEqual(row.PostedAtTick, NOW & 0xFFFFFFFF)
+        self.assertEqual(_LiveClock.calls, 0)
+        self.assertTrue(_clear_identity(self.accounts, index))
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_claim_uses_fixed_exclusive_nonreentrant_contract(self) -> None:
+        first = _claim_interrupt(self.accounts, owner_email=OWNER)
+        self.assertEqual(first.reason, "claimed")
+        self.assertIsNotNone(first.receipt)
+        receipt = cast(InterruptLockReceipt, first.receipt)
+        row = self.accounts.Intents[receipt.slot_index]
+        self.assertEqual(row.KindID, INTERRUPT_KIND)
+        self.assertEqual(row.SkillID, SKILL_ID)
+        self.assertEqual(row.TargetAgentID, TARGET_ID)
+        self.assertEqual(row.IsolationGroupID, GROUP_ID)
+        self.assertEqual(row.LockMode, LOCK_EXCLUSIVE)
+        self.assertEqual(row.MaxHolders, 1)
+        self.assertEqual(row.ReentryPolicy, REENTRY_NONREENTRANT)
+        self.assertEqual(row.ClaimStrength, CLAIM_HARD)
+
+        self.assertEqual(_claim_interrupt(self.accounts).reason, "conflict")
+        self.assertEqual(
+            _claim_interrupt(self.accounts, owner_email=OTHER_OWNER).reason,
+            "conflict",
+        )
+        self.assertNotIn(
+            "max_holders",
+            inspect.signature(self.accounts.TryPostInterruptLock).parameters,
+        )
+
+        independent = (
+            _claim_interrupt(self.accounts, target_agent_id=OTHER_TARGET_ID),
+            _claim_interrupt(self.accounts, enemy_skill_id=OTHER_SKILL_ID),
+            _claim_interrupt(
+                self.accounts,
+                owner_email="group-five@example.com",
+                group_id=OTHER_GROUP_ID,
+            ),
+        )
+        self.assertTrue(all(item.reason == "claimed" and item.receipt is not None for item in independent))
+        self.assertEqual(sum(bool(intent.Active) for intent in self.accounts.Intents), 4)
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_exact_receipt_mismatches_preserve_live_row(self) -> None:
+        mismatch_values: tuple[tuple[str, object], ...] = (
+            ("slot_index", 1),
+            ("owner_email", OTHER_OWNER),
+            ("kind_id", SKILL_TARGET_KIND),
+            ("enemy_skill_id", OTHER_SKILL_ID),
+            ("target_agent_id", OTHER_TARGET_ID),
+            ("isolation_group_id", OTHER_GROUP_ID),
+            ("lock_mode", LOCK_SHARED),
+            ("max_holders", 2),
+            ("reentry_policy", REENTRY_OWNER),
+            ("claim_strength", CLAIM_SOFT),
+        )
+        for field_name, value in mismatch_values:
+            with self.subTest(field_name=field_name):
+                accounts = _new_accounts(self.shared_memory_name)
+                result = _claim_interrupt(accounts)
+                receipt = cast(InterruptLockReceipt, result.receipt)
+                row = accounts.Intents[receipt.slot_index]
+                before = (
+                    row.Active,
+                    row.OwnerEmail,
+                    row.KindID,
+                    row.SkillID,
+                    row.TargetAgentID,
+                    row.IsolationGroupID,
+                    row.PostedAtTick,
+                    row.ExpiresAtTick,
+                )
+                self.assertFalse(accounts.ClearInterruptLockIfMatch(replace(receipt, **{field_name: value})))
+                self.assertEqual(
+                    before,
+                    (
+                        row.Active,
+                        row.OwnerEmail,
+                        row.KindID,
+                        row.SkillID,
+                        row.TargetAgentID,
+                        row.IsolationGroupID,
+                        row.PostedAtTick,
+                        row.ExpiresAtTick,
+                    ),
+                )
+                self.assertTrue(accounts.ClearInterruptLockIfMatch(receipt))
+
+        for field_name in ("posted_at_tick64", "expires_at_tick64"):
+            with self.subTest(field_name=field_name):
+                accounts = _new_accounts(self.shared_memory_name)
+                result = _claim_interrupt(accounts)
+                fresh_receipt = cast(InterruptLockReceipt, result.receipt)
+                wrong_value = getattr(fresh_receipt, field_name) + 1
+                self.assertFalse(
+                    accounts.ClearInterruptLockIfMatch(replace(fresh_receipt, **{field_name: wrong_value}))
+                )
+                self.assertTrue(accounts.Intents[fresh_receipt.slot_index].Active)
+
+        with self.assertRaises(AttributeError):
+            receipt.owner_email = OTHER_OWNER  # type: ignore[misc]
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_row_mismatches_preserve_live_claim(self) -> None:
+        row_mismatches: tuple[tuple[str, object], ...] = (
+            ("OwnerEmail", OTHER_OWNER),
+            ("KindID", SKILL_TARGET_KIND),
+            ("SkillID", OTHER_SKILL_ID),
+            ("TargetAgentID", OTHER_TARGET_ID),
+            ("IsolationGroupID", OTHER_GROUP_ID),
+            ("LockMode", LOCK_SHARED),
+            ("MaxHolders", 2),
+            ("ReentryPolicy", REENTRY_OWNER),
+            ("ClaimStrength", CLAIM_SOFT),
+        )
+        for field_name, value in row_mismatches:
+            with self.subTest(field_name=field_name):
+                accounts = _new_accounts(self.shared_memory_name)
+                result = _claim_interrupt(accounts)
+                receipt = cast(InterruptLockReceipt, result.receipt)
+                row = accounts.Intents[receipt.slot_index]
+                setattr(row, field_name, value)
+                self.assertFalse(accounts.ClearInterruptLockIfMatch(receipt))
+                self.assertTrue(row.Active)
+
+        for field_name in ("PostedAtTick", "ExpiresAtTick"):
+            with self.subTest(field_name=field_name):
+                accounts = _new_accounts(self.shared_memory_name)
+                result = _claim_interrupt(accounts)
+                receipt = cast(InterruptLockReceipt, result.receipt)
+                row = accounts.Intents[receipt.slot_index]
+                setattr(row, field_name, (int(getattr(row, field_name)) + 1) & 0xFFFFFFFF)
+                self.assertFalse(accounts.ClearInterruptLockIfMatch(receipt))
+                self.assertTrue(row.Active)
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_expiry_and_sweep_use_existing_wrap_safe_semantics(self) -> None:
+        result = _claim_interrupt(self.accounts, expires_at_tick=NOW + 5)
+        receipt = cast(InterruptLockReceipt, result.receipt)
+        _Clock.value = NOW + 5
+        _LiveClock.value = NOW + 5
+        self.assertFalse(self.accounts.ClearInterruptLockIfMatch(receipt))
+        self.assertEqual(self.accounts.SweepExpiredIntents(_Clock.value), 1)
+        self.assertFalse(self.accounts.Intents[receipt.slot_index].Active)
+
+        _Clock.value = 0xFFFFFFFE
+        _LiveClock.value = 0xFFFFFFFE
+        _FakeTiming.reset()
+        result = _claim_interrupt(self.accounts, expires_at_tick=0x1_0000_0005)
+        receipt = cast(InterruptLockReceipt, result.receipt)
+        self.assertEqual(receipt.expires_at_tick64, 0x1_0000_0005)
+        self.assertFalse(
+            self.accounts.CountLocks(
+                INTERRUPT_KIND,
+                SKILL_ID,
+                TARGET_ID,
+                GROUP_ID,
+                "",
+                0xFFFFFFFE,
+            )
+            == 0
+        )
+        _Clock.value = 0x1_0000_0005
+        _LiveClock.value = 0x1_0000_0005
+        self.assertFalse(self.accounts.ClearInterruptLockIfMatch(receipt))
+        self.assertEqual(self.accounts.SweepExpiredIntents(_Clock.value), 1)
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_malformed_live_rows_fail_closed(self) -> None:
+        _seed_interrupt_intent(self.accounts, 0, enemy_skill_id=0)
+        before = (
+            self.accounts.Intents[0].Active,
+            self.accounts.Intents[0].SkillID,
+            self.accounts.Intents[0].TargetAgentID,
+        )
+        result = _claim_interrupt(self.accounts, enemy_skill_id=OTHER_SKILL_ID)
+        self.assertEqual(result.reason, "malformed_row")
+        self.assertEqual(
+            before,
+            (
+                self.accounts.Intents[0].Active,
+                self.accounts.Intents[0].SkillID,
+                self.accounts.Intents[0].TargetAgentID,
+            ),
+        )
+
+        self.accounts.Intents[0].SkillID = SKILL_ID
+        self.accounts.Intents[0].LockMode = LOCK_SHARED
+        result = _claim_interrupt(self.accounts)
+        self.assertEqual(result.reason, "malformed_row")
+        self.assertTrue(self.accounts.Intents[0].Active)
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_failure_paths_do_not_claim_or_evict_live_rows(self) -> None:
+        invalid = _claim_interrupt(self.accounts, expires_at_tick=NOW)
+        self.assertEqual(invalid.reason, "invalid")
+        self.assertFalse(any(intent.Active for intent in self.accounts.Intents))
+        self.assertEqual(
+            _claim_interrupt(self.accounts, group_id=0).reason,
+            "invalid",
+        )
+        self.assertEqual(
+            _claim_interrupt(self.accounts, group_id=OTHER_GROUP_ID).reason,
+            "owner_unavailable",
+        )
+        self.assertEqual(_claim_interrupt(self.accounts, owner_email="missing@example.com").reason, "owner_unavailable")
+
+        _FakeTiming.advance_clock = False
+        _FakeTiming.advance_live_clock = False
+        stalled = _claim_interrupt(self.accounts)
+        self.assertEqual(stalled.reason, "issuance_tick_unavailable")
+        self.assertFalse(any(intent.Active for intent in self.accounts.Intents))
+        self.assertGreater(_FakeTiming.sleep_calls, 0)
+        _FakeTiming.advance_clock = True
+        _FakeTiming.advance_live_clock = True
+
+        class _FailingKernel32:
+            def __init__(self, wait_result: int | None = None, create_error: bool = False) -> None:
+                self.wait_result = wait_result
+                self.create_error = create_error
+
+            def CreateMutexW(self, *_args: object) -> int:
+                if self.create_error:
+                    raise OSError("creation failed")
+                return 1
+
+            def WaitForSingleObject(self, *_args: object) -> int:
+                if self.wait_result is None:
+                    raise OSError("wait failed")
+                return self.wait_result
+
+            def CloseHandle(self, _handle: object) -> bool:
+                return True
+
+        for fake in (_FailingKernel32(create_error=True), _FailingKernel32(), _FailingKernel32(0x102)):
+            with patch.object(INTENT_SYNC, "_kernel32", fake):
+                result = _claim_interrupt(self.accounts)
+                self.assertEqual(result.reason, "mutex_unavailable")
+                self.assertFalse(any(intent.Active for intent in self.accounts.Intents))
+
+        for index in range(INTENT_COUNT):
+            _seed_intent(
+                self.accounts,
+                index,
+                owner_email=OWNER,
+                skill_id=index + 1,
+                target_agent_id=index + 100,
+                expires_at_tick=NOW + 60_000,
+            )
+        full_table = _claim_interrupt(self.accounts, enemy_skill_id=9999, target_agent_id=9998)
+        self.assertEqual(full_table.reason, "table_full")
+        self.assertTrue(all(intent.Active for intent in self.accounts.Intents))
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_group_mutation_cannot_race_d0_owner_validation(self) -> None:
+        claim_observed = threading.Event()
+        allow_claim_observation = threading.Event()
+
+        class _ObservedAccount:
+            def __init__(self, source: Any) -> None:
+                self.AccountEmail = source.AccountEmail
+                self.IsAccount = source.IsAccount
+                self._group_id = int(source.IsolationGroupID)
+
+            @property
+            def IsolationGroupID(self) -> int:
+                observed_group_id = self._group_id
+                if threading.current_thread().name == "d0-claimant":
+                    claim_observed.set()
+                    if not allow_claim_observation.wait(2000 / 1000):
+                        raise TimeoutError("claim observation was not released")
+                return observed_group_id
+
+            @IsolationGroupID.setter
+            def IsolationGroupID(self, group_id: int) -> None:
+                self._group_id = int(group_id)
+
+        class _CoordinatedIntentLock:
+            def __init__(self) -> None:
+                self._condition = threading.Condition()
+                self._gate_open = False
+                self._held = False
+                self._waiters: list[str] = []
+                self.claim_waiting = threading.Event()
+                self.mutation_waiting = threading.Event()
+
+            def open(self) -> None:
+                with self._condition:
+                    self._gate_open = True
+                    self._condition.notify_all()
+
+            @contextmanager
+            def __call__(self, _shared_memory_name: str, timeout_ms: int = 1000) -> Any:
+                role = "mutation" if threading.current_thread().name == "d0-group-mutation" else "claim"
+                acquired = False
+                deadline = time.monotonic() + timeout_ms / 1000
+                with self._condition:
+                    self._waiters.append(role)
+                    if role == "mutation":
+                        self.mutation_waiting.set()
+                    else:
+                        self.claim_waiting.set()
+                    while not self._gate_open or self._held or (role == "claim" and "mutation" in self._waiters):
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            self._waiters.remove(role)
+                            break
+                        self._condition.wait(remaining)
+                    else:
+                        self._waiters.remove(role)
+                        self._held = True
+                        acquired = True
+                if not acquired:
+                    yield False
+                    return
+                try:
+                    yield True
+                finally:
+                    with self._condition:
+                        self._held = False
+                        self._condition.notify_all()
+
+        mutex = _CoordinatedIntentLock()
+        self.accounts.AccountData[0] = _ObservedAccount(self.accounts.AccountData[0])
+        self.accounts.TryPostInterruptLock.__globals__["intent_table_lock"] = mutex
+        self.accounts.SetAccountGroupByEmail.__globals__["intent_table_lock"] = mutex
+
+        claim_result: list[InterruptClaimResult] = []
+
+        def claim() -> None:
+            claim_result.append(_claim_interrupt(self.accounts))
+
+        mutation_done = threading.Event()
+        mutation_result: list[bool] = []
+
+        def move_owner() -> None:
+            try:
+                mutation_result.append(bool(self.accounts.SetAccountGroupByEmail(OWNER, OTHER_GROUP_ID)))
+            finally:
+                mutation_done.set()
+
+        claimant = threading.Thread(target=claim, name="d0-claimant")
+        claimant.start()
+        deadline = time.monotonic() + 2
+        while not (claim_observed.is_set() or mutex.claim_waiting.is_set()):
+            if time.monotonic() >= deadline:
+                self.fail("claim did not reach owner validation or the Intent mutex")
+            time.sleep(0.001)
+
+        mutator = threading.Thread(target=move_owner, name="d0-group-mutation")
+        mutator.start()
+        deadline = time.monotonic() + 2
+        while not (mutation_done.is_set() or mutex.mutation_waiting.is_set()):
+            if time.monotonic() >= deadline:
+                self.fail("group mutation did not reach its synchronized writer")
+            time.sleep(0.001)
+
+        mutex.open()
+        self.assertTrue(mutation_done.wait(2))
+        allow_claim_observation.set()
+        claimant.join(timeout=2)
+        mutator.join(timeout=2)
+        self.assertFalse(claimant.is_alive())
+        self.assertFalse(mutator.is_alive())
+        self.assertEqual(mutation_result, [True])
+        self.assertEqual(len(claim_result), 1)
+        self.assertEqual(claim_result[0].reason, "owner_unavailable")
+        self.assertEqual(self.accounts.AccountData[0].IsolationGroupID, OTHER_GROUP_ID)
+        self.assertFalse(any(intent.Active for intent in self.accounts.Intents))
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_publication_and_clear_order_are_active_gate_first_last(self) -> None:
+        class _RecordingIntent:
+            writes: list[str]
+
+            def __init__(self) -> None:
+                object.__setattr__(self, "writes", [])
+                for name, value in (
+                    ("OwnerEmail", ""),
+                    ("KindID", 0),
+                    ("LockMode", 0),
+                    ("ReentryPolicy", 0),
+                    ("ClaimStrength", 0),
+                    ("MaxHolders", 0),
+                    ("SkillID", 0),
+                    ("TargetAgentID", 0),
+                    ("IsolationGroupID", 0),
+                    ("PostedAtTick", 0),
+                    ("ExpiresAtTick", 0),
+                    ("Active", False),
+                ):
+                    object.__setattr__(self, name, value)
+
+            def __setattr__(self, name: str, value: object) -> None:
+                if name != "writes":
+                    self.writes.append(name)
+                object.__setattr__(self, name, value)
+
+            def reset(self) -> None:
+                self.Active = False
+                self.OwnerEmail = ""
+                self.KindID = 0
+                self.LockMode = 0
+                self.ReentryPolicy = 0
+                self.ClaimStrength = 0
+                self.MaxHolders = 0
+                self.SkillID = 0
+                self.TargetAgentID = 0
+                self.IsolationGroupID = 0
+                self.PostedAtTick = 0
+                self.ExpiresAtTick = 0
+
+        self.accounts.Intents = [_RecordingIntent() for _ in range(INTENT_COUNT)]
+        result = _claim_interrupt(self.accounts)
+        receipt = cast(InterruptLockReceipt, result.receipt)
+        row = self.accounts.Intents[receipt.slot_index]
+        self.assertEqual(row.writes[-1], "Active")
+        self.assertEqual(row.writes[-2:], ["ExpiresAtTick", "Active"])
+        row.writes.clear()
+        self.assertTrue(self.accounts.ClearInterruptLockIfMatch(receipt))
+        self.assertEqual(row.writes[0], "Active")
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_abandoned_mutex_overwrites_partial_inactive_row_safely(self) -> None:
+        row = self.accounts.Intents[0]
+        row.Active = False
+        row.OwnerEmail = "partial@example.com"
+        row.KindID = INTERRUPT_KIND
+        row.SkillID = 999
+        row.TargetAgentID = TARGET_ID
+        row.IsolationGroupID = GROUP_ID
+
+        class _AbandonedKernel32:
+            def CreateMutexW(self, *_args: object) -> int:
+                return 1
+
+            def WaitForSingleObject(self, *_args: object) -> int:
+                return INTENT_SYNC.WAIT_ABANDONED
+
+            def ReleaseMutex(self, _handle: object) -> bool:
+                return True
+
+            def CloseHandle(self, _handle: object) -> bool:
+                return True
+
+        with patch.object(INTENT_SYNC, "_kernel32", _AbandonedKernel32()):
+            result = _claim_interrupt(self.accounts)
+        self.assertEqual(result.reason, "claimed")
+        receipt = cast(InterruptLockReceipt, result.receipt)
+        self.assertEqual(receipt.slot_index, 0)
+        self.assertTrue(row.Active)
+        self.assertEqual(row.OwnerEmail, OWNER)
+        self.assertEqual(row.SkillID, SKILL_ID)
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_receipt_reuse_and_rollover_reject_stale_receipts(self) -> None:
+        old_result = _claim_interrupt(self.accounts)
+        old_receipt = cast(InterruptLockReceipt, old_result.receipt)
+        self.assertTrue(self.accounts.ClearInterruptLockIfMatch(old_receipt))
+        replacement_result = _claim_interrupt(self.accounts)
+        replacement = cast(InterruptLockReceipt, replacement_result.receipt)
+        self.assertEqual(old_receipt.slot_index, replacement.slot_index)
+        self.assertNotEqual(old_receipt.posted_at_tick64, replacement.posted_at_tick64)
+        self.assertFalse(self.accounts.ClearInterruptLockIfMatch(old_receipt))
+        self.assertTrue(self.accounts.Intents[replacement.slot_index].Active)
+        self.assertTrue(self.accounts.ClearInterruptLockIfMatch(replacement))
+
+        _Clock.value = 0xFFFFFFF0
+        _LiveClock.value = 0xFFFFFFF0
+        _FakeTiming.reset()
+        rollover_result = _claim_interrupt(
+            self.accounts,
+            expires_at_tick=0x1_0000_0005,
+        )
+        rollover_receipt = cast(InterruptLockReceipt, rollover_result.receipt)
+        self.assertTrue(self.accounts.ClearInterruptLockIfMatch(rollover_receipt))
+        _Clock.value = rollover_receipt.expires_at_tick64
+        _LiveClock.value = rollover_receipt.expires_at_tick64
+        replacement_result = _claim_interrupt(self.accounts)
+        replacement = cast(InterruptLockReceipt, replacement_result.receipt)
+        self.assertFalse(self.accounts.ClearInterruptLockIfMatch(rollover_receipt))
+        self.assertTrue(self.accounts.Intents[replacement.slot_index].Active)
 
     @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
     def test_exact_matching_claim_clears_and_sibling_claim_survives(self) -> None:
@@ -671,6 +1592,10 @@ class IntentSynchronizationTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
     def test_post_lock_normalizes_both_ticks_and_rejects_invalid_leases(self) -> None:
+        self.assertEqual(
+            self.accounts.PostLock(OWNER, INTERRUPT_KIND, SKILL_ID, TARGET_ID, NOW + 5000, GROUP_ID),
+            -1,
+        )
         self.assertEqual(
             self.accounts.PostLock(OWNER, SKILL_TARGET_KIND, SKILL_ID, TARGET_ID, NOW, GROUP_ID),
             -1,
@@ -981,6 +1906,121 @@ class IntentSynchronizationTests(unittest.TestCase):
                 ready.close()
                 start.close()
                 started.close()
+            del intents
+            _close_shared_table(memory)
+            memory.unlink()
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_simultaneous_interrupt_claims_for_same_key_elect_one_repeatedly(self) -> None:
+        from multiprocessing import shared_memory
+
+        memory = shared_memory.SharedMemory(create=True, size=_shared_table_size())
+        intents = INTENT_ARRAY.from_buffer(cast(Any, memory.buf))
+        workers: list[tuple[Any, _NamedEvent, _NamedEvent, _NamedEvent]] = []
+        active_rows: list[Any] = []
+        intent: Any = None
+        try:
+            for _ in range(5):
+                for intent in intents:
+                    intent.reset()
+                workers = [
+                    _start_intent_worker(memory.name, memory.name, "post_interrupt", owner, SKILL_ID)
+                    for owner in (OWNER, OTHER_OWNER)
+                ]
+                for _, ready, _, _ in workers:
+                    self.assertTrue(ready.wait())
+                for _, _, start, _ in workers:
+                    start.set()
+                for _, _, _, started in workers:
+                    self.assertTrue(started.wait())
+                worker_results = [_finish_worker(process) for process, _, _, _ in workers]
+                for return_code, _, stderr in worker_results:
+                    self.assertEqual(return_code, 0, stderr)
+                outcomes = [ast.literal_eval(stdout) for _, stdout, _ in worker_results]
+                self.assertEqual(sum(outcome[0] == "claimed" for outcome in outcomes), 1)
+                self.assertEqual(sum(outcome[0] == "conflict" for outcome in outcomes), 1)
+                self.assertEqual(sum(outcome[1] for outcome in outcomes), 1)
+                active_rows = [intent for intent in intents if intent.Active]
+                self.assertEqual(len(active_rows), 1)
+                self.assertEqual(active_rows[0].KindID, INTERRUPT_KIND)
+                self.assertEqual(active_rows[0].SkillID, SKILL_ID)
+                self.assertEqual(active_rows[0].TargetAgentID, TARGET_ID)
+                for process, ready, start, started in workers:
+                    ready.close()
+                    start.close()
+                    started.close()
+                workers = []
+        finally:
+            for process, ready, start, started in workers:
+                start.set()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=2)
+                ready.close()
+                start.close()
+                started.close()
+            active_rows.clear()
+            intent = None
+            del intents
+            _close_shared_table(memory)
+            memory.unlink()
+
+    @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
+    def test_interrupt_stale_cross_process_clear_cannot_erase_replacement(self) -> None:
+        from multiprocessing import shared_memory
+
+        memory = shared_memory.SharedMemory(create=True, size=_shared_table_size())
+        intents = INTENT_ARRAY.from_buffer(cast(Any, memory.buf))
+        accounts = _load_accounts_class(memory.name)(intents)
+        _register_owner(accounts, OWNER, GROUP_ID, 0)
+        _register_owner(accounts, OTHER_OWNER, GROUP_ID, 1)
+        process: Any = None
+        worker_events: tuple[_NamedEvent, _NamedEvent, _NamedEvent] | None = None
+        replacement: Any = None
+        try:
+            result = _claim_interrupt(accounts)
+            receipt = cast(InterruptLockReceipt, result.receipt)
+            with INTENT_SYNC.intent_table_lock(memory.name, timeout_ms=1500) as acquired:
+                self.assertTrue(acquired)
+                process, ready, start, started = _start_intent_worker(
+                    memory.name,
+                    memory.name,
+                    "clear_interrupt",
+                    OWNER,
+                    SKILL_ID,
+                    receipt,
+                )
+                worker_events = (ready, start, started)
+                self.assertTrue(ready.wait())
+                start.set()
+                self.assertTrue(started.wait())
+                time.sleep(0.1)
+                self.assertIsNone(process.poll(), "exact clear must wait for the shared mutex")
+                _seed_interrupt_intent(
+                    accounts,
+                    receipt.slot_index,
+                    owner_email=OTHER_OWNER,
+                    enemy_skill_id=OTHER_SKILL_ID,
+                    posted_at_tick=receipt.posted_at_tick64 + 1,
+                    expires_at_tick=NOW + 5000,
+                )
+            return_code, stdout, stderr = _finish_worker(process)
+            self.assertEqual(return_code, 0, stderr)
+            self.assertFalse(ast.literal_eval(stdout))
+            replacement = intents[receipt.slot_index]
+            self.assertTrue(replacement.Active)
+            self.assertEqual(replacement.OwnerEmail, OTHER_OWNER)
+            self.assertEqual(replacement.SkillID, OTHER_SKILL_ID)
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+            if worker_events is not None:
+                for event in worker_events:
+                    event.set()
+                    event.close()
+            replacement = None
+            del accounts
             del intents
             _close_shared_table(memory)
             memory.unlink()

@@ -21,6 +21,8 @@ if os.name == "nt":
     from ctypes import wintypes
 
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.GetTickCount64.argtypes = ()
+    _kernel32.GetTickCount64.restype = ctypes.c_ulonglong
     _kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR)
     _kernel32.CreateMutexW.restype = wintypes.HANDLE
     _kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
@@ -77,6 +79,13 @@ def intent_table_lock(
             _kernel32.CloseHandle(handle)
         except Exception:
             pass
+
+
+def get_uncached_tick_count64() -> int:
+    """Return the current Windows boot-time millisecond tick without frame caching."""
+    if _kernel32 is None:
+        raise OSError("kernel32.GetTickCount64 is unavailable")
+    return int(_kernel32.GetTickCount64())
 
 
 def normalize_tick(value: int) -> int:

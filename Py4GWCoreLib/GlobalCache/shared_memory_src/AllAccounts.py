@@ -1,4 +1,7 @@
 import ctypes
+import time
+from dataclasses import dataclass
+
 import PySystem
 from PyParty import HeroPartyMember, PetInfo
 from ctypes import Structure, c_float
@@ -15,6 +18,7 @@ from .Globals import (
     SHMEM_MAX_PLAYERS,
     SHMEM_MODULE_NAME,
     SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS,
+    SHMEM_MAX_EMAIL_LEN,
     SHMEM_MAX_CHAR_LEN,
     SHMEM_MAX_NUMBER_OF_SKILLS,
     SHMEM_MAX_INTENTS,
@@ -26,6 +30,7 @@ from .HeroAIOptionStruct import HeroAIOptionStruct
 from .AccountStruct import AccountStruct
 from .KeyStruct import KeyStruct
 from .IntentStruct import IntentStruct
+from .IntentSync import get_uncached_tick_count64
 from .IntentSync import intent_table_lock
 from .IntentSync import is_valid_future_lease
 from .IntentSync import normalize_tick
@@ -39,6 +44,34 @@ from .IntentSync import tick_is_expired
 #   from Py4GWCoreLib.GlobalCache.shared_memory_src import AllAccounts as _wb_mod
 #   _wb_mod.WHITEBOARD_DEBUG = True
 WHITEBOARD_DEBUG: bool = False
+
+_INTERRUPT_ISSUANCE_WAIT_SECONDS = 0.050
+_INTERRUPT_ISSUANCE_SLEEP_SECONDS = 0.001
+_INTERRUPT_CLOCK_DIAGNOSTIC_COOLDOWN_SECONDS = 5.0
+_INTERRUPT_CLOCK_DIAGNOSTIC_MAX_SIGNATURES = 16
+_INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED: dict[tuple[str, str, str], float] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptLockReceipt:
+    slot_index: int
+    owner_email: str
+    kind_id: int
+    enemy_skill_id: int
+    target_agent_id: int
+    isolation_group_id: int
+    lock_mode: int
+    max_holders: int
+    reentry_policy: int
+    claim_strength: int
+    posted_at_tick64: int
+    expires_at_tick64: int
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptClaimResult:
+    receipt: InterruptLockReceipt | None
+    reason: str
 
 #: How old a RUNNING message may be before SendMessage treats it as wedged (its coroutine died
 #: before cleanup) instead of mid-flight. Must exceed the longest legitimate command runtime.
@@ -286,14 +319,17 @@ class AllAccounts(Structure):
     def SetAccountGroupByEmail(self, account_email: str, group_id: int) -> bool:
         if not account_email:
             return False
-        index = self._find_account_slot_by_email(account_email)
-        if index == -1:
-            return False
-        account = self.AccountData[index]
-        if not account.IsAccount:
-            return False
-        account.IsolationGroupID = group_id
-        return True
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return False
+            index = self._find_account_slot_by_email(account_email)
+            if index == -1:
+                return False
+            account = self.AccountData[index]
+            if not account.IsAccount:
+                return False
+            account.IsolationGroupID = group_id
+            return True
 
     def GetAccountGroupByEmail(self, account_email: str) -> int:
         index = self._find_account_slot_by_email(account_email)
@@ -1219,6 +1255,300 @@ class AllAccounts(Structure):
         self._clear_intent_unlocked(index, "exact_release")
         return True
 
+    def _log_interrupt_clock_failure(self, stage: str, error: Exception) -> None:
+        """Emit one bounded diagnostic for a fail-closed D0 clock read."""
+        message = type(error).__name__
+        try:
+            message = str(error).replace("\r", " ").replace("\n", " ")[:160]
+        except Exception:
+            pass
+        try:
+            signature = (stage, type(error).__name__, message)
+            now = time.monotonic()
+            last_logged = _INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED.get(signature)
+            if (
+                last_logged is not None
+                and now - last_logged < _INTERRUPT_CLOCK_DIAGNOSTIC_COOLDOWN_SECONDS
+            ):
+                return
+            if signature not in _INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED:
+                if len(_INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED) >= _INTERRUPT_CLOCK_DIAGNOSTIC_MAX_SIGNATURES:
+                    oldest_signature = next(iter(_INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED))
+                    del _INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED[oldest_signature]
+            _INTERRUPT_CLOCK_DIAGNOSTIC_LAST_LOGGED[signature] = now
+        except Exception:
+            pass
+        try:
+            ConsoleLog(
+                SHMEM_MODULE_NAME,
+                f"INTERRUPT clock failure stage={stage} "
+                f"error={type(error).__name__}: {message}",
+                PySystem.Console.MessageType.Error,
+            )
+        except Exception:
+            pass
+
+    def _get_interrupt_issuance_tick(self, entry_tick: int) -> int | None:
+        """Return a strictly later full-width tick without spinning unboundedly."""
+        deadline = time.monotonic() + _INTERRUPT_ISSUANCE_WAIT_SECONDS
+        while True:
+            issuance_tick = int(get_uncached_tick_count64())
+            if issuance_tick > entry_tick:
+                return issuance_tick
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            time.sleep(min(_INTERRUPT_ISSUANCE_SLEEP_SECONDS, remaining))
+
+    def _is_valid_interrupt_receipt(self, receipt: object) -> bool:
+        if not isinstance(receipt, InterruptLockReceipt):
+            return False
+        if not isinstance(receipt.owner_email, str) or not receipt.owner_email:
+            return False
+        integer_fields = (
+            receipt.slot_index,
+            receipt.kind_id,
+            receipt.enemy_skill_id,
+            receipt.target_agent_id,
+            receipt.isolation_group_id,
+            receipt.lock_mode,
+            receipt.max_holders,
+            receipt.reentry_policy,
+            receipt.claim_strength,
+            receipt.posted_at_tick64,
+            receipt.expires_at_tick64,
+        )
+        if any(type(value) is not int for value in integer_fields):
+            return False
+        if not (0 <= receipt.slot_index < SHMEM_MAX_INTENTS):
+            return False
+        if receipt.kind_id != int(WhiteboardLockKind.INTERRUPT_TARGET):
+            return False
+        if receipt.enemy_skill_id <= 0 or receipt.target_agent_id <= 0:
+            return False
+        if receipt.isolation_group_id <= 0:
+            return False
+        if receipt.lock_mode != int(WhiteboardLockMode.EXCLUSIVE):
+            return False
+        if receipt.max_holders != 1:
+            return False
+        if receipt.reentry_policy != int(WhiteboardReentryPolicy.NON_REENTRANT):
+            return False
+        if receipt.claim_strength != int(WhiteboardClaimStrength.HARD):
+            return False
+        if receipt.posted_at_tick64 < 0 or receipt.expires_at_tick64 < 0:
+            return False
+        return is_valid_future_lease(receipt.posted_at_tick64, receipt.expires_at_tick64)
+
+    def TryPostInterruptLock(
+        self,
+        owner_email: str,
+        enemy_skill_id: int,
+        target_agent_id: int,
+        expires_at_tick: int,
+        isolation_group_id: int,
+    ) -> InterruptClaimResult:
+        """Atomically claim one fixed-contract INTERRUPT_TARGET lease."""
+        if not isinstance(owner_email, str):
+            return InterruptClaimResult(None, "invalid")
+        if not owner_email:
+            return InterruptClaimResult(None, "owner_unavailable")
+        if len(owner_email) >= SHMEM_MAX_EMAIL_LEN:
+            return InterruptClaimResult(None, "invalid")
+        integer_fields = (
+            enemy_skill_id,
+            target_agent_id,
+            expires_at_tick,
+            isolation_group_id,
+        )
+        if any(type(value) is not int for value in integer_fields):
+            return InterruptClaimResult(None, "invalid")
+        if (
+            enemy_skill_id <= 0
+            or target_agent_id <= 0
+            or isolation_group_id <= 0
+            or expires_at_tick < 0
+            or enemy_skill_id > 0xFFFFFFFF
+            or target_agent_id > 0xFFFFFFFF
+            or isolation_group_id > 0xFFFFFFFF
+        ):
+            return InterruptClaimResult(None, "invalid")
+
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return InterruptClaimResult(None, "mutex_unavailable")
+
+            try:
+                owner_slot = self._find_account_slot_by_email(owner_email)
+                owner_group = (
+                    int(self.AccountData[owner_slot].IsolationGroupID)
+                    if owner_slot != -1
+                    else 0
+                )
+            except Exception:
+                return InterruptClaimResult(None, "owner_unavailable")
+            if owner_slot == -1 or owner_group != isolation_group_id:
+                return InterruptClaimResult(None, "owner_unavailable")
+
+            try:
+                entry_tick64 = int(get_uncached_tick_count64())
+            except Exception as error:
+                self._log_interrupt_clock_failure("entry", error)
+                return InterruptClaimResult(None, "issuance_tick_unavailable")
+            if not is_valid_future_lease(entry_tick64, expires_at_tick):
+                return InterruptClaimResult(None, "invalid")
+
+            free_slot: int | None = None
+            expired_slot: int | None = None
+            interrupt_kind = int(WhiteboardLockKind.INTERRUPT_TARGET)
+            for i in range(SHMEM_MAX_INTENTS):
+                intent = self.Intents[i]
+                if not intent.Active:
+                    if free_slot is None:
+                        free_slot = i
+                    continue
+                if tick_is_expired(entry_tick64, int(intent.ExpiresAtTick)):
+                    if expired_slot is None:
+                        expired_slot = i
+                    continue
+                if int(intent.KindID) != interrupt_kind:
+                    continue
+
+                row_group = int(intent.IsolationGroupID)
+                if row_group <= 0:
+                    return InterruptClaimResult(None, "malformed_row")
+                if row_group != isolation_group_id:
+                    continue
+                if (
+                    not isinstance(intent.OwnerEmail, str)
+                    or not intent.OwnerEmail
+                    or int(intent.SkillID) <= 0
+                    or int(intent.TargetAgentID) <= 0
+                ):
+                    return InterruptClaimResult(None, "malformed_row")
+                if (
+                    int(intent.SkillID) == enemy_skill_id
+                    and int(intent.TargetAgentID) == target_agent_id
+                ):
+                    if (
+                        int(intent.LockMode) != int(WhiteboardLockMode.EXCLUSIVE)
+                        or int(intent.MaxHolders) != 1
+                        or int(intent.ReentryPolicy) != int(WhiteboardReentryPolicy.NON_REENTRANT)
+                        or int(intent.ClaimStrength) != int(WhiteboardClaimStrength.HARD)
+                    ):
+                        return InterruptClaimResult(None, "malformed_row")
+                    return InterruptClaimResult(None, "conflict")
+
+            slot_index = free_slot if free_slot is not None else expired_slot
+            if slot_index is None:
+                return InterruptClaimResult(None, "table_full")
+
+            try:
+                posted_at_tick64 = self._get_interrupt_issuance_tick(entry_tick64)
+            except Exception as error:
+                self._log_interrupt_clock_failure("issuance", error)
+                return InterruptClaimResult(None, "issuance_tick_unavailable")
+            if posted_at_tick64 is None:
+                return InterruptClaimResult(None, "issuance_tick_unavailable")
+            if not is_valid_future_lease(posted_at_tick64, expires_at_tick):
+                return InterruptClaimResult(None, "invalid")
+
+            try:
+                publication_tick64 = int(get_uncached_tick_count64())
+            except Exception as error:
+                self._log_interrupt_clock_failure("publication", error)
+                return InterruptClaimResult(None, "issuance_tick_unavailable")
+            if not is_valid_future_lease(publication_tick64, expires_at_tick):
+                return InterruptClaimResult(None, "invalid")
+
+            intent = self.Intents[slot_index]
+            if intent.Active:
+                self._clear_intent_unlocked(slot_index, "expired", posted_at_tick64)
+            intent.Active = False
+            intent.OwnerEmail = owner_email
+            intent.KindID = interrupt_kind
+            intent.LockMode = int(WhiteboardLockMode.EXCLUSIVE)
+            intent.ReentryPolicy = int(WhiteboardReentryPolicy.NON_REENTRANT)
+            intent.ClaimStrength = int(WhiteboardClaimStrength.HARD)
+            intent.MaxHolders = 1
+            intent.SkillID = enemy_skill_id
+            intent.TargetAgentID = target_agent_id
+            intent.IsolationGroupID = isolation_group_id
+            intent.PostedAtTick = normalize_tick(posted_at_tick64)
+            intent.ExpiresAtTick = normalize_tick(expires_at_tick)
+            intent.Active = True
+            self._wb_log(
+                interrupt_kind,
+                f"POST  slot={slot_index} email='{owner_email}' "
+                f"{self._wb_lock_display(intent)} holders=1 "
+                f"expires_in={int(expires_at_tick) - posted_at_tick64}ms",
+            )
+            return InterruptClaimResult(
+                InterruptLockReceipt(
+                    slot_index=slot_index,
+                    owner_email=owner_email,
+                    kind_id=interrupt_kind,
+                    enemy_skill_id=enemy_skill_id,
+                    target_agent_id=target_agent_id,
+                    isolation_group_id=isolation_group_id,
+                    lock_mode=int(WhiteboardLockMode.EXCLUSIVE),
+                    max_holders=1,
+                    reentry_policy=int(WhiteboardReentryPolicy.NON_REENTRANT),
+                    claim_strength=int(WhiteboardClaimStrength.HARD),
+                    posted_at_tick64=posted_at_tick64,
+                    expires_at_tick64=expires_at_tick,
+                ),
+                "claimed",
+            )
+
+    def ClearInterruptLockIfMatch(self, receipt: InterruptLockReceipt) -> bool:
+        """Clear one live INTERRUPT_TARGET row only for its exact receipt."""
+        if not self._is_valid_interrupt_receipt(receipt):
+            return False
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return False
+            intent = self.Intents[receipt.slot_index]
+            if not intent.Active:
+                return False
+            try:
+                now_tick64 = int(get_uncached_tick_count64())
+            except Exception as error:
+                self._log_interrupt_clock_failure("release", error)
+                return False
+            if not is_valid_future_lease(now_tick64, receipt.expires_at_tick64):
+                return False
+            if tick_is_expired(now_tick64, int(intent.ExpiresAtTick)):
+                return False
+            if intent.OwnerEmail != receipt.owner_email:
+                return False
+            if int(intent.KindID) != int(WhiteboardLockKind.INTERRUPT_TARGET):
+                return False
+            if int(intent.SkillID) != receipt.enemy_skill_id:
+                return False
+            if int(intent.TargetAgentID) != receipt.target_agent_id:
+                return False
+            if int(intent.IsolationGroupID) != receipt.isolation_group_id:
+                return False
+            if int(intent.LockMode) != int(WhiteboardLockMode.EXCLUSIVE):
+                return False
+            if int(intent.MaxHolders) != 1:
+                return False
+            if int(intent.ReentryPolicy) != int(WhiteboardReentryPolicy.NON_REENTRANT):
+                return False
+            if int(intent.ClaimStrength) != int(WhiteboardClaimStrength.HARD):
+                return False
+            if int(intent.PostedAtTick) != normalize_tick(receipt.posted_at_tick64):
+                return False
+            if int(intent.ExpiresAtTick) != normalize_tick(receipt.expires_at_tick64):
+                return False
+            self._clear_intent_unlocked(
+                receipt.slot_index,
+                "interrupt_exact_release",
+                now_tick64,
+            )
+            return True
+
     def ClearIntentsByOwner(self, owner_email: str) -> int:
         """Zero every whiteboard slot whose OwnerEmail matches. Returns count cleared."""
         if not owner_email:
@@ -1289,6 +1619,8 @@ class AllAccounts(Structure):
         Every lock is a lease. Past or missing expiry is rejected so no caller
         can create a permanent lock.
         """
+        if int(kind_id) == int(WhiteboardLockKind.INTERRUPT_TARGET):
+            return -1
         if not owner_email or kind_id <= 0 or target_id < 0:
             return -1
         if int(max_holders) <= 0:
