@@ -50,6 +50,7 @@ class CryCandidateReason(str, Enum):
     CAST_ASSESSMENT_MISMATCH = "cast_assessment_mismatch"
     UNKNOWN_TIMING = "unknown_timing"
     MECHANICALLY_INFEASIBLE = "mechanically_infeasible"
+    PRIMARY_HANDLED = "primary_handled"
     BELOW_MINIMUM_VALUE = "below_minimum_value"
 
 
@@ -515,6 +516,7 @@ def evaluate_smart_cry(
         covered_keys: list[CryCastKey] = []
         handled_keys: list[CryCastKey] = []
         covered_values: list[tuple[CryCastKey, int]] = []
+        primary_cast_key = None if primary_cast is None else primary_cast.cast_key
         primary_value_source = "unavailable"
         primary_value = 0
         additional_interrupt_count = 0
@@ -531,7 +533,6 @@ def evaluate_smart_cry(
             feasible_casts[cast_key] = cast
 
         feasible_keys = sorted(feasible_casts, key=_cast_sort_key)
-        primary_cast_key = None if primary_cast is None else primary_cast.cast_key
         for cast_key in feasible_keys:
             cast = feasible_casts[cast_key]
             if _cast_is_handled(cast_key, handled):
@@ -553,9 +554,13 @@ def evaluate_smart_cry(
         damage_coverage_count = len(set(affected_enemy_ids))
         damage_bonus = policy.damage_bonus if damage_coverage_count >= policy.damage_coverage_threshold else 0
         total_value = primary_value + additional_interrupt_value + damage_bonus
-        eligible = reason is None and total_value >= policy.minimum_candidate_value
-        if reason is None and not eligible:
-            reason = CryCandidateReason.BELOW_MINIMUM_VALUE
+        primary_handled = primary_cast_key is not None and _cast_is_handled(primary_cast_key, handled)
+        eligible = reason is None and not primary_handled and total_value >= policy.minimum_candidate_value
+        if reason is None:
+            if primary_handled:
+                reason = CryCandidateReason.PRIMARY_HANDLED
+            elif not eligible:
+                reason = CryCandidateReason.BELOW_MINIMUM_VALUE
         if reason is None:
             reason = CryCandidateReason.ELIGIBLE
 

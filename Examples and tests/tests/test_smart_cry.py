@@ -610,6 +610,33 @@ def test_handled_collateral_contributes_zero_interrupt_value() -> None:
     assert candidate.handled_cast_keys == (collateral.cast_key,)
 
 
+def test_handled_primary_cannot_be_lifted_by_collateral_and_damage() -> None:
+    primary = _cast(10, 100)
+    collateral = _cast(11, 101)
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, distance=10.0, cast=primary),
+            _enemy(11, 2.0, distance=12.0, cast=collateral),
+            _enemy(12, 1.0, distance=11.0),
+            _enemy(13, -1.0, distance=11.0),
+        ),
+        cry_radius=2.0,
+        cast_range=10.0,
+        handled=(primary.cast_key,),
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert decision.selected is None
+    assert candidate.eligible is False
+    assert candidate.reason is CryCandidateReason.PRIMARY_HANDLED
+    assert candidate.primary_cast_value == 0
+    assert candidate.primary_value_source == "unavailable"
+    assert candidate.additional_interrupt_value == 1
+    assert candidate.damage_coverage_count == 4
+    assert candidate.damage_bonus == 1
+    assert candidate.total_interrupt_value == 2
+
+
 def test_mechanically_infeasible_collateral_contributes_zero_interrupt_value() -> None:
     decision = _evaluate(
         (

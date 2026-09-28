@@ -423,6 +423,22 @@ class SmartCryController(BuildMgr):
                 ),
                 None,
             )
+            if cast_key is None:
+                self._emit_diagnostic(
+                    "declined",
+                    ("primary_covered_key_missing",),
+                    now_ms=now_ms,
+                    windowed=True,
+                )
+                return False
+            if cast_key.observation_identity is None:
+                self._emit_diagnostic(
+                    "declined",
+                    ("primary_observation_identity_missing",),
+                    now_ms=now_ms,
+                    windowed=True,
+                )
+                return False
             request = _CryRequest(
                 attempt_id=self._attempt_counter,
                 token=self._token_counter,
@@ -434,7 +450,7 @@ class SmartCryController(BuildMgr):
                 player_agent_id=int(self._lifecycle_id[1]),
                 primary_agent_id=int(selected.primary_agent_id),
                 enemy_skill_id=int(selected.primary_enemy_skill_id),
-                observation_identity=None if cast_key is None else cast_key.observation_identity,
+                observation_identity=cast_key.observation_identity,
                 covered_cast_keys=tuple(selected.covered_cast_keys),
                 enqueue_tick=now_ms,
                 deadline_tick=now_ms + min(self._queue_deadline_ms, queue_window),

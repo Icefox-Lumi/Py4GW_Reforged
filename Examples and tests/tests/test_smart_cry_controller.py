@@ -575,6 +575,52 @@ def test_try_cast_reports_lifecycle_missing_separately() -> None:
         assert runtime.native_calls == []
 
 
+@pytest.mark.parametrize(
+    ("coverage_kind", "expected_reason"),
+    [
+        ("missing_key", "primary_covered_key_missing"),
+        ("missing_identity", "primary_observation_identity_missing"),
+    ],
+)
+def test_try_cast_fails_closed_without_primary_coverage(
+    coverage_kind: str,
+    expected_reason: str,
+) -> None:
+    with _loaded_runtime() as (module, runtime):
+        controller = module.SmartCryController(skill_id=55)
+        controller._now_ms = lambda: runtime.clock.now
+        controller._refresh_lifecycle = lambda: None
+        controller._maintain_state = lambda _now_ms: None
+        controller._combat_option_enabled = lambda: True
+        controller._local_owner_context_result = lambda: types.SimpleNamespace(
+            context=("me@example.com", 4),
+            reason=None,
+        )
+        controller._handled_cast_keys = lambda *_args, **_kwargs: set()
+        controller._lifecycle_id = (1, 1, 0)
+
+        covered_cast_keys = ()
+        if coverage_kind == "missing_identity":
+            covered_cast_keys = (module.CryCastKey(10, 7),)
+        selected = types.SimpleNamespace(
+            primary_agent_id=10,
+            primary_enemy_skill_id=7,
+            total_interrupt_value=2,
+            covered_cast_keys=covered_cast_keys,
+        )
+        controller._build_selection = lambda _now_ms, _handled: types.SimpleNamespace(
+            decision=types.SimpleNamespace(selected=selected),
+            primary_assessment=_assessment(),
+        )
+
+        list(controller.try_cast())
+        assert runtime.queue_calls == 0
+        assert runtime.claim_calls == []
+        assert runtime.native_calls == []
+        assert controller.pending_request is None
+        assert any(f"values={expected_reason}" in message for message in runtime.diagnostics)
+
+
 def test_guarded_request_has_no_claim_until_its_queued_callback_runs() -> None:
     with _loaded_runtime() as (module, runtime):
         controller, request = _prepare_controller(module, runtime)
