@@ -512,6 +512,19 @@ def test_cry_only_is_smart_owned_and_masked() -> None:
         assert composition.fallback.calls == 1
 
 
+def test_complicate_remains_on_the_ordinary_heroai_fallback() -> None:
+    with _loaded_runtime() as (composition_module, runtime, smart_energy):
+        runtime.bar[:] = [932, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        assert 932 not in smart_energy.get_supported_handler_factories()
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_smart_ids == ()
+        assert composition.blocked_skills == []
+        assert composition.fallback.blocked_skills == []
+        assert composition.fallback.calls == 1
+
+
 def test_energy_surge_and_cry_mask_both_smart_skills() -> None:
     with _loaded_runtime() as (composition_module, runtime, _smart_energy):
         runtime.bar[:] = [55, 0, 39, 101, 0, 0, 0, 0]
