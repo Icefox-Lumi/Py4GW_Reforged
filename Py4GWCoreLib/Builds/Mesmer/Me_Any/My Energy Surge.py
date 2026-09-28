@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from typing import Any
+from typing import cast
 
 from Py4GWCoreLib.BuildMgr import BuildMgr
+from Py4GWCoreLib.Builds.Skills.SmartCryController import SmartCryController
+from Py4GWCoreLib.Builds.Skills.SmartCryController import get_cry_of_frustration_id
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import DAMAGE_PER_ENERGY
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import DECISION_INTERVAL_MS
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import DEFAULT_POLICY
@@ -52,7 +55,7 @@ class MyMesmer(BuildMgr):
             required_skills=[],
             optional_skills=[],
         )
-        self._active_handlers: dict[int, SmartEnergySurgeHandler] = {}
+        self._active_handlers: dict[int, Any] = {}
         self._skill_slots: dict[int, int] = {}
         self._equipped_bar: tuple[int, ...] | None = None
         self._smart_owned_skill_ids: tuple[int, ...] = ()
@@ -95,7 +98,7 @@ class MyMesmer(BuildMgr):
         return self._smart_owned_skill_ids
 
     @property
-    def active_handlers(self) -> dict[int, SmartEnergySurgeHandler]:
+    def active_handlers(self) -> dict[int, Any]:
         return dict(self._active_handlers)
 
     @property
@@ -109,7 +112,7 @@ class MyMesmer(BuildMgr):
     def GetActiveSmartSkillIDs(self) -> list[int]:
         return list(self._smart_owned_skill_ids)
 
-    def GetActiveHandlers(self) -> dict[int, SmartEnergySurgeHandler]:
+    def GetActiveHandlers(self) -> dict[int, Any]:
         return dict(self._active_handlers)
 
     def GetSkillSlots(self) -> dict[int, int]:
@@ -145,13 +148,27 @@ class MyMesmer(BuildMgr):
         except Exception:
             return
 
-    def _resolve_handler_factories(self) -> dict[int, type[SmartEnergySurgeHandler]]:
+    def _resolve_handler_factories(self) -> dict[int, type[Any]]:
         try:
-            factories = get_supported_handler_factories()
+            supported_factories = get_supported_handler_factories()
+            factories: dict[int, type[Any]] = {
+                int(skill_id): cast(type[Any], factory)
+                for skill_id, factory in supported_factories.items()
+            }
         except Exception as error:
             self._report_composition_error(f"smart registry unavailable: {type(error).__name__}")
-            return dict(SUPPORTED_HANDLER_FACTORIES)
-        self._last_composition_error = None
+            factories = {
+                int(skill_id): cast(type[Any], factory)
+                for skill_id, factory in SUPPORTED_HANDLER_FACTORIES.items()
+            }
+        try:
+            cry_skill_id = get_cry_of_frustration_id()
+            if cry_skill_id > 0:
+                factories[int(cry_skill_id)] = SmartCryController
+        except Exception as error:
+            self._report_composition_error(f"smart Cry unavailable: {type(error).__name__}")
+        else:
+            self._last_composition_error = None
         return factories
 
     def _refresh_composition(self) -> bool:
@@ -161,19 +178,19 @@ class MyMesmer(BuildMgr):
             return False
 
         factories = self._resolve_handler_factories()
-        active_id_list: list[int] = []
-        seen_active_ids: set[int] = set()
+        owned_id_list: list[int] = []
+        seen_owned_ids: set[int] = set()
         for skill_id in equipped_bar:
-            if skill_id > 0 and skill_id in factories and skill_id not in seen_active_ids:
-                active_id_list.append(skill_id)
-                seen_active_ids.add(skill_id)
-        active_ids = tuple(active_id_list)
+            if skill_id > 0 and skill_id in factories and skill_id not in seen_owned_ids:
+                owned_id_list.append(skill_id)
+                seen_owned_ids.add(skill_id)
+        owned_ids = tuple(owned_id_list)
         previous_ids = set(self._active_handlers)
-        for removed_skill_id in previous_ids - set(active_ids):
+        for removed_skill_id in previous_ids - set(owned_ids):
             self._active_handlers[removed_skill_id].dispose("skill_removed")
 
-        next_handlers: dict[int, SmartEnergySurgeHandler] = {}
-        for skill_id in active_ids:
+        next_handlers: dict[int, Any] = {}
+        for skill_id in owned_ids:
             handler = self._active_handlers.get(skill_id)
             if handler is None:
                 try:
@@ -197,15 +214,29 @@ class MyMesmer(BuildMgr):
         self._equipped_bar = equipped_bar
         self._skill_slots = slot_by_skill
         self._active_handlers = next_handlers
-        self._smart_owned_skill_ids = active_ids
-        self.SetBlockedSkills(list(active_ids))
+        self._smart_owned_skill_ids = owned_ids
+        self.SetBlockedSkills(list(owned_ids))
         return True
 
-    def _handler_result(self, handler: SmartEnergySurgeHandler) -> Generator[None, None, bool]:
+    def _handler_result(self, handler: Any) -> Generator[None, None, bool]:
         result = handler.try_cast()
         if hasattr(result, "__next__"):
             result = yield from result
         return bool(result)
+
+    @staticmethod
+    def _handler_has_active_dispatch(handler: Any) -> bool:
+        """Keep a second smart handler from preempting an in-flight cast."""
+
+        if getattr(handler, "_active_reservation", None) is not None:
+            return True
+        pending_check = getattr(handler, "_is_local_cast_pending", None)
+        if not callable(pending_check):
+            return False
+        try:
+            return bool(pending_check())
+        except Exception:
+            return True
 
     def ProcessSkillCasting(self) -> Generator[None, None, Any]:
         if False:
@@ -241,7 +272,32 @@ class MyMesmer(BuildMgr):
                 yield
                 return False
 
+        cry_skill_id = None
+        try:
+            cry_skill_id = get_cry_of_frustration_id()
+        except Exception:
+            pass
+
+        cry_handler = None if cry_skill_id is None else self._active_handlers.get(cry_skill_id)
+        if cry_handler is not None:
+            other_handler_active = any(
+                handler is not cry_handler and self._handler_has_active_dispatch(handler)
+                for _skill_id, handler in ready_handlers
+            )
+            if not other_handler_active:
+                try:
+                    if (yield from self._handler_result(cry_handler)):
+                        self.SetTickSuccess()
+                        return True
+                except Exception as error:
+                    cry_handler.cancel_pending("handler_exception")
+                    self._report_composition_error(
+                        f"smart handler {cry_skill_id} failed: {type(error).__name__}"
+                    )
+
         for skill_id, handler in ready_handlers:
+            if handler is cry_handler:
+                continue
             try:
                 if (yield from self._handler_result(handler)):
                     self.SetTickSuccess()
@@ -307,6 +363,7 @@ __all__ = [
     "PROFESSION_MAX_ENERGY",
     "SUPPORTED_HANDLER_FACTORIES",
     "SmartEnergySurgeHandler",
+    "SmartCryController",
     "UNKNOWN_MAX_ENERGY",
     "evaluate_energy_surge",
     "infer_max_energy",

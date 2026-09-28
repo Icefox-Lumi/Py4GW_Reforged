@@ -9,6 +9,7 @@ import PyImGui
 import PySystem
 
 from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
+from Py4GWCoreLib.botting_tree_src.isolation import AccountIsolationBootstrap
 
 MODULE_NAME = "HeroAI"
 MODULE_ICON = "Assets/Textures/Module_Icons/HeroAI.png"
@@ -40,6 +41,7 @@ LOOT_THROTTLE_CHECK = ThrottledTimer(250)
 
 cached_data = CacheData()
 heroai_build = HeroAI_Build(cached_data)
+heroai_isolation_bootstrap = AccountIsolationBootstrap()
 map_quads : list[Map.Pathing.Quad] = []
 #region Looting
 def LootingNode(cached_data: CacheData)-> BehaviorTree.NodeState:
@@ -960,6 +962,7 @@ def main():
     try:
         _hbs_outer_diag.set_active_owner(_OUTER_DIAGNOSTIC_OWNER)
         cached_data.Update()
+        heroai_isolation_bootstrap.ensure()
 
         EnsureFollowModuleIni()
         HeroAI_FloatingWindows.update()
@@ -1008,6 +1011,7 @@ def minimal():
 
 def on_enable():
     heroai_build.ClearBuildContract()
+    heroai_isolation_bootstrap.reset()
     HeroAI_FloatingWindows.settings.reset()
     HeroAI_FloatingWindows.SETTINGS_THROTTLE.SetThrottleTime(50)
 

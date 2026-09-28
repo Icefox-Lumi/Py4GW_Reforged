@@ -255,6 +255,34 @@ def post_resurrection_lock(dead_ally_agent_id: int, skill_id: int = 0, aftercast
 RESURRECTION_SCROLL_STATE_TARGET = 0
 RESURRECTION_SCROLL_STATE_TTL_MS = 3000
 
+ACCOUNT_ISOLATION_POLICY_TARGET = 0
+ACCOUNT_ISOLATION_POLICY_TTL_MS = 3000
+ACCOUNT_ISOLATION_POLICY_REFRESH_MS = 1000
+ACCOUNT_ISOLATION_POLICY_RETRY_MS = 250
+_account_isolation_policy_last_publish: dict[str, tuple[bool, int]] = {}
+_account_isolation_policy_last_failure: dict[str, tuple[bool, int]] = {}
+_account_isolation_policy_failure_counts: dict[str, int] = {}
+
+
+def _record_account_isolation_policy_publish_failure(email: str) -> None:
+    """Emit bounded, identity-free diagnostics for actual policy-publication failures."""
+    failures = _account_isolation_policy_failure_counts.get(email, 0) + 1
+    _account_isolation_policy_failure_counts[email] = failures
+    if failures not in (1, 3, 10):
+        return
+    try:
+        try:
+            message_type = PySystem.Console.MessageType.Warning
+        except AttributeError:
+            message_type = PySystem.Console.MessageType.Info
+        PySystem.Console.Log(
+            "Whiteboard",
+            "Account isolation policy heartbeat retry pending.",
+            message_type,
+        )
+    except Exception:
+        pass
+
 
 def publish_resurrection_scroll_state(enabled: bool, skip_if_res_available: bool) -> None:
     """Broadcast THIS account's resurrection-scroll state on the whiteboard.
@@ -316,6 +344,117 @@ def read_resurrection_scroll_states() -> dict[str, tuple[bool, bool]]:
                 continue
             bits = int(intent.SkillID)
             out[owner] = (bool(bits & 1), bool(bits & 2))
+    except Exception:
+        return out
+    return out
+
+
+def publish_account_isolation_policy(enabled: bool, *, force: bool = False) -> bool:
+    """Publish this account's desired isolation participation as a short-lived heartbeat."""
+    email = ""
+    desired = bool(enabled)
+    now: int | None = None
+    try:
+        from Py4GWCoreLib import GLOBAL_CACHE
+
+        email, _ = _owner_context()
+        if not email:
+            return False
+        now = int(PySystem.get_tick_count64())
+        previous_failure = _account_isolation_policy_last_failure.get(email)
+        if previous_failure is not None and previous_failure[0] != desired:
+            _account_isolation_policy_last_failure.pop(email, None)
+            _account_isolation_policy_failure_counts.pop(email, None)
+            previous_failure = None
+        if (
+            not force
+            and previous_failure is not None
+            and previous_failure[0] == desired
+            and tick_elapsed(now, previous_failure[1]) < ACCOUNT_ISOLATION_POLICY_RETRY_MS
+        ):
+            return False
+
+        previous = _account_isolation_policy_last_publish.get(email)
+        if (
+            not force
+            and previous is not None
+            and previous[0] == desired
+            and tick_elapsed(now, previous[1]) < ACCOUNT_ISOLATION_POLICY_REFRESH_MS
+        ):
+            return True
+
+        slot_index = GLOBAL_CACHE.ShMem.UpsertLockByOwnerKindTarget(
+            email,
+            int(WhiteboardLockKind.ACCOUNT_ISOLATION_POLICY),
+            int(desired),
+            ACCOUNT_ISOLATION_POLICY_TARGET,
+            now + ACCOUNT_ISOLATION_POLICY_TTL_MS,
+            0,
+            int(WhiteboardLockMode.SHARED),
+            255,
+            int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+            int(WhiteboardClaimStrength.SOFT),
+        )
+        if slot_index < 0:
+            _account_isolation_policy_last_failure[email] = (desired, now)
+            _record_account_isolation_policy_publish_failure(email)
+            return False
+        _account_isolation_policy_last_publish[email] = (desired, now)
+        _account_isolation_policy_last_failure.pop(email, None)
+        _account_isolation_policy_failure_counts.pop(email, None)
+        return True
+    except Exception:
+        if email and now is not None:
+            _account_isolation_policy_last_failure[email] = (desired, now)
+            _record_account_isolation_policy_publish_failure(email)
+        return False
+
+
+def clear_account_isolation_policy() -> bool:
+    """Remove this account's live isolation-policy heartbeat during owner cleanup."""
+    try:
+        from Py4GWCoreLib import GLOBAL_CACHE
+
+        email, _ = _owner_context()
+        if not email:
+            return False
+        GLOBAL_CACHE.ShMem.GetAllAccounts().ClearLockByOwnerKindTarget(
+            email,
+            int(WhiteboardLockKind.ACCOUNT_ISOLATION_POLICY),
+            ACCOUNT_ISOLATION_POLICY_TARGET,
+            0,
+        )
+        _account_isolation_policy_last_publish.pop(email, None)
+        _account_isolation_policy_last_failure.pop(email, None)
+        _account_isolation_policy_failure_counts.pop(email, None)
+        return True
+    except Exception:
+        return False
+
+
+def read_account_isolation_policies() -> dict[str, bool]:
+    """Return live per-account isolation policy heartbeats keyed by account email."""
+    out: dict[str, bool] = {}
+    published_at: dict[str, int] = {}
+    try:
+        from Py4GWCoreLib import GLOBAL_CACHE
+
+        now = int(PySystem.get_tick_count64())
+        for _slot_index, intent in GLOBAL_CACHE.ShMem.GetAllAccounts().GetAllIntents():
+            if int(intent.KindID) != int(WhiteboardLockKind.ACCOUNT_ISOLATION_POLICY):
+                continue
+            if tick_is_expired(now, int(intent.ExpiresAtTick)):
+                continue
+            owner = str(intent.OwnerEmail or '').strip()
+            state = int(intent.SkillID)
+            if not owner or state not in (0, 1):
+                continue
+            previous_tick = published_at.get(owner)
+            posted_at = int(intent.PostedAtTick)
+            if previous_tick is not None and tick_elapsed(posted_at, previous_tick) >= 0x80000000:
+                continue
+            out[owner] = bool(state)
+            published_at[owner] = posted_at
     except Exception:
         return out
     return out

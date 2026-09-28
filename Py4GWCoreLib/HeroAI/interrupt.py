@@ -839,6 +839,7 @@ def assess_interrupt(
     reaction_margin_ms: int = _DEFAULT_REACTION_MARGIN_MS,
     strict: bool = True,
     debug: bool | None = None,
+    now_ms: int | None = None,
 ) -> InterruptAssessment:
     """Return one shared mechanical assessment for legacy or strict callers.
 
@@ -850,6 +851,25 @@ def assess_interrupt(
 
     if debug is None:
         debug = INTERRUPT_DEBUG
+
+    try:
+        assessment_now_ms = _now_ms() if now_ms is None else int(now_ms)
+    except (TypeError, ValueError, OverflowError):
+        return _make_assessment(
+            target_agent_id=target_agent_id,
+            our_skill_id=our_skill_id,
+            strict=strict,
+            reason=InterruptAssessmentReason.INVALID_TIMING,
+            timing_invalid=True,
+        )
+    if assessment_now_ms < 0:
+        return _make_assessment(
+            target_agent_id=target_agent_id,
+            our_skill_id=our_skill_id,
+            strict=strict,
+            reason=InterruptAssessmentReason.INVALID_TIMING,
+            timing_invalid=True,
+        )
 
     if not target_agent_id:
         return _make_assessment(
@@ -1026,7 +1046,7 @@ def assess_interrupt(
         observation_age_ms: int | None = None
     else:
         try:
-            elapsed_ms = _now_ms() - observation.first_seen_ms
+            elapsed_ms = assessment_now_ms - observation.first_seen_ms
         except Exception:
             elapsed_ms = -1
         observation_age_ms = elapsed_ms

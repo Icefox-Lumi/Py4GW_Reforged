@@ -527,6 +527,33 @@ class Py4GWSharedMemoryManager:
             claim_strength,
         )
 
+    def UpsertLockByOwnerKindTarget(
+        self,
+        owner_email: str,
+        kind_id: int,
+        key_id: int,
+        target_id: int,
+        expires_at_tick: int,
+        isolation_group_id: int,
+        lock_mode: int = 1,
+        max_holders: int = 1,
+        reentry_policy: int = 1,
+        claim_strength: int = 1,
+    ) -> int:
+        """Atomically renew an owner-scoped generic lock or publish it once."""
+        return self.GetAllAccounts().UpsertLockByOwnerKindTarget(
+            owner_email,
+            kind_id,
+            key_id,
+            target_id,
+            expires_at_tick,
+            isolation_group_id,
+            lock_mode,
+            max_holders,
+            reentry_policy,
+            claim_strength,
+        )
+
     def ClearIntentsByOwner(self, owner_email: str) -> int:
         """Zero every intent slot whose OwnerEmail matches."""
         return self.GetAllAccounts().ClearIntentsByOwner(owner_email)

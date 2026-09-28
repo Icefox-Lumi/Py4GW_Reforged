@@ -1,4 +1,4 @@
-"""Offline D1B tests for pure Smart Cry policy and interrupt assessment."""
+"""Offline Smart Cry policy and interrupt assessment regressions."""
 
 from __future__ import annotations
 
@@ -72,6 +72,7 @@ CryOnsetConfidence = smart_cry.CryOnsetConfidence
 CryPolicyParameters = smart_cry.CryPolicyParameters
 CrySkillCategory = smart_cry.CrySkillCategory
 CrySkillClassification = smart_cry.CrySkillClassification
+CrySkillValueOverride = smart_cry.CrySkillValueOverride
 DEFAULT_POLICY = smart_cry.DEFAULT_POLICY
 evaluate_smart_cry = smart_cry.evaluate_smart_cry
 
@@ -110,6 +111,7 @@ def _cast(
     trusted: bool = True,
     active: bool = True,
     value_override: int | None = None,
+    value_reason: str | None = None,
 ) -> Any:
     return CryCastObservation(
         enemy_skill_id=skill_id,
@@ -127,6 +129,7 @@ def _cast(
             metadata_populated=metadata_populated,
         ),
         value_override=value_override,
+        value_reason=value_reason,
     )
 
 
@@ -181,7 +184,47 @@ def test_one_generic_feasible_cast_is_below_default_threshold() -> None:
 
     assert decision.selected is None
     assert decision.candidates[0].total_interrupt_value == 1
+    assert decision.candidates[0].primary_cast_value == 1
+    assert decision.candidates[0].primary_value_source == "generic"
+    assert decision.candidates[0].additional_interrupt_count == 0
+    assert decision.candidates[0].damage_coverage_count == 1
+    assert decision.candidates[0].damage_bonus == 0
     assert decision.candidates[0].reason is CryCandidateReason.BELOW_MINIMUM_VALUE
+
+
+def test_generic_primary_with_three_total_affected_hostiles_stays_below_threshold() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100)),
+            _enemy(11, 1.0),
+            _enemy(12, 2.0),
+        )
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert decision.selected is None
+    assert candidate.total_interrupt_value == 1
+    assert candidate.damage_coverage_count == 3
+    assert candidate.damage_bonus == 0
+
+
+def test_generic_primary_with_four_total_affected_hostiles_gets_one_damage_bonus() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100)),
+            _enemy(11, 1.0),
+            _enemy(12, 2.0),
+            _enemy(13, 3.0),
+        )
+    )
+
+    assert decision.selected is not None
+    assert decision.selected.primary_agent_id == 10
+    assert decision.selected.primary_cast_value == 1
+    assert decision.selected.additional_interrupt_value == 0
+    assert decision.selected.damage_coverage_count == 4
+    assert decision.selected.damage_bonus == 1
+    assert decision.selected.final_policy_value == 2
 
 
 def test_two_generic_feasible_casts_inside_one_cry_footprint_admit() -> None:
@@ -196,6 +239,10 @@ def test_two_generic_feasible_casts_inside_one_cry_footprint_admit() -> None:
     assert decision.selected is not None
     assert decision.selected.total_interrupt_value == 2
     assert decision.selected.feasible_covered_cast_count == 2
+    assert decision.selected.primary_cast_value == 1
+    assert decision.selected.additional_interrupt_count == 1
+    assert decision.selected.additional_interrupt_value == 1
+    assert decision.selected.damage_bonus == 0
 
 
 def test_explicit_healing_and_resurrection_values_admit() -> None:
@@ -231,7 +278,52 @@ def test_explicit_healing_and_resurrection_values_admit() -> None:
     )
 
     assert heal.selected is not None and heal.selected.total_interrupt_value == 2
+    assert heal.selected.primary_value_source == "heroai_healing"
     assert resurrection.selected is not None and resurrection.selected.total_interrupt_value == 4
+    assert resurrection.selected.primary_value_source == "heroai_resurrection"
+
+
+def test_generic_primary_plus_healing_collateral_sums_primary_and_additional_values() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100)),
+            _enemy(
+                11,
+                1.0,
+                cast=_cast(
+                    11,
+                    101,
+                    category=CrySkillCategory.HEALING,
+                    provenance=CryClassificationProvenance.HEROAI_METADATA,
+                    metadata_populated=True,
+                ),
+            ),
+        )
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert candidate.eligible is True
+    assert candidate.primary_cast_value == 1
+    assert candidate.additional_interrupt_count == 1
+    assert candidate.additional_interrupt_value == 2
+    assert candidate.total_interrupt_value == 3
+
+
+def test_primary_cast_is_not_counted_again_as_collateral() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100)),
+            _enemy(11, 1.0, cast=_cast(11, 101)),
+        )
+    )
+
+    candidate = decision.selected
+    assert candidate is not None
+    assert candidate.primary_cast_value == 1
+    assert candidate.additional_interrupt_count == 1
+    assert candidate.additional_interrupt_value == 1
+    assert candidate.total_interrupt_value == 2
+    assert len(candidate.covered_cast_values) == 2
 
 
 def test_default_metadata_is_not_explicit_classification_evidence() -> None:
@@ -496,6 +588,129 @@ def test_externally_handled_cast_is_excluded_and_all_handled_declines() -> None:
     assert all_handled.reason is CryDecisionReason.ALL_USEFUL_CASTS_HANDLED
 
 
+def test_handled_collateral_contributes_zero_interrupt_value() -> None:
+    primary = _cast(10, 100)
+    collateral = _cast(
+        11,
+        101,
+        category=CrySkillCategory.HEALING,
+        provenance=CryClassificationProvenance.HEROAI_METADATA,
+        metadata_populated=True,
+    )
+    decision = _evaluate(
+        (_enemy(10, 0.0, cast=primary), _enemy(11, 1.0, cast=collateral)),
+        handled=(collateral.cast_key,),
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert decision.selected is None
+    assert candidate.total_interrupt_value == 1
+    assert candidate.additional_interrupt_count == 0
+    assert candidate.additional_interrupt_value == 0
+    assert candidate.handled_cast_keys == (collateral.cast_key,)
+
+
+def test_mechanically_infeasible_collateral_contributes_zero_interrupt_value() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100)),
+            _enemy(
+                11,
+                1.0,
+                cast=_cast(
+                    11,
+                    101,
+                    category=CrySkillCategory.HEALING,
+                    provenance=CryClassificationProvenance.HEROAI_METADATA,
+                    metadata_populated=True,
+                    feasible=False,
+                ),
+            ),
+        )
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert decision.selected is None
+    assert candidate.total_interrupt_value == 1
+    assert candidate.additional_interrupt_count == 0
+    assert candidate.additional_interrupt_value == 0
+
+
+def test_non_casting_hostiles_contribute_damage_coverage_only() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100)),
+            _enemy(11, 1.0),
+            _enemy(12, 2.0),
+            _enemy(13, 3.0),
+        )
+    )
+
+    candidate = decision.selected
+    assert candidate is not None
+    assert candidate.damage_coverage_count == 4
+    assert candidate.damage_bonus == 1
+    assert candidate.additional_interrupt_count == 0
+    assert candidate.additional_interrupt_value == 0
+    assert candidate.total_interrupt_value == 2
+
+
+def test_dead_and_non_hostile_snapshot_entries_do_not_inflate_damage_coverage() -> None:
+    # Invalid agents are already absent from the controller's coherent snapshot.
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100)),
+            _enemy(11, 1.0),
+            _enemy(12, 2.0, alive=False),
+            _enemy(13, 3.0, hostile=False),
+        )
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert candidate.affected_enemy_ids == (10, 11)
+    assert candidate.damage_coverage_count == 2
+    assert candidate.damage_bonus == 0
+    assert candidate.total_interrupt_value == 1
+
+
+def test_large_hostile_clump_without_mechanically_valid_primary_cannot_admit_cry() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100, feasible=False)),
+            _enemy(11, 1.0),
+            _enemy(12, 2.0),
+            _enemy(13, 3.0),
+            _enemy(14, 3.2),
+            _enemy(15, 4.0),
+        )
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert decision.selected is None
+    assert candidate.reason is CryCandidateReason.MECHANICALLY_INFEASIBLE
+    assert candidate.damage_coverage_count == 6
+    assert candidate.damage_bonus == 1
+
+
+def test_damage_bonus_remains_exactly_one_above_four_affected_hostiles() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100)),
+            _enemy(11, 1.0),
+            _enemy(12, 2.0),
+            _enemy(13, 3.0),
+            _enemy(14, 3.2),
+            _enemy(15, 4.0),
+        )
+    )
+
+    candidate = decision.selected
+    assert candidate is not None
+    assert candidate.damage_coverage_count == 6
+    assert candidate.damage_bonus == 1
+    assert candidate.total_interrupt_value == 2
+
+
 def test_policy_parameters_are_tunable_data() -> None:
     custom = CryPolicyParameters(
         resurrection_value=6,
@@ -510,6 +725,100 @@ def test_policy_parameters_are_tunable_data() -> None:
     assert decision.selected.total_interrupt_value == 3
     assert DEFAULT_POLICY.generic_value == 1
     assert DEFAULT_POLICY.minimum_candidate_value == 2
+
+
+def test_numeric_skill_override_replaces_trusted_heroai_value() -> None:
+    policy = CryPolicyParameters(
+        skill_value_overrides=(CrySkillValueOverride(100, 3, "test_override"),),
+    )
+    decision = _evaluate(
+        (
+            _enemy(
+                10,
+                0.0,
+                cast=_cast(
+                    10,
+                    100,
+                    category=CrySkillCategory.HEALING,
+                    provenance=CryClassificationProvenance.HEROAI_METADATA,
+                    metadata_populated=True,
+                ),
+            ),
+        ),
+        policy=policy,
+    )
+
+    assert decision.selected is not None
+    assert decision.selected.primary_cast_value == 3
+    assert decision.selected.primary_value_source == "override:test_override"
+    assert decision.selected.total_interrupt_value == 3
+
+
+def test_default_override_table_is_empty_and_unclassified_casts_stay_generic() -> None:
+    assert smart_cry.DEFAULT_SKILL_VALUE_OVERRIDES == ()
+    decision = _evaluate((_enemy(10, 0.0, cast=_cast(10, 100)),))
+
+    candidate = decision.candidates[0]
+    assert candidate.primary_cast_value == 1
+    assert candidate.primary_value_source == "generic"
+
+
+def test_zero_override_primary_can_be_lifted_by_legitimate_collateral_value() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100, value_override=0, value_reason="zero_test")),
+            _enemy(
+                11,
+                1.0,
+                cast=_cast(
+                    11,
+                    101,
+                    category=CrySkillCategory.HEALING,
+                    provenance=CryClassificationProvenance.HEROAI_METADATA,
+                    metadata_populated=True,
+                ),
+            ),
+        )
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert candidate.eligible is True
+    assert candidate.primary_cast_value == 0
+    assert candidate.primary_value_source == "override:zero_test"
+    assert candidate.additional_interrupt_value == 2
+    assert candidate.damage_bonus == 0
+    assert candidate.total_interrupt_value == 2
+
+
+def test_zero_override_primary_still_receives_the_bounded_damage_bonus() -> None:
+    decision = _evaluate(
+        (
+            _enemy(10, 0.0, cast=_cast(10, 100, value_override=0)),
+            _enemy(11, 1.0),
+            _enemy(12, 2.0),
+            _enemy(13, 3.0),
+        )
+    )
+
+    candidate = next(candidate for candidate in decision.candidates if candidate.primary_agent_id == 10)
+    assert decision.selected is None
+    assert candidate.primary_cast_value == 0
+    assert candidate.damage_bonus == 1
+    assert candidate.total_interrupt_value == 1
+
+
+def test_duplicate_handled_cast_keys_are_counted_once() -> None:
+    cast = _cast(10, 100)
+    decision = _evaluate(
+        (_enemy(10, 0.0, cast=cast),),
+        handled=(cast.cast_key, cast.cast_key, (10, 100)),
+    )
+
+    candidate = decision.candidates[0]
+    assert decision.selected is None
+    assert candidate.handled_cast_keys == (cast.cast_key,)
+    assert candidate.additional_interrupt_value == 0
+    assert decision.reason is CryDecisionReason.ALL_USEFUL_CASTS_HANDLED
 
 
 def test_primary_target_rules_are_represented_in_pure_input() -> None:
@@ -706,6 +1015,18 @@ def test_structured_interrupt_reports_trusted_onset_and_shared_budget() -> None:
     assert result.ping_allowance_ms == 12
     assert result.interrupt_budget_ms == 162
     assert result.distance_gw == 100.0
+
+
+def test_explicit_assessment_tick_changes_strict_timing_without_changing_default_clock() -> None:
+    _trusted_interrupt_observation()
+    default_clock = interrupt.assess_interrupt(10, 5, 0, 10, strict=True)
+    explicit_late = interrupt.assess_interrupt(10, 5, 0, 10, strict=True, now_ms=2_000)
+
+    assert default_clock.feasible is True
+    assert default_clock.observation_age_ms == 100
+    assert explicit_late.reason is interrupt.InterruptAssessmentReason.CAST_FINISHED
+    assert explicit_late.observation_age_ms == 1_000
+    assert interrupt_runtime.now == 1_100
 
 
 def test_first_seen_cast_has_uncertain_onset_and_strict_path_fails_closed() -> None:

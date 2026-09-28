@@ -36,6 +36,7 @@ BUILD_MGR_PATH = ROOT / "Py4GWCoreLib" / "BuildMgr.py"
 WHITEBOARD_LOCKS_PATH = ROOT / "Py4GWCoreLib" / "GlobalCache" / "WhiteboardLocks.py"
 WHITEBOARD_ENUMS_PATH = ROOT / "Py4GWCoreLib" / "enums_src" / "Whiteboard_enums.py"
 GLOBALS_PATH = ROOT / "Py4GWCoreLib" / "GlobalCache" / "shared_memory_src" / "Globals.py"
+ISOLATION_PATH = ROOT / "Py4GWCoreLib" / "botting_tree_src" / "isolation.py"
 
 OWNER = "owner@example.com"
 OTHER_OWNER = "other@example.com"
@@ -276,6 +277,9 @@ REENTRY_OWNER = 1
 REENTRY_NONREENTRANT = 2
 CLAIM_HARD = 1
 CLAIM_SOFT = 2
+POLICY_KIND = int(WHITEBOARD_ENUMS["WhiteboardLockKind"].ACCOUNT_ISOLATION_POLICY)
+POLICY_TARGET = 0
+POLICY_GROUP = 0
 
 
 class _DummyStruct:
@@ -311,6 +315,7 @@ def _load_accounts_class(shared_memory_name: str) -> type[Any]:
         "ClearInterruptLockIfMatch",
         "ClearIntentsByOwner",
         "ClearLockByOwnerKindTarget",
+        "UpsertLockByOwnerKindTarget",
         "PostLock",
         "CountLocks",
         "PostIntent",
@@ -411,6 +416,11 @@ _SHARED_MEMORY_CLEAR_INTERRUPT = _load_method(
     "ClearInterruptLockIfMatch",
     {"InterruptLockReceipt": InterruptLockReceipt},
 )
+_SHARED_MEMORY_UPSERT_LOCK = _load_method(
+    SHARED_MEMORY_PATH,
+    "Py4GWSharedMemoryManager",
+    "UpsertLockByOwnerKindTarget",
+)
 _BUILD_MGR_POST = _load_method(BUILD_MGR_PATH, "BuildMgr", "_whiteboard_post_intent", {"PySystem": _Clock})
 _BUILD_MGR_CLEAR = _load_method(BUILD_MGR_PATH, "BuildMgr", "_whiteboard_owner_self_clear")
 
@@ -418,6 +428,15 @@ _BUILD_MGR_CLEAR = _load_method(BUILD_MGR_PATH, "BuildMgr", "_whiteboard_owner_s
 def _new_accounts(shared_memory_name: str | None = None) -> Any:
     identity = shared_memory_name or f"Py4GW_IntentUnitTest_{uuid4().hex}"
     accounts = _load_accounts_class(identity)(INTENT_ARRAY())
+    _register_owner(accounts, OWNER, GROUP_ID, 0)
+    _register_owner(accounts, OTHER_OWNER, GROUP_ID, 1)
+    _register_owner(accounts, "group-five@example.com", OTHER_GROUP_ID, 2)
+    return accounts
+
+
+def _new_list_backed_accounts(shared_memory_name: str | None = None) -> Any:
+    identity = shared_memory_name or f"Py4GW_IntentUnitTest_{uuid4().hex}"
+    accounts = _load_accounts_class(identity)([INTENT_STRUCT() for _ in range(INTENT_COUNT)])
     _register_owner(accounts, OWNER, GROUP_ID, 0)
     _register_owner(accounts, OTHER_OWNER, GROUP_ID, 1)
     _register_owner(accounts, "group-five@example.com", OTHER_GROUP_ID, 2)
@@ -492,6 +511,32 @@ def _seed_interrupt_intent(
         max_holders=max_holders,
         reentry_policy=reentry_policy,
         claim_strength=claim_strength,
+    )
+
+
+def _seed_policy_heartbeat(
+    accounts: Any,
+    index: int,
+    *,
+    owner_email: str = OWNER,
+    enabled: bool = False,
+    posted_at_tick: int = NOW - 100,
+    expires_at_tick: int = NOW + 3000,
+) -> None:
+    _seed_intent(
+        accounts,
+        index,
+        owner_email=owner_email,
+        kind_id=POLICY_KIND,
+        skill_id=int(enabled),
+        target_agent_id=POLICY_TARGET,
+        group_id=POLICY_GROUP,
+        posted_at_tick=posted_at_tick,
+        expires_at_tick=expires_at_tick,
+        lock_mode=LOCK_SHARED,
+        max_holders=255,
+        reentry_policy=REENTRY_OWNER,
+        claim_strength=CLAIM_SOFT,
     )
 
 
@@ -709,6 +754,7 @@ class _SharedMemoryWrapper:
     ClearIntentIfMatch = _SHARED_MEMORY_CLEAR_IF_MATCH
     TryPostInterruptLock = _SHARED_MEMORY_TRY_INTERRUPT
     ClearInterruptLockIfMatch = _SHARED_MEMORY_CLEAR_INTERRUPT
+    UpsertLockByOwnerKindTarget = _SHARED_MEMORY_UPSERT_LOCK
 
     def __init__(self, accounts: object, group_id: int = GROUP_ID) -> None:
         self.accounts = accounts
@@ -821,6 +867,258 @@ def _load_whiteboard_timestamp_consumers() -> dict[str, Callable[..., Any]]:
 
 
 WHITEBOARD_TIMESTAMP_CONSUMERS = _load_whiteboard_timestamp_consumers()
+
+
+def _load_policy_heartbeat_consumers(owner_context: Callable[[], tuple[str, int]]) -> dict[str, Callable[..., Any]]:
+    tree = ast.parse(WHITEBOARD_LOCKS_PATH.read_text(encoding="utf-8"))
+    function_names = {
+        "_record_account_isolation_policy_publish_failure",
+        "publish_account_isolation_policy",
+        "clear_account_isolation_policy",
+        "read_account_isolation_policies",
+    }
+    assignment_names = {
+        "ACCOUNT_ISOLATION_POLICY_TARGET",
+        "ACCOUNT_ISOLATION_POLICY_TTL_MS",
+        "ACCOUNT_ISOLATION_POLICY_REFRESH_MS",
+        "ACCOUNT_ISOLATION_POLICY_RETRY_MS",
+        "_account_isolation_policy_last_publish",
+        "_account_isolation_policy_last_failure",
+        "_account_isolation_policy_failure_counts",
+    }
+
+    def assignment_targets(node: ast.stmt) -> set[str]:
+        if isinstance(node, ast.Assign):
+            return {target.id for target in node.targets if isinstance(target, ast.Name)}
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            return {node.target.id}
+        return set()
+
+    nodes = [
+        node
+        for node in tree.body
+        if (
+            isinstance(node, ast.FunctionDef) and node.name in function_names
+        )
+        or bool(assignment_targets(node) & assignment_names)
+    ]
+    namespace: dict[str, object] = {
+        "PySystem": _Clock,
+        "tick_elapsed": INTENT_SYNC.tick_elapsed,
+        "tick_is_expired": INTENT_SYNC.tick_is_expired,
+        "_owner_context": owner_context,
+        **WHITEBOARD_ENUMS,
+    }
+    isolated = ast.Module(body=nodes, type_ignores=[])
+    ast.fix_missing_locations(isolated)
+    exec(compile(isolated, str(WHITEBOARD_LOCKS_PATH), "exec"), namespace)
+    return {
+        name: cast(Callable[..., Any], namespace[name])
+        for name in function_names
+        if name in namespace
+    }
+
+
+def _policy_heartbeat_runtime(
+    accounts: Any,
+    owner_context: Callable[[], tuple[str, int]],
+    shmem: _SharedMemoryWrapper | None = None,
+) -> tuple[dict[str, Callable[..., Any]], types.ModuleType]:
+    runtime = types.ModuleType("Py4GWCoreLib")
+    setattr(runtime, "GLOBAL_CACHE", types.SimpleNamespace(ShMem=shmem or _SharedMemoryWrapper(accounts)))
+    return _load_policy_heartbeat_consumers(owner_context), runtime
+
+
+class _CountingPolicySharedMemory(_SharedMemoryWrapper):
+    def __init__(self, accounts: object, *, failures_remaining: int = 0) -> None:
+        super().__init__(accounts)
+        self.failures_remaining = failures_remaining
+        self.upsert_calls = 0
+
+    def UpsertLockByOwnerKindTarget(self, *args: object, **kwargs: object) -> int:
+        self.upsert_calls += 1
+        if self.failures_remaining > 0:
+            self.failures_remaining -= 1
+            return -1
+        return int(super().UpsertLockByOwnerKindTarget(*args, **kwargs))
+
+
+class _ObservingIntent:
+    def __init__(self, intent: Any, observer: Callable[[], None]) -> None:
+        object.__setattr__(self, "_intent", intent)
+        object.__setattr__(self, "_observer", observer)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(object.__getattribute__(self, "_intent"), name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(object.__getattribute__(self, "_intent"), name, value)
+        if name in {"ExpiresAtTick", "SkillID", "PostedAtTick"}:
+            object.__getattribute__(self, "_observer")()
+
+    def reset(self) -> None:
+        object.__getattribute__(self, "_intent").reset()
+        object.__getattribute__(self, "_observer")()
+
+
+class _PartyAccount:
+    def __init__(self, email: str, *, group_id: int, party_id: int, isolated: bool) -> None:
+        self.AccountEmail = email
+        self.IsAccount = True
+        self.IsolationGroupID = group_id
+        self.IsIsolated = isolated
+        self.AgentPartyData = types.SimpleNamespace(PartyID=party_id)
+
+
+class _PartySharedMemory:
+    def __init__(self, accounts: list[_PartyAccount], intent_accounts: Any) -> None:
+        self.accounts = accounts
+        self.intent_accounts = intent_accounts
+        self.group_writes: list[tuple[str, int]] = []
+        self.isolation_writes: list[tuple[str, bool]] = []
+
+    def _find(self, email: str) -> _PartyAccount | None:
+        return next((account for account in self.accounts if account.AccountEmail == email), None)
+
+    def GetAccountDataFromEmail(self, email: str) -> _PartyAccount | None:
+        return self._find(email)
+
+    def GetAllAccountData(
+        self,
+        *,
+        sort_results: bool = True,
+        include_isolated: bool = False,
+    ) -> list[_PartyAccount]:
+        del sort_results, include_isolated
+        return list(self.accounts)
+
+    def GetAccountGroupByEmail(self, email: str) -> int:
+        account = self._find(email)
+        return int(account.IsolationGroupID) if account is not None else 0
+
+    def SetAccountGroupByEmail(self, email: str, group_id: int) -> bool:
+        account = self._find(email)
+        if account is None:
+            return False
+        account.IsolationGroupID = int(group_id)
+        self.group_writes.append((email, int(group_id)))
+        return True
+
+    def IsAccountIsolated(self, email: str) -> bool:
+        account = self._find(email)
+        return bool(account and account.IsIsolated)
+
+    def SetAccountIsolationByEmail(self, email: str, isolated: bool) -> bool:
+        account = self._find(email)
+        if account is None:
+            return False
+        account.IsIsolated = bool(isolated)
+        self.isolation_writes.append((email, bool(isolated)))
+        return True
+
+    def GetAllAccounts(self) -> Any:
+        return self.intent_accounts
+
+    def UpsertLockByOwnerKindTarget(self, *args: object, **kwargs: object) -> int:
+        return int(self.intent_accounts.UpsertLockByOwnerKindTarget(*args, **kwargs))
+
+
+@contextmanager
+def _loaded_policy_party_isolation(
+    runtime: types.ModuleType,
+    shared_memory: _PartySharedMemory,
+    settings_assignments: dict[str, int],
+    settings_groups: dict[int, str],
+    local_email: str,
+    policy_functions: dict[str, Callable[..., Any]],
+) -> Any:
+    class _Settings:
+        def __init__(self, _name: str, _scope: str = "account") -> None:
+            pass
+
+        def has(self, section: str, key: str) -> bool:
+            return section == "Assignments" and key in settings_assignments
+
+        def get_int(self, section: str, key: str, default: int = 0) -> int:
+            if section == "Assignments":
+                return int(settings_assignments.get(key, default))
+            if section != "Groups":
+                return default
+            group_ids = sorted(settings_groups)
+            if key == "count":
+                return len(group_ids)
+            if key.startswith("id_"):
+                try:
+                    return int(group_ids[int(key.removeprefix("id_"))])
+                except (IndexError, ValueError):
+                    return default
+            return default
+
+        def get_str(self, section: str, key: str, default: str = "") -> str:
+            if section != "Groups" or not key.startswith("name_"):
+                return default
+            try:
+                group_id = sorted(settings_groups)[int(key.removeprefix("name_"))]
+            except (IndexError, ValueError):
+                return default
+            return settings_groups.get(group_id, default)
+
+    class _Timer:
+        def __init__(self, _milliseconds: int) -> None:
+            pass
+
+        def IsExpired(self) -> bool:
+            return True
+
+        def Reset(self) -> None:
+            pass
+
+    runtime.__path__ = [str(ROOT / "Py4GWCoreLib")]
+    setattr(runtime, "GLOBAL_CACHE", types.SimpleNamespace(ShMem=shared_memory))
+    global_cache = types.ModuleType("Py4GWCoreLib.GlobalCache")
+    global_cache.__path__ = [str(ROOT / "Py4GWCoreLib" / "GlobalCache")]
+    setattr(global_cache, "GLOBAL_CACHE", runtime.GLOBAL_CACHE)
+    whiteboard_locks = types.ModuleType("Py4GWCoreLib.GlobalCache.WhiteboardLocks")
+    for name, function in policy_functions.items():
+        setattr(whiteboard_locks, name, function)
+    setattr(global_cache, "WhiteboardLocks", whiteboard_locks)
+    botting_tree = types.ModuleType("Py4GWCoreLib.botting_tree_src")
+    botting_tree.__path__ = [str(ROOT / "Py4GWCoreLib" / "botting_tree_src")]
+    core = types.ModuleType("Py4GWCoreLib.py4gwcorelib_src")
+    core.__path__ = [str(ROOT / "Py4GWCoreLib" / "py4gwcorelib_src")]
+    player = types.ModuleType("Py4GWCoreLib.Player")
+    setattr(player, "Player", types.SimpleNamespace(GetAccountEmail=lambda: local_email))
+    behavior_tree = types.ModuleType("Py4GWCoreLib.py4gwcorelib_src.BehaviorTree")
+    setattr(behavior_tree, "BehaviorTree", type("BehaviorTree", (), {}))
+    timer = types.ModuleType("Py4GWCoreLib.py4gwcorelib_src.Timer")
+    setattr(timer, "ThrottledTimer", _Timer)
+    settings = types.ModuleType("Py4GWCoreLib.py4gwcorelib_src.Settings")
+    setattr(settings, "Settings", _Settings)
+    py_system = types.ModuleType("PySystem")
+    setattr(py_system, "Console", _ObservableConsole)
+    modules = {
+        "Py4GWCoreLib": runtime,
+        "Py4GWCoreLib.GlobalCache": global_cache,
+        "Py4GWCoreLib.GlobalCache.WhiteboardLocks": whiteboard_locks,
+        "Py4GWCoreLib.botting_tree_src": botting_tree,
+        "Py4GWCoreLib.py4gwcorelib_src": core,
+        "Py4GWCoreLib.Player": player,
+        "Py4GWCoreLib.py4gwcorelib_src.BehaviorTree": behavior_tree,
+        "Py4GWCoreLib.py4gwcorelib_src.Timer": timer,
+        "Py4GWCoreLib.py4gwcorelib_src.Settings": settings,
+        "PySystem": py_system,
+    }
+    module_name = "Py4GWCoreLib.botting_tree_src._policy_heartbeat_party_test"
+    with patch.dict(sys.modules, modules):
+        spec = spec_from_file_location(module_name, ISOLATION_PATH)
+        assert spec is not None and spec.loader is not None
+        module = module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+            yield module
+        finally:
+            sys.modules.pop(module_name, None)
 
 
 class _ReadOnlyAccounts:
@@ -2024,6 +2322,217 @@ class IntentSynchronizationTests(unittest.TestCase):
             del intents
             _close_shared_table(memory)
             memory.unlink()
+
+    def test_policy_heartbeat_refresh_never_exposes_an_absent_policy(self) -> None:
+        for initial_enabled, desired_enabled in ((True, True), (False, False), (True, False), (False, True)):
+            with self.subTest(initial_enabled=initial_enabled, desired_enabled=desired_enabled):
+                _Clock.value = NOW
+                accounts = _new_list_backed_accounts()
+                _seed_policy_heartbeat(accounts, 0, enabled=initial_enabled)
+                functions, runtime = _policy_heartbeat_runtime(accounts, lambda: (OWNER, POLICY_GROUP))
+                publish = functions["publish_account_isolation_policy"]
+                read = functions["read_account_isolation_policies"]
+                observations: list[dict[str, bool]] = []
+                accounts.Intents[0] = _ObservingIntent(
+                    accounts.Intents[0],
+                    lambda: observations.append(dict(read())),
+                )
+
+                with patch.dict(sys.modules, {"Py4GWCoreLib": runtime}):
+                    self.assertTrue(publish(desired_enabled, force=True))
+                    self.assertEqual(read(), {OWNER: desired_enabled})
+
+                self.assertTrue(observations)
+                self.assertTrue(all(OWNER in policies for policies in observations))
+                self.assertTrue(
+                    all(policies[OWNER] in (initial_enabled, desired_enabled) for policies in observations)
+                )
+
+    def test_policy_heartbeat_failed_refresh_preserves_old_policy_until_expiry(self) -> None:
+        accounts = _new_accounts()
+        original_expiry = NOW + 3000
+        _seed_policy_heartbeat(accounts, 0, enabled=False, expires_at_tick=original_expiry)
+        shmem = _CountingPolicySharedMemory(accounts, failures_remaining=1)
+        functions, runtime = _policy_heartbeat_runtime(
+            accounts,
+            lambda: (OWNER, POLICY_GROUP),
+            shmem,
+        )
+        publish = functions["publish_account_isolation_policy"]
+        read = functions["read_account_isolation_policies"]
+
+        with patch.dict(sys.modules, {"Py4GWCoreLib": runtime}):
+            self.assertFalse(publish(False, force=True))
+            self.assertEqual(shmem.upsert_calls, 1)
+            self.assertEqual(read(), {OWNER: False})
+            self.assertEqual(int(accounts.Intents[0].ExpiresAtTick), original_expiry & 0xFFFFFFFF)
+
+            self.assertFalse(publish(False))
+            self.assertEqual(shmem.upsert_calls, 1)
+
+            _Clock.value = original_expiry
+            self.assertEqual(read(), {})
+
+    def test_policy_heartbeat_initial_failure_is_throttled_then_recovers(self) -> None:
+        accounts = _new_accounts()
+        shmem = _CountingPolicySharedMemory(accounts, failures_remaining=1)
+        functions, runtime = _policy_heartbeat_runtime(
+            accounts,
+            lambda: (OWNER, POLICY_GROUP),
+            shmem,
+        )
+        publish = functions["publish_account_isolation_policy"]
+        read = functions["read_account_isolation_policies"]
+
+        with patch.dict(sys.modules, {"Py4GWCoreLib": runtime}):
+            self.assertFalse(publish(True))
+            self.assertEqual(shmem.upsert_calls, 1)
+            self.assertEqual(read(), {})
+
+            for _ in range(4):
+                self.assertFalse(publish(True))
+            self.assertEqual(shmem.upsert_calls, 1)
+
+            _Clock.value += 249
+            self.assertFalse(publish(True))
+            self.assertEqual(shmem.upsert_calls, 1)
+
+            _Clock.value += 1
+            self.assertTrue(publish(True))
+            self.assertEqual(shmem.upsert_calls, 2)
+            self.assertEqual(read(), {OWNER: True})
+
+            self.assertTrue(publish(True))
+            self.assertEqual(shmem.upsert_calls, 2)
+            _Clock.value += 1000
+            self.assertTrue(publish(True))
+            self.assertEqual(shmem.upsert_calls, 3)
+
+    def test_policy_heartbeat_failed_refresh_recovers_to_the_new_policy(self) -> None:
+        accounts = _new_accounts()
+        _seed_policy_heartbeat(accounts, 0, enabled=False)
+        shmem = _CountingPolicySharedMemory(accounts, failures_remaining=1)
+        functions, runtime = _policy_heartbeat_runtime(
+            accounts,
+            lambda: (OWNER, POLICY_GROUP),
+            shmem,
+        )
+        publish = functions["publish_account_isolation_policy"]
+        read = functions["read_account_isolation_policies"]
+
+        with patch.dict(sys.modules, {"Py4GWCoreLib": runtime}):
+            self.assertFalse(publish(False, force=True))
+            self.assertEqual(read(), {OWNER: False})
+
+            _Clock.value += 250
+            self.assertTrue(publish(True))
+            self.assertEqual(shmem.upsert_calls, 2)
+            self.assertEqual(read(), {OWNER: True})
+            self.assertEqual(
+                int(accounts.Intents[0].ExpiresAtTick),
+                (_Clock.value + 3000) & 0xFFFFFFFF,
+            )
+
+    def test_policy_heartbeat_keeps_kind_eleven_and_old_account_separate(self) -> None:
+        accounts = _new_accounts()
+        _seed_interrupt_intent(accounts, 1, owner_email=OTHER_OWNER, enemy_skill_id=OTHER_SKILL_ID)
+        interrupt_before = (
+            bool(accounts.Intents[1].Active),
+            str(accounts.Intents[1].OwnerEmail),
+            int(accounts.Intents[1].KindID),
+            int(accounts.Intents[1].SkillID),
+            int(accounts.Intents[1].TargetAgentID),
+            int(accounts.Intents[1].IsolationGroupID),
+        )
+        owner = {"email": OWNER}
+        functions, runtime = _policy_heartbeat_runtime(
+            accounts,
+            lambda: (str(owner["email"]), POLICY_GROUP),
+        )
+        publish = functions["publish_account_isolation_policy"]
+        clear = functions["clear_account_isolation_policy"]
+        read = functions["read_account_isolation_policies"]
+
+        with patch.dict(sys.modules, {"Py4GWCoreLib": runtime}):
+            self.assertTrue(publish(False))
+            self.assertEqual(read(), {OWNER: False})
+            self.assertTrue(clear())
+
+            owner["email"] = OTHER_OWNER
+            self.assertTrue(publish(True, force=True))
+            self.assertEqual(read(), {OTHER_OWNER: True})
+
+        interrupt_after = (
+            bool(accounts.Intents[1].Active),
+            str(accounts.Intents[1].OwnerEmail),
+            int(accounts.Intents[1].KindID),
+            int(accounts.Intents[1].SkillID),
+            int(accounts.Intents[1].TargetAgentID),
+            int(accounts.Intents[1].IsolationGroupID),
+        )
+        self.assertEqual(interrupt_after, interrupt_before)
+
+    def test_policy_heartbeat_reader_expires_across_uint32_wrap(self) -> None:
+        _Clock.value = 0xFFFFFFFE
+        accounts = _new_accounts()
+        _seed_policy_heartbeat(
+            accounts,
+            0,
+            enabled=False,
+            posted_at_tick=0xFFFFFFF0,
+            expires_at_tick=0x00000020,
+        )
+        functions, runtime = _policy_heartbeat_runtime(accounts, lambda: (OWNER, POLICY_GROUP))
+        read = functions["read_account_isolation_policies"]
+
+        with patch.dict(sys.modules, {"Py4GWCoreLib": runtime}):
+            self.assertEqual(read(), {OWNER: False})
+            _Clock.value = 0x00000020
+            self.assertEqual(read(), {})
+
+    def test_disabled_policy_refresh_cannot_admit_peer_during_party_reconciliation(self) -> None:
+        _Clock.value = NOW
+        policy_accounts = _new_list_backed_accounts()
+        enabled_email = "enabled@example.com"
+        disabled_email = "disabled@example.com"
+        _seed_policy_heartbeat(policy_accounts, 0, owner_email=enabled_email, enabled=True)
+        _seed_policy_heartbeat(policy_accounts, 1, owner_email=disabled_email, enabled=False)
+
+        enabled_account = _PartyAccount(enabled_email, group_id=101, party_id=42, isolated=True)
+        disabled_account = _PartyAccount(disabled_email, group_id=0, party_id=42, isolated=False)
+        shared_memory = _PartySharedMemory([enabled_account, disabled_account], policy_accounts)
+        owner = {"email": disabled_email}
+        policy_functions, runtime = _policy_heartbeat_runtime(
+            policy_accounts,
+            lambda: (str(owner["email"]), POLICY_GROUP),
+        )
+        read = policy_functions["read_account_isolation_policies"]
+        observations: list[dict[str, bool]] = []
+
+        with _loaded_policy_party_isolation(
+            runtime,
+            shared_memory,
+            {disabled_email: 202},
+            {202: "Manager preference"},
+            disabled_email,
+            policy_functions,
+        ) as isolation:
+            def reconcile_during_refresh() -> None:
+                observations.append(dict(read()))
+                isolation.sync_party_isolation_group(enabled_email, 101)
+
+            policy_accounts.Intents[1] = _ObservingIntent(
+                policy_accounts.Intents[1],
+                reconcile_during_refresh,
+            )
+            self.assertTrue(policy_functions["publish_account_isolation_policy"](False, force=True))
+
+        self.assertTrue(observations)
+        self.assertTrue(all(policies.get(disabled_email) is False for policies in observations))
+        self.assertEqual(shared_memory.group_writes, [])
+        self.assertEqual(shared_memory.isolation_writes, [])
+        self.assertEqual(disabled_account.IsolationGroupID, 0)
+        self.assertFalse(disabled_account.IsIsolated)
 
     def test_all_direct_whiteboard_timestamp_readers_handle_wrap(self) -> None:
         intents: list[Any] = [INTENT_STRUCT() for _ in range(5)]

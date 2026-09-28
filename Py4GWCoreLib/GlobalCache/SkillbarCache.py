@@ -1,5 +1,10 @@
+from collections.abc import Callable
+from typing import Any
+
 import PySkillbar
+
 from Py4GWCoreLib.Py4GWcorelib import ActionQueueManager
+
 
 class SkillbarCache:
     def __init__(self, action_queue_manager):
@@ -43,6 +48,31 @@ class SkillbarCache:
     
     def UseSkill(self, skill_slot, target_agent_id=0, aftercast_delay=0):
         self._action_queue_manager.AddActionWithDelay("ACTION",aftercast_delay, self._skillbar_instance.UseSkill, skill_slot, target_agent_id)
+
+    def QueueGuardedUseSkill(
+        self,
+        callback: Callable[[Callable[[int, int], bool]], Any],
+    ) -> None:
+        """Queue one callback with this cache's bound native UseSkill callable.
+
+        This is an opt-in boundary for controllers that must perform their
+        final validation and native submission inside the same ACTION callback.
+        Ordinary ``UseSkill`` callers keep their existing delayed queue path.
+        """
+
+        if not callable(callback):
+            raise TypeError("callback must be callable")
+        self._action_queue_manager.AddAction(
+            "ACTION",
+            self._execute_guarded_use_skill,
+            callback,
+        )
+
+    def _execute_guarded_use_skill(
+        self,
+        callback: Callable[[Callable[[int, int], bool]], Any],
+    ) -> None:
+        callback(self._skillbar_instance.UseSkill)
      
     def UseSkillTargetless(self, skill_slot, aftercast_delay=0):
         self._action_queue_manager.AddActionWithDelay("ACTION",aftercast_delay, self._skillbar_instance.UseSkillTargetless, skill_slot)

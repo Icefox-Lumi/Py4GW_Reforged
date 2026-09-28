@@ -157,9 +157,12 @@ class _Runtime:
         self.bar = [0] * 8
         self.handler_cast_result = False
         self.raise_handler = False
+        self.raise_factory_for: set[int] = set()
         self.handlers: list[_FakeHandler] = []
 
     def factory(self, *, skill_id: int) -> _FakeHandler:
+        if skill_id in self.raise_factory_for:
+            raise RuntimeError(f"constructor failure for {skill_id}")
         handler = _FakeHandler(self, skill_id)
         self.handlers.append(handler)
         return handler
@@ -301,7 +304,11 @@ def _loaded_runtime() -> Iterator[tuple[Any, _Runtime, Any]]:
         sys.modules["Py4GWCoreLib.Builds.Any.HeroAI"] = hero_ai_module
 
         skill_module = types.ModuleType("Py4GWCoreLib.Skill")
-        setattr(skill_module, "Skill", types.SimpleNamespace(GetID=lambda _name: 39))
+
+        def _get_skill_id(name: str) -> int:
+            return 55 if name == "Cry_of_Frustration" else 39
+
+        setattr(skill_module, "Skill", types.SimpleNamespace(GetID=_get_skill_id))
         sys.modules["Py4GWCoreLib.Skill"] = skill_module
 
         skillbar_module = types.ModuleType("Py4GWCoreLib.Skillbar")
@@ -321,6 +328,7 @@ def _loaded_runtime() -> Iterator[tuple[Any, _Runtime, Any]]:
         smart_energy = _load_module("Py4GWCoreLib.Builds.Skills.SmartEnergySurge", SMART_ENERGY_PATH)
         composition = _load_module("d1a_test.composition", COMPOSITION_PATH)
         composition.get_supported_handler_factories = lambda: {39: runtime.factory}
+        composition.SmartCryController = runtime.factory
         yield composition, runtime, smart_energy
     finally:
         for name in tuple(sys.modules):
@@ -410,7 +418,11 @@ def _loaded_real_heroai_runtime() -> (
         _load_module("Py4GWCoreLib.Builds.Skills.SmartEnergySurge", SMART_ENERGY_PATH)
 
         skill_module = types.ModuleType("Py4GWCoreLib.Skill")
-        setattr(skill_module, "Skill", types.SimpleNamespace(GetID=lambda _name: 39))
+
+        def _get_skill_id(name: str) -> int:
+            return 55 if name == "Cry_of_Frustration" else 39
+
+        setattr(skill_module, "Skill", types.SimpleNamespace(GetID=_get_skill_id))
         sys.modules["Py4GWCoreLib.Skill"] = skill_module
 
         skillbar_module = types.ModuleType("Py4GWCoreLib.Skillbar")
@@ -420,6 +432,7 @@ def _loaded_real_heroai_runtime() -> (
 
         composition = _load_module("d1a_real.composition", COMPOSITION_PATH)
         composition.get_supported_handler_factories = lambda: {39: runtime.factory}
+        composition.SmartCryController = runtime.factory
         composition_build = composition.MyMesmer()
         composition_build._whiteboard_owner_self_clear = lambda: None
         composition_build.SetTickSuccess = lambda: setattr(
@@ -486,34 +499,34 @@ def test_energy_surge_only_masks_only_the_supported_skill() -> None:
         assert runtime.handlers[0].attempts == 1
 
 
-def test_cry_only_keeps_the_personal_composition_inert_and_unmasked() -> None:
+def test_cry_only_is_smart_owned_and_masked() -> None:
     with _loaded_runtime() as (composition_module, runtime, _smart_energy):
         runtime.bar[:] = [55, 101, 102, 0, 0, 0, 0, 0]
         composition = _composition(runtime, composition_module)
 
         assert composition.ScoreMatch(_Profession.Mesmer, _Profession._None, [55]) > 0
         assert _drain(composition.ProcessSkillCasting()) is True
-        assert composition.active_smart_ids == ()
-        assert composition.blocked_skills == []
-        assert composition.fallback.blocked_skills == []
+        assert composition.active_smart_ids == (55,)
+        assert composition.blocked_skills == [55]
+        assert composition.fallback.blocked_skills == [55]
         assert composition.fallback.calls == 1
 
 
-def test_energy_surge_and_cry_mask_energy_surge_only() -> None:
+def test_energy_surge_and_cry_mask_both_smart_skills() -> None:
     with _loaded_runtime() as (composition_module, runtime, _smart_energy):
         runtime.bar[:] = [55, 0, 39, 101, 0, 0, 0, 0]
         composition = _composition(runtime, composition_module)
 
         _drain(composition.ProcessSkillCasting())
 
-        assert composition.active_smart_ids == (39,)
-        assert composition.blocked_skills == [39]
-        assert composition.fallback.blocked_skills == [39]
+        assert composition.active_smart_ids == (55, 39)
+        assert composition.blocked_skills == [55, 39]
+        assert composition.fallback.blocked_skills == [55, 39]
 
 
 def test_neither_gives_the_full_bar_to_one_heroai_fallback() -> None:
     with _loaded_runtime() as (composition_module, runtime, _smart_energy):
-        runtime.bar[:] = [55, 101, 102, 103, 0, 0, 0, 0]
+        runtime.bar[:] = [56, 101, 102, 103, 0, 0, 0, 0]
         composition = _composition(runtime, composition_module)
 
         _drain(composition.ProcessSkillCasting())
@@ -609,6 +622,54 @@ def test_handler_error_keeps_ownership_masked_for_that_cycle() -> None:
         assert handler.cancel_reasons == ["handler_exception"]
         assert composition.blocked_skills == [39]
         assert composition.fallback.blocked_skills == [39]
+
+
+def test_energy_surge_constructor_failure_keeps_ownership_masked_and_recovers() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[0] = 39
+        runtime.raise_factory_for.add(39)
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (39,)
+        assert composition.active_handlers == {}
+        assert composition.blocked_skills == [39]
+        assert composition.fallback.blocked_skills == [39]
+        assert composition.fallback.calls == 1
+        assert runtime.handlers == []
+
+        runtime.raise_factory_for.clear()
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (39,)
+        assert composition.blocked_skills == [39]
+        assert tuple(composition.active_handlers) == (39,)
+        assert runtime.handlers[0].attempts == 1
+
+
+def test_cry_constructor_failure_keeps_ownership_masked_and_recovers() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[0] = 55
+        runtime.raise_factory_for.add(55)
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (55,)
+        assert composition.active_handlers == {}
+        assert composition.blocked_skills == [55]
+        assert composition.fallback.blocked_skills == [55]
+        assert composition.fallback.calls == 1
+        assert runtime.handlers == []
+
+        runtime.raise_factory_for.clear()
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (55,)
+        assert composition.blocked_skills == [55]
+        assert tuple(composition.active_handlers) == (55,)
+        assert runtime.handlers[0].attempts == 1
 
 
 def test_lifecycle_updates_before_cannot_act_gate() -> None:

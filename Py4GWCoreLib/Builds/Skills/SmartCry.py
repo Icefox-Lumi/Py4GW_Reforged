@@ -20,6 +20,10 @@ from Py4GWCoreLib.Builds.Skills.SmartMesmer import EnemyObservation
 from Py4GWCoreLib.Builds.Skills.SmartMesmer import PairwiseDistances
 from Py4GWCoreLib.Builds.Skills.SmartMesmer import pairwise_squared_distances
 
+MAX_CAST_VALUE: Final[int] = 4
+DAMAGE_COVERAGE_THRESHOLD: Final[int] = 4
+MAX_DAMAGE_BONUS: Final[int] = 1
+
 
 def _require_finite(name: str, value: float) -> None:
     if not math.isfinite(value):
@@ -70,6 +74,29 @@ class CryOnsetConfidence(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class CrySkillValueOverride:
+    """One bounded policy override for an exact runtime skill ID."""
+
+    skill_id: int
+    value: int
+    reason: str = "explicit"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.skill_id, int) or isinstance(self.skill_id, bool) or self.skill_id <= 0:
+            raise ValueError("skill_id must be a positive integer")
+        if (
+            not isinstance(self.value, int)
+            or isinstance(self.value, bool)
+            or self.value < 0
+            or self.value > MAX_CAST_VALUE
+        ):
+            raise ValueError(f"value must be an integer in the range 0..{MAX_CAST_VALUE}")
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise ValueError("reason must be a non-empty string")
+        object.__setattr__(self, "reason", self.reason.strip())
+
+
+@dataclass(frozen=True, slots=True)
 class CryPolicyParameters:
     """Explicit V1 policy tunables, not Guild Wars facts."""
 
@@ -78,6 +105,9 @@ class CryPolicyParameters:
     generic_value: int = 1
     unknown_value: int = 0
     minimum_candidate_value: int = 2
+    skill_value_overrides: tuple[CrySkillValueOverride, ...] = ()
+    damage_coverage_threshold: int = DAMAGE_COVERAGE_THRESHOLD
+    damage_bonus: int = MAX_DAMAGE_BONUS
 
     def __post_init__(self) -> None:
         for name in (
@@ -90,9 +120,35 @@ class CryPolicyParameters:
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
+        if (
+            not isinstance(self.damage_coverage_threshold, int)
+            or isinstance(self.damage_coverage_threshold, bool)
+            or self.damage_coverage_threshold < 0
+        ):
+            raise ValueError("damage_coverage_threshold must be a non-negative integer")
+        if (
+            not isinstance(self.damage_bonus, int)
+            or isinstance(self.damage_bonus, bool)
+            or self.damage_bonus < 0
+            or self.damage_bonus > MAX_DAMAGE_BONUS
+        ):
+            raise ValueError(f"damage_bonus must be an integer in the range 0..{MAX_DAMAGE_BONUS}")
+
+        overrides = tuple(self.skill_value_overrides)
+        override_ids: set[int] = set()
+        for override in overrides:
+            if not isinstance(override, CrySkillValueOverride):
+                raise ValueError("skill_value_overrides must contain CrySkillValueOverride values")
+            if override.skill_id in override_ids:
+                raise ValueError("skill_value_overrides cannot contain duplicate skill IDs")
+            override_ids.add(override.skill_id)
+        object.__setattr__(self, "skill_value_overrides", overrides)
 
 
-DEFAULT_POLICY: Final[CryPolicyParameters] = CryPolicyParameters()
+DEFAULT_SKILL_VALUE_OVERRIDES: Final[tuple[CrySkillValueOverride, ...]] = ()
+DEFAULT_POLICY: Final[CryPolicyParameters] = CryPolicyParameters(
+    skill_value_overrides=DEFAULT_SKILL_VALUE_OVERRIDES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,9 +256,14 @@ class CryCastObservation:
         if self.interrupt.enemy_skill_id != self.enemy_skill_id:
             raise ValueError("interrupt evidence must match enemy_skill_id")
         if self.value_override is not None and (
-            not isinstance(self.value_override, int) or isinstance(self.value_override, bool) or self.value_override < 0
+            not isinstance(self.value_override, int)
+            or isinstance(self.value_override, bool)
+            or self.value_override < 0
+            or self.value_override > MAX_CAST_VALUE
         ):
-            raise ValueError("value_override must be a non-negative integer")
+            raise ValueError(f"value_override must be an integer in the range 0..{MAX_CAST_VALUE}")
+        if self.value_reason is not None and (not isinstance(self.value_reason, str) or not self.value_reason.strip()):
+            raise ValueError("value_reason must be a non-empty string when supplied")
 
     @property
     def cast_key(self) -> CryCastKey:
@@ -249,6 +310,11 @@ class CryCandidateEvaluation:
     overlapping_primary_agent_ids: tuple[int, ...] = ()
     redundant: bool = False
     canonical_primary_agent_id: int | None = None
+    primary_value_source: str = "unavailable"
+    additional_interrupt_count: int = 0
+    additional_interrupt_value: int = 0
+    damage_coverage_count: int = 0
+    damage_bonus: int = 0
 
     @property
     def candidate_total_value(self) -> int:
@@ -261,6 +327,10 @@ class CryCandidateEvaluation:
     @property
     def actual_affected_enemy_ids(self) -> tuple[int, ...]:
         return self.affected_enemy_ids
+
+    @property
+    def final_policy_value(self) -> int:
+        return self.total_interrupt_value
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,17 +416,25 @@ def _assessment_reason(
     return None
 
 
-def _cast_value(cast: CryCastObservation, policy: CryPolicyParameters) -> int:
+def _resolve_cast_value(cast: CryCastObservation, policy: CryPolicyParameters) -> tuple[int, str]:
     if cast.value_override is not None:
-        return cast.value_override
+        reason = cast.value_reason.strip() if cast.value_reason is not None else "explicit"
+        return cast.value_override, f"override:{reason}"
+    for override in policy.skill_value_overrides:
+        if override.skill_id == cast.enemy_skill_id:
+            return override.value, f"override:{override.reason}"
     classification = cast.classification
     if not classification.is_explicit_supported_category:
-        return policy.generic_value
+        return policy.generic_value, "generic"
     if classification.category is CrySkillCategory.RESURRECTION:
-        return policy.resurrection_value
+        return policy.resurrection_value, "heroai_resurrection"
     if classification.category is CrySkillCategory.HEALING:
-        return policy.healing_value
-    return policy.generic_value
+        return policy.healing_value, "heroai_healing"
+    return policy.generic_value, "generic"
+
+
+def _cast_value(cast: CryCastObservation, policy: CryPolicyParameters) -> int:
+    return _resolve_cast_value(cast, policy)[0]
 
 
 def _cast_sort_key(cast_key: CryCastKey) -> tuple[int, int, tuple[int, ...]]:
@@ -433,11 +511,14 @@ def evaluate_smart_cry(
             and distances.matrix[primary_index][index_by_agent_id[enemy.agent_id]] <= radius_squared
         )
 
-        feasible_keys: list[CryCastKey] = []
+        feasible_casts: dict[CryCastKey, CryCastObservation] = {}
         covered_keys: list[CryCastKey] = []
         handled_keys: list[CryCastKey] = []
         covered_values: list[tuple[CryCastKey, int]] = []
+        primary_value_source = "unavailable"
         primary_value = 0
+        additional_interrupt_count = 0
+        additional_interrupt_value = 0
         for affected_agent_id in affected_enemy_ids:
             affected = observation_by_agent_id[affected_agent_id]
             cast = affected.current_cast
@@ -445,22 +526,33 @@ def evaluate_smart_cry(
                 continue
             any_feasible_cast = True
             cast_key = cast.cast_key
-            feasible_keys.append(cast_key)
+            if cast_key in feasible_casts:
+                continue
+            feasible_casts[cast_key] = cast
+
+        feasible_keys = sorted(feasible_casts, key=_cast_sort_key)
+        primary_cast_key = None if primary_cast is None else primary_cast.cast_key
+        for cast_key in feasible_keys:
+            cast = feasible_casts[cast_key]
             if _cast_is_handled(cast_key, handled):
                 handled_keys.append(cast_key)
                 continue
-            value = _cast_value(cast, policy)
+            value, value_source = _resolve_cast_value(cast, policy)
             any_unhandled_feasible_cast = True
             covered_keys.append(cast_key)
             covered_values.append((cast_key, value))
-            if affected.agent_id == primary.agent_id:
+            if cast_key == primary_cast_key:
                 primary_value = value
+                primary_value_source = value_source
+            else:
+                additional_interrupt_count += 1
+                additional_interrupt_value += value
 
-        feasible_keys.sort(key=_cast_sort_key)
-        covered_keys.sort(key=_cast_sort_key)
         handled_keys.sort(key=_cast_sort_key)
         covered_values.sort(key=lambda item: _cast_sort_key(item[0]))
-        total_value = sum(value for _, value in covered_values)
+        damage_coverage_count = len(set(affected_enemy_ids))
+        damage_bonus = policy.damage_bonus if damage_coverage_count >= policy.damage_coverage_threshold else 0
+        total_value = primary_value + additional_interrupt_value + damage_bonus
         eligible = reason is None and total_value >= policy.minimum_candidate_value
         if reason is None and not eligible:
             reason = CryCandidateReason.BELOW_MINIMUM_VALUE
@@ -481,6 +573,11 @@ def evaluate_smart_cry(
                 total_interrupt_value=total_value,
                 primary_cast_value=primary_value,
                 feasible_covered_cast_count=len(covered_keys),
+                primary_value_source=primary_value_source,
+                additional_interrupt_count=additional_interrupt_count,
+                additional_interrupt_value=additional_interrupt_value,
+                damage_coverage_count=damage_coverage_count,
+                damage_bonus=damage_bonus,
             )
         )
 
@@ -548,7 +645,12 @@ __all__ = [
     "CryPolicyParameters",
     "CrySkillCategory",
     "CrySkillClassification",
+    "CrySkillValueOverride",
+    "DAMAGE_COVERAGE_THRESHOLD",
     "DEFAULT_POLICY",
+    "DEFAULT_SKILL_VALUE_OVERRIDES",
+    "MAX_CAST_VALUE",
+    "MAX_DAMAGE_BONUS",
     "SmartCryCandidateEvaluation",
     "SmartCryDecision",
     "evaluate_cry",

@@ -18,6 +18,7 @@ class WhiteboardLockKind(IntEnum):
     # State-broadcast kinds (not exclusive claims): each account posts its OWN slot, owner-keyed,
     # re-posted on an interval and self-expiring, so party members can read live per-account state.
     RESURRECTION_SCROLL_STATE = 14
+    ACCOUNT_ISOLATION_POLICY = 15
 
 
 class WhiteboardLockMode(IntEnum):

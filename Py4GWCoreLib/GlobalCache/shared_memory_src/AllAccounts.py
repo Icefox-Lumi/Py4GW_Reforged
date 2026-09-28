@@ -1601,6 +1601,130 @@ class AllAccounts(Structure):
                 count += 1
             return count
 
+    def UpsertLockByOwnerKindTarget(
+        self,
+        owner_email: str,
+        kind_id: int,
+        key_id: int,
+        target_id: int,
+        expires_at_tick: int,
+        isolation_group_id: int,
+        lock_mode: int = int(WhiteboardLockMode.EXCLUSIVE),
+        max_holders: int = 1,
+        reentry_policy: int = int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+        claim_strength: int = int(WhiteboardClaimStrength.HARD),
+    ) -> int:
+        """Atomically renew an owner-scoped generic lock or publish it once.
+
+        Matching active rows remain active while their state and lease are renewed in place. This
+        is intentionally distinct from clear-then-post callers: a reader can observe the old or
+        new complete row, but never an internally-created absence during renewal.
+        """
+        if int(kind_id) == int(WhiteboardLockKind.INTERRUPT_TARGET):
+            return -1
+        if not isinstance(owner_email, str) or not owner_email or len(owner_email) >= SHMEM_MAX_EMAIL_LEN:
+            return -1
+        integer_fields = (
+            kind_id,
+            key_id,
+            target_id,
+            expires_at_tick,
+            isolation_group_id,
+            lock_mode,
+            max_holders,
+            reentry_policy,
+            claim_strength,
+        )
+        if any(type(value) is not int for value in integer_fields):
+            return -1
+        if kind_id <= 0 or target_id < 0 or isolation_group_id < 0 or expires_at_tick < 0:
+            return -1
+        if max_holders <= 0:
+            max_holders = 1
+
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return -1
+            now = int(PySystem.get_tick_count64())
+            if not is_valid_future_lease(now, expires_at_tick):
+                return -1
+
+            matching_slots: list[int] = []
+            free_slot: int | None = None
+            expired_slot: int | None = None
+            for i in range(SHMEM_MAX_INTENTS):
+                intent = self.Intents[i]
+                if not intent.Active:
+                    if free_slot is None:
+                        free_slot = i
+                    continue
+                if (
+                    intent.OwnerEmail == owner_email
+                    and int(intent.KindID) == kind_id
+                    and int(intent.TargetAgentID) == target_id
+                    and int(intent.IsolationGroupID) == isolation_group_id
+                ):
+                    matching_slots.append(i)
+                    continue
+                if expired_slot is None and tick_is_expired(now, int(intent.ExpiresAtTick)):
+                    expired_slot = i
+
+            normalized_expiry = normalize_tick(expires_at_tick)
+            normalized_posted = normalize_tick(now)
+            if matching_slots:
+                for index in matching_slots:
+                    intent = self.Intents[index]
+                    # Extend the old lease before changing its state. Readers therefore see a
+                    # complete old policy or a complete new policy, never a cleared heartbeat.
+                    intent.ExpiresAtTick = normalized_expiry
+                    intent.SkillID = key_id
+                    intent.LockMode = lock_mode
+                    intent.ReentryPolicy = reentry_policy
+                    intent.ClaimStrength = claim_strength
+                    intent.MaxHolders = max_holders
+                    intent.PostedAtTick = normalized_posted
+                intent = self.Intents[matching_slots[0]]
+                self._wb_log(
+                    kind_id,
+                    f"RENEW slot={matching_slots[0]} email='{owner_email}' "
+                    f"{self._wb_lock_display(intent)} holders={max_holders} "
+                    f"expires_in={expires_at_tick - now}ms",
+                )
+                return matching_slots[0]
+
+            slot_index = free_slot if free_slot is not None else expired_slot
+            if slot_index is None:
+                self._wb_log(
+                    kind_id,
+                    f"UPSERT-FAIL kind={self._wb_kind_display(kind_id)} "
+                    f"key={key_id} target={target_id} reason=full",
+                )
+                return -1
+
+            intent = self.Intents[slot_index]
+            if intent.Active:
+                self._clear_intent_unlocked(slot_index, "expired", now)
+            intent.Active = False
+            intent.OwnerEmail = owner_email
+            intent.KindID = kind_id
+            intent.LockMode = lock_mode
+            intent.ReentryPolicy = reentry_policy
+            intent.ClaimStrength = claim_strength
+            intent.MaxHolders = max_holders
+            intent.SkillID = key_id
+            intent.TargetAgentID = target_id
+            intent.IsolationGroupID = isolation_group_id
+            intent.PostedAtTick = normalized_posted
+            intent.ExpiresAtTick = normalized_expiry
+            intent.Active = True
+            self._wb_log(
+                kind_id,
+                f"POST slot={slot_index} email='{owner_email}' "
+                f"{self._wb_lock_display(intent)} holders={max_holders} "
+                f"expires_in={expires_at_tick - now}ms",
+            )
+            return slot_index
+
     def PostLock(
         self,
         owner_email: str,
