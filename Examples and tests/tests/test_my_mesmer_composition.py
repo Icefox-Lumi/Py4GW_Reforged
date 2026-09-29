@@ -125,6 +125,7 @@ class _FakeHandler:
         self.runtime = runtime
         self.skill_id = skill_id
         self.skill_slot: int | None = None
+        self.active_dispatch = False
         self.lifecycle_updates = 0
         self.attempts = 0
         self.dispose_reasons: list[str] = []
@@ -136,13 +137,16 @@ class _FakeHandler:
     def update_lifecycle(self, _context: Any = None) -> None:
         self.lifecycle_updates += 1
 
+    def has_active_dispatch(self) -> bool:
+        return self.active_dispatch
+
     def try_cast(self):
         if False:
             yield
         self.attempts += 1
         if self.runtime.raise_handler:
             raise RuntimeError("test handler failure")
-        return self.runtime.handler_cast_result
+        return self.runtime.handler_results.get(self.skill_id, self.runtime.handler_cast_result)
 
     def cancel_pending(self, reason: str) -> None:
         self.cancel_reasons.append(reason)
@@ -156,6 +160,7 @@ class _Runtime:
     def __init__(self) -> None:
         self.bar = [0] * 8
         self.handler_cast_result = False
+        self.handler_results: dict[int, bool] = {}
         self.raise_handler = False
         self.raise_factory_for: set[int] = set()
         self.handlers: list[_FakeHandler] = []
@@ -512,16 +517,79 @@ def test_cry_only_is_smart_owned_and_masked() -> None:
         assert composition.fallback.calls == 1
 
 
-def test_complicate_remains_on_the_ordinary_heroai_fallback() -> None:
+def test_passive_cry_does_not_report_tick_success_and_fallback_continues() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[:] = [55, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.DidTickSucceed() is False
+        assert composition.active_handlers[55].has_active_dispatch() is False
+        assert composition.fallback.calls == 1
+
+
+def test_passive_cry_does_not_preempt_energy_surge_handler() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[:] = [55, 0, 39, 101, 0, 0, 0, 0]
+        runtime.handler_results[39] = True
+        runtime.handler_results[55] = False
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.DidTickSucceed() is True
+        assert composition.active_handlers[55].attempts == 1
+        assert composition.active_handlers[39].attempts == 1
+
+
+def test_complicate_is_smart_owned_and_fail_closed_when_runtime_resolution_is_unavailable() -> None:
     with _loaded_runtime() as (composition_module, runtime, smart_energy):
         runtime.bar[:] = [932, 101, 102, 0, 0, 0, 0, 0]
         composition = _composition(runtime, composition_module)
 
         assert 932 not in smart_energy.get_supported_handler_factories()
         assert _drain(composition.ProcessSkillCasting()) is True
-        assert composition.active_smart_ids == ()
-        assert composition.blocked_skills == []
-        assert composition.fallback.blocked_skills == []
+        assert composition.active_smart_ids == (932,)
+        assert composition.blocked_skills == [932]
+        assert composition.fallback.blocked_skills == [932]
+        assert composition.fallback.calls == 1
+
+
+def test_complicate_toggle_off_remains_smart_owned_and_blocked() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[:] = [932, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+        root: Any = sys.modules["Py4GWCoreLib"]
+        setattr(root, "GLOBAL_CACHE", types.SimpleNamespace())
+        setattr(root, "Player", types.SimpleNamespace(GetAccountEmail=lambda: "toggle-test"))
+
+        _drain(composition.ProcessSkillCasting())
+        handler = composition.active_handlers[932]
+        handler.set_cached_data(
+            types.SimpleNamespace(
+                account_options=types.SimpleNamespace(Skills=[True, True, False, True, True, True, True, True])
+            )
+        )
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert handler._skill_toggle_enabled(3) is False
+        assert composition.active_smart_ids == (932,)
+        assert composition.blocked_skills == [932]
+        assert composition.fallback.blocked_skills == [932]
+
+
+def test_complicate_constructor_failure_does_not_claim_runtime_ownership() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[:] = [932, 101, 102, 0, 0, 0, 0, 0]
+        runtime.raise_factory_for.add(932)
+        composition_module.SmartComplicateController = runtime.factory
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (932,)
+        assert composition.blocked_skills == [932]
+        assert composition.fallback.blocked_skills == [932]
         assert composition.fallback.calls == 1
 
 

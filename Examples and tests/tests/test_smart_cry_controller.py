@@ -312,6 +312,14 @@ def _invoke(controller: Any, runtime: _Runtime, token: int = 1) -> None:
     controller._on_guarded_action(token, native_use)
 
 
+def _drain(generator: Any) -> Any:
+    while True:
+        try:
+            next(generator)
+        except StopIteration as finished:
+            return finished.value
+
+
 def test_preclaim_reports_skill_unready_as_the_first_failed_gate() -> None:
     with _loaded_runtime() as (module, runtime):
         controller, request = _prepare_preclaim_controller(module, runtime)
@@ -645,7 +653,7 @@ def test_successful_native_true_is_submitted_but_not_called_interrupt_success() 
         assert runtime.clear_calls == []
 
 
-def test_native_false_is_uncertain_and_keeps_exact_receipt_for_bounded_cleanup() -> None:
+def test_native_false_is_uncertain_and_keeps_receipt_until_natural_expiry() -> None:
     with _loaded_runtime() as (module, runtime):
         controller, _request_value = _prepare_controller(module, runtime)
         runtime.native_result = False
@@ -655,11 +663,105 @@ def test_native_false_is_uncertain_and_keeps_exact_receipt_for_bounded_cleanup()
         assert controller.state is module.CryControllerState.UNCERTAIN
         assert controller.d0_receipt is runtime.receipt
         assert runtime.clear_calls == []
+        assert controller.pending_request is None
+        assert controller.has_active_dispatch() is False
+        assert controller._post_submit_deadline is None
 
         runtime.clock.now = 1_201
         controller.update_lifecycle()
-        assert runtime.clear_calls == [runtime.receipt]
+        assert runtime.clear_calls == []
+        assert controller.d0_receipt is runtime.receipt
+
+        runtime.clock.now = runtime.receipt.expires_at_tick64
+        controller.update_lifecycle()
+        assert runtime.clear_calls == []
         assert controller.d0_receipt is None
+        assert controller.state is module.CryControllerState.IDLE
+        assert any("receipt_expired" in message and "lease" in message for message in runtime.diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("remaining_ms", "expected_lease_ms"),
+    [(800, 900), (10_000, 10_100), (10_001, None)],
+)
+def test_required_lease_uses_fresh_remaining_window_and_controller_cap(
+    remaining_ms: int,
+    expected_lease_ms: int | None,
+) -> None:
+    with _loaded_runtime() as (module, _runtime):
+        controller = module.SmartCryController(skill_id=55)
+        assessment = types.SimpleNamespace(
+            interrupt_budget_ms=400,
+            enemy_remaining_ms=remaining_ms,
+        )
+
+        assert controller._required_lease_ms(assessment, 1_000) == expected_lease_ms
+
+
+@pytest.mark.parametrize(
+    "assessment",
+    [
+        types.SimpleNamespace(interrupt_budget_ms="400", enemy_remaining_ms=800),
+        types.SimpleNamespace(interrupt_budget_ms=400.0, enemy_remaining_ms=800),
+        types.SimpleNamespace(interrupt_budget_ms=0, enemy_remaining_ms=800),
+        types.SimpleNamespace(interrupt_budget_ms=400, enemy_remaining_ms=424),
+    ],
+)
+def test_malformed_or_infeasible_lease_is_rejected_without_claim(
+    assessment: Any,
+) -> None:
+    with _loaded_runtime() as (module, runtime):
+        controller, _request_value = _prepare_controller(module, runtime)
+        controller._preclaim_validate = lambda _request, _now: assessment
+
+        _invoke(controller, runtime)
+
+        assert runtime.claim_calls == []
+        assert runtime.native_calls == []
+        assert runtime.clear_calls == []
+        assert controller.d0_receipt is None
+        assert controller.state is module.CryControllerState.IDLE
+
+
+def test_callback_lease_uses_the_callback_time_assessment_not_a_queued_value() -> None:
+    with _loaded_runtime() as (module, runtime):
+        controller, _request_value = _prepare_controller(module, runtime)
+        callback_assessment = types.SimpleNamespace(
+            feasible=True,
+            enemy_skill_id=7,
+            observation_identity=(10, 7, 1),
+            interrupt_budget_ms=400,
+            enemy_remaining_ms=800,
+        )
+        observed: list[Any] = []
+        controller._preclaim_validate = lambda _request, _now: callback_assessment
+        controller._post_claim_validate = lambda _request, _receipt: callback_assessment
+        controller._required_lease_ms = lambda assessment, now_ms: (
+            observed.append(assessment) or module.SmartCryController._required_lease_ms(controller, assessment, now_ms)
+        )
+
+        controller._request = _request(module)
+        _invoke(controller, runtime)
+
+        assert observed
+        assert observed[0] is callback_assessment
+        assert runtime.claim_calls == [("me@example.com", 7, 10, 1_900, 4)]
+
+
+def test_live_post_native_receipt_is_passive_and_does_not_queue_a_second_local_cast() -> None:
+    with _loaded_runtime() as (module, runtime):
+        controller, _request_value = _prepare_controller(module, runtime)
+        _invoke(controller, runtime)
+
+        assert controller.pending_request is None
+        assert controller.has_active_dispatch() is False
+        assert controller.build_interrupt_proposal() is None
+        assert _drain(controller.try_cast()) is False
+        assert controller.state is module.CryControllerState.SUBMITTED
+        assert runtime.queue_calls == 0
+        assert len(runtime.claim_calls) == 1
+        assert len(runtime.native_calls) == 1
+        assert runtime.clear_calls == []
 
 
 def test_preclaim_failure_makes_no_native_call_and_no_release_attempt() -> None:
@@ -812,11 +914,19 @@ def test_activation_adapter_accepts_matching_onset_once_and_rejects_conflicts() 
         assert adapter.matches(10, 7, 1_101) is False
 
 
-@pytest.mark.parametrize("result", [False, RuntimeError("native")])
-def test_possible_submission_never_broad_clears_on_non_true_result(result: Any) -> None:
+@pytest.mark.parametrize("result", [True, False, RuntimeError("native")])
+def test_every_native_outcome_retains_receipt_past_the_old_cleanup_window(
+    result: Any,
+) -> None:
     with _loaded_runtime() as (module, runtime):
         controller, _request_value = _prepare_controller(module, runtime)
         runtime.native_result = result
         _invoke(controller, runtime)
+        assert runtime.clear_calls == []
+        assert controller.d0_receipt is runtime.receipt
+
+        runtime.clock.now = 1_201
+        controller.update_lifecycle()
+
         assert runtime.clear_calls == []
         assert controller.d0_receipt is runtime.receipt

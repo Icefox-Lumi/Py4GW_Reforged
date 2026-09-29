@@ -7,6 +7,9 @@ from typing import Any
 from typing import cast
 
 from Py4GWCoreLib.BuildMgr import BuildMgr
+from Py4GWCoreLib.Builds.Skills.SmartComplicate import COMPLICATE_SKILL_ID
+from Py4GWCoreLib.Builds.Skills.SmartComplicateController import SmartComplicateController
+from Py4GWCoreLib.Builds.Skills.SmartComplicateController import SmartCryComplicateCoordinator
 from Py4GWCoreLib.Builds.Skills.SmartCryController import SmartCryController
 from Py4GWCoreLib.Builds.Skills.SmartCryController import get_cry_of_frustration_id
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import DAMAGE_PER_ENERGY
@@ -152,14 +155,12 @@ class MyMesmer(BuildMgr):
         try:
             supported_factories = get_supported_handler_factories()
             factories: dict[int, type[Any]] = {
-                int(skill_id): cast(type[Any], factory)
-                for skill_id, factory in supported_factories.items()
+                int(skill_id): cast(type[Any], factory) for skill_id, factory in supported_factories.items()
             }
         except Exception as error:
             self._report_composition_error(f"smart registry unavailable: {type(error).__name__}")
             factories = {
-                int(skill_id): cast(type[Any], factory)
-                for skill_id, factory in SUPPORTED_HANDLER_FACTORIES.items()
+                int(skill_id): cast(type[Any], factory) for skill_id, factory in SUPPORTED_HANDLER_FACTORIES.items()
             }
         try:
             cry_skill_id = get_cry_of_frustration_id()
@@ -169,6 +170,7 @@ class MyMesmer(BuildMgr):
             self._report_composition_error(f"smart Cry unavailable: {type(error).__name__}")
         else:
             self._last_composition_error = None
+        factories[COMPLICATE_SKILL_ID] = SmartComplicateController
         return factories
 
     def _refresh_composition(self) -> bool:
@@ -228,6 +230,12 @@ class MyMesmer(BuildMgr):
     def _handler_has_active_dispatch(handler: Any) -> bool:
         """Keep a second smart handler from preempting an in-flight cast."""
 
+        explicit_check = getattr(handler, "has_active_dispatch", None)
+        if callable(explicit_check):
+            try:
+                return bool(explicit_check())
+            except Exception:
+                return True
         if getattr(handler, "_active_reservation", None) is not None:
             return True
         pending_check = getattr(handler, "_is_local_cast_pending", None)
@@ -253,7 +261,7 @@ class MyMesmer(BuildMgr):
         self.ResetTickState()
         self._refresh_composition()
 
-        ready_handlers: list[tuple[int, SmartEnergySurgeHandler]] = []
+        ready_handlers: list[tuple[int, Any]] = []
         for skill_id, handler in tuple(self._active_handlers.items()):
             try:
                 handler.update_lifecycle(self._composition_generation)
@@ -272,32 +280,42 @@ class MyMesmer(BuildMgr):
                 yield
                 return False
 
-        cry_skill_id = None
+        smart_interrupt_skill_ids = {COMPLICATE_SKILL_ID}
         try:
-            cry_skill_id = get_cry_of_frustration_id()
+            smart_interrupt_skill_ids.add(get_cry_of_frustration_id())
         except Exception:
             pass
-
-        cry_handler = None if cry_skill_id is None else self._active_handlers.get(cry_skill_id)
-        if cry_handler is not None:
+        smart_interrupt_handlers = tuple(
+            handler
+            for skill_id, handler in ready_handlers
+            if skill_id in smart_interrupt_skill_ids
+            and callable(getattr(handler, "build_interrupt_proposal", None))
+            and callable(getattr(handler, "try_cast_selected", None))
+        )
+        if len(smart_interrupt_handlers) > 1:
             other_handler_active = any(
-                handler is not cry_handler and self._handler_has_active_dispatch(handler)
+                handler not in smart_interrupt_handlers and self._handler_has_active_dispatch(handler)
                 for _skill_id, handler in ready_handlers
             )
             if not other_handler_active:
                 try:
-                    if (yield from self._handler_result(cry_handler)):
+                    coordinator = SmartCryComplicateCoordinator()
+                    if (yield from coordinator.try_cast(smart_interrupt_handlers)):
                         self.SetTickSuccess()
                         return True
                 except Exception as error:
-                    cry_handler.cancel_pending("handler_exception")
-                    self._report_composition_error(
-                        f"smart handler {cry_skill_id} failed: {type(error).__name__}"
-                    )
+                    for handler in smart_interrupt_handlers:
+                        try:
+                            handler.cancel_pending("chooser_exception")
+                        except Exception:
+                            pass
+                    self._report_composition_error(f"smart interrupt chooser failed: {type(error).__name__}")
+
+            ready_handlers = [
+                (skill_id, handler) for skill_id, handler in ready_handlers if handler not in smart_interrupt_handlers
+            ]
 
         for skill_id, handler in ready_handlers:
-            if handler is cry_handler:
-                continue
             try:
                 if (yield from self._handler_result(handler)):
                     self.SetTickSuccess()

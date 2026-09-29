@@ -37,7 +37,7 @@ CRY_SKILL_NAME: Final[str] = "Cry_of_Frustration"
 QUEUE_DEADLINE_MS: Final[int] = 150
 POST_SUBMIT_ALLOWANCE_MS: Final[int] = 100
 CLAIM_TO_SUBMIT_RESERVE_MS: Final[int] = 25
-MAX_REQUIRED_LEASE_MS: Final[int] = 1_000
+MAX_REQUIRED_LEASE_MS: Final[int] = 10_100
 CONFLICT_SUPPRESSION_MS: Final[int] = 150
 ACTIVATION_EVENT_MAX_AGE_MS: Final[int] = 10_000
 DIAGNOSTIC_COOLDOWN_MS: Final[int] = 1_000
@@ -95,6 +95,13 @@ class _Selection:
     snapshot: CombatSnapshot
     primary_assessment: Any
     runtime_rejection_counts: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _CapturedSelection:
+    request: _CryRequest
+    selection: _Selection
+    proposal: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +282,8 @@ class SmartCryController(BuildMgr):
         self._skill_slot: int | None = None
         self._state = CryControllerState.IDLE
         self._request: _CryRequest | None = None
+        self._captured_selection: _CapturedSelection | None = None
+        self._capture_proposal = False
         self._receipt: Any = None
         self._token_counter = 0
         self._attempt_counter = 0
@@ -319,6 +328,59 @@ class SmartCryController(BuildMgr):
     @property
     def pending_request(self) -> _CryRequest | None:
         return self._request
+
+    def has_active_dispatch(self) -> bool:
+        return self._has_active_dispatch()
+
+    def build_interrupt_proposal(self) -> Any | None:
+        """Capture the existing selection before the shared queue boundary."""
+
+        if not hasattr(self, "_state") or self._disposed or self._has_active_work():
+            return None
+        self._captured_selection = None
+        self._capture_proposal = True
+        try:
+            for _ in self.try_cast():
+                pass
+        finally:
+            self._capture_proposal = False
+        captured = self._captured_selection
+        return None if captured is None else captured.proposal
+
+    def discard_interrupt_proposal(self, proposal: Any) -> None:
+        captured = self._captured_selection
+        if captured is not None and captured.proposal is proposal:
+            self._captured_selection = None
+
+    def try_cast_selected(self, proposal: Any) -> Generator[None, None, bool]:
+        """Queue one previously captured proposal through the normal callback."""
+
+        if False:
+            yield
+        if not hasattr(self, "_state") or self._disposed:
+            return False
+        if self._request is not None:
+            return True
+        if self._receipt is not None:
+            return False
+        captured = self._captured_selection
+        if captured is None or captured.proposal is not proposal:
+            return False
+        self._captured_selection = None
+        now_ms = self._now_ms()
+        if now_ms is None:
+            return False
+        self._refresh_lifecycle()
+        self._maintain_state(now_ms)
+        if self._has_active_work() or not self._captured_selection_is_current(captured, now_ms):
+            return False
+        if not self._selection_dispatch_allowed(captured, now_ms):
+            return False
+        try:
+            return self._queue_captured_selection(captured, now_ms)
+        except Exception:
+            self._drop_request("selection_dispatch_exception")
+            return False
 
     def set_skill_slot(self, slot_index: int | None) -> None:
         new_slot = None if slot_index is None else int(slot_index)
@@ -367,11 +429,13 @@ class SmartCryController(BuildMgr):
             return False
         self._refresh_lifecycle()
         self._maintain_state(now_ms)
-        if self._has_active_work():
+        if self._has_active_dispatch():
             if self._request is not None and self._receipt is None and not self._combat_option_enabled():
                 self._drop_request("combat_disabled")
                 return False
             return True
+        if self._receipt is not None:
+            return False
 
         try:
             from Py4GWCoreLib.HeroAI import interrupt
@@ -460,35 +524,14 @@ class SmartCryController(BuildMgr):
                 self._emit_diagnostic("declined", ("queue_deadline",))
                 return False
 
-            self._request = request
-            self._state = CryControllerState.SELECTED
-            self._emit_diagnostic(
-                "selected",
-                (
-                    request.attempt_id,
-                    request.primary_agent_id,
-                    request.enemy_skill_id,
-                    request.candidate_value,
-                    *self._candidate_policy_diagnostic_signature(selected),
-                    tuple(
-                        (
-                            key.enemy_agent_id,
-                            key.enemy_skill_id,
-                            key.observation_identity,
-                        )
-                        for key in request.covered_cast_keys
-                    ),
-                ),
-                now_ms=now_ms,
-            )
-            self._queue_guarded_request(request)
-            self._state = CryControllerState.QUEUED
-            self._emit_diagnostic(
-                "enqueued",
-                (request.attempt_id, request.token, request.deadline_tick),
-                now_ms=now_ms,
-            )
-            return True
+            if self._capture_proposal:
+                proposal = self._adapt_selection_proposal(selection)
+                if proposal is None:
+                    return False
+                self._captured_selection = _CapturedSelection(request, selection, proposal)
+                return False
+
+            return self._queue_selection_request(request, selected, now_ms)
         except Exception as error:
             self._drop_request("selection_exception")
             self._emit_diagnostic("declined", ("selection_exception", type(error).__name__))
@@ -744,11 +787,7 @@ class SmartCryController(BuildMgr):
         if selection is None or selection.decision.selected is None:
             return None
         selected = selection.decision.selected
-        if (
-            selected.primary_agent_id != request.primary_agent_id
-            or selected.primary_enemy_skill_id != int(receipt.enemy_skill_id)
-            or selected.total_interrupt_value < DEFAULT_POLICY.minimum_candidate_value
-        ):
+        if not self._selected_candidate_is_valid(selected, request, receipt):
             return None
         if request.observation_identity is None:
             return None
@@ -818,7 +857,7 @@ class SmartCryController(BuildMgr):
     def _pending_request_finished_after_native(self, request: _CryRequest) -> None:
         now_ms = self._now_ms()
         self._request = None
-        self._post_submit_deadline = None if now_ms is None else now_ms + POST_SUBMIT_ALLOWANCE_MS
+        self._post_submit_deadline = None
         self._state = CryControllerState.SUBMITTED if self._native_result is True else CryControllerState.UNCERTAIN
         result_label = "wrapper_true" if self._native_result is True else "wrapper_false_uncertain"
         self._emit_diagnostic(
@@ -830,7 +869,7 @@ class SmartCryController(BuildMgr):
     def _mark_submission_uncertain(self, request: _CryRequest, reason: str) -> None:
         now_ms = self._now_ms()
         self._request = None
-        self._post_submit_deadline = None if now_ms is None else now_ms + POST_SUBMIT_ALLOWANCE_MS
+        self._post_submit_deadline = None
         self._state = CryControllerState.UNCERTAIN
         self._emit_diagnostic(
             "native_uncertain",
@@ -963,6 +1002,7 @@ class SmartCryController(BuildMgr):
             cast_range=cast_range,
             pairwise_distances=pairwise_squared_distances(snapshot),
             handled_cast_keys=handled_cast_keys,
+            policy=self._selection_policy(),
         )
         if decision.selected is None:
             return _Selection(
@@ -982,6 +1022,80 @@ class SmartCryController(BuildMgr):
     def _record_selection_failure(self, reason: str) -> None:
         self._selection_failure_reason = str(reason)
         return None
+
+    def _selection_policy(self) -> Any:
+        return DEFAULT_POLICY
+
+    def _adapt_selection_proposal(self, selection: _Selection) -> Any | None:
+        from Py4GWCoreLib.Builds.Skills.SmartInterruptChooser import SmartCryInterruptProposal
+
+        try:
+            return SmartCryInterruptProposal._from_canonical_decision(
+                selection.decision,
+                interrupt_skill_id=self.skill_id,
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def _selection_dispatch_allowed(self, captured: _CapturedSelection, now_ms: int) -> bool:
+        del captured, now_ms
+        return True
+
+    def _captured_selection_is_current(self, captured: _CapturedSelection, now_ms: int) -> bool:
+        request = captured.request
+        return (
+            not self._disposed
+            and now_ms < request.deadline_tick
+            and self._token_counter == request.token
+            and self._lifecycle_id == request.lifecycle_id
+            and self._composition_generation == request.composition_generation
+            and self._bar_generation == request.bar_generation
+        )
+
+    def _queue_captured_selection(self, captured: _CapturedSelection, now_ms: int) -> bool:
+        request = captured.request
+        selected = captured.selection.decision.selected
+        if selected is None:
+            return False
+        return self._queue_selection_request(request, selected, now_ms)
+
+    def _queue_selection_request(self, request: _CryRequest, selected: Any, now_ms: int) -> bool:
+        self._request = request
+        self._state = CryControllerState.SELECTED
+        self._emit_diagnostic(
+            "selected",
+            (
+                request.attempt_id,
+                request.primary_agent_id,
+                request.enemy_skill_id,
+                request.candidate_value,
+                *self._candidate_policy_diagnostic_signature(selected),
+                tuple(
+                    (key.enemy_agent_id, key.enemy_skill_id, key.observation_identity)
+                    for key in request.covered_cast_keys
+                ),
+            ),
+            now_ms=now_ms,
+        )
+        self._queue_guarded_request(request)
+        self._state = CryControllerState.QUEUED
+        self._emit_diagnostic(
+            "enqueued",
+            (request.attempt_id, request.token, request.deadline_tick),
+            now_ms=now_ms,
+        )
+        return True
+
+    @staticmethod
+    def _selected_candidate_is_valid(selected: Any, request: _CryRequest, receipt: Any) -> bool:
+        try:
+            return (
+                selected.primary_agent_id == request.primary_agent_id
+                and selected.primary_enemy_skill_id == int(receipt.enemy_skill_id)
+                and selected.total_interrupt_value >= DEFAULT_POLICY.minimum_candidate_value
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
 
     def _selection_diagnostic_signature(self, selection: _Selection | None) -> tuple[Any, ...]:
         if selection is None:
@@ -1165,14 +1279,24 @@ class SmartCryController(BuildMgr):
             return None
 
     def _required_lease_ms(self, assessment: Any, now_ms: int) -> int | None:
-        budget_ms = int(getattr(assessment, "interrupt_budget_ms", 0) or 0)
-        remaining_ms = int(getattr(assessment, "enemy_remaining_ms", 0) or 0)
-        if budget_ms <= 0 or remaining_ms < budget_ms + CLAIM_TO_SUBMIT_RESERVE_MS:
-            return None
-        required_ms = budget_ms + CLAIM_TO_SUBMIT_RESERVE_MS + POST_SUBMIT_ALLOWANCE_MS
-        if required_ms > MAX_REQUIRED_LEASE_MS:
-            return None
         del now_ms
+        budget_value = getattr(assessment, "interrupt_budget_ms", None)
+        remaining_value = getattr(assessment, "enemy_remaining_ms", None)
+        if (
+            isinstance(budget_value, bool)
+            or not isinstance(budget_value, int)
+            or isinstance(remaining_value, bool)
+            or not isinstance(remaining_value, int)
+        ):
+            return None
+        budget_ms = int(budget_value)
+        remaining_ms = int(remaining_value)
+        submission_horizon_ms = budget_ms + CLAIM_TO_SUBMIT_RESERVE_MS
+        if budget_ms <= 0 or remaining_ms < submission_horizon_ms:
+            return None
+        required_ms = max(remaining_ms, submission_horizon_ms) + POST_SUBMIT_ALLOWANCE_MS
+        if required_ms <= 0 or required_ms > MAX_REQUIRED_LEASE_MS:
+            return None
         return required_ms
 
     def _safe_queue_window_ms(self, assessment: Any) -> int:
@@ -1283,15 +1407,11 @@ class SmartCryController(BuildMgr):
         if self._state is CryControllerState.RELEASING:
             self._release_receipt("retry")
             return
-        if (
-            self._state in (CryControllerState.SUBMITTED, CryControllerState.UNCERTAIN)
-            and self._post_submit_deadline is not None
-            and now_ms >= self._post_submit_deadline
-        ):
-            self._release_receipt("post_submit_window")
 
     def _invalidate_work(self, reason: str) -> None:
         self._token_counter += 1
+        self._captured_selection = None
+        self._capture_proposal = False
         if self._receipt is None:
             self._request = None
             self._state = CryControllerState.IDLE
@@ -1319,6 +1439,8 @@ class SmartCryController(BuildMgr):
         diagnostic_windowed: bool = False,
     ) -> None:
         self._token_counter += 1
+        self._captured_selection = None
+        self._capture_proposal = False
         self._request = None
         self._state = CryControllerState.IDLE
         self._native_invocation_entered = False
@@ -1331,8 +1453,11 @@ class SmartCryController(BuildMgr):
             windowed=diagnostic_windowed,
         )
 
+    def _has_active_dispatch(self) -> bool:
+        return self._request is not None or self._captured_selection is not None
+
     def _has_active_work(self) -> bool:
-        return self._request is not None or self._receipt is not None
+        return self._has_active_dispatch() or self._receipt is not None
 
     def _request_is_current(
         self,

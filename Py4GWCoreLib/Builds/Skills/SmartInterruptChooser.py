@@ -173,6 +173,26 @@ class SmartCryInterruptProposal:
         return SmartInterruptFamily.CRY
 
     @property
+    def primary_agent_id(self) -> int:
+        return self.evaluation.primary_agent_id
+
+    @property
+    def primary_enemy_skill_id(self) -> int:
+        return self.evaluation.primary_enemy_skill_id
+
+    @property
+    def covered_cast_keys(self) -> tuple[CryCastKey, ...]:
+        return self.evaluation.covered_cast_keys
+
+    @property
+    def total_interrupt_value(self) -> int:
+        return self.evaluation.total_interrupt_value
+
+    @property
+    def final_policy_value(self) -> int:
+        return self.evaluation.final_policy_value
+
+    @property
     def additional_interrupt_count(self) -> int:
         return self.evaluation.additional_interrupt_count
 
@@ -202,6 +222,26 @@ class SmartComplicateInterruptProposal:
     @property
     def interrupt_skill_id(self) -> int:
         return COMPLICATE_SKILL_ID
+
+    @property
+    def primary_agent_id(self) -> int:
+        return self.proposal.primary_agent_id
+
+    @property
+    def primary_enemy_skill_id(self) -> int:
+        return self.proposal.interrupted_skill_id
+
+    @property
+    def covered_cast_keys(self) -> tuple[CryCastKey, ...]:
+        return (self.proposal.primary_cast_key,)
+
+    @property
+    def total_interrupt_value(self) -> int:
+        return self.proposal.primary_cast_value
+
+    @property
+    def final_policy_value(self) -> int:
+        return self.proposal.primary_cast_value
 
     @property
     def primary_cast_key(self) -> CryCastKey:
