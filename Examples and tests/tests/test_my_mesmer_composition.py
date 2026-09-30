@@ -140,6 +140,15 @@ class _FakeHandler:
     def has_active_dispatch(self) -> bool:
         return self.active_dispatch
 
+    def build_interrupt_proposal(self) -> object | None:
+        return object()
+
+    def try_cast_selected(self, _proposal: object) -> bool:
+        self.attempts += 1
+        if self.runtime.raise_handler:
+            raise RuntimeError("test handler failure")
+        return self.runtime.handler_results.get(self.skill_id, self.runtime.handler_cast_result)
+
     def try_cast(self):
         if False:
             yield
@@ -164,6 +173,9 @@ class _Runtime:
         self.raise_handler = False
         self.raise_factory_for: set[int] = set()
         self.handlers: list[_FakeHandler] = []
+        self.coordinator_attempts = 0
+        self.coordinator_handler_ids: tuple[int, ...] = ()
+        self.coordinator_selected_skill_id: int | None = None
 
     def factory(self, *, skill_id: int) -> _FakeHandler:
         if skill_id in self.raise_factory_for:
@@ -334,6 +346,26 @@ def _loaded_runtime() -> Iterator[tuple[Any, _Runtime, Any]]:
         composition = _load_module("d1a_test.composition", COMPOSITION_PATH)
         composition.get_supported_handler_factories = lambda: {39: runtime.factory}
         composition.SmartCryController = runtime.factory
+
+        class _FakeCoordinator:
+            def try_cast(self, handlers: Any):
+                if False:
+                    yield
+                supplied = tuple(handlers)
+                runtime.coordinator_attempts += 1
+                runtime.coordinator_handler_ids = tuple(handler.skill_id for handler in supplied)
+                selected_skill_id = runtime.coordinator_selected_skill_id
+                if selected_skill_id is None:
+                    return False
+                selected_handler = next(
+                    (handler for handler in supplied if handler.skill_id == selected_skill_id),
+                    None,
+                )
+                if selected_handler is None:
+                    return False
+                return bool(selected_handler.try_cast_selected(selected_handler.build_interrupt_proposal()))
+
+        composition.SmartCryComplicateCoordinator = _FakeCoordinator
         yield composition, runtime, smart_energy
     finally:
         for name in tuple(sys.modules):
@@ -485,6 +517,11 @@ def _composition(runtime: _Runtime, composition: Any) -> Any:
     return composition.MyMesmer()
 
 
+def _use_fake_priority_handlers(composition: Any, runtime: _Runtime) -> None:
+    composition.SmartUnnaturalSignet = runtime.factory
+    composition.SmartComplicateController = runtime.factory
+
+
 def test_registry_contains_only_energy_surge() -> None:
     with _loaded_runtime() as (_composition_module, _runtime_value, smart_energy):
         factories = smart_energy.get_supported_handler_factories()
@@ -502,6 +539,219 @@ def test_energy_surge_only_masks_only_the_supported_skill() -> None:
         assert composition.blocked_skills == [39]
         assert composition.fallback.blocked_skills == [39]
         assert runtime.handlers[0].attempts == 1
+
+
+def test_unnatural_signet_is_smart_owned_and_masked() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[0] = 934
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (934,)
+        assert composition.blocked_skills == [934]
+        assert composition.fallback.blocked_skills == [934]
+        assert composition.fallback.calls == 1
+        assert composition.skill_slots[934] == 1
+
+
+def test_unnatural_signet_constructor_failure_remains_owned_and_masked() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[0] = 934
+        runtime.raise_factory_for.add(934)
+        composition_module.SmartUnnaturalSignet = runtime.factory
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (934,)
+        assert composition.active_handlers == {}
+        assert composition.blocked_skills == [934]
+        assert composition.fallback.blocked_skills == [934]
+        assert composition.fallback.calls == 1
+
+
+def test_unnatural_signet_slot_movement_refreshes_and_removal_disposes() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[0] = 934
+        composition = _composition(runtime, composition_module)
+        _drain(composition.ProcessSkillCasting())
+        handler = composition.active_handlers[934]
+
+        runtime.bar[:] = [101, 934, 102, 103, 0, 0, 0, 0]
+        _drain(composition.ProcessSkillCasting())
+        assert composition.active_handlers[934] is handler
+        assert composition.skill_slots[934] == 2
+        assert handler.skill_slot == 2
+
+        runtime.bar[1] = 0
+        _drain(composition.ProcessSkillCasting())
+        assert composition.active_smart_ids == ()
+        assert composition.blocked_skills == []
+
+
+def test_unnatural_signet_coexists_with_existing_smart_handlers() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[:] = [934, 0, 39, 55, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (934, 39, 55)
+        assert composition.blocked_skills == [934, 39, 55]
+        assert composition.fallback.blocked_skills == [934, 39, 55]
+
+
+def test_energy_surge_precedes_unnatural_when_unnatural_is_first_on_bar() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 39, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 39: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[934].attempts == 0
+
+
+def test_energy_surge_precedes_unnatural_when_energy_surge_is_first_on_bar() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [39, 934, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 39: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[934].attempts == 0
+
+
+def test_energy_surge_decline_allows_unnatural_to_run() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 39, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 39: False})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[934].attempts == 1
+
+
+def test_lone_cry_precedes_unnatural_regardless_of_bar_order() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 55, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 55: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[55].attempts == 1
+        assert composition.active_handlers[934].attempts == 0
+
+
+def test_lone_cry_decline_continues_through_energy_surge_to_unnatural() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 55, 39, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 55: False, 39: False})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[55].attempts == 1
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[934].attempts == 1
+
+
+def test_lone_complicate_precedes_unnatural_regardless_of_bar_order() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 932, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 932: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[932].attempts == 1
+        assert composition.active_handlers[934].attempts == 0
+
+
+def test_lone_complicate_decline_continues_through_energy_surge_to_unnatural() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 932, 39, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 932: False, 39: False})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[932].attempts == 1
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[934].attempts == 1
+
+
+def test_paired_interrupt_coordinator_precedes_energy_surge_and_unnatural() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 39, 932, 55, 0, 0, 0, 0]
+        runtime.coordinator_selected_skill_id = 55
+        runtime.handler_results.update({934: True, 39: True, 55: True, 932: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert runtime.coordinator_attempts == 1
+        assert runtime.coordinator_handler_ids == (932, 55)
+        assert composition.active_handlers[55].attempts == 1
+        assert composition.active_handlers[932].attempts == 0
+        assert composition.active_handlers[39].attempts == 0
+        assert composition.active_handlers[934].attempts == 0
+
+
+def test_paired_interrupt_decline_allows_energy_surge_before_unnatural() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 39, 932, 55, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 39: True, 55: True, 932: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert runtime.coordinator_attempts == 1
+        assert composition.active_handlers[55].attempts == 0
+        assert composition.active_handlers[932].attempts == 0
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[934].attempts == 0
+
+
+def test_paired_interrupt_and_energy_surge_decline_allow_unnatural_once() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, 39, 932, 55, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, 39: False, 55: True, 932: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert runtime.coordinator_attempts == 1
+        assert composition.active_handlers[55].attempts == 0
+        assert composition.active_handlers[932].attempts == 0
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[934].attempts == 1
+
+
+def test_remaining_smart_handlers_keep_stable_bar_order_after_priority_tiers() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        composition_module.get_supported_handler_factories = lambda: {
+            39: runtime.factory,
+            700: runtime.factory,
+            701: runtime.factory,
+        }
+        runtime.bar[:] = [701, 934, 39, 700, 0, 0, 0, 0]
+        runtime.handler_results.update({701: False, 934: False, 39: False, 700: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[701].attempts == 1
+        assert composition.active_handlers[934].attempts == 1
+        assert composition.active_handlers[700].attempts == 1
 
 
 def test_cry_only_is_smart_owned_and_masked() -> None:

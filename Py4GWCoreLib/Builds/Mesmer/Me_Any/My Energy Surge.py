@@ -40,8 +40,11 @@ from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import LegacyEnergySurgeControl
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import My_Energy_Surge
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import SmartEnergySurgeHandler
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import evaluate_energy_surge
+from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import get_energy_surge_id
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import get_supported_handler_factories
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import infer_max_energy
+from Py4GWCoreLib.Builds.Skills.SmartUnnaturalSignet import UNNATURAL_SIGNET_SKILL_ID
+from Py4GWCoreLib.Builds.Skills.SmartUnnaturalSignet import SmartUnnaturalSignet
 
 
 class MyMesmer(BuildMgr):
@@ -171,6 +174,7 @@ class MyMesmer(BuildMgr):
         else:
             self._last_composition_error = None
         factories[COMPLICATE_SKILL_ID] = SmartComplicateController
+        factories[UNNATURAL_SIGNET_SKILL_ID] = SmartUnnaturalSignet
         return factories
 
     def _refresh_composition(self) -> bool:
@@ -292,7 +296,11 @@ class MyMesmer(BuildMgr):
             and callable(getattr(handler, "build_interrupt_proposal", None))
             and callable(getattr(handler, "try_cast_selected", None))
         )
+        prioritized_skill_ids: set[int] = set()
         if len(smart_interrupt_handlers) > 1:
+            prioritized_skill_ids.update(
+                skill_id for skill_id, handler in ready_handlers if handler in smart_interrupt_handlers
+            )
             other_handler_active = any(
                 handler not in smart_interrupt_handlers and self._handler_has_active_dispatch(handler)
                 for _skill_id, handler in ready_handlers
@@ -311,11 +319,45 @@ class MyMesmer(BuildMgr):
                             pass
                     self._report_composition_error(f"smart interrupt chooser failed: {type(error).__name__}")
 
-            ready_handlers = [
-                (skill_id, handler) for skill_id, handler in ready_handlers if handler not in smart_interrupt_handlers
-            ]
+        elif len(smart_interrupt_handlers) == 1:
+            interrupt_skill_id, interrupt_handler = next(
+                (skill_id, handler) for skill_id, handler in ready_handlers if handler in smart_interrupt_handlers
+            )
+            prioritized_skill_ids.add(interrupt_skill_id)
+            try:
+                if (yield from self._handler_result(interrupt_handler)):
+                    self.SetTickSuccess()
+                    return True
+            except Exception as error:
+                interrupt_handler.cancel_pending("handler_exception")
+                self._report_composition_error(f"smart handler {interrupt_skill_id} failed: {type(error).__name__}")
+
+        try:
+            energy_surge_skill_id: int | None = get_energy_surge_id()
+        except Exception:
+            energy_surge_skill_id = None
+        energy_surge_entry = next(
+            (
+                (skill_id, handler)
+                for skill_id, handler in ready_handlers
+                if energy_surge_skill_id is not None and skill_id == energy_surge_skill_id
+            ),
+            None,
+        )
+        if energy_surge_entry is not None:
+            energy_surge_skill_id, energy_surge_handler = energy_surge_entry
+            prioritized_skill_ids.add(energy_surge_skill_id)
+            try:
+                if (yield from self._handler_result(energy_surge_handler)):
+                    self.SetTickSuccess()
+                    return True
+            except Exception as error:
+                energy_surge_handler.cancel_pending("handler_exception")
+                self._report_composition_error(f"smart handler {energy_surge_skill_id} failed: {type(error).__name__}")
 
         for skill_id, handler in ready_handlers:
+            if skill_id in prioritized_skill_ids:
+                continue
             try:
                 if (yield from self._handler_result(handler)):
                     self.SetTickSuccess()
