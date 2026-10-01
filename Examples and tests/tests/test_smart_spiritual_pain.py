@@ -118,7 +118,7 @@ def test_minion_rule_requires_direct_enemy_living_evidence_and_npc_flag() -> Non
     assert missing_flags is HostileSummonClassification.NOT_CONFIRMED_HOSTILE_SUMMON
 
 
-def test_spirit_rule_requires_both_npc_flag_and_type_map_bit() -> None:
+def test_spirit_rule_requires_npc_flag_but_not_type_map_bit() -> None:
     confirmed = smart_spiritual_pain.classify_hostile_summon(_evidence(npc_flags=SPIRIT_FLAG, type_map=SPIRIT_TYPE_BIT))
     missing_type_bit = smart_spiritual_pain.classify_hostile_summon(_evidence(npc_flags=SPIRIT_FLAG, type_map=0))
     missing_npc_flag = smart_spiritual_pain.classify_hostile_summon(_evidence(npc_flags=0, type_map=SPIRIT_TYPE_BIT))
@@ -131,10 +131,10 @@ def test_spirit_rule_requires_both_npc_flag_and_type_map_bit() -> None:
     )
 
     assert confirmed is HostileSummonClassification.CONFIRMED_HOSTILE_SUMMON
-    assert missing_type_bit is HostileSummonClassification.NOT_CONFIRMED_HOSTILE_SUMMON
+    assert missing_type_bit is HostileSummonClassification.CONFIRMED_HOSTILE_SUMMON
     assert missing_npc_flag is HostileSummonClassification.NOT_CONFIRMED_HOSTILE_SUMMON
     assert non_enemy is HostileSummonClassification.NOT_CONFIRMED_HOSTILE_SUMMON
-    assert missing_type_map is HostileSummonClassification.NOT_CONFIRMED_HOSTILE_SUMMON
+    assert missing_type_map is HostileSummonClassification.CONFIRMED_HOSTILE_SUMMON
     assert missing_npc_flags is HostileSummonClassification.NOT_CONFIRMED_HOSTILE_SUMMON
 
 
@@ -214,13 +214,12 @@ def test_multiple_confirmed_hostile_summons_are_all_counted_in_area() -> None:
     assert decision.selected.useful_total_damage == 110.0
 
 
-def test_ordinary_unknown_and_unconfirmed_enemies_contribute_no_special_value() -> None:
+def test_ordinary_unknown_and_type_map_only_enemies_contribute_no_special_value() -> None:
     decision = _decision(
         (
             _target(10),
             _target(11, x=10.0, hp=20.0),
-            _target(12, x=20.0, hp=20.0, npc_flags=SPIRIT_FLAG, type_map=0),
-            _target(13, x=30.0, hp=20.0, npc_flags=None, type_map=SPIRIT_TYPE_BIT),
+            _target(12, x=20.0, hp=20.0, npc_flags=None, type_map=SPIRIT_TYPE_BIT),
         )
     )
 

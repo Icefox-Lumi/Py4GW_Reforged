@@ -285,8 +285,7 @@ def classify_hostile_summon(evidence: SpiritualPainEvidence) -> HostileSummonCla
     if evidence.npc_flags & NPC_MINION_FLAG:
         return HostileSummonClassification.CONFIRMED_HOSTILE_SUMMON
     if evidence.npc_flags & NPC_SPIRIT_FLAG:
-        if evidence.type_map is not None and evidence.type_map & TYPE_MAP_SPIRIT_BIT:
-            return HostileSummonClassification.CONFIRMED_HOSTILE_SUMMON
+        return HostileSummonClassification.CONFIRMED_HOSTILE_SUMMON
     return HostileSummonClassification.NOT_CONFIRMED_HOSTILE_SUMMON
 
 
