@@ -471,7 +471,11 @@ def evaluate_smart_spiritual_pain(
 
         assert observation.current_hp is not None
         assert observation.distance_from_player is not None
-        primary_value = useful_damage(policy.primary_damage, observation.current_hp)
+        primary_summon_classification = observation.hostile_summon_classification
+        primary_damage = policy.primary_damage
+        if primary_summon_classification is HostileSummonClassification.CONFIRMED_HOSTILE_SUMMON:
+            primary_damage += policy.summon_damage
+        primary_value = useful_damage(primary_damage, observation.current_hp)
         special_agent_ids = tuple(
             candidate.agent_id
             for candidate in observations
@@ -491,7 +495,7 @@ def evaluate_smart_spiritual_pain(
                 target_agent_id=observation.agent_id,
                 eligible=True,
                 reason=CandidateReason.ELIGIBLE,
-                primary_summon_classification=observation.hostile_summon_classification,
+                primary_summon_classification=primary_summon_classification,
                 useful_primary_damage=primary_value,
                 useful_special_summon_damage=special_value,
                 useful_total_damage=primary_value + special_value,

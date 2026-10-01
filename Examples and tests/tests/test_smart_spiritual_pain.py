@@ -247,9 +247,9 @@ def test_dead_invalid_and_non_enemy_summons_contribute_no_special_value() -> Non
 def test_summon_outside_area_has_zero_special_value() -> None:
     decision = _decision((_target(10), _confirmed_minion(11, x=322.001, hp=100.0)))
 
-    assert decision.selected is not None
-    assert decision.selected.special_summon_agent_ids == ()
-    assert decision.selected.useful_total_damage == 60.0
+    ordinary_candidate = next(candidate for candidate in decision.candidates if candidate.target_agent_id == 10)
+    assert ordinary_candidate.special_summon_agent_ids == ()
+    assert ordinary_candidate.useful_total_damage == 60.0
 
 
 def test_exact_area_boundary_is_inclusive() -> None:
@@ -319,13 +319,32 @@ def test_observation_numeric_fields_reject_text_and_non_finite_values() -> None:
 
 
 def test_primary_itself_is_excluded_even_when_confirmed_as_a_summon() -> None:
-    decision = _decision((_confirmed_minion(10, hp=40.0),))
+    decision = _decision((_confirmed_minion(10, hp=100.0),))
 
     assert decision.selected is not None
     assert decision.selected.primary_summon_classification is HostileSummonClassification.CONFIRMED_HOSTILE_SUMMON
     assert decision.selected.special_summon_agent_ids == ()
+    assert decision.selected.useful_primary_damage == 90.0
+    assert decision.selected.useful_special_summon_damage == 0.0
+    assert decision.selected.useful_total_damage == 90.0
+
+
+def test_confirmed_summoned_primary_caps_combined_packets_once_when_hp_is_below_combined_damage() -> None:
+    decision = _decision((_confirmed_minion(10, hp=40.0),))
+
+    assert decision.selected is not None
     assert decision.selected.useful_primary_damage == 40.0
+    assert decision.selected.useful_special_summon_damage == 0.0
     assert decision.selected.useful_total_damage == 40.0
+
+
+def test_confirmed_summoned_primary_uses_available_hp_between_packet_and_combined_damage() -> None:
+    decision = _decision((_confirmed_minion(10, hp=75.0),))
+
+    assert decision.selected is not None
+    assert decision.selected.useful_primary_damage == 75.0
+    assert decision.selected.useful_special_summon_damage == 0.0
+    assert decision.selected.useful_total_damage == 75.0
 
 
 def test_non_positive_special_summon_agent_ids_fail_closed() -> None:
@@ -359,8 +378,9 @@ def test_ordinary_primary_surrounded_by_summons_and_summoned_primary_with_other_
     )
     summoned_primary = _decision(
         (
-            _confirmed_minion(20),
+            _confirmed_minion(20, hp=100.0),
             _confirmed_spirit(21, x=10.0, hp=30.0),
+            _confirmed_minion(22, x=20.0, hp=20.0),
         )
     )
 
@@ -369,7 +389,10 @@ def test_ordinary_primary_surrounded_by_summons_and_summoned_primary_with_other_
     assert ordinary_primary.selected.useful_total_damage == 110.0
     assert summoned_primary.selected is not None
     assert summoned_primary.selected.target_agent_id == 20
-    assert summoned_primary.selected.special_summon_agent_ids == (21,)
+    assert summoned_primary.selected.special_summon_agent_ids == (21, 22)
+    assert summoned_primary.selected.useful_primary_damage == 90.0
+    assert summoned_primary.selected.useful_special_summon_damage == 50.0
+    assert summoned_primary.selected.useful_total_damage == 140.0
 
 
 def test_highest_total_useful_value_wins_without_a_summon_preference() -> None:
@@ -381,7 +404,8 @@ def test_highest_total_useful_value_wins_without_a_summon_preference() -> None:
     )
 
     assert decision.selected is not None
-    assert decision.selected.target_agent_id == 10
+    assert decision.selected.target_agent_id == 20
+    assert decision.selected.useful_total_damage == 90.0
 
 
 def test_ties_use_special_victim_count_then_distance_then_agent_id() -> None:
