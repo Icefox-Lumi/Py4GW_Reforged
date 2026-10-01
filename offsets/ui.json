@@ -422,6 +422,16 @@
         { "name": "to_function_start", "op": "to_function_start", "in": "scan", "out": "final" }
       ]
     },
+    "key_mappings_table": {
+      "log_level": "warning",
+      "on_fail": "continue",
+      "steps": [
+        { "name": "find_assertion_use", "op": "find_use_of_string", "literal": "count == arrsize(s_remapTable)", "out": "string_use" },
+        { "name": "table_immediate", "op": "add", "in": "string_use", "value": "0xD", "out": "table_immediate" },
+        { "name": "table_pointer", "op": "read_u32", "in": "table_immediate", "out": "candidate" },
+        { "name": "validate_data", "op": "validate_section", "in": "candidate", "section": "data", "out": "final" }
+      ]
+    },
     "load_settings_func": {
       "steps": [
         { "name": "scan_target", "op": "scan", "pattern": "load_settings", "out": "scan" },
