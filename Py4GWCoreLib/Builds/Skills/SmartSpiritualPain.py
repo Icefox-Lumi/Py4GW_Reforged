@@ -1,4 +1,4 @@
-"""Pure PvE Spiritual Pain evidence, classification, and target-value policy."""
+"""Pure PvE Spiritual Pain policy and its guarded My Mesmer runtime handler."""
 
 from __future__ import annotations
 
@@ -6,9 +6,13 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 from typing import Final
 
+from Py4GWCoreLib.BuildMgr import BuildMgr
+
 SPIRITUAL_PAIN_SKILL_ID: Final[int] = 1336
+SPIRITUAL_PAIN_NAME: Final[str] = "Spiritual_Pain"
 SPIRITUAL_PAIN_CAST_RANGE: Final[float] = 1248.0
 SPIRITUAL_PAIN_AREA_RADIUS: Final[float] = 322.0
 SPIRITUAL_PAIN_AREA_RADIUS_SQUARED: Final[float] = 103684.0
@@ -314,6 +318,19 @@ def _finite_float(value: object) -> float | None:
     return converted if math.isfinite(converted) else None
 
 
+def _position(value: Any) -> tuple[float, float] | None:
+    try:
+        if value is None or len(value) < 2:
+            return None
+        x_value = _finite_float(value[0])
+        y_value = _finite_float(value[1])
+        if x_value is None or y_value is None:
+            return None
+        return x_value, y_value
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
 def _valid_policy(policy: SpiritualPainPolicy) -> bool:
     return all(
         value is not None and value > 0.0
@@ -518,6 +535,395 @@ resolve_spiritual_pain_rank = resolve_spiritual_pain_damage
 SpiritualPainAgentObservation = SpiritualPainTargetObservation
 
 
+@dataclass(frozen=True, slots=True)
+class _RuntimeParameters:
+    policy: SpiritualPainPolicy
+
+
+class SmartSpiritualPain(BuildMgr):
+    """Small My Mesmer-owned Spiritual Pain handler with no coordination state."""
+
+    def __init__(
+        self,
+        match_only: bool = False,
+        *,
+        skill_id: int | None = None,
+    ) -> None:
+        from Py4GWCoreLib import Profession
+
+        resolved_skill_id = int(skill_id or SPIRITUAL_PAIN_SKILL_ID)
+        if resolved_skill_id != SPIRITUAL_PAIN_SKILL_ID:
+            raise ValueError("SmartSpiritualPain only supports PvE Spiritual Pain 1336")
+        self._skill_id = resolved_skill_id
+        super().__init__(
+            name="Smart Spiritual Pain",
+            required_primary=Profession.Mesmer,
+            required_secondary=Profession(0),
+            template_code="OQBCAswEc5Jw0zuoNopTOggD",
+            required_skills=[self._skill_id],
+            optional_skills=[],
+            is_template_only=True,
+        )
+        if match_only:
+            return
+        self._disposed = False
+        self._skill_slot: int | None = None
+        self._composition_generation: int | None = None
+
+    @property
+    def skill_id(self) -> int:
+        return self._skill_id
+
+    @property
+    def skill_slot(self) -> int | None:
+        return self._skill_slot
+
+    def set_skill_slot(self, slot_index: int | None) -> None:
+        if slot_index is None:
+            self._skill_slot = None
+            return
+        slot = int(slot_index)
+        self._skill_slot = slot if 1 <= slot <= 8 else None
+
+    def update_lifecycle(self, context: Any = None) -> None:
+        if getattr(self, "_disposed", True):
+            return
+        if context is not None:
+            self._composition_generation = int(context)
+
+    def try_cast(self):
+        if False:
+            yield
+        if getattr(self, "_disposed", True):
+            return False
+        try:
+            return (yield from self._run_local_skill_logic())
+        except Exception:
+            return False
+
+    def cancel_pending(self, _reason: str) -> None:
+        return
+
+    def dispose(self, _reason: str = "handler_disposed") -> None:
+        if not getattr(self, "_disposed", True):
+            self._disposed = True
+
+    def OnContractActivated(self, cached_data: Any = None) -> None:
+        self._disposed = False
+        if cached_data is not None:
+            self.set_cached_data(cached_data)
+
+    @staticmethod
+    def _current_domination_rank(agent: Any, player_agent_id: int) -> int | None:
+        try:
+            attributes = agent.GetAttributes(int(player_agent_id))
+        except Exception:
+            return None
+        for attribute in attributes or ():
+            attribute_id = getattr(attribute, "attribute_id", getattr(attribute, "Id", -1))
+            try:
+                if int(attribute_id) != 2:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            level = getattr(attribute, "level", getattr(attribute, "Value", None))
+            numeric_level = _finite_float(level)
+            if numeric_level is None or not numeric_level.is_integer() or not 0 <= numeric_level <= 21:
+                return None
+            return int(numeric_level)
+        return None
+
+    def _resolve_runtime_parameters(self) -> _RuntimeParameters | None:
+        from Py4GWCoreLib import Agent
+        from Py4GWCoreLib import Player
+        from Py4GWCoreLib import Range
+
+        try:
+            player_agent_id = int(Player.GetAgentID() or 0)
+            if player_agent_id <= 0:
+                return None
+            rank = self._current_domination_rank(Agent, player_agent_id)
+            base_policy = SpiritualPainPolicy.from_domination_rank(rank)
+            cast_range = _finite_float(getattr(Range.Spellcast, "value", None))
+            if base_policy is None or cast_range is None or cast_range <= 0.0:
+                return None
+            return _RuntimeParameters(
+                policy=SpiritualPainPolicy(
+                    primary_damage=base_policy.primary_damage,
+                    summon_damage=base_policy.summon_damage,
+                    cast_range=cast_range,
+                    area_radius=SPIRITUAL_PAIN_AREA_RADIUS,
+                )
+            )
+        except Exception:
+            return None
+
+    def _combat_option_enabled(self) -> bool:
+        try:
+            options = getattr(self._cached_data, "account_options", None)
+            combat = getattr(options, "Combat", None)
+            return combat is not None and bool(combat)
+        except Exception:
+            return False
+
+    def _skill_toggle_enabled(self, slot: int) -> bool:
+        try:
+            if not 1 <= int(slot) <= 8:
+                return False
+            options = getattr(self._cached_data, "account_options", None)
+            skills = getattr(options, "Skills", None)
+            if skills is None:
+                return False
+            return bool(skills[int(slot) - 1])
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return False
+
+    def _resolve_current_slot(self) -> int | None:
+        try:
+            from Py4GWCoreLib import SkillBar
+
+            slot = self._skill_slot
+            if slot is None or not 1 <= slot <= 8:
+                return None
+            if int(SkillBar.GetSkillIDBySlot(slot) or 0) != self._skill_id:
+                return None
+            return slot
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _skill_readiness(self, slot: int) -> bool:
+        try:
+            from Py4GWCoreLib import GLOBAL_CACHE
+            from Py4GWCoreLib import Player
+            from Py4GWCoreLib import Routines
+
+            if self._resolve_current_slot() != slot or not self._skill_toggle_enabled(slot):
+                return False
+            if not bool(self.CanCastSkillSlot(slot)):
+                return False
+            can_cast = getattr(Routines.Checks.Skills, "CanCast", None)
+            if callable(can_cast) and not bool(can_cast()):
+                return False
+            enough_energy = getattr(Routines.Checks.Skills, "HasEnoughEnergy", None)
+            if callable(enough_energy) and not bool(enough_energy(Player.GetAgentID(), self._skill_id)):
+                return False
+            skill_ready = getattr(Routines.Checks.Skills, "IsSkillSlotReady", None)
+            if callable(skill_ready) and not bool(skill_ready(slot)):
+                return False
+            skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
+            recharge = _finite_float(getattr(skill_data, "recharge", None))
+            return recharge == 0.0
+        except Exception:
+            return False
+
+    def _runtime_gate(self) -> bool:
+        try:
+            from Py4GWCoreLib import GLOBAL_CACHE
+            from Py4GWCoreLib import Agent
+            from Py4GWCoreLib import Map
+            from Py4GWCoreLib import Player
+            from Py4GWCoreLib import Routines
+
+            if not bool(Map.IsMapReady()) or not bool(Map.IsExplorable()) or bool(Map.IsInCinematic()):
+                return False
+            if not bool(Routines.Checks.Map.MapValid()) or not bool(Routines.Checks.Player.CanAct()):
+                return False
+            player_agent_id = int(Player.GetAgentID() or 0)
+            if (
+                player_agent_id <= 0
+                or not bool(Agent.IsValid(player_agent_id))
+                or not bool(Agent.IsLiving(player_agent_id))
+                or not bool(Agent.IsAlive(player_agent_id))
+                or bool(Agent.IsKnockedDown(player_agent_id))
+                or bool(Agent.IsCasting(player_agent_id))
+            ):
+                return False
+            if int(GLOBAL_CACHE.SkillBar.GetCasting() or 0) != 0:
+                return False
+            return self._combat_option_enabled()
+        except Exception:
+            return False
+
+    def _target_is_allowed(self, agent_id: int) -> bool:
+        try:
+            return bool(self._validate_target_for_skill_cast(self._skill_id, int(agent_id)))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_enemy(agent_id: int) -> bool:
+        try:
+            from Py4GWCoreLib import Agent
+            from Py4GWCoreLib.enums_src.GameData_enums import Allegiance
+
+            raw_allegiance = Agent.GetAllegiance(agent_id)
+            allegiance = raw_allegiance[0] if isinstance(raw_allegiance, tuple) else raw_allegiance
+            return int(allegiance) == int(Allegiance.Enemy.value)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _absolute_current_hp(agent: Any, agent_id: int) -> float | None:
+        normalized_health = _finite_float(agent.GetHealth(agent_id))
+        maximum_health = _finite_float(agent.GetMaxHealth(agent_id))
+        if (
+            normalized_health is None
+            or maximum_health is None
+            or not 0.0 < normalized_health <= 1.0
+            or maximum_health <= 0.0
+        ):
+            return None
+        current_hp = normalized_health * maximum_health
+        return current_hp if math.isfinite(current_hp) and current_hp > 0.0 else None
+
+    @staticmethod
+    def _npc_flags(agent: Any, agent_id: int) -> int | None:
+        try:
+            value = agent.GetNPCFlags(agent_id)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return None
+            return int(value)
+        except Exception:
+            return None
+
+    def _build_snapshot(self, _parameters: _RuntimeParameters) -> tuple[SpiritualPainTargetObservation, ...] | None:
+        from Py4GWCoreLib import Agent
+        from Py4GWCoreLib import AgentArray
+        from Py4GWCoreLib import Player
+
+        player_position = _position(Player.GetXY())
+        if player_position is None:
+            return None
+        try:
+            raw_enemy_ids = AgentArray.GetEnemyArray()
+        except Exception:
+            return None
+        if raw_enemy_ids is None:
+            return None
+
+        observations: list[SpiritualPainTargetObservation] = []
+        seen_ids: set[int] = set()
+        for raw_agent_id in raw_enemy_ids:
+            try:
+                agent_id = int(raw_agent_id)
+                if agent_id <= 0 or agent_id in seen_ids:
+                    continue
+                seen_ids.add(agent_id)
+
+                is_valid = bool(Agent.IsValid(agent_id))
+                is_living = bool(Agent.IsLiving(agent_id))
+                is_alive = bool(Agent.IsAlive(agent_id))
+                is_direct_enemy = self._is_enemy(agent_id)
+                if not is_valid or not is_living or not is_alive or not is_direct_enemy:
+                    continue
+                if not self._target_is_allowed(agent_id):
+                    continue
+
+                position = _position(Agent.GetXY(agent_id))
+                distance = None
+                if position is not None:
+                    distance = math.hypot(
+                        position[0] - player_position[0],
+                        position[1] - player_position[1],
+                    )
+                    if not math.isfinite(distance):
+                        distance = None
+                observations.append(
+                    SpiritualPainTargetObservation(
+                        agent_id=agent_id,
+                        x=None if position is None else position[0],
+                        y=None if position is None else position[1],
+                        current_hp=self._absolute_current_hp(Agent, agent_id),
+                        distance_from_player=distance,
+                        evidence=SpiritualPainEvidence(
+                            is_valid=is_valid,
+                            is_living=is_living,
+                            is_alive=is_alive,
+                            is_direct_enemy=is_direct_enemy,
+                            npc_flags=self._npc_flags(Agent, agent_id),
+                            type_map=None,
+                        ),
+                    )
+                )
+            except Exception:
+                continue
+        return tuple(sorted(observations, key=lambda observation: observation.agent_id))
+
+    def _evaluate_live(self, parameters: _RuntimeParameters) -> SpiritualPainDecision | None:
+        snapshot = self._build_snapshot(parameters)
+        if snapshot is None:
+            return None
+        return evaluate_smart_spiritual_pain(snapshot, policy=parameters.policy)
+
+    @staticmethod
+    def _same_scoring_parameters(first: _RuntimeParameters, second: _RuntimeParameters) -> bool:
+        return first.policy == second.policy
+
+    def _final_revalidate(
+        self,
+        selected_agent_id: int,
+        parameters: _RuntimeParameters,
+    ) -> tuple[_RuntimeParameters, SpiritualPainCandidateEvaluation] | None:
+        if not self._runtime_gate():
+            return None
+        slot = self._resolve_current_slot()
+        if slot is None or not self._skill_readiness(slot):
+            return None
+        current_parameters = self._resolve_runtime_parameters()
+        if current_parameters is None or not self._same_scoring_parameters(parameters, current_parameters):
+            return None
+        try:
+            if not bool(self.CanCastSkillID(self._skill_id)):
+                return None
+        except Exception:
+            return None
+        decision = self._evaluate_live(current_parameters)
+        if decision is None or decision.selected is None:
+            return None
+        if decision.selected.target_agent_id != int(selected_agent_id):
+            return None
+        return current_parameters, decision.selected
+
+    def _dispatch_selected(self, selected_agent_id: int, parameters: _RuntimeParameters):
+        if False:
+            yield
+        validated = self._final_revalidate(selected_agent_id, parameters)
+        if validated is None:
+            return False
+        try:
+            result = self.CastSkillID(
+                skill_id=self._skill_id,
+                log=False,
+                target_agent_id=int(selected_agent_id),
+            )
+            if hasattr(result, "__next__"):
+                result = yield from result
+            return bool(result)
+        except Exception:
+            return False
+
+    def _run_local_skill_logic(self):
+        if False:
+            yield
+        if not self._runtime_gate():
+            return False
+        slot = self._resolve_current_slot()
+        if slot is None or not self._skill_readiness(slot):
+            return False
+        try:
+            if not bool(self.CanCastSkillID(self._skill_id)):
+                return False
+        except Exception:
+            return False
+        parameters = self._resolve_runtime_parameters()
+        if parameters is None:
+            return False
+        decision = self._evaluate_live(parameters)
+        if decision is None or decision.selected is None:
+            return False
+        return (yield from self._dispatch_selected(decision.selected.target_agent_id, parameters))
+
+
 __all__ = [
     "CandidateReason",
     "DecisionReason",
@@ -529,6 +935,7 @@ __all__ = [
     "SPIRITUAL_PAIN_AREA_RADIUS",
     "SPIRITUAL_PAIN_AREA_RADIUS_SQUARED",
     "SPIRITUAL_PAIN_CAST_RANGE",
+    "SPIRITUAL_PAIN_NAME",
     "SPIRITUAL_PAIN_PRIMARY_DAMAGE_BY_RANK",
     "SPIRITUAL_PAIN_SKILL_ID",
     "SPIRITUAL_PAIN_SUMMON_DAMAGE_BY_RANK",
@@ -539,6 +946,7 @@ __all__ = [
     "SpiritualPainPolicy",
     "SpiritualPainRankDamage",
     "SpiritualPainTargetObservation",
+    "SmartSpiritualPain",
     "TYPE_MAP_SPIRIT_BIT",
     "classify_hostile_summon",
     "classify_summon",

@@ -4,19 +4,83 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from dataclasses import fields
+from enum import IntEnum
 from pathlib import Path
 from typing import Any
+from typing import Iterator
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "Py4GWCoreLib" / "Builds" / "Skills" / "SmartSpiritualPain.py"
 MODULE_NAME = "_d3c_b_smart_spiritual_pain"
-MODULE_SPEC = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
-assert MODULE_SPEC is not None and MODULE_SPEC.loader is not None, f"could not load {MODULE_PATH}"
-smart_spiritual_pain: Any = importlib.util.module_from_spec(MODULE_SPEC)
-sys.modules[MODULE_NAME] = smart_spiritual_pain
-MODULE_SPEC.loader.exec_module(smart_spiritual_pain)
+
+
+class _FakeBuildMgr:
+    def __init__(self, **_: Any) -> None:
+        self._cached_data: Any = None
+        self._test_runtime: Any = None
+
+    def set_cached_data(self, cached_data: Any) -> None:
+        self._cached_data = cached_data
+
+    def _validate_target_for_skill_cast(self, _skill_id: int, agent_id: int) -> bool:
+        runtime = self._test_runtime
+        if runtime is None:
+            return True
+        return runtime.target_allowed.get(agent_id, True)
+
+    def CanCastSkillSlot(self, _slot: int) -> bool:
+        runtime = self._test_runtime
+        return runtime is None or (runtime.can_cast and runtime.energy_available and runtime.skill_ready)
+
+    def CanCastSkillID(self, _skill_id: int) -> bool:
+        runtime = self._test_runtime
+        return runtime is None or (runtime.can_cast and runtime.energy_available and runtime.skill_ready)
+
+    def CastSkillID(self, skill_id: int, *, target_agent_id: int = 0, **_: Any) -> bool:
+        runtime = self._test_runtime
+        if runtime is None:
+            return False
+        runtime.cast_calls.append((skill_id, target_agent_id))
+        return runtime.cast_result
+
+
+@contextmanager
+def _loaded_policy_module() -> Iterator[Any]:
+    owned_names = tuple(
+        name
+        for name in sys.modules
+        if name == "Py4GWCoreLib" or name.startswith("Py4GWCoreLib.") or name == MODULE_NAME
+    )
+    original = {name: sys.modules[name] for name in owned_names}
+    try:
+        for name in owned_names:
+            sys.modules.pop(name, None)
+        root_package = types.ModuleType("Py4GWCoreLib")
+        root_package.__path__ = [str(ROOT / "Py4GWCoreLib")]
+        sys.modules["Py4GWCoreLib"] = root_package
+        build_mgr_module = types.ModuleType("Py4GWCoreLib.BuildMgr")
+        setattr(build_mgr_module, "BuildMgr", _FakeBuildMgr)
+        sys.modules["Py4GWCoreLib.BuildMgr"] = build_mgr_module
+
+        module_spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
+        assert module_spec is not None and module_spec.loader is not None, f"could not load {MODULE_PATH}"
+        module = importlib.util.module_from_spec(module_spec)
+        sys.modules[MODULE_NAME] = module
+        module_spec.loader.exec_module(module)
+        yield module
+    finally:
+        for name in tuple(sys.modules):
+            if name == "Py4GWCoreLib" or name.startswith("Py4GWCoreLib.") or name == MODULE_NAME:
+                sys.modules.pop(name, None)
+        sys.modules.update(original)
+
+
+with _loaded_policy_module() as _loaded_policy:
+    smart_spiritual_pain: Any = _loaded_policy
 
 
 CandidateReason = smart_spiritual_pain.CandidateReason
@@ -29,6 +93,202 @@ TargetObservation = smart_spiritual_pain.SpiritualPainTargetObservation
 MINION_FLAG = smart_spiritual_pain.NPC_MINION_FLAG
 SPIRIT_FLAG = smart_spiritual_pain.NPC_SPIRIT_FLAG
 SPIRIT_TYPE_BIT = smart_spiritual_pain.TYPE_MAP_SPIRIT_BIT
+
+
+class _Allegiance(IntEnum):
+    Ally = 1
+    Enemy = 3
+
+
+class _Profession(IntEnum):
+    _None = 0
+    Mesmer = 5
+
+
+class _Runtime:
+    def __init__(self) -> None:
+        self.player_id = 1
+        self.player_xy = (0.0, 0.0)
+        self.domination_rank = 10
+        self.bar = [1336, 0, 0, 0, 0, 0, 0, 0]
+        self.states: dict[int, Any] = {
+            self.player_id: types.SimpleNamespace(
+                position=self.player_xy,
+                valid=True,
+                living=True,
+                alive=True,
+                enemy=False,
+                hp_fraction=1.0,
+                max_hp=100,
+                npc_flags=0,
+                knocked_down=False,
+                casting=False,
+            )
+        }
+        self.enemy_ids: list[int] = []
+        self.target_allowed: dict[int, bool] = {}
+        self.map_ready = True
+        self.map_valid = True
+        self.explorable = True
+        self.in_cinematic = False
+        self.player_can_act = True
+        self.can_cast = True
+        self.energy_available = True
+        self.skill_ready = True
+        self.casting_skill = 0
+        self.cast_result = True
+        self.cast_calls: list[tuple[int, int]] = []
+
+    def add_enemy(
+        self,
+        agent_id: int,
+        *,
+        x: float = 0.0,
+        y: float = 0.0,
+        hp_fraction: Any = 1.0,
+        max_hp: Any = 100,
+        npc_flags: Any = 0,
+        type_map: int = 0,
+        valid: bool = True,
+        living: bool = True,
+        alive: bool = True,
+        enemy: bool = True,
+        target_allowed: bool = True,
+    ) -> None:
+        self.states[agent_id] = types.SimpleNamespace(
+            position=(x, y),
+            valid=valid,
+            living=living,
+            alive=alive,
+            enemy=enemy,
+            hp_fraction=hp_fraction,
+            max_hp=max_hp,
+            npc_flags=npc_flags,
+            type_map=type_map,
+            knocked_down=False,
+            casting=False,
+        )
+        self.enemy_ids.append(agent_id)
+        self.target_allowed[agent_id] = target_allowed
+
+
+@contextmanager
+def _runtime_modules(runtime: _Runtime) -> Iterator[Any]:
+    owned_names = tuple(name for name in sys.modules if name == "Py4GWCoreLib" or name.startswith("Py4GWCoreLib."))
+    original = {name: sys.modules[name] for name in owned_names}
+    try:
+        for name in owned_names:
+            sys.modules.pop(name, None)
+
+        root_package = types.ModuleType("Py4GWCoreLib")
+        root_package.__path__ = [str(ROOT / "Py4GWCoreLib")]
+        setattr(root_package, "Profession", _Profession)
+
+        build_mgr_module = types.ModuleType("Py4GWCoreLib.BuildMgr")
+        setattr(build_mgr_module, "BuildMgr", _FakeBuildMgr)
+        sys.modules["Py4GWCoreLib"] = root_package
+        sys.modules["Py4GWCoreLib.BuildMgr"] = build_mgr_module
+
+        enums_package = types.ModuleType("Py4GWCoreLib.enums_src")
+        enums_package.__path__ = [str(ROOT / "Py4GWCoreLib" / "enums_src")]
+        game_data_module = types.ModuleType("Py4GWCoreLib.enums_src.GameData_enums")
+        setattr(game_data_module, "Allegiance", _Allegiance)
+        sys.modules["Py4GWCoreLib.enums_src"] = enums_package
+        sys.modules["Py4GWCoreLib.enums_src.GameData_enums"] = game_data_module
+
+        def _state(agent_id: int) -> Any:
+            return runtime.states.get(agent_id)
+
+        agent_api = types.SimpleNamespace(
+            GetAttributes=lambda _agent_id: [types.SimpleNamespace(attribute_id=2, level=runtime.domination_rank)],
+            IsValid=lambda agent_id: bool(getattr(_state(agent_id), "valid", False)),
+            IsLiving=lambda agent_id: bool(getattr(_state(agent_id), "living", False)),
+            IsAlive=lambda agent_id: bool(getattr(_state(agent_id), "alive", False)),
+            IsKnockedDown=lambda agent_id: bool(getattr(_state(agent_id), "knocked_down", False)),
+            IsCasting=lambda agent_id: bool(getattr(_state(agent_id), "casting", False)),
+            GetAllegiance=lambda agent_id: (
+                _Allegiance.Enemy.value if bool(getattr(_state(agent_id), "enemy", False)) else _Allegiance.Ally.value,
+                "Enemy" if bool(getattr(_state(agent_id), "enemy", False)) else "Ally",
+            ),
+            GetXY=lambda agent_id: getattr(_state(agent_id), "position", None),
+            GetHealth=lambda agent_id: getattr(_state(agent_id), "hp_fraction", 0.0),
+            GetMaxHealth=lambda agent_id: getattr(_state(agent_id), "max_hp", 0),
+            GetNPCFlags=lambda agent_id: getattr(_state(agent_id), "npc_flags", 0),
+        )
+        agent_array_api = types.SimpleNamespace(GetEnemyArray=lambda: list(runtime.enemy_ids))
+        player_api = types.SimpleNamespace(
+            GetAgentID=lambda: runtime.player_id,
+            GetXY=lambda: runtime.player_xy,
+            GetAccountEmail=lambda: "spiritual-pain-test",
+        )
+        map_api = types.SimpleNamespace(
+            IsMapReady=lambda: runtime.map_ready,
+            IsExplorable=lambda: runtime.explorable,
+            IsInCinematic=lambda: runtime.in_cinematic,
+        )
+        skills_api = types.SimpleNamespace(
+            CanCast=lambda: runtime.can_cast,
+            HasEnoughEnergy=lambda *_args: runtime.energy_available,
+            IsSkillSlotReady=lambda _slot: runtime.skill_ready,
+        )
+        routines_api = types.SimpleNamespace(
+            Checks=types.SimpleNamespace(
+                Map=types.SimpleNamespace(MapValid=lambda: runtime.map_valid),
+                Player=types.SimpleNamespace(CanAct=lambda: runtime.player_can_act),
+                Skills=skills_api,
+            )
+        )
+        skill_bar_api = types.SimpleNamespace(
+            GetCasting=lambda: runtime.casting_skill,
+            GetSkillData=lambda _slot: types.SimpleNamespace(recharge=0.0 if runtime.skill_ready else 1.0),
+        )
+        skillbar_module = types.ModuleType("Py4GWCoreLib.Skillbar")
+        setattr(
+            skillbar_module,
+            "SkillBar",
+            types.SimpleNamespace(
+                GetSkillIDBySlot=lambda slot: runtime.bar[int(slot) - 1],
+            ),
+        )
+        sys.modules["Py4GWCoreLib.Skillbar"] = skillbar_module
+
+        setattr(root_package, "Agent", agent_api)
+        setattr(root_package, "AgentArray", agent_array_api)
+        setattr(root_package, "Player", player_api)
+        setattr(root_package, "Map", map_api)
+        setattr(root_package, "Range", types.SimpleNamespace(Spellcast=types.SimpleNamespace(value=1248.0)))
+        setattr(root_package, "Routines", routines_api)
+        setattr(root_package, "SkillBar", getattr(skillbar_module, "SkillBar"))
+        setattr(root_package, "GLOBAL_CACHE", types.SimpleNamespace(SkillBar=skill_bar_api))
+        yield root_package
+    finally:
+        for name in tuple(sys.modules):
+            if name == "Py4GWCoreLib" or name.startswith("Py4GWCoreLib."):
+                sys.modules.pop(name, None)
+        sys.modules.update(original)
+
+
+def _new_runtime_handler(runtime: _Runtime) -> Any:
+    handler = smart_spiritual_pain.SmartSpiritualPain(skill_id=1336)
+    handler._test_runtime = runtime
+    handler.set_skill_slot(1)
+    handler.set_cached_data(
+        types.SimpleNamespace(
+            account_options=types.SimpleNamespace(
+                Combat=True,
+                Skills=[True, True, True, True, True, True, True, True],
+            )
+        )
+    )
+    return handler
+
+
+def _drain(generator: Any) -> Any:
+    while True:
+        try:
+            next(generator)
+        except StopIteration as finished:
+            return finished.value
 
 
 def _evidence(
@@ -519,3 +779,257 @@ def test_useful_damage_helper_fails_closed_and_caps_positive_damage() -> None:
     assert smart_spiritual_pain.useful_damage(5.0, 60.0) == 5.0
     assert smart_spiritual_pain.useful_damage(60.0, 0.0) == 0.0
     assert smart_spiritual_pain.useful_damage(None, 60.0) == 0.0
+
+
+def test_runtime_ordinary_primary_uses_absolute_hp_and_dispatches_after_revalidation() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, x=100.0, hp_fraction=0.5, max_hp=100)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        snapshot = handler._build_snapshot(parameters)
+        assert snapshot is not None
+        assert snapshot[0].current_hp == 50.0
+
+        assert _drain(handler.try_cast()) is True
+
+    assert runtime.cast_calls == [(1336, 10)]
+
+
+def test_runtime_confirmed_minion_primary_receives_both_packets_and_excludes_itself() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=200, npc_flags=MINION_FLAG)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        decision = handler._evaluate_live(parameters)
+        assert decision is not None and decision.selected is not None
+        selected = decision.selected
+
+        assert selected.target_agent_id == 10
+        assert selected.useful_primary_damage == 147.0
+        assert selected.special_summon_agent_ids == ()
+
+
+def test_runtime_confirmed_spirit_primary_receives_both_packets() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=200, npc_flags=SPIRIT_FLAG, type_map=0)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        decision = handler._evaluate_live(parameters)
+        assert decision is not None and decision.selected is not None
+
+        assert decision.selected.target_agent_id == 10
+        assert decision.selected.useful_primary_damage == 147.0
+        assert decision.selected.useful_special_summon_damage == 0.0
+
+
+def test_runtime_snapshot_counts_only_confirmed_nearby_summons_for_other_values() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=100)
+    runtime.add_enemy(11, x=100.0, max_hp=20, npc_flags=MINION_FLAG)
+    runtime.add_enemy(12, x=200.0, max_hp=40, npc_flags=SPIRIT_FLAG, type_map=0)
+    runtime.add_enemy(13, x=20.0, max_hp=20, npc_flags=0, type_map=SPIRIT_TYPE_BIT)
+    runtime.add_enemy(14, x=323.0, max_hp=100, npc_flags=MINION_FLAG)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        decision = handler._evaluate_live(parameters)
+        assert decision is not None
+        ordinary = next(candidate for candidate in decision.candidates if candidate.target_agent_id == 10)
+
+        assert ordinary.special_summon_agent_ids == (11, 12)
+        assert ordinary.useful_special_summon_damage == 60.0
+        assert ordinary.useful_total_damage == 115.0
+
+
+def test_runtime_primary_with_unusable_max_hp_is_skipped() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=0)
+    runtime.add_enemy(20, x=50.0, max_hp=100)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        decision = handler._evaluate_live(parameters)
+        assert decision is not None and decision.selected is not None
+
+        assert decision.selected.target_agent_id == 20
+
+
+def test_runtime_unusable_secondary_hp_is_omitted_without_blocking_other_summons() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=100)
+    runtime.add_enemy(11, x=100.0, max_hp=0, npc_flags=MINION_FLAG)
+    runtime.add_enemy(12, x=200.0, max_hp=20, npc_flags=SPIRIT_FLAG)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        decision = handler._evaluate_live(parameters)
+        assert decision is not None
+        ordinary = next(candidate for candidate in decision.candidates if candidate.target_agent_id == 10)
+
+        assert ordinary.special_summon_agent_ids == (12,)
+        assert ordinary.useful_special_summon_damage == 20.0
+        assert ordinary.useful_total_damage == 75.0
+
+
+def test_runtime_malformed_or_non_finite_hp_fails_closed() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, hp_fraction=float("nan"), max_hp=100)
+    runtime.add_enemy(11, hp_fraction=0.5, max_hp=float("inf"))
+    runtime.add_enemy(20, x=50.0, max_hp=100)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        decision = handler._evaluate_live(parameters)
+        assert decision is not None and decision.selected is not None
+
+        assert decision.selected.target_agent_id == 20
+
+
+def test_runtime_declines_when_all_primary_hp_is_unavailable() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=0)
+    runtime.add_enemy(11, hp_fraction=float("nan"), max_hp=100)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        assert _drain(handler.try_cast()) is False
+
+    assert runtime.cast_calls == []
+
+
+def test_runtime_respects_normal_build_target_restrictions() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=200, target_allowed=False)
+    runtime.add_enemy(20, x=50.0, max_hp=100)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        decision = handler._evaluate_live(parameters)
+        assert decision is not None and decision.selected is not None
+
+        assert decision.selected.target_agent_id == 20
+
+
+def test_runtime_final_revalidation_rejects_stale_primary_and_cast_gates() -> None:
+    mutations = (
+        ("primary death", lambda handler, runtime: setattr(runtime.states[10], "alive", False)),
+        ("allegiance loss", lambda handler, runtime: setattr(runtime.states[10], "enemy", False)),
+        ("range loss", lambda handler, runtime: setattr(runtime.states[10], "position", (2000.0, 0.0))),
+        ("max hp loss", lambda handler, runtime: setattr(runtime.states[10], "max_hp", 0)),
+        ("skill not ready", lambda handler, runtime: setattr(runtime, "skill_ready", False)),
+        ("energy loss", lambda handler, runtime: setattr(runtime, "energy_available", False)),
+        ("slot movement", lambda handler, runtime: runtime.bar.__setitem__(0, 0)),
+        (
+            "toggle off",
+            lambda handler, runtime: setattr(handler._cached_data.account_options, "Skills", [False] + [True] * 7),
+        ),
+        ("combat off", lambda handler, runtime: setattr(handler._cached_data.account_options, "Combat", False)),
+    )
+
+    for label, mutation in mutations:
+        runtime = _Runtime()
+        runtime.add_enemy(10, max_hp=100)
+        with _runtime_modules(runtime):
+            handler = _new_runtime_handler(runtime)
+            original_evaluate = handler._evaluate_live
+            evaluate_count = 0
+
+            def _evaluate_and_mutate(parameters: Any) -> Any:
+                nonlocal evaluate_count
+                decision = original_evaluate(parameters)
+                if evaluate_count == 0:
+                    mutation(handler, runtime)
+                evaluate_count += 1
+                return decision
+
+            handler._evaluate_live = _evaluate_and_mutate
+            assert _drain(handler.try_cast()) is False, label
+
+        assert runtime.cast_calls == [], label
+
+
+def test_runtime_final_revalidation_refreshes_summon_membership_before_dispatch() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=100)
+    runtime.add_enemy(20, x=0.0, max_hp=200, npc_flags=MINION_FLAG)
+    runtime.add_enemy(5, x=500.0, max_hp=200, npc_flags=MINION_FLAG)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        original_evaluate = handler._evaluate_live
+        evaluate_count = 0
+
+        def _evaluate_and_remove_summon(parameters: Any) -> Any:
+            nonlocal evaluate_count
+            decision = original_evaluate(parameters)
+            if evaluate_count == 0:
+                runtime.states[20].alive = False
+            evaluate_count += 1
+            return decision
+
+        handler._evaluate_live = _evaluate_and_remove_summon
+        assert _drain(handler.try_cast()) is False
+
+    assert runtime.cast_calls == []
+
+
+def test_runtime_final_revalidation_refreshes_secondary_summon_hp_before_dispatch() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=100)
+    runtime.add_enemy(20, x=0.0, max_hp=200, npc_flags=MINION_FLAG)
+    runtime.add_enemy(5, x=500.0, max_hp=200, npc_flags=MINION_FLAG)
+
+    with _runtime_modules(runtime):
+        handler = _new_runtime_handler(runtime)
+        original_evaluate = handler._evaluate_live
+        evaluate_count = 0
+
+        def _evaluate_and_invalidate_summon_hp(parameters: Any) -> Any:
+            nonlocal evaluate_count
+            decision = original_evaluate(parameters)
+            if evaluate_count == 0:
+                runtime.states[20].max_hp = 0
+            evaluate_count += 1
+            return decision
+
+        handler._evaluate_live = _evaluate_and_invalidate_summon_hp
+        assert _drain(handler.try_cast()) is False
+
+    assert runtime.cast_calls == []
+
+
+def test_runtime_handler_does_not_use_shared_coordination_state() -> None:
+    runtime = _Runtime()
+    runtime.add_enemy(10, max_hp=100)
+
+    with _runtime_modules(runtime) as root_package:
+
+        class _ForbiddenSharedMemory:
+            def __getattr__(self, _name: str) -> Any:
+                raise AssertionError("shared memory was accessed")
+
+        root_package.GLOBAL_CACHE.ShMem = _ForbiddenSharedMemory()
+        handler = _new_runtime_handler(runtime)
+        assert _drain(handler.try_cast()) is True
+        assert not hasattr(handler, "_active_reservation")
+
+    assert runtime.cast_calls == [(1336, 10)]

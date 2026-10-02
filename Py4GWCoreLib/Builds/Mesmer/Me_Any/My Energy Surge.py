@@ -43,6 +43,8 @@ from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import evaluate_energy_surge
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import get_energy_surge_id
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import get_supported_handler_factories
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import infer_max_energy
+from Py4GWCoreLib.Builds.Skills.SmartSpiritualPain import SPIRITUAL_PAIN_SKILL_ID
+from Py4GWCoreLib.Builds.Skills.SmartSpiritualPain import SmartSpiritualPain
 from Py4GWCoreLib.Builds.Skills.SmartUnnaturalSignet import UNNATURAL_SIGNET_SKILL_ID
 from Py4GWCoreLib.Builds.Skills.SmartUnnaturalSignet import SmartUnnaturalSignet
 
@@ -75,6 +77,13 @@ class MyMesmer(BuildMgr):
         from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI as HeroAIBuild
 
         self.SetFallback("HeroAI", HeroAIBuild(standalone_fallback=True))
+
+    def set_cached_data(self, cached_data: Any) -> None:
+        super().set_cached_data(cached_data)
+        for handler in tuple(self._active_handlers.values()):
+            set_cached_data = getattr(handler, "set_cached_data", None)
+            if callable(set_cached_data):
+                set_cached_data(cached_data)
 
     def ScoreMatch(
         self,
@@ -174,6 +183,7 @@ class MyMesmer(BuildMgr):
         else:
             self._last_composition_error = None
         factories[COMPLICATE_SKILL_ID] = SmartComplicateController
+        factories[SPIRITUAL_PAIN_SKILL_ID] = SmartSpiritualPain
         factories[UNNATURAL_SIGNET_SKILL_ID] = SmartUnnaturalSignet
         return factories
 
@@ -201,6 +211,9 @@ class MyMesmer(BuildMgr):
             if handler is None:
                 try:
                     handler = factories[skill_id](skill_id=skill_id)
+                    set_cached_data = getattr(handler, "set_cached_data", None)
+                    if callable(set_cached_data):
+                        set_cached_data(getattr(self, "_cached_data", None))
                 except Exception as error:
                     self._report_composition_error(f"smart handler {skill_id} creation failed: {type(error).__name__}")
                     continue

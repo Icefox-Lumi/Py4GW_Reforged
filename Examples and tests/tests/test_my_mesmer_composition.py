@@ -18,6 +18,7 @@ COMPOSITION_PATH = ROOT / "Py4GWCoreLib" / "Builds" / "Mesmer" / "Me_Any" / "My 
 SMART_ENERGY_PATH = SKILLS_DIR / "SmartEnergySurge.py"
 SMART_MESMER_PATH = SKILLS_DIR / "SmartMesmer.py"
 HERO_AI_PATH = ROOT / "Py4GWCoreLib" / "Builds" / "Any" / "HeroAI.py"
+SPIRITUAL_PAIN_SKILL_ID = 1336
 
 
 class _Profession(IntEnum):
@@ -147,6 +148,10 @@ class _FakeHandler:
         self.attempts += 1
         if self.runtime.raise_handler:
             raise RuntimeError("test handler failure")
+        if self.skill_id == 1336 and (
+            not self.runtime.spiritual_toggle_enabled or not self.runtime.spiritual_combat_enabled
+        ):
+            return False
         return self.runtime.handler_results.get(self.skill_id, self.runtime.handler_cast_result)
 
     def try_cast(self):
@@ -155,6 +160,10 @@ class _FakeHandler:
         self.attempts += 1
         if self.runtime.raise_handler:
             raise RuntimeError("test handler failure")
+        if self.skill_id == 1336 and (
+            not self.runtime.spiritual_toggle_enabled or not self.runtime.spiritual_combat_enabled
+        ):
+            return False
         return self.runtime.handler_results.get(self.skill_id, self.runtime.handler_cast_result)
 
     def cancel_pending(self, reason: str) -> None:
@@ -176,6 +185,8 @@ class _Runtime:
         self.coordinator_attempts = 0
         self.coordinator_handler_ids: tuple[int, ...] = ()
         self.coordinator_selected_skill_id: int | None = None
+        self.spiritual_toggle_enabled = True
+        self.spiritual_combat_enabled = True
 
     def factory(self, *, skill_id: int) -> _FakeHandler:
         if skill_id in self.raise_factory_for:
@@ -520,6 +531,7 @@ def _composition(runtime: _Runtime, composition: Any) -> Any:
 def _use_fake_priority_handlers(composition: Any, runtime: _Runtime) -> None:
     composition.SmartUnnaturalSignet = runtime.factory
     composition.SmartComplicateController = runtime.factory
+    composition.SmartSpiritualPain = runtime.factory
 
 
 def test_registry_contains_only_energy_surge() -> None:
@@ -527,6 +539,149 @@ def test_registry_contains_only_energy_surge() -> None:
         factories = smart_energy.get_supported_handler_factories()
         assert tuple(factories) == (39,)
         assert factories[39] is smart_energy.SmartEnergySurgeHandler
+
+
+def test_spiritual_pain_is_smart_owned_and_masked() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        composition_module.SmartSpiritualPain = runtime.factory
+        runtime.bar[:] = [SPIRITUAL_PAIN_SKILL_ID, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (SPIRITUAL_PAIN_SKILL_ID,)
+        assert composition.blocked_skills == [SPIRITUAL_PAIN_SKILL_ID]
+        assert composition.fallback.blocked_skills == [SPIRITUAL_PAIN_SKILL_ID]
+        assert composition.fallback.calls == 1
+
+
+def test_spiritual_pain_constructor_failure_remains_owned_and_masked() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        composition_module.SmartSpiritualPain = runtime.factory
+        runtime.raise_factory_for.add(SPIRITUAL_PAIN_SKILL_ID)
+        runtime.bar[:] = [SPIRITUAL_PAIN_SKILL_ID, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (SPIRITUAL_PAIN_SKILL_ID,)
+        assert composition.active_handlers == {}
+        assert composition.blocked_skills == [SPIRITUAL_PAIN_SKILL_ID]
+        assert composition.fallback.blocked_skills == [SPIRITUAL_PAIN_SKILL_ID]
+
+
+def test_spiritual_pain_toggle_or_combat_off_remains_owned_and_masked() -> None:
+    for disabled_attribute in ("spiritual_toggle_enabled", "spiritual_combat_enabled"):
+        with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+            composition_module.SmartSpiritualPain = runtime.factory
+            setattr(runtime, disabled_attribute, False)
+            runtime.bar[:] = [SPIRITUAL_PAIN_SKILL_ID, 101, 102, 0, 0, 0, 0, 0]
+            composition = _composition(runtime, composition_module)
+
+            _drain(composition.ProcessSkillCasting())
+
+            assert composition.active_smart_ids == (SPIRITUAL_PAIN_SKILL_ID,)
+            assert composition.blocked_skills == [SPIRITUAL_PAIN_SKILL_ID]
+            assert composition.fallback.blocked_skills == [SPIRITUAL_PAIN_SKILL_ID]
+            assert composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID].attempts == 1
+
+
+def test_spiritual_pain_slot_movement_and_removal_refresh_ownership() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        composition_module.SmartSpiritualPain = runtime.factory
+        runtime.bar[:] = [101, SPIRITUAL_PAIN_SKILL_ID, 102, 103, 104, 105, 106, 107]
+        composition = _composition(runtime, composition_module)
+        _drain(composition.ProcessSkillCasting())
+        handler = composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID]
+
+        assert composition.skill_slots[SPIRITUAL_PAIN_SKILL_ID] == 2
+        assert handler.skill_slot == 2
+
+        runtime.bar[:] = [SPIRITUAL_PAIN_SKILL_ID, 101, 102, 103, 104, 105, 106, 107]
+        _drain(composition.ProcessSkillCasting())
+        assert composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID] is handler
+        assert handler.skill_slot == 1
+
+        runtime.bar[0] = 108
+        _drain(composition.ProcessSkillCasting())
+        assert composition.active_smart_ids == ()
+        assert composition.blocked_skills == []
+        assert handler.dispose_reasons == ["skill_removed"]
+
+
+def test_unsupported_and_pvp_spiritual_pain_ids_remain_heroai_owned() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        composition_module.SmartSpiritualPain = runtime.factory
+        runtime.bar[:] = [3189, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == ()
+        assert composition.blocked_skills == []
+        assert composition.fallback.blocked_skills == []
+        assert composition.fallback.calls == 1
+
+
+def test_energy_surge_precedes_spiritual_pain_when_spiritual_is_earlier_on_bar() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [SPIRITUAL_PAIN_SKILL_ID, 39, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({SPIRITUAL_PAIN_SKILL_ID: True, 39: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID].attempts == 0
+
+
+def test_energy_surge_decline_allows_spiritual_pain_afterward() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [SPIRITUAL_PAIN_SKILL_ID, 39, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({SPIRITUAL_PAIN_SKILL_ID: True, 39: False})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[39].attempts == 1
+        assert composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID].attempts == 1
+
+
+def test_valid_cry_interrupt_prevents_spiritual_pain_that_pass() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [SPIRITUAL_PAIN_SKILL_ID, 55, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({SPIRITUAL_PAIN_SKILL_ID: True, 55: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[55].attempts == 1
+        assert composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID].attempts == 0
+        assert runtime.coordinator_attempts == 0
+
+
+def test_residual_bar_order_runs_unnatural_before_spiritual_pain() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [934, SPIRITUAL_PAIN_SKILL_ID, 55, 39, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, SPIRITUAL_PAIN_SKILL_ID: True, 55: False, 39: False})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[934].attempts == 1
+        assert composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID].attempts == 0
+
+
+def test_residual_bar_order_runs_spiritual_pain_before_unnatural() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [SPIRITUAL_PAIN_SKILL_ID, 934, 55, 39, 0, 0, 0, 0]
+        runtime.handler_results.update({934: True, SPIRITUAL_PAIN_SKILL_ID: True, 55: False, 39: False})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID].attempts == 1
+        assert composition.active_handlers[934].attempts == 0
 
 
 def test_energy_surge_only_masks_only_the_supported_skill() -> None:
