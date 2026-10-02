@@ -19,6 +19,7 @@ SMART_ENERGY_PATH = SKILLS_DIR / "SmartEnergySurge.py"
 SMART_MESMER_PATH = SKILLS_DIR / "SmartMesmer.py"
 HERO_AI_PATH = ROOT / "Py4GWCoreLib" / "Builds" / "Any" / "HeroAI.py"
 SPIRITUAL_PAIN_SKILL_ID = 1336
+MISTRUST_SKILL_ID = 979
 
 
 class _Profession(IntEnum):
@@ -144,13 +145,19 @@ class _FakeHandler:
     def build_interrupt_proposal(self) -> object | None:
         return object()
 
+    def _runtime_allows_cast(self) -> bool:
+        if self.skill_id == SPIRITUAL_PAIN_SKILL_ID:
+            return self.runtime.spiritual_toggle_enabled and self.runtime.spiritual_combat_enabled
+        if self.skill_id == MISTRUST_SKILL_ID:
+            return self.runtime.mistrust_toggle_enabled and self.runtime.mistrust_combat_enabled
+        return True
+
     def try_cast_selected(self, _proposal: object) -> bool:
         self.attempts += 1
+        self.runtime.attempt_order.append(self.skill_id)
         if self.runtime.raise_handler:
             raise RuntimeError("test handler failure")
-        if self.skill_id == 1336 and (
-            not self.runtime.spiritual_toggle_enabled or not self.runtime.spiritual_combat_enabled
-        ):
+        if not self._runtime_allows_cast():
             return False
         return self.runtime.handler_results.get(self.skill_id, self.runtime.handler_cast_result)
 
@@ -158,11 +165,10 @@ class _FakeHandler:
         if False:
             yield
         self.attempts += 1
+        self.runtime.attempt_order.append(self.skill_id)
         if self.runtime.raise_handler:
             raise RuntimeError("test handler failure")
-        if self.skill_id == 1336 and (
-            not self.runtime.spiritual_toggle_enabled or not self.runtime.spiritual_combat_enabled
-        ):
+        if not self._runtime_allows_cast():
             return False
         return self.runtime.handler_results.get(self.skill_id, self.runtime.handler_cast_result)
 
@@ -182,11 +188,14 @@ class _Runtime:
         self.raise_handler = False
         self.raise_factory_for: set[int] = set()
         self.handlers: list[_FakeHandler] = []
+        self.attempt_order: list[int] = []
         self.coordinator_attempts = 0
         self.coordinator_handler_ids: tuple[int, ...] = ()
         self.coordinator_selected_skill_id: int | None = None
         self.spiritual_toggle_enabled = True
         self.spiritual_combat_enabled = True
+        self.mistrust_toggle_enabled = True
+        self.mistrust_combat_enabled = True
 
     def factory(self, *, skill_id: int) -> _FakeHandler:
         if skill_id in self.raise_factory_for:
@@ -357,6 +366,7 @@ def _loaded_runtime() -> Iterator[tuple[Any, _Runtime, Any]]:
         composition = _load_module("d1a_test.composition", COMPOSITION_PATH)
         composition.get_supported_handler_factories = lambda: {39: runtime.factory}
         composition.SmartCryController = runtime.factory
+        composition.SmartMistrust = runtime.factory
 
         class _FakeCoordinator:
             def try_cast(self, handlers: Any):
@@ -532,6 +542,7 @@ def _use_fake_priority_handlers(composition: Any, runtime: _Runtime) -> None:
     composition.SmartUnnaturalSignet = runtime.factory
     composition.SmartComplicateController = runtime.factory
     composition.SmartSpiritualPain = runtime.factory
+    composition.SmartMistrust = runtime.factory
 
 
 def test_registry_contains_only_energy_surge() -> None:
@@ -584,6 +595,97 @@ def test_spiritual_pain_toggle_or_combat_off_remains_owned_and_masked() -> None:
             assert composition.blocked_skills == [SPIRITUAL_PAIN_SKILL_ID]
             assert composition.fallback.blocked_skills == [SPIRITUAL_PAIN_SKILL_ID]
             assert composition.active_handlers[SPIRITUAL_PAIN_SKILL_ID].attempts == 1
+
+
+def test_mistrust_is_smart_owned_and_masked_when_equipped() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[:] = [MISTRUST_SKILL_ID, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (MISTRUST_SKILL_ID,)
+        assert composition.blocked_skills == [MISTRUST_SKILL_ID]
+        assert composition.fallback.blocked_skills == [MISTRUST_SKILL_ID]
+        assert composition.fallback.calls == 1
+
+
+def test_mistrust_constructor_failure_remains_owned_and_masked() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.raise_factory_for.add(MISTRUST_SKILL_ID)
+        runtime.bar[:] = [MISTRUST_SKILL_ID, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (MISTRUST_SKILL_ID,)
+        assert composition.active_handlers == {}
+        assert composition.blocked_skills == [MISTRUST_SKILL_ID]
+        assert composition.fallback.blocked_skills == [MISTRUST_SKILL_ID]
+        assert composition.fallback.calls == 1
+
+
+def test_mistrust_toggle_or_combat_off_remains_owned_and_masked() -> None:
+    for disabled_attribute in ("mistrust_toggle_enabled", "mistrust_combat_enabled"):
+        with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+            setattr(runtime, disabled_attribute, False)
+            runtime.bar[:] = [MISTRUST_SKILL_ID, 101, 102, 0, 0, 0, 0, 0]
+            composition = _composition(runtime, composition_module)
+
+            _drain(composition.ProcessSkillCasting())
+
+            assert composition.active_smart_ids == (MISTRUST_SKILL_ID,)
+            assert composition.blocked_skills == [MISTRUST_SKILL_ID]
+            assert composition.fallback.blocked_skills == [MISTRUST_SKILL_ID]
+            assert composition.active_handlers[MISTRUST_SKILL_ID].attempts == 1
+
+
+def test_mistrust_slot_movement_and_removal_refresh_ownership() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        runtime.bar[:] = [101, MISTRUST_SKILL_ID, 102, 103, 104, 105, 106, 107]
+        composition = _composition(runtime, composition_module)
+        _drain(composition.ProcessSkillCasting())
+        handler = composition.active_handlers[MISTRUST_SKILL_ID]
+
+        assert composition.skill_slots[MISTRUST_SKILL_ID] == 2
+        assert handler.skill_slot == 2
+
+        runtime.bar[:] = [MISTRUST_SKILL_ID, 101, 102, 103, 104, 105, 106, 107]
+        _drain(composition.ProcessSkillCasting())
+        assert composition.active_handlers[MISTRUST_SKILL_ID] is handler
+        assert handler.skill_slot == 1
+
+        runtime.bar[0] = 0
+        _drain(composition.ProcessSkillCasting())
+        assert composition.active_smart_ids == ()
+        assert composition.blocked_skills == []
+        assert handler.dispose_reasons == ["skill_removed"]
+
+
+def test_energy_surge_precedes_mistrust_and_residuals_keep_equipped_bar_order() -> None:
+    cases = (
+        (
+            [SPIRITUAL_PAIN_SKILL_ID, MISTRUST_SKILL_ID, 934, 39, 0, 0, 0, 0],
+            {39: False, SPIRITUAL_PAIN_SKILL_ID: False, MISTRUST_SKILL_ID: False, 934: True},
+            [39, SPIRITUAL_PAIN_SKILL_ID, MISTRUST_SKILL_ID, 934],
+        ),
+        (
+            [MISTRUST_SKILL_ID, 934, SPIRITUAL_PAIN_SKILL_ID, 39, 0, 0, 0, 0],
+            {39: False, MISTRUST_SKILL_ID: False, 934: False, SPIRITUAL_PAIN_SKILL_ID: True},
+            [39, MISTRUST_SKILL_ID, 934, SPIRITUAL_PAIN_SKILL_ID],
+        ),
+    )
+
+    for bar, handler_results, expected_attempt_order in cases:
+        with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+            _use_fake_priority_handlers(composition_module, runtime)
+            runtime.bar[:] = bar
+            runtime.handler_results.update(handler_results)
+            composition = _composition(runtime, composition_module)
+
+            assert _drain(composition.ProcessSkillCasting()) is True
+
+            assert runtime.attempt_order == expected_attempt_order
 
 
 def test_spiritual_pain_slot_movement_and_removal_refresh_ownership() -> None:

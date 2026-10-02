@@ -4,7 +4,8 @@ import PyAgent
 
 from Py4GWCoreLib.py4gwcorelib_src.FrameCache import frame_cache
 from .native_src.context.AgentContext import AgentStruct, AgentLivingStruct, AgentItemStruct, AgentGadgetStruct
-from .native_src.context.WorldContext import AttributeStruct
+from .native_src.context.WorldContext import AttributeStruct, NPC_ModelStruct
+from .native_src.internals.gw_array import GW_Array_Value_View
 from .native_src.internals.helpers import encoded_wstr_to_str
 from .native_src.internals.string_table import decode as decode_raw
 #from .CombatEventQueue_src import helpers as CombatEventHelpers
@@ -1461,6 +1462,23 @@ class Agent:
             if int(npc.model_file_id) == int(model_id):
                 return npc
         return None
+
+    @staticmethod
+    def GetNPCModelAtIndex(model_index: int) -> Optional[NPC_ModelStruct]:
+        """Return only the current NPC row at the living agent's model index."""
+        from .Context import GWContext
+
+        if type(model_index) is not int or model_index <= 0:
+            return None
+        try:
+            world_ctx = GWContext.World.GetContext()
+            npc_models_array = None if world_ctx is None else world_ctx.npc_models_array
+            if npc_models_array is None:
+                return None
+            row = GW_Array_Value_View(npc_models_array, NPC_ModelStruct).get(model_index)
+            return row if row is not None and row.is_valid else None
+        except Exception:
+            return None
 
     @staticmethod
     def GetNPCFlags(agent_id: int) -> int:
