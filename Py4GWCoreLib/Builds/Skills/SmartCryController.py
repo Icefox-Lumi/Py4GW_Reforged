@@ -302,7 +302,6 @@ class SmartCryController(BuildMgr):
         self._suppression_deadline: int | None = None
         self._diagnostic_state: dict[str, tuple[int, tuple[Any, ...]]] = {}
         self._preclaim_failure: _ValidationFailure | None = None
-        self._selection_failure_reason: str | None = None
         self._queue_deadline_ms = max(0, int(queue_deadline_ms))
 
     @property
@@ -458,12 +457,6 @@ class SmartCryController(BuildMgr):
             handled_cast_keys = self._handled_cast_keys(isolation_group_id, now_ms)
             selection = self._build_selection(now_ms, handled_cast_keys)
             if selection is None or selection.decision.selected is None:
-                self._emit_diagnostic(
-                    "declined",
-                    self._selection_diagnostic_signature(selection),
-                    now_ms=now_ms,
-                    windowed=True,
-                )
                 return False
 
             selected = selection.decision.selected
@@ -882,7 +875,6 @@ class SmartCryController(BuildMgr):
         now_ms: int,
         handled_cast_keys: set[CryCastKey],
     ) -> _Selection | None:
-        self._selection_failure_reason = None
         from Py4GWCoreLib import GLOBAL_CACHE
         from Py4GWCoreLib import Agent
         from Py4GWCoreLib import AgentArray
@@ -891,26 +883,26 @@ class SmartCryController(BuildMgr):
 
         player_position = self._position(Player.GetXY())
         if player_position is None:
-            return self._record_selection_failure("player_geometry_unavailable")
+            return None
         try:
             cry_radius = float(GLOBAL_CACHE.Skill.Data.GetAoERange(self.skill_id))
             cast_range = float(Range.Spellcast.value)
         except (AttributeError, TypeError, ValueError):
-            return self._record_selection_failure("skill_geometry_unavailable")
+            return None
         if not math.isfinite(cry_radius) or cry_radius <= 0.0 or not math.isfinite(cast_range) or cast_range <= 0.0:
-            return self._record_selection_failure("skill_geometry_invalid")
+            return None
 
         try:
             raw_enemy_ids = AgentArray.GetEnemyArray()
         except Exception:
-            return self._record_selection_failure("enemy_array_unavailable")
+            return None
         enemy_observations: list[CryEnemyObservation] = []
         geometry_observations: list[EnemyObservation] = []
         assessment_by_agent: dict[int, Any] = {}
         try:
             from Py4GWCoreLib.HeroAI import interrupt
         except Exception:
-            return self._record_selection_failure("interrupt_unavailable")
+            return None
 
         seen_ids: set[int] = set()
         runtime_rejections: dict[str, int] = {}
@@ -987,7 +979,7 @@ class SmartCryController(BuildMgr):
 
         lifecycle_id = self._lifecycle_id
         if lifecycle_id is None:
-            return self._record_selection_failure("lifecycle_missing")
+            return None
         if not enemy_observations:
             count_runtime_rejection("no_enemy_observation")
         snapshot = CombatSnapshot(
@@ -1018,10 +1010,6 @@ class SmartCryController(BuildMgr):
             primary_assessment,
             tuple(sorted(runtime_rejections.items())),
         )
-
-    def _record_selection_failure(self, reason: str) -> None:
-        self._selection_failure_reason = str(reason)
-        return None
 
     def _selection_policy(self) -> Any:
         return DEFAULT_POLICY
@@ -1097,53 +1085,6 @@ class SmartCryController(BuildMgr):
         except (AttributeError, TypeError, ValueError):
             return False
 
-    def _selection_diagnostic_signature(self, selection: _Selection | None) -> tuple[Any, ...]:
-        if selection is None:
-            return (
-                "no_eligible_candidate",
-                f"selection={self._selection_failure_reason or 'selection_unavailable'}",
-            )
-
-        decision = selection.decision
-        candidate_reason_counts: dict[str, int] = {}
-        handled_keys: set[CryCastKey] = set()
-        score_by_key: dict[CryCastKey, int] = {}
-        maximum_candidate_value = 0
-        redundant_count = 0
-        for candidate in decision.candidates:
-            reason = str(getattr(getattr(candidate, "reason", None), "value", candidate.reason))
-            candidate_reason_counts[reason] = candidate_reason_counts.get(reason, 0) + 1
-            maximum_candidate_value = max(maximum_candidate_value, int(candidate.total_interrupt_value))
-            if bool(getattr(candidate, "redundant", False)):
-                redundant_count += 1
-            handled_keys.update(candidate.handled_cast_keys)
-            for cast_key, value in candidate.covered_cast_values:
-                score_by_key[cast_key] = int(value)
-
-        decision_reason = str(getattr(getattr(decision, "reason", None), "value", decision.reason))
-        reason_summary = (
-            ",".join(f"{reason}={count}" for reason, count in sorted(candidate_reason_counts.items())) or "none"
-        )
-        runtime_summary = (
-            ",".join(f"{reason}={count}" for reason, count in selection.runtime_rejection_counts) or "none"
-        )
-        score_counts: dict[int, int] = {}
-        for value in score_by_key.values():
-            score_counts[value] = score_counts.get(value, 0) + 1
-        score_summary = ",".join(f"{value}:{count}" for value, count in sorted(score_counts.items())) or "none"
-        policy_candidate = decision.candidates[0] if decision.candidates else None
-        return (
-            "no_eligible_candidate",
-            f"decision={decision_reason}",
-            f"reasons={reason_summary}",
-            f"runtime={runtime_summary}",
-            f"handled={len(handled_keys)}",
-            f"redundant={redundant_count}",
-            f"max_value={maximum_candidate_value}",
-            f"threshold={DEFAULT_POLICY.minimum_candidate_value}",
-            f"scores={score_summary}",
-            *self._candidate_policy_diagnostic_signature(policy_candidate),
-        )
 
     @staticmethod
     def _candidate_policy_diagnostic_signature(candidate: Any) -> tuple[str, ...]:

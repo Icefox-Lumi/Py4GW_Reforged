@@ -184,6 +184,8 @@ def _load_widget_module() -> types.ModuleType:
         "Py4GWCoreLib.Builds",
         "Py4GWCoreLib.Builds.Any",
         "Py4GWCoreLib.Builds.Any.HeroAI",
+        "Py4GWCoreLib.botting_tree_src",
+        "Py4GWCoreLib.botting_tree_src.isolation",
         "Py4GWCoreLib.Map",
         "Py4GWCoreLib.Player",
         "Py4GWCoreLib.routines_src",
@@ -192,7 +194,6 @@ def _load_widget_module() -> types.ModuleType:
         "Py4GWCoreLib.HeroAI.cache_data",
         "Py4GWCoreLib.HeroAI.follow",
         "Py4GWCoreLib.HeroAI.follow.follower_runtime",
-        "Py4GWCoreLib.HeroAI.dispatch_diagnostics",
         "Py4GWCoreLib.HeroAI.enemy_party",
         "Py4GWCoreLib.HeroAI.resurrection_scroll",
         "Py4GWCoreLib.HeroAI.team_viewer_broadcast",
@@ -246,6 +247,15 @@ def _load_widget_module() -> types.ModuleType:
     )
     _install_module("Py4GWCoreLib.Builds", package=True)
     _install_module("Py4GWCoreLib.Builds.Any", package=True)
+    _install_module("Py4GWCoreLib.botting_tree_src", package=True)
+    _install_module(
+        "Py4GWCoreLib.botting_tree_src.isolation",
+        AccountIsolationBootstrap=type(
+            "_AccountIsolationBootstrap",
+            (),
+            {"ensure": lambda self: None, "reset": lambda self: None},
+        ),
+    )
     _install_module(
         "Py4GWCoreLib.Builds.Any.HeroAI",
         HeroAI_Build=_HeroAI_Build,
@@ -268,14 +278,6 @@ def _load_widget_module() -> types.ModuleType:
         execute_follower_follow=lambda *_args: _NodeState.FAILURE,
         get_follow_destination_distance=lambda *_args: 0.0,
         is_follow_recovery_active=lambda *_args: False,
-    )
-    _install_module(
-        "Py4GWCoreLib.HeroAI.dispatch_diagnostics",
-        cached_state_fields=lambda *_args: {},
-        increment_counter=lambda *_args: None,
-        log_compact_state=lambda *_args, **_kwargs: None,
-        node_state=lambda value: str(getattr(value, "name", value)).lower(),
-        set_active_owner=lambda *_args: None,
     )
     _install_module("Py4GWCoreLib.HeroAI.enemy_party")
     _install_module("Py4GWCoreLib.HeroAI.resurrection_scroll")
@@ -379,8 +381,7 @@ def test_ooc_movement_interrupt_still_owns_the_selector():
     combat_calls = _run_widget_ticks(24)
 
     assert combat_calls == 0
-    assert SUBJECT._OUTER_DIAGNOSTIC_RUNTIME["movement_result"] == "success"
-    assert SUBJECT._OUTER_DIAGNOSTIC_RUNTIME["movement_reason"] == "agent_moving"
+    assert SUBJECT.movement_interrupt() == _NodeState.SUCCESS
 
 
 def test_combat_movement_yields_to_build_dispatch():
@@ -389,11 +390,7 @@ def test_combat_movement_yields_to_build_dispatch():
     combat_calls = _run_widget_ticks(24)
 
     assert combat_calls > 0
-    assert SUBJECT._OUTER_DIAGNOSTIC_RUNTIME["movement_result"] == "failure"
-    assert SUBJECT._OUTER_DIAGNOSTIC_RUNTIME["movement_reason"] == (
-        "agent_moving_combat_yield"
-    )
-    assert SUBJECT._OUTER_DIAGNOSTIC_RUNTIME["movement_moving"] is True
+    assert SUBJECT.movement_interrupt() == _NodeState.FAILURE
 
 
 def test_sustained_combat_movement_cannot_starve_dispatch():
@@ -411,7 +408,7 @@ def test_casting_guard_still_blocks_dispatch_until_casting_ends():
     blocked_calls = _run_widget_ticks(20)
 
     assert blocked_calls == 0
-    assert SUBJECT._OUTER_DIAGNOSTIC_RUNTIME["casting_blocked"] is True
+    assert SUBJECT.CastingBlockNode.condition_fn() == _NodeState.RUNNING
 
     SUBJECT.Agent.IsCasting = lambda *_args: False
     resumed_calls = _run_widget_ticks(24)
@@ -425,7 +422,6 @@ def test_movement_end_falls_through_to_combat():
     result = SUBJECT.movement_interrupt()
 
     assert result.name == "FAILURE"
-    assert SUBJECT._OUTER_DIAGNOSTIC_RUNTIME["movement_reason"] == "not_moving"
     assert _run_widget_ticks(24) > 0
 
 
@@ -436,6 +432,3 @@ def test_smart_unstuck_movement_interrupt_behavior_is_preserved():
     result = SUBJECT.movement_interrupt()
 
     assert result.name == "FAILURE"
-    assert SUBJECT._OUTER_DIAGNOSTIC_RUNTIME["movement_reason"] == (
-        "smart_unstuck_active"
-    )

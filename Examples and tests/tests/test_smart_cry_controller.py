@@ -385,94 +385,30 @@ def test_preclaim_failure_terminal_diagnostic_contains_reason_without_account_id
         assert controller.state is module.CryControllerState.IDLE
 
 
-def test_no_eligible_summary_exposes_value_one_below_threshold() -> None:
-    with _loaded_runtime() as (module, runtime):
-        smart_cry = sys.modules["Py4GWCoreLib.Builds.Skills.SmartCry"]
-        controller = module.SmartCryController(skill_id=55)
-        key = module.CryCastKey(10, 100, (10, 100, 1))
-        candidate = types.SimpleNamespace(
-            reason=smart_cry.CryCandidateReason.BELOW_MINIMUM_VALUE,
-            total_interrupt_value=1,
-            primary_cast_value=1,
-            primary_value_source="generic",
-            additional_interrupt_count=0,
-            additional_interrupt_value=0,
-            damage_coverage_count=3,
-            damage_bonus=0,
-            redundant=False,
-            handled_cast_keys=(),
-            covered_cast_values=((key, 1),),
-        )
-        decision = types.SimpleNamespace(
-            reason=smart_cry.CryDecisionReason.NO_ELIGIBLE_CANDIDATE,
-            candidates=(candidate,),
-        )
-        selection = module._Selection(decision, None, None, ())
-
-        signature = controller._selection_diagnostic_signature(selection)
-
-        assert "reasons=below_minimum_value=1" in signature
-        assert "max_value=1" in signature
-        assert "threshold=2" in signature
-        assert "scores=1:1" in signature
-        assert "primary_value=1" in signature
-        assert "primary_source=generic" in signature
-        assert "additional_interrupt_count=0" in signature
-        assert "additional_interrupt_value=0" in signature
-        assert "damage_coverage_count=3" in signature
-        assert "damage_bonus=0" in signature
-        assert "final_policy_value=1" in signature
-        assert "minimum_candidate_value=2" in signature
-        assert "final_value=1" in signature
-
-
-def test_no_eligible_summary_is_deterministic_and_includes_runtime_rejections() -> None:
-    with _loaded_runtime() as (module, runtime):
-        smart_cry = sys.modules["Py4GWCoreLib.Builds.Skills.SmartCry"]
-        controller = module.SmartCryController(skill_id=55)
-        candidates = tuple(
-            types.SimpleNamespace(
-                reason=reason,
-                total_interrupt_value=0,
-                redundant=False,
-                handled_cast_keys=(),
-                covered_cast_values=(),
-            )
-            for reason in (
-                smart_cry.CryCandidateReason.UNKNOWN_TIMING,
-                smart_cry.CryCandidateReason.NO_ACTIVE_CAST,
-            )
-        )
-        decision = types.SimpleNamespace(
-            reason=smart_cry.CryDecisionReason.NO_ELIGIBLE_CANDIDATE,
-            candidates=candidates,
-        )
-        selection = module._Selection(
-            decision,
-            None,
-            None,
-            (("dead_enemy", 2), ("geometry_unavailable", 1)),
-        )
-
-        signature = controller._selection_diagnostic_signature(selection)
-
-        assert signature.index("reasons=no_active_cast=1,unknown_timing=1") >= 0
-        assert "runtime=dead_enemy=2,geometry_unavailable=1" in signature
-
-
-def test_windowed_diagnostic_emits_latest_reason_after_one_cooldown_window() -> None:
+def test_no_eligible_candidate_does_not_emit_routine_selection_summary() -> None:
     with _loaded_runtime() as (module, runtime):
         controller = module.SmartCryController(skill_id=55)
-        controller._emit_diagnostic("no_eligible_candidate", ("reason=first",), now_ms=1_000, windowed=True)
-        controller._emit_diagnostic("no_eligible_candidate", ("reason=second",), now_ms=1_100, windowed=True)
+        controller._now_ms = lambda: runtime.clock.now
+        controller._refresh_lifecycle = lambda: None
+        controller._maintain_state = lambda _now: None
+        controller._lifecycle_id = (1, 1, 0)
+        controller._combat_option_enabled = lambda: True
+        controller._local_owner_context_result = lambda: types.SimpleNamespace(
+            context=("me@example.com", 4),
+            reason=None,
+        )
+        controller._handled_cast_keys = lambda *_args: set()
+        controller._build_selection = lambda *_args: types.SimpleNamespace(
+            decision=types.SimpleNamespace(selected=None),
+        )
 
-        assert len(runtime.diagnostics) == 1
-        assert "reason=first" in runtime.diagnostics[0]
+        assert _drain(controller.try_cast()) is False
+        runtime.clock.now += 1_000
+        assert _drain(controller.try_cast()) is False
+        assert runtime.diagnostics == []
 
-        controller._emit_diagnostic("no_eligible_candidate", ("reason=second",), now_ms=2_001, windowed=True)
 
-        assert len(runtime.diagnostics) == 2
-        assert "reason=second" in runtime.diagnostics[1]
+
 
 
 @pytest.mark.parametrize(

@@ -100,7 +100,7 @@ class SmartComplicateController(SmartCryController):
 
     def _build_selection(self, now_ms: int, handled_cast_keys: set[Any]) -> Any:
         if not self._runtime_skill_id_valid or not self._validate_runtime_skill_id():
-            return self._record_selection_failure("complicate_skill_id_mismatch")
+            return None
 
         base_selection = super()._build_selection(now_ms, handled_cast_keys)
         if base_selection is None:
@@ -180,28 +180,6 @@ class SmartComplicateController(SmartCryController):
             return None
         return super()._final_native_boundary_validate(request, receipt)
 
-    def _selection_diagnostic_signature(self, selection: Any) -> tuple[Any, ...]:
-        if selection is None:
-            return (
-                "no_eligible_candidate",
-                f"selection={self._selection_failure_reason or 'selection_unavailable'}",
-            )
-        decision = selection.decision
-        reason_counts: dict[str, int] = {}
-        for candidate in decision.candidates:
-            reason = str(getattr(getattr(candidate, "reason", None), "value", "unknown"))
-            reason_counts[reason] = reason_counts.get(reason, 0) + 1
-        reason_summary = ",".join(f"{reason}={count}" for reason, count in sorted(reason_counts.items())) or "none"
-        decision_reason = str(getattr(getattr(decision, "reason", None), "value", "unknown"))
-        runtime_summary = (
-            ",".join(f"{reason}={count}" for reason, count in selection.runtime_rejection_counts) or "none"
-        )
-        return (
-            "no_eligible_candidate",
-            f"decision={decision_reason}",
-            f"reasons={reason_summary}",
-            f"runtime={runtime_summary}",
-        )
 
     def _adapt_selection_proposal(self, selection: Any) -> SmartComplicateInterruptProposal | None:
         selected = selection.decision.selected
