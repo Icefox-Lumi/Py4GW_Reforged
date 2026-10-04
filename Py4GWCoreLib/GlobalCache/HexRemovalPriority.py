@@ -278,17 +278,44 @@ HEX_REMOVAL_PRIORITY: dict[int, HexRemovalEntry] = {}
 # Reverse map for the GUI: skill_id → original table name (save-key consistency).
 _NAME_BY_SKILL_ID: dict[int, str] = {}
 _HEX_REMOVAL_PRIORITY_BUILT: bool = False
+_resolved_profile_identity: tuple[str, str] | None = None
+_priority_cache_generation: int = 0
+
+
+def _get_active_profile_identity() -> tuple[str, str] | None:
+    """Ask the configuration owner to load and identify the active profile."""
+    try:
+        from Py4GWCoreLib.HeroAI.hex_removal_src.hex_removal_config import get_active_profile_identity
+
+        return get_active_profile_identity()
+    except Exception:
+        return None
+
+
+def _ensure_profile_identity() -> tuple[str, str] | None:
+    global _HEX_REMOVAL_PRIORITY_BUILT, _priority_cache_generation, _resolved_profile_identity
+
+    identity = _get_active_profile_identity()
+    if identity != _resolved_profile_identity:
+        HEX_REMOVAL_PRIORITY.clear()
+        _NAME_BY_SKILL_ID.clear()
+        _role_cache.clear()
+        _priority_cache_generation += 1
+        _resolved_profile_identity = identity
+        _HEX_REMOVAL_PRIORITY_BUILT = False
+    return identity
 
 
 def _build_hex_removal_priority() -> None:
-    """Resolve _HEX_DEFAULTS + user overrides into HEX_REMOVAL_PRIORITY.
+    """Resolve defaults and the active profile into HEX_REMOVAL_PRIORITY.
 
-    Lazy first call so module import doesn't require the GW skill database.
-    Names that fail to resolve are skipped. User overrides come from the
-    per-account JSONC config; if loading fails, falls back to defaults.
+    Names that fail to resolve are skipped. If the profile identity is
+    unavailable or profile loading fails, the built-in priorities remain.
     """
     global _HEX_REMOVAL_PRIORITY_BUILT
-    if _HEX_REMOVAL_PRIORITY_BUILT:
+
+    identity = _ensure_profile_identity()
+    if _HEX_REMOVAL_PRIORITY_BUILT and identity == _resolved_profile_identity:
         return
     try:
         from Py4GWCoreLib import GLOBAL_CACHE
@@ -297,11 +324,13 @@ def _build_hex_removal_priority() -> None:
 
     # Lazy import to avoid CoreLib → HeroAI hard dep at module load time.
     overrides: dict[str, HexRemovalEntry] = {}
-    try:
-        from Py4GWCoreLib.HeroAI.hex_removal_src.hex_removal_config import load_active_overrides
-        overrides = load_active_overrides()
-    except Exception:
-        pass
+    if identity is not None:
+        try:
+            from Py4GWCoreLib.HeroAI.hex_removal_src.hex_removal_config import load_active_overrides
+
+            overrides = load_active_overrides()
+        except Exception:
+            pass
 
     merged = {**_HEX_DEFAULTS, **overrides}
     for name, entry in merged.items():
@@ -318,20 +347,21 @@ def invalidate_hex_removal_priority() -> None:
     Called by HeroAI.hex_removal_config after the user edits via the GUI
     or imports a new config — picks up the change without a restart.
     """
-    global _HEX_REMOVAL_PRIORITY_BUILT
+    global _HEX_REMOVAL_PRIORITY_BUILT, _priority_cache_generation
     HEX_REMOVAL_PRIORITY.clear()
     _NAME_BY_SKILL_ID.clear()
+    _role_cache.clear()
     _HEX_REMOVAL_PRIORITY_BUILT = False
+    _priority_cache_generation += 1
 
 
 def get_skill_id_to_name() -> dict[int, str]:
     """skill_id → original hex name. Used by the GUI for save-key lookup."""
-    if not _HEX_REMOVAL_PRIORITY_BUILT:
-        _build_hex_removal_priority()
+    _build_hex_removal_priority()
     return dict(_NAME_BY_SKILL_ID)
 
 
-def get_target_role(agent_id: int) -> tuple[TargetRole, int]:
+def _get_target_role(agent_id: int) -> tuple[TargetRole, int]:
     """Return (role, primary_profession_id) for the given agent.
 
     Per-zone cached (see _role_cache). Unknown profession → CASTER.
@@ -363,6 +393,23 @@ def get_target_role(agent_id: int) -> tuple[TargetRole, int]:
     return result
 
 
+def get_target_role(agent_id: int) -> tuple[TargetRole, int]:
+    """Return the target role after validating the active profile identity."""
+    _ensure_profile_identity()
+    return _get_target_role(agent_id)
+
+
+def _classify_hex_with_role(
+    hex_skill_id: int,
+    role: TargetRole,
+    profession_id: int,
+) -> HexRemovalPriority:
+    entry = HEX_REMOVAL_PRIORITY.get(int(hex_skill_id))
+    if entry is None:
+        return DEFAULT_HEX_REMOVAL_PRIORITY
+    return entry.for_target(role, profession_id)
+
+
 def classify_hex_with_role(
     hex_skill_id: int,
     role: TargetRole,
@@ -373,12 +420,8 @@ def classify_hex_with_role(
     Lets callers resolve role once per agent and reuse it across many hexes,
     avoiding redundant Agent.GetProfessions calls. Unknown hexes → DEFAULT.
     """
-    if not _HEX_REMOVAL_PRIORITY_BUILT:
-        _build_hex_removal_priority()
-    entry = HEX_REMOVAL_PRIORITY.get(int(hex_skill_id))
-    if entry is None:
-        return DEFAULT_HEX_REMOVAL_PRIORITY
-    return entry.for_target(role, profession_id)
+    _build_hex_removal_priority()
+    return _classify_hex_with_role(hex_skill_id, role, profession_id)
 
 
 def classify_hex_for_removal(hex_skill_id: int, target_agent_id: int) -> HexRemovalPriority:
@@ -386,8 +429,9 @@ def classify_hex_for_removal(hex_skill_id: int, target_agent_id: int) -> HexRemo
 
     Unknown hexes resolve to DEFAULT_HEX_REMOVAL_PRIORITY.
     """
-    role, profession_id = get_target_role(int(target_agent_id))
-    return classify_hex_with_role(hex_skill_id, role, profession_id)
+    _build_hex_removal_priority()
+    role, profession_id = _get_target_role(int(target_agent_id))
+    return _classify_hex_with_role(hex_skill_id, role, profession_id)
 
 
 def get_hex_removal_effect_observations(agent_id: int) -> tuple[tuple[int, float | None], ...]:
@@ -476,13 +520,19 @@ def get_hex_skill_ids_on_agent(agent_id: int) -> list[int]:
     ]
 
 
-@frame_cache(category="HexRemoval", source_lib="ScoredHexedAllies")
+def _scored_hexed_allies_cache_key(max_distance: float = 4500.0) -> tuple[int, float]:
+    _build_hex_removal_priority()
+    return _priority_cache_generation, float(max_distance)
+
+
+@frame_cache(category="HexRemoval", source_lib="ScoredHexedAllies", key=_scored_hexed_allies_cache_key)
 def _get_scored_hexed_allies(max_distance: float = 4500.0) -> list[tuple[int, int]]:
     """Single hexed-ally scan, frame-cached on max_distance.
 
     Returns (agent_id, worst_priority) sorted by (priority desc,
     distance asc). HIGH/MED/LOW callers share this one scan per frame.
     """
+    _build_hex_removal_priority()
     from Py4GWCoreLib import GLOBAL_CACHE
     from Py4GWCoreLib import Routines
 
@@ -500,7 +550,7 @@ def _get_scored_hexed_allies(max_distance: float = 4500.0) -> list[tuple[int, in
     for agent_id in ally_array:
         # Resolve role once per ally to avoid repeating the
         # Agent.GetProfessions C-call inside the per-hex loop.
-        role, prof_id = get_target_role(agent_id)
+        role, prof_id = _get_target_role(agent_id)
 
         hex_iter = get_hex_removal_effect_observations(agent_id)
         worst = 0
@@ -516,7 +566,7 @@ def _get_scored_hexed_allies(max_distance: float = 4500.0) -> list[tuple[int, in
                     continue
             except Exception:
                 continue
-            priority = int(classify_hex_with_role(skill_id, role, prof_id))
+            priority = int(_classify_hex_with_role(skill_id, role, prof_id))
 
             if HEX_REMOVAL_DEBUG and should_log_detection(agent_id, skill_id):
                 rem_str = (

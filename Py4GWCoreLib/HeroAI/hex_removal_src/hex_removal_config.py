@@ -17,18 +17,17 @@ by JsonFactory - there is no hand-rolled JSON/JSONC handling here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 
 import PySystem
 
-from Py4GWCoreLib.enums_src.GameData_enums import Profession, Profession_Names
-from Py4GWCoreLib.GlobalCache.HexRemovalPriority import (
-    HexRemovalEntry,
-    HexRemovalPriority,
-    _HEX_DEFAULTS,
-)
+from Py4GWCoreLib.enums_src.GameData_enums import Profession
+from Py4GWCoreLib.enums_src.GameData_enums import Profession_Names
+from Py4GWCoreLib.GlobalCache.HexRemovalPriority import _HEX_DEFAULTS
+from Py4GWCoreLib.GlobalCache.HexRemovalPriority import HexRemovalEntry
+from Py4GWCoreLib.GlobalCache.HexRemovalPriority import HexRemovalPriority
 from Py4GWCoreLib.py4gwcorelib_src.JsonFactory import JsonFactory
-
 
 # ============================================================================
 # Constants
@@ -301,11 +300,12 @@ def _apply_debug_flags_to_runtime(state: ConfigState) -> None:
     except Exception:
         pass
     try:
-        from Py4GWCoreLib.GlobalCache.shared_memory_src import AllAccounts as wb
         from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardLockKind
+        from Py4GWCoreLib.GlobalCache.shared_memory_src import AllAccounts as wb
         kind = int(WhiteboardLockKind.HEX_REMOVAL_TARGET)
-        if hasattr(wb, "WHITEBOARD_DEBUG_KINDS"):
-            wb.WHITEBOARD_DEBUG_KINDS[kind] = bool(state.debug_hex_removal_locks)
+        debug_kinds = getattr(wb, "WHITEBOARD_DEBUG_KINDS", None)
+        if debug_kinds is not None:
+            debug_kinds[kind] = bool(state.debug_hex_removal_locks)
     except Exception:
         pass
 
@@ -336,6 +336,20 @@ def _get_state() -> ConfigState:
         _cache_key = key
         _apply_debug_flags_to_runtime(_cache_state)
     return _cache_state
+
+
+def get_active_profile_identity() -> tuple[str, str] | None:
+    """Load the active profile through this owner and return its cache identity.
+
+    The identity is unavailable until both account email and character name are
+    known. Callers can use it to validate derived data without duplicating the
+    profile-loading path.
+    """
+    _get_state()
+    email, character_name = _cache_key
+    if not email or not character_name:
+        return None
+    return _cache_key
 
 
 def load_active_overrides() -> dict[str, HexRemovalEntry]:
