@@ -20,6 +20,7 @@ SMART_MESMER_PATH = SKILLS_DIR / "SmartMesmer.py"
 HERO_AI_PATH = ROOT / "Py4GWCoreLib" / "Builds" / "Any" / "HeroAI.py"
 SPIRITUAL_PAIN_SKILL_ID = 1336
 MISTRUST_SKILL_ID = 979
+PANIC_SKILL_ID = 52
 
 
 class _Profession(IntEnum):
@@ -396,9 +397,9 @@ def _loaded_runtime() -> Iterator[tuple[Any, _Runtime, Any]]:
 
 
 @contextmanager
-def _loaded_real_heroai_runtime() -> (
-    Iterator[tuple[Any, Any, _RealPathRuntime, _RealPathCachedData, _RealPathRegistry, list[Any]]]
-):
+def _loaded_real_heroai_runtime() -> Iterator[
+    tuple[Any, Any, _RealPathRuntime, _RealPathCachedData, _RealPathRegistry, list[Any]]
+]:
     owned_prefixes = (
         "Py4GWCoreLib",
         "PySystem",
@@ -541,6 +542,7 @@ def _composition(runtime: _Runtime, composition: Any) -> Any:
 def _use_fake_priority_handlers(composition: Any, runtime: _Runtime) -> None:
     composition.SmartUnnaturalSignet = runtime.factory
     composition.SmartComplicateController = runtime.factory
+    composition.SmartPanic = runtime.factory
     composition.SmartSpiritualPain = runtime.factory
     composition.SmartMistrust = runtime.factory
 
@@ -660,6 +662,99 @@ def test_mistrust_slot_movement_and_removal_refresh_ownership() -> None:
         assert composition.active_smart_ids == ()
         assert composition.blocked_skills == []
         assert handler.dispose_reasons == ["skill_removed"]
+
+
+def test_panic_is_smart_owned_and_masked_when_equipped() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        composition_module.SmartPanic = runtime.factory
+        runtime.bar[:] = [PANIC_SKILL_ID, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (PANIC_SKILL_ID,)
+        assert composition.blocked_skills == [PANIC_SKILL_ID]
+        assert composition.fallback.blocked_skills == [PANIC_SKILL_ID]
+        assert composition.fallback.calls == 1
+
+
+def test_panic_constructor_failure_remains_owned_and_masked() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        composition_module.SmartPanic = runtime.factory
+        runtime.raise_factory_for.add(PANIC_SKILL_ID)
+        runtime.bar[:] = [PANIC_SKILL_ID, 101, 102, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, composition_module)
+
+        _drain(composition.ProcessSkillCasting())
+
+        assert composition.active_smart_ids == (PANIC_SKILL_ID,)
+        assert composition.active_handlers == {}
+        assert composition.blocked_skills == [PANIC_SKILL_ID]
+        assert composition.fallback.blocked_skills == [PANIC_SKILL_ID]
+        assert composition.fallback.calls == 1
+
+
+def test_panic_slot_movement_and_removal_refresh_ownership() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        composition_module.SmartPanic = runtime.factory
+        runtime.bar[:] = [101, PANIC_SKILL_ID, 102, 103, 104, 105, 106, 107]
+        composition = _composition(runtime, composition_module)
+        _drain(composition.ProcessSkillCasting())
+        handler = composition.active_handlers[PANIC_SKILL_ID]
+
+        assert composition.skill_slots[PANIC_SKILL_ID] == 2
+        assert handler.skill_slot == 2
+
+        runtime.bar[:] = [PANIC_SKILL_ID, 101, 102, 103, 104, 105, 106, 107]
+        _drain(composition.ProcessSkillCasting())
+        assert composition.active_handlers[PANIC_SKILL_ID] is handler
+        assert handler.skill_slot == 1
+
+        runtime.bar[0] = 108
+        _drain(composition.ProcessSkillCasting())
+        assert composition.active_smart_ids == ()
+        assert composition.blocked_skills == []
+        assert handler.dispose_reasons == ["skill_removed"]
+
+
+def test_panic_respects_existing_priority_lanes_and_residual_bar_order() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [PANIC_SKILL_ID, MISTRUST_SKILL_ID, 101, 102, 0, 0, 0, 0]
+        runtime.handler_results.update({PANIC_SKILL_ID: False, MISTRUST_SKILL_ID: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert runtime.attempt_order == [PANIC_SKILL_ID, MISTRUST_SKILL_ID]
+
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [MISTRUST_SKILL_ID, PANIC_SKILL_ID, 101, 102, 0, 0, 0, 0]
+        runtime.handler_results.update({MISTRUST_SKILL_ID: False, PANIC_SKILL_ID: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert runtime.attempt_order == [MISTRUST_SKILL_ID, PANIC_SKILL_ID]
+
+
+def test_energy_surge_and_cry_keep_priority_over_panic() -> None:
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [PANIC_SKILL_ID, 39, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({PANIC_SKILL_ID: True, 39: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert runtime.attempt_order == [39]
+
+    with _loaded_runtime() as (composition_module, runtime, _smart_energy):
+        _use_fake_priority_handlers(composition_module, runtime)
+        runtime.bar[:] = [PANIC_SKILL_ID, 55, 0, 0, 0, 0, 0, 0]
+        runtime.handler_results.update({PANIC_SKILL_ID: True, 55: True})
+        composition = _composition(runtime, composition_module)
+
+        assert _drain(composition.ProcessSkillCasting()) is True
+        assert runtime.attempt_order == [55]
 
 
 def test_energy_surge_precedes_mistrust_and_residuals_keep_equipped_bar_order() -> None:

@@ -45,6 +45,8 @@ from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import get_supported_handler_fa
 from Py4GWCoreLib.Builds.Skills.SmartEnergySurge import infer_max_energy
 from Py4GWCoreLib.Builds.Skills.SmartMistrust import MISTRUST_SKILL_ID
 from Py4GWCoreLib.Builds.Skills.SmartMistrust import SmartMistrust
+from Py4GWCoreLib.Builds.Skills.SmartPanic import PANIC_SKILL_ID
+from Py4GWCoreLib.Builds.Skills.SmartPanic import SmartPanic
 from Py4GWCoreLib.Builds.Skills.SmartSpiritualPain import SPIRITUAL_PAIN_SKILL_ID
 from Py4GWCoreLib.Builds.Skills.SmartSpiritualPain import SmartSpiritualPain
 from Py4GWCoreLib.Builds.Skills.SmartUnnaturalSignet import UNNATURAL_SIGNET_SKILL_ID
@@ -186,6 +188,7 @@ class MyMesmer(BuildMgr):
             self._last_composition_error = None
         factories[COMPLICATE_SKILL_ID] = SmartComplicateController
         factories[MISTRUST_SKILL_ID] = SmartMistrust
+        factories[PANIC_SKILL_ID] = SmartPanic
         factories[SPIRITUAL_PAIN_SKILL_ID] = SmartSpiritualPain
         factories[UNNATURAL_SIGNET_SKILL_ID] = SmartUnnaturalSignet
         return factories

@@ -1489,6 +1489,18 @@ class Agent:
         return int(npc.npc_flags) if npc else 0
 
     @staticmethod
+    def GetNPCFlagsOptional(agent_id: int) -> Optional[int]:
+        """Retrieve NPC flags while preserving unavailable NPC metadata as None."""
+        try:
+            living = Agent.GetLivingAgentByID(agent_id)
+            if living is None or living.is_player:
+                return None
+            npc = Agent.GetNPCModelByID(int(living.player_number))
+            return None if npc is None else int(npc.npc_flags)
+        except Exception:
+            return None
+
+    @staticmethod
     def IsFleshy(agent_id: int) -> bool:
         living = Agent.GetLivingAgentByID(agent_id)
         if living is None:
