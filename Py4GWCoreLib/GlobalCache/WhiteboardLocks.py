@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import PySystem
 
-from Py4GWCoreLib.enums_src.Whiteboard_enums import (
-    WhiteboardClaimStrength,
-    WhiteboardLockKind,
-    WhiteboardLockMode,
-    WhiteboardReentryPolicy,
-)
+from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardClaimStrength
+from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardLockKind
+from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardLockMode
+from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardReentryPolicy
 
 from ..py4gwcorelib_src.FrameCache import frame_cache
 from .shared_memory_src.IntentSync import tick_elapsed
 from .shared_memory_src.IntentSync import tick_is_expired
+
+if TYPE_CHECKING:
+    from .shared_memory_src.AllAccounts import HexRemovalClaimToken
 
 
 MINION_LOCK_KEY = 0
@@ -29,7 +32,8 @@ BLOOD_ENERGY_BUFF_LOCK_KEY = 1
 
 @frame_cache(category="WhiteboardLocks", source_lib="OwnerContext")
 def _owner_context() -> tuple[str, int]:
-    from Py4GWCoreLib import GLOBAL_CACHE, Player
+    from Py4GWCoreLib import GLOBAL_CACHE
+    from Py4GWCoreLib import Player
 
     email = Player.GetAccountEmail() or ""
     if not email:
@@ -41,11 +45,24 @@ def _owner_context() -> tuple[str, int]:
     return email, group_id
 
 
+def get_hex_removal_owner_context() -> tuple[str, int]:
+    """Read the current account and isolation group without frame caching."""
+    try:
+        from Py4GWCoreLib import GLOBAL_CACHE
+        from Py4GWCoreLib import Player
+
+        email = str(Player.GetAccountEmail() or "").strip()
+        if not email:
+            return "", 0
+        group_id = int(GLOBAL_CACHE.ShMem.GetAccountGroupByEmail(email))
+        return (email, group_id) if group_id > 0 else ("", 0)
+    except Exception:
+        return "", 0
+
+
 def _skill_lock_duration_ms(skill_id: int, aftercast_delay: int = 250, minimum_ms: int = 500) -> int:
     from Py4GWCoreLib import GLOBAL_CACHE
-    from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import (
-        SHMEM_INTENT_DEFAULT_PING_BUDGET_MS,
-    )
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import SHMEM_INTENT_DEFAULT_PING_BUDGET_MS
 
     activation_ms = 0
     aftercast_ms = 0
@@ -481,7 +498,7 @@ def is_hex_removal_lock_blocked(hexed_ally_agent_id: int, now_tick: int | None =
             int(now_tick),
             int(WhiteboardLockMode.EXCLUSIVE),
             1,
-            int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+            int(WhiteboardReentryPolicy.NON_REENTRANT),
             int(WhiteboardClaimStrength.HARD),
         ))
     except Exception:
@@ -501,80 +518,107 @@ def filter_unlocked_hex_targets(hexed_ally_agent_ids: list[int]) -> list[int]:
 
 
 def post_hex_removal_lock(hexed_ally_agent_id: int, skill_id: int = 0, aftercast_delay: int = 250) -> int:
-    """Reserve a hexed ally for hex removal. Returns slot index or -1.
-
-    Self-lock dedup: if this owner already holds an active lock on this
-    target in the same group, returns the existing slot. Without dedup,
-    multi-tier rotations (HIGH/MED/LOW) post one lock per tier per tick
-    while the previous cast hasn't yet bumped recharge.
-    """
-    if hexed_ally_agent_id <= 0:
+    """Atomically reserve a hexed ally. Returns the Intent slot or -1."""
+    if isinstance(hexed_ally_agent_id, bool) or not isinstance(hexed_ally_agent_id, int) or hexed_ally_agent_id <= 0:
         return -1
     try:
-        from Py4GWCoreLib import GLOBAL_CACHE
-
-        email, group_id = _owner_context()
-        if not email:
-            return -1
-        now = int(PySystem.get_tick_count64())
-
-        # Drop expired-but-not-yet-swept entries so a stale lock can't suppress a fresh POST.
-        for slot_index, intent in GLOBAL_CACHE.ShMem.GetAllAccounts().GetAllIntents():
-            if intent.OwnerEmail != email:
-                continue
-            if int(intent.KindID) != int(WhiteboardLockKind.HEX_REMOVAL_TARGET):
-                continue
-            if int(intent.TargetAgentID) != int(hexed_ally_agent_id):
-                continue
-            if int(intent.IsolationGroupID) != int(group_id):
-                continue
-            if tick_is_expired(now, int(intent.ExpiresAtTick)):
-                continue
-            return int(slot_index)
-
-        expires_at = now + _skill_lock_duration_ms(
+        lease_duration_ms = _skill_lock_duration_ms(
             int(skill_id),
             int(aftercast_delay),
             HEX_REMOVAL_LOCK_MIN_DURATION_MS,
         )
-        return int(GLOBAL_CACHE.ShMem.PostLock(
-            email,
-            int(WhiteboardLockKind.HEX_REMOVAL_TARGET),
-            HEX_REMOVAL_LOCK_KEY,
+        token = try_acquire_hex_removal_claim(
             int(hexed_ally_agent_id),
-            int(expires_at),
-            int(group_id),
-            int(WhiteboardLockMode.EXCLUSIVE),
-            1,
-            int(WhiteboardReentryPolicy.OWNER_REENTRANT),
-            int(WhiteboardClaimStrength.HARD),
-        ))
+            lease_duration_ms,
+        )
+        return -1 if token is None else int(token.intent_slot_index)
     except Exception:
         return -1
 
 
-def clear_hex_removal_lock(hexed_ally_agent_id: int) -> bool:
-    """Release the local hex-removal lock early after a successful cleanse.
-
-    Returns True if at least one matching lock was cleared.
-    """
-    if hexed_ally_agent_id <= 0:
-        return False
+def try_acquire_hex_removal_claim(
+    target_agent_id: int,
+    lease_duration_ms: int,
+) -> HexRemovalClaimToken | None:
+    """Acquire one exact common cleanse claim, failing closed on every owner error."""
+    if (
+        isinstance(target_agent_id, bool)
+        or not isinstance(target_agent_id, int)
+        or target_agent_id <= 0
+        or isinstance(lease_duration_ms, bool)
+        or not isinstance(lease_duration_ms, int)
+        or lease_duration_ms <= 0
+    ):
+        return None
+    email, group_id = get_hex_removal_owner_context()
+    if not email or group_id <= 0:
+        return None
     try:
         from Py4GWCoreLib import GLOBAL_CACHE
 
-        email, group_id = _owner_context()
-        if not email:
-            return False
-        cleared = int(GLOBAL_CACHE.ShMem.GetAllAccounts().ClearLockByOwnerKindTarget(
+        result = GLOBAL_CACHE.ShMem.GetAllAccounts().TryAcquireHexRemovalTarget(
             email,
-            int(WhiteboardLockKind.HEX_REMOVAL_TARGET),
-            int(hexed_ally_agent_id),
-            int(group_id),
-        ))
-        return cleared > 0
+            target_agent_id,
+            lease_duration_ms,
+            group_id,
+        )
+        return result.token
+    except Exception:
+        return None
+
+
+def hex_removal_claim_is_owned(token: HexRemovalClaimToken) -> bool:
+    try:
+        from Py4GWCoreLib import GLOBAL_CACHE
+
+        return bool(GLOBAL_CACHE.ShMem.GetAllAccounts().IsHexRemovalClaimOwned(token))
     except Exception:
         return False
+
+
+def renew_hex_removal_claim(
+    token: HexRemovalClaimToken,
+    lease_duration_ms: int,
+) -> HexRemovalClaimToken | None:
+    if isinstance(lease_duration_ms, bool) or not isinstance(lease_duration_ms, int):
+        return None
+    try:
+        from Py4GWCoreLib import GLOBAL_CACHE
+
+        result = GLOBAL_CACHE.ShMem.GetAllAccounts().RenewHexRemovalClaim(
+            token,
+            lease_duration_ms,
+        )
+        return result.token
+    except Exception:
+        return None
+
+
+def release_hex_removal_claim(token: HexRemovalClaimToken) -> bool:
+    try:
+        from Py4GWCoreLib import GLOBAL_CACHE
+
+        return bool(GLOBAL_CACHE.ShMem.GetAllAccounts().ReleaseHexRemovalClaim(token))
+    except Exception:
+        return False
+
+
+def clear_hex_removal_lock(
+    hexed_ally_agent_id: int,
+    claim_token: HexRemovalClaimToken | None = None,
+) -> bool:
+    """Compatibility shim that requires the exact claim token to release."""
+    try:
+        if (
+            isinstance(hexed_ally_agent_id, bool)
+            or int(hexed_ally_agent_id) <= 0
+            or claim_token is None
+            or int(getattr(claim_token, "target_agent_id", 0)) != int(hexed_ally_agent_id)
+        ):
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return release_hex_removal_claim(claim_token)
 
 
 def is_buff_target_lock_blocked(buffed_ally_agent_id: int, key_id: int = BUFF_TARGET_LOCK_KEY, now_tick: int | None = None) -> bool:

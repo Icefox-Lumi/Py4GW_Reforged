@@ -47,6 +47,8 @@ from Py4GWCoreLib.Builds.Skills.SmartMistrust import MISTRUST_SKILL_ID
 from Py4GWCoreLib.Builds.Skills.SmartMistrust import SmartMistrust
 from Py4GWCoreLib.Builds.Skills.SmartPanic import PANIC_SKILL_ID
 from Py4GWCoreLib.Builds.Skills.SmartPanic import SmartPanic
+from Py4GWCoreLib.Builds.Skills.SmartShatterHex import SHATTER_HEX_SKILL_ID
+from Py4GWCoreLib.Builds.Skills.SmartShatterHex import SmartShatterHex
 from Py4GWCoreLib.Builds.Skills.SmartSpiritualPain import SPIRITUAL_PAIN_SKILL_ID
 from Py4GWCoreLib.Builds.Skills.SmartSpiritualPain import SmartSpiritualPain
 from Py4GWCoreLib.Builds.Skills.SmartUnnaturalSignet import UNNATURAL_SIGNET_SKILL_ID
@@ -189,6 +191,7 @@ class MyMesmer(BuildMgr):
         factories[COMPLICATE_SKILL_ID] = SmartComplicateController
         factories[MISTRUST_SKILL_ID] = SmartMistrust
         factories[PANIC_SKILL_ID] = SmartPanic
+        factories[SHATTER_HEX_SKILL_ID] = SmartShatterHex
         factories[SPIRITUAL_PAIN_SKILL_ID] = SmartSpiritualPain
         factories[UNNATURAL_SIGNET_SKILL_ID] = SmartUnnaturalSignet
         return factories
@@ -292,6 +295,11 @@ class MyMesmer(BuildMgr):
             except Exception as error:
                 handler.cancel_pending("handler_lifecycle_exception")
                 self._report_composition_error(f"smart handler {skill_id} failed: {type(error).__name__}")
+
+        shatter_handler = self._active_handlers.get(SHATTER_HEX_SKILL_ID)
+        if shatter_handler is not None and self._handler_has_active_dispatch(shatter_handler):
+            yield
+            return False
 
         can_process = getattr(self, "CanProcess", None)
         if callable(can_process):

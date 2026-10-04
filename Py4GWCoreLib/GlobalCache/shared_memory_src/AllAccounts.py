@@ -1,34 +1,30 @@
 import ctypes
 import time
+from ctypes import Structure
+from ctypes import c_float
 from dataclasses import dataclass
 
 import PySystem
-from PyParty import HeroPartyMember, PetInfo
-from ctypes import Structure, c_float
+from PyParty import HeroPartyMember
+from PyParty import PetInfo
+
 from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
-from Py4GWCoreLib.enums_src.Whiteboard_enums import (
-    WhiteboardClaimStrength,
-    WhiteboardLockKind,
-    WhiteboardLockMode,
-    WhiteboardReentryPolicy,
-)
+from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardClaimStrength
+from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardLockKind
+from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardLockMode
+from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardReentryPolicy
 from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
 
-from .Globals import (
-    SHMEM_MAX_PLAYERS,
-    SHMEM_MODULE_NAME,
-    SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS,
-    SHMEM_MAX_EMAIL_LEN,
-    SHMEM_MAX_CHAR_LEN,
-    SHMEM_MAX_NUMBER_OF_SKILLS,
-    SHMEM_MAX_INTENTS,
-    SHMEM_SHARED_MEMORY_FILE_NAME,
-)
-
-from .SharedMessageStruct import SharedMessageStruct
-from .HeroAIOptionStruct import HeroAIOptionStruct
 from .AccountStruct import AccountStruct
-from .KeyStruct import KeyStruct
+from .Globals import SHMEM_MAX_CHAR_LEN
+from .Globals import SHMEM_MAX_EMAIL_LEN
+from .Globals import SHMEM_MAX_INTENTS
+from .Globals import SHMEM_MAX_NUMBER_OF_SKILLS
+from .Globals import SHMEM_MAX_PLAYERS
+from .Globals import SHMEM_MODULE_NAME
+from .Globals import SHMEM_SHARED_MEMORY_FILE_NAME
+from .Globals import SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
+from .HeroAIOptionStruct import HeroAIOptionStruct
 from .IntentStruct import IntentStruct
 from .IntentSync import get_uncached_tick_count64
 from .IntentSync import intent_table_lock
@@ -36,6 +32,8 @@ from .IntentSync import is_valid_future_lease
 from .IntentSync import normalize_tick
 from .IntentSync import tick_elapsed
 from .IntentSync import tick_is_expired
+from .KeyStruct import KeyStruct
+from .SharedMessageStruct import SharedMessageStruct
 
 # Master toggle for all whiteboard/lock debug logs.
 # Default is silent. Flip this single flag when you want visibility again.
@@ -72,6 +70,34 @@ class InterruptLockReceipt:
 class InterruptClaimResult:
     receipt: InterruptLockReceipt | None
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class HexRemovalClaimToken:
+    intent_slot_index: int
+    owner_slot_index: int
+    local_generation: int
+    owner_email: str
+    kind_id: int
+    key_id: int
+    target_agent_id: int
+    isolation_group_id: int
+    lock_mode: int
+    max_holders: int
+    reentry_policy: int
+    claim_strength: int
+    posted_at_tick64: int
+    expires_at_tick64: int
+
+
+@dataclass(frozen=True, slots=True)
+class HexRemovalClaimResult:
+    token: HexRemovalClaimToken | None
+    reason: str
+
+
+_HEX_REMOVAL_CLAIM_TOKENS_BY_SLOT: dict[int, HexRemovalClaimToken] = {}
+_HEX_REMOVAL_CLAIM_GENERATION = 0
 
 #: How old a RUNNING message may be before SendMessage treats it as wedged (its coroutine died
 #: before cleanup) instead of mid-flight. Must exceed the longest legitimate command runtime.
@@ -541,8 +567,8 @@ class AllAccounts(Structure):
         
     def SetHeroesData(self):
         """Set data for all heroes in the given list."""
-        from ...Player import Player
         from ...Party import Party
+        from ...Player import Player
         owner_id = Player.GetAgentID()
         for hero_data in Party.GetHeroes():
             agent_from_login = Party.Players.GetAgentIDByLoginNumber(hero_data.owner_player_id)
@@ -563,9 +589,9 @@ class AllAccounts(Structure):
         
     def SetPetData(self):
         """Set pet data for the account with the given email."""
-        from ...Player import Player
-        from ...Party import Party
         from ...Agent import Agent
+        from ...Party import Party
+        from ...Player import Player
         
         owner_agent_id = Player.GetAgentID()
         pet_info = Party.Pets.GetPetInfo(owner_agent_id)
@@ -1339,6 +1365,317 @@ class AllAccounts(Structure):
         if receipt.posted_at_tick64 < 0 or receipt.expires_at_tick64 < 0:
             return False
         return is_valid_future_lease(receipt.posted_at_tick64, receipt.expires_at_tick64)
+
+    @staticmethod
+    def _is_valid_hex_removal_claim_token(token: object) -> bool:
+        if not isinstance(token, HexRemovalClaimToken):
+            return False
+        if not isinstance(token.owner_email, str) or not token.owner_email:
+            return False
+        integer_fields = (
+            token.intent_slot_index,
+            token.owner_slot_index,
+            token.local_generation,
+            token.kind_id,
+            token.key_id,
+            token.target_agent_id,
+            token.isolation_group_id,
+            token.lock_mode,
+            token.max_holders,
+            token.reentry_policy,
+            token.claim_strength,
+            token.posted_at_tick64,
+            token.expires_at_tick64,
+        )
+        if any(type(value) is not int for value in integer_fields):
+            return False
+        return (
+            0 <= token.intent_slot_index < SHMEM_MAX_INTENTS
+            and 0 <= token.owner_slot_index < SHMEM_MAX_PLAYERS
+            and token.local_generation > 0
+            and len(token.owner_email) < SHMEM_MAX_EMAIL_LEN
+            and token.kind_id == int(WhiteboardLockKind.HEX_REMOVAL_TARGET)
+            and token.key_id == 0
+            and 0 < token.target_agent_id <= 0xFFFFFFFF
+            and 0 < token.isolation_group_id <= 0xFFFFFFFF
+            and token.lock_mode == int(WhiteboardLockMode.EXCLUSIVE)
+            and token.max_holders == 1
+            and token.reentry_policy == int(WhiteboardReentryPolicy.NON_REENTRANT)
+            and token.claim_strength == int(WhiteboardClaimStrength.HARD)
+            and token.posted_at_tick64 >= 0
+            and token.expires_at_tick64 >= 0
+            and is_valid_future_lease(token.posted_at_tick64, token.expires_at_tick64)
+        )
+
+    @staticmethod
+    def _hex_removal_row_matches_token(intent: IntentStruct, token: HexRemovalClaimToken) -> bool:
+        return (
+            bool(intent.Active)
+            and intent.OwnerEmail == token.owner_email
+            and int(intent.KindID) == token.kind_id
+            and int(intent.SkillID) == token.key_id
+            and int(intent.TargetAgentID) == token.target_agent_id
+            and int(intent.IsolationGroupID) == token.isolation_group_id
+            and int(intent.LockMode) == token.lock_mode
+            and int(intent.MaxHolders) == token.max_holders
+            and int(intent.ReentryPolicy) == token.reentry_policy
+            and int(intent.ClaimStrength) == token.claim_strength
+            and int(intent.PostedAtTick) == normalize_tick(token.posted_at_tick64)
+            and int(intent.ExpiresAtTick) == normalize_tick(token.expires_at_tick64)
+        )
+
+    def _hex_claim_owner_is_current(
+        self,
+        token: HexRemovalClaimToken,
+        *,
+        require_group_match: bool,
+    ) -> bool:
+        try:
+            owner = self.AccountData[token.owner_slot_index]
+            if not owner.IsAccount or owner.AccountEmail != token.owner_email:
+                return False
+            if require_group_match and int(owner.IsolationGroupID) != token.isolation_group_id:
+                return False
+            return True
+        except Exception:
+            return False
+
+    def TryAcquireHexRemovalTarget(
+        self,
+        owner_email: str,
+        target_agent_id: int,
+        lease_duration_ms: int,
+        isolation_group_id: int,
+    ) -> HexRemovalClaimResult:
+        """Atomically claim the common (HEX_REMOVAL_TARGET, key 0, ally) scope."""
+        if not isinstance(owner_email, str) or not owner_email or len(owner_email) >= SHMEM_MAX_EMAIL_LEN:
+            return HexRemovalClaimResult(None, "invalid_owner")
+        integer_fields = (target_agent_id, lease_duration_ms, isolation_group_id)
+        if any(type(value) is not int for value in integer_fields):
+            return HexRemovalClaimResult(None, "invalid")
+        if (
+            not 0 < target_agent_id <= 0xFFFFFFFF
+            or not 0 < isolation_group_id <= 0xFFFFFFFF
+            or not 0 < lease_duration_ms < 0x80000000
+        ):
+            return HexRemovalClaimResult(None, "invalid")
+
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return HexRemovalClaimResult(None, "mutex_unavailable")
+
+            try:
+                owner_slot = self._find_account_slot_by_email(owner_email)
+                if owner_slot < 0:
+                    return HexRemovalClaimResult(None, "owner_unavailable")
+                owner = self.AccountData[owner_slot]
+                if not owner.IsAccount or int(owner.IsolationGroupID) != isolation_group_id:
+                    return HexRemovalClaimResult(None, "group_mismatch")
+                now_tick64 = int(get_uncached_tick_count64())
+            except Exception:
+                return HexRemovalClaimResult(None, "identity_or_clock_unavailable")
+
+            expires_at_tick64 = now_tick64 + lease_duration_ms
+            if not is_valid_future_lease(now_tick64, expires_at_tick64):
+                return HexRemovalClaimResult(None, "invalid_lease")
+
+            free_slot: int | None = None
+            expired_slot: int | None = None
+            hex_kind = int(WhiteboardLockKind.HEX_REMOVAL_TARGET)
+            for index in range(SHMEM_MAX_INTENTS):
+                intent = self.Intents[index]
+                if not intent.Active:
+                    if free_slot is None:
+                        free_slot = index
+                    continue
+                if tick_is_expired(now_tick64, int(intent.ExpiresAtTick)):
+                    if expired_slot is None:
+                        expired_slot = index
+                    continue
+                if int(intent.KindID) != hex_kind:
+                    continue
+
+                try:
+                    row_group = int(intent.IsolationGroupID)
+                    row_target = int(intent.TargetAgentID)
+                    row_key = int(intent.SkillID)
+                    row_owner = str(intent.OwnerEmail or "").strip()
+                    row_mode = int(intent.LockMode)
+                    row_max_holders = int(intent.MaxHolders)
+                    row_reentry = int(intent.ReentryPolicy)
+                    row_strength = int(intent.ClaimStrength)
+                except Exception:
+                    return HexRemovalClaimResult(None, "malformed_live_claim")
+                if (
+                    row_group <= 0
+                    or row_target <= 0
+                    or not row_owner
+                    or row_key != 0
+                    or row_mode != int(WhiteboardLockMode.EXCLUSIVE)
+                    or row_max_holders != 1
+                    or row_reentry
+                    not in (
+                        int(WhiteboardReentryPolicy.NON_REENTRANT),
+                        int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+                    )
+                    or row_strength != int(WhiteboardClaimStrength.HARD)
+                ):
+                    return HexRemovalClaimResult(None, "malformed_live_claim")
+                if row_group == isolation_group_id and row_target == target_agent_id:
+                    return HexRemovalClaimResult(None, "conflict")
+
+            slot_index = free_slot if free_slot is not None else expired_slot
+            if slot_index is None:
+                return HexRemovalClaimResult(None, "table_full")
+
+            if self.Intents[slot_index].Active:
+                self._clear_intent_unlocked(slot_index, "expired", now_tick64)
+            intent = self.Intents[slot_index]
+            intent.Active = False
+            intent.OwnerEmail = owner_email
+            intent.KindID = hex_kind
+            intent.LockMode = int(WhiteboardLockMode.EXCLUSIVE)
+            intent.ReentryPolicy = int(WhiteboardReentryPolicy.NON_REENTRANT)
+            intent.ClaimStrength = int(WhiteboardClaimStrength.HARD)
+            intent.MaxHolders = 1
+            intent.SkillID = 0
+            intent.TargetAgentID = target_agent_id
+            intent.IsolationGroupID = isolation_group_id
+            intent.PostedAtTick = normalize_tick(now_tick64)
+            intent.ExpiresAtTick = normalize_tick(expires_at_tick64)
+            intent.Active = True
+            global _HEX_REMOVAL_CLAIM_GENERATION
+            _HEX_REMOVAL_CLAIM_GENERATION += 1
+            claim_token = HexRemovalClaimToken(
+                intent_slot_index=slot_index,
+                owner_slot_index=owner_slot,
+                local_generation=_HEX_REMOVAL_CLAIM_GENERATION,
+                owner_email=owner_email,
+                kind_id=hex_kind,
+                key_id=0,
+                target_agent_id=target_agent_id,
+                isolation_group_id=isolation_group_id,
+                lock_mode=int(WhiteboardLockMode.EXCLUSIVE),
+                max_holders=1,
+                reentry_policy=int(WhiteboardReentryPolicy.NON_REENTRANT),
+                claim_strength=int(WhiteboardClaimStrength.HARD),
+                posted_at_tick64=now_tick64,
+                expires_at_tick64=expires_at_tick64,
+            )
+            _HEX_REMOVAL_CLAIM_TOKENS_BY_SLOT[slot_index] = claim_token
+            self._wb_log(
+                hex_kind,
+                f"POST slot={slot_index} email='{owner_email}' "
+                f"kind=HEX_REMOVAL_TARGET key=0 target={target_agent_id} "
+                f"group={isolation_group_id} expires_in={lease_duration_ms}ms",
+            )
+            return HexRemovalClaimResult(claim_token, "claimed")
+
+    def IsHexRemovalClaimOwned(self, token: HexRemovalClaimToken) -> bool:
+        """Check the exact live token under the shared Intent mutex."""
+        if not self._is_valid_hex_removal_claim_token(token):
+            return False
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return False
+            try:
+                if _HEX_REMOVAL_CLAIM_TOKENS_BY_SLOT.get(token.intent_slot_index) is not token:
+                    return False
+                now_tick64 = int(get_uncached_tick_count64())
+                if now_tick64 < token.posted_at_tick64:
+                    return False
+                if not is_valid_future_lease(now_tick64, token.expires_at_tick64):
+                    return False
+                if not self._hex_claim_owner_is_current(token, require_group_match=True):
+                    return False
+                return self._hex_removal_row_matches_token(
+                    self.Intents[token.intent_slot_index],
+                    token,
+                )
+            except Exception:
+                return False
+
+    def RenewHexRemovalClaim(
+        self,
+        token: HexRemovalClaimToken,
+        lease_duration_ms: int,
+    ) -> HexRemovalClaimResult:
+        """Renew one exact, still-live token without changing its publication identity."""
+        if not self._is_valid_hex_removal_claim_token(token):
+            return HexRemovalClaimResult(None, "invalid_token")
+        if type(lease_duration_ms) is not int or not 0 < lease_duration_ms < 0x80000000:
+            return HexRemovalClaimResult(None, "invalid_lease")
+        renewed_token: HexRemovalClaimToken | None = None
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return HexRemovalClaimResult(None, "mutex_unavailable")
+            try:
+                if _HEX_REMOVAL_CLAIM_TOKENS_BY_SLOT.get(token.intent_slot_index) is not token:
+                    return HexRemovalClaimResult(None, "ownership_changed")
+                now_tick64 = int(get_uncached_tick_count64())
+                if now_tick64 < token.posted_at_tick64:
+                    return HexRemovalClaimResult(None, "clock_rollback")
+                if not is_valid_future_lease(now_tick64, token.expires_at_tick64):
+                    return HexRemovalClaimResult(None, "expired")
+                if not self._hex_claim_owner_is_current(token, require_group_match=True):
+                    return HexRemovalClaimResult(None, "owner_changed")
+                intent = self.Intents[token.intent_slot_index]
+                if not self._hex_removal_row_matches_token(intent, token):
+                    return HexRemovalClaimResult(None, "ownership_changed")
+                renewed_expiry = now_tick64 + lease_duration_ms
+                if not is_valid_future_lease(now_tick64, renewed_expiry):
+                    return HexRemovalClaimResult(None, "invalid_lease")
+                intent.ExpiresAtTick = normalize_tick(renewed_expiry)
+                global _HEX_REMOVAL_CLAIM_GENERATION
+                _HEX_REMOVAL_CLAIM_GENERATION += 1
+                renewed_token = HexRemovalClaimToken(
+                    intent_slot_index=token.intent_slot_index,
+                    owner_slot_index=token.owner_slot_index,
+                    local_generation=_HEX_REMOVAL_CLAIM_GENERATION,
+                    owner_email=token.owner_email,
+                    kind_id=token.kind_id,
+                    key_id=token.key_id,
+                    target_agent_id=token.target_agent_id,
+                    isolation_group_id=token.isolation_group_id,
+                    lock_mode=token.lock_mode,
+                    max_holders=token.max_holders,
+                    reentry_policy=token.reentry_policy,
+                    claim_strength=token.claim_strength,
+                    posted_at_tick64=token.posted_at_tick64,
+                    expires_at_tick64=renewed_expiry,
+                )
+                _HEX_REMOVAL_CLAIM_TOKENS_BY_SLOT[token.intent_slot_index] = renewed_token
+            except Exception:
+                return HexRemovalClaimResult(None, "clock_or_table_unavailable")
+        if renewed_token is None:
+            return HexRemovalClaimResult(None, "clock_or_table_unavailable")
+        return HexRemovalClaimResult(renewed_token, "renewed")
+
+    def ReleaseHexRemovalClaim(self, token: HexRemovalClaimToken) -> bool:
+        """Release only the exact live row represented by token."""
+        if not self._is_valid_hex_removal_claim_token(token):
+            return False
+        with intent_table_lock(SHMEM_SHARED_MEMORY_FILE_NAME) as acquired:
+            if not acquired:
+                return False
+            try:
+                if _HEX_REMOVAL_CLAIM_TOKENS_BY_SLOT.get(token.intent_slot_index) is not token:
+                    return False
+                now_tick64 = int(get_uncached_tick_count64())
+                if now_tick64 < token.posted_at_tick64:
+                    return False
+                if not is_valid_future_lease(now_tick64, token.expires_at_tick64):
+                    return False
+                if not self._hex_claim_owner_is_current(token, require_group_match=False):
+                    return False
+                intent = self.Intents[token.intent_slot_index]
+                if not self._hex_removal_row_matches_token(intent, token):
+                    return False
+                self._clear_intent_unlocked(token.intent_slot_index, "hex_exact_release", now_tick64)
+                _HEX_REMOVAL_CLAIM_TOKENS_BY_SLOT.pop(token.intent_slot_index, None)
+                return True
+            except Exception:
+                return False
 
     def TryPostInterruptLock(
         self,

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass
+from dataclasses import field
 from enum import IntEnum
 from functools import lru_cache
+
+import PySystem
 
 from Py4GWCoreLib.enums_src.GameData_enums import Profession
 
@@ -38,7 +42,7 @@ PROFESSION_ROLE: dict[int, TargetRole] = {
 
 DEFAULT_HEX_REMOVAL_PRIORITY: HexRemovalPriority = HexRemovalPriority.MEDIUM
 
-# Below this remaining-ms threshold, hexes are skipped unless they are HIGH.
+# Hexes at or below this remaining-ms threshold are skipped for every priority.
 MIN_HEX_REMAINING_MS_TO_REMOVE: int = 2500
 
 # Toggle for [HexRemoval] console logs.
@@ -386,35 +390,90 @@ def classify_hex_for_removal(hex_skill_id: int, target_agent_id: int) -> HexRemo
     return classify_hex_with_role(hex_skill_id, role, profession_id)
 
 
-def get_hex_skill_ids_on_agent(agent_id: int) -> list[int]:
-    """Return hex skill IDs on agent_id (SHMEM, with local Effects fallback)."""
-    try:
-        from Py4GWCoreLib import GLOBAL_CACHE, Routines
-    except Exception:
-        return []
+def get_hex_removal_effect_observations(agent_id: int) -> tuple[tuple[int, float | None], ...]:
+    """Return positively confirmed observed hex IDs and known remaining times.
 
-    skill_ids: list[int] = []
+    The returned observations are not a complete stack or exact effect-instance
+    ledger. Empty results do not prove the agent has no hexes.
+    """
+    try:
+        from Py4GWCoreLib import GLOBAL_CACHE
+        from Py4GWCoreLib import Routines
+    except Exception:
+        return ()
+
+    observed: list[tuple[int, float | None]] = []
+
     try:
         shared_buffs = Routines.Checks.Agents.GetBuffs(int(agent_id))
-        if shared_buffs:
-            skill_ids = [int(b.SkillId) for b in shared_buffs]
-        else:
-            effects = list(GLOBAL_CACHE.Effects.GetBuffs(int(agent_id))) + list(
-                GLOBAL_CACHE.Effects.GetEffects(int(agent_id))
-            )
-            skill_ids = [int(getattr(e, "skill_id", 0) or 0) for e in effects]
-            skill_ids = [s for s in skill_ids if s > 0]
     except Exception:
-        return []
-
-    hexes: list[int] = []
-    for sid in skill_ids:
+        shared_buffs = ()
+    for buff in shared_buffs or ():
         try:
-            if GLOBAL_CACHE.Skill.Flags.IsHex(sid):
-                hexes.append(sid)
+            raw_skill_id = getattr(buff, "SkillId", 0)
+            if isinstance(raw_skill_id, bool):
+                continue
+            skill_id = int(raw_skill_id)
+            if skill_id <= 0:
+                continue
+            remaining_ms: float | None = None
+            if int(getattr(buff, "Type", 0)) == 2:
+                raw_remaining = getattr(buff, "Remaining", None)
+                if raw_remaining is not None and not isinstance(raw_remaining, bool):
+                    numeric_remaining = float(raw_remaining)
+                    if math.isfinite(numeric_remaining):
+                        remaining_ms = numeric_remaining
+            observed.append((skill_id, remaining_ms))
         except Exception:
             continue
-    return hexes
+
+    for effect_source in (GLOBAL_CACHE.Effects.GetBuffs, GLOBAL_CACHE.Effects.GetEffects):
+        try:
+            local_effects = effect_source(int(agent_id))
+        except Exception:
+            continue
+        for effect in local_effects or ():
+            try:
+                raw_skill_id = getattr(effect, "skill_id", getattr(effect, "SkillId", 0))
+                if isinstance(raw_skill_id, bool):
+                    continue
+                skill_id = int(raw_skill_id)
+                if skill_id <= 0:
+                    continue
+                remaining_ms = None
+                raw_remaining = getattr(effect, "time_remaining", None)
+                if raw_remaining is not None and not isinstance(raw_remaining, bool):
+                    numeric_remaining = float(raw_remaining)
+                    if math.isfinite(numeric_remaining):
+                        remaining_ms = numeric_remaining
+                observed.append((skill_id, remaining_ms))
+            except Exception:
+                continue
+
+    confirmed: list[tuple[int, float | None]] = []
+    for skill_id, remaining_ms in observed:
+        try:
+            if GLOBAL_CACHE.Skill.Flags.IsHex(skill_id):
+                confirmed.append((skill_id, remaining_ms))
+        except Exception:
+            continue
+    return tuple(
+        sorted(
+            confirmed,
+            key=lambda item: (
+                item[0],
+                -1.0 if item[1] is None else item[1],
+            ),
+        )
+    )
+
+
+def get_hex_skill_ids_on_agent(agent_id: int) -> list[int]:
+    """Return hex skill IDs on agent_id (SHMEM, with local Effects fallback)."""
+    return [
+        skill_id
+        for skill_id, _remaining_ms in get_hex_removal_effect_observations(agent_id)
+    ]
 
 
 @frame_cache(category="HexRemoval", source_lib="ScoredHexedAllies")
@@ -424,9 +483,11 @@ def _get_scored_hexed_allies(max_distance: float = 4500.0) -> list[tuple[int, in
     Returns (agent_id, worst_priority) sorted by (priority desc,
     distance asc). HIGH/MED/LOW callers share this one scan per frame.
     """
-    from Py4GWCoreLib import GLOBAL_CACHE, Routines
-    from ..AgentArray import AgentArray
+    from Py4GWCoreLib import GLOBAL_CACHE
+    from Py4GWCoreLib import Routines
+
     from ..Agent import Agent
+    from ..AgentArray import AgentArray
     from ..Player import Player
 
     player_pos = Player.GetXY()
@@ -441,31 +502,7 @@ def _get_scored_hexed_allies(max_distance: float = 4500.0) -> list[tuple[int, in
         # Agent.GetProfessions C-call inside the per-hex loop.
         role, prof_id = get_target_role(agent_id)
 
-        hex_iter: list[tuple[int, float | None]] = []
-        try:
-            shared_buffs = Routines.Checks.Agents.GetBuffs(agent_id)
-            if shared_buffs:
-                for buff in shared_buffs:
-                    sid = int(buff.SkillId)
-                    if sid <= 0:
-                        continue
-                    # Type==2 → EffectType (hex/effect with remaining_ms);
-                    # Type==1 → BuffType (upkeep, no remaining time).
-                    rem = float(buff.Remaining) if int(buff.Type) == 2 else None
-                    hex_iter.append((sid, rem))
-            else:
-                local_effects = (
-                    GLOBAL_CACHE.Effects.GetBuffs(agent_id)
-                    + GLOBAL_CACHE.Effects.GetEffects(agent_id)
-                )
-                for effect in local_effects:
-                    sid = int(getattr(effect, "skill_id", 0) or 0)
-                    if sid <= 0:
-                        continue
-                    rem = getattr(effect, "time_remaining", None)
-                    hex_iter.append((sid, float(rem) if rem is not None else None))
-        except Exception:
-            continue
+        hex_iter = get_hex_removal_effect_observations(agent_id)
         worst = 0
         # Lazy per-ally descriptor: only resolved when a log line actually fires
         # (debug on AND throttle/near-expiry passes), and at most once per ally
@@ -495,8 +532,8 @@ def _get_scored_hexed_allies(max_distance: float = 4500.0) -> list[tuple[int, in
                     f"priority={HexRemovalPriority(priority).name} {rem_str}"
                 )
 
-            # Skip near-expired hexes (BuffType upkeep has no remaining time → keep).
-            if time_remaining_ms is not None and 0 < int(time_remaining_ms) <= MIN_HEX_REMAINING_MS_TO_REMOVE:
+            # Unknown durations are retained; known expired and near-expiry entries are skipped.
+            if time_remaining_ms is not None and float(time_remaining_ms) <= MIN_HEX_REMAINING_MS_TO_REMOVE:
                 # Don't log NONE-priority skips — they'd flood without signal.
                 if HEX_REMOVAL_DEBUG and priority > 0:
                     if ally_descriptor is None:
@@ -547,8 +584,9 @@ def get_hexed_ally_for_removal(
     `min_priority` is a `HexRemovalPriority` int (default `HexRemovalPriority.LOW = 1`).
     """
     from Py4GWCoreLib import Routines
-    from ..Py4GWcorelib import Utils
+
     from ..Player import Player
+    from ..Py4GWcorelib import Utils
 
     # Precondition gate: don't pick a target unless the removal skill
     # is castable, otherwise we'd POST a phantom lock that blocks other
@@ -599,9 +637,10 @@ def get_hexed_ally_for_removal(
     if selected and reserve:
         try:
             from .WhiteboardLocks import post_hex_removal_lock
-            post_hex_removal_lock(selected, skill_id=skill_id, aftercast_delay=aftercast_delay)
+            if post_hex_removal_lock(selected, skill_id=skill_id, aftercast_delay=aftercast_delay) < 0:
+                return 0
         except Exception:
-            pass
+            return 0
     return selected
 
 
@@ -611,14 +650,8 @@ def cast_hex_removal_and_track(
     target_agent_id: int,
     aftercast_delay: int = 250,
 ):
-    """Cast a hex-removal skill; on success, release the cross-hero lock early.
-
-    Wraps build.CastSkillIDAndRestoreTarget with pre/post hex-count tracking.
-    Early release lets another client step in for the next hex on this
-    teammate without waiting for the natural lock expiry.
-    """
+    """Dispatch a hex-removal cast and report queue acceptance without inferring removal."""
     pre_hex_ids = get_hex_skill_ids_on_agent(target_agent_id)
-    pre_count = len(pre_hex_ids)
 
     # Each name lookup wrapped individually so a single failure can't squash
     # the casting log — that line is the primary cast/reject signal.
@@ -662,27 +695,10 @@ def cast_hex_removal_and_track(
     )
 
     if cast_result:
-        post_hex_ids = get_hex_skill_ids_on_agent(target_agent_id)
-        if len(post_hex_ids) < pre_count:
-            try:
-                from .WhiteboardLocks import clear_hex_removal_lock
-                clear_hex_removal_lock(int(target_agent_id))
-            except Exception as exc:
-                _log_hex(
-                    f"lock_release_error agent#{int(target_agent_id)}: {exc!r}"
-                )
-            removed_ids = [hid for hid in pre_hex_ids if hid not in set(post_hex_ids)]
-            try:
-                from Py4GWCoreLib import GLOBAL_CACHE
-                removed_names = ", ".join(
-                    (GLOBAL_CACHE.Skill.GetName(int(hid)) or f"#{int(hid)}").strip()
-                    for hid in removed_ids
-                )
-            except Exception:
-                removed_names = ", ".join(f"#{int(hid)}" for hid in removed_ids)
-            _log_hex(
-                f"removed [{removed_names}] from {target_name}; lock released"
-            )
+        _log_hex(
+            f"dispatch accepted for {skill_name} on "
+            f"{target_name}(#{int(target_agent_id)}); cleanse outcome unobserved"
+        )
 
     return cast_result
 
@@ -695,8 +711,9 @@ def _log_hex(msg: str) -> None:
     if not HEX_REMOVAL_DEBUG:
         return
     try:
-        from Py4GWCoreLib import ConsoleLog
         import Py4GW
+
+        from Py4GWCoreLib import ConsoleLog
         ConsoleLog("HexRemoval", msg, PySystem.Console.MessageType.Info)
     except Exception:
         pass
@@ -714,7 +731,8 @@ def _role_name(role: TargetRole) -> str:
 
 def _profession_name(profession_id: int) -> str:
     try:
-        from ..enums_src.GameData_enums import Profession, Profession_Names
+        from ..enums_src.GameData_enums import Profession
+        from ..enums_src.GameData_enums import Profession_Names
         prof = Profession(int(profession_id))
         return Profession_Names.get(prof, "?")
     except Exception:
@@ -733,7 +751,7 @@ def _skill_name(skill_id: int) -> str:
 def _agent_name(agent_id: int) -> str:
     try:
         from ..Agent import Agent
-        resolved = (Agent.GetName(int(agent_id)) or "").strip()
+        resolved = (Agent.GetNameByID(int(agent_id)) or "").strip()
         if resolved:
             return resolved
     except Exception:
