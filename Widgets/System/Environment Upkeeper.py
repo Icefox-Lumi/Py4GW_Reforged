@@ -1,9 +1,9 @@
 import PyImGui
+
 from Py4GWCoreLib import *
 from Py4GWCoreLib.HotkeyManager import HOTKEY_MANAGER
 
-
-#do not ever disable this module, it is the main module for everything
+# do not ever disable this module, it is the main module for everything
 MODULE_NAME = "Environment Upkeeper"
 MODULE_ICON = "Assets/Textures/Module_Icons/Environment Upkeeper.png"
 OPTIONAL = False
@@ -63,14 +63,14 @@ def tooltip():
     red = ColorPalette.GetColor("red")
     PyImGui.text_colored("This is a system Widget, deactivating it will cause issues.", red.to_tuple_normalized())
     PyImGui.separator()
-    
+
     # Description
     PyImGui.text("This widget is responsible for managing the environment upkeep tasks")
     PyImGui.text("such as processing action queues for various activities like looting,")
     PyImGui.text("merchant interactions, salvaging, and identifying items. It ensures")
     PyImGui.text("that these tasks are performed efficiently and in a timely manner,")
     PyImGui.text("enhancing the overall experience.")
-    
+
     PyImGui.spacing()
 
     # Features
@@ -79,72 +79,73 @@ def tooltip():
     PyImGui.bullet_text("Throttles queue processing to optimize performance.")
     PyImGui.bullet_text("Integrates with Loot Filters for item management.")
     PyImGui.bullet_text("Upkeeps Singletons")
-    
+
     PyImGui.spacing()
 
     # Credits
     PyImGui.text_colored("Credits:", title_color.to_tuple_normalized())
     PyImGui.bullet_text("Developed by Apo")
-    
+
     PyImGui.end_tooltip()
+
 
 def main():
     global widget_config
 
     HOTKEY_MANAGER.update()
-    
-    if Routines.Checks.Map.MapValid():
-        GLOBAL_CACHE._update_cache()
-    else:
+
+    map_valid = Routines.Checks.Map.MapValid()
+    GLOBAL_CACHE._update_cache_for_environment(map_valid)
+    if not map_valid:
         # A map change makes every agent/item id meaningless, so the loot class clears its own
         # session ids. Driving it from here as well keeps the old behaviour when the map is invalid.
         from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import LootFilters
 
         LootFilters().on_map_change()
-    
+
     for routine in GLOBAL_CACHE.Coroutines[:]:
         try:
             next(routine)
         except StopIteration:
             GLOBAL_CACHE.Coroutines.remove(routine)
-    
+
     if Map.IsMapLoading() or Map.IsInCinematic():
         widget_config.action_queue_manager.ResetNonTransitionQueues()
-        
+
         if widget_config.throttle_transition_queue.IsExpired():
             widget_config.action_queue_manager.ProcessQueue("TRANSITION")
             widget_config.throttle_transition_queue.Reset()
         return
-    
+
     if not Routines.Checks.Map.MapValid():
         return
-    
+
     if widget_config.throttle_action_queue.IsExpired():
         widget_config.action_queue_manager.ProcessQueue("ACTION")
         widget_config.throttle_action_queue.Reset()
-        
+
     if widget_config.throttle_loot_queue.IsExpired():
         widget_config.action_queue_manager.ProcessQueue("LOOT")
         widget_config.throttle_loot_queue.Reset()
-        
+
     if widget_config.throttle_merchant_queue.IsExpired():
         widget_config.action_queue_manager.ProcessQueue("MERCHANT")
         widget_config.throttle_merchant_queue.Reset()
-        
+
     if widget_config.throttle_salvage_queue.IsExpired():
         widget_config.action_queue_manager.ProcessQueue("SALVAGE")
         widget_config.throttle_salvage_queue.Reset()
-        
+
     if widget_config.throttle_identify_queue.IsExpired():
         widget_config.action_queue_manager.ProcessQueue("IDENTIFY")
         widget_config.throttle_identify_queue.Reset()
-        
+
     if widget_config.throttle_fast_queue.IsExpired():
         widget_config.action_queue_manager.ProcessQueue("FAST")
         widget_config.throttle_fast_queue.Reset()
-        
+
     widget_config.overlay.UpkeepTextures()
-         
-    
+
+
 if __name__ == "__main__":
     main()

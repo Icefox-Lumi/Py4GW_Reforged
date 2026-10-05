@@ -1,21 +1,24 @@
+from typing import Generator
+from typing import List
 
+from Py4GWCoreLib import Map
 from Py4GWCoreLib import ThrottledTimer
 from Py4GWCoreLib.Py4GWcorelib import ActionQueueManager
 
-from Py4GWCoreLib import Map
-
 from .CameraCache import CameraCache
+from .CleansingContext import CleansingContext
 from .EffectCache import EffectsCache
-from .ItemCache import RawItemCache, ItemCache, ItemArray
 from .InventoryCache import InventoryCache
+from .ItemCache import ItemArray
+from .ItemCache import ItemCache
+from .ItemCache import RawItemCache
 from .MerchantCache import TradingCache
 from .PartyCache import PartyCache
 from .QuestCache import QuestCache
-from .SkillCache import SkillCache
-from .SkillbarCache import SkillbarCache
 from .SharedMemory import Py4GWSharedMemoryManager
+from .SkillbarCache import SkillbarCache
+from .SkillCache import SkillCache
 
-from typing import Generator, List
 
 class GlobalCache:
     _instance = None
@@ -39,52 +42,61 @@ class GlobalCache:
         self.Inventory = InventoryCache(self._ActionQueueManager, self._RawItemCache, self.Item)
         self.Trading = TradingCache(self._ActionQueueManager)
         self.Party = PartyCache(self._ActionQueueManager)
+        self.CleansingContext = CleansingContext()
         self.Quest = QuestCache(self._ActionQueueManager)
         self.Skill = SkillCache()
         self.SkillBar = SkillbarCache(self._ActionQueueManager)
         self.ShMem = Py4GWSharedMemoryManager()
         self.Coroutines: List[Generator] = []
-        
-      
+
     def _reset(self):
         self.Effects._reset_cache()
 
         self.Item._reset_cache()
         self._TrottleTimers.Reset()
-        
+
+    def _update_cache_for_environment(self, map_valid: bool) -> None:
+        if map_valid:
+            self._update_cache()
+            return
+
+        self.CleansingContext.InvalidatePublishedSnapshot(
+            reason="Environment Upkeeper skipped cache refresh because MapValid is false"
+        )
+
     def _update_cache(self):
-        #this block is forcing an update when loading or in cinematic
-        #to default everything to 0 
-        if Map.IsMapLoading() or Map.IsInCinematic():
+        # this block is forcing an update when loading or in cinematic
+        # to default everything to 0
+        if Map.IsMapLoading() or Map.IsInCinematic() or not Map.IsMapReady():
+            self.CleansingContext.Refresh()
             self.Party._update_cache()
 
             self._RawItemCache.update()
             self.Item._update_cache()
 
             self.SkillBar._update_cache()
-        #end force update block
-               
+        # end force update block
+
         if self._TrottleTimers._75ms.IsExpired():
             self._TrottleTimers._75ms.Reset()
             if self._TrottleTimers._500ms.IsExpired():
                 self._TrottleTimers._500ms.Reset()
-            
-            if self._TrottleTimers._150ms.IsExpired():   
+
+            if self._TrottleTimers._150ms.IsExpired():
                 self._TrottleTimers._150ms.Reset()
                 self.Party._update_cache()
+                self.CleansingContext.Refresh()
 
                 self._RawItemCache.update()
                 self.Item._update_cache()
                 self.Camera._update_cache()
 
-             
             self.SkillBar._update_cache()
-                       
 
     class TrottleTimers:
         def __init__(self):
             self._50ms = ThrottledTimer(50)
-            self._63ms = ThrottledTimer(63) #4 frames
+            self._63ms = ThrottledTimer(63)  # 4 frames
             self._75ms = ThrottledTimer(75)
             self._100ms = ThrottledTimer(100)
             self._150ms = ThrottledTimer(150)
@@ -92,7 +104,7 @@ class GlobalCache:
             self._500ms = ThrottledTimer(500)
             self._1_000ms = ThrottledTimer(1000)
             self._5_000ms = ThrottledTimer(5000)
-            self._10_000ms = ThrottledTimer(10000)         
+            self._10_000ms = ThrottledTimer(10000)
 
         def Reset(self):
             self._50ms.Reset()
@@ -105,5 +117,3 @@ class GlobalCache:
             self._1_000ms.Reset()
             self._5_000ms.Reset()
             self._10_000ms.Reset()
-    
-        
