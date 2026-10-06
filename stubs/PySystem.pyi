@@ -40,6 +40,12 @@ def get_tick_count64() -> int:
     """Get the frame timestamp tick count as a 64-bit integer."""
     ...
 
+
+def get_account_publication_snapshot() -> tuple[str, int, bytes, int, int, int, int]:
+    """Nonblocking detached v2 read: status, tick64, bytes, prefix/total/span/timestamp offsets."""
+    ...
+
+
 def get_shared_memory_name() -> str:
     """Get the current per-process runtime shared-memory name."""
     ...

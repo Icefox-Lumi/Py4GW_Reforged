@@ -32,6 +32,8 @@ from .IntentSync import is_valid_future_lease
 from .IntentSync import normalize_tick
 from .IntentSync import tick_elapsed
 from .IntentSync import tick_is_expired
+from .IntentSync import publication_age
+from .IntentSync import publication_is_live
 from .KeyStruct import KeyStruct
 from .SharedMessageStruct import SharedMessageStruct
 
@@ -150,7 +152,7 @@ class AllAccounts(Structure):
         
         base_timestamp = PySystem.get_tick_count64()
         
-        if slot_active and (base_timestamp - last_updated) < SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS:
+        if slot_active and publication_is_live(base_timestamp, last_updated, SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS):
             return True
         return False
 
@@ -290,10 +292,16 @@ class AllAccounts(Structure):
                     return i
 
         active_candidates = [i for i in candidates if self._is_slot_active(i)]
-        if active_candidates:
-            return max(active_candidates, key=lambda idx: (int(self.AccountData[idx].LastUpdated), idx))
+        now = PySystem.get_tick_count64()
 
-        return max(candidates, key=lambda idx: (int(self.AccountData[idx].LastUpdated), idx))
+        def newest_key(index: int) -> tuple[int, int]:
+            age = publication_age(now, int(self.AccountData[index].LastUpdated))
+            return (age if age is not None else 0x80000000, -index)
+
+        if active_candidates:
+            return min(active_candidates, key=newest_key)
+
+        return min(candidates, key=newest_key)
 
     def _find_player_slot_by_key(self, account_email: str, hwnd: int) -> int:
         if not account_email or not hwnd:
@@ -405,7 +413,8 @@ class AllAccounts(Structure):
         slot_data = self.AccountData[index]
         if not slot_data.IsSlotActive:
             return False
-        return (PySystem.get_tick_count64() - slot_data.LastUpdated) >= SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
+        age = publication_age(PySystem.get_tick_count64(), slot_data.LastUpdated)
+        return age is not None and age >= SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
 
     def GetEmptySlot(self, allow_expired_reclaim: bool = True) -> int:
         """Find the first empty or safely reclaimable slot in shared memory."""
@@ -429,7 +438,8 @@ class AllAccounts(Structure):
             slot_active = slot_data.IsSlotActive 
             last_updated = slot_data.LastUpdated
             base_timestamp = PySystem.get_tick_count64()
-            if slot_active and (base_timestamp - last_updated) >= SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS:
+            age = publication_age(base_timestamp, last_updated)
+            if slot_active and age is not None and age >= SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS:
                 expired_slots.append(i)
                 
         return expired_slots

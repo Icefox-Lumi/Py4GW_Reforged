@@ -27,6 +27,7 @@ from Py4GWCoreLib.Builds.Skills import SkillsTemplate
 from Py4GWCoreLib.enums_src.GameData_enums import Attribute
 from Py4GWCoreLib.enums_src.Whiteboard_enums import WhiteboardLockKind
 from Py4GWCoreLib.GlobalCache.shared_memory_src import Globals as _SharedMemoryGlobals
+from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import publication_age
 from Py4GWCoreLib.GlobalCache.WhiteboardLocks import claim_resurrection_target
 from Py4GWCoreLib.Skill import Skill
 
@@ -1410,9 +1411,7 @@ class My_Healing_Burst(BuildMgr):
             last_updated = int(getattr(account, "LastUpdated", 0) or 0)
         except Exception:
             return None
-        if last_updated <= 0:
-            return None
-        return max(0, int(tick_ms) - last_updated)
+        return publication_age(tick_ms, last_updated)
 
     def _diagnostic_observation_from_values(
         self,
@@ -2680,8 +2679,6 @@ class My_Healing_Burst(BuildMgr):
                 )
                 if account_map_signature != map_signature:
                     continue
-                if int(getattr(account, "LastUpdated", 0) or 0) <= 0:
-                    continue
                 shared_accounts[agent_id] = account
             except Exception:
                 continue
@@ -2707,7 +2704,7 @@ class My_Healing_Burst(BuildMgr):
             try:
                 agent_data = getattr(account, "AgentData", None)
                 last_updated = int(getattr(account, "LastUpdated", 0) or 0)
-                if agent_id <= 0 or last_updated <= 0 or agent_data is None:
+                if agent_id <= 0 or agent_data is None:
                     continue
             except Exception:
                 continue
@@ -2892,7 +2889,8 @@ class My_Healing_Burst(BuildMgr):
         tick_ms: int,
         snapshot: _SharedAgentSnapshot,
     ) -> int:
-        return max(0, tick_ms - int(snapshot.last_updated))
+        age = publication_age(tick_ms, int(snapshot.last_updated))
+        return age if age is not None else 0x80000000
 
     @classmethod
     def _is_shared_effect_snapshot_fresh(
@@ -3547,7 +3545,6 @@ class My_Healing_Burst(BuildMgr):
                     snapshot is None
                     or tick_ms <= 0
                     or not snapshot.exact_effects_available
-                    or int(snapshot.last_updated) <= 0
                     or not self._is_shared_effect_snapshot_fresh(tick_ms, snapshot)
                 ):
                     # Unknown shared state must not be treated as an uncovered
@@ -3598,7 +3595,7 @@ class My_Healing_Burst(BuildMgr):
             if shared_snapshot is None:
                 shared_timestamp = context.shared_last_updated.get(agent_id)
                 if shared_timestamp is not None:
-                    snapshot_age_ms = max(0, context.tick_ms - int(shared_timestamp))
+                    snapshot_age_ms = publication_age(context.tick_ms, int(shared_timestamp))
                 summary = _EffectSummary(
                     supported_count=0,
                     minimum_count=0,

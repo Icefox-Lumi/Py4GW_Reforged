@@ -14,6 +14,7 @@ from typing import Final
 from typing import cast
 
 from Py4GWCoreLib.BuildMgr import BuildMgr
+from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import publication_is_live
 from Py4GWCoreLib.Builds.Skills.SmartMesmer import CombatSnapshot
 from Py4GWCoreLib.Builds.Skills.SmartMesmer import EnemyObservation
 from Py4GWCoreLib.Builds.Skills.SmartMesmer import FocusCandidate
@@ -989,8 +990,8 @@ class SmartEnergySurgeHandler(BuildMgr):
                 continue
             last_updated = int(getattr(account, "LastUpdated", 0) or 0)
             slot_active = bool(getattr(account, "IsSlotActive", True))
-            is_current = (
-                slot_active and last_updated > 0 and now_tick - last_updated < int(SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS)
+            is_current = slot_active and publication_is_live(
+                now_tick, last_updated, int(SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS)
             )
             agent_data = getattr(account, "AgentData", None)
             map_data = getattr(agent_data, "Map", None)

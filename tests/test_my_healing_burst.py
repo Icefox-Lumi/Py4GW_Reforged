@@ -12,6 +12,13 @@ from typing import Any
 _MISSING = object()
 
 
+def test_shared_effect_age_handles_zero_wrap_and_future() -> None:
+    for last, now, expected in ((0, 5, 5), (0xFFFFFFF0, 5, 21), (100, 99, 0x80000000), (0, 0x80000000, 0x80000000)):
+        snapshot = SimpleNamespace(last_updated=last)
+        assert HBS.My_Healing_Burst._shared_snapshot_age_ms(now, snapshot) == expected
+        assert HBS.My_Healing_Burst._is_shared_effect_flags_fresh(now, snapshot) is (expected < 0x80000000)
+
+
 def _load_hbs_module() -> types.ModuleType:
     """Load the build with minimal runtime stubs for pure policy helpers."""
     module_name = "_hbs_policy_test_subject"
@@ -100,6 +107,12 @@ def _load_hbs_module() -> types.ModuleType:
         "Py4GWCoreLib.GlobalCache.WhiteboardLocks",
         claim_resurrection_target=lambda *args, **kwargs: 0,
     )
+    tick_path = Path(__file__).resolve().parents[1] / "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py"
+    tick_spec = importlib.util.spec_from_file_location("_hbs_tick_helpers", tick_path)
+    assert tick_spec is not None and tick_spec.loader is not None
+    tick_module = importlib.util.module_from_spec(tick_spec)
+    tick_spec.loader.exec_module(tick_module)
+    add_module("Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync", publication_age=tick_module.publication_age)
     add_module(
         "PySystem",
         get_tick_count64=lambda: 0,

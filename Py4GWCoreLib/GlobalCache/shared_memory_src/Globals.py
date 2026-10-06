@@ -2,6 +2,8 @@ from Py4GWCoreLib.enums_src.GameData_enums import Attribute
 
 SHMEM_MODULE_NAME = "Py4GW - Shared Memory"
 SHMEM_SHARED_MEMORY_FILE_NAME = "Py4GW_Shared_Mem"
+SHMEM_NATIVE_EVIDENCE_NAME = "Py4GW_Shared_Mem.v2"
+SHMEM_NATIVE_PUBLICATION_MUTEX = r"Local\Py4GW.AccountPublication.v2"
 
 SHMEM_MAX_PLAYERS = 64
 SHMEM_MAX_EMAIL_LEN = 64

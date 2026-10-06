@@ -98,6 +98,17 @@ def tick_elapsed(now_tick: int, then_tick: int) -> int:
     return (normalize_tick(now_tick) - normalize_tick(then_tick)) & UINT32_MASK
 
 
+def publication_age(now_tick: int, last_updated: int) -> int | None:
+    """Return an account age, rejecting future/half-range ambiguous timestamps."""
+    age = tick_elapsed(now_tick, last_updated)
+    return age if age < UINT32_HALF_RANGE else None
+
+
+def publication_is_live(now_tick: int, last_updated: int, timeout_ms: int = 5000) -> bool:
+    age = publication_age(now_tick, last_updated)
+    return age is not None and age < timeout_ms
+
+
 def tick_is_expired(now_tick: int, expires_at_tick: int) -> bool:
     """Treat deadlines at/past now, or outside the valid half-range, as expired."""
     remaining = (normalize_tick(expires_at_tick) - normalize_tick(now_tick)) & UINT32_MASK

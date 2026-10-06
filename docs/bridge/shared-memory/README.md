@@ -6,6 +6,11 @@ consumers and the Reforged Native C++ writer.
 
 ## Authority and status
 
+- `native-account-publication.md` describes the current additive v2 Native
+  evidence protocol and detached reader, verified offline and awaiting live
+  injected-client verification. Read it before extending corrected evidence.
+  It covers attachment failure preserving abandoned recovery and distinguishes
+  guarded explicit shutdown from nonblocking static teardown fallback.
 - `multibox-shmem-cpp-writer-postmortem.md` records the resolved layout bug,
   root cause, and corrective evidence. Read it before changing the layout.
 - `../../archive/bridge/shared-memory/multibox-shmem-cpp-writer-plan.md` preserves the locked migration

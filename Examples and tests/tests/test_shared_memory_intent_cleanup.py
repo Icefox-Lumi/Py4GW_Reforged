@@ -352,6 +352,8 @@ def _load_accounts_class(shared_memory_name: str) -> type[Any]:
         "normalize_tick": INTENT_SYNC.normalize_tick,
         "tick_elapsed": INTENT_SYNC.tick_elapsed,
         "tick_is_expired": INTENT_SYNC.tick_is_expired,
+        "publication_age": INTENT_SYNC.publication_age,
+        "publication_is_live": INTENT_SYNC.publication_is_live,
         **WHITEBOARD_ENUMS,
     }
     isolated = ast.Module(body=cast(list[ast.stmt], methods), type_ignores=[])
@@ -841,15 +843,18 @@ def _load_whiteboard_timestamp_consumers() -> dict[str, Callable[..., Any]]:
     names = {
         "get_resurrection_lock_owner",
         "read_resurrection_scroll_states",
-        "post_hex_removal_lock",
         "post_buff_target_lock",
         "post_loot_lock",
+        "post_hex_removal_lock",
+        "try_acquire_hex_removal_claim",
     }
     namespace: dict[str, object] = {
         "PySystem": types.SimpleNamespace(get_tick_count64=lambda: 5),
         "tick_elapsed": INTENT_SYNC.tick_elapsed,
         "tick_is_expired": INTENT_SYNC.tick_is_expired,
         "_owner_context": lambda: (OWNER, GROUP_ID),
+        "get_hex_removal_owner_context": lambda: (OWNER, GROUP_ID),
+        "HexRemovalClaimToken": types.SimpleNamespace,
         "_skill_lock_duration_ms": lambda _skill, _aftercast, minimum: minimum,
         "RESURRECTION_LOCK_KEY": 0,
         "HEX_REMOVAL_LOCK_KEY": 0,
@@ -1150,6 +1155,30 @@ class IntentSynchronizationTests(unittest.TestCase):
         _ObservableConsole.records.clear()
         self.shared_memory_name = f"Py4GW_IntentTest_{uuid4().hex}"
         self.accounts = _new_accounts(self.shared_memory_name)
+
+    def test_hex_lock_adapter_delegates_to_atomic_claim_and_fails_closed(self) -> None:
+        calls: list[tuple[str, int, int, int]] = []
+        response = types.SimpleNamespace(token=types.SimpleNamespace(intent_slot_index=17))
+
+        def acquire(owner: str, target: int, duration: int, group: int) -> types.SimpleNamespace:
+            calls.append((owner, target, duration, group))
+            return response
+
+        table = types.SimpleNamespace(TryAcquireHexRemovalTarget=acquire)
+        runtime = types.ModuleType("Py4GWCoreLib")
+        setattr(runtime, "GLOBAL_CACHE", types.SimpleNamespace(ShMem=types.SimpleNamespace(GetAllAccounts=lambda: table)))
+        post = WHITEBOARD_TIMESTAMP_CONSUMERS["post_hex_removal_lock"]
+        with patch.dict(sys.modules, {"Py4GWCoreLib": runtime}):
+            self.assertEqual(post(55, SKILL_ID, 250), 17)
+            self.assertEqual(calls, [(OWNER, 55, 500, GROUP_ID)])
+            response.token = None
+            self.assertEqual(post(55, SKILL_ID, 250), -1)
+            self.assertEqual(len(calls), 2)
+            with patch.object(table, "TryAcquireHexRemovalTarget", side_effect=RuntimeError("claim unavailable")):
+                self.assertEqual(post(55, SKILL_ID, 250), -1)
+            self.assertEqual(post(0, SKILL_ID, 250), -1)
+            self.assertEqual(post(True, SKILL_ID, 250), -1)
+            self.assertEqual(len(calls), 2)
 
     @unittest.skipUnless(os.name == "nt", "the production table guard is a Windows named mutex")
     def test_interrupt_public_surface_is_uncached_and_fixed(self) -> None:
@@ -2592,10 +2621,11 @@ class IntentSynchronizationTests(unittest.TestCase):
                 readers["read_resurrection_scroll_states"](),
                 {"live-state@example.com": (True, True)},
             )
-            self.assertEqual(readers["post_hex_removal_lock"](55), 17)
             self.assertEqual(readers["post_buff_target_lock"](55), 17)
             self.assertEqual(readers["post_loot_lock"](55), 17)
-        self.assertEqual(len(shmem.posts), 3)
+        # Hex removal delegates to its atomic claim owner; it no longer reads
+        # timestamps directly and is covered by the dedicated claim tests.
+        self.assertEqual(len(shmem.posts), 2)
 
 
 def _accounts_for_intent_list(intents: list[Any]) -> Any:

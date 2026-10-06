@@ -565,6 +565,10 @@ intent_sync_module: Any = types.ModuleType("Py4GWCoreLib.GlobalCache.shared_memo
 intent_sync_module.tick_is_expired = lambda now, expires: (
     ((int(expires) - int(now)) & 0xFFFFFFFF) == 0 or ((int(expires) - int(now)) & 0xFFFFFFFF) >= 0x80000000
 )
+_tick_helpers = _load_module(
+    "_energy_surge_tick_helpers", ROOT / "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py"
+)
+intent_sync_module.publication_is_live = _tick_helpers.publication_is_live
 sys.modules["Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync"] = intent_sync_module
 
 clock_module: Any = types.ModuleType("PySystem")
@@ -1129,3 +1133,16 @@ def test_controller_source_has_no_target_hijack_or_energy_whiteboard_registratio
     ):
         assert forbidden not in source
     assert "register(" not in source
+
+
+@pytest.mark.parametrize(
+    "last,now,live",
+    [(0, 4999, True), (0, 5000, False), (0xFFFFFFF0, 5, True), (100, 99, False), (0, 0x80000000, False)],
+)
+def test_foreign_owner_freshness_at_rollover(runtime: _Runtime, last: int, now: int, live: bool) -> None:
+    runtime.add_foreign_reservation(10, rank=10, last_updated=last)
+    controller = _controller(runtime)
+    # Use the actual owner identity installed by the runtime fixture.
+    email = runtime.shared.accounts.AccountData[0].AccountEmail
+    snapshots = controller._copy_foreign_owner_snapshots({email}, now, runtime.map_id)
+    assert snapshots[email].active is live
