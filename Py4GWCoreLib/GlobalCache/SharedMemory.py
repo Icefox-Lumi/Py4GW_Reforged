@@ -47,8 +47,11 @@ from .shared_memory_src.AllAccounts import AllAccounts
 from .shared_memory_src.AllAccounts import InterruptClaimResult
 from .shared_memory_src.AllAccounts import InterruptLockReceipt
 from .shared_memory_src.AccountPublication import AccountPublicationResult
+from .shared_memory_src.AccountPublication import AccountPublicationResultV3
 from .shared_memory_src.AccountPublication import read_native_account_snapshot
+from .shared_memory_src.AccountPublication import read_native_account_snapshot_v3
 from .shared_memory_src.Globals import SHMEM_NATIVE_EVIDENCE_NAME
+from .shared_memory_src.Globals import SHMEM_NATIVE_EVIDENCE_NAME_V3
 from Py4GWCoreLib.HeroAI.follow.leader_publish import FollowFormationPublisher
 from ..py4gwcorelib_src.FrameCache import frame_cache
 
@@ -63,6 +66,8 @@ class Py4GWSharedMemoryManager:
         return cls._instance
     
     def __init__(self, name=SHMEM_SHARED_MEMORY_FILE_NAME, max_num_players=SHMEM_MAX_PLAYERS):
+        if name.removeprefix("Local\\") == SHMEM_NATIVE_EVIDENCE_NAME_V3:
+            raise ValueError("Native v3 evidence is accessible only through GetNativeAccountSnapshotV3")
         if name.removeprefix("Local\\") == SHMEM_NATIVE_EVIDENCE_NAME:
             raise ValueError("Native v2 evidence is accessible only through GetNativeAccountSnapshot")
         if not self._initialized:
@@ -82,6 +87,8 @@ class Py4GWSharedMemoryManager:
 
     def _attach(self) -> bool:
         """Attach to the C++-created shared region. Never creates it."""
+        if self.shm_name.removeprefix("Local\\") == SHMEM_NATIVE_EVIDENCE_NAME_V3:
+            raise ValueError("Legacy writers cannot attach to Native v3 evidence")
         if self.shm_name.removeprefix("Local\\") == SHMEM_NATIVE_EVIDENCE_NAME:
             raise ValueError("Legacy writers cannot attach to Native v2 evidence")
         if getattr(self, "shm", None) is not None:
@@ -105,11 +112,16 @@ class Py4GWSharedMemoryManager:
     def GetNativeAccountSnapshot(self) -> AccountPublicationResult:
         return read_native_account_snapshot(getattr(PySystem, "get_account_publication_snapshot", None))
 
+    def GetNativeAccountSnapshotV3(self) -> AccountPublicationResultV3:
+        return read_native_account_snapshot_v3(getattr(PySystem, "get_account_publication_snapshot_v3", None))
+
     def GetBaseTimestamp(self):
         return PySystem.get_tick_count64()
     
     @frame_cache(category="SharedMemory", source_lib="GetAllAccounts")
     def GetAllAccounts(self) -> AllAccounts:
+        if self.shm_name.removeprefix("Local\\") == SHMEM_NATIVE_EVIDENCE_NAME_V3:
+            raise ValueError("Legacy writers cannot access Native v3 evidence")
         if self.shm_name.removeprefix("Local\\") == SHMEM_NATIVE_EVIDENCE_NAME:
             raise ValueError("Legacy writers cannot access Native v2 evidence")
         if self.shm is None and not self._attach():

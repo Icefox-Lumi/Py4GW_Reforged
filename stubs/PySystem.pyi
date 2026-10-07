@@ -46,6 +46,11 @@ def get_account_publication_snapshot() -> tuple[str, int, bytes, int, int, int, 
     ...
 
 
+def get_account_publication_snapshot_v3() -> tuple[str, int, bytes]:
+    """Nonblocking detached v3 read: status, tick64, versioned live/witness envelope bytes."""
+    ...
+
+
 def get_shared_memory_name() -> str:
     """Get the current per-process runtime shared-memory name."""
     ...

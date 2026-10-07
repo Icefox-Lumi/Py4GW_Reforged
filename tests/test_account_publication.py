@@ -1,5 +1,7 @@
 """Exercise the real detached reader and wire declarations without injected imports."""
 
+# pyright: strict
+
 from __future__ import annotations
 import __future__
 
@@ -39,7 +41,7 @@ def subject(monkeypatch: Any) -> Any:
     exec(compile(ast.Module([attribute], []), "Attribute", "exec"), namespace)
     globals_tree = ast.parse((WIRE / "Globals.py").read_text(encoding="utf-8"))
     for node in globals_tree.body:
-        if isinstance(node, ast.Assign):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
             exec(compile(ast.Module([node], []), "Globals", "exec"), namespace)
     pending: list[ast.ClassDef] = []
     paths = [*WIRE.glob("*.py"), ROOT / "Py4GWCoreLib/native_src/internals/types.py"]
@@ -102,6 +104,203 @@ def cohort(subject: Any, tick: int = 0) -> Any:
         row.AgentPartyData.PartyID = 5
         table.Keys[index] = row.Key
     return table
+
+
+def envelope_v3(subject: Any, tick: int = 100, instance: int = 0) -> Any:
+    reader = subject.reader
+    envelope = reader._EnvelopeWireV3()
+    h = envelope.header
+    h.magic = 0x3356425747345950
+    h.version = 3
+    h.header_size = ctypes.sizeof(reader._HeaderWireV3)
+    h.envelope_size = ctypes.sizeof(envelope)
+    h.live_size = subject.AllAccounts.Inbox.offset
+    h.account_size = ctypes.sizeof(subject.AccountStruct)
+    h.owner_size = ctypes.sizeof(reader._OwnerWireV3)
+    h.witness_size = ctypes.sizeof(reader._BuildWitnessWireV3)
+    h.owner_capacity = subject.SHMEM_MAX_PLAYERS
+    h.witness_capacity = subject.SHMEM_MAX_BUILD_WITNESSES
+    h.recovery_epoch = 1
+    table = cohort(subject, tick)
+    if instance == 0:
+        table.AccountData[1].IsSlotActive = False
+        table.AccountData[2].IsSlotActive = False
+    table.AccountData[0].AgentData.UUID[0] = 123
+    ctypes.memmove(
+        ctypes.addressof(envelope) + reader._EnvelopeWireV3.keys.offset, ctypes.addressof(table), h.live_size
+    )
+    h.live_count = sum(bool(row.IsSlotActive) for row in envelope.accounts)
+    h.owner_count = 1
+    meta = envelope.owners[0]
+    meta.active = 1
+    meta.instance_type = instance
+    meta.instance_epoch = 1 if instance == 0 else 3
+    meta.published_tick = tick & 0xFFFFFFFF
+    meta.witness_count = 1
+    meta.incarnation[0] = 77
+    meta.character_uuid[0] = 123
+    witness = meta.witnesses[0]
+    witness.kind = 1
+    witness.hero_id = 7
+    witness.primary = 5
+    witness.secondary = 8
+    witness.skills[:] = [65, 57, 979, 934, 67, 1336, 25, 791]
+    witness.revision = 1
+    witness.outpost_epoch = 1
+    witness.observed_at_tick64 = tick
+    return envelope
+
+
+def decode_v3(subject: Any, envelope: Any, now: int = 101) -> Any:
+    return subject.reader.read_native_account_snapshot_v3(lambda: ("success", now, bytes(envelope)))
+
+
+@pytest.mark.parametrize("instance", [0, 1])
+def test_v3_valid_detached_cohort(subject: Any, instance: int) -> None:
+    envelope = envelope_v3(subject, instance=instance)
+    calls = 0
+
+    def read() -> tuple[str, int, bytes]:
+        nonlocal calls
+        calls += 1
+        return "success", 101, bytes(envelope)
+
+    result = subject.reader.read_native_account_snapshot_v3(read)
+    assert result.status is subject.reader.AccountPublicationStatus.SUCCESS, result.reason
+    snapshot = result.snapshot
+    assert snapshot and calls == 1
+    assert len(snapshot.accounts) == (1 if instance == 0 else 3)
+    owner = snapshot.cohorts[0]
+    assert len(owner.witnesses) == 1
+    witness = owner.witnesses[0]
+    assert witness.hero_id == 7 and witness.skills[0] == 65
+    assert witness.observed_at_tick64 == 100 and witness.revision == 1
+    assert owner.character_uuid == (123, 0, 0, 0)
+    envelope.owners[0].witnesses[0].skills[0] = 39
+    envelope.accounts[0].AgentData.AgentID = 99
+    assert witness.skills[0] == 65 and owner.owner.GetAccountData().AgentData.AgentID == 1000
+    detached = owner.owner.GetAccountData()
+    detached.AgentData.AgentID = 77
+    assert owner.owner.GetAccountData().AgentData.AgentID == 1000
+    assert "owner" not in repr(snapshot)  # account identity/payload omitted from normal diagnostics
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("magic", 0),
+        ("version", 4),
+        ("header_size", 1),
+        ("envelope_size", 1),
+        ("live_size", 1),
+        ("account_size", 1),
+        ("owner_size", 1),
+        ("witness_size", 1),
+        ("owner_capacity", 65),
+        ("witness_capacity", 8),
+        ("live_count", 65),
+        ("live_count", 0),
+        ("owner_count", 65),
+        ("owner_count", 0),
+        ("recovery_epoch", 0),
+    ],
+)
+def test_v3_reject_layout(subject: Any, field: str, value: int) -> None:
+    envelope = envelope_v3(subject)
+    setattr(envelope.header, field, value)
+    result = decode_v3(subject, envelope)
+    assert result.snapshot is None and result.status is subject.reader.AccountPublicationStatus.SYNC_FAILURE, field
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("kind", 2),
+        ("hero_id", 0),
+        ("primary", 0),
+        ("primary", 11),
+        ("secondary", 11),
+        ("revision", 0),
+        ("outpost_epoch", 0),
+        ("outpost_epoch", 2),
+        ("observed_at_tick64", 102),
+    ],
+)
+def test_v3_reject_witness(subject: Any, field: str, value: int) -> None:
+    envelope = envelope_v3(subject)
+    setattr(envelope.owners[0].witnesses[0], field, value)
+    assert decode_v3(subject, envelope).snapshot is None, field
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "skills",
+        "duplicate",
+        "count",
+        "incarnation",
+        "uuid",
+        "owner",
+        "stamp",
+        "epoch",
+        "phase",
+        "unassociated",
+        "destination",
+    ],
+)
+def test_v3_reject_association(subject: Any, case: str) -> None:
+    envelope = envelope_v3(subject, instance=1 if case == "destination" else 0)
+    meta = envelope.owners[0]
+    if case == "skills":
+        meta.witnesses[0].skills[7] = 0
+    elif case == "duplicate":
+        meta.witness_count = 2
+        meta.witnesses[1] = meta.witnesses[0]
+    elif case == "count":
+        meta.witness_count = 8
+    elif case == "incarnation":
+        meta.incarnation[0] = 0
+    elif case == "uuid":
+        meta.character_uuid[0] = 124
+    elif case == "owner":
+        envelope.accounts[0].IsAccount = False
+    elif case == "stamp":
+        meta.published_tick = 99
+    elif case == "epoch":
+        meta.instance_epoch = 0
+    elif case == "phase":
+        meta.instance_type = 2
+    elif case == "unassociated":
+        meta.active = 0
+        envelope.header.owner_count = 0
+    elif case == "destination":
+        meta.witnesses[0].hero_id = 8
+    assert decode_v3(subject, envelope).snapshot is None, case
+
+
+@pytest.mark.parametrize("age,count", [(4999, 1), (5000, 0), (0x80000000, 0), (0xFFFFFFFF, 0)])
+def test_v3_modular_lease(subject: Any, age: int, count: int) -> None:
+    tick = 0xFFFFFFF0
+    envelope = envelope_v3(subject, tick=tick)
+    result = decode_v3(subject, envelope, now=tick + age)
+    assert result.snapshot and len(result.snapshot.cohorts) == count
+
+
+@pytest.mark.parametrize("status", ["busy", "unavailable", "recovery", "sync_failure"])
+def test_v3_failure_has_no_evidence(subject: Any, status: str) -> None:
+    result = subject.reader.read_native_account_snapshot_v3(lambda: (status, 0, b""))
+    assert result.snapshot is None and result.status.value == status
+
+
+def test_v3_missing_binding_and_invalid_payload(subject: Any) -> None:
+    reader = subject.reader
+    assert reader.read_native_account_snapshot_v3(None).status is reader.AccountPublicationStatus.UNAVAILABLE
+    for payload in (b"", bytes(envelope_v3(subject))[:-1], bytearray(bytes(envelope_v3(subject)))):
+        result = reader.read_native_account_snapshot_v3(lambda: ("success", 101, payload))
+        assert result.snapshot is None
+    success = decode_v3(subject, envelope_v3(subject))
+    assert success.snapshot
+    assert reader.read_native_account_snapshot_v3(lambda: ("busy", 101, b"")).snapshot is None
 
 
 def transport(subject: Any, table: Any, now: int = 1, status: str = "success") -> tuple[Any, ...]:
@@ -253,6 +452,7 @@ def test_legacy_writable_api_cannot_attach_v2(subject: Any) -> None:
             "_attach",
             "GetAllAccounts",
             "GetNativeAccountSnapshot",
+            "GetNativeAccountSnapshotV3",
             "GetAccountData",
             "ResetPlayerData",
             "SetPlayerData",
@@ -271,6 +471,8 @@ def test_legacy_writable_api_cannot_attach_v2(subject: Any) -> None:
         PySystem=types.SimpleNamespace(),
         read_native_account_snapshot=subject.reader.read_native_account_snapshot,
         AccountPublicationResult=subject.reader.AccountPublicationResult,
+        read_native_account_snapshot_v3=subject.reader.read_native_account_snapshot_v3,
+        AccountPublicationResultV3=subject.reader.AccountPublicationResultV3,
     )
     isolated = ast.ClassDef(owner.name, [], [], methods, [])
     exec(
@@ -283,7 +485,12 @@ def test_legacy_writable_api_cannot_attach_v2(subject: Any) -> None:
         namespace,
     )
     manager_type = namespace[owner.name]
-    for name in (subject.SHMEM_NATIVE_EVIDENCE_NAME, "Local\\" + subject.SHMEM_NATIVE_EVIDENCE_NAME):
+    for name in (
+        subject.SHMEM_NATIVE_EVIDENCE_NAME,
+        "Local\\" + subject.SHMEM_NATIVE_EVIDENCE_NAME,
+        subject.SHMEM_NATIVE_EVIDENCE_NAME_V3,
+        "Local\\" + subject.SHMEM_NATIVE_EVIDENCE_NAME_V3,
+    ):
         with pytest.raises(ValueError):
             manager_type(name)
         manager = object.__new__(manager_type)
@@ -307,6 +514,22 @@ def test_legacy_writable_api_cannot_attach_v2(subject: Any) -> None:
     manager = object.__new__(manager_type)
     assert manager.GetNativeAccountSnapshot().status.value == "unavailable"
     assert manager.GetNativeAccountSnapshot().snapshot is None
+    # Older DLL capability fails closed even though its v2 binding is present.
+    v2_calls = 0
+
+    def older_dll_v2_read() -> tuple[Any, ...]:
+        nonlocal v2_calls
+        v2_calls += 1
+        return transport(subject, cohort(subject))
+
+    namespace["PySystem"].get_account_publication_snapshot = older_dll_v2_read
+    assert manager.GetNativeAccountSnapshotV3().status.value == "unavailable"
+    assert manager.GetNativeAccountSnapshotV3().snapshot is None
+    assert v2_calls == 0
+    v3_replies = iter((("success", 101, bytes(envelope_v3(subject))), ("busy", 101, b"")))
+    namespace["PySystem"].get_account_publication_snapshot_v3 = lambda: next(v3_replies)
+    assert manager.GetNativeAccountSnapshotV3().snapshot is not None
+    assert manager.GetNativeAccountSnapshotV3().snapshot is None
     # No legacy access occurs on either snapshot call; this object has no shm.
     replies = iter((transport(subject, cohort(subject)), transport(subject, cohort(subject), status="busy")))
     namespace["PySystem"].get_account_publication_snapshot = lambda: next(replies)
