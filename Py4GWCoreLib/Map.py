@@ -22,6 +22,8 @@ from .UIManager import UIManager
 from .FrameTree import Frame, FrameId
 from .Overlay import *
 import math
+from dataclasses import dataclass
+from time import monotonic
 
 from .py4gwcorelib_src.FrameCache import frame_cache
 
@@ -34,6 +36,20 @@ classes:
     |_ Pathing: A nested class within Map that offers methods specific to pathing map operations.
 
 """
+
+
+@dataclass(frozen=True, slots=True)
+class LoadingObservation:
+    """Uncached copied facts; fallback Loading is never authoritative."""
+
+    observed_at: float
+    contexts: tuple[bool, bool, bool, bool]
+    raw_instance_type: int | None
+
+    @property
+    def loading(self) -> bool:
+        return all(self.contexts) and self.raw_instance_type == InstanceType.Loading.value
+
 
 class Map:
     #region Instance_Type
@@ -92,6 +108,23 @@ class Map:
         return Map.GetInstanceType() not in (
             InstanceType.Outpost.value,
             InstanceType.Explorable.value,
+        )
+
+    @staticmethod
+    def IsMapLoadingObserved() -> bool:
+        """Return true only when loaded contexts explicitly report the Loading instance type."""
+        return Map.GetLoadingObservation().loading
+
+    @staticmethod
+    def GetLoadingObservation() -> LoadingObservation:
+        map_context = GWContext.Map.GetContext()
+        char_context = GWContext.Char.GetContext()
+        instance_info = GWContext.InstanceInfo.GetContext()
+        world_context = GWContext.World.GetContext()
+        return LoadingObservation(
+            monotonic(),
+            (map_context is not None, char_context is not None, instance_info is not None, world_context is not None),
+            int(instance_info.instance_type) if instance_info is not None else None,
         )
 
     @staticmethod

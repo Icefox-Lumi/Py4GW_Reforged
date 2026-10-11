@@ -1,6 +1,7 @@
 import PyImGui
 
 from Py4GWCoreLib import *
+from Py4GWCoreLib import GLOBAL_CACHE
 from Py4GWCoreLib.HotkeyManager import HOTKEY_MANAGER
 
 # do not ever disable this module, it is the main module for everything
@@ -94,8 +95,18 @@ def main():
 
     HOTKEY_MANAGER.update()
 
-    map_valid = Routines.Checks.Map.MapValid()
-    GLOBAL_CACHE._update_cache_for_environment(map_valid)
+    boundary = None
+    try:
+        observation = GLOBAL_CACHE.CleansingContext.CaptureEnvironment()
+    except Exception:
+        boundary = GLOBAL_CACHE.CleansingContext.RejectEnvironmentObservation()
+        observation = None
+    map_valid = observation is not None and observation.readable and Routines.Checks.Map.MapValid()
+    map_loading = Map.IsMapLoading()
+    map_loading_observed = observation is not None and observation.loading.loading
+    GLOBAL_CACHE._update_cache_for_environment(
+        map_valid, map_loading_observed=map_loading_observed, observation=observation, boundary=boundary
+    )
     if not map_valid:
         # A map change makes every agent/item id meaningless, so the loot class clears its own
         # session ids. Driving it from here as well keeps the old behaviour when the map is invalid.
@@ -109,7 +120,7 @@ def main():
         except StopIteration:
             GLOBAL_CACHE.Coroutines.remove(routine)
 
-    if Map.IsMapLoading() or Map.IsInCinematic():
+    if map_loading or Map.IsInCinematic():
         widget_config.action_queue_manager.ResetNonTransitionQueues()
 
         if widget_config.throttle_transition_queue.IsExpired():

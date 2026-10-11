@@ -31,8 +31,7 @@ def load_module(name: str, path: Path, monkeypatch: Any) -> Any:
     return module
 
 
-@pytest.fixture
-def subject(monkeypatch: Any) -> Any:
+def build_publication_subject(monkeypatch: Any) -> Any:
     # Evaluate the owning _fields_ declarations, including real enum-derived
     # capacities. Only injected runtime methods/imports are excluded.
     namespace: dict[str, Any] = dict(vars(ctypes), IntEnum=IntEnum)
@@ -80,6 +79,11 @@ def subject(monkeypatch: Any) -> Any:
     clock = load_module(f"{package_name}.IntentSync", WIRE / "IntentSync.py", monkeypatch)
     reader = load_module(f"{package_name}.AccountPublication", WIRE / "AccountPublication.py", monkeypatch)
     return types.SimpleNamespace(**namespace, reader=reader, clock=clock)
+
+
+@pytest.fixture
+def subject(monkeypatch: Any) -> Any:
+    return build_publication_subject(monkeypatch)
 
 
 def cohort(subject: Any, tick: int = 0) -> Any:

@@ -4,6 +4,7 @@ import PyAgent
 
 from Py4GWCoreLib.py4gwcorelib_src.FrameCache import frame_cache
 from .native_src.context.AgentContext import AgentStruct, AgentLivingStruct, AgentItemStruct, AgentGadgetStruct
+from .native_src.context.AgentContext import Stage3ObservationScope
 from .native_src.context.WorldContext import AttributeStruct, NPC_ModelStruct
 from .native_src.internals.gw_array import GW_Array_Value_View
 from .native_src.internals.helpers import encoded_wstr_to_str
@@ -83,23 +84,48 @@ class Agent:
     
 
     @staticmethod
-    def GetLivingAgentByID(agent_id: int):
+    def GetLivingAgentByID(
+        agent_id: int, *, _stage3_observation: dict[str, bool | int | str | None] | None = None
+    ) -> AgentLivingStruct | None:
         """
         Purpose: Retrieve a living agent by its ID.
         Args:
             agent_id (int): The ID of the agent to retrieve.
         Returns: PyAgent
         """
-        cached = Agent._living_cache.get(agent_id)
-        if cached is not None:
-            return cached
-        agent = Agent.GetAgentByID(agent_id)
-        if agent is None:
-            return None
-        living = agent.GetAsAgentLiving()
-        if living is not None:
-            Agent._living_cache[agent_id] = living
-        return living
+        with Stage3ObservationScope(_stage3_observation) as observation:
+            cached = Agent._living_cache.get(agent_id)
+            if cached is not None:
+                if observation is not None:
+                    observation.update(cached=True, gate="CACHE")
+                return cached
+            if observation is not None:
+                observation["gate"] = "READ"
+            agent = Agent.GetAgentByID(agent_id)
+            if observation is not None:
+                observation["agent_found"] = agent is not None
+            if agent is None:
+                if observation is not None:
+                    observation["gate"] = "AGENT"
+                return None
+            conversion: dict[str, bool | int | str | None] | None = {} if observation is not None else None
+            try:
+                living = (
+                    agent.GetAsAgentLiving()
+                    if conversion is None
+                    else agent.GetAsAgentLiving(_stage3_observation=conversion)
+                )
+            finally:
+                if observation is not None and conversion is not None:
+                    observation["living_type"] = conversion.get("living_type")
+            if observation is not None:
+                observation["conversion"] = living is not None
+                observation["gate"] = (
+                    "OK" if living is not None else "TYPE" if observation["living_type"] is False else "CONVERT"
+                )
+            if living is not None:
+                Agent._living_cache[agent_id] = living
+            return living
 
     @staticmethod
     def GetItemAgentByID(agent_id: int):
@@ -776,17 +802,37 @@ class Agent:
         return velocity.x, velocity.y
     
     @staticmethod
-    def GetProfessions(agent_id : int) -> tuple[int, int]:
+    def GetProfessions(
+        agent_id: int, *, _stage3_observation: dict[str, bool | int | str | None] | None = None
+    ) -> tuple[int, int]:
         """
         Purpose: Retrieve the player's primary and secondary professions.
         Args: agent_id (int): The ID of the agent.
         Returns: tuple
         """
-        living = Agent.GetLivingAgentByID(agent_id)
-        if living is None:
-            return 0, 0
+        with Stage3ObservationScope(_stage3_observation) as observation:
+            living = (
+                Agent.GetLivingAgentByID(agent_id)
+                if observation is None
+                else Agent.GetLivingAgentByID(agent_id, _stage3_observation=observation)
+            )
+            if living is None:
+                if observation is not None:
+                    observation["professions"] = False
+                return 0, 0
 
-        return living.primary, living.secondary
+            if observation is not None:
+                observation["gate"] = "READ"
+            primary = living.primary
+            if observation is not None:
+                observation["primary"] = primary
+            secondary = living.secondary
+            if observation is not None:
+                observation.update(
+                    professions=True,
+                    gate="ZERO" if primary == 0 else "CACHE" if observation["cached"] is True else "OK",
+                )
+            return primary, secondary
 
     @staticmethod
     def GetProfessionNames(agent_id : int) -> tuple[str, str]:

@@ -4,6 +4,11 @@ from ..internals.gw_array import GW_Array
 from ..internals.gw_list import GW_TList, GW_TLink
 from ..internals.types import Vec2f, Vec3f, GamePos
 from dataclasses import dataclass
+from contextlib import AbstractContextManager
+
+def Stage3ObservationScope(
+    sink: dict[str, bool | int | str | None] | None,
+) -> AbstractContextManager[dict[str, bool | int | str | None] | None]: ...
 
 # ---------------------------------------------------------------------
 # ------------------ DyeInfo ------------------------------------------
@@ -586,8 +591,9 @@ class AgentStruct():
 
     def GetAsAgentGadget(self) -> Optional[AgentGadgetStruct]:...
 
-    def GetAsAgentLiving(self) -> Optional[AgentLivingStruct]:...
-    
+    def GetAsAgentLiving(
+        self, *, _stage3_observation: dict[str, bool | int | str | None] | None = None
+    ) -> Optional[AgentLivingStruct]: ...
 
     
 class AgentArrayStruct():

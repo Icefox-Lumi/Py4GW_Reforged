@@ -11,9 +11,43 @@ from ..internals.types import Vec2f, Vec3f, GamePos
 from ..internals.gw_array import GW_Array, GW_Array_Value_View
 from ..internals.gw_list import GW_TList, GW_TList_View, GW_TLink
 from typing import List, Optional
+from typing import cast as type_cast
 from ..internals.native_symbol import NativeSymbol
 from ...Scanner import ScannerSection
 from dataclasses import dataclass
+from contextlib import contextmanager
+from collections.abc import Iterator
+
+
+@contextmanager
+def Stage3ObservationScope(
+    sink: dict[str, bool | int | str | None] | None,
+) -> Iterator[dict[str, bool | int | str | None] | None]:
+    # TEMPORARY: one invocation, with None for every read not performed here.
+    observation: dict[str, bool | int | str | None] | None = (
+        dict(
+            agent_found=None,
+            living_type=None,
+            conversion=None,
+            primary=None,
+            professions=None,
+            cached=None,
+            gate="UNKNOWN",
+        )
+        if sink is not None
+        else None
+    )
+    try:
+        yield observation
+    finally:
+        if sink is not None and observation is not None:
+            try:
+                sink.clear()
+                sink.update(observation)
+            except Exception:
+                # A broken observer cannot replace a production return or exception.
+                pass
+
 
 # ---------------------------------------------------------------------
 # ------------------ DyeInfo ------------------------------------------
@@ -558,10 +592,26 @@ class AgentStruct(Structure):
             return ctypes.cast(ctypes.pointer(self), ctypes.POINTER(AgentGadgetStruct)).contents
         return None
 
-    def GetAsAgentLiving(self) -> Optional["AgentLivingStruct"]:
-        if self.is_living_type:
-            return ctypes.cast(ctypes.pointer(self), ctypes.POINTER(AgentLivingStruct)).contents
-        return None
+    def GetAsAgentLiving(
+        self, *, _stage3_observation: dict[str, bool | int | str | None] | None = None
+    ) -> Optional["AgentLivingStruct"]:
+        with Stage3ObservationScope(_stage3_observation) as observation:
+            if observation is not None:
+                observation["gate"] = "READ"
+            is_living = self.is_living_type
+            if observation is not None:
+                observation["living_type"] = is_living
+            if not is_living:
+                if observation is not None:
+                    observation["gate"] = "TYPE"
+                return None
+            living = type_cast(
+                Optional["AgentLivingStruct"],
+                ctypes.cast(ctypes.pointer(self), ctypes.POINTER(AgentLivingStruct)).contents,
+            )
+            if observation is not None:
+                observation.update(conversion=living is not None, gate="OK" if living is not None else "CONVERT")
+            return living
     
 # ---------------------------------------------------------------------
 # ------------------ AgentLiving --------------------------------------

@@ -120,10 +120,10 @@ class CharContextStruct(Structure):
         ("h0268", c_uint32 * 17),           # +0x0268
         ("player_flags", c_uint32),         # +0x02AC
         ("player_number", c_uint32),        # +0x02B0
-        ("h02B4", c_uint32 * 42),           # +0x02B4
-        ("progress_bar_ptr", POINTER(ProgressBar)),     # +0x035C ProgressBar*
-        ("h0360", c_uint32 * 28),           # +0x0360
-        ("player_email_ptr", c_wchar * 0x40),   # +0x03D0 wchar_t[64]
+        ("h02B4", c_uint32 * 43),  # +0x02B4
+        ("progress_bar_ptr", POINTER(ProgressBar)),  # +0x0360 ProgressBar*
+        ("h0360", c_uint32 * 29),  # +0x0364; retain the existing field name
+        ("player_email_ptr", c_wchar * 0x40),  # +0x03D8 wchar_t[64]
     ]
     @property
     def player_uuid(self) -> tuple[int, int, int, int]:
@@ -253,6 +253,9 @@ class CharContext:
         return CharContext._cached_ctx
         
 assert sizeof(ProgressBar) == 0x2C
-assert sizeof(CharContextStruct) == 0x450
+assert getattr(CharContextStruct, "progress_bar_ptr").offset == 0x360
+assert getattr(CharContextStruct, "h0360").offset == 0x364
+assert getattr(CharContextStruct, "player_email_ptr").offset == 0x3D8
+assert sizeof(CharContextStruct) == 0x458
 
 CharContext.enable()
