@@ -104,13 +104,12 @@ class SystemSharedMemoryManager:
 
         if self.size < self.expected_size:
             self.last_error = (
-                f"Shared memory is too small: got {self.size} bytes, "
-                f"expected at least {self.expected_size} bytes."
+                f"Shared memory is too small: got {self.size} bytes, " f"expected at least {self.expected_size} bytes."
             )
             return
 
         for _ in range(3):
-            header_before = SharedMemoryHeader.from_buffer_copy(self.shm.buf[:self.header_size])
+            header_before = SharedMemoryHeader.from_buffer_copy(self.shm.buf[: self.header_size])
             if header_before.sequence & 1:
                 continue
 
@@ -121,13 +120,11 @@ class SystemSharedMemoryManager:
                 )
                 return
 
-            agent_payload = AgentArraySHMemStruct.from_buffer_copy(
-                self.shm.buf[self.start_agent:self.end_agent]
-            )
+            agent_payload = AgentArraySHMemStruct.from_buffer_copy(self.shm.buf[self.start_agent : self.end_agent])
             pointers_payload = Pointers_SHMemStruct.from_buffer_copy(
-                self.shm.buf[self.start_pointers:self.end_pointers]
+                self.shm.buf[self.start_pointers : self.end_pointers]
             )
-            header_after = SharedMemoryHeader.from_buffer_copy(self.shm.buf[:self.header_size])
+            header_after = SharedMemoryHeader.from_buffer_copy(self.shm.buf[: self.header_size])
 
             if header_before.sequence != header_after.sequence:
                 continue

@@ -1215,17 +1215,15 @@ class WorldContext:
     @staticmethod
     def _update_ptr():
         from ..ShMem.SysShaMem import SystemShaMemMgr
-        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+
+        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None:
+            return
         ptr = SSM.WorldContext
-        #ptr = PyPointers.PyPointers.GetWorldContextPtr()
         WorldContext._ptr = ptr
         if not ptr:
             WorldContext._cached_ctx = None
             return
-        WorldContext._cached_ctx = cast(
-            ptr,
-            POINTER(WorldContextStruct)
-        ).contents
+        WorldContext._cached_ctx = cast(ptr, POINTER(WorldContextStruct)).contents
 
     @staticmethod
     def enable():

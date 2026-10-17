@@ -6,9 +6,6 @@ from Py4GWCoreLib import ThrottledTimer
 from Py4GWCoreLib.Py4GWcorelib import ActionQueueManager
 
 from .CameraCache import CameraCache
-from .CleansingContext import CleansingContext
-from .CleansingContext import EnvironmentObservation
-from .CleansingContext import TransitionBoundary
 from .EffectCache import EffectsCache
 from .InventoryCache import InventoryCache
 from .ItemCache import ItemArray
@@ -20,7 +17,6 @@ from .QuestCache import QuestCache
 from .SharedMemory import Py4GWSharedMemoryManager
 from .SkillbarCache import SkillbarCache
 from .SkillCache import SkillCache
-from .Stage3EvidenceProbeDiagnostics import STAGE3_EVIDENCE_PROBE_DIAGNOSTICS
 
 
 class GlobalCache:
@@ -45,7 +41,6 @@ class GlobalCache:
         self.Inventory = InventoryCache(self._ActionQueueManager, self._RawItemCache, self.Item)
         self.Trading = TradingCache(self._ActionQueueManager)
         self.Party = PartyCache(self._ActionQueueManager)
-        self.CleansingContext = CleansingContext()
         self.Quest = QuestCache(self._ActionQueueManager)
         self.Skill = SkillCache()
         self.SkillBar = SkillbarCache(self._ActionQueueManager)
@@ -58,76 +53,8 @@ class GlobalCache:
         self.Item._reset_cache()
         self._TrottleTimers.Reset()
 
-    def _update_cache_for_environment(
-        self,
-        map_valid: bool,
-        *,
-        map_loading_observed: bool = False,
-        observation: EnvironmentObservation | None = None,
-        boundary: TransitionBoundary | None = None,
-    ) -> None:
-        context = self.CleansingContext
-        attempt_id = None
-        before = None
-        before_evidence = None
-        try:
-            attempt_id = STAGE3_EVIDENCE_PROBE_DIAGNOSTICS.active_attempt_id(context)
-            if attempt_id is not None:
-                before = context.GetSnapshot()
-                before_evidence = STAGE3_EVIDENCE_PROBE_DIAGNOSTICS.capture_snapshot(context, before)
-        except Exception:
-            attempt_id = None
-            before = None
-            before_evidence = None
-
-        if boundary is None:
-            boundary = (
-                context.ObserveEnvironment(observation)
-                if observation is not None
-                else context.ObserveCurrentEnvironment()
-            )
-        elif boundary is not context.GetTransitionBoundary():
-            context.Invalidate("stale environment boundary supplied to cache")
-            return
-        observation = boundary.observation
-        self._cleansing_environment: TransitionBoundary | None = boundary
-        after = context.GetSnapshot()
-        if (observation is None or not observation.readable) and attempt_id is not None and before is not None:
-            try:
-                latch = getattr(context, "_pending_remote_outpost_transition", None)
-                STAGE3_EVIDENCE_PROBE_DIAGNOSTICS.record_forwarding(
-                    attempt_id,
-                    context,
-                    map_loading_observed,
-                    before,
-                    after,
-                    latch if isinstance(latch, bool) else None,
-                    before_evidence,
-                )
-            except Exception:
-                pass
-        try:
-            if map_valid and observation is not None and observation.readable:
-                self._update_cache()
-        finally:
-            self._cleansing_environment = None
-
-    def _refresh_cleansing_context(self) -> None:
-        boundary = getattr(self, "_cleansing_environment", None)
-        self._cleansing_environment = None
-        snapshot = self.CleansingContext.Refresh(boundary)
-        try:
-            STAGE3_EVIDENCE_PROBE_DIAGNOSTICS.record_refresh(self.CleansingContext, snapshot)
-        except Exception:
-            pass
-
     def _update_cache(self):
-        boundary = getattr(self, "_cleansing_environment", None)
-        if boundary is not None:
-            if boundary.observation is None or not boundary.observation.readable:
-                return
-        elif Map.IsMapLoading() or Map.IsInCinematic() or not Map.IsMapReady():
-            self.CleansingContext.ObserveCurrentEnvironment()
+        if Map.IsMapLoading() or Map.IsInCinematic() or not Map.IsMapReady():
             return
 
         if self._TrottleTimers._75ms.IsExpired():
@@ -138,7 +65,6 @@ class GlobalCache:
             if self._TrottleTimers._150ms.IsExpired():
                 self._TrottleTimers._150ms.Reset()
                 self.Party._update_cache()
-                self._refresh_cleansing_context()
 
                 self._RawItemCache.update()
                 self.Item._update_cache()

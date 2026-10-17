@@ -138,18 +138,13 @@ class InstanceInfo:
         return InstanceInfo._ptr    
     @staticmethod
     def _update_ptr():
-        # Use the legacy pattern scan.  The C++ shared memory publishes
-        # g_instance_info_ptr (address of a code reference) rather than the
-        # actual InstanceInfo*, so the SSM dereference path gives garbage.
+        # The shared directory contains a code reference, not InstanceInfo*.
         ptr = InstanceInfo_GetPtr.read_ptr()
         InstanceInfo._ptr = ptr
         if not ptr:
             InstanceInfo._cached_ctx = None
             return
-        InstanceInfo._cached_ctx = cast(
-            ptr,
-            POINTER(InstanceInfoStruct)
-        ).contents
+        InstanceInfo._cached_ctx = cast(ptr, POINTER(InstanceInfoStruct)).contents
 
     @staticmethod
     def enable():

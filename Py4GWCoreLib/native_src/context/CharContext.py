@@ -217,18 +217,15 @@ class CharContext:
     @staticmethod
     def _update_ptr():
         from ..ShMem.SysShaMem import SystemShaMemMgr
-        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+
+        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None:
+            return
         ptr = SSM.CharContext
-        #ptr = PyPointers.PyPointers.GetCharContextPtr()
         CharContext._ptr = ptr
         if not ptr:
             CharContext._cached_ctx = None
             return
-        
-        CharContext._cached_ctx = cast(
-            ptr,
-            POINTER(CharContextStruct)
-        ).contents
+        CharContext._cached_ctx = cast(ptr, POINTER(CharContextStruct)).contents
 
     @staticmethod
     def enable():

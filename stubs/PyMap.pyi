@@ -5,6 +5,7 @@
 from typing import List
 from typing import Tuple
 
+
 # ── Travel ──
 # region defaults to -2 (GW::Constants::ServerRegion::NoRegion sentinel used by the binding).
 def travel(map_id: int, region: int = -2, district_number: int = 0, language: int = 0) -> bool: ...
