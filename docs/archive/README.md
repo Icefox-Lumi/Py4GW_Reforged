@@ -21,6 +21,8 @@ script).
 
 ## Bridge
 
+- [Native account publication](bridge/shared-memory/native-account-publication.md) - retired v2 transport, detached reader, and offline verification record; removed during pre-Cleansing source restoration. Independent Python v1 freshness and coordination remain active. *(abandoned)*
+
 - `bridge/shared-memory/multibox-shmem-cpp-writer-plan.md` — C++ shmem-writer migration plan; implemented and working. The postmortem at `../bridge/shared-memory/multibox-shmem-cpp-writer-postmortem.md` is the layout authority (its `ATTRIBUTES` count corrects this plan). *(completed)*
 
 ## Game client

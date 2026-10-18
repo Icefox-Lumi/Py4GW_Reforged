@@ -54,8 +54,13 @@ class GlobalCache:
         self._TrottleTimers.Reset()
 
     def _update_cache(self):
-        if Map.IsMapLoading() or Map.IsInCinematic() or not Map.IsMapReady():
-            return
+        # GlobalCache intentionally orchestrates these existing internal refresh hooks.
+        # Party and SkillBar refresh native snapshots; Item services pending name requests.
+        if Map.IsMapLoading() or Map.IsInCinematic():
+            self.Party._update_cache()  # pyright: ignore[reportPrivateUsage]
+            self._RawItemCache.update()
+            self.Item._update_cache()  # pyright: ignore[reportPrivateUsage]
+            self.SkillBar._update_cache()  # pyright: ignore[reportPrivateUsage]
 
         if self._TrottleTimers._75ms.IsExpired():
             self._TrottleTimers._75ms.Reset()

@@ -1,22 +1,24 @@
 # Shared-Memory Documentation Map
 
+Status: current navigation; historical migration records are labelled below
+
 This folder contains the multi-account shared-memory writer migration and its
 failure record. It is an integration boundary between Python shared-memory
 consumers and the Reforged Native C++ writer.
 
 ## Authority and status
 
-- `native-account-publication.md` describes the current additive v2 Native
-  evidence protocol and detached reader, verified offline and awaiting live
-  injected-client verification. Read it before extending corrected evidence.
-  It covers attachment failure preserving abandoned recovery and distinguishes
-  guarded explicit shutdown from nonblocking static teardown fallback.
+- [Native account publication](../../archive/bridge/shared-memory/native-account-publication.md)
+  preserves the retired v2 evidence protocol and detached reader as historical
+  material. Its APIs, probes, Native tests, and build targets were removed
+  during pre-Cleansing source restoration. Independent Python v1 freshness
+  and coordination remain active.
 - `multibox-shmem-cpp-writer-postmortem.md` records the resolved layout bug,
   root cause, and corrective evidence. Read it before changing the layout.
 - `../../archive/bridge/shared-memory/multibox-shmem-cpp-writer-plan.md` preserves the locked migration
   scope and the byte/layout invariants as implemented; note its layout table
   predates the postmortem correction.
-- Both records report the migration as implemented and working; verify live
+- The v1 plan and postmortem report the migration as implemented and working; verify live
   behavior and the current native/Python sources before extending it.
 - Coordination regions such as `Inbox`, `Intents`, and `HeroAIOptions` remain
   Python-written according to the migration record; do not infer that the C++

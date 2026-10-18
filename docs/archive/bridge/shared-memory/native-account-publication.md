@@ -1,8 +1,30 @@
 # Native Account Publication
 
-Status: current; offline-verified, pending injected-client verification
-Scope: corrected Native account evidence and the detached Python reader
-Authority: Native multibox source, Python ctypes declarations, focused regression tests
+Status: historical; retired during pre-Cleansing source restoration on 2026-10-17
+Scope: retired Native v2 account evidence and detached Python reader
+Authority: pre-restoration source and offline tests preserved in the verified restoration archive
+
+## Retirement boundary
+
+The protocol, APIs, probes, Native tests, and build targets described below
+have been removed from active source. This record preserves their historical
+design and verification claims; its build instructions are historical too.
+The independent Python v1 wrap-aware freshness helpers and their consumers
+in AllAccounts, SmartEnergySurge, and My Healing Burst remain active.
+Python-owned messaging, isolation, HeroAI coordination, and intent claims
+also remain active on v1.
+
+The five restored Native source files match comparison checkpoint
+`204069e66e525aa0e2ebf4af4960f1684a356398`. That checkpoint is not proven to
+be the source used to compile the original DLL. Source restoration provides
+no new injected-client verification.
+
+Exact pre-restoration source and recovery material are preserved at
+`C:\Users\O_o\Desktop\Py4GW-Archives\Post-Cleansing-Restoration\2026-10-17-pre-reversion`.
+For current ownership, start with the
+[shared-memory map](../../../bridge/shared-memory/README.md).
+
+The original record follows unchanged.
 
 ## Transport and ownership
 
