@@ -309,6 +309,10 @@ class BuildMgr:
             if skill_id == Skill.GetID("Spirit_Transfer"):
                 if not Routines.Agents.GetNearestSpirit(Range.Spellcast.value):
                     return False
+            elif skill_id == Skill.GetID("Spirit_Light"):
+                # Pets must not enable Spirit Light's health-sacrificing fallback.
+                if not Routines.Agents.GetNearestSpirit(Range.Earshot.value):
+                    return False
             else:
                 spirit_array = AgentArray.GetSpiritPetArray()
                 spirit_array = AgentArray.Filter.ByDistance(

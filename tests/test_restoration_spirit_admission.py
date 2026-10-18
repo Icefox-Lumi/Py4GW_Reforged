@@ -94,11 +94,13 @@ class _SpiritWorld:
     dead: set[int] = field(default_factory=set[int])
     spawned: set[int] = field(default_factory=lambda: {10})
     spirits: list[int] = field(default_factory=lambda: [10])
+    pets: list[int] = field(default_factory=list[int])
     allies: list[int] = field(default_factory=lambda: [1, 2])
     hostile: set[int] = field(default_factory=set[int])
     energy: float = 1.0
     recharge: int = 0
     slot: int = 2
+    equipped_skill_id: int = TRANSFER
     explorable: bool = True
     adrenaline: bool = True
     skills_enabled: list[bool] = field(default_factory=lambda: [True] * 8)
@@ -136,10 +138,10 @@ class _SpiritWorld:
         return 30
 
     def get_slot(self, skill_id: int) -> int:
-        return self.slot
+        return self.slot if skill_id == self.equipped_skill_id else 0
 
     def equipped_skill(self, slot: int) -> int:
-        return TRANSFER
+        return self.equipped_skill_id
 
     def skill_data(self, slot: int) -> SimpleNamespace:
         return SimpleNamespace(recharge=self.recharge)
@@ -148,7 +150,14 @@ class _SpiritWorld:
         return 5, "Spell"
 
     def allegiance(self, agent_id: int) -> tuple[int, str]:
-        return (3, "Enemy") if agent_id in self.hostile else (1, "Ally")
+        if agent_id in self.hostile:
+            return 3, "Enemy"
+        if agent_id in self.spirits or agent_id in self.pets:
+            return 4, "SpiritPet"
+        return 1, "Ally"
+
+    def spirit_pet_array(self) -> list[int]:
+        return self.spirits + self.pets
 
     def energy_cost(self, skill_id: int, agent_id: int) -> int:
         return 10 if skill_id == TRANSFER else 5
@@ -220,7 +229,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _SpiritWorld:
     _module(monkeypatch, "Py4GWCoreLib.native_src.context.AgentContext", AgentStruct=object)
     array_module = _load(monkeypatch, "Py4GWCoreLib.AgentArray", "Py4GWCoreLib/AgentArray.py")
     core.__dict__["AgentArray"] = array_module.AgentArray
-    monkeypatch.setattr(array_module.AgentArray, "GetSpiritPetArray", staticmethod(lambda: list(state.spirits)))
+    monkeypatch.setattr(array_module.AgentArray, "GetSpiritPetArray", staticmethod(state.spirit_pet_array))
     monkeypatch.setattr(array_module.AgentArray, "GetAllyArray", staticmethod(lambda: list(state.allies)))
     _module(monkeypatch, "Py4GWCoreLib.HeroAI").__path__ = []
     _module(
@@ -289,6 +298,26 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _SpiritWorld:
     return state
 
 
+@pytest.fixture
+def light_world(world: _SpiritWorld) -> _SpiritWorld:
+    world.equipped_skill_id = LIGHT
+    world.place(10, 500.0)
+    return world
+
+
+@pytest.fixture
+def pet_world(light_world: _SpiritWorld) -> _SpiritWorld:
+    # A separate living pet in the SpiritPet array, with the non-spawned pet classification.
+    light_world.spirits.clear()
+    light_world.pets.append(20)
+    light_world.valid.add(20)
+    light_world.health[20] = 1.0
+    light_world.place(20, 100.0)
+    assert light_world.allegiance(20) == (4, "SpiritPet") and 20 not in light_world.spawned
+    assert light_world.is_alive(20)
+    return light_world
+
+
 @pytest.mark.parametrize("distance, expected", [(500.0, True), (1100.0, True), (1248.0, True), (1248.01, False)])
 def test_spirit_range_through_helper_and_shared_admission(world: _SpiritWorld, distance: float, expected: bool) -> None:
     world.place(10, distance)
@@ -298,14 +327,14 @@ def test_spirit_range_through_helper_and_shared_admission(world: _SpiritWorld, d
     assert world.submissions == ([(2, 2, 250)] if expected else []), world
 
 
-@pytest.mark.parametrize("kind", ["absent", "dead", "unspawned", "pet", "invalid"])
+@pytest.mark.parametrize("kind", ["absent", "dead", "unspawned", "invalid"])
 def test_invalid_donor_never_admits(world: _SpiritWorld, kind: str) -> None:
     world.place(10, 500.0)
     if kind == "absent":
         world.spirits.clear()
     elif kind == "dead":
         world.dead.add(10)
-    elif kind in ("unspawned", "pet"):
+    elif kind == "unspawned":
         world.spawned.clear()
     else:
         world.valid.remove(10)
@@ -314,11 +343,15 @@ def test_invalid_donor_never_admits(world: _SpiritWorld, kind: str) -> None:
     assert world.submissions == [], world
 
 
+@pytest.mark.parametrize("skill_id", [TRANSFER, LIGHT], ids=["transfer", "light"])
 @pytest.mark.parametrize("hostile", [False, True], ids=["allied", "enemy"])
-def test_supplied_spirit_allegiances_are_eligible(world: _SpiritWorld, hostile: bool) -> None:
+def test_supplied_spirit_allegiances_are_eligible(world: _SpiritWorld, skill_id: int, hostile: bool) -> None:
+    world.equipped_skill_id = skill_id
+    world.place(10, 500.0)
     if hostile:
         world.hostile.add(10)
-    assert _finish(world.helper.Spirit_Transfer()) is True, world
+    helper = world.helper.Spirit_Transfer if skill_id == TRANSFER else world.helper.Spirit_Light
+    assert _finish(helper()) is True, world
     assert world.submissions == [(2, 2, 250)], world
 
 
@@ -346,8 +379,11 @@ def test_invalid_nearer_entries_do_not_hide_a_qualifying_spirit(world: _SpiritWo
     assert _finish(world.helper.Spirit_Transfer()) is True, world
 
 
+@pytest.mark.parametrize("skill_id", [TRANSFER, LIGHT], ids=["transfer", "light"])
 @pytest.mark.parametrize("guard", ["energy", "recharge", "toggle", "pending", "unequipped", "map", "adrenaline"])
-def test_existing_cast_guards_still_block(world: _SpiritWorld, guard: str) -> None:
+def test_existing_cast_guards_still_block(world: _SpiritWorld, skill_id: int, guard: str) -> None:
+    world.equipped_skill_id = skill_id
+    world.place(10, 500.0)
     if guard == "energy":
         world.energy = 0.1
     elif guard == "recharge":
@@ -362,17 +398,21 @@ def test_existing_cast_guards_still_block(world: _SpiritWorld, guard: str) -> No
         world.explorable = False
     else:
         world.adrenaline = False
-    assert world.build.CanCastSkillID(TRANSFER) is False, (guard, world)
-    assert _finish(world.helper.Spirit_Transfer()) is False, (guard, world)
+    helper = world.helper.Spirit_Transfer if skill_id == TRANSFER else world.helper.Spirit_Light
+    assert world.build.CanCastSkillID(skill_id) is False, (guard, world)
+    assert _finish(helper()) is False, (guard, world)
     assert world.submissions == [], world
 
 
-def test_extra_condition_and_following_shared_conditions_remain(world: _SpiritWorld) -> None:
-    assert world.build.CanCastSkillID(TRANSFER, extra_condition=False) is False, world
-    conditions = world.metadata[TRANSFER].Conditions
+@pytest.mark.parametrize("skill_id", [TRANSFER, LIGHT], ids=["transfer", "light"])
+def test_extra_condition_and_following_shared_conditions_remain(world: _SpiritWorld, skill_id: int) -> None:
+    world.equipped_skill_id = skill_id
+    world.place(10, 500.0)
+    assert world.build.CanCastSkillID(skill_id, extra_condition=False) is False, world
+    conditions = world.metadata[skill_id].Conditions
     conditions.EnemyCount = 1
     world.routines.Agents.GetFilteredEnemyArray = _empty
-    assert world.build.CanCastSkillID(TRANSFER) is False, world
+    assert world.build.CanCastSkillID(skill_id) is False, world
 
 
 @pytest.mark.parametrize("distance, expected", [(1248.0, True), (1248.01, False)])
@@ -392,10 +432,14 @@ def test_recipient_health_thresholds_remain(
     assert bool(_finish(world.helper.Spirit_Transfer(health_threshold=threshold))) is expected, world
 
 
-def test_submission_marks_pending_and_prevents_duplicate(world: _SpiritWorld) -> None:
-    assert _finish(world.helper.Spirit_Transfer()) is True, world
+@pytest.mark.parametrize("skill_id", [TRANSFER, LIGHT], ids=["transfer", "light"])
+def test_submission_marks_pending_and_prevents_duplicate(world: _SpiritWorld, skill_id: int) -> None:
+    world.equipped_skill_id = skill_id
+    world.place(10, 500.0)
+    helper = world.helper.Spirit_Transfer if skill_id == TRANSFER else world.helper.Spirit_Light
+    assert _finish(helper()) is True, world
     assert world.timer.deadline == 250, world
-    assert _finish(world.helper.Spirit_Transfer()) is False, world
+    assert _finish(helper()) is False, world
     assert world.submissions == [(2, 2, 250)], world
 
 
@@ -423,7 +467,82 @@ def test_other_skills_keep_earshot_admission(
     assert world.metadata[LIGHT].Conditions.RequiresSpiritInEarshot is True
 
 
-def test_spirit_light_no_spirit_fallback_remains_blocked(world: _SpiritWorld) -> None:
-    world.spirits.clear()
-    assert _finish(world.helper.Spirit_Light()) is False, world
-    assert world.submissions == [], world
+@pytest.mark.parametrize("distance, expected", [(500.0, True), (1012.0, True), (1012.01, False), (1100.0, False)])
+def test_spirit_light_earshot_through_helper_and_admission(
+    light_world: _SpiritWorld, distance: float, expected: bool
+) -> None:
+    light_world.place(10, distance)
+    assert light_world.build.CanCastSkillID(LIGHT) is expected, light_world
+    assert light_world.build.CanCastSkillSlot(2) is expected, light_world
+    assert bool(_finish(light_world.helper.Spirit_Light())) is expected, light_world
+    assert light_world.submissions == ([(2, 2, 250)] if expected else []), light_world
+
+
+@pytest.mark.parametrize("kind", ["absent", "dead", "unspawned", "invalid"])
+def test_spirit_light_rejects_missing_or_invalid_spirit(light_world: _SpiritWorld, kind: str) -> None:
+    if kind == "absent":
+        light_world.spirits.clear()
+    elif kind == "dead":
+        light_world.dead.add(10)
+    elif kind == "unspawned":
+        light_world.spawned.clear()
+    else:
+        light_world.valid.remove(10)
+    assert light_world.build.CanCastSkillID(LIGHT) is False, (kind, light_world)
+    assert _finish(light_world.helper.Spirit_Light()) is False, (kind, light_world)
+    assert light_world.submissions == [], light_world
+
+
+@pytest.mark.parametrize("skill_id", [TRANSFER, LIGHT], ids=["transfer", "light"])
+def test_pet_only_cannot_admit_either_spirit_heal(pet_world: _SpiritWorld, skill_id: int) -> None:
+    pet_world.equipped_skill_id = skill_id
+    helper = pet_world.helper.Spirit_Transfer if skill_id == TRANSFER else pet_world.helper.Spirit_Light
+    assert pet_world.routines.Agents.GetNearestSpirit(pet_world.ranges.Earshot.value) == 0, pet_world
+    assert pet_world.health[1] > pet_world.metadata[LIGHT].Conditions.SacrificeHealth, pet_world
+    assert _finish(helper()) is False, pet_world
+    assert pet_world.build.CanCastSkillID(skill_id) is False, pet_world
+    assert pet_world.build.CanCastSkillSlot(2) is False, pet_world
+    assert pet_world.submissions == [], pet_world
+
+
+def test_pet_does_not_hide_qualifying_spirit(pet_world: _SpiritWorld) -> None:
+    pet_world.spirits.append(10)
+    assert pet_world.routines.Agents.GetNearestSpirit(pet_world.ranges.Earshot.value) == 10, pet_world
+    assert _finish(pet_world.helper.Spirit_Light()) is True, pet_world
+    assert pet_world.submissions == [(2, 2, 250)], pet_world
+
+
+def test_unrelated_spirit_gate_keeps_pet_behavior_without_extra_scan(
+    pet_world: _SpiritWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_scan(*args: Any, **kwargs: Any) -> int:
+        raise AssertionError("Unrelated spirit-gated skills must retain their existing observation path")
+
+    monkeypatch.setattr(pet_world.routines.Agents, "GetNearestSpirit", unexpected_scan)
+    assert pet_world.build._meets_custom_skill_shared_conditions(OTHER) is True, pet_world
+
+
+def test_spirit_light_keeps_spirit_supported_self_healing(light_world: _SpiritWorld) -> None:
+    light_world.health[1] = 0.1
+    assert _finish(light_world.helper.Spirit_Light(health_threshold=0.30)) is True, light_world
+    assert light_world.submissions == [(2, 1, 250)], light_world
+    assert light_world.health[1] == 0.1, "Submission must not simulate completed healing"
+
+
+@pytest.mark.parametrize(
+    "threshold, health, expected",
+    [
+        (None, 0.59, True),
+        (None, 0.60, False),
+        (0.30, 0.29, True),
+        (0.30, 0.30, False),
+        (0.60, 0.59, True),
+        (0.60, 0.60, False),
+    ],
+)
+def test_spirit_light_recipient_thresholds_remain(
+    light_world: _SpiritWorld, threshold: float | None, health: float, expected: bool
+) -> None:
+    light_world.health[2] = health
+    assert bool(_finish(light_world.helper.Spirit_Light(health_threshold=threshold))) is expected, light_world
+    assert light_world.submissions == ([(2, 2, 250)] if expected else []), light_world
