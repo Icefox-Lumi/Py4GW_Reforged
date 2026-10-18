@@ -76,9 +76,9 @@ class Blood_is_Power_Healer(BuildMgr):
         if (yield from self.skills.Ritualist.RestorationMagic.Mend_Body_and_Soul(health_threshold=0.40)):
             return True
 
-        # Protective Was Kaolai: drop the ashes to release the 85 HP party heal
-        # when 4+ allies are damaged. Gated on equipped so we don't drop quest
-        # items or other bundles the bot didn't put in our hand.
+        # Kaolai release: four nearby party members below 75% HP.
+        # Equipped plus holding does not identify the bundle; the shared helper
+        # retains the conservative range until positive ash identity is established.
         if self.IsSkillEquipped(Protective_Was_Kaolai_ID) and (yield from self.skills.Ritualist.NoAttribute.Drop_Held_Bundle(health_threshold=0.75)):
             return True
 

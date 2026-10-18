@@ -398,7 +398,7 @@ class Party:
     class Players:
         @staticmethod
         @frame_cache(category="Party.Players", source_lib="GetAgentIDByLoginNumber")
-        def GetAgentIDByLoginNumber(login_number):
+        def GetAgentIDByLoginNumber(login_number: int):
             """
             Retrieve the agent ID by login number.
             Args:
