@@ -80,6 +80,7 @@ class _World:
     positions: dict[int, tuple[float, float]] = field(default_factory=dict[int, tuple[float, float]])
     origin: tuple[float, float] = (0.0, 0.0)
     accounts: list[Any] = field(default_factory=list[Any])
+    remote_now: int = 10000
     party_loaded: bool = True
     holding: bool = True
     button_present: bool = True
@@ -151,6 +152,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
         IsValid=state.is_valid,
         IsDead=state.is_dead,
         GetHealth=state.get_health,
+        GetLoginNumber=_login_agent_id,
         GetXY=state.position,
         DEAD_HEALTH_EPSILON=0.0001,
     )
@@ -187,7 +189,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
         frame_cache=_frame_cache,
     )
     _module(monkeypatch, "Py4GWCoreLib.routines_src").__path__ = []
-    _module(
+    map_module = _module(
         monkeypatch,
         "Py4GWCoreLib.Map",
         Map=SimpleNamespace(
@@ -198,11 +200,22 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
             GetLanguage=lambda: (0,),
         ),
     )
+    core.__dict__["Map"] = map_module.__dict__["Map"]
+
+    def publications(*, sort_results: bool = True) -> list[Any]:
+        return state.accounts
+
     _module(
         monkeypatch,
         "Py4GWCoreLib.GlobalCache",
-        GLOBAL_CACHE=SimpleNamespace(ShMem=SimpleNamespace(GetAllAccountData=lambda: state.accounts)),
+        GLOBAL_CACHE=SimpleNamespace(ShMem=SimpleNamespace(GetAllAccountData=publications)),
     )
+    clock = _load(
+        monkeypatch,
+        "Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync",
+        "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py",
+    )
+    monkeypatch.setattr(clock, "get_uncached_tick_count64", lambda: state.remote_now)
     checks = _load(monkeypatch, "Py4GWCoreLib.routines_src.Checks", "Py4GWCoreLib/routines_src/Checks.py")
     core.Routines.Checks = checks.Checks
     checks.Checks.Skills.CanCast = staticmethod(lambda: state.can_cast)
@@ -619,3 +632,394 @@ def test_stock_stamps_before_yield_but_does_not_itself_suppress_retries(world: _
     assert _finish(pending) is True
     assert _finish(world.generic.Drop_Held_Bundle(health_threshold=0.75)) is True
     assert world.clicks == 2 and world.holding
+
+
+def _emergency(world: _World, *, after_targeted_heals: bool = False) -> bool:
+    return bool(_finish(world.helper.Drop_Emergency_Bundle(after_targeted_heals=after_targeted_heals)))
+
+
+def _injuries(world: _World, health: tuple[float, ...]) -> None:
+    world.health = dict.fromkeys(range(1, 5), 1.0)
+    world.health.update(dict(zip((2, 3, 4), health)))
+
+
+@pytest.mark.parametrize(
+    "health,expected",
+    [
+        ((0.28, 0.34, 0.37), True),
+        ((0.30, 0.34), True),
+        ((0.35, 0.35), True),
+        ((0.3501, 0.35), False),
+        ((0.39, 0.39), False),
+        ((0.399, 0.399, 0.399), True),
+        ((0.40, 0.40, 0.40), False),
+        ((0.50, 0.55, 0.60), False),
+        ((0.09,), False),
+        ((0.09, 0.35), False),
+        ((0.20, 0.35), True),
+        ((0.1999, 0.35), False),
+        ((0, 0.3), False),
+        ((-0.1, 0.3), False),
+        ((math.nan, 0.3), False),
+        ((math.inf, 0.3), False),
+    ],
+)
+def test_emergency_injury_burden_and_rescue_boundaries(
+    world: _World, health: tuple[float, ...], expected: bool
+) -> None:
+    _injuries(world, health)
+    assert _emergency(world) is expected, (health, world.clicks)
+    assert world.clicks == int(expected)
+    assert world.timer.deadline == (250 if expected else None)
+    assert world.holding and (world.health[2] == health[0] or math.isnan(health[0]))
+
+
+def test_failed_targeted_rescue_allows_critical_group_but_never_a_single_recipient(world: _World) -> None:
+    _injuries(world, (0.09, 0.30))
+    assert not _emergency(world) and not world.clicks
+    assert _emergency(world, after_targeted_heals=True)
+    world.timer.Stop()
+    _injuries(world, (0.09,))
+    assert not _emergency(world, after_targeted_heals=True) and world.clicks == 1
+
+
+@pytest.mark.parametrize("kind", ["dead", "invalid", "zero", "disconnected", "outside", "npc", "duplicate"])
+def test_emergency_counts_only_distinct_eligible_living_party(world: _World, kind: str) -> None:
+    _injuries(world, (0.28, 0.30))
+    if kind == "dead":
+        world.dead.add(3)
+    elif kind == "invalid":
+        world.valid.remove(3)
+    elif kind == "zero":
+        world.players[2].login_number = 0
+        world.allies.append(0)
+        world.valid.add(0)
+        world.health[0] = 0.2
+    elif kind == "disconnected":
+        world.players[2].is_connected = False
+    elif kind == "outside":
+        world.positions[3] = (2500.01, 0)
+    elif kind == "npc":
+        world.players = [member for member in world.players if member.login_number != 3]
+    else:
+        world.health[3] = 1.0
+        world.players += [world.players[1]] * 3
+        world.allies += [2] * 3
+    assert not _emergency(world), (kind, world)
+    assert world.clicks == 0
+
+
+def test_emergency_keeps_inclusive_range_and_roster_hero_henchman_support(world: _World) -> None:
+    _injuries(world, (0.28, 0.34))
+    world.players = world.players[:1]
+    world.heroes = [SimpleNamespace(agent_id=2)]
+    world.henchmen = [SimpleNamespace(agent_id=3)]
+    world.positions[3] = (2500, 0)
+    assert _emergency(world)
+    assert world.frame_requests == [(5040781, [0, 0])]
+
+
+@pytest.mark.parametrize("rank,maximum", [(None, 0), (0, 280), (8, 500), (12, 1000), (16, 500), ((12, 16), 500)])
+def test_emergency_heuristic_does_not_invent_healing_from_rank_or_maximum(
+    world: _World, monkeypatch: pytest.MonkeyPatch, rank: Any, maximum: int
+) -> None:
+    _injuries(world, (0.28, 0.34))
+    agent = sys.modules["Py4GWCoreLib.Agent"].__dict__["Agent"]
+
+    def forbidden(*_args: Any) -> Any:
+        pytest.fail(f"Severity heuristic must not infer healing: rank={rank}, max_health={maximum}")
+
+    for name in ("GetAttributes", "GetMaxHealth", "GetWeaponExtraData"):
+        monkeypatch.setattr(agent, name, forbidden, raising=False)
+    _module(monkeypatch, "PyEffects", PyEffects=forbidden)
+    _module(monkeypatch, "PyItem", Item=forbidden)
+    _module(monkeypatch, "PyGameThread", enqueue=forbidden)
+    assert _emergency(world)
+    assert world.clicks == 1
+
+
+def _publication(agent: int, health: float, *, stamp: int = 9999) -> Any:
+    return SimpleNamespace(
+        IsSlotActive=True,
+        IsAccount=True,
+        LastUpdated=stamp,
+        AgentPartyData=SimpleNamespace(PartyID=7),
+        AgentData=SimpleNamespace(
+            AgentID=agent,
+            LoginNumber=agent,
+            Map=SimpleNamespace(MapID=10, Region=1, District=1, Language=0),
+            Health=SimpleNamespace(Current=health),
+            Is_Dead=False,
+            Is_DeadByTypeMap=False,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("fresh", True),
+        ("249ms", True),
+        ("250ms", False),
+        ("stale", False),
+        ("future", False),
+        ("wrap", True),
+        ("duplicate", False),
+        ("login", False),
+        ("map", False),
+        ("party", False),
+        ("inactive", False),
+        ("nonplayer", False),
+        ("dead", False),
+        ("type_dead", False),
+        ("nan", False),
+        ("missing", False),
+    ],
+)
+def test_emergency_remote_publication_freshness_and_identity(world: _World, case: str, expected: bool) -> None:
+    _injuries(world, (1.0, 0.30))
+    row = _publication(2, 0.28)
+    world.accounts = [row]
+    if case in {"249ms", "250ms", "stale", "future", "wrap"}:
+        row.LastUpdated = {"249ms": 9751, "250ms": 9750, "stale": 6000, "future": 10001, "wrap": 0xFFFFFFF0}[case]
+        if case == "wrap":
+            world.remote_now = 0x100000010
+    elif case == "duplicate":
+        world.accounts.append(_publication(2, 0.29))
+    elif case == "login":
+        row.AgentData.LoginNumber = 22
+    elif case == "map":
+        row.AgentData.Map.MapID = 11
+    elif case == "party":
+        row.AgentPartyData.PartyID = 8
+    elif case == "inactive":
+        row.IsSlotActive = False
+    elif case == "nonplayer":
+        row.IsAccount = False
+    elif case == "dead":
+        row.AgentData.Is_Dead = True
+    elif case == "type_dead":
+        row.AgentData.Is_DeadByTypeMap = True
+    elif case == "nan":
+        row.AgentData.Health.Current = math.nan
+    elif case == "missing":
+        del row.LastUpdated
+    assert _emergency(world) is expected, (case, world.accounts)
+    assert world.clicks == int(expected)
+
+
+def test_emergency_rejects_publication_changed_while_copying(world: _World) -> None:
+    _injuries(world, (1.0, 0.30))
+    row = _publication(2, 0.28)
+
+    class ChangingHealth:
+        @property
+        def Current(self) -> float:
+            row.LastUpdated += 1
+            return 0.28
+
+    row.AgentData.Health = ChangingHealth()
+    world.accounts = [row]
+    assert not _emergency(world) and not world.clicks
+
+
+def test_uncertain_emergency_evidence_does_not_gate_four_person_routine(world: _World) -> None:
+    world.accounts = [_publication(2, 0.28, stamp=6000)]
+    world.health[3] = 0.30
+    assert not _emergency(world)
+    assert _release(world)
+    assert world.clicks == 1
+
+
+@pytest.mark.parametrize("gate", ["pending", "not_held", "party", "healthy", "routine_mild"])
+def test_emergency_skips_extra_publication_scan_without_candidate(
+    world: _World, monkeypatch: pytest.MonkeyPatch, gate: str
+) -> None:
+    _injuries(world, (0.28, 0.34))
+    if gate == "pending":
+        world.helper.build._mark_local_cast_pending(250)
+    elif gate == "not_held":
+        world.holding = False
+    elif gate == "party":
+        world.party_loaded = False
+    elif gate == "healthy":
+        world.health = dict.fromkeys(range(1, 5), 1.0)
+    else:
+        world.health.update(dict(zip((1, 2, 3, 4), (0.60, 0.65, 0.70, 0.74))))
+
+    def forbidden(_recipients: Any) -> Any:
+        pytest.fail(f"No emergency candidate should read publications: {gate}")
+
+    monkeypatch.setattr(world.helper, "_emergency_health", forbidden)
+    assert not _emergency(world) and not world.clicks
+
+
+def test_emergency_stamps_before_yield_and_closing_does_not_revoke_submission(world: _World) -> None:
+    _injuries(world, (0.28, 0.34))
+    work = world.helper.Drop_Emergency_Bundle()
+    assert next(work) is None
+    assert world.clicks == 1 and world.timer.deadline == 250
+    work.close()
+    assert not _emergency(world) and world.clicks == 1
+    world.timer.now = 249
+    assert not _emergency(world)
+    world.timer.now = 250
+    assert _emergency(world) and world.clicks == 2
+
+
+@pytest.mark.parametrize(
+    "health,early,after_rescue",
+    [
+        ((0.28, 0.34, 0.37, 0.95), True, True),
+        ((0.28, 0.34, 0.37, 0.74), True, True),
+        ((0.35, 0.35, 0.74, 0.74), True, True),
+        ((0.3501, 0.35, 0.74, 0.74), False, False),
+        ((0.39, 0.39, 0.39, 0.39), True, True),
+        ((0.60, 0.65, 0.70, 0.74), False, False),
+        ((0.19, 0.30, 0.74, 0.74), False, True),
+        ((0.10, 0.74, 0.74, 0.74), False, False),
+        ((0.40, 0.40, 0.40, 0.40), False, False),
+        ((0.20, 0.35, 0.74, 0.74), True, True),
+    ],
+)
+def test_four_person_emergency_priority_boundaries(
+    world: _World, health: tuple[float, ...], early: bool, after_rescue: bool
+) -> None:
+    world.health.update(dict(zip((1, 2, 3, 4), health)))
+    assert _emergency(world) is early, (health, "before rescue")
+    assert world.clicks == int(early)
+    world.timer.Stop()
+    assert _emergency(world, after_targeted_heals=True) is after_rescue, (health, "after rescue")
+    assert world.clicks == int(early) + int(after_rescue)
+
+
+@pytest.mark.parametrize("additional_health", [0.95, 0.75, 0.74, 0.40, 0.39, 0.20])
+def test_additional_injured_members_cannot_remove_emergency_priority(world: _World, additional_health: float) -> None:
+    world.health.update({1: 0.28, 2: 0.34, 3: 0.37, 4: additional_health})
+    assert _emergency(world), (4, additional_health)
+    for aid in range(5, 9):
+        world.timer.Stop()
+        world.players.append(SimpleNamespace(login_number=aid, is_connected=True))
+        world.allies.append(aid)
+        world.valid.add(aid)
+        world.health[aid] = additional_health
+        assert _emergency(world), (aid, additional_health, world.health)
+    assert world.clicks == 5
+
+
+@pytest.mark.parametrize("gate", ["not_held", "pending", "stale", "conflict"])
+def test_four_person_emergency_keeps_holding_pending_and_health_evidence_guards(world: _World, gate: str) -> None:
+    world.health.update({1: 0.74, 2: 0.28, 3: 0.30, 4: 0.74})
+    if gate == "not_held":
+        world.holding = False
+    elif gate == "pending":
+        world.helper.build._mark_local_cast_pending(250)
+    elif gate == "stale":
+        world.accounts = [_publication(2, 0.28, stamp=9750)]
+    else:
+        world.accounts = [_publication(2, 0.28), _publication(2, 0.29)]
+    assert not _emergency(world) and not world.clicks, gate
+    if gate in {"stale", "conflict"}:
+        assert _release(world) and world.clicks == 1, "Emergency-only evidence must not restrict routine release."
+
+
+@pytest.mark.parametrize(
+    "health,expected",
+    [
+        ((1.0, 0.25, 0.30, 1.0), True),
+        ((1.0, 0.37, 0.38, 1.0), False),
+        ((0.39, 0.39, 0.39, 0.39), True),
+        ((0.60, 0.65, 0.70, 0.74), False),
+        ((1.0, 0.19, 0.30, 1.0), False),
+    ],
+)
+def test_emergency_examples_without_diagnostic_hooks(world: _World, health: tuple[float, ...], expected: bool) -> None:
+    world.health.update(dict(zip((1, 2, 3, 4), health)))
+    assert world.helper.bip_diagnostic is None
+    assert _emergency(world) is expected, health
+    assert world.clicks == int(expected)
+    assert world.timer.deadline == (250 if expected else None)
+
+
+@pytest.mark.parametrize("gate", ["pending", "party_unloaded", "no_held", "player_invalid_or_dead", "button_missing"])
+def test_emergency_action_guards_without_capture(world: _World, gate: str) -> None:
+    _injuries(world, (0.25, 0.30))
+    if gate == "pending":
+        world.timer.deadline = 250
+    elif gate == "party_unloaded":
+        world.party_loaded = False
+    elif gate == "no_held":
+        world.holding = False
+    elif gate == "player_invalid_or_dead":
+        world.dead.add(1)
+    else:
+        world.button_present = False
+    assert not _emergency(world), gate
+    assert not world.clicks
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("fresh", True),
+        ("stale", False),
+        ("future", False),
+        ("login", False),
+        ("conflict", False),
+        ("missing", False),
+        ("native", True),
+        ("changing", False),
+    ],
+)
+def test_emergency_publication_outcomes_without_capture(
+    world: _World,
+    case: str,
+    expected: bool,
+) -> None:
+    _injuries(world, (1.0, 0.30))
+    row = _publication(2, 0.25)
+    world.accounts = [row]
+    if case == "stale":
+        row.LastUpdated = 9750
+    elif case == "future":
+        row.LastUpdated = 10001
+    elif case == "login":
+        row.AgentData.LoginNumber = 22
+    elif case == "conflict":
+        world.accounts.append(_publication(2, 0.25))
+    elif case == "missing":
+        del row.LastUpdated
+    elif case == "native":
+        world.accounts = []
+        world.health[2] = 0.25
+    elif case == "changing":
+
+        class ChangedHealth:
+            @property
+            def Current(self) -> float:
+                row.LastUpdated += 1
+                return 0.25
+
+        row.AgentData.Health = ChangedHealth()
+    assert _emergency(world) is expected, case
+    assert world.clicks == int(expected), case
+
+
+@pytest.mark.parametrize("excluded", ["duplicates", "invalid", "dead", "outside"])
+def test_emergency_repeated_decisions_require_unique_living_recipients(
+    world: _World,
+    excluded: str,
+) -> None:
+    _injuries(world, (0.25, 0.30))
+    world.allies.extend([2, 2, 3, 3])
+    world.players.extend([world.players[1], world.players[2]])
+    if excluded == "invalid":
+        world.valid.remove(3)
+    elif excluded == "dead":
+        world.dead.add(3)
+    elif excluded == "outside":
+        world.positions[3] = (2500.01, 0)
+    for index in range(3):
+        world.timer.Stop()
+        assert _emergency(world) is (excluded == "duplicates"), excluded
+        assert world.clicks == (index + 1 if excluded == "duplicates" else 0), (index, excluded)

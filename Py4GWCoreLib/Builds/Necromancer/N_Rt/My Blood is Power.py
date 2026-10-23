@@ -39,7 +39,7 @@ class _MaskedCombat(Protocol):
 
 
 class MyBloodIsPower(BuildMgr):
-    """Exact N/Rt bar, with the generic healer's eight-skill decision order."""
+    """Exact N/Rt bar, with Smart Kaolai group triage in the existing action owner."""
 
     def __init__(self, cached_data: Any = None, match_only: bool = False) -> None:
         super().__init__(
@@ -274,6 +274,9 @@ class MyBloodIsPower(BuildMgr):
 
         restoration = self.skillbook.Ritualist.RestorationMagic
         soul_reaping = self.skillbook.Necromancer.SoulReaping
+        if (yield from self._smart_kaolai.Drop_Emergency_Bundle()):
+            self._diagnostic_finish("Drop_Held_Bundle", preempted=True)
+            return True
         if (yield from restoration.Spirit_Transfer(health_threshold=0.30)):
             self._diagnostic_finish("Spirit_Transfer", preempted=True)
             return True
@@ -284,6 +287,11 @@ class MyBloodIsPower(BuildMgr):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=True)
             return True
         if (yield from self._smart_kaolai.Drop_Held_Bundle(health_threshold=0.75)):
+            self._diagnostic_finish("Drop_Held_Bundle", preempted=True)
+            return True
+        # The preferred rescue may fail its real spirit/resource/admission checks.
+        # Reassess now; an earlier emergency decision is never a release permit.
+        if (yield from self._smart_kaolai.Drop_Emergency_Bundle(after_targeted_heals=True)):
             self._diagnostic_finish("Drop_Held_Bundle", preempted=True)
             return True
         if (yield from soul_reaping.Signet_of_Lost_Souls(max_self_energy_pct=0.30)):

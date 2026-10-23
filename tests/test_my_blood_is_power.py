@@ -113,6 +113,12 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     def max_health(_agent: int) -> int:
         return 500
 
+    def login_number(agent: int) -> int:
+        return agent
+
+    def publications(*, sort_results: bool = True) -> list[Any]:
+        return []
+
     def equipped_skill(slot: int) -> int:
         return state.bar[slot - 1]
 
@@ -126,6 +132,14 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     core.Agent.IsKnockedDown = false
     core.Agent.GetMaxHealth = max_health
     core.Agent.IsHoldingItem = false
+    core.Agent.GetLoginNumber = login_number
+    core.GLOBAL_CACHE.ShMem = SimpleNamespace(GetAllAccountData=publications)
+    publication_clock = admission._load(
+        monkeypatch,
+        "Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync",
+        "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py",
+    )
+    monkeypatch.setattr(publication_clock, "get_uncached_tick_count64", lambda: 10000)
     core.Party = SimpleNamespace(IsPartyLoaded=false)
     admission._module(monkeypatch, "Py4GWCoreLib.FrameTree", FrameTree=SimpleNamespace(frames_at_path=empty_list))
     core.Map = SimpleNamespace(
@@ -818,6 +832,7 @@ def configure_kaolai(runtime: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     r.core.Agent.IsHoldingItem = holding
     r.core.Party = SimpleNamespace(
         IsPartyLoaded=lambda: state.party_loaded,
+        GetPartyID=lambda: 7,
         GetPlayers=lambda: state.players,
         GetHeroes=lambda: state.heroes,
         GetHenchmen=lambda: state.henchmen,
@@ -961,7 +976,7 @@ def test_kaolai_routine_entry_preempted_by_repeated_real_emergency_heals(
 
 @pytest.mark.parametrize("armed", [False, True])
 @pytest.mark.parametrize("case", ["two_critical", "three_critical", "dead", "outside", "no_button", "pending", "busy"])
-def test_kaolai_missed_opportunity_real_dispatch(
+def test_kaolai_emergency_opportunity_and_existing_gates_real_dispatch(
     capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, armed: bool, case: str
 ) -> None:
     r = capture_runtime
@@ -982,8 +997,9 @@ def test_kaolai_missed_opportunity_real_dispatch(
         r.state.can_cast = False
     capture: Any = r.click("Arm one capture") if armed else None
     finish(selected.ProcessSkillCasting())
-    assert not state.clicks and not r.world.submissions, (armed, case)
-    assert selected._local_cast_timer.deadline == (250 if case == "pending" else None)
+    released = case in {"two_critical", "three_critical"}
+    assert state.clicks == ([1] if released else []) and not r.world.submissions, (armed, case)
+    assert selected._local_cast_timer.deadline == (250 if released or case == "pending" else None)
     if armed:
         counts = capture.kaolai.counts
         key = {
@@ -995,7 +1011,7 @@ def test_kaolai_missed_opportunity_real_dispatch(
             "pending": "pending_or_party_gate",
             "busy": "busy_entry",
         }[case]
-        assert counts[key] == 1 and not counts["click_call_returned"], (case, counts)
+        assert counts[key] == 1 and counts["click_call_returned"] == int(released), (case, counts)
     else:
         assert not r.output
 
@@ -1077,13 +1093,17 @@ def test_kaolai_capture_sampling_output_and_disarmed_read_bounds(
     assert not state.clicks and not r.world.submissions
     finish(selected.ProcessSkillCasting())
     assert capture.kaolai.counts["samples"] == observed and len(r.output) == 8
+    assert all("kaolai_emergency=[" not in line for line in r.output)
 
 
+@pytest.mark.parametrize("emergency", [False, True])
 def test_kaolai_observation_failure_cannot_cancel_real_drop(
-    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, emergency: bool
 ) -> None:
     r = capture_runtime
     state = configure_kaolai(r, monkeypatch)
+    if emergency:
+        r.world.health.update({1: 1.0, 2: 0.25, 3: 0.30, 4: 1.0})
     selected = r.outer.EnsureBuildContract()
     capture = r.click("Arm one capture")
 
@@ -1097,11 +1117,113 @@ def test_kaolai_observation_failure_cannot_cancel_real_drop(
     assert not r.world.submissions
 
 
-def test_kaolai_click_call_can_return_without_native_submission(
-    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize(
+    "case,health,action",
+    [
+        ("qualifies", (1.0, 0.25, 0.30, 1.0), "early"),
+        ("deficit", (1.0, 0.37, 0.38, 1.0), "none"),
+        ("four_severe", (0.39, 0.39, 0.39, 0.39), "early"),
+        ("four_mild", (0.60, 0.65, 0.70, 0.74), "routine"),
+        ("late", (1.0, 0.19, 0.30, 1.0), "late"),
+        ("no_held", (1.0, 0.25, 0.30, 1.0), "none"),
+        ("pending", (1.0, 0.25, 0.30, 1.0), "none"),
+        ("button", (1.0, 0.25, 0.30, 1.0), "none"),
+        ("busy", (1.0, 0.25, 0.30, 1.0), "none"),
+    ],
+)
+def test_emergency_real_controller_armed_disarmed_action_contract(
+    capture_runtime: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    armed: bool,
+    case: str,
+    health: tuple[float, ...],
+    action: str,
 ) -> None:
     r = capture_runtime
     state = configure_kaolai(r, monkeypatch)
+    r.world.health.update(dict(zip((1, 2, 3, 4), health)))
+    r.world.recharge = 1
+    selected = r.outer.EnsureBuildContract()
+    if case == "no_held":
+        state.holding = False
+    elif case == "pending":
+        selected._mark_local_cast_pending(250)
+    elif case == "button":
+        state.button_present = False
+    elif case == "busy":
+        r.state.can_cast = False
+    capture: Any = r.click("Arm one capture") if armed else None
+    yielded = list(selected.ProcessSkillCasting())
+    accepted = action != "none"
+    assert (state.clicks, r.world.submissions, selected._local_cast_timer.deadline, selected.DidTickSucceed()) == (
+        [1] if accepted else [],
+        [],
+        250 if accepted or case == "pending" else None,
+        accepted,
+    ), (armed, case, yielded)
+    assert yielded == [None], (armed, case, yielded)
+    if not armed:
+        assert not r.output and selected._smart_kaolai.bip_diagnostic is None
+        return
+    assert capture.winners["Drop_Held_Bundle"] == int(accepted)
+    assert capture.kaolai.counts["click_call_returned"] == int(accepted)
+    assert capture.kaolai.counts["drop_checked"] == int(case != "busy" and action != "early")
+    r.click("Stop")
+    assert "kaolai=[" in r.output[-1] and "kaolai_emergency=[" not in r.output[-1]
+
+
+@pytest.mark.parametrize("ending", ["stop", "disable", "reload", "dispose", "cancel"])
+def test_emergency_release_capture_terminal_isolation(
+    capture_runtime: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    ending: str,
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.health.update({1: 1.0, 2: 0.25, 3: 0.30, 4: 1.0})
+    selected = r.outer.EnsureBuildContract()
+    capture = r.click("Arm one capture")
+    work = selected.ProcessSkillCasting()
+    next(work)
+    assert capture.kaolai.counts["click_call_returned"] == 1
+    assert not capture.kaolai.counts["drop_selected"]
+    if ending == "stop":
+        r.click("Stop")
+    elif ending == "disable":
+        r.widget.on_disable()
+    elif ending == "reload":
+        r.widget.on_disable()  # WidgetManager's normal reload lifecycle.
+        source = ROOT / "Widgets/Coding/Debug/Py4GW/Smart BiP Diagnostic.py"
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), r.widget.__dict__)
+    elif ending == "dispose":
+        selected.Dispose()
+    else:
+        work.close()
+        # The next owner entry discards the unfinished sampled pass even when
+        # that entry is too soon to be sampled itself.
+        finish(selected.ProcessSkillCasting())
+        r.click("Stop")
+    work.close()
+    assert capture.done and capture.pending is None
+    counts = dict(capture.kaolai.counts)
+    assert not counts.get("drop_selected") and state.clicks == [1]
+    output = list(r.output)
+    for _ in range(3):
+        selected._smart_kaolai._observe_event("drop_checked")
+        capture.kaolai_event("drop_checked")
+        r.widget.update()
+    assert capture.kaolai.counts == counts and r.output == output
+
+
+@pytest.mark.parametrize("emergency", [False, True])
+def test_kaolai_click_call_can_return_without_native_submission(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, emergency: bool
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    if emergency:
+        r.world.health.update({1: 1.0, 2: 0.28, 3: 0.34, 4: 0.37})
     # Execute Frame.click itself: outer checks pass, its final usability recheck
     # fails. No native button request is issued, yet the helper still accepts.
     source = ROOT / "Py4GWCoreLib/FrameTree/frame.py"
@@ -1369,6 +1491,12 @@ def capture_runtime(bip_runtime: Any, spirit_runtime: Any, monkeypatch: pytest.M
         "Py4GWCoreLib.GlobalCache.shared_memory_src.Globals",
         SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS=5000,
     )
+
+    class PublishedHealth:
+        @property
+        def Current(self) -> float:
+            return float(r.world.get_health(2))
+
     r.publication = SimpleNamespace(
         IsAccount=True,
         IsSlotActive=True,
@@ -1385,6 +1513,9 @@ def capture_runtime(bip_runtime: Any, spirit_runtime: Any, monkeypatch: pytest.M
             OwnerAgentID=0,
             Map=SimpleNamespace(MapID=10, Region=1, District=1, Language=0),
             Energy=SimpleNamespace(Current=0.4),
+            Health=PublishedHealth(),
+            Is_Dead=False,
+            Is_DeadByTypeMap=False,
             Buffs=SimpleNamespace(Buffs=[]),
             Profession=(5, 0),
         ),
@@ -1672,6 +1803,329 @@ def test_selected_custom_can_rearm_after_control_ends(capture_runtime: Any, endi
     assert selected._bip_diagnostic is second and second.samples == 1
     first.stop()
     assert r.control._armed and not second.done
+
+
+@pytest.mark.parametrize("skill", [962, 915, 1234])
+def test_rescue_and_routine_histories_preserve_actions_and_capture_budget(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, skill: int
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.place(10, 500 if skill == 915 else 1100)
+    ready = False
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        return SimpleNamespace(recharge=0 if ready and r.state.bar[slot - 1] == skill else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+    selected = r.outer.EnsureBuildContract()
+    for history in ("A", "B"):
+        base_time = r.now + 1
+        output_before = len(r.output)
+        capture = r.click("Arm one capture")
+        state.clicks.clear()
+        r.world.submissions.clear()
+        for pass_index, health in enumerate(((0.74, 0.09, 0.30, 0.74), (0.74, 0.09, 0.74, 0.74), (1.0,) * 4)):
+            r.now = base_time + pass_index
+            Timer.now = int(r.now * 1000)
+            r.world.health.update(dict(zip((1, 2, 3, 4), health)))
+            ready = pass_index == (0 if history == "A" else 1)
+            finish(selected.ProcessSkillCasting())
+        assert r.world.submissions == [(IDS.index(skill) + 1, 2, 250)] and state.clicks == [1], history
+        assert capture.winners[NAMES[IDS.index(skill)]] == capture.winners["Drop_Held_Bundle"] == 1
+        assert capture.kaolai.counts["click_call_returned"] == 1
+        for elapsed in (10, 20, 30, 40, 50, 60):
+            r.now = base_time + elapsed
+            r.widget.update()
+        assert capture.done and len(r.output) - output_before == capture.records == 8
+        assert "kaolai=[" in r.output[-1]
+        assert all("kaolai_emergency=[" not in line for line in r.output)
+
+
+@pytest.mark.parametrize("ending", ["complete", "stop", "reset", "cancel"])
+def test_failed_rescue_drop_capture_reset_and_rearm(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.place(10, 1100)
+    r.world.health.update({1: 0.74, 2: 0.09, 3: 0.30, 4: 0.74})
+    ready = False
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        return SimpleNamespace(recharge=0 if ready and r.state.bar[slot - 1] == 962 else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+    selected = r.outer.EnsureBuildContract()
+    first = r.click("Arm one capture")
+    work = selected.ProcessSkillCasting()
+    next(work)
+    assert first.kaolai.counts["routine_entry"] == 1
+    assert not r.world.submissions and state.clicks == [1], "Failed rescues reached the yielding routine drop."
+    if ending == "complete":
+        for now in (10, 20, 30, 40, 50, 60):
+            r.now = now
+            r.widget.update()
+        assert len(r.output) == 8
+    elif ending == "reset":
+        first.discard_pending()
+        r.click("Stop")
+    elif ending == "cancel":
+        work.close()
+        finish(selected.ProcessSkillCasting())  # Unsampled entry resets the unfinished pass.
+        r.click("Stop")
+    else:
+        r.click("Stop")
+    work.close()
+    old_counts = dict(first.kaolai.counts)
+    assert first.done and first.pending is None and not old_counts.get("drop_selected", 0)
+    r.now, Timer.now = 61.0, 61000
+    r.world.health[3] = 0.74  # One injured recipient: targeted winner without a deferral.
+    ready = True
+    second = r.click("Arm one capture")
+    finish(selected.ProcessSkillCasting())
+    assert second is not first and second.winners["Spirit_Transfer"] == 1
+    first.finish("Spirit_Transfer", preempted=True)
+    assert first.kaolai.counts == old_counts
+    assert r.world.submissions == [(2, 2, 250)] and state.clicks == [1]
+    r.click("Stop")
+
+
+def test_targeted_heal_survives_capture_accounting_exception(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.place(10, 1100)
+    r.world.health.update({1: 0.74, 2: 0.09, 3: 0.30, 4: 0.74})
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        return SimpleNamespace(recharge=0 if r.state.bar[slot - 1] == 962 else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+    selected = r.outer.EnsureBuildContract()
+    capture = r.click("Arm one capture")
+    smart: Any = sys.modules["Py4GWCoreLib.Builds.Skills.SmartKaolai"]
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("Injected capture accounting failure")
+
+    monkeypatch.setattr(smart.KaolaiCapture, "finish", broken)
+    finish(selected.ProcessSkillCasting())
+    assert capture.result == "ABORTED_ACCOUNTING_ERROR"
+    assert r.world.submissions == [(2, 2, 250)] and not state.clicks
+    assert selected.DidTickSucceed() and selected._local_cast_timer.deadline == 250
+
+
+@pytest.mark.parametrize("skill", [962, 915, 1234])
+@pytest.mark.parametrize(
+    "health,caster_hp,group_wins",
+    [
+        ((0.28, 0.34, 0.37), 1.0, True),
+        ((0.28, 0.34, 1.0), 1.0, True),
+        ((0.09, 1.0, 1.0), 1.0, False),
+        ((0.09, 0.34, 0.37), 1.0, False),
+        ((0.28, 0.34, 0.37), 0.74, True),
+        ((0.35, 0.35, 0.74), 0.74, True),
+        ((0.39, 0.39, 0.39), 0.39, True),
+        ((0.20, 0.35, 0.74), 0.74, True),
+        ((0.19, 0.30, 0.74), 0.74, False),
+        ((0.10, 0.74, 0.74), 0.74, False),
+    ],
+)
+def test_real_owner_selects_group_recovery_or_critical_targeted_rescue(
+    capture_runtime: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    skill: int,
+    health: tuple[float, ...],
+    caster_hp: float,
+    group_wins: bool,
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.health.update({1: caster_hp, **dict(zip((2, 3, 4), health))})
+    r.world.place(10, 500 if skill == 915 else 1100)
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        return SimpleNamespace(recharge=0 if r.state.bar[slot - 1] == skill else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+    selected = r.outer.EnsureBuildContract()
+    capture = r.click("Arm one capture")
+    finish(selected.ProcessSkillCasting())
+    expected = [] if group_wins else [(IDS.index(skill) + 1, 2, 250)]
+    assert r.world.submissions == expected, (skill, health, r.world.submissions)
+    assert state.clicks == ([1] if group_wins else [])
+    assert selected._local_cast_timer.deadline == 250
+    winner = "Drop_Held_Bundle" if group_wins else NAMES[IDS.index(skill)]
+    assert capture.winners == {winner: 1}
+    assert not capture.kaolai.counts["drop_checked"], "The winner must precede the ordinary routine-drop branch."
+    assert not capture.kaolai.counts["generic_held_cleared"]
+
+
+@pytest.mark.parametrize("failure", ["recharge", "no_spirit", "energy"])
+@pytest.mark.parametrize("fourth_hp", [1.0, 0.74])
+@pytest.mark.parametrize("armed", [False, True])
+def test_real_failed_critical_rescue_falls_through_to_emergency_kaolai(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, failure: str, fourth_hp: float, armed: bool
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.health.update({1: fourth_hp, 2: 0.09, 3: 0.34, 4: 0.37})
+    r.world.place(10, 3000 if failure == "no_spirit" else 1100)
+    r.world.energy = 0 if failure == "energy" else 1.0
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        return SimpleNamespace(recharge=0 if r.state.bar[slot - 1] == 962 and failure != "recharge" else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+    selected = r.outer.EnsureBuildContract()
+    capture: Any = r.click("Arm one capture") if armed else None
+    finish(selected.ProcessSkillCasting())
+    assert not r.world.submissions and state.clicks == [1], (failure, r.world.submissions)
+    assert selected._local_cast_timer.deadline == 250
+    if not armed:
+        assert not r.output
+        return
+    assert capture.winners["Drop_Held_Bundle"] == capture.kaolai.counts["click_call_returned"] == 1
+
+
+@pytest.mark.parametrize(
+    "health",
+    [(0.60, 0.65, 0.70, 0.74), (0.40, 0.40, 0.40, 0.40), (0.74, 0.3501, 0.35, 0.74)],
+)
+def test_four_person_nonemergency_keeps_actual_routine_order(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, health: tuple[float, ...]
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.health.update(dict(zip((1, 2, 3, 4), health)))
+    selected = r.outer.EnsureBuildContract()
+    capture = r.click("Arm one capture")
+    finish(selected.ProcessSkillCasting())
+    assert state.clicks == [1] and not r.world.submissions, health
+    assert capture.kaolai.counts["drop_checked"] == capture.kaolai.counts["click_call_returned"] == 1
+    assert capture.winners == {"Drop_Held_Bundle": 1}
+    assert selected._local_cast_timer.deadline == 250
+
+
+@pytest.mark.parametrize("change", ["recovered", "manual_drop", "disconnected", "death", "outside"])
+@pytest.mark.parametrize("armed", [False, True])
+def test_emergency_fallthrough_uses_fresh_evidence_after_failed_rescue(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, change: str, armed: bool
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.health.update({1: 1.0, 2: 0.09, 3: 0.34, 4: 1.0})
+    r.world.place(10, 1100)
+    reads: list[int] = []
+
+    def rejected_skill(slot: int) -> SimpleNamespace:
+        skill = r.state.bar[slot - 1]
+        reads.append(skill)
+        if skill == 962:
+            if change == "recovered":
+                r.world.health[3] = 1.0
+            elif change == "manual_drop":
+                state.holding = False
+            elif change == "disconnected":
+                state.players[2].is_connected = False
+            elif change == "death":
+                r.world.dead.add(3)
+            else:
+                r.world.place(3, 2500.01)
+        return SimpleNamespace(recharge=1)
+
+    r.core.SkillBar.GetSkillData = rejected_skill
+    selected = r.outer.EnsureBuildContract()
+    capture: Any = r.click("Arm one capture") if armed else None
+    finish(selected.ProcessSkillCasting())
+    assert 962 in reads, "The test must reach real targeted-rescue admission."
+    assert not state.clicks and not r.world.submissions, (change, reads)
+    assert selected._local_cast_timer.IsStopped()
+    if not armed:
+        assert not r.output
+        return
+    assert not capture.kaolai.counts["click_call_returned"]
+
+
+@pytest.mark.parametrize("gate", ["not_held", "button", "insufficient", "uncertain_remote"])
+def test_unavailable_emergency_kaolai_keeps_actual_spot_heal_available(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, gate: str
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.health.update({1: 1.0, 2: 0.28, 3: 0.34, 4: 1.0})
+    r.world.place(10, 1100)
+    if gate == "not_held":
+        state.holding = False
+    elif gate == "button":
+        state.button_present = False
+    elif gate == "insufficient":
+        r.world.health[3] = 1.0
+    else:
+        r.publication.LastUpdated = 9000
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        return SimpleNamespace(recharge=0 if r.state.bar[slot - 1] == 962 else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+    selected = r.outer.EnsureBuildContract()
+    finish(selected.ProcessSkillCasting())
+    assert state.clicks == [] and r.world.submissions == [(2, 2, 250)], gate
+    assert selected._local_cast_timer.deadline == 250
+
+
+@pytest.mark.parametrize("change", ["close", "dispose", "map_invalid", "death", "casting"])
+def test_emergency_owner_lifecycle_can_stop_before_any_submission(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.health.update({1: 1.0, 2: 0.28, 3: 0.34, 4: 0.37})
+    selected = r.outer.EnsureBuildContract()
+    work = selected.ProcessSkillCasting()
+    if change == "close":
+        work.close()
+    elif change == "dispose":
+        selected.Dispose()
+    elif change == "map_invalid":
+        r.state.valid = False
+    elif change == "death":
+        r.world.dead.add(1)
+        r.state.can_cast = False
+    else:
+        r.state.can_cast = False
+    assert list(work) == ([None] if change in {"death", "casting"} else [])
+    assert not state.clicks and not r.world.submissions, change
+
+
+def test_emergency_owner_has_one_pending_submission_and_preserves_fallback_mask(
+    capture_runtime: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = capture_runtime
+    state = configure_kaolai(r, monkeypatch)
+    r.world.health.update({1: 1.0, 2: 0.28, 3: 0.34, 4: 0.37})
+    selected = r.outer.EnsureBuildContract()
+    work = selected.ProcessSkillCasting()
+    assert next(work) is None
+    assert state.clicks == [1] and selected._local_cast_timer.deadline == 250
+    work.close()
+    for Timer.now in (0, 100, 249):
+        finish(selected.ProcessSkillCasting())
+    assert state.clicks == [1] and not r.world.submissions
+    assert selected.GetSupportedSkills() == selected.GetBlockedSkills() == IDS
+    assert r.cache.combat_handler.blocked_skill_ids == set(IDS)
+    # Pending suppresses all competing actions only for the existing window.
+    Timer.now, state.holding = 250, False
+    r.world.place(10, 1100)
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        return SimpleNamespace(recharge=0 if r.state.bar[slot - 1] == 962 else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+    finish(selected.ProcessSkillCasting())
+    assert state.clicks == [1] and r.world.submissions == [(2, 2, 250)]
 
 
 @pytest.mark.parametrize("armed", [False, True])
