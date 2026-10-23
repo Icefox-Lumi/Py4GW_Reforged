@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from math import dist
 from typing import TYPE_CHECKING
 
 from Py4GWCoreLib.BuildMgr import BuildCoroutine
@@ -26,50 +25,33 @@ class NoAttribute:
         health_threshold: float = 0.65,
         within_range: float = Range.Spirit.value,
     ) -> BuildCoroutine:
-        """Submit a bundle release for enough injured nearby party members.
+        """Drop the currently-held bundle (item-spell ashes) when at least
+        `min_party_damaged_count` allies within `within_range` are below
+        `health_threshold` HP (0.0-1.0). Returns False when not holding a
+        bundle or the threshold isn't met.
 
-        The Kaolai callers retain the existing ally population and Spirit-range
-        limit until a reliable positive ash identity is established. Membership
-        filtering only narrows that population; this is not the full party-area
-        census and the generic holding check does not identify Kaolai's ashes.
-        True means a click was submitted, not that release or healing completed.
-        """
-        from Py4GWCoreLib import AgentArray, Party
+        Bundle item-spells (Protective Was Kaolai, Vital Was Soothing,
+        Generous Was Tsungrai, ...) heal/buff the party on drop. Sequence
+        this check BEFORE the cast in any rotation that holds an item spell
+        so we release the heal before recasting."""
+        from Py4GWCoreLib import AgentArray
         from Py4GWCoreLib.FrameTree import FrameTree
-
-        # Use the pending-only gate; public cast checks also require energy/recharge.
-        if self.build._is_local_cast_pending() or not Party.IsPartyLoaded():  # pyright: ignore[reportPrivateUsage]
-            return False
 
         player_id: int = Player.GetAgentID()
 
         if not Agent.IsHoldingItem(player_id):
             return False
 
-        party_ids: set[int] = {
-            Party.Players.GetAgentIDByLoginNumber(member.login_number)
-            for member in Party.GetPlayers() or []
-            if member.is_connected
-        }
-        party_ids.update(member.agent_id for member in Party.GetHeroes() or [])
-        party_ids.update(member.agent_id for member in Party.GetHenchmen() or [])
-
-        # Intersect, rather than add roster members missing from the old census:
-        # broadening release eligibility is unsafe while bundle identity is unknown.
-        ally_ids: set[int] = set(AgentArray.GetAllyArray()) & party_ids
-        player_pos = Player.GetXY()
+        # Inline party-damage scan via Routines.Checks.Agents.* so remote
+        # heroes' HP is read from the shared-memory broadcast (correct in
+        # multibox) instead of this client's stale local view.
+        ally_ids = AgentArray.GetAllyArray()
+        ally_ids = AgentArray.Filter.ByDistance(ally_ids, Player.GetXY(), within_range)
+        ally_ids = AgentArray.Filter.ByCondition(ally_ids, lambda aid: Routines.Checks.Agents.IsAlive(aid))
 
         damaged_count = 0
         for aid in ally_ids:
-            if aid <= 0 or not Agent.IsValid(aid):
-                continue
-            if not dist(player_pos, Agent.GetXY(aid)) <= within_range:
-                continue
-            # Preserve same-party remote-player health/liveness evidence.
-            if not Routines.Checks.Agents.IsAlive(aid):
-                continue
-            health = Routines.Checks.Agents.GetHealth(aid)
-            if 0.0 < health < health_threshold:
+            if Routines.Checks.Agents.GetHealth(aid) < health_threshold:
                 damaged_count += 1
                 if damaged_count >= min_party_damaged_count:
                     break

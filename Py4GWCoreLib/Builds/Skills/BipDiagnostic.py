@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from Py4GWCoreLib import ThrottledTimer
     from Py4GWCoreLib.BuildMgr import BuildMgr
     from Py4GWCoreLib.Builds.Skills import SkillsTemplate
+    from Py4GWCoreLib.Builds.Skills.SmartKaolai import KaolaiCapture, KaolaiObservation
     from Py4GWCoreLib.GlobalCache.shared_memory_src.AccountStruct import AccountStruct
 
     # Narrow read interfaces for the existing unannotated Python facades.
@@ -126,6 +127,7 @@ class Snapshot:
     restoration: int | None = None
     blood: int | None = None
     hr: str = "unknown"
+    kaolai: KaolaiObservation | None = None
 
 
 def observe_build(
@@ -427,6 +429,7 @@ class BipDiagnostic:
         self.last: Snapshot | None = None
         self.submitted_targets: dict[int, float] = {}
         self.records = 0
+        self.kaolai: KaolaiCapture | None = None
 
     @staticmethod
     def _console(message: str) -> None:
@@ -445,6 +448,8 @@ class BipDiagnostic:
     def discard_pending(self) -> None:
         """At a new decision entry, abandon evidence whose pass never finished."""
         if self._decision_unfinished or self.pending is not None:
+            if self.kaolai is not None and self.pending is not None and self.pending.kaolai is not None:
+                self.kaolai.counts["inconclusive_cancelled_pass"] += 1
             self._decision_unfinished = False
             self.pending = None
             self.health_target = 0
@@ -495,6 +500,12 @@ class BipDiagnostic:
             self.pending = observe()
             self.pending_at = now
             self.health_target = 0
+            if self.pending.kaolai is not None:
+                if self.kaolai is None:
+                    from Py4GWCoreLib.Builds.Skills.SmartKaolai import KaolaiCapture
+
+                    self.kaolai = KaolaiCapture()
+                self.kaolai.observe(self.pending.kaolai, now)
         except Exception:
             self.stop("ABORTED_OBSERVATION_ERROR")
 
@@ -508,6 +519,8 @@ class BipDiagnostic:
     def advance(self, now: float) -> bool:
         if self.done or self.started is None:
             return False
+        if self.kaolai is not None:
+            self.kaolai.advance(now)
         elapsed = now - self.started
         if elapsed >= 60:
             self._aggregate(60.0)
@@ -517,6 +530,15 @@ class BipDiagnostic:
             self._aggregate(elapsed)
             self.next_report = (int(elapsed // 10) + 1) * 10.0
         return True
+
+    def kaolai_event(self, event: str) -> None:
+        """Account for a real owner action; never read the world or submit work."""
+        try:
+            now = self.clock()
+            if self._active(now) and self.kaolai is not None:
+                self.kaolai.event(event, now)
+        except Exception:
+            self.stop("ABORTED_ACCOUNTING_ERROR")
 
     def health_rejected(self, target: int) -> None:
         # Called only after the real selector, lock and throttle checks passed.
@@ -555,6 +577,8 @@ class BipDiagnostic:
                 self.advance(now)
                 return
             self.winners[winner] += 1
+            if self.kaolai is not None and winner == "Drop_Held_Bundle":
+                self.kaolai.event("drop_selected", now)
             # These are the rotation's only no-action outcomes; all skill winners are accepted requests.
             action_accepted = winner not in {"none", "idle", "cannot_cast"}
             sample, self.pending = self.pending, None
@@ -562,9 +586,15 @@ class BipDiagnostic:
                 if action_accepted:
                     self._break_continuity()
                 return
+            if self.kaolai is not None and sample.kaolai is not None:
+                # This associates a completed pass with its entry census, even
+                # when the action yielded. It is not a census at submission time.
+                self.kaolai.finish(sample.kaolai, winner, preempted)
             # Suspended coroutines are missing evidence, never seconds of inferred blockage.
             if now - self.pending_at > 0.25:
                 self.totals["stale_pass"] += 1
+                if self.kaolai is not None and sample.kaolai is not None:
+                    self.kaolai.counts["delayed_pass_outcome"] += 1
                 self._break_continuity()
                 return
             if sample.demand and preempted:
@@ -675,6 +705,7 @@ class BipDiagnostic:
             f"gates=[{pairs(self.gates)}] demand_gates=[{pairs(self.demand_gates)}] "
             f"winners=[{pairs(self.winners)}] preemptions=[{pairs(self.preemptions)}] "
             f"attrs=[{pairs(self.attributes)}] last=[{state}]"
+            + (self.kaolai.summary() if self.kaolai is not None else "")
         )
 
     def stop(self, reason: str = "ABORTED_CONTRACT_DISPOSED") -> None:
@@ -690,8 +721,13 @@ class BipDiagnostic:
         self.health_target = 0
         self._break_continuity()
         self.submitted_targets.clear()
+        if self.kaolai is not None:
+            self.kaolai.end("inconclusive_capture_ended")
         if self.started is not None:
             try:
-                self._write(f"BIP3B DONE result={reason} observed_effect_is_not_caster_attribution=1")
+                self._write(
+                    f"BIP3B DONE result={reason} observed_effect_is_not_caster_attribution=1"
+                    + (self.kaolai.summary() if self.kaolai is not None else "")
+                )
             except Exception:
                 pass

@@ -644,6 +644,7 @@ def real_pass(
         Any=SimpleNamespace(PvE=other, NoAttribute=other),
     )
     owner.skillbook = owner.skills
+    owner._smart_kaolai = other
     owner._active = True
     owner._diagnostic_path = request.param
     # Optional Blood Bond is absent from the exact BiP bar.

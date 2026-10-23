@@ -14,6 +14,7 @@ from Py4GWCoreLib import Routines
 from Py4GWCoreLib.BuildMgr import BuildCoroutine
 from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 from Py4GWCoreLib.Builds.Skills import SkillsTemplate
+from Py4GWCoreLib.Builds.Skills.SmartKaolai import SmartKaolai
 from Py4GWCoreLib.Skill import Skill
 
 if TYPE_CHECKING:
@@ -63,6 +64,7 @@ class MyBloodIsPower(BuildMgr):
         self._fallback = HeroAI_Build(cached_data=cached_data, standalone_fallback=True)
         self.SetFallback("HeroAI", self._fallback)
         self.skillbook = SkillsTemplate(self)
+        self._smart_kaolai = SmartKaolai(self, self.skillbook.Ritualist.RestorationMagic)
         self.SetSkillCastingFn(self._run_local_skill_logic)
 
     def ScoreMatch(
@@ -205,6 +207,7 @@ class MyBloodIsPower(BuildMgr):
         self._bip_diagnostic = None
         self.skillbook.Necromancer.BloodMagic.bip_diagnostic = None
         self.skillbook.Ritualist.RestorationMagic.bip_diagnostic = None
+        self._smart_kaolai.bip_diagnostic = None
 
     def _diagnostic_begin(self) -> None:
         # Registry candidates never acquire a capture. Activation alone does not
@@ -239,6 +242,7 @@ class MyBloodIsPower(BuildMgr):
                 self._bip_diagnostic = diagnostic
                 self.skillbook.Necromancer.BloodMagic.bip_diagnostic = diagnostic
                 self.skillbook.Ritualist.RestorationMagic.bip_diagnostic = diagnostic
+                self._smart_kaolai.bip_diagnostic = diagnostic
         except Exception:
             if diagnostic is not None:
                 diagnostic.stop("ABORTED_OBSERVATION_ERROR")
@@ -246,7 +250,7 @@ class MyBloodIsPower(BuildMgr):
     def _diagnostic_snapshot(self) -> Snapshot:
         from Py4GWCoreLib.Builds.Skills.BipDiagnostic import observe_build
 
-        return observe_build(
+        snapshot = observe_build(
             self,
             self.skillbook,
             cast_timer=self._local_cast_timer,
@@ -255,6 +259,8 @@ class MyBloodIsPower(BuildMgr):
             uses_coordination=self._is_whiteboard_skill,
             target_allowed=self._validate_target_for_skill_cast,
         )
+        snapshot.kaolai = self._smart_kaolai.observe(pending="pending" in snapshot.gates, busy="busy" in snapshot.gates)
+        return snapshot
 
     def _diagnostic_finish(self, winner: str, *, preempted: bool = False) -> None:
         if self._bip_diagnostic is not None:
@@ -277,7 +283,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.40)):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=True)
             return True
-        if (yield from self.skillbook.Ritualist.NoAttribute.Drop_Held_Bundle(health_threshold=0.75)):
+        if (yield from self._smart_kaolai.Drop_Held_Bundle(health_threshold=0.75)):
             self._diagnostic_finish("Drop_Held_Bundle", preempted=True)
             return True
         if (yield from soul_reaping.Signet_of_Lost_Souls(max_self_energy_pct=0.30)):
@@ -316,7 +322,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.75)):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
-        if (yield from restoration.Protective_Was_Kaolai()):
+        if (yield from self._smart_kaolai.Protective_Was_Kaolai()):
             self._diagnostic_finish("Protective_Was_Kaolai", preempted=False)
             return True
         if not self.IsInAggro():

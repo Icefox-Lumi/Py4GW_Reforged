@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 import sys
 import types
 from collections.abc import Callable, Generator
@@ -88,6 +89,7 @@ class _World:
     frame_requests: list[tuple[int, list[int]]] = field(default_factory=list[tuple[int, list[int]]])
     timer: _Timer = field(default_factory=_Timer)
     helper: Any = None
+    generic: Any = None
 
     def is_holding(self, agent_id: int) -> bool:
         return self.holding
@@ -170,7 +172,14 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
     _module(monkeypatch, "Py4GWCoreLib.Party", Party=party)
     _module(monkeypatch, "Py4GWCoreLib.FrameTree", FrameTree=SimpleNamespace(frames_at_path=state.frames))
     _module(monkeypatch, "Py4GWCoreLib.enums_src").__path__ = []
-    _module(monkeypatch, "Py4GWCoreLib.enums_src.GameData_enums", Range=ranges)
+    _module(monkeypatch, "Py4GWCoreLib.enums_src.GameData_enums", Range=ranges, Allegiance=object)
+    _module(monkeypatch, "PyAgent")
+    _module(monkeypatch, "Py4GWCoreLib.Py4GWcorelib", Utils=SimpleNamespace(Distance=math.dist))
+    _module(monkeypatch, "Py4GWCoreLib.Context", GWContext=SimpleNamespace())
+    _module(monkeypatch, "Py4GWCoreLib.native_src.context.AgentContext", AgentStruct=object)
+    arrays = _load(monkeypatch, "Py4GWCoreLib.AgentArray", "Py4GWCoreLib/AgentArray.py")
+    monkeypatch.setattr(arrays.AgentArray, "GetAllyArray", staticmethod(lambda: state.allies))
+    core.__dict__["AgentArray"] = arrays.AgentArray
     _module(monkeypatch, "Py4GWCoreLib.py4gwcorelib_src").__path__ = []
     _module(
         monkeypatch,
@@ -203,7 +212,9 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
     build = object.__new__(build_type)
     build._local_cast_timer = state.timer
     subject = _load(monkeypatch, "_kaolai_release_subject", "Py4GWCoreLib/Builds/Skills/ritualist/NoAttribute.py")
-    state.helper = subject.NoAttribute(build)
+    state.generic = subject.NoAttribute(build)
+    smart = _load(monkeypatch, "_smart_kaolai_subject", "Py4GWCoreLib/Builds/Skills/SmartKaolai.py")
+    state.helper = smart.SmartKaolai(build, SimpleNamespace())
     return state
 
 
@@ -217,6 +228,148 @@ def _finish(coroutine: Generator[Any, None, Any]) -> Any:
 
 def _release(world: _World) -> bool:
     return bool(_finish(world.helper.Drop_Held_Bundle(health_threshold=0.75)))
+
+
+@pytest.mark.parametrize(
+    "case,injured,critical,dead,outside,missing,routine",
+    [
+        ("four", 4, 0, 0, 0, 0, True),
+        ("two_critical", 2, 2, 0, 0, 0, False),
+        ("three_critical", 3, 3, 0, 0, 0, False),
+        ("dead_fourth", 3, 0, 1, 0, 0, False),
+        ("outside_fourth", 3, 0, 0, 1, 0, False),
+        ("boundary_range", 4, 0, 0, 0, 0, True),
+        ("boundary_health", 3, 0, 0, 0, 0, False),
+        ("missing_ally", 3, 0, 0, 0, 1, False),
+        ("duplicates", 4, 0, 0, 0, 0, True),
+        ("pending", 4, 0, 0, 0, 0, False),
+        ("busy", 4, 0, 0, 0, 0, False),
+        ("no_button", 4, 0, 0, 0, 0, False),
+    ],
+)
+def test_observation_census_matches_existing_admission(
+    world: _World, case: str, injured: int, critical: int, dead: int, outside: int, missing: int, routine: bool
+) -> None:
+    if case in {"two_critical", "three_critical"}:
+        count = 2 if case == "two_critical" else 3
+        world.health = {aid: 0.1 if aid <= count else 1.0 for aid in range(1, 5)}
+    elif case == "dead_fourth":
+        world.dead.add(4)
+    elif case == "outside_fourth":
+        world.positions[4] = (2500.001, 0)
+    elif case == "boundary_range":
+        world.positions[4] = (2500, 0)
+    elif case == "boundary_health":
+        world.health[4] = 0.75
+    elif case == "missing_ally":
+        world.allies.remove(4)
+    elif case == "duplicates":
+        world.allies.extend([1, 1, 2])
+        world.players.append(world.players[0])
+    elif case == "pending":
+        world.timer.deadline = 250
+    elif case == "no_button":
+        world.button_present = False
+    before_timer = vars(world.timer).copy()
+    observed = world.helper.observe(pending=case == "pending", busy=case == "busy")
+    assert (
+        observed.injured,
+        observed.critical,
+        observed.dead,
+        observed.outside,
+        observed.missing,
+        observed.routine,
+    ) == (injured, critical, dead, outside, missing, routine), (case, observed)
+    assert vars(world.timer) == before_timer and world.clicks == 0, (case, world)
+    # Busy is an outer rotation gate; the release helper has only a pending gate.
+    assert _release(world) == (routine or case == "busy"), (case, observed, world)
+
+
+@pytest.mark.parametrize("case", ["death", "unloaded", "invalid", "oversized_roster"])
+def test_observation_refuses_incomplete_context(world: _World, case: str) -> None:
+    if case == "death":
+        world.dead.add(1)
+    elif case == "unloaded":
+        world.party_loaded = False
+    elif case == "invalid":
+        world.valid.remove(1)
+    else:
+        world.players *= 17
+    observed = world.helper.observe(pending=False, busy=False)
+    assert not observed.complete and not observed.routine, (case, observed)
+    if case != "oversized_roster":
+        assert observed.held is None, (case, observed)
+    assert not world.frame_requests and not world.clicks
+
+
+def _kaolai_capture(world: _World) -> Any:
+    capture = sys.modules["_smart_kaolai_subject"].KaolaiCapture()
+    capture.observe(world.helper.observe(pending=False, busy=False), 0.0)
+    capture.event("click_call_returned", 0.0)
+    return capture
+
+
+@pytest.mark.parametrize("held", [True, False])
+def test_held_state_and_hp_rise_are_separate_unattributed_observations(world: _World, held: bool) -> None:
+    capture = _kaolai_capture(world)
+    world.holding = held
+    capture.observe(world.helper.observe(pending=False, busy=False), 0.25)
+    # Healing may become visible after a held-state change.
+    world.health[2] = 0.9
+    capture.observe(world.helper.observe(pending=False, busy=False), 0.5)
+    capture.advance(2.0)
+    assert capture.watch is None
+    assert capture.counts["generic_held_cleared"] == int(not held)
+    assert capture.counts["no_change_observed"] == int(held)
+    assert capture.counts["hp_fraction_rises_unattributed"] == 1
+    summary = capture.summary()
+    assert "identity:unknown" in summary and "heal_receipt:unavailable" in summary
+    assert "click_receipt:unavailable" in summary and "confirmed" not in summary
+    assert world.clicks == 0, "Observation must never produce actions."
+
+
+@pytest.mark.parametrize("ending", ["gap", "late_clear", "death", "unloaded", "stop"])
+def test_release_watch_inconclusive_endings(world: _World, ending: str) -> None:
+    capture = _kaolai_capture(world)
+    if ending == "stop":
+        capture.end("inconclusive_capture_ended")
+    elif ending in {"gap", "late_clear"}:
+        capture.advance(2.0)
+        if ending == "late_clear":
+            world.holding = False
+            capture.observe(world.helper.observe(pending=False, busy=False), 2.1)
+    else:
+        world.holding = False
+        if ending == "death":
+            world.dead.add(1)
+        else:
+            world.party_loaded = False
+        capture.observe(world.helper.observe(pending=False, busy=False), 0.5)
+    assert capture.watch is None and not capture.counts["generic_held_cleared"], (ending, capture.counts)
+    assert sum(value for key, value in capture.counts.items() if key.startswith("inconclusive_")) == 1
+
+
+def test_release_watch_bounds_and_repeated_calls_do_not_extend_deadline(world: _World) -> None:
+    capture = _kaolai_capture(world)
+    for index in range(1, 100):
+        capture.event("click_call_returned", index / 100)
+    assert capture.watch.started == 0 and capture.counts["windows"] == 1
+    capture.advance(2.0)
+    for now in range(2, 20, 2):
+        capture.event("click_call_returned", float(now))
+        capture.advance(now + 2.0)
+    assert capture.watch is None and capture.counts["windows"] == 4
+    assert capture.counts["overlapping_calls"] == 99
+    assert capture.counts["window_budget_exhausted"] == 6
+
+
+@pytest.mark.parametrize("bundle", ["unknown", "other_ashes", "quest_bundle"])
+def test_generic_detector_never_promotes_bundle_identity(world: _World, bundle: str) -> None:
+    # The supported detector exposes the same boolean for all these inputs.
+    world.holding = True
+    capture = _kaolai_capture(world)
+    assert capture.last.held is True and "identity:unknown" in capture.summary(), bundle
+    assert _release(world) is True, "Diagnostics must not silently change the existing generic-bundle policy."
 
 
 def test_four_players_include_caster_once_and_preserve_button_route(world: _World) -> None:
@@ -265,6 +418,13 @@ def test_invalid_or_not_strictly_injured_health_is_excluded(world: _World, healt
 def test_health_just_below_threshold_qualifies(world: _World) -> None:
     world.health[4] = 0.749999
     assert _release(world) is True, world
+
+
+@pytest.mark.parametrize("injured", [1, 2])
+def test_no_new_single_or_two_critical_recipient_policy(world: _World, injured: int) -> None:
+    world.health = {agent: 0.01 if agent <= injured else 1.0 for agent in range(1, 5)}
+    assert _release(world) is False, (injured, world)
+    assert world.clicks == 0
 
 
 @pytest.mark.parametrize("distance, expected", [(2500.0, True), (2500.1, False), (3000.0, False), (5021.0, False)])
@@ -360,7 +520,7 @@ def test_real_callers_preserve_emergency_precedence_and_release_contract(
     def attempt(name: str, **kwargs: Any) -> Generator[None, None, bool]:
         events.append((name, kwargs))
         if name == "drop":
-            release: Generator[None, None, bool] = world.helper.Drop_Held_Bundle(**kwargs)
+            release: Generator[None, None, bool] = world.generic.Drop_Held_Bundle(**kwargs)
             return (yield from release)
         return name == preemption
 
@@ -391,3 +551,71 @@ def test_real_callers_preserve_emergency_precedence_and_release_contract(
             ("Mend_Body_and_Soul", {"health_threshold": 0.40}),
             ("drop", {"health_threshold": 0.75}),
         ], (build_name, events)
+
+
+@pytest.mark.parametrize("agent_id", [0, -1, 999])
+def test_smart_rejects_nonpositive_and_invalid_roster_ids(world: _World, agent_id: int) -> None:
+    world.allies[-1] = agent_id
+    world.players[-1].login_number = agent_id
+    world.health[agent_id] = 0.5
+    assert _release(world) is False, (agent_id, world)
+
+
+@pytest.mark.parametrize(
+    "change", ["duplicates", "nonparty", "disconnected", "invalid", "zero", "negative", "party", "pending"]
+)
+def test_stock_intentionally_loses_later_admission_safeguards(world: _World, change: str) -> None:
+    if change == "duplicates":
+        world.allies = [1, 1, 2, 3]
+    elif change == "nonparty":
+        world.players.pop()
+    elif change == "disconnected":
+        world.players[-1].is_connected = False
+    elif change == "invalid":
+        world.valid.remove(4)
+    elif change in ("zero", "negative"):
+        agent_id = 0 if change == "zero" else -1
+        world.allies[-1] = agent_id
+        world.players[-1].login_number = agent_id
+        world.health[agent_id] = 0.5
+    elif change == "party":
+        world.party_loaded = False
+    else:
+        world.generic.build._mark_local_cast_pending(250)
+    assert _release(world) is False, (change, world)
+    assert _finish(world.generic.Drop_Held_Bundle(health_threshold=0.75)) is True, (change, world)
+    assert world.clicks == 1 and world.timer.delay == 250
+
+
+@pytest.mark.parametrize("boundary, expected", [(0.749999, True), (0.75, False), (0.0, False), (-0.1, False)])
+def test_stock_retains_shared_liveness_and_strict_upper_health_boundary(
+    world: _World, boundary: float, expected: bool
+) -> None:
+    world.health[4] = boundary
+    assert _finish(world.generic.Drop_Held_Bundle(health_threshold=0.75)) is expected, world
+
+
+@pytest.mark.parametrize("unavailable", ["holding", "button", "button_usable", "dead", "distance"])
+def test_stock_retains_original_release_requirements(world: _World, unavailable: str) -> None:
+    if unavailable == "holding":
+        world.holding = False
+    elif unavailable == "button":
+        world.button_present = False
+    elif unavailable == "button_usable":
+        world.button_usable = False
+    elif unavailable == "dead":
+        world.dead.add(4)
+    else:
+        world.positions[4] = (2500.1, 0.0)
+    assert _finish(world.generic.Drop_Held_Bundle(health_threshold=0.75)) is False, (unavailable, world)
+    assert world.clicks == 0 and world.timer.IsStopped()
+
+
+def test_stock_stamps_before_yield_but_does_not_itself_suppress_retries(world: _World) -> None:
+    world.positions[4] = (2500.0, 0.0)
+    pending = world.generic.Drop_Held_Bundle(health_threshold=0.75)
+    assert next(pending) is None
+    assert world.clicks == 1 and world.timer.deadline == 250
+    assert _finish(pending) is True
+    assert _finish(world.generic.Drop_Held_Bundle(health_threshold=0.75)) is True
+    assert world.clicks == 2 and world.holding
