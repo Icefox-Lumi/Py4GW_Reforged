@@ -134,6 +134,7 @@ def test_legacy_lease_and_duplicate_order_use_modular_clock(subject: Any) -> Non
     namespace: dict[str, Any] = dict(
         WireAccounts=subject.AllAccounts,
         PySystem=clock,
+        get_uncached_tick_count64=lambda: clock.get_tick_count64(),
         publication_age=subject.clock.publication_age,
         publication_is_live=subject.clock.publication_is_live,
         SHMEM_MAX_PLAYERS=subject.SHMEM_MAX_PLAYERS,

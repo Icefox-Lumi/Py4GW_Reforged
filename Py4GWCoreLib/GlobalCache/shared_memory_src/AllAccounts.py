@@ -144,26 +144,26 @@ class AllAccounts(Structure):
             raise IndexError(f"Index {index} is out of bounds for max players {SHMEM_MAX_PLAYERS}.")
         return self.AccountData[index]
     
-    def _is_slot_active(self, index: int) -> bool:
-        """Check if the slot at the given index is active."""
+    def _is_slot_active(self, index: int, now_tick: int | None = None) -> bool:
+        """Check freshness, optionally sharing an uncached sample within one scan."""
         slot_data = self.GetAccountData(index)
-        slot_active = slot_data.IsSlotActive    
+        if not slot_data.IsSlotActive:
+            return False
         last_updated = slot_data.LastUpdated
-        
-        base_timestamp = PySystem.get_tick_count64()
-        
-        if slot_active and publication_is_live(base_timestamp, last_updated, SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS):
-            return True
-        return False
+        # A writer may publish after a scan's sample. Read again after its stamp;
+        # never substitute the reader's cached frame clock or allow future ages.
+        if now_tick is None or publication_age(now_tick, last_updated) is None:
+            now_tick = get_uncached_tick_count64()
+        return publication_is_live(now_tick, last_updated, SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS)
 
-    def _is_visible_account(self, index: int) -> bool:
-        if not self._is_slot_active(index):
+    def _is_visible_account(self, index: int, now_tick: int | None = None) -> bool:
+        if not self._is_slot_active(index, now_tick):
             return False
         account = self.AccountData[index]
         return account.IsAccount and not self._is_slot_isolated(index)
 
-    def _is_visible_slot(self, index: int) -> bool:
-        if not self._is_slot_active(index):
+    def _is_visible_slot(self, index: int, now_tick: int | None = None) -> bool:
+        if not self._is_slot_active(index, now_tick):
             return False
         return not self._is_slot_isolated(index)
 
@@ -180,19 +180,20 @@ class AllAccounts(Structure):
             return 0
         return int(self.AccountData[owner_index].IsolationGroupID)
 
-    def _get_local_group_id(self) -> int:
-        """Return the local player's IsolationGroupID."""
+    def _get_local_group_id(self) -> int | None:
+        """Return the local player's group, or None when identity is unavailable."""
         try:
             from ...Player import Player
+
             email = Player.GetAccountEmail()
             if not email:
-                return 0
+                return None
             index = self._find_account_slot_by_email(email)
             if index == -1:
-                return 0
+                return None
             return int(self.AccountData[index].IsolationGroupID)
         except Exception:
-            return 0
+            return None
 
     def _get_local_account_email(self) -> str:
         try:
@@ -223,6 +224,8 @@ class AllAccounts(Structure):
             return False
 
         local_g = self._get_local_group_id()
+        if local_g is None:
+            return True
         target_g = self._get_slot_group(index)
         if local_g > 0:
             return target_g != local_g
@@ -285,17 +288,19 @@ class AllAccounts(Structure):
         except Exception:
             local_hwnd = 0
 
+        now_tick = get_uncached_tick_count64()
         if local_hwnd:
             for i in candidates:
                 key = self.Keys[i]
-                if key.HWND == local_hwnd and key.EntityType == 0 and self._is_slot_active(i):
+                if key.HWND == local_hwnd and key.EntityType == 0 and self._is_slot_active(i, now_tick):
                     return i
 
-        active_candidates = [i for i in candidates if self._is_slot_active(i)]
-        now = PySystem.get_tick_count64()
+        active_candidates = [i for i in candidates if self._is_slot_active(i, now_tick)]
+        last_updated = {i: int(self.AccountData[i].LastUpdated) for i in candidates}
+        now = get_uncached_tick_count64()
 
         def newest_key(index: int) -> tuple[int, int]:
-            age = publication_age(now, int(self.AccountData[index].LastUpdated))
+            age = publication_age(now, last_updated[index])
             return (age if age is not None else 0x80000000, -index)
 
         if active_candidates:
@@ -631,8 +636,12 @@ class AllAccounts(Structure):
         all_accounts = self.AccountData
         for i in range(SHMEM_MAX_PLAYERS):
             account = all_accounts[i]
-            if account.AccountEmail == account_email and account.IsAccount and self._is_slot_active(i):
-                return i
+            if account.AccountEmail == account_email and account.IsAccount and account.IsSlotActive:
+                # Read the publication before sampling now: another client's
+                # frame can be newer than this client's cached frame timestamp.
+                last_updated = account.LastUpdated
+                if publication_is_live(get_uncached_tick_count64(), last_updated, SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS):
+                    return i
 
         # Slot creation is owned by the C++ writer now; a miss just means the
         # account is not online yet. The read-only Python side must not submit.
@@ -656,9 +665,10 @@ class AllAccounts(Structure):
     def GetAccountDataFromPartyNumber(self, party_number: int, log : bool = False) -> AccountStruct | None:
         """Get player data for the account with the given party number."""
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = all_accounts[i]
-            if self._is_visible_account(i) and player.AgentPartyData.PartyPosition == party_number:
+            if self._is_visible_account(i, now_tick) and player.AgentPartyData.PartyPosition == party_number:
                 return player
             
         return None
@@ -719,12 +729,13 @@ class AllAccounts(Structure):
         """Get all active account players in shared memory."""
         players : list[AccountStruct] = []
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             account = all_accounts[i]
             if include_isolated:
-                if self._is_slot_active(i) and account.IsAccount:
+                if self._is_slot_active(i, now_tick) and account.IsAccount:
                     players.append(account)
-            elif self._is_visible_account(i):
+            elif self._is_visible_account(i, now_tick):
                 players.append(account)
 
         if sort_results and len(players) > 1:
@@ -748,8 +759,9 @@ class AllAccounts(Structure):
     def GetNumActiveSlots(self) -> int:
         """Get the number of active slots in shared memory."""
         count = 0
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
-            if self._is_visible_slot(i):
+            if self._is_visible_slot(i, now_tick):
                 count += 1
         return count
     
@@ -757,10 +769,11 @@ class AllAccounts(Structure):
         """Get a list of heroes owned by the specified player."""
         heroes : list[AccountStruct] = []
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):   
             account_data = all_accounts[i]
 
-            if (self._is_visible_slot(i) and account_data.IsHero and
+            if (self._is_visible_slot(i, now_tick) and account_data.IsHero and
                 account_data.AgentData.OwnerAgentID == owner_agent_id):
                 heroes.append(account_data)
         return heroes
@@ -775,10 +788,11 @@ class AllAccounts(Structure):
         """Get a list of pets owned by the specified player."""
         pets : list[AccountStruct] = []
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):   
             account_data = all_accounts[i]
 
-            if (self._is_visible_slot(i) and account_data.IsPet and
+            if (self._is_visible_slot(i, now_tick) and account_data.IsPet and
                 account_data.AgentData.OwnerAgentID == owner_agent_id):
                 pets.append(account_data)
         return pets
@@ -790,9 +804,10 @@ class AllAccounts(Structure):
     def GetAllActiveSlotsData(self) -> list[AccountStruct]:
         """Get all active slot data, ordered by PartyID, PartyPosition, PlayerLoginNumber, CharacterName."""
         accs : list[AccountStruct] = []
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             acc = self.AccountData[i]
-            if self._is_visible_slot(i):
+            if self._is_visible_slot(i, now_tick):
                 accs.append(acc)
 
         # Sort by PartyID, then PartyPosition, then PlayerLoginNumber, then CharacterName
@@ -824,9 +839,10 @@ class AllAccounts(Structure):
     def GetAllAccountHeroAIOptions(self) -> list[HeroAIOptionStruct]:
         """Get HeroAI options for all accounts."""
         options = []
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = self.AccountData[i]
-            if self._is_visible_account(i):
+            if self._is_visible_account(i, now_tick):
                 options.append(self.HeroAIOptions[i])
         return options
 
@@ -836,9 +852,10 @@ class AllAccounts(Structure):
         all_accounts = self.AccountData
         all_options = self.HeroAIOptions
 
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             account = all_accounts[i]
-            if self._is_visible_account(i):
+            if self._is_visible_account(i, now_tick):
                 pairs.append((account, all_options[i]))
 
         if sort_results and len(pairs) > 1:
@@ -868,9 +885,10 @@ class AllAccounts(Structure):
 
     def GetHeroAIOptionsByPartyNumber(self, party_number: int) -> HeroAIOptionStruct | None:
         """Get HeroAI options for the account with the given party number."""
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = self.AccountData[i]
-            if self._is_visible_account(i) and player.AgentPartyData.PartyPosition == party_number:
+            if self._is_visible_account(i, now_tick) and player.AgentPartyData.PartyPosition == party_number:
                 return self.HeroAIOptions[i]
         return None 
     
@@ -930,9 +948,10 @@ class AllAccounts(Structure):
     def GetMapsFromPlayers(self):
         """Get a list of unique maps from all active players."""
         maps = set()
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = self.AccountData[i]
-            if self._is_visible_account(i):
+            if self._is_visible_account(i, now_tick):
                 maps.add((player.AgentData.Map.MapID, player.AgentData.Map.Region, player.AgentData.Map.District, player.AgentData.Map.Language))
         return list(maps)
     
@@ -941,9 +960,10 @@ class AllAccounts(Structure):
         Get a list of unique PartyIDs for players in the specified map/region/district.
         """
         parties = set()
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = self.AccountData[i]
-            if (self._is_visible_account(i) and
+            if (self._is_visible_account(i, now_tick) and
                 player.AgentData.Map.MapID == map_id and
                 player.AgentData.Map.Region == map_region and
                 player.AgentData.Map.District == map_district and
@@ -955,9 +975,10 @@ class AllAccounts(Structure):
         """Get a list of players in a specific party on a specific map."""
         players = []
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             account_data = all_accounts[i]
-            if (self._is_visible_account(i) and
+            if (self._is_visible_account(i, now_tick) and
                 account_data.AgentData.Map.MapID == map_id and
                 account_data.AgentData.Map.Region == map_region and
                 account_data.AgentData.Map.District == map_district and
