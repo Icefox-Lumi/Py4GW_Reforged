@@ -328,7 +328,7 @@ def test_every_reached_priority_and_yield_matches_generic(runtime: Any, aggro: b
     assert len(observed[1]) <= (22 if aggro else 17)
     assert custom.skillbook.Necromancer.BloodMagic.bip_diagnostic is None
     assert custom.skillbook.Ritualist.RestorationMagic.bip_diagnostic is None
-    assert not hasattr(custom, "_bip_diagnostic")
+    assert custom._bip_diagnostic is None
 
 
 def test_cannot_cast_stops_both_rotations(runtime: Any) -> None:
@@ -880,3 +880,526 @@ def test_outer_clear_closes_pending_work_and_reactivates_the_cached_owner(runtim
     assert not r.cache.combat_handler.blocked_skill_ids
     assert outer.EnsureBuildContract() is custom
     assert r.cache.combat_handler.blocked_skill_ids == set(IDS)
+
+
+@pytest.fixture
+def capture_runtime(bip_runtime: Any, spirit_runtime: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Production selection, owner, reader, control and widget; native boundaries only."""
+    r = bip_runtime
+    assert r is spirit_runtime
+    r.control = admission._load(
+        monkeypatch, "Py4GWCoreLib.Builds.Skills.BipDiagnostic", "Py4GWCoreLib/Builds/Skills/BipDiagnostic.py"
+    )
+    publication_clock = admission._load(
+        monkeypatch,
+        "Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync",
+        "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py",
+    )
+    monkeypatch.setattr(publication_clock, "get_uncached_tick_count64", lambda: 10000)
+    admission._module(
+        monkeypatch,
+        "Py4GWCoreLib.GlobalCache.shared_memory_src.Globals",
+        SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS=5000,
+    )
+    r.publication = SimpleNamespace(
+        IsAccount=True,
+        IsSlotActive=True,
+        AccountEmail="recipient@example.invalid",
+        LastUpdated=9999,
+        IsHero=False,
+        IsPet=False,
+        IsNPC=False,
+        IsIsolated=False,
+        AgentPartyData=SimpleNamespace(PartyID=7),
+        AgentData=SimpleNamespace(
+            AgentID=2,
+            LoginNumber=2,
+            OwnerAgentID=0,
+            Map=SimpleNamespace(MapID=10, Region=1, District=1, Language=0),
+            Energy=SimpleNamespace(Current=0.4),
+            Buffs=SimpleNamespace(Buffs=[]),
+            Profession=(5, 0),
+        ),
+    )
+
+    def publications(*, sort_results: bool) -> list[Any]:
+        assert not sort_results
+        return [r.publication]
+
+    def login_agent(login: int) -> int:
+        return login
+
+    def attributes(_agent: int) -> list[Any]:
+        return [
+            SimpleNamespace(attribute_id=33, level=12, base_level=8),
+            SimpleNamespace(attribute_id=4, level=13, base_level=9),
+        ]
+
+    r.core.GLOBAL_CACHE.ShMem = SimpleNamespace(GetAllAccountData=publications, GetBaseTimestamp=lambda: 10000)
+    r.core.GLOBAL_CACHE.Party = SimpleNamespace(
+        GetPartyID=lambda: 7,
+        GetPlayers=lambda: [SimpleNamespace(login_number=2, is_connected=True)],
+        Players=SimpleNamespace(GetAgentIDByLoginNumber=login_agent),
+    )
+    r.core.GLOBAL_CACHE.Effects = SimpleNamespace(HasEffect=false)
+    r.core.Agent.GetAttributes = attributes
+    r.ui = SimpleNamespace(clicked="", texts=[], ends=0)
+
+    def end() -> None:
+        r.ui.ends += 1
+
+    def visible(_name: str) -> bool:
+        return True
+
+    def clicked(name: str) -> bool:
+        return name == r.ui.clicked
+
+    r.core.PyImGui = SimpleNamespace(
+        begin=visible,
+        end=end,
+        text=r.ui.texts.append,
+        button=clicked,
+        same_line=noop,
+    )
+    r.widget = admission._load(monkeypatch, "_custom_bip_widget", "Widgets/Coding/Debug/Py4GW/Smart BiP Diagnostic.py")
+    r.now = 0.0
+    r.output = []
+
+    def click(label: str) -> Any:
+        r.ui.clicked = label
+        r.widget.draw()
+        r.ui.clicked = ""
+        pending = r.control.pending_capture()
+        if pending is not None:
+            pending.clock = lambda: r.now
+            pending.emit = r.output.append
+        return pending
+
+    r.click = click
+    r.outer = r.Hero(cached_data=r.cache)
+    # Real metadata, while unavailable world/weapon details use the Phase A
+    # native stubs. No owner method or diagnostic observation is replaced.
+    metadata_module: Any = sys.modules["Py4GWCoreLib.HeroAI.custom_skill"]
+    metadata_module.CustomSkillClass = lambda: SimpleNamespace(get_skill=r.world.metadata.__getitem__)
+    return r
+
+
+@pytest.mark.parametrize("arm_first", [False, True])
+def test_custom_capture_claim_requires_selected_execution(capture_runtime: Any, arm_first: bool) -> None:
+    r = capture_runtime
+    r.widget.on_enable()
+    assert not r.control._armed
+    capture: Any = r.click("Arm one capture") if arm_first else None
+    registry = r.Registry(build_init_kwargs={"cached_data": r.cache})
+    candidate = registry.GetBestBuild()
+    assert isinstance(candidate, r.Custom) and not candidate._active
+    candidate._diagnostic_begin()
+    assert candidate._bip_diagnostic is None
+    selected = r.outer.EnsureBuildContract()
+    assert isinstance(selected, r.Custom) and selected._active
+    assert selected is not candidate
+    assert selected._bip_diagnostic is None
+    if not arm_first:
+        trace_rotation(selected, selected.skillbook, None)
+        capture = r.click("Arm one capture")
+    # Even an explicitly executed generic handler cannot steal this pending arm.
+    generic = r.Generic()
+    trace_rotation(generic, generic.skills, None)
+    assert generic._bip_diagnostic is None and capture.started is None
+    assert r.control.pending_capture("Blood is Power Healer") is None
+    r.state.aggro = False
+    trace_rotation(selected, selected.skillbook, None)
+    r.now = 80
+    r.widget.update()
+    assert capture.started is None and not r.output
+    r.state.aggro = True
+    # Run the configured production rotation through HeroAI -> ProcessCombat.
+    finish(r.outer.ProcessCombat())
+    assert selected._bip_diagnostic is capture and capture.started == 80
+    assert selected.skillbook.Necromancer.BloodMagic.bip_diagnostic is capture
+    assert selected.skillbook.Ritualist.RestorationMagic.bip_diagnostic is capture
+    assert selected.GetSupportedSkills() == selected.GetBlockedSkills() == IDS
+    assert r.calls[-1] == set(IDS)
+    assert capture.samples == 1 and capture.totals["demand40_mesmer"] == 1
+    assert capture.last.restoration == 12 and capture.last.blood == 13 and capture.last.hr == "False"
+    assert r.control.pending_capture() is None and len(r.output) == 1
+
+
+@pytest.mark.parametrize("success_at", [None, *range(1, 23)])
+def test_custom_capture_all_branch_labels_and_action_yields(capture_runtime: Any, success_at: int | None) -> None:
+    r = capture_runtime
+    selected = r.outer.EnsureBuildContract()
+    assert selected._diagnostic_snapshot().demand == frozenset({2})
+    disarmed = trace_rotation(selected, selected.skillbook, success_at)
+    capture = r.click("Arm one capture")
+    armed = trace_rotation(selected, selected.skillbook, success_at)
+    assert armed == disarmed, (success_at, disarmed, armed)
+    assert capture.samples == 1 and not capture.done
+    winner = armed[1][-1][0] if success_at else "none"
+    assert capture.winners == {winner: 1}, (success_at, capture.winners)
+    assert capture.preemptions == ({winner: 1} if success_at and success_at < 8 else {})
+    assert capture.totals["health_only"] == 0 and capture.health_only_seconds == 0
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["generic", "pvp", "zone", "name", "agent", "map", "uptime", "agent_uptime", "slots", "invalid", "cache", "clear"],
+)
+def test_custom_capture_lifecycle_aborts_and_cannot_transfer(capture_runtime: Any, change: str) -> None:
+    r = capture_runtime
+    selected = r.outer.EnsureBuildContract()
+    capture = r.click("Arm one capture")
+    trace_rotation(selected, selected.skillbook, None)
+    assert capture.samples == 1 and not capture.done
+    if change == "generic":
+        r.state.bar[5] = r.world.skill_id("Wielders_Boon")
+    elif change == "pvp":
+        r.state.bar[5:7] = [3012, 3013]
+    elif change == "zone":
+        r.world.explorable = False
+    elif change == "name":
+        r.state.name = "Another character"
+    elif change == "agent":
+        r.state.agent = 3
+    elif change == "map":
+        r.state.map += 1
+    elif change in ("uptime", "agent_uptime"):
+        setattr(r.state, change, 1)
+    elif change == "slots":
+        r.state.bar.reverse()
+    elif change == "invalid":
+        r.state.valid = False
+    elif change == "cache":
+        selected.set_cached_data(SimpleNamespace(combat_handler=type(r.cache.combat_handler)()))
+    else:
+        r.outer.ClearBuildContract()
+    if change in ("generic", "pvp", "zone", "map", "slots"):
+        r.outer.EnsureBuildContract()
+    elif change not in ("cache", "clear"):
+        finish(selected.ProcessSkillCasting())
+    assert capture.done and not r.control._armed, (change, capture.result)
+    assert selected._bip_diagnostic is None
+    assert selected.skillbook.Necromancer.BloodMagic.bip_diagnostic is None
+    assert selected.skillbook.Ritualist.RestorationMagic.bip_diagnostic is None
+    assert capture.pending is None and capture.health_only_seconds == 0
+    assert len(r.output) == 2 and "ABORTED" in r.output[-1]
+    r.state.bar, r.world.explorable, r.state.valid = IDS.copy(), True, True
+    successor = r.outer.EnsureBuildContract()
+    trace_rotation(successor, successor.skillbook, None)
+    assert successor._bip_diagnostic is None and len(r.output) == 2
+
+
+def test_custom_pending_capture_waits_through_outpost_and_pvp_bar(capture_runtime: Any) -> None:
+    r = capture_runtime
+    capture = r.click("Arm one capture")
+    r.world.explorable = False
+    assert r.outer.EnsureBuildContract() is None
+    r.world.explorable = True
+    r.state.bar[5:7] = [3012, 3013]
+    generic = r.outer.EnsureBuildContract()
+    assert isinstance(generic, r.Generic)
+    trace_rotation(generic, generic.skills, None)
+    r.now = 100
+    r.widget.update()
+    assert capture.started is None and not r.output
+    r.state.bar = IDS.copy()
+    custom = r.outer.EnsureBuildContract()
+    trace_rotation(custom, custom.skillbook, None)
+    assert custom._bip_diagnostic is capture and capture.started == 100
+
+
+@pytest.fixture
+def capture_actions(capture_runtime: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Reach real helpers and queue submissions through the selected custom owner."""
+    r = capture_runtime
+    r.world.health.update({1: 0.86, 2: 0.90, 3: 0.90, 4: 0.90})
+    r.world.place(10, 500)
+    r.core.Party = SimpleNamespace(IsPartyLoaded=lambda: False)
+    admission._module(monkeypatch, "Py4GWCoreLib.FrameTree", FrameTree=SimpleNamespace())
+    monkeypatch.setattr(r.core.AgentArray, "GetEnemyArray", staticmethod(empty_list))
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "IsMartial", staticmethod(false))
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "IsMelee", staticmethod(false))
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "IsConditioned", staticmethod(false))
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "IsAlive", staticmethod(r.world.is_alive))
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "GetHealth", staticmethod(r.world.get_health))
+    admission._module(monkeypatch, "Py4GWCoreLib.Effect", Effects=SimpleNamespace(HasEffect=false))
+    r.core.Agent.IsPoisoned = r.core.Agent.IsBleeding = r.core.Agent.IsDegenHexed = false
+    r.core.Agent.IsCrippled = false
+    r.ready = {119}
+
+    def ready(skill: int) -> bool:
+        return skill in r.ready
+
+    monkeypatch.setattr(r.core.Routines.Checks.Skills, "IsSkillIDReady", staticmethod(ready))
+    r.selected = r.outer.EnsureBuildContract()
+    return r
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("cancel", [False, True])
+def test_custom_real_life_queue_yields_and_abandoned_pass(capture_actions: Any, armed: bool, cancel: bool) -> None:
+    r = capture_actions
+    capture: Any = r.click("Arm one capture") if armed else None
+    # Initial completed health-only observation; real BiP selects a recipient.
+    assert list(r.outer.ProcessCombat()) == [None]
+    assert not r.world.submissions
+    if armed:
+        assert capture.samples == capture.totals["health_only"] == 1, capture.totals
+    r.now, Timer.now, r.ready = 0.25, 250, {119, 1251}
+    assert list(r.outer.Tick(True)) == [None]
+    assert r.world.submissions == [(6, 0, 250)]
+    pending = r.outer._tick_coroutine
+    assert pending is not None and r.selected._local_cast_timer.deadline == 500
+    if armed:
+        assert capture.pending is not None and capture.samples == 1
+    r.now, Timer.now = 0.30, 300
+    if cancel:
+        r.outer.ResetTickExecution()
+        assert pending.gi_frame is None
+        assert list(r.outer.ProcessCombat()) == [None]
+    else:
+        assert list(pending) == [None] * 10
+        r.outer.ResetTickExecution()
+    assert r.world.submissions == [(6, 0, 250)]
+    if armed:
+        assert capture.pending is None and capture.health_only_seconds == 0
+        assert capture.totals["health_only"] == 1
+        assert capture.totals["after_health_action"] == (0 if cancel else 1)
+    r.ready = {119}
+    for now in (0.50, 0.75):
+        r.now, Timer.now = now, int(now * 1000)
+        finish(r.outer.ProcessCombat())
+    assert r.world.submissions == [(6, 0, 250)]
+    if armed:
+        assert capture.totals["health_only"] == 3 and capture.health_only_seconds == 0.25
+
+
+@pytest.mark.parametrize("ending", ["stop", "disable", "complete"])
+def test_selected_custom_can_rearm_after_control_ends(capture_runtime: Any, ending: str) -> None:
+    r = capture_runtime
+    selected = r.outer.EnsureBuildContract()
+    first = r.click("Arm one capture")
+    trace_rotation(selected, selected.skillbook, None)
+    if ending == "stop":
+        r.click("Stop")
+    elif ending == "disable":
+        r.widget.on_disable()
+    else:
+        for now in (10, 20, 30, 40, 50, 60):
+            r.now = now
+            r.widget.update()
+        assert len(r.output) == 8 and first.result == "COMPLETE"
+    assert first.done and first.pending is None and not r.control._armed
+    r.widget.on_enable()
+    assert not r.control._armed
+    second = r.click("Arm one capture")
+    assert second is not first and second.samples == 0
+    r.now += 1
+    trace_rotation(selected, selected.skillbook, None)
+    assert selected._bip_diagnostic is second and second.samples == 1
+    first.stop()
+    assert r.control._armed and not second.done
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("skill,hp", [(1234, 0.67), (962, 0.45), (915, 0.55)])
+def test_custom_real_later_self_heal_excludes_health_only(
+    capture_actions: Any, armed: bool, skill: int, hp: float
+) -> None:
+    r = capture_actions
+    r.world.health[1] = hp
+    r.ready.add(skill)
+    capture: Any = r.click("Arm one capture") if armed else None
+    # Low energy recipients remain healthy; this is an actual self-heal after BiP rejection.
+    assert finish(r.selected._run_local_skill_logic()) is True
+    assert r.world.submissions == [(IDS.index(skill) + 1, 1, 250)], (armed, skill, r.world.submissions)
+    if armed:
+        assert capture.samples == 1 and capture.totals["health_reject"] == 1
+        assert capture.totals["after_health_action"] == capture.totals["heal_self_q"] == 1
+        assert capture.totals["health_only"] == 0 and capture.health_only_seconds == 0
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("after", ["blocked", "hp_rise", "recovered", "floor_changed"])
+def test_unsampled_cancellation_breaks_all_interval_continuity(capture_actions: Any, armed: bool, after: str) -> None:
+    r = capture_actions
+    r.maximum = 280 if after == "floor_changed" else 500
+
+    def maximum(_agent: int) -> int:
+        return r.maximum
+
+    r.core.Agent.GetMaxHealth = maximum
+    if after == "floor_changed":
+        r.world.health[1] = 0.94
+    capture: Any = r.click("Arm one capture") if armed else None
+    assert list(r.outer.ProcessCombat()) == [None]
+    if armed:
+        assert capture.samples == capture.totals["health_only"] == 1
+        assert capture.pending is None and capture.next_sample == 0.25
+    r.now, Timer.now, r.ready = 0.10, 100, {119, 1251}
+    assert list(r.outer.Tick(True)) == [None]
+    assert r.world.submissions == [(6, 0, 250)]
+    assert r.selected._local_cast_timer.deadline == 350
+    if armed:
+        assert capture.pending is None and capture.samples == 1, "The intervening Life pass is unsampled."
+        assert capture.next_sample == 0.25
+    suspended = r.outer._tick_coroutine
+    r.outer.ResetTickExecution()
+    assert suspended.gi_frame is None and r.outer._tick_coroutine is None
+    # Closing ordinary queued work does not cancel its pending timer.
+    assert r.selected._local_cast_timer.deadline == 350
+    r.now, Timer.now, r.ready = 0.36, 360, {119}
+    r.maximum = 500
+    if after == "hp_rise":
+        r.world.health[1] = 0.875
+    elif after == "recovered":
+        r.world.health[1] = 1.0
+    safe = after in {"recovered", "floor_changed"}
+    assert list(r.outer.ProcessCombat()) == ([] if safe else [None])
+    expected_queue = [(6, 0, 250)] + ([(1, 2, 250)] if safe else [])
+    assert r.world.submissions == expected_queue, (armed, after, r.world.submissions)
+    assert r.selected._local_cast_timer.deadline == (610 if safe else None)
+    if not armed:
+        assert r.selected._bip_diagnostic is None
+        return
+    observed = {
+        "samples": capture.samples,
+        "health_only": capture.totals["health_only"],
+        "health_only_s": capture.health_only_seconds,
+        "sampled_s": capture.sampled_seconds,
+        "demand_s": capture.demand_seconds,
+        "hp_block_s": capture.hp_block_seconds,
+        "block_streak": capture.block_streak,
+        "max_block_streak": capture.max_block_streak,
+        "hp_rise": capture.totals["hp_rise"],
+        "recovered": capture.totals["recovered"],
+        "floor_changed": capture.totals["floor_changed"],
+    }
+    assert observed == {
+        "samples": 2,
+        "health_only": 1 if safe else 2,
+        "health_only_s": 0,
+        "sampled_s": 0,
+        "demand_s": 0,
+        "hp_block_s": 0,
+        "block_streak": 0,
+        "max_block_streak": 0,
+        "hp_rise": 0,
+        "recovered": 0,
+        "floor_changed": 0,
+    }, (after, observed)
+    assert capture.pending is None and capture.next_sample == 0.61
+    if not safe:
+        # The fix must allow continuity to restart between valid completed samples.
+        r.now, Timer.now = 0.61, 610
+        assert list(r.outer.ProcessCombat()) == [None]
+        assert capture.samples == capture.totals["health_only"] == 3
+        assert capture.health_only_seconds == capture.sampled_seconds == capture.demand_seconds == 0.25
+        assert capture.hp_block_seconds == capture.block_streak == capture.max_block_streak == 0.25
+
+
+def test_completed_unsampled_decisions_preserve_legitimate_continuity(capture_actions: Any) -> None:
+    r = capture_actions
+    capture = r.click("Arm one capture")
+    for now in (0.00, 0.10, 0.25, 0.30, 0.50):
+        r.now, Timer.now = now, int(now * 1000)
+        assert list(r.outer.ProcessCombat()) == [None]
+    assert capture.samples == capture.totals["health_only"] == 3
+    assert capture.winners == {"none": 5}
+    assert capture.health_only_seconds == capture.sampled_seconds == capture.demand_seconds == 0.50
+    assert capture.hp_block_seconds == capture.block_streak == capture.max_block_streak == 0.50
+    assert not r.world.submissions and r.selected._local_cast_timer.IsStopped()
+
+
+@pytest.mark.parametrize("armed", [False, True])
+def test_unsampled_accepted_life_resumes_without_starting_another_decision(capture_actions: Any, armed: bool) -> None:
+    r = capture_actions
+    capture: Any = r.click("Arm one capture") if armed else None
+    assert list(r.outer.ProcessCombat()) == [None]
+    first = capture.previous if armed else None
+    r.now, Timer.now, r.ready = 0.10, 100, {119, 1251}
+    assert list(r.outer.Tick(True)) == [None]
+    suspended = r.outer._tick_coroutine
+    # Resumption happens after sampling would be due, but is still the same pass.
+    r.now, Timer.now = 0.30, 300
+    for _ in range(10):
+        assert list(r.outer.Tick(True)) == [None]
+        assert r.outer._tick_coroutine is suspended
+        if armed:
+            assert capture.pending is None and capture.samples == 1
+            assert capture.next_sample == 0.25 and capture.previous is first
+    assert list(r.outer.Tick(True)) == [None]
+    assert r.outer._tick_coroutine is None and suspended.gi_frame is None
+    if armed:
+        assert capture.winners == {"none": 1, "Life": 1}
+        assert capture.previous is None, "Existing finish() must break continuity for an unsampled accepted action."
+    r.now, Timer.now, r.ready = 0.36, 360, {119}
+    assert list(r.outer.ProcessCombat()) == [None]
+    assert r.world.submissions == [(6, 0, 250)]
+    assert r.selected._local_cast_timer.IsStopped()
+    if armed:
+        assert capture.samples == capture.totals["health_only"] == 2
+        assert capture.health_only_seconds == capture.sampled_seconds == capture.demand_seconds == 0
+        assert capture.hp_block_seconds == capture.block_streak == capture.max_block_streak == 0
+
+
+@pytest.mark.parametrize("sampled", [False, True])
+def test_repeated_cancelled_decisions_preserve_only_finalized_history(capture_actions: Any, sampled: bool) -> None:
+    r = capture_actions
+    capture = r.click("Arm one capture")
+    # Preserve real duration already finalized before any cancellation.
+    for now in (0.00, 0.25):
+        r.now, Timer.now = now, int(now * 1000)
+        assert list(r.outer.ProcessCombat()) == [None]
+    assert capture.samples == 2 and capture.health_only_seconds == 0.25
+    finalized = capture.totals.copy()
+    start = 0.50 if sampled else 0.35
+    for now in (start, start + 0.26):
+        r.now, Timer.now, r.ready = now, round(now * 1000), {119, 1251}
+        assert list(r.outer.Tick(True)) == [None]
+        suspended = r.outer._tick_coroutine
+        assert capture.totals == finalized and capture.samples == 2
+        r.outer.ResetTickExecution()
+        assert suspended.gi_frame is None
+    assert r.world.submissions == [(6, 0, 250), (6, 0, 250)]
+    r.now, Timer.now, r.ready = start + 0.52, round((start + 0.52) * 1000), {119}
+    assert list(r.outer.ProcessCombat()) == [None]
+    assert capture.pending is None and capture.samples == capture.totals["health_only"] == 3
+    assert capture.health_only_seconds == capture.sampled_seconds == capture.demand_seconds == 0.25
+    assert capture.hp_block_seconds == capture.max_block_streak == 0.25 and capture.block_streak == 0
+
+
+@pytest.mark.parametrize("ending", ["stop", "dispose", "complete"])
+def test_unsampled_decision_cannot_leak_through_capture_end_and_rearm(capture_actions: Any, ending: str) -> None:
+    r = capture_actions
+    first = r.click("Arm one capture")
+    assert list(r.outer.ProcessCombat()) == [None]
+    r.now, Timer.now, r.ready = 0.10, 100, {119, 1251}
+    assert list(r.outer.Tick(True)) == [None]
+    suspended = r.outer._tick_coroutine
+    assert first.pending is None and first.samples == 1
+    if ending == "stop":
+        r.click("Stop")
+    elif ending == "dispose":
+        r.outer.ClearBuildContract()
+        assert suspended.gi_frame is None
+    else:
+        r.now = 60
+        r.widget.update()
+    assert first.done and first.pending is None and first.previous is None
+    second = r.click("Arm one capture")
+    assert second is not first and second.started is None
+    if ending != "dispose":
+        # Old work may finish after rearming; it must still belong to the old capture.
+        assert list(suspended) == [None] * 10
+        r.outer.ResetTickExecution()
+        assert second.started is None and second.samples == 0
+    r.now += 1
+    Timer.now, r.ready = round(r.now * 1000), {119}
+    assert list(r.outer.ProcessCombat()) == [None]
+    assert r.selected._bip_diagnostic is second
+    assert second.samples == second.totals["health_only"] == 1
+    assert second.health_only_seconds == second.sampled_seconds == second.demand_seconds == 0
+    assert first.samples == first.totals["health_only"] == 1
+    first.stop()
+    assert r.control._armed and not second.done

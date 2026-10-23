@@ -14,6 +14,7 @@ from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.Skill import Skill
 
 if TYPE_CHECKING:
+    from Py4GWCoreLib.Builds.Skills.BipDiagnostic import BipDiagnostic
     from Py4GWCoreLib.HeroAI.custom_skill_src.skill_types import CustomSkill
     from Py4GWCoreLib.BuildMgr import BuildMgr
 
@@ -23,6 +24,7 @@ __all__ = ["BloodMagic"]
 class BloodMagic:
     def __init__(self, build: BuildMgr) -> None:
         self.build: BuildMgr = build
+        self.bip_diagnostic: BipDiagnostic | None = None
         self.bip_throttle: ThrottledTimer = ThrottledTimer(1500)
         self.bip_throttle.Stop()
         self.blood_ritual_throttle: ThrottledTimer = ThrottledTimer(1500)
@@ -148,6 +150,8 @@ class BloodMagic:
         if not _is_bip_throttle_ready():
             return False
         if not _can_safely_cast_bip():
+            if self.bip_diagnostic is not None:
+                self.bip_diagnostic.health_rejected(target_agent_id)
             return False
 
         post_buff_target_lock(
@@ -161,6 +165,8 @@ class BloodMagic:
             extra_condition=_can_safely_cast_bip,
         )):
             self.bip_throttle.Reset()
+            if self.bip_diagnostic is not None:
+                self.bip_diagnostic.submission("bip", target_agent_id)
             return True
 
         return False

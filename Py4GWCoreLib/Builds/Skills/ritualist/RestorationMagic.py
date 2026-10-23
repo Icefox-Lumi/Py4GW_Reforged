@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from Py4GWCoreLib.BuildMgr import BuildCoroutine
 from Py4GWCoreLib import Range, Routines
@@ -11,6 +11,7 @@ from Py4GWCoreLib.Skill import Skill
 from Py4GWCoreLib.HeroAI.types import Skilltarget
 
 if TYPE_CHECKING:
+    from Py4GWCoreLib.Builds.Skills.BipDiagnostic import BipDiagnostic
     from Py4GWCoreLib.HeroAI.custom_skill_src.skill_types import CustomSkill
     from Py4GWCoreLib.BuildMgr import BuildMgr
 
@@ -20,6 +21,7 @@ __all__ = ["RestorationMagic"]
 class RestorationMagic:
     def __init__(self, build: BuildMgr) -> None:
         self.build: BuildMgr = build
+        self.bip_diagnostic: BipDiagnostic | None = None
 
     def _has_spirit_in_earshot(self) -> bool:
         return bool(Routines.Agents.GetNearestSpirit(Range.Earshot.value))
@@ -134,10 +136,13 @@ class RestorationMagic:
         if not target_agent_id:
             return False
 
-        return (yield from self.build.CastSkillIDAndRestoreTarget(
+        accepted = (yield from self.build.CastSkillIDAndRestoreTarget(
             mend_body_and_soul_id,
             target_agent_id,
         ))
+        if accepted and self.bip_diagnostic is not None:
+            self.bip_diagnostic.submission("heal", cast(int, target_agent_id))
+        return accepted
 
     def Mending_Grip(self) -> BuildCoroutine:
         mending_grip_id: int = Skill.GetID("Mending_Grip")
@@ -383,11 +388,14 @@ class RestorationMagic:
         if not target_agent_id:
             return False
 
-        return (yield from self.build.CastSkillIDAndRestoreTarget(
+        accepted = (yield from self.build.CastSkillIDAndRestoreTarget(
             spirit_light_id,
             target_agent_id,
             extra_condition=_can_safely_cast_spirit_light,
         ))
+        if accepted and self.bip_diagnostic is not None:
+            self.bip_diagnostic.submission("heal", target_agent_id)
+        return accepted
 
     def Spirit_Transfer(
         self,
@@ -420,10 +428,13 @@ class RestorationMagic:
         if not target_agent_id:
             return False
 
-        return (yield from self.build.CastSkillIDAndRestoreTarget(
+        accepted = (yield from self.build.CastSkillIDAndRestoreTarget(
             spirit_transfer_id,
             target_agent_id,
         ))
+        if accepted and self.bip_diagnostic is not None:
+            self.bip_diagnostic.submission("heal", target_agent_id)
+        return accepted
     #endregion
 
     #region W

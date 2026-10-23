@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+from typing import TYPE_CHECKING
 from typing import Protocol
 from typing import cast
 
@@ -14,6 +15,9 @@ from Py4GWCoreLib.BuildMgr import BuildCoroutine
 from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 from Py4GWCoreLib.Builds.Skills import SkillsTemplate
 from Py4GWCoreLib.Skill import Skill
+
+if TYPE_CHECKING:
+    from Py4GWCoreLib.Builds.Skills.BipDiagnostic import BipDiagnostic, Snapshot
 
 _SKILL_IDS: tuple[int, ...] = (
     Skill.GetID("Blood_is_Power"),
@@ -45,6 +49,7 @@ class MyBloodIsPower(BuildMgr):
             required_skills=list(_SKILL_IDS),
         )
         self._active = False
+        self._bip_diagnostic: BipDiagnostic | None = None
         self._generation = 0
         self._identity: tuple[str, str, int, int, int, int, int] | None = None
         self._bar: tuple[int, ...] = ()
@@ -76,6 +81,7 @@ class MyBloodIsPower(BuildMgr):
 
     def set_cached_data(self, cached_data: Any) -> None:
         if cached_data is not self._cached_data:
+            self._diagnostic_stop()
             self._release_fallback_mask()
             self._identity = None
             self._generation += 1
@@ -107,6 +113,7 @@ class MyBloodIsPower(BuildMgr):
         self._applied_mask = None
 
     def _reset_runtime_state(self) -> None:
+        self._diagnostic_stop()
         self._generation += 1
         self.ResetTarget()
         self.priority_target = 0
@@ -127,6 +134,7 @@ class MyBloodIsPower(BuildMgr):
             self._fallback.ClearBuildContract()
 
     def Dispose(self, reason: str = "contract_disposed") -> None:
+        self._diagnostic_stop("ABORTED_CONTRACT_DISPOSED")
         self._active = False
         self._release_fallback_mask()
         self._reset_runtime_state()
@@ -166,6 +174,7 @@ class MyBloodIsPower(BuildMgr):
             # Reordered slots invalidate suspended work, but do not reset a
             # same-character cast window or the shared helper's BiP throttle.
             self._generation += 1
+            self._diagnostic_stop()
         self._uptime = uptime
         self._bar = bar
         return True
@@ -188,56 +197,145 @@ class MyBloodIsPower(BuildMgr):
             # different context. Calls already submitted to the queue remain.
             coroutine.close()
 
+    def _diagnostic_stop(self, reason: str = "ABORTED_SESSION_CHANGED") -> None:
+        diagnostic = self._bip_diagnostic
+        if diagnostic is None:
+            return
+        diagnostic.stop(reason)
+        self._bip_diagnostic = None
+        self.skillbook.Necromancer.BloodMagic.bip_diagnostic = None
+        self.skillbook.Ritualist.RestorationMagic.bip_diagnostic = None
+
+    def _diagnostic_begin(self) -> None:
+        # Registry candidates never acquire a capture. Activation alone does not
+        # start it either: only the selected owner's next aggro decision can.
+        if not self._active:
+            return
+        diagnostic = self._bip_diagnostic
+        try:
+            if diagnostic is None or diagnostic.done:
+                from Py4GWCoreLib.Builds.Skills.BipDiagnostic import pending_capture
+
+                diagnostic = pending_capture("My Blood is Power")
+            if diagnostic is None:
+                return
+            # Track every new pass, including entries rejected by the sample throttle.
+            diagnostic.enter_decision()
+            if not diagnostic.poll_due():
+                return
+            identity = None
+            if Routines.Checks.Map.MapValid() and Map.IsExplorable():
+                identity = (
+                    Player.GetAgentID(),
+                    Player.GetName(),
+                    Map.GetMapID(),
+                    Map.GetRegion()[0],
+                    Map.GetDistrict(),
+                    Map.GetLanguage()[0],
+                    *self._get_current_skills(),
+                )
+            diagnostic.begin(identity, self.IsInAggro() if identity is not None else False, self._diagnostic_snapshot)
+            if diagnostic.started is not None and not diagnostic.done:
+                self._bip_diagnostic = diagnostic
+                self.skillbook.Necromancer.BloodMagic.bip_diagnostic = diagnostic
+                self.skillbook.Ritualist.RestorationMagic.bip_diagnostic = diagnostic
+        except Exception:
+            if diagnostic is not None:
+                diagnostic.stop("ABORTED_OBSERVATION_ERROR")
+
+    def _diagnostic_snapshot(self) -> Snapshot:
+        from Py4GWCoreLib.Builds.Skills.BipDiagnostic import observe_build
+
+        return observe_build(
+            self,
+            self.skillbook,
+            cast_timer=self._local_cast_timer,
+            weapon_allowed=self._meets_custom_skill_weapon_requirement,
+            shared_allowed=self._meets_custom_skill_shared_conditions,
+            uses_coordination=self._is_whiteboard_skill,
+            target_allowed=self._validate_target_for_skill_cast,
+        )
+
+    def _diagnostic_finish(self, winner: str, *, preempted: bool = False) -> None:
+        if self._bip_diagnostic is not None:
+            self._bip_diagnostic.finish(winner, preempted=preempted)
+
     def _run_local_skill_logic(self) -> BuildCoroutine:
+        self._diagnostic_begin()
         if not Routines.Checks.Skills.CanCast():
+            self._diagnostic_finish("cannot_cast")
             return False
 
         restoration = self.skillbook.Ritualist.RestorationMagic
         soul_reaping = self.skillbook.Necromancer.SoulReaping
         if (yield from restoration.Spirit_Transfer(health_threshold=0.30)):
+            self._diagnostic_finish("Spirit_Transfer", preempted=True)
             return True
         if (yield from restoration.Spirit_Light(health_threshold=0.30)):
+            self._diagnostic_finish("Spirit_Light", preempted=True)
             return True
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.40)):
+            self._diagnostic_finish("Mend_Body_and_Soul", preempted=True)
             return True
         if (yield from self.skillbook.Ritualist.NoAttribute.Drop_Held_Bundle(health_threshold=0.75)):
+            self._diagnostic_finish("Drop_Held_Bundle", preempted=True)
             return True
         if (yield from soul_reaping.Signet_of_Lost_Souls(max_self_energy_pct=0.30)):
+            self._diagnostic_finish("Signet_of_Lost_Souls", preempted=True)
             return True
         if (yield from restoration.Recuperation(min_party_damaged_count=6)):
+            self._diagnostic_finish("Recuperation", preempted=True)
             return True
         if (yield from restoration.Recuperation(min_degen_count=6)):
+            self._diagnostic_finish("Recuperation", preempted=True)
             return True
         if (yield from self.skillbook.Necromancer.BloodMagic.Blood_is_Power()):
+            self._diagnostic_finish("Blood_is_Power", preempted=False)
             return True
         if (yield from restoration.Spirit_Transfer()):
+            self._diagnostic_finish("Spirit_Transfer", preempted=False)
             return True
         if (yield from restoration.Mend_Body_and_Soul(cleanse_blind_martial=True)):
+            self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
         if (yield from restoration.Mend_Body_and_Soul(cleanse_cripple_melee=True)):
+            self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
         if (yield from restoration.Recuperation(min_party_damaged_count=6)):
+            self._diagnostic_finish("Recuperation", preempted=False)
             return True
         if (yield from restoration.Recuperation(min_degen_count=4)):
+            self._diagnostic_finish("Recuperation", preempted=False)
             return True
         if (yield from soul_reaping.Signet_of_Lost_Souls(max_self_energy_pct=0.60)):
+            self._diagnostic_finish("Signet_of_Lost_Souls", preempted=False)
             return True
         if (yield from restoration.Life()):
+            self._diagnostic_finish("Life", preempted=False)
             return True
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.75)):
+            self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
         if (yield from restoration.Protective_Was_Kaolai()):
+            self._diagnostic_finish("Protective_Was_Kaolai", preempted=False)
             return True
         if not self.IsInAggro():
+            self._diagnostic_finish("idle")
             return False
         if (yield from soul_reaping.Signet_of_Lost_Souls()):
+            self._diagnostic_finish("Signet_of_Lost_Souls", preempted=False)
             return True
         if (yield from restoration.Recuperation(min_party_damaged_count=6)):
+            self._diagnostic_finish("Recuperation", preempted=False)
             return True
         if (yield from restoration.Recuperation(min_degen_count=2)):
+            self._diagnostic_finish("Recuperation", preempted=False)
             return True
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.85)):
+            self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
         if (yield from restoration.Spirit_Light()):
+            self._diagnostic_finish("Spirit_Light", preempted=False)
             return True
+        self._diagnostic_finish("none")
         return False
