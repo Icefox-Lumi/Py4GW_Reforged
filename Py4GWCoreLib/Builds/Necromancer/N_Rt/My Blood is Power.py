@@ -14,6 +14,7 @@ from Py4GWCoreLib import Routines
 from Py4GWCoreLib.BuildMgr import BuildCoroutine
 from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 from Py4GWCoreLib.Builds.Skills import SkillsTemplate
+from Py4GWCoreLib.Builds.Skills.SmartBloodIsPower import SmartBloodIsPower
 from Py4GWCoreLib.Builds.Skills.SmartKaolai import SmartKaolai
 from Py4GWCoreLib.Skill import Skill
 from Py4GWCoreLib.Skillbar import SkillBar
@@ -66,6 +67,7 @@ class MyBloodIsPower(BuildMgr):
         self._fallback = HeroAI_Build(cached_data=cached_data, standalone_fallback=True)
         self.SetFallback("HeroAI", self._fallback)
         self.skillbook = SkillsTemplate(self)
+        self._smart_bip = SmartBloodIsPower(self, self.skillbook.Necromancer.BloodMagic)
         self._smart_kaolai = SmartKaolai(self, self.skillbook.Ritualist.RestorationMagic)
         self.SetSkillCastingFn(self._run_local_skill_logic)
 
@@ -326,7 +328,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from restoration.Recuperation(min_degen_count=6)):
             self._diagnostic_finish("Recuperation", preempted=True)
             return True
-        if (yield from self.skillbook.Necromancer.BloodMagic.Blood_is_Power()):
+        if (yield from self._smart_bip.try_cast()):
             self._diagnostic_finish("Blood_is_Power", preempted=False)
             return True
         if (yield from restoration.Spirit_Transfer()):

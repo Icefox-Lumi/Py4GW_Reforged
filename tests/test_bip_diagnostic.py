@@ -601,6 +601,7 @@ def real_pass(
     owner.CastSkillIDAndRestoreTarget = submit
     conditions = owner.GetCustomSkill(119).Conditions
     conditions.LessLife = 0.50
+    conditions.LessEnergy = 0.40
 
     def custom_skill(skill: int) -> Any:
         return SimpleNamespace(
@@ -625,7 +626,11 @@ def real_pass(
     bip_method = _production_method(
         ROOT / "Py4GWCoreLib/Builds/Skills/necromancer/BloodMagic.py", "Blood_is_Power", namespace
     )
-    blood.Blood_is_Power = lambda: bip_method(blood)
+
+    def bip_attempt(*, target_agent_id: int | None = None) -> Generator[Any, None, bool]:
+        return (yield from cast(Generator[Any, None, bool], bip_method(blood, target_agent_id=target_agent_id)))
+
+    blood.Blood_is_Power = bip_attempt
     restoration = SimpleNamespace(build=owner, bip_diagnostic=capture, _has_spirit_in_earshot=_return(True))
     for name in ("Mend_Body_and_Soul", "Spirit_Light", "Spirit_Transfer"):
         from functools import partial
@@ -636,6 +641,10 @@ def real_pass(
         setattr(restoration, name, no_action)
     targeting = ModuleType("Py4GWCoreLib.HeroAI.targeting")
     setattr(targeting, "GetAllAlliesArray", _return([1, 2]))
+    # This accounting fixture already fixes owner selection at recipient 2.
+    # Real population selection and stale proposals are covered by the owner
+    # integration tests; keep the controlled population consistent here.
+    setattr(targeting, "GetEligibleAllyEnergyTargets", _return([2]))
     monkeypatch.setitem(sys.modules, targeting.__name__, targeting)
     other = OtherSkills()
     owner.skills = SimpleNamespace(
@@ -645,6 +654,12 @@ def real_pass(
     )
     owner.skillbook = owner.skills
     owner._smart_kaolai = other
+    smart_path = ROOT / "Py4GWCoreLib/Builds/Skills/SmartBloodIsPower.py"
+    smart_class = next(
+        node for node in ast.parse(smart_path.read_text(encoding="utf-8")).body if isinstance(node, ast.ClassDef)
+    )
+    exec(compile(ast.Module(body=[smart_class], type_ignores=[]), str(smart_path), "exec"), namespace)
+    owner._smart_bip = namespace["SmartBloodIsPower"](owner, blood)
     owner._active = True
     owner._diagnostic_path = request.param
     # Optional Blood Bond is absent from the exact BiP bar.

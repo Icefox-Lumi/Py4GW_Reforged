@@ -200,6 +200,7 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     soul = load("_phase_a_soul", "Py4GWCoreLib/Builds/Skills/necromancer/SoulReaping.py")
     ashes = load("_phase_a_ashes", "Py4GWCoreLib/Builds/Skills/ritualist/NoAttribute.py")
     load("Py4GWCoreLib.Builds.Skills.SmartKaolai", "Py4GWCoreLib/Builds/Skills/SmartKaolai.py")
+    load("Py4GWCoreLib.Builds.Skills.SmartBloodIsPower", "Py4GWCoreLib/Builds/Skills/SmartBloodIsPower.py")
     restoration = cast(Any, type(world.helper))
 
     def necromancer(owner: Any) -> SimpleNamespace:
@@ -345,6 +346,10 @@ def trace_rotation(build: Any, book: Any, success_at: int | None) -> tuple[Any, 
     ):
         for name in names:
             setattr(group, name, handler(name))
+    if hasattr(build, "_smart_bip"):
+        # This branch-order test substitutes all skill attempts. Real proposal
+        # and execution behavior is covered by the integration comparisons.
+        build._smart_bip.try_cast = handler("Blood_is_Power")
     coroutine = build._run_local_skill_logic()
     while True:
         try:
@@ -701,6 +706,9 @@ def bip_interface_baseline() -> dict[str, str]:
     paths = {
         "blood": "Py4GWCoreLib/Builds/Skills/necromancer/BloodMagic.py",
         "targeting": "Py4GWCoreLib/HeroAI/targeting.py",
+        # The controller blob is unchanged at reviewed interface commit d1467ec.
+        # Reuse the existing pinned object requirement instead of adding one.
+        "controller": BUILD_DIR + "My Blood is Power.py",
     }
     return {
         name: subprocess.check_output(
@@ -859,6 +867,304 @@ def target_bip_runtime(bip_runtime: Any, monkeypatch: pytest.MonkeyPatch) -> Any
 
     monkeypatch.setattr(r.core.AgentArray, "GetAllyArray", staticmethod(allies))
     return r
+
+
+@pytest.fixture
+def smart_bip_runtime(
+    target_bip_runtime: Any, bip_interface_baseline: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> Any:
+    """Real rotations, stock selection, Smart proposal, helper, locks and owner admission."""
+    r = target_bip_runtime
+    namespace: dict[str, Any] = {"__name__": "_pre_smart_bip_controller"}
+    exec(compile(bip_interface_baseline["controller"], "pre_smart_controller.py", "exec"), namespace)
+    r.PreSmart = namespace["MyBloodIsPower"]
+    r.world.health.update({agent: 1.0 for agent in (1, 2, 3, 4)})
+    r.world.place(10, 500)
+    r.core.Agent.IsCrippled = false
+    r.core.Agent.IsPoisoned = r.core.Agent.IsBleeding = r.core.Agent.IsDegenHexed = false
+
+    def native_skill(name: str) -> SimpleNamespace:
+        return SimpleNamespace(id=SimpleNamespace(id=r.world.skill_id(name)))
+
+    admission._module(monkeypatch, "PySkill", Skill=native_skill)
+    models = admission._load(monkeypatch, "_smart_bip_models", "Py4GWCoreLib/enums_src/Model_enums.py")
+    r.core.SpiritModelID = models.SpiritModelID
+    admission._module(monkeypatch, "Py4GWCoreLib.Effect", Effects=SimpleNamespace(HasEffect=false))
+    r.ready = {119}
+    monkeypatch.setattr(r.core.AgentArray, "GetEnemyArray", staticmethod(empty_list))
+    for name in ("IsMartial", "IsMelee", "IsConditioned"):
+        monkeypatch.setattr(r.core.Routines.Checks.Agents, name, staticmethod(false))
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "IsAlive", staticmethod(r.world.is_alive))
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "GetHealth", staticmethod(r.world.get_health))
+
+    def ready(skill: int) -> bool:
+        return skill in r.ready and not r.world.recharge
+
+    monkeypatch.setattr(r.core.Routines.Checks.Skills, "IsSkillIDReady", staticmethod(ready))
+
+    def owner(kind: Any = None) -> Any:
+        build = (kind or r.Custom)(cached_data=r.cache)
+        build._custom_skill_data_handler = SimpleNamespace(get_skill=r.world.metadata.__getitem__)
+        build._local_cast_timer = r.timer_type(0)
+        build._local_cast_timer.Stop()
+        return build
+
+    r.make_owner = owner
+    return r
+
+
+def test_smart_bip_match_only_and_single_owner_construction(smart_bip_runtime: Any) -> None:
+    r = smart_bip_runtime
+    candidate = r.Custom(match_only=True)
+    assert candidate.ScoreMatch() == 1008
+    assert not hasattr(candidate, "_smart_bip") and not hasattr(candidate, "skillbook")
+    build = r.make_owner()
+    assert vars(build._smart_bip) == {
+        "build": build,
+        "_blood_magic": build.skillbook.Necromancer.BloodMagic,
+    }
+    assert build._smart_bip.build is build.skillbook.Necromancer.BloodMagic.build is build
+    assert build.current_fallback_handler is build._fallback
+
+
+@pytest.mark.parametrize("bar", [IDS, [119, 0, 0, 0, 0, 0, 0, 0], [0, 0, 119, 0, 962, 0, 0, 0]])
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("normal", 2),
+        ("energy_order", 4),
+        ("distance_tie", 4),
+        ("id_tie", 3),
+        ("coverage", 4),
+        ("reservation", 3),
+        ("invalid_energy", 4),
+        ("no_recipient", 0),
+        ("health", 0),
+        ("absolute_health", 0),
+        ("invalid_maximum", 0),
+        ("throttle", 0),
+        ("pending", 0),
+        ("energy_cost", 0),
+        ("recharge", 0),
+        ("toggle", 0),
+        ("cannot_cast", 0),
+        ("adrenaline", 0),
+        ("post_failure", 2),
+        ("late_health", 0),
+    ],
+)
+def test_smart_bip_committed_rotation_action_parity(
+    smart_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch, bar: list[int], armed: bool, case: str, expected: int
+) -> None:
+    r = smart_bip_runtime
+    r.state.bar = list(bar)
+    slot = bar.index(119) + 1
+    if case == "energy_order":
+        r.accounts[4].AgentData.Energy.Current = 0.2
+    elif case == "distance_tie":
+        r.world.place(4, 100)
+    elif case == "id_tie":
+        r.world.place(2, 500)
+    elif case == "coverage":
+        proposal_defect(r, "bip", 2)
+        proposal_defect(r, "ritual", 3)
+    elif case == "reservation":
+        r.locked.add(2)
+    elif case == "invalid_energy":
+        r.accounts[2].AgentData.Energy.Current = float("nan")
+        r.accounts[3].AgentData.Energy.Current = float("inf")
+    elif case == "no_recipient":
+        for account in r.accounts.values():
+            account.AgentData.Energy.Current = 0.40001
+    if case in ("absolute_health", "invalid_maximum"):
+
+        def maximum_health(_agent: int) -> int:
+            return 280 if case == "absolute_health" else 0
+
+        r.core.Agent.GetMaxHealth = maximum_health
+    r.world.energy = 0.0 if case == "energy_cost" else 1.0
+    r.world.recharge = int(case == "recharge")
+    r.world.adrenaline = case != "adrenaline"
+    r.state.can_cast = case != "cannot_cast"
+    r.cache.account_options.Skills[slot - 1] = case != "toggle"
+    r.post_failure = case == "post_failure"
+    if case == "late_health":
+
+        def lose_health() -> None:
+            r.world.health[1] = 0.88
+
+        r.after_post = lose_health
+    outcomes: list[Any] = []
+    scans: list[int] = []
+    for kind in (r.PreSmart, r.Custom):
+        Timer.now = 0
+        r.trace.clear()
+        r.intents.clear()
+        r.world.submissions.clear()
+        r.target = 20
+        r.world.health[1] = 0.88 if case == "health" else 0.955 if case == "absolute_health" else 1.0
+        build = r.make_owner(kind)
+        helper = build.skillbook.Necromancer.BloodMagic
+        if case == "throttle":
+            helper.bip_throttle.Reset()
+        if case == "pending":
+            build._mark_local_cast_pending(250)
+        # Rotation-level accounting uses a prepared sample. Selected-owner
+        # sampling/attachment is exercised separately through the actual widget.
+        capture = r.diagnostic.BipDiagnostic(clock=lambda: 0.0, emit=noop)
+        capture.start(0.0)
+        capture.pending = r.diagnostic.Snapshot()
+        build._bip_diagnostic = helper.bip_diagnostic = capture if armed else None
+        proposals: list[int | None] = []
+        attempt = helper.Blood_is_Power
+
+        def record_proposal(*, target_agent_id: int | None = None) -> Any:
+            proposals.append(target_agent_id)
+            return attempt(target_agent_id=target_agent_id)
+
+        monkeypatch.setattr(helper, "Blood_is_Power", record_proposal)
+        accepted = finish(build._run_local_skill_logic())
+        if kind is r.Custom:
+            assert len(proposals) <= 1 and all(target is not None and target > 0 for target in proposals), proposals
+            if expected:
+                assert proposals == [expected]
+        else:
+            assert proposals == ([] if case == "cannot_cast" else [None])
+        scans.append(sum(event[0] == "allies" for event in r.trace))
+        outcomes.append(
+            (
+                accepted,
+                list(r.world.submissions),
+                [event for event in r.trace if event[0] in ("post", "submit", "restore")],
+                helper.bip_throttle.IsStopped(),
+                build._is_local_cast_pending(),
+                r.target,
+                capture.health_target,
+                dict(capture.totals),
+                dict(capture.winners),
+            )
+        )
+    assert outcomes[0] == outcomes[1], (bar, armed, case, outcomes)
+    assert outcomes[1][0] is bool(expected)
+    assert outcomes[1][1] == ([(slot, expected, 250)] if expected else []), (case, outcomes)
+    if case == "normal":
+        assert scans[1] == scans[0] + 3, "Stock selection plus three explicit eligibility checks."
+        assert outcomes[1][-2].get("bip_q", 0) == int(armed)
+
+
+@pytest.mark.parametrize("stage", ["proposal", "post", "second_admission"])
+@pytest.mark.parametrize(
+    "defect", ["membership", "dead", "range", "missing_energy", "above_threshold", "bip", "ritual", "reserved"]
+)
+def test_smart_bip_stale_proposal_never_retargets(
+    smart_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch, stage: str, defect: str
+) -> None:
+    r = smart_bip_runtime
+    build = r.make_owner()
+    helper = build.skillbook.Necromancer.BloodMagic
+    attempt = helper.Blood_is_Power
+    proposals: list[int | None] = []
+
+    def record_proposal(*, target_agent_id: int | None = None) -> Any:
+        proposals.append(target_agent_id)
+        if stage == "proposal":
+            proposal_defect(r, defect)
+        return attempt(target_agent_id=target_agent_id)
+
+    monkeypatch.setattr(helper, "Blood_is_Power", record_proposal)
+    if stage == "post":
+        r.after_post = lambda: proposal_defect(r, defect)
+    elif stage == "second_admission":
+
+        def changed_target() -> int:
+            proposal_defect(r, defect)
+            return 20
+
+        r.core.Player.GetTargetID = changed_target
+    assert finish(build._run_local_skill_logic()) is False, (stage, defect, r.trace)
+    assert proposals == [2] and not r.world.submissions
+    assert helper.bip_throttle.IsStopped() and not build._is_local_cast_pending()
+    assert sum(event[0] == "post" for event in r.trace) == (0 if stage == "proposal" else 1)
+    assert len(r.intents) == (0 if stage == "proposal" else 1), "Posted leases retain their ordinary lifetime."
+    assert r.targeting.TargetLowestAllyEnergy(True, 119, 0.4) == 3, "A valid alternative remains available."
+
+
+@pytest.mark.parametrize(
+    "health,maximum,allowed", [(0.88, 500, False), (0.8801, 500, True), (0.955, 280, False), (0.9551, 280, True)]
+)
+def test_smart_bip_preserves_sacrifice_boundary(
+    smart_bip_runtime: Any, health: float, maximum: int, allowed: bool
+) -> None:
+    r = smart_bip_runtime
+    r.world.health[1] = health
+
+    def maximum_health(_agent: int) -> int:
+        return maximum
+
+    r.core.Agent.GetMaxHealth = maximum_health
+    build = r.make_owner()
+    assert finish(build._run_local_skill_logic()) is allowed
+    assert r.world.submissions == ([(1, 2, 250)] if allowed else [])
+
+
+def test_smart_bip_real_timer_boundaries(smart_bip_runtime: Any) -> None:
+    r = smart_bip_runtime
+    build = r.make_owner()
+    Timer.now = 0
+    assert finish(build._run_local_skill_logic()) is True
+    Timer.now = 249
+    assert build._is_local_cast_pending()
+    for now in (250, 1499):
+        Timer.now = now
+        assert not build._is_local_cast_pending()
+        assert finish(build._run_local_skill_logic()) is False
+    Timer.now = 1500
+    assert finish(build._run_local_skill_logic()) is True
+    assert r.world.submissions == [(1, 2, 250), (1, 2, 250)]
+
+
+@pytest.mark.parametrize(
+    "change", ["bip_slot", "replacement_slot", "empty_slot", "remove_bip", "map", "character", "cache", "dispose"]
+)
+def test_smart_bip_suspended_work_uses_owner_lifecycle(smart_bip_runtime: Any, change: str) -> None:
+    r = smart_bip_runtime
+    r.state.bar = [119, 0, 962, 0, 0, 0, 777, 0]
+    build = r.make_owner()
+    build.OnContractActivated(r.cache)
+    component = build._smart_bip
+    coroutine = build.ProcessSkillCasting()
+    next(coroutine)
+    assert r.world.submissions == [(1, 2, 250)] and build._is_local_cast_pending()
+    if change == "bip_slot":
+        r.state.bar[0], r.state.bar[1] = 0, 119
+    elif change == "replacement_slot":
+        r.state.bar[6], r.state.bar[7] = 0, 777
+    elif change == "empty_slot":
+        r.state.bar[2], r.state.bar[3] = 0, 962
+    elif change == "remove_bip":
+        r.state.bar[0] = 0
+    elif change == "map":
+        r.state.map += 1
+    elif change == "character":
+        r.state.name = "New Necromancer"
+    elif change == "cache":
+        build.set_cached_data(SimpleNamespace(**vars(r.cache)))
+    else:
+        build.Dispose()
+    assert list(coroutine) == []
+    assert r.world.submissions == [(1, 2, 250)], "Submitted native work is not cancelled by closing Python work."
+    assert build.skillbook.Necromancer.BloodMagic.bip_throttle.IsStopped()
+    assert build._is_local_cast_pending() is (change in {"bip_slot", "replacement_slot", "empty_slot"})
+    r.state.bar = [0, 0, 0, 119, 0, 0, 0, 0]
+    for account in r.accounts.values():
+        account.AgentData.Map.MapID = r.state.map
+    Timer.now = 1500
+    build.OnContractActivated(r.cache)
+    assert build._smart_bip is component
+    finish(build.ProcessSkillCasting())
+    assert r.world.submissions == [(1, 2, 250), (4, 2, 250)], (change, r.trace)
+    assert not build.skillbook.Necromancer.BloodMagic.bip_throttle.IsStopped()
 
 
 def proposal_defect(runtime: Any, defect: str, agent: int = 2) -> None:
@@ -2302,6 +2608,44 @@ def capture_actions(capture_runtime: Any, monkeypatch: pytest.MonkeyPatch) -> An
 
 
 @pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("healthy", [False, True])
+def test_smart_bip_selected_owner_capture_matches_committed(
+    capture_actions: Any, bip_interface_baseline: dict[str, str], armed: bool, healthy: bool
+) -> None:
+    r = capture_actions
+    namespace: dict[str, Any] = {"__name__": "_pre_smart_capture"}
+    exec(compile(bip_interface_baseline["controller"], "pre_smart_controller.py", "exec"), namespace)
+    results: list[Any] = []
+    for kind in (namespace["MyBloodIsPower"], r.Custom):
+        r.control.stop_capture()
+        r.world.submissions.clear()
+        r.posts.clear()
+        r.world.health[1] = 1.0 if healthy else 0.86
+        r.now, Timer.now = 0.0, 0
+        build = kind(cached_data=r.cache)
+        build.OnContractActivated(r.cache)
+        capture: Any = r.click("Arm one capture") if armed else None
+        finish(build.ProcessSkillCasting())
+        results.append(
+            (
+                list(r.world.submissions),
+                list(r.posts),
+                build._is_local_cast_pending(),
+                build.skillbook.Necromancer.BloodMagic.bip_throttle.IsStopped(),
+                (capture.samples, dict(capture.totals), dict(capture.winners)) if armed else None,
+            )
+        )
+        if armed:
+            assert build.skillbook.Necromancer.BloodMagic.bip_diagnostic is capture
+            assert capture.samples == 1 and not capture.done
+            assert capture.totals["bip_q"] == int(healthy)
+            assert capture.totals["health_reject"] == int(not healthy)
+        build.Dispose()
+    assert results[0] == results[1], (armed, healthy, results)
+    assert results[1][0] == ([(1, 2, 250)] if healthy else [])
+
+
+@pytest.mark.parametrize("armed", [False, True])
 @pytest.mark.parametrize("cancel", [False, True])
 def test_custom_real_life_queue_yields_and_abandoned_pass(capture_actions: Any, armed: bool, cancel: bool) -> None:
     r = capture_actions
@@ -2797,6 +3141,37 @@ def assert_replacement_ready(runtime: Any) -> None:
     assert r.replacement not in combat.blocked_skill_ids
     assert combat.IsSkillReady(slot)
     assert combat.IsReadyToCast(slot) == (True, 2)
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("change", ["none", "bip_slot", "reactivate"])
+def test_smart_bip_pending_blocks_real_replacement_until_expiry(
+    pending_fallback: Any, armed: bool, change: str
+) -> None:
+    r = pending_fallback
+    r.world.health.update({1: 1.0, 2: 0.65})
+    r.world.energy = 0.4
+    r.ready = {119, r.replacement}
+    if armed:
+        r.click("Arm one capture")
+    r.tick(0)
+    assert r.world.submissions == [(1, 2, 250)]
+    component = r.selected._smart_bip
+    if change == "bip_slot":
+        r.state.bar[0], r.state.bar[2] = 0, 119
+    elif change == "reactivate":
+        r.selected.OnContractActivated(r.cache)
+    for now in (75, 76, 249, 249):
+        r.tick(now)
+        assert r.selected._is_local_cast_pending()
+        assert_replacement_ready(r)
+        assert r.world.submissions == [(1, 2, 250)]
+        assert r.selected._smart_bip is component
+    r.tick(250)
+    r.tick(250)
+    assert not r.selected._is_local_cast_pending()
+    assert r.world.submissions == [(1, 2, 250), (7, 2, 250)]
+    assert r.selected._fallback.DidTickSucceed()
 
 
 @pytest.mark.parametrize("armed", [False, True])
