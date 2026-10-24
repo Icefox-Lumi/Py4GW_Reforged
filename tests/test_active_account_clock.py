@@ -12,66 +12,9 @@ from typing import Any, cast
 
 import pytest
 
-from test_account_publication import ROOT, WIRE, build_wire_subject, load_module
+from test_account_publication import ROOT, account_world as _world_fixture, load_module
 
-
-@pytest.fixture
-def world(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Use the real wire layout and readers with controlled host clocks."""
-    wire = build_wire_subject(monkeypatch)
-    clock = SimpleNamespace(frame=10000, uncached=10000, hwnd=0)
-    logs: list[tuple[str, str, int]] = []
-
-    def log(module: str, message: str, level: int) -> None:
-        logs.append((module, message, level))
-
-    system = ModuleType("PySystem")
-    system.__dict__.update(
-        get_tick_count64=lambda: clock.frame,
-        Console=SimpleNamespace(
-            Log=log,
-            get_gw_window_handle=lambda: clock.hwnd,
-            MessageType=SimpleNamespace(Info=0, Warning=1, Error=2),
-        ),
-    )
-    monkeypatch.setitem(sys.modules, "PySystem", system)
-    sender, receiver = "sender@example.invalid", "receiver@example.invalid"
-    player = ModuleType("Py4GWCoreLib.Player")
-    player.__dict__.update(Player=SimpleNamespace(GetAccountEmail=lambda: sender))
-    monkeypatch.setitem(sys.modules, player.__name__, player)
-    whiteboard = load_module("_active_whiteboard", WIRE.parents[1] / "enums_src/Whiteboard_enums.py", monkeypatch)
-
-    tree = ast.parse((WIRE / "AllAccounts.py").read_text(encoding="utf-8"))
-    owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "AllAccounts")
-    # Retain the owning methods over the real ctypes fields, without importing
-    # the injected facade or repeating its field declarations.
-    owner.bases = [ast.Name("WireAccounts", ast.Load())]
-    owner.body = [node for node in owner.body if not isinstance(node, (ast.Assign, ast.AnnAssign))]
-    namespace: dict[str, Any] = dict(
-        cast(dict[str, Any], vars(wire)),
-        __name__="_active_account_fixture",
-        __package__="Py4GWCoreLib.GlobalCache.shared_memory_src",
-        __spec__=None,
-        WireAccounts=wire.AllAccounts,
-        PySystem=system,
-        ConsoleLog=log,
-        publication_age=wire.clock.publication_age,
-        publication_is_live=wire.clock.publication_is_live,
-        get_uncached_tick_count64=lambda: clock.uncached,
-    )
-    whiteboard_symbols = cast(dict[str, Any], vars(whiteboard))
-    namespace.update({name: value for name, value in whiteboard_symbols.items() if not name.startswith("__")})
-    module = ast.Module([ast.ImportFrom("__future__", [ast.alias("annotations")], 0), owner], [])
-    exec(compile(ast.fix_missing_locations(module), str(WIRE / "AllAccounts.py"), "exec"), namespace)
-    table = namespace["AllAccounts"]()
-    for index, email in enumerate((sender, receiver)):
-        row = table.AccountData[index]
-        row.AccountEmail = email
-        row.IsAccount = True
-        row.IsSlotActive = True
-        row.LastUpdated = clock.uncached
-
-    return SimpleNamespace(table=table, wire=wire, clock=clock, logs=logs, sender=sender, receiver=receiver)
+world = _world_fixture
 
 
 def _pair(world: Any) -> Any:
