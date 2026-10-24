@@ -14,7 +14,6 @@ from typing import cast
 
 import pytest
 
-pytest_plugins = ["test_restoration_spirit_admission"]
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_DIR = "Py4GWCoreLib/Builds/Necromancer/N_Rt/"
 IDS = [119, 962, 1234, 915, 1219, 1251, 981, 1365]
@@ -29,6 +28,27 @@ NAMES = [
     "Signet_of_Lost_Souls",
 ]
 admission: Any = importlib.import_module("test_restoration_spirit_admission")
+# Register the shared fixture locally; a test module plugin is order-dependent.
+world = admission.world
+
+
+@pytest.mark.parametrize("admission_first", [True, False], ids=["admission-first", "controller-first"])
+def test_world_fixture_is_available_in_either_collection_order(admission_first: bool) -> None:
+    cases = [
+        "tests/test_my_blood_is_power.py::test_real_registry_selection_and_cached_instance",
+        "tests/test_restoration_spirit_admission.py::test_spirit_range_through_helper_and_shared_admission",
+    ]
+    if admission_first:
+        cases.reverse()
+    result = subprocess.run(
+        [sys.executable, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider", *cases, "--tb=short"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    assert result.returncode == 0, f"Collection order: {cases}\n{result.stdout}\n{result.stderr}"
 
 
 def source_functions(source: str, names: set[str], namespace: dict[str, Any]) -> dict[str, Any]:
