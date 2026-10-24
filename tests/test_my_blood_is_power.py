@@ -120,6 +120,7 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         return []
 
     def equipped_skill(slot: int) -> int:
+        assert 1 <= slot <= 8, (slot, state.bar)
         return state.bar[slot - 1]
 
     def equipped_slot(skill: int) -> int:
@@ -209,13 +210,18 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     hero = load("Py4GWCoreLib.Builds.Any.HeroAI", "Py4GWCoreLib/Builds/Any/HeroAI.py")
     custom = load("Py4GWCoreLib.Builds.My Blood is Power", BUILD_DIR + "My Blood is Power.py")
     generic = load("Py4GWCoreLib.Builds.Blood is Power Healer", BUILD_DIR + "Blood is Power Healer.py")
+    xinrae = load("Py4GWCoreLib.Builds.Xinraes Weapon Healer", BUILD_DIR + "Xinraes Weapon Healer.py")
     metadata = load(
         "Py4GWCoreLib.HeroAI.custom_skill_src.necromancer", "Py4GWCoreLib/HeroAI/custom_skill_src/necromancer.py"
     )
     metadata.NecromancerSkills(world.metadata)
     cast(Any, sys.modules["Py4GWCoreLib.HeroAI.custom_skill_src.ritualist"]).RitualistSkills(world.metadata)
     registry: Any = sys.modules["Py4GWCoreLib.BuildMgr"].BuildRegistry
-    monkeypatch.setattr(registry, "_cached_build_types", [generic.Blood_is_Power_Healer, custom.MyBloodIsPower])
+    monkeypatch.setattr(
+        registry,
+        "_cached_build_types",
+        [generic.Blood_is_Power_Healer, xinrae.Xinraes_Weapon_Healer, custom.MyBloodIsPower],
+    )
 
     # Use the production mask writer, not a duplicate of its replacement semantics.
     tree = ast.parse((ROOT / "Py4GWCoreLib/HeroAI/combat.py").read_text(encoding="utf-8"))
@@ -259,6 +265,7 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         locks=locks,
         Custom=custom.MyBloodIsPower,
         Generic=generic.Blood_is_Power_Healer,
+        Xinrae=xinrae.Xinraes_Weapon_Healer,
         Hero=hero.HeroAI_Build,
         Registry=registry,
     )
@@ -275,14 +282,14 @@ def test_real_registry_selection_and_cached_instance(runtime: Any, reverse: bool
     assert isinstance(winner, r.Custom)
     assert registry.GetBestBuild() is winner
     r.state.bar[-1] = r.world.skill_id("Wielders_Boon")
-    assert registry.GetBestBuild() is None  # Removed the generic healer's required signet.
+    assert registry.GetBestBuild() is winner
     r.state.bar = IDS.copy()
     r.state.bar[5] = r.world.skill_id("Wielders_Boon")
-    assert isinstance(registry.GetBestBuild(), r.Generic)
+    assert registry.GetBestBuild() is winner
 
 
-@pytest.mark.parametrize("bar", [IDS[:-1], IDS + [119], IDS[:-1] + [119], IDS[:-1] + [0], IDS[:-1] + [9999]])
-def test_rejects_inexact_bars(runtime: Any, bar: list[int]) -> None:
+@pytest.mark.parametrize("bar", [[], IDS[1:], IDS + [119], IDS[:-1] + [119], [119, -1]])
+def test_rejects_missing_bip_or_malformed_bars(runtime: Any, bar: list[int]) -> None:
     assert runtime.Custom(match_only=True).ScoreMatch(current_skills=bar) == -1, bar
 
 
@@ -389,19 +396,16 @@ def test_real_custom_generic_custom_and_pure_heroai_transitions(runtime: Any) ->
     finish(outer.ProcessCombat())
     custom.current_target_id = 55
     custom.skillbook.Necromancer.BloodMagic.bip_throttle.Reset()
-    r.state.bar[5] = r.world.skill_id("Wielders_Boon")
+    r.state.bar[0] = r.world.skill_id("Xinraes_Weapon")
     generic = outer.EnsureBuildContract()
-    assert isinstance(generic, r.Generic)
+    assert isinstance(generic, r.Xinrae)
     assert not r.cache.combat_handler.blocked_skill_ids
     generic.current_fallback_handler.set_cached_data(r.cache)
     generic.SetSkillCastingFn(decline)
     finish(outer.ProcessCombat())
     assert r.calls[-1] == set(generic.GetBlockedSkills())
-    diagnostic_stops: list[bool] = []
-    generic._bip_diagnostic = SimpleNamespace(stop=lambda: diagnostic_stops.append(True))
     r.state.bar = IDS.copy()
     assert outer.EnsureBuildContract() is custom
-    assert diagnostic_stops == [True]
     assert custom.skillbook.Necromancer.BloodMagic.bip_diagnostic is None
     assert custom.current_target_id == 0
     assert custom.skillbook.Necromancer.BloodMagic.bip_throttle.IsStopped()
@@ -1647,7 +1651,20 @@ def test_custom_capture_all_branch_labels_and_action_yields(capture_runtime: Any
 
 @pytest.mark.parametrize(
     "change",
-    ["generic", "pvp", "zone", "name", "agent", "map", "uptime", "agent_uptime", "slots", "invalid", "cache", "clear"],
+    [
+        "generic",
+        "replacement",
+        "zone",
+        "name",
+        "agent",
+        "map",
+        "uptime",
+        "agent_uptime",
+        "slots",
+        "invalid",
+        "cache",
+        "clear",
+    ],
 )
 def test_custom_capture_lifecycle_aborts_and_cannot_transfer(capture_runtime: Any, change: str) -> None:
     r = capture_runtime
@@ -1656,8 +1673,8 @@ def test_custom_capture_lifecycle_aborts_and_cannot_transfer(capture_runtime: An
     trace_rotation(selected, selected.skillbook, None)
     assert capture.samples == 1 and not capture.done
     if change == "generic":
-        r.state.bar[5] = r.world.skill_id("Wielders_Boon")
-    elif change == "pvp":
+        r.state.bar[0] = r.world.skill_id("Xinraes_Weapon")
+    elif change == "replacement":
         r.state.bar[5:7] = [3012, 3013]
     elif change == "zone":
         r.world.explorable = False
@@ -1677,7 +1694,7 @@ def test_custom_capture_lifecycle_aborts_and_cannot_transfer(capture_runtime: An
         selected.set_cached_data(SimpleNamespace(combat_handler=type(r.cache.combat_handler)()))
     else:
         r.outer.ClearBuildContract()
-    if change in ("generic", "pvp", "zone", "map", "slots"):
+    if change in ("generic", "replacement", "zone", "map", "slots"):
         r.outer.EnsureBuildContract()
     elif change not in ("cache", "clear"):
         finish(selected.ProcessSkillCasting())
@@ -1693,16 +1710,14 @@ def test_custom_capture_lifecycle_aborts_and_cannot_transfer(capture_runtime: An
     assert successor._bip_diagnostic is None and len(r.output) == 2
 
 
-def test_custom_pending_capture_waits_through_outpost_and_pvp_bar(capture_runtime: Any) -> None:
+def test_custom_pending_capture_waits_through_outpost_and_missing_bip(capture_runtime: Any) -> None:
     r = capture_runtime
     capture = r.click("Arm one capture")
     r.world.explorable = False
     assert r.outer.EnsureBuildContract() is None
     r.world.explorable = True
-    r.state.bar[5:7] = [3012, 3013]
-    generic = r.outer.EnsureBuildContract()
-    assert isinstance(generic, r.Generic)
-    trace_rotation(generic, generic.skills, None)
+    r.state.bar = [0] * 8
+    assert r.outer.EnsureBuildContract() is r.outer
     r.now = 100
     r.widget.update()
     assert capture.started is None and not r.output
@@ -1803,6 +1818,605 @@ def test_selected_custom_can_rearm_after_control_ends(capture_runtime: Any, endi
     assert selected._bip_diagnostic is second and second.samples == 1
     first.stop()
     assert r.control._armed and not second.done
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("bar", [IDS, list(reversed(IDS)), IDS[:-1] + [773], [119, 773, 0, 0, 0, 0, 0, 0], [119]])
+def test_flexible_selection_uses_real_registry_and_runtime(runtime: Any, reverse: bool, bar: list[int]) -> None:
+    r = runtime
+    if reverse:
+        r.Registry._cached_build_types.reverse()
+    candidate = r.Custom(match_only=True)
+    score = 1000 + len(set(bar) & set(IDS))
+    assert candidate.ScoreMatch(current_skills=bar) == score
+    assert not hasattr(candidate, "skillbook") and not hasattr(candidate, "_fallback")
+    assert not r.cache.combat_handler.blocked_skill_ids
+    r.state.bar = bar + [0] * (8 - len(bar))
+    registry = r.Registry(build_init_kwargs={"cached_data": r.cache})
+    assert isinstance(registry.GetBestBuild(), r.Custom)
+    outer = r.Hero(cached_data=r.cache)
+    selected = outer.EnsureBuildContract()
+    assert isinstance(selected, r.Custom)
+    assert selected.ScoreMatch() == score
+    assert r.cache.combat_handler.blocked_skill_ids == set(bar) & set(IDS)
+
+
+@pytest.mark.parametrize("primary,secondary,bar", [(8, 4, IDS), (4, 0, IDS), (5, 8, IDS), (4, 8, IDS[1:] + [0])])
+def test_ineligible_professions_or_missing_bip_never_select_custom(
+    runtime: Any, primary: int, secondary: int, bar: list[int]
+) -> None:
+    r = runtime
+    r.state.primary, r.state.secondary, r.state.bar = primary, secondary, bar.copy()
+    assert r.Custom(match_only=True).ScoreMatch() == -1
+    assert not isinstance(r.Registry(build_init_kwargs={"cached_data": r.cache}).GetBestBuild(), r.Custom)
+    assert r.Hero(cached_data=r.cache).EnsureBuildContract().build_name == "HeroAI"
+    assert not r.cache.combat_handler.blocked_skill_ids
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_flexible_match_competes_with_supported_nr_t_neighbors(runtime: Any, reverse: bool) -> None:
+    r = runtime
+    # Xinrae can compete with BiP in the matcher even on a synthetic two-elite
+    # input. Selection must remain score-based, independent of discovery order.
+    r.state.bar[5] = r.world.skill_id("Xinraes_Weapon")
+    assert r.Xinrae(match_only=True).ScoreMatch() > 0
+    assert r.Generic(match_only=True).ScoreMatch() > 0
+    if reverse:
+        r.Registry._cached_build_types.reverse()
+    assert isinstance(r.Registry(build_init_kwargs={"cached_data": r.cache}).GetBestBuild(), r.Custom)
+    assert isinstance(r.Hero(cached_data=r.cache).EnsureBuildContract(), r.Custom)
+
+
+@pytest.fixture
+def supported_fallback(capture_actions: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Execute production CombatClass decisions; only native/cache inputs are supplied.
+
+    Loading the class AST avoids importing the injected startup graph. All class
+    methods, including target selection, conditions, masks and submission, are
+    compiled unchanged. No fallback decision or accepted action is fabricated.
+    """
+    r = capture_actions
+    types: Any = sys.modules["Py4GWCoreLib.HeroAI.types"]
+    metadata_types: Any = sys.modules["Py4GWCoreLib.HeroAI.custom_skill_src.skill_types"]
+    targeting: Any = sys.modules["Py4GWCoreLib.HeroAI.targeting"]
+    enums: Any = sys.modules["Py4GWCoreLib.enums_src.GameData_enums"]
+    utils: Any = sys.modules["Py4GWCoreLib.HeroAI.utils"]
+
+    def no_effects(*_args: Any) -> list[int]:
+        return []
+
+    def energy(_agent: int, **_kwargs: Any) -> float:
+        return r.world.energy
+
+    def zero(_id: int) -> int:
+        return 0
+
+    def no_account(_id: int) -> None:
+        return None
+
+    def weapon_spell(_id: int) -> bool:
+        return r.weapon_spell
+
+    utils.HasIllusionaryWeaponry = false
+    utils.GetEffectAndBuffIds = no_effects
+    utils.GetEnergyValues = energy
+    r.core.Agent.IsCasting = false
+    r.core.Agent.IsLiving = r.world.is_alive
+    r.core.Agent.GetDaggerStatus = zero
+    r.core.SkillBar.GetCasting = lambda: 0
+    r.core.Skill.Data = SimpleNamespace(GetAdrenaline=zero, GetHealthCost=zero, GetCombo=zero)
+    r.core.Party.GetPartyTarget = lambda: 0
+    r.core.GLOBAL_CACHE.ShMem.GetAllActiveSlotsData = empty_list
+    r.cache.party = SimpleNamespace(get_by_player_id=no_account)
+    r.cache.data.is_leader = False
+    r.weapon_spell = True
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "IsWeaponSpelled", staticmethod(weapon_spell))
+    monkeypatch.setattr(r.core.Routines.Checks.Effects, "HasBuff", staticmethod(false))
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        assert 1 <= slot <= 8, (slot, r.state.bar)
+        return SimpleNamespace(recharge=0 if r.state.bar[slot - 1] in r.ready else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+
+    def metadata(skill: int) -> Any:
+        return r.world.metadata.get(skill, metadata_types.CustomSkill())
+
+    tree = ast.parse((ROOT / "Py4GWCoreLib/HeroAI/combat.py").read_text(encoding="utf-8"))
+    combat_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "CombatClass")
+    namespace: dict[str, Any] = {
+        "__name__": "Py4GWCoreLib.HeroAI._offline_combat",
+        "__package__": "Py4GWCoreLib.HeroAI",
+        "MAX_SKILLS": 8,
+        "SPIRIT_BUFF_SKILL_IDS": frozenset(),
+        "VOW_SPELL_TYPES": (types.SkillType.Spell.value,),
+        "custom_skill_data_handler": SimpleNamespace(get_skill=metadata),
+        "Allegiance": enums.Allegiance,
+        **{name: getattr(r.core, name) for name in ("Agent", "Player", "GLOBAL_CACHE", "Routines", "Range")},
+        **{name: getattr(types, name) for name in ("SkillType", "SkillNature", "Skilltarget")},
+        "TargetLowestAlly": targeting.TargetLowestAlly,
+    }
+    future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+    code = ast.fix_missing_locations(ast.Module(body=[future, combat_class], type_ignores=[]))
+    exec(compile(code, "Py4GWCoreLib/HeroAI/combat.py", "exec"), namespace)
+    combat = object.__new__(namespace["CombatClass"])
+    combat.cached_data = r.cache
+    combat.blocked_skill_ids = set()
+    combat.is_skill_enabled = [True] * 8
+    combat.skill_order = list(range(8))
+    combat.is_targeting_enabled = True
+    combat.is_combat_enabled = False
+    combat.expertise_exists = False
+    combat.in_casting_routine = False
+    combat.aftercast_timer = Timer(250)
+    combat.alcohol_skills = []
+    combat.blood_is_power, combat.blood_ritual = 119, 157
+    combat.double_dragon = r.world.skill_id("Double_Dragon")
+    combat.heroic_refrain = r.world.skill_id("Heroic_Refrain")
+    combat.great_dwarf_weapon = r.world.skill_id("Great_Dwarf_Weapon")
+    combat.drunken_master = r.world.skill_id("Drunken_Master")
+
+    def refresh() -> None:
+        combat.in_aggro = r.cache.data.in_aggro = r.state.aggro
+        combat.skills = [
+            SimpleNamespace(
+                skill_id=skill,
+                skillbar_data=SimpleNamespace(recharge=0 if skill in r.ready else 1, adrenaline_a=0),
+                custom_skill_data=metadata(skill),
+            )
+            for skill in r.state.bar
+        ]
+
+    r.cache.UpdateCombat = refresh
+    r.cache.combat_handler = combat
+    r.selected.OnContractActivated()
+    return r
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("aggro", [False, True])
+@pytest.mark.parametrize("replacement", ["Mighty_Was_Vorizun", "Wielders_Boon"])
+def test_supported_replacement_reaches_real_heroai_submission(
+    supported_fallback: Any, armed: bool, aggro: bool, replacement: str
+) -> None:
+    r = supported_fallback
+    skill = r.world.skill_id(replacement)
+    r.state.bar[4] = skill
+    r.state.aggro = aggro
+    r.world.health[2] = 0.65
+    r.ready = {119, skill}  # BiP must decline its real sacrifice floor.
+    capture: Any = r.click("Arm one capture") if armed else None
+    assert r.outer.EnsureBuildContract() is r.selected
+    finish(r.outer.ProcessSkillCasting())
+    expected_target = 1 if replacement == "Mighty_Was_Vorizun" else 2
+    assert r.world.submissions == [(5, expected_target, 250)]
+    assert not r.posts and r.selected._local_cast_timer.IsStopped()
+    assert r.cache.combat_handler.blocked_skill_ids == set(IDS) - {1219}
+    assert r.selected._fallback.DidTickSucceed()
+    if armed and aggro:
+        assert capture.samples == 1 and capture.totals["bip_submitted"] == 0
+
+
+@pytest.mark.parametrize("gate", ["recharge", "energy", "weapon", "health", "disabled", "cinematic"])
+def test_supported_fallback_retains_real_admission_gates(supported_fallback: Any, gate: str) -> None:
+    r = supported_fallback
+    skill = r.world.skill_id("Wielders_Boon")
+    r.state.bar = [119, skill, 0, 0, 0, 0, 0, 0]
+    r.world.health[2] = 0.65
+    r.ready = {119, skill}
+    if gate == "recharge":
+        r.ready.remove(skill)
+    elif gate == "energy":
+        r.world.energy = 0
+    elif gate == "weapon":
+        r.weapon_spell = False
+    elif gate == "health":
+        r.world.health.update({1: 0.86, 2: 0.75})
+    elif gate == "disabled":
+        r.cache.combat_handler.is_skill_enabled[1] = False
+    else:
+        r.core.Map.IsInCinematic = lambda: True
+    finish(r.outer.ProcessSkillCasting())
+    assert not r.world.submissions, (gate, r.world.submissions)
+    assert not r.posts
+
+
+@pytest.mark.parametrize("missing", IDS[1:])
+@pytest.mark.parametrize("armed", [False, True])
+def test_each_missing_optional_skill_keeps_real_fallback_available(
+    supported_fallback: Any, missing: int, armed: bool
+) -> None:
+    r = supported_fallback
+    skill = r.world.skill_id("Mighty_Was_Vorizun")
+    slot = r.state.bar.index(missing)
+    r.state.bar[slot] = skill
+    r.ready = {119, skill}
+    if armed:
+        r.click("Arm one capture")
+    finish(r.outer.ProcessSkillCasting())
+    assert r.world.submissions == [(slot + 1, 1, 250)], missing
+    assert not r.posts and r.selected._local_cast_timer.IsStopped()
+    assert r.cache.combat_handler.blocked_skill_ids == set(IDS) - {missing}
+
+
+@pytest.mark.parametrize("holding", [False, True])
+def test_absent_kaolai_skips_every_controller_entry(capture_actions: Any, holding: bool) -> None:
+    r = capture_actions
+    r.state.bar[4] = 0
+
+    def held(_id: int) -> bool:
+        return holding
+
+    r.core.Agent.IsHoldingItem = held
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("Absent Kaolai entered preparation or release logic")
+
+    r.selected._smart_kaolai.Drop_Emergency_Bundle = forbidden
+    r.selected._smart_kaolai.Drop_Held_Bundle = forbidden
+    r.selected._smart_kaolai.Protective_Was_Kaolai = forbidden
+    finish(r.outer.ProcessCombat())
+    assert not r.world.submissions and not r.posts
+    assert r.calls == [set(IDS) - {1219}]
+    assert r.selected._local_cast_timer.IsStopped()
+
+
+@pytest.mark.parametrize("health", [0.30, 0.60])
+def test_kaolai_remove_and_readd_uses_same_owner_and_generic_bundle(
+    capture_actions: Any, monkeypatch: pytest.MonkeyPatch, health: float
+) -> None:
+    r = capture_actions
+    bundle = configure_kaolai(r, monkeypatch)
+    r.world.health.update(dict.fromkeys(r.world.allies, health))
+    outer = r.Hero(cached_data=r.cache)
+    custom = outer.EnsureBuildContract()
+    custom._custom_skill_data_handler = SimpleNamespace(get_skill=r.world.metadata.__getitem__)
+    r.state.bar[4] = r.world.skill_id("Mighty_Was_Vorizun")
+    assert outer.EnsureBuildContract() is custom
+    finish(outer.ProcessCombat())
+    assert not bundle.clicks and not r.world.submissions
+    assert custom._local_cast_timer.IsStopped()
+    r.state.bar[4] = 1219
+    assert outer.EnsureBuildContract() is custom
+    finish(outer.ProcessCombat())
+    assert bundle.clicks == [1] and not r.world.submissions
+    assert custom._local_cast_timer.deadline == 250
+    finish(outer.ProcessCombat())
+    assert bundle.clicks == [1], "Pending release must not be accepted twice."
+
+
+@pytest.mark.parametrize("armed", [False, True])
+def test_replacement_and_local_skill_transitions_use_current_slots(supported_fallback: Any, armed: bool) -> None:
+    r = supported_fallback
+    skill = r.world.skill_id("Wielders_Boon")
+    custom = r.selected
+    r.world.health[2] = 0.65
+    capture: Any = r.click("Arm one capture") if armed else None
+
+    def skill_data(slot: int) -> SimpleNamespace:
+        return SimpleNamespace(recharge=0 if r.state.bar[slot - 1] in r.ready else 1)
+
+    r.core.SkillBar.GetSkillData = skill_data
+    bars = [
+        [119, 0, 1234, 0, 0, 0, 0, 0],
+        [119, 0, skill, 0, 0, 0, 0, 0],
+        [0, 119, 0, skill, 0, 0, 0, 0],
+        [0, 119, 0, 1234, 0, 0, 0, 0],
+    ]
+    for index, bar in enumerate(bars):
+        Timer.now = index * 1000
+        r.now = float(index)
+        r.state.bar = bar
+        r.ready = {119, 1234, skill}
+        assert r.outer.EnsureBuildContract() is custom
+        finish(r.outer.ProcessCombat())
+        assert r.world.submissions[-1] == ((3 if index < 2 else 4), 2, 250), (bar, r.world.submissions)
+        assert len(r.world.submissions) == index + 1
+        assert r.cache.combat_handler.blocked_skill_ids == set(bar) & set(IDS)
+    if armed:
+        assert capture.done and not r.control._armed
+    # BiP removal releases the custom mask; restoration reactivates the cached owner.
+    r.state.bar = [skill, 0, 0, 0, 0, 0, 0, 0]
+    assert r.outer.EnsureBuildContract() is r.outer
+    assert not r.cache.combat_handler.blocked_skill_ids
+    finish(r.outer.ProcessCombat())
+    assert r.world.submissions[-1] == (1, 2, 250)
+    r.state.bar[7] = 119
+    assert r.outer.EnsureBuildContract() is custom
+    assert custom._local_cast_timer.IsStopped()
+    finish(r.outer.ProcessCombat())
+    assert r.world.submissions[-1] == (1, 2, 250)
+    assert len(r.world.submissions) == 6
+    assert r.cache.combat_handler.blocked_skill_ids == {119}
+
+
+@pytest.mark.parametrize("change", ["remove_life", "empty_slot_move", "replacement_move", "bip_move", "map", "name"])
+@pytest.mark.parametrize("armed", [False, True])
+def test_flexible_bar_invalidates_real_suspended_spirit_work(capture_actions: Any, change: str, armed: bool) -> None:
+    r = capture_actions
+    r.state.bar = [119, 1251, 0, 773, 0, 0, 0, 0]
+    r.ready = {119, 1251}
+    capture: Any = r.click("Arm one capture") if armed else None
+    custom = r.outer.EnsureBuildContract()
+    coroutine = custom.ProcessSkillCasting()
+    next(coroutine)
+    assert r.world.submissions == [(2, 0, 250)]
+    generation = custom._generation
+    if change == "remove_life":
+        r.state.bar[1] = 0
+    elif change == "empty_slot_move":
+        r.state.bar[1:3] = [0, 1251]  # Same compact matching list.
+    elif change == "replacement_move":
+        r.state.bar[3:5] = [0, 773]
+    elif change == "bip_move":
+        r.state.bar[0], r.state.bar[7] = 0, 119
+    elif change == "map":
+        r.state.map += 1
+    else:
+        r.state.name = "Another Necromancer"
+    assert list(coroutine) == []
+    assert custom._generation > generation
+    assert r.world.submissions == [(2, 0, 250)]
+    assert custom._local_cast_timer.IsStopped() is (change in ("map", "name"))
+    if armed:
+        assert capture.done and capture.pending is None
+    r.ready = {119}
+    finish(custom.ProcessSkillCasting())
+    assert r.world.submissions == [(2, 0, 250)]
+    assert r.cache.combat_handler.blocked_skill_ids == set(r.state.bar) & set(IDS)
+
+
+@pytest.fixture
+def pending_fallback(supported_fallback: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Real pending clock semantics, headless guards, ticks and combat sorting."""
+    r = supported_fallback
+    timer_module = admission._load(monkeypatch, "_pending_timer", "Py4GWCoreLib/py4gwcorelib_src/Timer.py")
+    monkeypatch.setattr(timer_module, "time", SimpleNamespace(perf_counter=lambda: Timer.now / 1000))
+    r.selected._local_cast_timer = timer_module.ThrottledTimer(0)
+    r.selected._local_cast_timer.Stop()
+    combat = r.cache.combat_handler
+    combat.aftercast = 0
+    combat.aftercast_timer = timer_module.Timer()
+    combat.aftercast_timer.Start()
+
+    # CacheData's shared-memory refresh is an environment boundary. Retain its
+    # actual combat update and prioritization instead of the identity slot order.
+    tree = ast.parse((ROOT / "Py4GWCoreLib/HeroAI/cache_data.py").read_text(encoding="utf-8"))
+    cache_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "CacheData")
+    methods: list[ast.stmt] = [
+        node
+        for node in cache_class.body
+        if isinstance(node, ast.FunctionDef) and node.name in ("UpdateCombat", "IsHeadlessCombatPauseActive")
+    ]
+    namespace: dict[str, Any] = {}
+    exec(compile(ast.Module(body=methods, type_ignores=[]), "cache_data.py", "exec"), namespace)
+    for name in ("UpdateCombat", "IsHeadlessCombatPauseActive"):
+        setattr(r.cache, name, namespace[name].__get__(r.cache))
+    r.cache.data.local_in_aggro = False
+    r.cache.data.fast_casting_exists = r.cache.data.expertise_exists = False
+    r.cache.data.fast_casting_level = r.cache.data.expertise_level = 0
+    r.cache.account_options.Combat = r.cache.account_options.Targeting = True
+
+    def duration(_skill: int) -> float:
+        return 0.0
+
+    r.core.Skill.Data.GetActivation = r.core.Skill.Data.GetAftercast = duration
+
+    tree = ast.parse((ROOT / "Py4GWCoreLib/HeroAI/headless_tree.py").read_text(encoding="utf-8"))
+    headless_class = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "HeroAIHeadlessTree"
+    )
+    behavior: Any = sys.modules["Py4GWCoreLib.py4gwcorelib_src.BehaviorTree"].BehaviorTree
+    behavior.NodeState.RUNNING = SimpleNamespace(name="RUNNING")
+    namespace = {
+        "Agent": r.core.Agent,
+        "Player": r.core.Player,
+        "Range": r.core.Range,
+        "BehaviorTree": behavior,
+        "is_follow_recovery_active": false,
+    }
+    future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+    code = ast.fix_missing_locations(ast.Module(body=[future, headless_class], type_ignores=[]))
+    exec(compile(code, "headless_tree.py", "exec"), namespace)
+    headless = object.__new__(namespace["HeroAIHeadlessTree"])
+    headless.cached_data, headless.heroai_build = r.cache, r.outer
+    headless._headless_combat_enabled = True
+    headless._follow_state = SimpleNamespace()
+
+    def tick(now: int) -> None:
+        Timer.now, r.now = now, now / 1000
+        r.cache.data.in_aggro = r.state.aggro
+        assert headless._guard_alive() and headless._guard_not_knocked_down()
+        if headless._casting_block() is behavior.NodeState.SUCCESS:
+            if r.state.aggro:
+                headless._handle_combat()
+            else:
+                headless._handle_out_of_combat()
+
+    r.tick = tick
+    r.replacement = r.world.skill_id("Wielders_Boon")
+    r.state.bar = [119, 962, 0, 0, 0, 0, r.replacement, 0]
+    r.world.health[2] = 0.20
+    r.ready = {119, 962, r.replacement}
+    return r
+
+
+def assert_replacement_ready(runtime: Any) -> None:
+    r = runtime
+    assert r.replacement in r.state.bar
+    assert not r.core.Agent.IsCasting(r.state.agent) and r.core.SkillBar.GetCasting() == 0
+    combat = r.cache.combat_handler
+    slot = next(index for index, skill in enumerate(combat.skills) if skill.skill_id == r.replacement)
+    assert r.replacement not in combat.blocked_skill_ids
+    assert combat.IsSkillReady(slot)
+    assert combat.IsReadyToCast(slot) == (True, 2)
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("aggro", [False, True])
+@pytest.mark.parametrize("expiry", [250, 251])
+def test_local_pending_blocks_equipped_replacement_until_expiry(
+    pending_fallback: Any, armed: bool, aggro: bool, expiry: int
+) -> None:
+    r = pending_fallback
+    r.state.aggro = aggro
+    if armed:
+        r.click("Arm one capture")
+    r.tick(0)
+    assert r.world.submissions == [(2, 2, 250)]
+    assert r.selected._is_local_cast_pending()
+    assert r.selected._local_cast_timer.GetTimeRemaining() == 250
+    assert r.selected._fallback.tick_state is None
+    # Leave Transfer ready at 75 ms: its local admission must decline because
+    # the owner is pending while Boon remains otherwise eligible and unmasked.
+    r.tick(75)
+    assert_replacement_ready(r)
+    assert r.selected._is_local_cast_pending()
+    assert r.world.submissions == [(2, 2, 250)], (75, r.world.submissions)
+    r.tick(76)  # Complete the yielded, rejected pass without resetting ownership.
+    r.ready.remove(962)  # At expiry, prevent another local Transfer from winning.
+    r.tick(249)
+    assert_replacement_ready(r)
+    assert r.selected._is_local_cast_pending()
+    assert r.world.submissions == [(2, 2, 250)], (249, r.world.submissions)
+    r.tick(249)  # Complete this pass before the boundary tick.
+    r.tick(expiry)
+    assert not r.selected._is_local_cast_pending()
+    assert r.world.submissions == [(2, 2, 250), (7, 2, 250)], (expiry, r.world.submissions)
+    assert r.selected._fallback.DidTickSucceed()
+    r.tick(expiry + 1)
+    assert len(r.world.submissions) == 2
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("aggro", [False, True])
+def test_kaolai_pending_blocks_replacement_until_expiry(
+    pending_fallback: Any, monkeypatch: pytest.MonkeyPatch, armed: bool, aggro: bool
+) -> None:
+    r = pending_fallback
+    skill_data = r.core.SkillBar.GetSkillData
+    bundle = configure_kaolai(r, monkeypatch)
+    r.core.SkillBar.GetSkillData = skill_data
+    r.core.Party.GetPartyTarget = lambda: 0
+    r.state.aggro = aggro
+    r.state.bar = [119, 0, 0, 0, 1219, 0, r.replacement, 0]
+    r.ready = {119, r.replacement}
+    if armed:
+        r.click("Arm one capture")
+    r.tick(0)
+    assert bundle.clicks == [1] and not r.world.submissions
+    assert r.selected._local_cast_timer.GetTimeRemaining() == 250
+    r.tick(50)  # Complete the release's existing yield, retaining its stamp.
+    bundle.holding = False
+    r.world.health[1] = 0.86  # BiP still fails its sacrifice floor.
+    for now in (75, 76, 249, 249):
+        r.tick(now)
+        assert r.selected._is_local_cast_pending(), now
+        assert_replacement_ready(r)
+        assert not r.world.submissions and bundle.clicks == [1], (now, r.world.submissions, bundle.clicks)
+    r.tick(250)
+    assert not r.selected._is_local_cast_pending()
+    assert r.world.submissions == [(7, 2, 250)] and bundle.clicks == [1]
+    assert r.selected._fallback.DidTickSucceed()
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("change", ["replacement_slot", "empty_slot", "reactivate"])
+def test_pending_survives_same_owner_composition_and_activation(
+    pending_fallback: Any, armed: bool, change: str
+) -> None:
+    r = pending_fallback
+    if armed:
+        r.click("Arm one capture")
+    r.tick(0)
+    owner = r.selected
+    generation = owner._generation
+    r.ready.remove(962)
+    if change == "replacement_slot":
+        r.state.bar[4], r.state.bar[6] = r.replacement, 0
+    elif change == "empty_slot":
+        r.state.bar[1:3] = [0, 962]  # Compact matcher signature is unchanged.
+    else:
+        owner.OnContractActivated(r.cache)
+    for now in (75, 76, 249, 249):
+        r.tick(now)
+        assert r.outer.GetBuildContract() is owner
+        assert owner._is_local_cast_pending()
+        assert_replacement_ready(r)
+        assert r.world.submissions == [(2, 2, 250)], (change, now, r.world.submissions)
+    assert owner._generation == generation + (change != "reactivate")
+    r.tick(250)
+    assert r.world.submissions == [(2, 2, 250), (r.state.bar.index(r.replacement) + 1, 2, 250)]
+    assert not owner._is_local_cast_pending()
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize("change", ["remove_life", "replacement_slot", "empty_slot"])
+def test_invalidated_local_wait_retains_pending_fallback_barrier(
+    pending_fallback: Any, armed: bool, change: str
+) -> None:
+    r = pending_fallback
+    r.state.bar[1] = 1251
+    r.world.health[2] = 0.65
+    r.ready = {119, 1251, r.replacement}
+    if armed:
+        r.click("Arm one capture")
+    r.tick(0)
+    assert r.world.submissions == [(2, 0, 250)]
+    suspended = r.outer._tick_coroutine
+    assert suspended is not None
+    if change == "remove_life":
+        r.state.bar[1] = 0
+    elif change == "replacement_slot":
+        r.state.bar[4], r.state.bar[6] = r.replacement, 0
+    else:
+        r.state.bar[1:3] = [0, 1251]
+    r.ready.remove(1251)
+    for now in (75, 76, 249, 249):
+        r.tick(now)
+        assert r.selected._is_local_cast_pending()
+        assert_replacement_ready(r)
+        assert r.world.submissions == [(2, 0, 250)], (change, now, r.world.submissions)
+    assert suspended.gi_frame is None
+    # A yielded rejection can take one tick to finish after invalidation. The
+    # next eligible pass must progress; the existing HeroAI aftercast gate then
+    # prevents the second advance from submitting again.
+    r.tick(250)
+    r.tick(250)
+    assert not r.selected._is_local_cast_pending()
+    assert r.world.submissions == [(2, 0, 250), (r.state.bar.index(r.replacement) + 1, 2, 250)]
+
+
+@pytest.mark.parametrize("change", ["map", "character", "dispose", "pure_heroai"])
+def test_pending_is_scoped_to_owner_context_and_cannot_stick_to_successor(pending_fallback: Any, change: str) -> None:
+    r = pending_fallback
+    r.tick(0)
+    owner = r.selected
+    assert owner._is_local_cast_pending()
+    r.ready.remove(962)
+    if change == "map":
+        r.state.map += 1
+    elif change == "character":
+        r.state.name = "Another Necromancer"
+    elif change == "dispose":
+        r.outer.ClearBuildContract()
+    else:
+        r.state.bar[0] = 0
+    r.tick(75)
+    assert not owner._is_local_cast_pending(), change
+    assert r.world.submissions == [(2, 2, 250), (7, 2, 250)], (change, r.world.submissions)
+    assert r.cache.combat_handler.blocked_skill_ids == (set() if change == "pure_heroai" else {119, 962})
+    if change == "pure_heroai":
+        assert r.outer.GetBuildContract() is r.outer
+        owner.Dispose()
+        assert not r.cache.combat_handler.blocked_skill_ids
+        r.state.bar[0] = 119
+    assert r.outer.EnsureBuildContract() is owner
+    assert not owner._is_local_cast_pending()
+    r.tick(326)  # Successor's HeroAI aftercast has also expired.
+    r.tick(326)
+    assert r.world.submissions == [(2, 2, 250), (7, 2, 250), (7, 2, 250)]
+    assert r.cache.combat_handler.blocked_skill_ids == {119, 962}
 
 
 @pytest.mark.parametrize("skill", [962, 915, 1234])

@@ -16,6 +16,7 @@ from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 from Py4GWCoreLib.Builds.Skills import SkillsTemplate
 from Py4GWCoreLib.Builds.Skills.SmartKaolai import SmartKaolai
 from Py4GWCoreLib.Skill import Skill
+from Py4GWCoreLib.Skillbar import SkillBar
 
 if TYPE_CHECKING:
     from Py4GWCoreLib.Builds.Skills.BipDiagnostic import BipDiagnostic, Snapshot
@@ -39,7 +40,7 @@ class _MaskedCombat(Protocol):
 
 
 class MyBloodIsPower(BuildMgr):
-    """Exact N/Rt bar, with Smart Kaolai group triage in the existing action owner."""
+    """N/Rt PvE BiP owner with local support skills and HeroAI replacements."""
 
     def __init__(self, cached_data: Any = None, match_only: bool = False) -> None:
         super().__init__(
@@ -47,7 +48,8 @@ class MyBloodIsPower(BuildMgr):
             required_primary=Profession.Necromancer,
             required_secondary=Profession.Ritualist,
             template_code="OAhjQgGaIP3Bhn0cyNMHnVvqK",
-            required_skills=list(_SKILL_IDS),
+            required_skills=[_SKILL_IDS[0]],
+            optional_skills=list(_SKILL_IDS[1:]),
         )
         self._active = False
         self._bip_diagnostic: BipDiagnostic | None = None
@@ -74,12 +76,25 @@ class MyBloodIsPower(BuildMgr):
         current_skills: list[int] | None = None,
     ) -> int:
         skills = self._get_current_skills() if current_skills is None else current_skills
-        if len(skills) != 8 or 0 in skills or len(set(skills)) != 8 or set(skills) != set(_SKILL_IDS):
+        equipped = [skill for skill in skills if skill]
+        if len(skills) > 8 or any(skill < 0 for skill in equipped) or len(set(equipped)) != len(equipped):
             return -1
         # BuildMgr's profession parameters are currently unannotated.
         base_match: Callable[[Profession | None, Profession | None, list[int]], int] = cast(Any, super()).ScoreMatch
         score = base_match(current_primary, current_secondary, skills)
         return 1000 + score if score >= 0 else -1
+
+    def GetBlockedSkills(self) -> list[int]:
+        # Recognition requires only BiP; every equipped local skill remains ours
+        # even when its custom admission declines this pass.
+        return [skill for skill in super().GetBlockedSkills() if self.IsSkillEquipped(skill)]
+
+    def ResolveFallback(self) -> BuildMgr | None:
+        # BuildMgr resolves fallback after local work declines. Its pending stamp
+        # covers both casts and bundle releases, even before native flags update.
+        if self._is_local_cast_pending():
+            return None
+        return super().ResolveFallback()
 
     def set_cached_data(self, cached_data: Any) -> None:
         if cached_data is not self._cached_data:
@@ -168,7 +183,10 @@ class MyBloodIsPower(BuildMgr):
             Map.GetLanguage()[0],
         )
         uptime = (Map.GetInstanceUptime(), Player.GetInstanceUptime())
-        bar = tuple(self._get_current_skills())
+        # BuildMgr's matching list omits empty slots. Keep their positions here
+        # so moving a skill across an empty slot also invalidates suspended work.
+        get_skill_id: Callable[[int], int] = cast(Any, SkillBar).GetSkillIDBySlot
+        bar = tuple(get_skill_id(slot) for slot in range(1, 9))
         if identity != self._identity or any(now < before for now, before in zip(uptime, self._uptime)):
             self._reset_runtime_state()
             self._identity = identity
@@ -267,6 +285,8 @@ class MyBloodIsPower(BuildMgr):
             self._bip_diagnostic.finish(winner, preempted=preempted)
 
     def _run_local_skill_logic(self) -> BuildCoroutine:
+        from Py4GWCoreLib import Skill
+
         self._diagnostic_begin()
         if not Routines.Checks.Skills.CanCast():
             self._diagnostic_finish("cannot_cast")
@@ -274,7 +294,8 @@ class MyBloodIsPower(BuildMgr):
 
         restoration = self.skillbook.Ritualist.RestorationMagic
         soul_reaping = self.skillbook.Necromancer.SoulReaping
-        if (yield from self._smart_kaolai.Drop_Emergency_Bundle()):
+        kaolai_id = Skill.GetID("Protective_Was_Kaolai")
+        if self.IsSkillEquipped(kaolai_id) and (yield from self._smart_kaolai.Drop_Emergency_Bundle()):
             self._diagnostic_finish("Drop_Held_Bundle", preempted=True)
             return True
         if (yield from restoration.Spirit_Transfer(health_threshold=0.30)):
@@ -286,12 +307,14 @@ class MyBloodIsPower(BuildMgr):
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.40)):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=True)
             return True
-        if (yield from self._smart_kaolai.Drop_Held_Bundle(health_threshold=0.75)):
+        if self.IsSkillEquipped(kaolai_id) and (yield from self._smart_kaolai.Drop_Held_Bundle(health_threshold=0.75)):
             self._diagnostic_finish("Drop_Held_Bundle", preempted=True)
             return True
         # The preferred rescue may fail its real spirit/resource/admission checks.
         # Reassess now; an earlier emergency decision is never a release permit.
-        if (yield from self._smart_kaolai.Drop_Emergency_Bundle(after_targeted_heals=True)):
+        if self.IsSkillEquipped(kaolai_id) and (
+            yield from self._smart_kaolai.Drop_Emergency_Bundle(after_targeted_heals=True)
+        ):
             self._diagnostic_finish("Drop_Held_Bundle", preempted=True)
             return True
         if (yield from soul_reaping.Signet_of_Lost_Souls(max_self_energy_pct=0.30)):
@@ -330,7 +353,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.75)):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
-        if (yield from self._smart_kaolai.Protective_Was_Kaolai()):
+        if self.IsSkillEquipped(kaolai_id) and (yield from self._smart_kaolai.Protective_Was_Kaolai()):
             self._diagnostic_finish("Protective_Was_Kaolai", preempted=False)
             return True
         if not self.IsInAggro():
