@@ -1689,6 +1689,9 @@ def widget_control(interrupted_pass: Any, diagnostic: Any, monkeypatch: pytest.M
     def end() -> None:
         ui.ends += 1
 
+    def combo(_label: str, selected: int, _items: Any) -> int:
+        return selected
+
     imgui = ModuleType("PyImGui")
     for name, value in {
         "begin": _field(ui, "visible"),
@@ -1696,6 +1699,8 @@ def widget_control(interrupted_pass: Any, diagnostic: Any, monkeypatch: pytest.M
         "text": ui.texts.append,
         "button": button,
         "same_line": _return(None),
+        "separator": _return(None),
+        "combo": combo,
     }.items():
         setattr(imgui, name, value)
     monkeypatch.setitem(sys.modules, imgui.__name__, imgui)
