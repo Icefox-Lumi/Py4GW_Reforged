@@ -376,33 +376,81 @@ class AllAccounts(Structure):
             return 0
         return int(self.AccountData[index].IsolationGroupID)
 
-    def _can_communicate(self, sender_email: str, receiver_email: str) -> bool:
-        """Group-aware communication check between two accounts."""
-        s_idx = self._find_account_slot_by_email(sender_email)
-        r_idx = self._find_account_slot_by_email(receiver_email)
-        if s_idx == -1 or r_idx == -1:
+    def _get_message_account_snapshot(
+        self, account_email: str, expected_index: int | None = None
+    ) -> tuple[int, int, int, int, bool] | None:
+        """Return one current (slot, timestamp, party, group, isolated) identity."""
+        if not account_email:
+            return None
+        if expected_index is None:
+            expected_index = self.GetSlotByEmail(account_email)
+        if expected_index < 0:
+            return None
+        snapshot: tuple[int, int, int, int, bool] | None = None
+        for index in range(SHMEM_MAX_PLAYERS):
+            account = self.AccountData[index]
+            if account.AccountEmail != account_email or not account.IsAccount or not account.IsSlotActive:
+                continue
+            candidate = (
+                index,
+                int(account.LastUpdated),
+                int(account.AgentPartyData.PartyID),
+                int(account.IsolationGroupID),
+                bool(account.IsIsolated),
+            )
+            if not publication_is_live(get_uncached_tick_count64(), candidate[1], SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS):
+                continue
+            # Email-addressed messages carry no account generation. Never rank
+            # competing live identities (or fall back to historical metadata).
+            if snapshot is not None:
+                return None
+            snapshot = candidate
+        # In particular, an expired local-HWND row cannot borrow a different
+        # process's current publication to authorize sending or receiving.
+        return snapshot if snapshot is not None and snapshot[0] == expected_index else None
+
+    def _can_communicate(self, sender_email: str, receiver_email: str, receiver_index: int | None = None) -> bool:
+        """Authorize current, unambiguous identities; pin send admission's receiver."""
+        try:
+            sender = self._get_message_account_snapshot(sender_email)
+            receiver = self._get_message_account_snapshot(receiver_email, receiver_index)
+            if sender is None or receiver is None:
+                return False
+            # These are live shared-memory views. Reject observed identity or
+            # permission changes during resolution; use only the copied values.
+            for email, snapshot in ((sender_email, sender), (receiver_email, receiver)):
+                account = self.AccountData[snapshot[0]]
+                if account.AccountEmail != email or not account.IsAccount or not account.IsSlotActive:
+                    return False
+                if (
+                    int(account.LastUpdated),
+                    int(account.AgentPartyData.PartyID),
+                    int(account.IsolationGroupID),
+                    bool(account.IsIsolated),
+                ) != snapshot[1:]:
+                    return False
+            now = get_uncached_tick_count64()
+            if not all(
+                publication_is_live(now, snapshot[1], SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS)
+                for snapshot in (sender, receiver)
+            ):
+                return False
+        except (AttributeError, OSError, TypeError, ValueError):
             return False
+
         if sender_email == receiver_email:
             return True
-
-        # Party members are always allowed to exchange coordination messages,
-        # even when one side is grouped/isolated differently.
-        try:
-            s_party = int(getattr(self.AccountData[s_idx].AgentPartyData, "PartyID", 0) or 0)
-            r_party = int(getattr(self.AccountData[r_idx].AgentPartyData, "PartyID", 0) or 0)
-            if s_party > 0 and s_party == r_party:
-                return True
-        except Exception:
-            pass
-
-        s_g = int(self.AccountData[s_idx].IsolationGroupID)
-        r_g = int(self.AccountData[r_idx].IsolationGroupID)
+        _, _, s_party, s_g, s_isolated = sender
+        _, _, r_party, r_g, r_isolated = receiver
+        # Preserve the existing same-party exception to group/isolation rules.
+        if s_party > 0 and s_party == r_party:
+            return True
         if s_g > 0 and r_g > 0:
             return s_g == r_g
         if s_g > 0 or r_g > 0:
             return False  # one grouped, one not
         # both ungrouped: legacy
-        return not self.AccountData[s_idx].IsIsolated and not self.AccountData[r_idx].IsIsolated
+        return not s_isolated and not r_isolated
 
     @staticmethod
     def _is_system_control_command(command: SharedCommandType | int) -> bool:
@@ -1046,7 +1094,9 @@ class AllAccounts(Structure):
             ConsoleLog(SHMEM_MODULE_NAME, "Sender email is empty.", PySystem.Console.MessageType.Error)
             return -1
 
-        if not self._is_system_control_command(command) and not self._can_communicate(sender_email, receiver_email):
+        if not self._is_system_control_command(command) and not self._can_communicate(
+            sender_email, receiver_email, receiver_index=index
+        ):
             ConsoleLog(SHMEM_MODULE_NAME, f"Cannot communicate between {sender_email} and {receiver_email} (isolated or different groups).", PySystem.Console.MessageType.Warning)
             return -1
         
