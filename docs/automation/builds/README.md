@@ -7,6 +7,12 @@ This folder contains build authoring workflow, prompt guidance, and the
 
 - `buildmgr-and-skills-template.md` describes the current ownership and package
   contract between `BuildMgr`, `SkillsTemplate`, and skill modules.
+- [Smart Kaolai extraction](smart-kaolai-extraction.md) preserves the historical
+  extraction and generic release restoration, with a dated reconciliation of
+  current ownership, flexible matching, adaptive release, and Option A.
+- [Smart Kaolai observation](smart-kaolai-observation.md) preserves the historical
+  missed-drop investigation, capture evidence, and superseded tactical proposal;
+  it distinguishes those findings from completed behavior and accepted limits.
 - `build-authoring-handover.md` records the preferred implementation method:
   thin explicit build controllers with generic behavior owned by `BuildMgr`.
 - `build-prompting-guide.md` records an effective request shape for build work;
