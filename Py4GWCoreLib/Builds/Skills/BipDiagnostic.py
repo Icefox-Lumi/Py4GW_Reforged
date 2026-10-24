@@ -337,6 +337,268 @@ def publication_values(
         return rejected(gate + "_unavailable")
 
 
+def _account_evidence(account: Any, accounts: list[AccountStruct]) -> dict[str, Any]:
+    """Read only the numeric/boolean fields we may print; never serialize an account."""
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import (
+        get_uncached_tick_count64,
+        publication_age,
+        publication_is_live,
+    )
+
+    values: dict[str, Any] = {}
+    for path in (
+        "LastUpdated",
+        "IsAccount",
+        "IsSlotActive",
+        "IsHero",
+        "IsPet",
+        "IsNPC",
+        "IsIsolated",
+        "AgentData.AgentID",
+        "AgentData.LoginNumber",
+        "AgentData.OwnerAgentID",
+        "AgentPartyData.PartyID",
+        "AgentData.Map.MapID",
+        "AgentData.Map.Region",
+        "AgentData.Map.District",
+        "AgentData.Map.Language",
+        "AgentData.Energy.Current",
+    ):
+        value: Any = account
+        try:
+            for part in path.split("."):
+                value = getattr(value, part)
+            values[path.split(".")[-1]] = value if isinstance(value, (int, float)) and isfinite(value) else None
+        except (AttributeError, TypeError, ValueError):
+            values[path.split(".")[-1]] = None
+    try:
+        email = account.AccountEmail
+        values["account_present"] = bool(email)
+        values["account_candidates"] = sum(other.AccountEmail == email for other in accounts) if email else 0
+    except (AttributeError, TypeError, ValueError):
+        values.setdefault("account_present", None)
+        values["account_candidates"] = None
+    stamp = values["LastUpdated"]
+    try:
+        now = get_uncached_tick_count64() if isinstance(stamp, int) else None
+    except OSError:
+        now = None
+    values["age_ms"] = publication_age(now, stamp) if now is not None else None
+    values["fresh"] = publication_is_live(now, stamp, SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS) if now is not None else None
+    return values
+
+
+def inspect_account_evidence() -> None:
+    """One explicit, bounded read. No capture state, publication or PartyCache writes."""
+    import json
+    import sys
+
+    from Py4GWCoreLib import Agent, Console, GLOBAL_CACHE, Map, Player, Skill
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import (
+        SHMEM_MAX_PLAYERS,
+        SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS,
+    )
+
+    def emit(kind: str, values: dict[str, Any]) -> None:
+        Console.Log(
+            "SmartBiP3B",
+            "BIP3B EVIDENCE " + kind + " " + json.dumps(values, sort_keys=True, allow_nan=False),
+            Console.MessageType.Info,
+        )
+
+    try:
+        accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False)
+        party = cast("_PartyIdentity", GLOBAL_CACHE.Party).GetPartyID()
+        location = (Map.GetMapID(), Map.GetRegion()[0], Map.GetDistrict(), Map.GetLanguage()[0])
+        ready = Map.IsMapReady()
+        self_id = Player.GetAgentID()
+        get_agent = cast("_PartyLogins", GLOBAL_CACHE.Party.Players).GetAgentIDByLoginNumber
+        roster = sorted(
+            (get_agent(member.login_number), member.login_number, bool(member.is_connected))
+            for member in cast("list[_PartyPlayer]", GLOBAL_CACHE.Party.GetPlayers())
+        )
+        remote = [row for row in roster if row[0] and row[0] != self_id]
+        buffs = (Skill.GetID("Blood_is_Power"), Skill.GetID("Blood_Ritual"))
+        active = [_account_evidence(account, accounts) for account in accounts]
+        raw: list[dict[str, Any]] | None = None
+        try:
+            slots = GLOBAL_CACHE.ShMem.GetAllAccounts()
+            raw = [_account_evidence(slots.GetAccountData(i), accounts) for i in range(SHMEM_MAX_PLAYERS)]
+        except Exception:
+            pass  # A filtered-out slot is useful evidence, but not required for the active read.
+
+        rows: list[dict[str, Any]] = []
+        for agent_id, login, connected in remote[:16]:
+            failure: list[str] = []
+            valid, _, _, profession = (
+                publication_values(accounts, agent_id, login, party, location, buffs, failure=failure)
+                if connected
+                else (False, None, None, None)
+            )
+            candidates = [v for v in active if v["AgentID"] == agent_id]
+            exact = [
+                v for v in candidates if tuple(v[k] for k in ("MapID", "Region", "District", "Language")) == location
+            ]
+            by_login = [v for v in active if login > 0 and v["LoginNumber"] == login]
+            raw_agent = [v for v in raw or [] if v["AgentID"] == agent_id]
+            raw_login = [v for v in raw or [] if login > 0 and v["LoginNumber"] == login]
+            # Never choose arbitrarily among duplicate candidates at a stronger association.
+            source, chosen = "none", []
+            for label, choices in (
+                ("active_exact", exact),
+                ("active_agent", candidates),
+                ("active_login", by_login),
+                ("raw_agent", raw_agent),
+                ("raw_login", raw_login),
+            ):
+                if choices:
+                    source, chosen = label, choices
+                    break
+            rows.append(
+                dict(
+                    agent=agent_id,
+                    login=login,
+                    connected=connected,
+                    valid=valid,
+                    verified_mesmer=valid and profession == 5,
+                    first="disconnected" if not connected else failure[0] if failure else "pass",
+                    active_agent=len(candidates),
+                    active_exact=len(exact),
+                    active_login=len(by_login),
+                    raw_agent=len(raw_agent) if raw is not None else None,
+                    raw_login=len(raw_login) if raw is not None else None,
+                    source=source,
+                    unique=len(chosen) == 1,
+                    published=chosen[0] if len(chosen) == 1 else None,
+                )
+            )
+        emit(
+            "summary",
+            dict(
+                active_total=len(accounts),
+                remote_total=len(remote),
+                inspected=len(rows),
+                raw_available=raw is not None,
+                fresh_boundary_ms=f"age < {SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS}",
+                reads="non-atomic; null=unavailable; active reader may be frame-cached",
+                members=[{k: row[k] for k in ("agent", "first", "active_agent", "active_exact")} for row in rows],
+            ),
+        )
+        if not rows:
+            return
+        selected = next((row for row in rows if row["verified_mesmer"]), rows[0])
+        rejected = [row for row in rows if not row["valid"]]
+        if rejected:
+            selected = rejected[0]
+            for row in rejected:
+                try:
+                    # A rejected publication cannot establish profession; use the roster agent's local read.
+                    if Agent.GetProfessions(row["agent"])[0] == 5:
+                        selected = row
+                        break
+                except Exception:
+                    pass  # Unavailable profession keeps the stable rejected-recipient fallback.
+        expected: dict[str, Any] = dict(zip(("MapID", "Region", "District", "Language"), location))
+        expected.update(
+            AgentID=selected["agent"],
+            LoginNumber=selected["login"],
+            OwnerAgentID=0,
+            PartyID=party,
+            IsAccount=True,
+            IsSlotActive=True,
+            IsHero=False,
+            IsPet=False,
+            IsNPC=False,
+        )
+        emit("selected", {k: v for k, v in selected.items() if k != "published"})
+        emit(
+            "identity",
+            dict(
+                expected=expected,
+                published=selected["published"],
+                selection="rejected first (locally observed Mesmer preferred); all valid: verified Mesmer preferred; agent/login order",
+            ),
+        )
+        published = selected["published"]
+        failed: list[str] = []
+        unavailable: list[str] = ["publication"] if published is None else []
+        region_exception: bool | None = None
+        association: bool | None = None
+        if published is not None:
+            checks = {
+                key: None if published[key] is None else published[key] == value for key, value in expected.items()
+            }
+            checks.update(
+                IsIsolated=None if published["IsIsolated"] is None else True,
+                account_present=published["account_present"],
+                account_unique=(
+                    None if published["account_candidates"] is None else published["account_candidates"] == 1
+                ),
+                freshness=published["fresh"],
+                connected=selected["connected"],
+                expected_login=selected["login"] > 0,
+            )
+            failed = [key for key, value in checks.items() if value is False]
+            unavailable = [key for key, value in checks.items() if value is None]
+            keys = ("MapID", "District", "Language", "AgentID", "PartyID", "Region")
+            if all(published[key] is not None for key in keys):
+                same_map = all(published[key] == expected[key] for key in ("MapID", "District", "Language"))
+                # SameMapOrPartyAsAccount's rule, evaluated on these printed fields.
+                region_exception = bool(
+                    ready
+                    and same_map
+                    and published["AgentID"] in {row[0] for row in roster}
+                    and published["PartyID"] == party
+                )
+                association = bool(ready and same_map and (region_exception or published["Region"] == location[1]))
+        emit(
+            "gates",
+            dict(
+                first=selected["first"],
+                failed_fields=failed,
+                unavailable_fields=unavailable,
+                diagnostic_accepted=selected["valid"],
+                detail="candidate_count uses exact agent+map/Region/district/language; details are separate nearby reads",
+            ),
+        )
+
+        # Do not construct CacheData: its initialization/update owns settings and cache writes.
+        cache_module = sys.modules.get("Py4GWCoreLib.HeroAI.cache_data")
+        cache: Any = getattr(getattr(cache_module, "CacheData", None), "_instance", None)
+        cache_values: dict[str, Any] | None = None
+        cache_party: int | None = None
+        energy_rule: bool | None = None
+        if cache is not None:
+            cache_party = int(cache.party.party_id)
+            account = cache.party.get_by_player_id(selected["agent"])
+            if account is not None:
+                cache_values = _account_evidence(account, accounts)
+                energy = cache_values["Current"]
+                if all(cache_values[key] is not None for key in ("IsSlotActive", "PartyID", "Current")):
+                    energy_rule = bool(
+                        cache_values["IsSlotActive"] and cache_values["PartyID"] == cache_party and 0 <= energy <= 1
+                    )
+            else:
+                energy_rule = False
+        emit(
+            "production",
+            dict(
+                map_ready=ready,
+                association_rule_accepts=association,
+                current_party_region_exception=region_exception,
+                cache_available=cache is not None,
+                cache_party=cache_party,
+                cache_entry=cache_values,
+                energy_lookup_rule_accepts=energy_rule,
+                comparison="source rules evaluated on printed fields; no cache refresh; not a target/cast decision or frame-cached lookup result",
+            ),
+        )
+    except Exception:
+        # Never log exception text: bindings may include account identifiers in errors.
+        emit("unavailable", dict(reason="read_failed; partial preceding evidence may exist"))
+
+
 def recipient_counts(rows: list[Recipient]) -> Snapshot:
     result = Snapshot()
     demand: set[int] = set()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import sys
 from collections.abc import Callable, Generator
 from pathlib import Path
@@ -17,6 +18,742 @@ OWNER = ROOT / "Py4GWCoreLib/Builds/Necromancer/N_Rt/Blood is Power Healer.py"
 CUSTOM = ROOT / "Py4GWCoreLib/Builds/Necromancer/N_Rt/My Blood is Power.py"
 DIAGNOSTIC = ROOT / "Py4GWCoreLib/Builds/Skills/BipDiagnostic.py"
 WIDGET = ROOT / "Widgets/Coding/Debug/Py4GW/Smart BiP Diagnostic.py"
+
+
+@pytest.fixture
+def account_inspection(runtime_reads: Any, diagnostic: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    world, owner, _ = runtime_reads
+    control, _, _, _ = diagnostic
+    core: Any = sys.modules["Py4GWCoreLib"]
+    constants: Any = sys.modules["Py4GWCoreLib.GlobalCache.shared_memory_src.Globals"]
+    constants.SHMEM_MAX_PLAYERS = 64
+    core.Map.IsMapReady = _return(True)
+    world.raw = [world.account]
+    calls: list[str] = []
+    output: list[str] = []
+
+    def active(**_kwargs: Any) -> list[Any]:
+        calls.append("active")
+        return world.accounts
+
+    def slot(index: int) -> Any:
+        calls.append("slot")
+        return world.raw[index] if index < len(world.raw) else None
+
+    core.GLOBAL_CACHE.ShMem.GetAllAccountData = active
+    core.GLOBAL_CACHE.ShMem.GetAllAccounts = _return(SimpleNamespace(GetAccountData=slot))
+    cache_module = ModuleType("Py4GWCoreLib.HeroAI.cache_data")
+    setattr(cache_module, "CacheData", SimpleNamespace(_instance=owner._cached_data))
+    monkeypatch.setitem(sys.modules, cache_module.__name__, cache_module)
+
+    def log(sender: str, message: str, _level: Any) -> None:
+        assert sender == "SmartBiP3B", sender
+        output.append(message)
+
+    core.Console = SimpleNamespace(Log=log, MessageType=SimpleNamespace(Info=0))
+
+    def inspect() -> dict[str, Any]:
+        output.clear()
+        control.inspect_account_evidence()
+        assert 1 <= len(output) <= 5, output
+        assert all(line.startswith("BIP3B EVIDENCE ") and "@" not in line for line in output), output
+        return {line.split(" ", 3)[2]: json.loads(line.split(" ", 3)[3]) for line in output}
+
+    return SimpleNamespace(
+        world=world,
+        owner=owner,
+        core=core,
+        control=control,
+        inspect=inspect,
+        output=output,
+        calls=calls,
+        cache_module=cache_module,
+    )
+
+
+def test_account_inspection_valid_snapshot_and_no_state_mutation(account_inspection: Any) -> None:
+    env = account_inspection
+    from copy import deepcopy
+
+    before = deepcopy(env.world.account)
+    capture_state = (env.control._armed, env.control._arm_consumed, env.control._capture)
+    cached = env.owner._cached_data.party
+    cache_state = dict(cast(dict[str, Any], vars(cached)))
+    report = env.inspect()
+    assert report["selected"]["first"] == "pass", report
+    assert report["selected"]["verified_mesmer"] is True, report
+    assert report["identity"]["published"]["age_ms"] == 1, report
+    assert report["gates"]["failed_fields"] == [] and report["gates"]["unavailable_fields"] == [], report
+    assert report["production"]["energy_lookup_rule_accepts"] is True, report
+    assert report["production"]["association_rule_accepts"] is True, report
+    assert report["summary"]["fresh_boundary_ms"] == "age < 5000", report
+    assert env.calls.count("active") == 1 and env.calls.count("slot") == 64, env.calls
+    assert (env.control._armed, env.control._arm_consumed, env.control._capture) == capture_state
+    assert vars(cached) == cache_state
+    assert env.control._account_evidence(before, [before]) == env.control._account_evidence(
+        env.world.account, env.world.accounts
+    ), report
+
+
+@pytest.fixture
+def isolation_reader(account_inspection: Any) -> Any:
+    from functools import partial
+
+    env = account_inspection
+    env.world.account.IsolationGroupID = 7
+    reader = SimpleNamespace(AccountData=[env.world.account], local_group=7, _is_local_owned_slot=_return(False))
+    reader._get_local_group_id = _field(reader, "local_group")
+    sync: Any = sys.modules["Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync"]
+    namespace = dict(
+        AccountStruct=Any,
+        SHMEM_MAX_PLAYERS=1,
+        SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS=5000,
+        PySystem=SimpleNamespace(
+            get_tick_count64=lambda: env.world.tick if env.world.frame_tick is None else env.world.frame_tick
+        ),
+        get_uncached_tick_count64=sync.get_uncached_tick_count64,
+        publication_age=sync.publication_age,
+        publication_is_live=sync.publication_is_live,
+    )
+    path = ROOT / "Py4GWCoreLib/GlobalCache/shared_memory_src/AllAccounts.py"
+    for name in (
+        "GetAccountData",
+        "_is_slot_active",
+        "_get_slot_group",
+        "_is_slot_isolated",
+        "_is_visible_account",
+        "GetAllActivePlayers",
+    ):
+        setattr(reader, name, partial(_production_method(path, name, namespace), reader))
+    env.core.GLOBAL_CACHE.ShMem.GetAllAccountData = reader.GetAllActivePlayers
+    env.reader = reader
+    return env
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+@pytest.mark.parametrize("energy", [0.0, 0.2])
+@pytest.mark.parametrize("buff", [0, 119, 157])
+def test_isolation_live_shape_preserves_energy_and_coverage(
+    isolation_reader: Any, runtime_reads: Any, isolated: bool, energy: float, buff: int
+) -> None:
+    env = isolation_reader
+    world, owner, observe = runtime_reads
+    account = world.account
+    account.IsIsolated = isolated
+    account.LastUpdated = world.tick
+    account.AgentData.AgentID, account.AgentData.LoginNumber = 14, 4
+    account.AgentPartyData.PartyID = 1
+    account.AgentData.Map = SimpleNamespace(MapID=624, Region=4, District=1, Language=0)
+    account.AgentData.Buffs = SimpleNamespace(Buffs=[] if not buff else [SimpleNamespace(SkillId=buff)])
+    world.energy = energy
+    env.core.GLOBAL_CACHE.Party.GetPartyID = _return(1)
+    env.core.GLOBAL_CACHE.Party.GetPlayers = _return([SimpleNamespace(login_number=4, is_connected=True)])
+    env.core.GLOBAL_CACHE.Party.Players.GetAgentIDByLoginNumber = _return(14)
+    env.core.Map.GetMapID, env.core.Map.GetRegion = _return(624), _return((4, ""))
+    env.core.AgentArray.GetAllyArray = _return([1, 14])
+    env.owner._cached_data.party.party_id = 1
+    failures: list[str] = []
+    result = env.control.publication_values(
+        env.reader.GetAllActivePlayers(sort_results=False),
+        14,
+        4,
+        1,
+        (624, 4, 1, 0),
+        (119, 157),
+        failure=failures,
+    )
+    assert result == (True, energy, bool(buff), 5) and failures == [], (isolated, energy, buff, result, failures)
+    sample = observe(owner)
+    assert (
+        sample.counts["valid_accounts"] == 1 and sample.counts["energy_unknown"] == sample.counts["effect_unknown"] == 0
+    ), sample
+    assert sample.covered == (frozenset({14}) if buff else frozenset()), sample
+    assert sample.eligible == sample.demand == (frozenset() if buff else frozenset({14})), sample
+    assert sample.counts["demand40_mesmer"] == int(not buff), sample
+    report = env.inspect()
+    assert report["gates"]["first"] == "pass" and report["gates"]["failed_fields"] == [], report
+    assert report["identity"]["published"]["IsIsolated"] is isolated, report
+    assert "IsIsolated" not in report["identity"]["expected"], report
+    assert report["identity"]["published"]["age_ms"] == 0, report
+    assert report["production"]["association_rule_accepts"] is True, report
+    assert report["production"]["energy_lookup_rule_accepts"] is True, report
+
+
+@pytest.mark.parametrize(
+    "local_group,target_group,isolated,visible",
+    [
+        (7, 7, True, True),
+        (7, 8, False, False),
+        (7, 8, True, False),
+        (0, 7, False, False),
+        (0, 0, True, False),
+        (0, 0, False, True),
+    ],
+)
+def test_isolation_reader_remains_authoritative(
+    isolation_reader: Any, runtime_reads: Any, local_group: int, target_group: int, isolated: bool, visible: bool
+) -> None:
+    env = isolation_reader
+    world, owner, observe = runtime_reads
+    env.reader.local_group = local_group
+    world.account.IsolationGroupID, world.account.IsIsolated = target_group, isolated
+    sample = observe(owner)
+    assert sample.counts["valid_accounts"] == int(visible), (local_group, target_group, isolated, sample)
+    assert sample.counts["energy_unknown"] == sample.counts["effect_unknown"] == int(not visible), sample
+    assert sample.demand == (frozenset({2}) if visible else frozenset()), sample
+    report = env.inspect()
+    assert report["selected"]["first"] == ("pass" if visible else "candidate_count"), report
+    assert report["selected"]["source"] == ("active_exact" if visible else "raw_agent"), report
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+@pytest.mark.parametrize("path", ["capture", "inspection"])
+def test_review_diagnostic_clock_compatibility(
+    isolation_reader: Any, runtime_reads: Any, isolated: bool, path: str
+) -> None:
+    env = isolation_reader
+    world, owner, observe = runtime_reads
+    world.frame_tick, world.account.LastUpdated, world.tick = 10000, 10001, 10002
+    world.account.IsIsolated = isolated
+    world.energy, world.effect = 0.0, True
+    assert env.core.GLOBAL_CACHE.ShMem.GetBaseTimestamp() == 10000
+    assert env.reader.GetAllActivePlayers(sort_results=False) == [world.account], "central reader accepts age 1"
+    if path == "capture":
+        sample = observe(owner)
+        assert sample.counts["valid_accounts"] == 1, (path, isolated, sample)
+        assert sample.counts["energy_unknown"] == sample.counts["effect_unknown"] == 0, sample
+        assert sample.covered == frozenset({2}) and not sample.demand, sample
+    else:
+        report = env.inspect()
+        assert report["selected"]["valid"] is True, (path, isolated, report)
+        assert report["identity"]["published"]["age_ms"] == 1, report
+        assert report["identity"]["published"]["Current"] == 0.0, report
+        assert report["gates"]["first"] == "pass" and not report["gates"]["failed_fields"], report
+
+
+@pytest.mark.parametrize(
+    "now,stamp,valid",
+    [
+        (10002, 10002, True),
+        (10002, 5003, True),
+        (10002, 5002, False),
+        (10002, 5001, False),
+        (10002, 10003, False),
+        (0x100000005, 0xFFFFFFF0, True),
+        (0x100000005, (5 - 4999) & 0xFFFFFFFF, True),
+        (0x100000005, (5 - 5000) & 0xFFFFFFFF, False),
+        (0x100000005, 6, False),
+        (0x100000005, 0x80000005, False),
+        (0x80000000, 0, False),
+    ],
+)
+def test_diagnostic_uncached_freshness_boundaries(
+    account_inspection: Any, runtime_reads: Any, now: int, stamp: int, valid: bool
+) -> None:
+    env = account_inspection
+    world, owner, observe = runtime_reads
+    world.frame_tick, world.tick, world.account.LastUpdated = now - 16, now, stamp
+    world.account.IsIsolated = True
+    world.energy, world.effect = 0.0, True
+    sample = observe(owner)
+    assert sample.counts["valid_accounts"] == int(valid), (now, stamp, sample)
+    assert sample.counts["energy_unknown"] == sample.counts["effect_unknown"] == int(not valid), sample
+    assert sample.covered == (frozenset({2}) if valid else frozenset()), sample
+    report = env.inspect()
+    assert report["selected"]["valid"] is valid, (now, stamp, report)
+    assert report["identity"]["published"]["fresh"] is valid, report
+
+
+@pytest.mark.parametrize("path", ["capture", "inspection"])
+def test_diagnostic_samples_clock_after_publication_timestamp(
+    account_inspection: Any, runtime_reads: Any, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    env = account_inspection
+    world, owner, observe = runtime_reads
+    original = world.account
+    world.frame_tick = 10000
+    reads: list[str] = []
+
+    class AdvancedPublication:
+        @property
+        def LastUpdated(self) -> int:
+            reads.append("stamp")
+            world.tick = 10002
+            return 10001
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(original, name)
+
+    def clock() -> int:
+        reads.append("clock")
+        return world.tick
+
+    world.account = AdvancedPublication()
+    world.accounts = world.raw = [world.account]
+    sync: Any = sys.modules["Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync"]
+    monkeypatch.setattr(sync, "get_uncached_tick_count64", clock)
+    if path == "capture":
+        assert observe(owner).counts["valid_accounts"] == 1
+    else:
+        report = env.inspect()
+        assert report["selected"]["valid"] is True, report
+        assert report["identity"]["published"]["age_ms"] == 1, report
+    assert "clock" in reads and reads.index("stamp") < reads.index("clock"), (path, reads)
+
+
+def test_diagnostic_unavailable_clock_keeps_evidence_unknown(
+    account_inspection: Any, runtime_reads: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = account_inspection
+    _, owner, observe = runtime_reads
+    sync: Any = sys.modules["Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync"]
+
+    def unavailable() -> int:
+        raise OSError("clock failed for private@example.invalid")
+
+    monkeypatch.setattr(sync, "get_uncached_tick_count64", unavailable)
+    sample = observe(owner)
+    assert sample.counts["valid_accounts"] == 0 and sample.counts["energy_unknown"] == 1, sample
+    assert sample.counts["effect_unknown"] == 1 and not sample.covered and not sample.demand, sample
+    report = env.inspect()
+    assert report["selected"]["valid"] is False and report["selected"]["first"] == "freshness_unavailable", report
+    assert report["identity"]["published"]["age_ms"] is None, report
+    assert report["identity"]["published"]["fresh"] is None, report
+    assert "freshness" in report["gates"]["unavailable_fields"], report
+    assert "freshness" not in report["gates"]["failed_fields"], report
+
+
+def test_isolation_flag_change_during_read_still_rejects(account_inspection: Any) -> None:
+    env = account_inspection
+
+    class ChangedIsolationEnergy:
+        @property
+        def Current(self) -> float:
+            env.world.account.IsIsolated = True
+            return 0.2
+
+    env.world.account.AgentData.Energy = ChangedIsolationEnergy()
+    failures: list[str] = []
+    result = env.control.publication_values(env.world.accounts, 2, 2, 7, (10, 1, 1, 0), (119, 157), failure=failures)
+    assert result == (False, None, None, None) and failures == ["publication_changed"], (result, failures)
+
+
+@pytest.mark.parametrize(
+    "path,value,first,failed,association,energy",
+    [
+        ("AgentData.Map.Region", 9, "candidate_count", "Region", True, True),
+        ("AgentData.Map.MapID", 99, "candidate_count", "MapID", False, True),
+        ("AgentData.Map.District", 99, "candidate_count", "District", False, True),
+        ("AgentData.Map.Language", 99, "candidate_count", "Language", False, True),
+        ("AgentPartyData.PartyID", 99, "identity", "PartyID", True, False),
+        ("AgentData.AgentID", 99, "candidate_count", "AgentID", True, True),
+        ("AgentData.LoginNumber", 99, "identity", "LoginNumber", True, True),
+        ("AgentData.OwnerAgentID", 99, "identity", "OwnerAgentID", True, True),
+        ("LastUpdated", 5000, "freshness", "freshness", True, True),
+        ("LastUpdated", 10001, "freshness", "freshness", True, True),
+        ("AccountEmail", "", "account_present", "account_present", True, True),
+        ("IsSlotActive", False, "identity", "IsSlotActive", True, False),
+        ("IsAccount", False, "identity", "IsAccount", True, True),
+        ("IsHero", True, "identity", "IsHero", True, True),
+        ("IsPet", True, "identity", "IsPet", True, True),
+        ("IsNPC", True, "identity", "IsNPC", True, True),
+    ],
+)
+def test_account_inspection_gate_and_production_parity(
+    account_inspection: Any, path: str, value: Any, first: str, failed: str, association: bool, energy: bool
+) -> None:
+    env = account_inspection
+    owner = env.world.account
+    parts = path.split(".")
+    for part in parts[:-1]:
+        owner = getattr(owner, part)
+    setattr(owner, parts[-1], value)
+    report = env.inspect()
+    assert report["selected"]["first"] == first, (path, report)
+    assert failed in report["gates"]["failed_fields"], (path, report)
+    assert report["production"]["association_rule_accepts"] is association, (path, report)
+    assert report["production"]["energy_lookup_rule_accepts"] is energy, (path, report)
+
+    # Compare the reported evaluations with the actual owning production functions.
+    def frame_cache(**_kwargs: Any) -> Callable[[Any], Any]:
+        def decorate(function: Any) -> Any:
+            return function
+
+        return decorate
+
+    namespace: dict[str, Any] = dict(
+        GLOBAL_CACHE=env.core.GLOBAL_CACHE,
+        Map=env.core.Map,
+        AccountStruct=Any,
+        Optional=__import__("typing").Optional,
+        CacheData=Any,
+        frame_cache=frame_cache,
+        _account_key=_return(None),
+        _agent_key=_return(None),
+    )
+    path_to_utils = ROOT / "Py4GWCoreLib/HeroAI/utils.py"
+    namespace["IsValidEnergyValue"] = _production_method(path_to_utils, "IsValidEnergyValue", namespace)
+    production_association = _production_method(path_to_utils, "SameMapOrPartyAsAccount", namespace)
+    production_energy = _production_method(path_to_utils, "GetEnergyValues", namespace)
+    assert production_association(env.world.account) is association, (path, report)
+    assert (production_energy(2, env.owner._cached_data) >= 0) is energy, (path, report)
+
+
+@pytest.mark.parametrize(
+    "path", ["LastUpdated", "IsIsolated", "AgentData.LoginNumber", "AccountEmail", "AgentData.Map.Region"]
+)
+def test_account_inspection_unavailable_is_not_false(account_inspection: Any, path: str) -> None:
+    env = account_inspection
+    owner = env.world.account
+    parts = path.split(".")
+    for part in parts[:-1]:
+        owner = getattr(owner, part)
+    delattr(owner, parts[-1])
+    report = env.inspect()
+    expected = "candidate_fields_unavailable" if path.endswith("Region") else "identity_stamp_unavailable"
+    assert report["selected"]["first"] == expected, (path, report)
+    key = "freshness" if path == "LastUpdated" else "account_present" if path == "AccountEmail" else parts[-1]
+    assert key in report["gates"]["unavailable_fields"], (path, report)
+    assert key not in report["gates"]["failed_fields"], (path, report)
+
+
+@pytest.mark.parametrize("age", [0, 1, 4999, 5000, 5001])
+def test_account_inspection_freshness_boundary(account_inspection: Any, age: int) -> None:
+    env = account_inspection
+    env.world.account.LastUpdated = env.world.tick - age
+    report = env.inspect()
+    assert report["identity"]["published"]["age_ms"] == age, report
+    assert report["selected"]["valid"] is (age < 5000), report
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+@pytest.mark.parametrize("isolated", [False, True])
+def test_account_inspection_missing_or_ambiguous(account_inspection: Any, duplicate: bool, isolated: bool) -> None:
+    env = account_inspection
+    env.world.account.IsIsolated = isolated
+    env.world.accounts = [env.world.account, env.world.account] if duplicate else []
+    env.world.raw = env.world.accounts
+    report = env.inspect()
+    assert report["selected"]["first"] == "candidate_count", report
+    assert report["selected"]["unique"] is False, report
+    assert report["identity"]["published"] is None, report
+    assert report["production"]["energy_lookup_rule_accepts"] is True, report
+
+
+def test_account_inspection_filtered_expired_slot_and_retained_cache(account_inspection: Any) -> None:
+    env = account_inspection
+    env.world.accounts = []
+    env.world.account.LastUpdated = 5000
+    report = env.inspect()
+    assert report["selected"]["source"] == "raw_agent", report
+    assert report["selected"]["active_agent"] == 0, report
+    assert report["selected"]["first"] == "candidate_count", report
+    assert "freshness" in report["gates"]["failed_fields"], report
+    assert report["production"]["energy_lookup_rule_accepts"] is True, report
+
+
+@pytest.mark.parametrize("email,first", [("", "account_present"), ("second@example.test", "freshness")])
+def test_account_inspection_multiple_failures_order(account_inspection: Any, email: str, first: str) -> None:
+    env = account_inspection
+    env.world.account.AccountEmail = email
+    env.world.account.LastUpdated = 5000
+    env.world.account.AgentData.LoginNumber = 99
+    env.world.account.IsHero = True
+    report = env.inspect()
+    assert report["gates"]["first"] == first, report
+    assert {"freshness", "LoginNumber", "IsHero"} <= set(report["gates"]["failed_fields"]), report
+
+
+def test_account_inspection_account_uniqueness_precedes_freshness(account_inspection: Any) -> None:
+    from copy import deepcopy
+
+    env = account_inspection
+    other = deepcopy(env.world.account)
+    other.AgentData.AgentID = 3
+    other.AgentData.LoginNumber = 3
+    env.world.accounts.append(other)
+    env.world.account.LastUpdated = 5000
+    report = env.inspect()
+    assert report["gates"]["first"] == "account_unique", report
+    assert {"account_unique", "freshness"} <= set(report["gates"]["failed_fields"]), report
+
+
+@pytest.fixture
+def mixed_account_inspection(account_inspection: Any) -> Any:
+    from copy import deepcopy
+
+    env = account_inspection
+    other = deepcopy(env.world.account)
+    other.AgentData.AgentID = other.AgentData.LoginNumber = 3
+    other.AccountEmail = "third@example.test"
+    env.world.accounts.append(other)
+    env.world.raw = list(env.world.accounts)
+    env.core.GLOBAL_CACHE.Party.GetPlayers = _return(
+        [SimpleNamespace(login_number=3, is_connected=True), SimpleNamespace(login_number=2, is_connected=True)]
+    )
+    env.professions = {2: (5, 0), 3: (5, 0)}
+    env.core.Agent.GetProfessions = env.professions.__getitem__
+    env.owner._cached_data.party.get_by_player_id = {2: env.world.account, 3: other}.get
+    env.other = other
+    return env
+
+
+@pytest.mark.parametrize("field", ["LoginNumber", "IsHero"])
+def test_account_inspection_mixed_rejection_exposes_actual_field(mixed_account_inspection: Any, field: str) -> None:
+    env = mixed_account_inspection
+    if field == "LoginNumber":
+        env.other.AgentData.LoginNumber = 99
+    else:
+        env.other.IsHero = True
+    before = [env.control._account_evidence(account, env.world.accounts) for account in env.world.accounts]
+    cache_before = dict(cast(dict[str, Any], vars(env.owner._cached_data.party)))
+    capture_before = (env.control._armed, env.control._arm_consumed, env.control._capture)
+    report = env.inspect()
+    assert report["selected"]["agent"] == 3, (field, report)
+    assert report["gates"]["first"] == "identity", (field, report)
+    assert report["gates"]["failed_fields"] == [field], (field, report)
+    assert report["gates"]["unavailable_fields"] == [], (field, report)
+    assert report["summary"]["members"] == [
+        dict(agent=2, first="pass", active_agent=1, active_exact=1),
+        dict(agent=3, first="identity", active_agent=1, active_exact=1),
+    ], (field, report)
+    assert len(env.output) == 5 and not any("@" in line for line in env.output), env.output
+    assert report["production"]["association_rule_accepts"] is True, report
+    assert report["production"]["energy_lookup_rule_accepts"] is True, report
+    assert report["production"]["cache_entry"][field] == (99 if field == "LoginNumber" else True), report
+    assert before == [env.control._account_evidence(account, env.world.accounts) for account in env.world.accounts]
+    assert cache_before == vars(env.owner._cached_data.party)
+    assert capture_before == (env.control._armed, env.control._arm_consumed, env.control._capture)
+
+
+@pytest.mark.parametrize(
+    "reject_first,reject_second,local_first,local_second,expected",
+    [
+        (True, False, 2, 5, 2),  # Rejected non-Mesmer ahead of a valid Mesmer.
+        (False, True, 5, 2, 3),
+        (True, True, 2, 5, 3),  # Reliable local profession breaks the rejected-recipient tie.
+        (True, True, 5, 5, 2),  # Multiple rejected Mesmers retain agent/login ordering.
+        (True, True, 2, 2, 2),
+        (True, True, 0, 0, 2),  # Unknown professions do not borrow the rejected publication's profession.
+        (True, True, None, None, 2),  # Missing local observations.
+        (True, True, None, 5, 3),
+        (False, False, 2, 5, 2),  # All-valid selection retains the verified-publication preference.
+    ],
+)
+def test_account_inspection_rejected_selection_order(
+    mixed_account_inspection: Any,
+    reject_first: bool,
+    reject_second: bool,
+    local_first: int | None,
+    local_second: int | None,
+    expected: int,
+) -> None:
+    env = mixed_account_inspection
+    env.world.account.IsHero = reject_first
+    env.other.IsHero = reject_second
+    env.professions.clear()
+    for agent, primary in ((2, local_first), (3, local_second)):
+        if primary is not None:
+            env.professions[agent] = (primary, 0)
+    report = env.inspect()
+    assert report["selected"]["agent"] == expected, report
+    assert report["gates"]["first"] == ("identity" if reject_first or reject_second else "pass"), report
+    # Reversing source iteration cannot affect the established roster ordering.
+    env.world.accounts.reverse()
+    env.core.GLOBAL_CACHE.Party.GetPlayers = _return(
+        [SimpleNamespace(login_number=2, is_connected=True), SimpleNamespace(login_number=3, is_connected=True)]
+    )
+    assert env.inspect() == report
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "missing_login", "wrong_login", "missing_profession"])
+def test_account_inspection_rejected_missing_and_ambiguous_evidence(mixed_account_inspection: Any, defect: str) -> None:
+    env = mixed_account_inspection
+    if defect == "duplicate":
+        env.world.accounts.append(env.other)
+    elif defect == "missing_login":
+        del env.other.AgentData.LoginNumber
+    else:
+        env.other.AgentData.LoginNumber = 99
+        if defect == "missing_profession":
+            del env.other.AgentData.Profession
+            del env.core.Agent.GetProfessions
+    report = env.inspect()
+    assert report["selected"]["agent"] == 3, (defect, report)
+    if defect == "duplicate":
+        assert report["selected"]["unique"] is False and report["identity"]["published"] is None, report
+        assert report["gates"]["first"] == "candidate_count", report
+    elif defect == "missing_login":
+        assert report["gates"]["first"] == "identity_stamp_unavailable", report
+        assert "LoginNumber" in report["gates"]["unavailable_fields"], report
+        assert "LoginNumber" not in report["gates"]["failed_fields"], report
+    else:
+        assert report["gates"]["first"] == "identity" and report["gates"]["failed_fields"] == ["LoginNumber"], report
+
+
+def test_account_inspection_no_remote_candidates(account_inspection: Any) -> None:
+    env = account_inspection
+    env.core.GLOBAL_CACHE.Party.GetPlayers = _return([SimpleNamespace(login_number=1, is_connected=True)])
+    report = env.inspect()
+    assert list(report) == ["summary"] and report["summary"]["members"] == [], report
+
+
+def test_account_inspection_deterministic_verified_mesmer_then_rejected(account_inspection: Any) -> None:
+    from copy import deepcopy
+
+    env = account_inspection
+    other = deepcopy(env.world.account)
+    other.AgentData.AgentID = other.AgentData.LoginNumber = 3
+    other.AccountEmail = "third@example.test"
+    env.world.account.AgentData.Profession = (2, 0)
+    env.world.accounts.append(other)
+    env.core.GLOBAL_CACHE.Party.GetPlayers = _return(
+        [
+            SimpleNamespace(login_number=3, is_connected=True),
+            SimpleNamespace(login_number=2, is_connected=True),
+        ]
+    )
+    assert env.inspect()["selected"]["agent"] == 3
+    other.AgentData.Profession = (2, 0)
+    assert env.inspect()["selected"]["agent"] == 2
+    other.AgentData.Map.Region = 99
+    report = env.inspect()
+    assert report["selected"]["agent"] == 3 and report["selected"]["verified_mesmer"] is False, report
+
+
+def test_account_inspection_disconnected_and_unavailable_cache(account_inspection: Any) -> None:
+    env = account_inspection
+    env.world.connected = False
+    env.cache_module.CacheData._instance = None
+    report = env.inspect()
+    assert report["gates"]["first"] == "disconnected", report
+    assert report["production"]["cache_available"] is False, report
+    assert report["production"]["energy_lookup_rule_accepts"] is None, report
+
+
+def test_account_inspection_exception_does_not_print_secret(account_inspection: Any) -> None:
+    env = account_inspection
+
+    def fail(**_kwargs: Any) -> Any:
+        raise RuntimeError("secret@example.test")
+
+    env.core.GLOBAL_CACHE.ShMem.GetAllAccountData = fail
+    report = env.inspect()
+    assert list(report) == ["unavailable"], report
+
+
+def test_account_inspection_roster_and_output_bounds(account_inspection: Any) -> None:
+    env = account_inspection
+    env.core.GLOBAL_CACHE.Party.GetPlayers = _return(
+        [SimpleNamespace(login_number=i, is_connected=True) for i in range(2, 32)]
+    )
+    report = env.inspect()
+    assert report["summary"]["remote_total"] == 30 and report["summary"]["inspected"] == 16, report
+    assert len(env.output) == 5 and max(map(len, env.output)) < 4096, env.output
+
+
+def test_widget_click_runs_real_inspection_once(widget_control: Any, account_inspection: Any) -> None:
+    env, inspection = widget_control, account_inspection
+    env.click("Inspect account evidence")
+    assert len(inspection.output) == 5, inspection.output
+    assert inspection.calls.count("active") == 1 and inspection.calls.count("slot") == 64, inspection.calls
+    env.widget.update()
+    env.widget.draw()
+    assert len(inspection.output) == 5 and inspection.calls.count("active") == 1, inspection.output
+    assert env.control.capture_status() == "Disarmed"
+
+
+def test_widget_inspection_is_explicit_bounded_and_preserves_arm_stop(
+    widget_control: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = widget_control
+    calls: list[str] = []
+    monkeypatch.setattr(env.widget, "inspect_account_evidence", lambda: calls.append("inspect"))
+    env.widget.on_enable()
+    env.widget.update()
+    env.widget.draw()
+    assert calls == [], calls
+    env.click("Inspect account evidence")
+    assert calls == ["inspect"] and env.control.capture_status() == "Disarmed", calls
+    env.click("Arm one capture")
+    armed = env.control.pending_capture()
+    env.click("Inspect account evidence")
+    assert calls == ["inspect", "inspect"] and env.control.pending_capture() is armed
+    env.click("Stop")
+    env.widget.update()
+    env.widget.draw()
+    assert calls == ["inspect", "inspect"] and env.control.capture_status() == "Disarmed"
+
+
+@pytest.mark.parametrize("cache_state", ["absent", "uninitialized", "existing"])
+def test_account_inspection_never_constructs_or_refreshes_cache(
+    account_inspection: Any, monkeypatch: pytest.MonkeyPatch, cache_state: str
+) -> None:
+    from functools import partial
+
+    env = account_inspection
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("manual account inspection must not construct or refresh HeroAI cache")
+
+    cached = env.owner._cached_data
+    cached.update = forbidden
+    party = SimpleNamespace(party_id=7, accounts={2: env.world.account}, update=forbidden, reset=forbidden)
+    reader = _production_method(ROOT / "Py4GWCoreLib/HeroAI/party_cache.py", "get_by_player_id", {"AccountStruct": Any})
+    party.get_by_player_id = partial(reader, party)
+    cached.party = party
+
+    class ExistingCacheOnly:
+        _instance: Any = cached if cache_state == "existing" else None
+
+        def __new__(cls) -> Any:
+            return forbidden()
+
+    monkeypatch.setattr(env.cache_module, "CacheData", ExistingCacheOnly)
+    if cache_state == "absent":
+        monkeypatch.delitem(sys.modules, env.cache_module.__name__)
+    before = dict(party.accounts)
+    report = env.inspect()
+    assert report["production"]["cache_available"] is (cache_state == "existing"), report
+    assert report["production"]["energy_lookup_rule_accepts"] is (True if cache_state == "existing" else None), report
+    assert getattr(ExistingCacheOnly, "_instance") is (cached if cache_state == "existing" else None)
+    assert (env.cache_module.__name__ in sys.modules) is (cache_state != "absent")
+    assert party.accounts == before
+
+
+@pytest.mark.parametrize("energy", [float("nan"), float("inf"), "private-energy@example.invalid"])
+def test_account_inspection_invalid_energy_and_private_fields_are_not_printed(
+    account_inspection: Any, energy: Any
+) -> None:
+    env = account_inspection
+    env.world.energy = energy
+    env.world.account.AccountEmail = "private-account@example.invalid"
+    env.world.account.AccountName = "Private Character Name"
+    report = env.inspect()
+    assert report["identity"]["published"]["Current"] is None, report
+    assert report["production"]["cache_entry"]["Current"] is None, report
+    assert report["production"]["energy_lookup_rule_accepts"] is None, report
+    assert all("private" not in line.lower() and "Character Name" not in line for line in env.output), env.output
+
+
+def test_account_inspection_unready_map_is_observational(account_inspection: Any) -> None:
+    env = account_inspection
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("manual account evidence must not target, cast, message, or refresh state")
+
+    env.core.Map.IsMapReady = _return(False)
+    env.core.Player.ChangeTarget = forbidden
+    env.core.SkillBar.UseSkill = forbidden
+    env.core.GLOBAL_CACHE.ShMem.SendMessage = forbidden
+    env.owner.CastSkillIDAndRestoreTarget = forbidden
+    env.owner._cached_data.update = forbidden
+    state = (env.control._armed, env.control._arm_consumed, env.control._capture)
+    report = env.inspect()
+    assert report["production"]["map_ready"] is False, report
+    assert report["production"]["association_rule_accepts"] is False, report
+    assert "not a target/cast decision" in report["production"]["comparison"], report
+    assert (env.control._armed, env.control._arm_consumed, env.control._capture) == state
 
 
 def _return(value: Any) -> Callable[..., Any]:

@@ -2,7 +2,13 @@
 
 from Py4GWCoreLib import PyImGui
 
-from Py4GWCoreLib.Builds.Skills.BipDiagnostic import arm_capture, capture_status, stop_capture, update_capture
+from Py4GWCoreLib.Builds.Skills.BipDiagnostic import (
+    arm_capture,
+    capture_status,
+    inspect_account_evidence,
+    stop_capture,
+    update_capture,
+)
 
 MODULE_NAME = "Smart BiP Diagnostic"
 MODULE_CATEGORY = "Coding"
@@ -36,6 +42,8 @@ def draw() -> None:
         PyImGui.same_line()
         if PyImGui.button("Stop"):
             stop_capture()
+        if PyImGui.button("Inspect account evidence"):
+            inspect_account_evidence()
         PyImGui.text("Results: SmartBiP3B in the Py4GW console.")
     finally:
         PyImGui.end()
