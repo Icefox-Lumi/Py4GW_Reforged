@@ -100,9 +100,25 @@ class BloodMagic:
 
         return False
 
-    def Blood_is_Power(self) -> BuildCoroutine:
+    def Blood_is_Power(self, *, target_agent_id: int | None = None) -> BuildCoroutine:
+        """Attempt only the proposed eligible recipient, or use stock selection when omitted.
+
+        Revalidation uses current Python observations, not a native execution-time guarantee.
+        """
         blood_is_power_id: int = Skill.GetID("Blood_is_Power")
         blood_is_power: CustomSkill = self.build.GetCustomSkill(blood_is_power_id)
+        explicit_target = target_agent_id is not None
+
+        def _is_proposed_target_eligible() -> bool:
+            from Py4GWCoreLib.HeroAI.targeting import GetEligibleAllyEnergyTargets
+
+            if target_agent_id is None or target_agent_id <= 0:
+                return False
+            return target_agent_id in GetEligibleAllyEnergyTargets(
+                other_ally=True,
+                filter_skill_id=blood_is_power_id,
+                less_energy=blood_is_power.Conditions.LessEnergy,
+            )
 
         def _is_bip_throttle_ready() -> bool:
             return self.bip_throttle.IsStopped() or self.bip_throttle.IsExpired()
@@ -136,13 +152,20 @@ class BloodMagic:
 
             return True
 
+        def _can_cast_proposed_bip() -> bool:
+            return _can_safely_cast_bip() and _is_proposed_target_eligible()
+
         if not self.build.IsSkillEquipped(blood_is_power_id):
             return False
 
-        target_agent_id: int = self.build.ResolveAllyTarget(
-            blood_is_power_id,
-            blood_is_power,
-        )
+        if explicit_target:
+            if not _is_proposed_target_eligible():
+                return False
+        else:
+            target_agent_id = self.build.ResolveAllyTarget(
+                blood_is_power_id,
+                blood_is_power,
+            )
         if not target_agent_id:
             return False
         if is_buff_target_lock_blocked(target_agent_id, BLOOD_ENERGY_BUFF_LOCK_KEY):
@@ -162,7 +185,7 @@ class BloodMagic:
         if (yield from self.build.CastSkillIDAndRestoreTarget(
             blood_is_power_id,
             target_agent_id,
-            extra_condition=_can_safely_cast_bip,
+            extra_condition=_can_cast_proposed_bip if explicit_target else _can_safely_cast_bip,
         )):
             self.bip_throttle.Reset()
             if self.bip_diagnostic is not None:

@@ -1,3 +1,7 @@
+from collections.abc import Callable as _Callable
+from typing import Protocol as _Protocol
+from typing import cast as _cast
+
 from Py4GWCoreLib import GLOBAL_CACHE, Utils, AgentArray, Routines, Agent, Player
 from Py4GWCoreLib.EnemyBlacklist import EnemyBlacklist
 from .constants import (
@@ -224,8 +228,13 @@ def TargetAllyNonWeaponSpelled(distance=Range.Earshot.value):
     return Utils.GetFirstFromArray(ally_array)
 
 
-def TargetLowestAllyEnergy(other_ally=False, filter_skill_id=0, less_energy=1.0, distance=Range.Spellcast.value):
-    global BLOOD_IS_POWER, BLOOD_RITUAL
+def GetEligibleAllyEnergyTargets(
+    other_ally: bool = False,
+    filter_skill_id: int = 0,
+    less_energy: float = 1.0,
+    distance: float = Range.Spellcast.value,
+) -> list[int]:
+    """Return the stock energy-recipient population in its existing array order."""
     from Py4GWCoreLib.GlobalCache.WhiteboardLocks import (
         BLOOD_ENERGY_BUFF_LOCK_KEY,
         filter_unlocked_buff_targets,
@@ -242,6 +251,19 @@ def TargetLowestAllyEnergy(other_ally=False, filter_skill_id=0, less_energy=1.0,
         ally_array,
         lambda agent_id: IsValidEnergyValue(GetEnergyValues(agent_id)) and GetEnergyValues(agent_id) <= less_energy,
     )
+    return _cast(list[int], ally_array)
+
+
+class _EnergyReader(_Protocol):
+    GetEnergyValues: _Callable[[int], float]
+
+
+def TargetLowestAllyEnergy(other_ally=False, filter_skill_id=0, less_energy=1.0, distance=Range.Spellcast.value):
+    from . import utils
+
+    get_energy = _cast(_EnergyReader, utils).GetEnergyValues
+
+    ally_array = GetEligibleAllyEnergyTargets(other_ally, filter_skill_id, less_energy, distance)
 
     # Prioritize the ally with the lowest current energy, breaking ties by distance to the caster so
     # the closest eligible ally wins when energy values match.
@@ -249,7 +271,7 @@ def TargetLowestAllyEnergy(other_ally=False, filter_skill_id=0, less_energy=1.0,
     ally_array = sorted(
         ally_array or [],
         key=lambda agent_id: (
-            GetEnergyValues(agent_id),
+            get_energy(agent_id),
             Utils.Distance(Agent.GetXY(agent_id), player_xy),
             agent_id,
         ),

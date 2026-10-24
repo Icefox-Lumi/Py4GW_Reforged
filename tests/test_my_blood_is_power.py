@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import subprocess
 import sys
 from collections.abc import Generator
 from pathlib import Path
@@ -28,6 +29,18 @@ NAMES = [
     "Signet_of_Lost_Souls",
 ]
 admission: Any = importlib.import_module("test_restoration_spirit_admission")
+
+
+def source_functions(source: str, names: set[str], namespace: dict[str, Any]) -> dict[str, Any]:
+    """Load production decisions without the injected startup graph or frame cache."""
+    functions = [node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name in names]
+    assert {node.name for node in functions} == names
+    for node in functions:
+        node.decorator_list = []
+    future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+    code = ast.fix_missing_locations(ast.Module(body=[future, *functions], type_ignores=[]))
+    exec(compile(code, "production_functions.py", "exec"), namespace)
+    return namespace
 
 
 def finish(coroutine: Generator[Any, None, Any]) -> Any:
@@ -679,6 +692,540 @@ def test_bip_inclusive_energy_ranking_effects_locks_and_throttle(
     r.locked.update({3, 4})
     assert finish(helper.Blood_is_Power()) is False
     assert len(r.world.submissions) == 3
+
+
+@pytest.fixture(scope="module")
+def bip_interface_baseline() -> dict[str, str]:
+    """Published pre-interface sources, read without a checkout or optional Git locks."""
+    revision = "318e0698951cef8cb4ab8a3bb9efe941f2307c73"
+    paths = {
+        "blood": "Py4GWCoreLib/Builds/Skills/necromancer/BloodMagic.py",
+        "targeting": "Py4GWCoreLib/HeroAI/targeting.py",
+    }
+    return {
+        name: subprocess.check_output(
+            ["git", "--no-optional-locks", "show", f"{revision}:{path}"], cwd=ROOT, text=True, encoding="utf-8"
+        )
+        for name, path in paths.items()
+    }
+
+
+@pytest.fixture
+def target_bip_runtime(bip_runtime: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Real energy/effect readers, filters, buff locks, timers, helper and owner casting.
+
+    Shared-memory/native inputs and submissions remain offline boundaries. Each
+    read sees this test's current frame; no production decision is substituted.
+    """
+    r = bip_runtime
+    r.trace, r.intents = [], []
+    accounts: dict[int, Any] = {}
+    r.accounts = accounts
+    r.post_failure, r.target = False, 20
+    r.after_post = noop
+    r.world.valid.add(20)
+    r.world.health[20] = 1.0
+    r.world.hostile.add(20)
+    for agent, energy in r.energy.items():
+        accounts[agent] = SimpleNamespace(
+            IsSlotActive=True,
+            AgentData=SimpleNamespace(
+                AgentID=agent,
+                Energy=SimpleNamespace(Current=energy),
+                Buffs=SimpleNamespace(Buffs=[]),
+                Map=SimpleNamespace(MapID=10, Region=1, District=1, Language=0),
+            ),
+            AgentPartyData=SimpleNamespace(PartyID=5),
+        )
+
+    class PartyView:
+        party_id = 5
+
+        def get_by_player_id(self, agent: int) -> Any:
+            r.trace.append(("energy", agent))
+            return r.accounts.get(agent)
+
+        def __iter__(self) -> Any:
+            return iter(r.accounts.values())
+
+    r.core.Map.IsMapReady = lambda: True
+
+    def pet_id(_agent: int) -> int:
+        return 0
+
+    def login_agent(login: int) -> int:
+        return login
+
+    r.core.GLOBAL_CACHE.Party = SimpleNamespace(
+        GetHeroes=empty_list,
+        GetPlayers=empty_list,
+        GetPartyID=lambda: 5,
+        Pets=SimpleNamespace(GetPetID=pet_id),
+        Players=SimpleNamespace(GetAgentIDByLoginNumber=login_agent),
+    )
+    r.core.GLOBAL_CACHE.Effects = SimpleNamespace(HasEffect=false)
+    utils: Any = sys.modules["Py4GWCoreLib.HeroAI.utils"]
+    utils.__dict__.update(
+        GLOBAL_CACHE=r.core.GLOBAL_CACHE,
+        Map=r.core.Map,
+        Agent=r.core.Agent,
+        Player=r.core.Player,
+        Allegiance=sys.modules["Py4GWCoreLib.enums_src.GameData_enums"].Allegiance,
+        CacheData=lambda: SimpleNamespace(party=PartyView()),
+    )
+    source_functions(
+        (ROOT / "Py4GWCoreLib/HeroAI/utils.py").read_text(encoding="utf-8"),
+        {"GetEnergyValues", "IsValidEnergyValue", "CheckForEffect", "SameMapOrPartyAsAccount"},
+        utils.__dict__,
+    )
+    monkeypatch.setattr(r.core.Routines.Checks.Agents, "HasEffect", staticmethod(utils.CheckForEffect))
+    admission._load(
+        monkeypatch, "Py4GWCoreLib.enums_src.Whiteboard_enums", "Py4GWCoreLib/enums_src/Whiteboard_enums.py"
+    )
+    admission._load(
+        monkeypatch,
+        "Py4GWCoreLib.GlobalCache.shared_memory_src.Globals",
+        "Py4GWCoreLib/GlobalCache/shared_memory_src/Globals.py",
+    )
+    clock: Any = sys.modules["PySystem"]
+    clock.get_tick_count64 = lambda: Timer.now
+
+    def blocked(*args: Any) -> bool:
+        r.trace.append(("lock_read", *args))
+        return args[2] in r.locked
+
+    def post(*args: Any) -> int:
+        r.trace.append(("post", *args))
+        if not r.post_failure:
+            r.intents.append(
+                (
+                    0,
+                    SimpleNamespace(
+                        OwnerEmail=args[0],
+                        KindID=args[1],
+                        SkillID=args[2],
+                        TargetAgentID=args[3],
+                        ExpiresAtTick=args[4],
+                        IsolationGroupID=args[5],
+                    ),
+                )
+            )
+        r.after_post()
+        return -1 if r.post_failure else 0
+
+    def group_id(_email: str) -> int:
+        return 7
+
+    r.core.GLOBAL_CACHE.ShMem = SimpleNamespace(
+        GetAccountGroupByEmail=group_id,
+        IsLockBlocked=blocked,
+        PostLock=post,
+        GetAllAccounts=lambda: SimpleNamespace(GetAllIntents=lambda: r.intents),
+    )
+    r.locks = admission._load(
+        monkeypatch, "Py4GWCoreLib.GlobalCache.WhiteboardLocks", "Py4GWCoreLib/GlobalCache/WhiteboardLocks.py"
+    )
+    blood: Any = sys.modules["_phase_a_blood"]
+    blood.is_buff_target_lock_blocked = r.locks.is_buff_target_lock_blocked
+    blood.post_buff_target_lock = r.locks.post_buff_target_lock
+    timer = admission._load(monkeypatch, "_bip_interface_timer", "Py4GWCoreLib/py4gwcorelib_src/Timer.py")
+    monkeypatch.setattr(timer, "time", SimpleNamespace(perf_counter=lambda: Timer.now / 1000))
+    r.core.ThrottledTimer = blood.ThrottledTimer = timer.ThrottledTimer
+    r.timer_type = timer.ThrottledTimer
+    r.core.Player.GetTargetID = lambda: r.target
+
+    def submit(slot: int, target_agent_id: int = 0, aftercast_delay: int = 0) -> None:
+        r.trace.append(("submit", slot, target_agent_id, aftercast_delay))
+        r.world.submit(slot, target_agent_id, aftercast_delay)
+        r.target = target_agent_id
+
+    def change_target(target: int) -> Generator[None, None, None]:
+        r.trace.append(("restore", target))
+        r.target = target
+        yield
+
+    r.core.GLOBAL_CACHE.SkillBar.UseSkill = submit
+    r.core.Routines.Yield = SimpleNamespace(Agents=SimpleNamespace(ChangeTarget=change_target))
+    diagnostic = admission._load(
+        monkeypatch, "Py4GWCoreLib.Builds.Skills.BipDiagnostic", "Py4GWCoreLib/Builds/Skills/BipDiagnostic.py"
+    )
+    r.diagnostic = diagnostic
+    r.targeting = sys.modules["Py4GWCoreLib.HeroAI.targeting"]
+
+    def allies() -> list[int]:
+        result: list[int] = list(r.world.allies)
+        r.trace.append(("allies", tuple(result)))
+        return result
+
+    monkeypatch.setattr(r.core.AgentArray, "GetAllyArray", staticmethod(allies))
+    return r
+
+
+def proposal_defect(runtime: Any, defect: str, agent: int = 2) -> None:
+    r = runtime
+    if defect == "membership":
+        r.world.allies.remove(agent)
+    elif defect == "dead":
+        r.world.dead.add(agent)
+    elif defect == "range":
+        r.world.place(agent, 1248.01)
+    elif defect == "missing_energy":
+        del r.accounts[agent]
+    elif defect == "inactive":
+        r.accounts[agent].IsSlotActive = False
+    elif defect == "wrong_party":
+        r.accounts[agent].AgentPartyData.PartyID = 6
+    elif defect in ("bip", "ritual"):
+        r.accounts[agent].AgentData.Buffs.Buffs = [SimpleNamespace(SkillId=119 if defect == "bip" else 157)]
+    elif defect == "reserved":
+        r.locked.add(agent)
+    else:
+        r.accounts[agent].AgentData.Energy.Current = {
+            "unknown": -1.0,
+            "negative": -0.01,
+            "over_one": 1.01,
+            "nan": float("nan"),
+            "infinity": float("inf"),
+            "above_threshold": 0.40001,
+        }[defect]
+
+
+@pytest.mark.parametrize("target", [2, 3, 4])
+def test_explicit_bip_accepts_eligible_nonwinner(
+    target_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch, target: int
+) -> None:
+    r = target_bip_runtime
+    r.accounts[2].AgentData.Energy.Current = 0.1
+    assert r.targeting.TargetLowestAllyEnergy(True, 119, 0.4) == 2
+    r.trace.clear()
+    build, book = mechanics_build(r, True, monkeypatch)
+    assert finish(book.Necromancer.BloodMagic.Blood_is_Power(target_agent_id=target)) is True
+    assert r.world.submissions == [(1, target, 250)], (target, r.trace)
+    assert r.target == 20 and build._is_local_cast_pending()
+    assert sum(event[0] == "post" for event in r.trace) == 1
+    assert sum(event[0] == "allies" for event in r.trace) == 3, "Proposal check plus the two existing owner admissions."
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "zero",
+        "negative_id",
+        "missing_id",
+        "self",
+        "membership",
+        "dead",
+        "range",
+        "missing_energy",
+        "inactive",
+        "wrong_party",
+        "unknown",
+        "negative",
+        "over_one",
+        "nan",
+        "infinity",
+        "above_threshold",
+        "bip",
+        "ritual",
+        "reserved",
+    ],
+)
+def test_explicit_bip_invalid_proposal_never_retargets(
+    target_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch, defect: str
+) -> None:
+    r = target_bip_runtime
+    target = {"zero": 0, "negative_id": -1, "missing_id": 99999, "self": 1}.get(defect, 2)
+    if target == 2:
+        proposal_defect(r, defect)
+    build, book = mechanics_build(r, True, monkeypatch)
+    helper = book.Necromancer.BloodMagic
+    assert not finish(helper.Blood_is_Power(target_agent_id=target)), (defect, r.trace)
+    assert not r.world.submissions and not r.intents and helper.bip_throttle.IsStopped(), (defect, r.trace)
+    assert not build._is_local_cast_pending()
+    assert r.targeting.TargetLowestAllyEnergy(True, 119, 0.4) > 0, "An alternative must remain eligible."
+
+
+@pytest.mark.parametrize(
+    "defect", ["membership", "dead", "range", "missing_energy", "above_threshold", "bip", "ritual", "reserved"]
+)
+@pytest.mark.parametrize("stage", ["post", "second_admission"])
+def test_explicit_bip_revalidates_before_owner_submission(
+    target_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch, defect: str, stage: str
+) -> None:
+    r = target_bip_runtime
+    build, book = mechanics_build(r, True, monkeypatch)
+    if stage == "post":
+        r.after_post = lambda: proposal_defect(r, defect)
+    else:
+        # GetTargetID is read between CastSkillIDAndRestoreTarget's admission and CastSkillID's admission.
+        def changed_target() -> int:
+            proposal_defect(r, defect)
+            return 20
+
+        r.core.Player.GetTargetID = changed_target
+    helper = book.Necromancer.BloodMagic
+    assert not finish(helper.Blood_is_Power(target_agent_id=2)), (defect, stage, r.trace)
+    assert not r.world.submissions and helper.bip_throttle.IsStopped() and not build._is_local_cast_pending()
+    assert len(r.intents) == 1, "A rejected admission retains the already-posted ordinary lease."
+    assert sum(event[0] == "post" for event in r.trace) == 1
+
+
+@pytest.mark.parametrize(
+    "health,max_hp,allowed",
+    [
+        (0.88, 500, False),
+        (0.8801, 500, True),
+        (0.955, 280, False),
+        (0.9551, 280, True),
+        (1.0, 0, False),
+        (1.0, -1, False),
+    ],
+)
+def test_explicit_bip_preserves_strict_sacrifice_floors(
+    target_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch, health: float, max_hp: int, allowed: bool
+) -> None:
+    r = target_bip_runtime
+    r.world.health[1] = health
+
+    def maximum(_agent: int) -> int:
+        return max_hp
+
+    r.core.Agent.GetMaxHealth = maximum
+    _, book = mechanics_build(r, True, monkeypatch)
+    assert finish(book.Necromancer.BloodMagic.Blood_is_Power(target_agent_id=3)) is allowed, (health, max_hp, r.trace)
+    assert r.world.submissions == ([(1, 3, 250)] if allowed else [])
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_bip_interface_real_throttle_and_pending_boundaries(
+    target_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch, explicit: bool
+) -> None:
+    r = target_bip_runtime
+    build, book = mechanics_build(r, True, monkeypatch)
+    build._local_cast_timer = r.timer_type(0)
+    build._local_cast_timer.Stop()
+    helper = book.Necromancer.BloodMagic
+    kwargs = {"target_agent_id": 2} if explicit else {}
+    assert finish(helper.Blood_is_Power(**kwargs))
+    Timer.now = 249
+    assert build._is_local_cast_pending()
+    Timer.now = 250
+    assert not build._is_local_cast_pending() and not finish(helper.Blood_is_Power(**kwargs))
+    Timer.now = 1499
+    assert not finish(helper.Blood_is_Power(**kwargs))
+    Timer.now = 1500
+    assert finish(helper.Blood_is_Power(**kwargs))
+    assert r.world.submissions == [(1, 2, 250), (1, 2, 250)], (explicit, r.trace)
+
+
+@pytest.mark.parametrize("change", ["map", "slots", "dispose"])
+def test_explicit_bip_suspended_restore_remains_owned_by_controller(
+    target_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    r = target_bip_runtime
+    build, book = mechanics_build(r, True, monkeypatch)
+    build.OnContractActivated(r.cache)
+
+    def local() -> Generator[Any, None, bool]:
+        attempt = cast(Generator[Any, None, bool], book.Necromancer.BloodMagic.Blood_is_Power(target_agent_id=3))
+        return (yield from attempt)
+
+    build.SetSkillCastingFn(local)
+    coroutine = build.ProcessSkillCasting()
+    next(coroutine)
+    assert r.world.submissions == [(1, 3, 250)] and build._is_local_cast_pending()
+    if change == "map":
+        r.state.map += 1
+    elif change == "slots":
+        r.state.bar.reverse()
+    else:
+        build.Dispose()
+    assert list(coroutine) == [], (change, r.trace)
+    assert r.world.submissions == [
+        (1, 3, 250)
+    ], "Closing Python work must not pretend to cancel a queued native action."
+    assert book.Necromancer.BloodMagic.bip_throttle.IsStopped(), "The abandoned helper did not finish/reset its timer."
+    assert build._is_local_cast_pending() is (change == "slots")
+
+
+@pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "accepted",
+        "health",
+        "energy",
+        "recharge",
+        "toggle",
+        "pending",
+        "unequipped",
+        "map",
+        "adrenaline",
+        "post_failure",
+        "late_energy",
+        "late_health",
+    ],
+)
+def test_bip_interface_committed_default_and_explicit_action_parity(
+    target_bip_runtime: Any,
+    bip_interface_baseline: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    custom: bool,
+    armed: bool,
+    case: str,
+) -> None:
+    r = target_bip_runtime
+    original_selector = source_functions(
+        bip_interface_baseline["targeting"], {"TargetLowestAllyEnergy"}, dict(r.targeting.__dict__)
+    )["TargetLowestAllyEnergy"]
+    baseline: dict[str, Any] = {"__name__": "_published_blood"}
+    exec(compile(bip_interface_baseline["blood"], "published_BloodMagic.py", "exec"), baseline)
+    current_selector = r.targeting.TargetLowestAllyEnergy
+    results: list[Any] = []
+    reads: list[Any] = []
+    for mode in ("published", "default", "explicit"):
+        Timer.now = 0
+        r.trace.clear()
+        r.intents.clear()
+        r.world.submissions.clear()
+        r.target, r.world.energy = 20, 1.0
+        r.state.bar = [0, 0, 119, 0, 0, 0, 0, 0]
+        r.world.health[1] = 0.88 if case == "health" else 1.0
+        r.world.recharge = int(case == "recharge")
+        r.world.explorable = case != "map"
+        r.world.adrenaline = case != "adrenaline"
+        r.cache.account_options.Skills[2] = case != "toggle"
+        r.post_failure = case == "post_failure"
+        r.after_post = (lambda: setattr(r.world, "energy", 0.0)) if case == "late_energy" else noop
+        if case == "late_health":
+
+            def lose_health() -> None:
+                r.world.health[1] = 0.88
+
+            r.after_post = lose_health
+        if case == "energy":
+            r.world.energy = 0.0
+        if case == "unequipped":
+            r.state.bar[2] = 0
+        build, book = mechanics_build(r, custom, monkeypatch)
+        build._local_cast_timer = r.timer_type(0)
+        build._local_cast_timer.Stop()
+        if case == "pending":
+            build._mark_local_cast_pending(250)
+        helper = baseline["BloodMagic"](build) if mode == "published" else book.Necromancer.BloodMagic
+        r.targeting.TargetLowestAllyEnergy = original_selector if mode == "published" else current_selector
+        capture = r.diagnostic.BipDiagnostic(clock=lambda: 0.0, emit=noop)
+        capture.start(0.0)
+        capture.pending = r.diagnostic.Snapshot()
+        helper.bip_diagnostic = capture if armed else None
+        accepted = finish(helper.Blood_is_Power(**({"target_agent_id": 2} if mode == "explicit" else {})))
+        reads.append(list(r.trace))
+        results.append(
+            (
+                accepted,
+                [event for event in r.trace if event[0] in ("post", "submit", "restore")],
+                list(r.world.submissions),
+                helper.bip_throttle.IsStopped(),
+                build._is_local_cast_pending(),
+                r.target,
+                capture.health_target,
+                dict(capture.totals),
+            )
+        )
+    assert results[0] == results[1] == results[2], (custom, armed, case, results)
+    assert reads[0] == reads[1], (case, "Default observation/coordination ordering changed", reads[:2])
+    accepted = case in ("accepted", "post_failure")
+    assert results[0][0] is accepted and results[0][2] == ([(3, 2, 250)] if accepted else []), (case, results)
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        ({}, 1),
+        ({"other_ally": True}, 3),
+        ({"other_ally": True, "less_energy": 0.4}, 3),
+        ({"other_ally": True, "less_energy": 0.3}, 0),
+        ({"other_ally": True, "less_energy": 0.4, "distance": 350.0}, 0),
+        ({"other_ally": True, "filter_skill_id": 999}, 3),
+    ],
+)
+def test_energy_selector_defaults_and_other_consumers_keep_committed_semantics(
+    target_bip_runtime: Any, bip_interface_baseline: dict[str, str], kwargs: dict[str, Any], expected: int
+) -> None:
+    r = target_bip_runtime
+    r.accounts[2].AgentData.Energy.Current = 0.7
+    r.accounts[2].AgentData.Buffs.Buffs = [SimpleNamespace(SkillId=999)]
+    baseline = source_functions(
+        bip_interface_baseline["targeting"], {"TargetLowestAllyEnergy"}, dict(r.targeting.__dict__)
+    )
+    traces: list[Any] = []
+    for selector in (baseline["TargetLowestAllyEnergy"], r.targeting.TargetLowestAllyEnergy):
+        r.trace.clear()
+        assert selector(**kwargs) == expected, (kwargs, expected, r.trace)
+        traces.append(list(r.trace))
+    assert traces[0] == traces[1], (kwargs, traces)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "membership",
+        "dead",
+        "range",
+        "missing_energy",
+        "inactive",
+        "wrong_party",
+        "unknown",
+        "negative",
+        "over_one",
+        "nan",
+        "infinity",
+        "above_threshold",
+        "bip",
+        "ritual",
+        "reserved",
+    ],
+)
+def test_energy_selector_exclusions_match_committed_observation_order(
+    target_bip_runtime: Any, bip_interface_baseline: dict[str, str], defect: str
+) -> None:
+    r = target_bip_runtime
+    proposal_defect(r, defect)
+    baseline = source_functions(
+        bip_interface_baseline["targeting"], {"TargetLowestAllyEnergy"}, dict(r.targeting.__dict__)
+    )
+    traces: list[Any] = []
+    for selector in (baseline["TargetLowestAllyEnergy"], r.targeting.TargetLowestAllyEnergy):
+        r.trace.clear()
+        assert selector(True, 119, 0.4) == 3, (defect, r.trace)
+        traces.append(list(r.trace))
+    assert traces[0] == traces[1], (defect, traces)
+
+
+@pytest.mark.parametrize("threshold", [None, 0.7, 0.69999])
+def test_stock_energy_selector_preserves_non_bip_thresholds(target_bip_runtime: Any, threshold: float | None) -> None:
+    r = target_bip_runtime
+    for account in r.accounts.values():
+        account.AgentData.Energy.Current = 0.7
+    kwargs = {} if threshold is None else {"less_energy": threshold}
+    # SkillManager omits less_energy; the selector's 1.0 default must remain intact.
+    assert r.targeting.TargetLowestAllyEnergy(other_ally=True, filter_skill_id=157, **kwargs) == (
+        0 if threshold == 0.69999 else 2
+    ), (threshold, r.trace)
+
+
+def test_blood_ritual_retains_shared_energy_population_and_coordination(
+    target_bip_runtime: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = target_bip_runtime
+    r.state.bar[0] = 157
+    r.accounts[2].AgentData.Buffs.Buffs = [SimpleNamespace(SkillId=119)]
+    r.locked.add(3)
+    _, book = mechanics_build(r, False, monkeypatch)
+    assert finish(book.Necromancer.BloodMagic.Blood_Ritual()) is True
+    assert r.world.submissions == [(1, 4, 250)], r.trace
+    assert len(r.intents) == 1 and r.intents[0][1].SkillID == r.locks.BLOOD_ENERGY_BUFF_LOCK_KEY
 
 
 @pytest.mark.parametrize(
