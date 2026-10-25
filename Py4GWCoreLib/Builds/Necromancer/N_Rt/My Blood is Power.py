@@ -16,6 +16,7 @@ from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 from Py4GWCoreLib.Builds.Skills import SkillsTemplate
 from Py4GWCoreLib.Builds.Skills.SmartBloodIsPower import SmartBloodIsPower
 from Py4GWCoreLib.Builds.Skills.SmartKaolai import SmartKaolai
+from Py4GWCoreLib.Builds.Skills.SmartMendBodyAndSoul import SmartMendBodyAndSoul
 from Py4GWCoreLib.Builds.Skills.SmartSpiritLight import SmartSpiritLight
 from Py4GWCoreLib.Builds.Skills.SmartSpiritTransfer import SmartSpiritTransfer
 from Py4GWCoreLib.Skill import Skill
@@ -71,6 +72,7 @@ class MyBloodIsPower(BuildMgr):
         self.skillbook = SkillsTemplate(self)
         self._smart_bip = SmartBloodIsPower(self, self.skillbook.Necromancer.BloodMagic)
         self._smart_kaolai = SmartKaolai(self, self.skillbook.Ritualist.RestorationMagic)
+        self._smart_mend = SmartMendBodyAndSoul(self)
         self._smart_spirit_light = SmartSpiritLight(self)
         self._smart_spirit_transfer = SmartSpiritTransfer(self)
         self.SetSkillCastingFn(self._run_local_skill_logic)
@@ -232,6 +234,7 @@ class MyBloodIsPower(BuildMgr):
         self.skillbook.Necromancer.BloodMagic.bip_diagnostic = None
         self.skillbook.Ritualist.RestorationMagic.bip_diagnostic = None
         self._smart_kaolai.bip_diagnostic = None
+        self._smart_mend.bip_diagnostic = None
         self._smart_spirit_light.bip_diagnostic = None
         self._smart_spirit_transfer.bip_diagnostic = None
 
@@ -269,6 +272,7 @@ class MyBloodIsPower(BuildMgr):
                 self.skillbook.Necromancer.BloodMagic.bip_diagnostic = diagnostic
                 self.skillbook.Ritualist.RestorationMagic.bip_diagnostic = diagnostic
                 self._smart_kaolai.bip_diagnostic = diagnostic
+                self._smart_mend.bip_diagnostic = diagnostic
                 self._smart_spirit_light.bip_diagnostic = diagnostic
                 self._smart_spirit_transfer.bip_diagnostic = diagnostic
         except Exception:
@@ -314,7 +318,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from self._smart_spirit_light.try_cast(health_threshold=0.30)):
             self._diagnostic_finish("Spirit_Light", preempted=True)
             return True
-        if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.40)):
+        if (yield from self._smart_mend.try_cast(mode="emergency")):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=True)
             return True
         if self.IsSkillEquipped(kaolai_id) and (yield from self._smart_kaolai.Drop_Held_Bundle(health_threshold=0.75)):
@@ -342,10 +346,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from self._smart_spirit_transfer.try_cast()):
             self._diagnostic_finish("Spirit_Transfer", preempted=False)
             return True
-        if (yield from restoration.Mend_Body_and_Soul(cleanse_blind_martial=True)):
-            self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
-            return True
-        if (yield from restoration.Mend_Body_and_Soul(cleanse_cripple_melee=True)):
+        if (yield from self._smart_mend.try_cast(mode="urgent")):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
         if (yield from restoration.Recuperation(min_party_damaged_count=6)):
@@ -360,7 +361,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from restoration.Life()):
             self._diagnostic_finish("Life", preempted=False)
             return True
-        if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.75)):
+        if (yield from self._smart_mend.try_cast(mode="routine")):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
         if self.IsSkillEquipped(kaolai_id) and (yield from self._smart_kaolai.Protective_Was_Kaolai()):
@@ -378,11 +379,14 @@ class MyBloodIsPower(BuildMgr):
         if (yield from restoration.Recuperation(min_degen_count=2)):
             self._diagnostic_finish("Recuperation", preempted=False)
             return True
-        if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.85)):
+        if (yield from self._smart_mend.try_cast(mode="preventive")):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
         if (yield from self._smart_spirit_light.try_cast()):
             self._diagnostic_finish("Spirit_Light", preempted=False)
+            return True
+        if (yield from self._smart_mend.try_cast(mode="opportunistic")):
+            self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
         self._diagnostic_finish("none")
         return False

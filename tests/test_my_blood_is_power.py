@@ -167,6 +167,10 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     core.Agent.IsKnockedDown = false
     core.Agent.GetMaxHealth = max_health
     core.Agent.IsHoldingItem = false
+    core.Agent.IsConditioned = false
+    core.Agent.IsBleeding = false
+    core.Agent.IsCrippled = false
+    core.Agent.IsDeepWounded = false
     core.Agent.GetLoginNumber = login_number
     core.GLOBAL_CACHE.ShMem = SimpleNamespace(GetAllAccountData=publications)
     publication_clock = admission._load(
@@ -222,6 +226,7 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     ashes = load("_phase_a_ashes", "Py4GWCoreLib/Builds/Skills/ritualist/NoAttribute.py")
     load("Py4GWCoreLib.Builds.Skills.SmartKaolai", "Py4GWCoreLib/Builds/Skills/SmartKaolai.py")
     load("Py4GWCoreLib.Builds.Skills.SmartBloodIsPower", "Py4GWCoreLib/Builds/Skills/SmartBloodIsPower.py")
+    load("Py4GWCoreLib.Builds.Skills.SmartMendBodyAndSoul", "Py4GWCoreLib/Builds/Skills/SmartMendBodyAndSoul.py")
     load("Py4GWCoreLib.Builds.Skills.SmartSpiritTransfer", "Py4GWCoreLib/Builds/Skills/SmartSpiritTransfer.py")
     load("Py4GWCoreLib.Builds.Skills.SmartSpiritLight", "Py4GWCoreLib/Builds/Skills/SmartSpiritLight.py")
     restoration = cast(Any, type(world.helper))
@@ -384,6 +389,8 @@ def trace_rotation(build: Any, book: Any, success_at: int | None) -> tuple[Any, 
         build._smart_spirit_transfer.try_cast = handler("Spirit_Transfer")
     if hasattr(build, "_smart_spirit_light"):
         build._smart_spirit_light.try_cast = handler("Spirit_Light")
+    if hasattr(build, "_smart_mend"):
+        build._smart_mend.try_cast = handler("Mend_Body_and_Soul")
     coroutine = build._run_local_skill_logic()
     while True:
         try:
@@ -394,16 +401,58 @@ def trace_rotation(build: Any, book: Any, success_at: int | None) -> tuple[Any, 
 
 @pytest.mark.parametrize("aggro", [False, True])
 @pytest.mark.parametrize("success_at", [None, *range(1, 23)])
-def test_every_reached_priority_and_yield_matches_generic(runtime: Any, aggro: bool, success_at: int | None) -> None:
+def test_every_reached_stock_and_smart_priority(runtime: Any, aggro: bool, success_at: int | None) -> None:
     runtime.state.aggro = aggro
     generic = runtime.Generic()
     custom = runtime.Custom()
-    expected = trace_rotation(generic, generic.skills, success_at)
-    observed = trace_rotation(custom, custom.skillbook, success_at)
-    assert observed == expected, (aggro, success_at, expected, observed)
-    assert len(observed[1]) <= (22 if aggro else 17)
+    stock: list[tuple[str, dict[str, Any]]] = [
+        ("Spirit_Transfer", {"health_threshold": 0.30}),
+        ("Spirit_Light", {"health_threshold": 0.30}),
+        ("Mend_Body_and_Soul", {"health_threshold": 0.40}),
+        ("Drop_Held_Bundle", {"health_threshold": 0.75}),
+        ("Signet_of_Lost_Souls", {"max_self_energy_pct": 0.30}),
+        ("Recuperation", {"min_party_damaged_count": 6}),
+        ("Recuperation", {"min_degen_count": 6}),
+        ("Blood_is_Power", {}),
+        ("Spirit_Transfer", {}),
+        ("Mend_Body_and_Soul", {"cleanse_blind_martial": True}),
+        ("Mend_Body_and_Soul", {"cleanse_cripple_melee": True}),
+        ("Recuperation", {"min_party_damaged_count": 6}),
+        ("Recuperation", {"min_degen_count": 4}),
+        ("Signet_of_Lost_Souls", {"max_self_energy_pct": 0.60}),
+        ("Life", {}),
+        ("Mend_Body_and_Soul", {"health_threshold": 0.75}),
+        ("Protective_Was_Kaolai", {}),
+    ]
+    if aggro:
+        stock.extend(
+            [
+                ("Signet_of_Lost_Souls", {}),
+                ("Recuperation", {"min_party_damaged_count": 6}),
+                ("Recuperation", {"min_degen_count": 2}),
+                ("Mend_Body_and_Soul", {"health_threshold": 0.85}),
+                ("Spirit_Light", {}),
+            ]
+        )
+    smart: list[tuple[str, dict[str, Any]]] = []
+    modes = {0.40: "emergency", 0.75: "routine", 0.85: "preventive"}
+    for name, kwargs in stock:
+        if name != "Mend_Body_and_Soul":
+            smart.append((name, kwargs))
+        elif "health_threshold" in kwargs:
+            smart.append((name, {"mode": modes[kwargs["health_threshold"]]}))
+        elif "cleanse_blind_martial" in kwargs:
+            smart.append((name, {"mode": "urgent"}))
+    if aggro:
+        smart.append(("Mend_Body_and_Soul", {"mode": "opportunistic"}))
+    for build, book, expected_calls in ((generic, generic.skills, stock), (custom, custom.skillbook, smart)):
+        calls = expected_calls[:success_at] if success_at is not None else expected_calls
+        expected = (success_at is not None and success_at <= len(expected_calls), calls, list(range(1, len(calls) + 1)))
+        observed = trace_rotation(build, book, success_at)
+        assert observed == expected, (build.build_name, aggro, success_at, expected, observed)
     assert custom.skillbook.Necromancer.BloodMagic.bip_diagnostic is None
     assert custom.skillbook.Ritualist.RestorationMagic.bip_diagnostic is None
+    assert custom._smart_mend.bip_diagnostic is None
     assert custom._bip_diagnostic is None
 
 
@@ -603,7 +652,11 @@ def test_real_healing_thresholds_targets_and_submissions_match_generic(
         else:
             helper = getattr(book.Ritualist.RestorationMagic, NAMES[IDS.index(skill)])
         r.world.submissions.clear()
-        result = finish(helper(health_threshold=threshold))
+        if custom and skill == 1234:
+            mode = {0.40: "emergency", 0.75: "routine", 0.85: "preventive"}[threshold]
+            result = finish(build._smart_mend.try_cast(mode=mode))
+        else:
+            result = finish(helper(health_threshold=threshold))
         results.append((result, list(r.world.submissions)))
     expected: tuple[bool, list[tuple[int, int, int]]] = (
         (True, [(IDS.index(skill) + 1, 2, 250)]) if delta < 0 else (False, [])
@@ -955,6 +1008,7 @@ def test_smart_bip_match_only_and_single_owner_construction(smart_bip_runtime: A
     candidate = r.Custom(match_only=True)
     assert candidate.ScoreMatch() == 1008
     assert not hasattr(candidate, "_smart_bip") and not hasattr(candidate, "skillbook")
+    assert not hasattr(candidate, "_smart_mend")
     build = r.make_owner()
     assert vars(build._smart_bip) == {
         "build": build,
@@ -1086,7 +1140,10 @@ def test_smart_bip_committed_rotation_action_parity(
     assert outcomes[1][0] is bool(expected)
     assert outcomes[1][1] == ([(slot, expected, 250)] if expected else []), (case, outcomes)
     if case == "normal":
-        assert scans[1] == scans[0] + 3, "Stock selection plus three explicit eligibility checks."
+        # Smart BiP still adds three explicit eligibility checks. An equipped,
+        # unavailable Smart MBaS now declines before the stock helper's two scans.
+        avoided_mend_scans = 2 if 1234 in bar else 0
+        assert scans[1] == scans[0] + 3 - avoided_mend_scans
         assert outcomes[1][-2].get("bip_q", 0) == int(armed)
 
 
@@ -2510,6 +2567,7 @@ def test_custom_capture_claim_requires_selected_execution(capture_runtime: Any, 
     assert selected._bip_diagnostic is capture and capture.started == 80
     assert selected.skillbook.Necromancer.BloodMagic.bip_diagnostic is capture
     assert selected.skillbook.Ritualist.RestorationMagic.bip_diagnostic is capture
+    assert selected._smart_mend.bip_diagnostic is capture
     assert selected.GetSupportedSkills() == selected.GetBlockedSkills() == IDS
     assert r.calls[-1] == set(IDS)
     assert capture.samples == 1 and capture.totals["demand40_mesmer"] == 1
@@ -2586,6 +2644,7 @@ def test_custom_capture_lifecycle_aborts_and_cannot_transfer(capture_runtime: An
     assert selected._bip_diagnostic is None
     assert selected.skillbook.Necromancer.BloodMagic.bip_diagnostic is None
     assert selected.skillbook.Ritualist.RestorationMagic.bip_diagnostic is None
+    assert selected._smart_mend.bip_diagnostic is None
     assert capture.pending is None and capture.health_only_seconds == 0
     assert len(r.output) == 2 and "ABORTED" in r.output[-1]
     r.state.bar, r.world.explorable, r.state.valid = IDS.copy(), True, True

@@ -1411,6 +1411,44 @@ def real_pass(
     exec(compile(ast.Module(body=[smart_class], type_ignores=[]), str(smart_path), "exec"), namespace)
     owner._smart_spirit_light = namespace["SmartSpiritLight"](owner)
     owner._smart_spirit_light.bip_diagnostic = capture
+
+    # Load the real Smart MBaS policy against this fixture's native boundaries.
+    # Its submissions must still reach the existing diagnostic accounting tests.
+    def uncached(function: Any) -> Any:
+        return function
+
+    def filter_allies(allies: list[int], *_args: Any, **_kwargs: Any) -> list[int]:
+        return allies
+
+    core.Party = core.GLOBAL_CACHE.Party
+    core.Player.GetAccountEmail = _return("diagnostic@example.test")
+    core.Player.GetName = _return("diagnostic-test")
+    core.Agent.GetEnergy = _return(1.0)
+    core.Agent.GetMaxEnergy = _return(30)
+    for name in ("IsConditioned", "IsBleeding", "IsDeepWounded"):
+        setattr(core.Agent, name, _return(False))
+    core.Routines.Agents.GetFilteredSpiritArray = _return([5])
+    core.Routines.Checks.Skills.GetEnergyCostWithEffects = _return(5)
+    owner.CanCastSkillID = _return(True)
+    setattr(targeting, "FilterAllyArray", filter_allies)
+    for name, attributes in (
+        ("Agent", {"Agent": core.Agent}),
+        ("Player", {"Player": core.Player}),
+        ("Skill", {"Skill": core.Skill}),
+        ("BuildMgr", {"BuildCoroutine": Any}),
+        ("py4gwcorelib_src.FrameCache", {"frame_cache": _return(uncached)}),
+    ):
+        boundary = ModuleType(f"Py4GWCoreLib.{name}")
+        boundary.__dict__.update(attributes)
+        monkeypatch.setitem(sys.modules, boundary.__name__, boundary)
+    mend_path = ROOT / "Py4GWCoreLib/Builds/Skills/SmartMendBodyAndSoul.py"
+    spec = importlib.util.spec_from_file_location("_diagnostic_smart_mend", mend_path)
+    assert spec is not None and spec.loader is not None
+    mend: Any = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, mend)
+    spec.loader.exec_module(mend)
+    owner._smart_mend = mend.SmartMendBodyAndSoul(owner)
+    owner._smart_mend.bip_diagnostic = capture
     owner._active = True
     owner._diagnostic_path = request.param
     # Optional Blood Bond is absent from the exact BiP bar.
