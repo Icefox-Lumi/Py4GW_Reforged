@@ -6,13 +6,20 @@ import ast
 import importlib
 import subprocess
 import sys
-from collections.abc import Callable, Generator
+from collections.abc import Callable
+from collections.abc import Generator
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from typing import cast
 
 import pytest
+from test_condition_observations import account_world as _condition_account_fixture
+from test_condition_observations import condition_world as _condition_world_fixture
+
+account_world = _condition_account_fixture
+condition_world = _condition_world_fixture
 
 controller: Any = importlib.import_module("test_my_blood_is_power")
 world = controller.world
@@ -432,6 +439,447 @@ def attempt(r: Any, mode: str, target: int | None) -> None:
         # Even before native flags/recharge update, the owner's pending barrier applies.
         assert controller.finish(r.mend.try_cast(mode=mode)) is False
         assert r.world.submissions == expected
+
+
+@pytest.fixture
+def v2_runtime(condition_world: Any, mend_runtime: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from dataclasses import replace
+
+    r, storage = mend_runtime, condition_world
+    storage.local = replace(storage.local, location=(r.state.map, 1, 1, 0))
+    for row in storage.table.AccountData[:2]:
+        row.AgentData.Map.MapID = r.state.map
+    storage.owner = storage.module.account_owner(storage.table, 1)
+    r.storage = storage
+    r.accounts.append(publication(r, 2))
+    r.core.GLOBAL_CACHE.ShMem.ReadConditionObservation = storage.manager.ReadConditionObservation
+
+    def character(aid: int) -> str:
+        return f"Character {aid - 1}"
+
+    r.core.Agent.GetNameByID = character
+    r.professions[2] = 9  # HR Paragon remains martial, not automatically a spellcaster.
+
+    def publish(*names: str) -> None:
+        assert storage.mapping.publish(
+            storage.publisher, storage.owner, storage.local.instance, storage.clock.uncached, frozenset(names)
+        )
+
+    r.publish = publish
+    return r
+
+
+@pytest.mark.parametrize(
+    "conditions,mode,allowed",
+    [
+        (("Blind",), "urgent", True),
+        (("Dazed",), "urgent", False),
+        (("Poison", "Burning"), "opportunistic", True),
+        (("Poison",), "opportunistic", False),
+        ((), "urgent", False),
+    ],
+)
+def test_v2_owner_conditions_use_existing_policy(
+    v2_runtime: Any, conditions: tuple[str, ...], mode: str, allowed: bool
+) -> None:
+    r = v2_runtime
+    r.publish(*conditions)
+    attempt(r, mode, 2 if allowed else None)
+    assert 2 not in r.effect_reads, "consumer must never enumerate a remote human's native effects"
+
+
+@pytest.mark.parametrize("fault", ["missing", "expired", "empty", "unknown", "removed", "attach"])
+def test_v2_unknown_or_removed_evidence_keeps_health_healing(v2_runtime: Any, fault: str) -> None:
+    r, s = v2_runtime, v2_runtime.storage
+    if fault != "missing":
+        r.publish("Blind")
+    if fault == "expired":
+        s.clock.uncached += 750
+    elif fault in ("empty", "removed"):
+        r.publish(*(() if fault == "empty" else ("Poison",)))
+    elif fault == "unknown":
+        assert s.mapping.publish(s.publisher, s.owner, s.local.instance, s.clock.uncached, None)
+    elif fault == "attach":
+        s.manager._attach = lambda: False
+    attempt(r, "urgent", None)
+    r.world.health[2] = r.accounts[0].AgentData.Health.Current = 0.50
+    r.frame.reset_cache()
+    attempt(r, "routine", 2)
+
+
+@pytest.mark.parametrize("gate", ["spirit", "combat", "reserve", "emergency"])
+def test_v2_opportunistic_preserves_all_other_gates(v2_runtime: Any, gate: str) -> None:
+    r = v2_runtime
+    r.publish("Blind", "Poison")
+    if gate == "spirit":
+        r.world.spirits = []
+    elif gate == "combat":
+        r.state.aggro = False
+    elif gate == "reserve":
+        r.cost = 10000
+    else:
+        r.world.health[3] = 0.39
+    attempt(r, "opportunistic", None)
+
+
+@pytest.mark.parametrize("stage", ["wrapper", "dispatch"])
+@pytest.mark.parametrize(
+    "change", ["expired", "removed", "restart", "reentry", "character", "party", "isolation", "instance"]
+)
+def test_v2_both_final_admissions_recheck_current_binding(
+    v2_runtime: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    change: str,
+) -> None:
+    from dataclasses import replace
+
+    r, s = v2_runtime, v2_runtime.storage
+    r.publish("Blind")
+
+    def mutate() -> None:
+        if change == "expired":
+            s.clock.uncached += 750
+        elif change == "removed":
+            r.publish()
+        elif change == "restart":
+            s.clock.uncached += 1
+            s.publisher = s.module.Publisher()
+            r.publish("Blind")
+        elif change == "reentry":
+            s.mapping.invalidate(s.publisher, stop=False)
+            r.publish("Blind")
+        elif change == "character":
+            s.table.AccountData[1].AgentData.CharacterName = "Other character"
+        elif change == "party":
+            s.table.AccountData[1].AgentPartyData.PartyID = 8
+        elif change == "isolation":
+            s.table.AccountData[1].IsolationGroupID = 8
+        else:
+            s.local = replace(s.local, instance=b"j" * 32)
+
+    original: Callable[..., Generator[Any, None, bool]] = r.build.CastSkillIDAndRestoreTarget
+
+    def wrapper(skill: int, target: int, **kwargs: Any) -> Generator[Any, None, bool]:
+        mutate()
+        return (yield from original(skill, target, **kwargs))
+
+    def dispatch() -> int:
+        mutate()
+        return 20
+
+    (
+        monkeypatch.setattr(r.build, "CastSkillIDAndRestoreTarget", wrapper)
+        if stage == "wrapper"
+        else monkeypatch.setattr(r.core.Player, "GetTargetID", dispatch)
+    )
+    attempt(r, "urgent", None)
+
+
+def test_v2_condition_age_does_not_borrow_or_require_health_cadence(v2_runtime: Any) -> None:
+    r = v2_runtime
+    r.publish("Blind")
+    r.accounts[0].LastUpdated = r.clock - 251
+    attempt(r, "urgent", 2)
+
+
+@pytest.fixture
+def evidence(v2_runtime: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    r = v2_runtime
+    r.control = controller.admission._load(
+        monkeypatch, "Py4GWCoreLib.Builds.Skills.BipDiagnostic", "Py4GWCoreLib/Builds/Skills/BipDiagnostic.py"
+    )
+    output: list[str] = []
+    r.output = output
+    r.now = 0.0
+    assert r.control.arm_capture(mbas=True)
+    r.capture = r.control.pending_capture()
+    r.capture.clock = lambda: r.now
+    r.capture.emit = output.append
+    r.capture.begin((1, "private-character", r.state.map), True, r.control.Snapshot)
+    r.mend.bip_diagnostic = r.capture
+    return r
+
+
+def evidence_cast(r: Any, mode: str, accepted: bool) -> list[str]:
+    assert controller.finish(r.mend.try_cast(mode=mode)) is accepted, r.output
+    assert r.world.submissions == ([(3, 2, 250)] if accepted else []), r.output
+    assert 2 not in r.effect_reads, r.effect_reads
+    return [line for line in r.output if line.startswith("MBASV2 ")]
+
+
+@pytest.mark.parametrize("mode,conditions", [("urgent", ("Blind",)), ("opportunistic", ("Burning", "Poison"))])
+@pytest.mark.parametrize("health", [0.84, 0.85, 1.0])
+def test_evidence_real_selection_admissions_and_queue(
+    evidence: Any, mode: str, conditions: tuple[str, ...], health: float
+) -> None:
+    r = evidence
+    r.world.health[2] = r.accounts[0].AgentData.Health.Current = health
+    r.publish(*conditions)
+    lines = evidence_cast(r, mode, True)
+    assert len(lines) == 5, lines
+    candidate = lines[1]
+    for field in (
+        "remote_human=1",
+        f"hp_pct={health * 100:.3f}",
+        f"mode={mode}",
+        "source=authorized_owner_publication",
+        "binding=VALID",
+        "spirits=1",
+        "selection_gates=PASS",
+    ):
+        assert field in candidate, (field, candidate)
+    assert "ranked=" + ",".join(sorted(conditions)) in candidate
+    assert all("attempt=1 target=remote1" in line for line in lines[1:]), lines
+    assert "call=1 accepted=1" in lines[2] and "call=2 accepted=1" in lines[3], lines
+    assert f"healthy_condition_only={int(health >= 0.85)}" in lines[-1], lines
+    assert not any(secret in "\n".join(lines) for secret in ("private-character", "Character", "@", "hwnd"))
+    r.now = 60
+    r.control.update_capture()
+    result = "HEALTHY_CONDITION_ONLY_QUEUED" if health >= 0.85 else "EXERCISED_NO_HEALTHY_QUEUE_PROOF"
+    assert any(f"MBASV2 DONE result={result}" in line for line in r.output), r.output
+    assert r.capture.result == "INCONCLUSIVE_NO_RELEVANT_DEMAND" and not r.control._armed
+
+
+@pytest.mark.parametrize("mode", ["emergency", "routine", "preventive"])
+def test_evidence_health_heal_is_not_condition_only(evidence: Any, mode: str) -> None:
+    r = evidence
+    r.world.health[2] = r.accounts[0].AgentData.Health.Current = 0.2
+    r.publish("Blind")
+    assert evidence_cast(r, mode, True) == [r.output[1]], r.output
+    assert r.capture.totals["heal_other_q"] == 1
+
+
+@pytest.mark.parametrize("fault", ["empty", "expired", "dazed_paragon", "no_spirits", "combat", "emergency"])
+def test_evidence_no_opportunity_is_not_exercised(evidence: Any, fault: str) -> None:
+    r = evidence
+    r.publish(*(() if fault == "empty" else ("Dazed",) if fault == "dazed_paragon" else ("Blind",)))
+    if fault == "expired":
+        r.storage.clock.uncached += 750
+    elif fault == "no_spirits":
+        r.world.spirits = []
+    elif fault == "combat":
+        r.state.aggro = r.state.close = False
+    elif fault == "emergency":
+        r.world.health[3] = 0.39
+    evidence_cast(r, "urgent", False)
+    r.now = 60
+    r.control.update_capture()
+    assert any("MBASV2 DONE result=NOT_EXERCISED" in line for line in r.output), r.output
+
+
+@pytest.mark.parametrize("call", [1, 2])
+@pytest.mark.parametrize("fault", ["expired", "instance", "owner", "restart", "removed", "energy", "context"])
+def test_evidence_actual_admission_rejections(
+    evidence: Any, monkeypatch: pytest.MonkeyPatch, call: int, fault: str
+) -> None:
+    from dataclasses import replace
+
+    r, s = evidence, evidence.storage
+    r.publish("Blind")
+    original: Callable[..., Generator[Any, None, bool]] = r.build.CastSkillIDAndRestoreTarget
+
+    def mutate() -> int:
+        if fault == "expired":
+            s.clock.uncached += 750
+        elif fault == "instance":
+            s.local = replace(s.local, instance=b"z" * 32)
+        elif fault == "owner":
+            s.table.AccountData[1].AgentData.CharacterName = "Changed"
+        elif fault == "restart":
+            s.clock.uncached += 1
+            s.publisher = s.module.Publisher()
+            r.publish("Blind")
+        elif fault == "removed":
+            r.publish()
+        elif fault == "context":
+            r.build._generation += 1
+        else:
+            r.world.energy = 0
+        return 20
+
+    def wrapper(*args: Any, **kwargs: Any) -> Generator[Any, None, bool]:
+        mutate()
+        return (yield from original(*args, **kwargs))
+
+    if call == 1:
+        monkeypatch.setattr(r.build, "CastSkillIDAndRestoreTarget", wrapper)
+    else:
+        monkeypatch.setattr(r.core.Player, "GetTargetID", mutate)
+    lines = evidence_cast(r, "urgent", False)
+    assert "SUBMISSION attempt=1 target=remote1 accepted=0" in lines[-1], lines
+    if fault != "energy":
+        assert any(f"call={call} accepted=0" in line for line in lines), lines
+    assert r.capture._mend_counts["healthy_queued"] == 0
+
+
+@pytest.mark.parametrize("after_queue", [False, True])
+@pytest.mark.parametrize("ending", ["close", "stop", "expiry", "new_decision", "dispose", "reload", "widget_disable"])
+def test_evidence_cancelled_attempt_cannot_later_succeed(
+    evidence: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    after_queue: bool,
+    ending: str,
+) -> None:
+    r = evidence
+    r.publish("Blind")
+    original: Callable[..., Generator[Any, None, bool]] = r.build.CastSkillIDAndRestoreTarget
+
+    def suspended(*args: Any, **kwargs: Any) -> Generator[Any, None, Any]:
+        yield
+        if not after_queue:
+            return (yield from original(*args, **kwargs))
+
+    monkeypatch.setattr(r.build, "RestoreEnemyTarget" if after_queue else "CastSkillIDAndRestoreTarget", suspended)
+    coroutine = r.mend.try_cast(mode="urgent")
+    next(coroutine)
+    assert bool(r.world.submissions) is after_queue
+    token = r.capture._mend_attempt
+    if ending == "close":
+        coroutine.close()
+    elif ending == "expiry":
+        r.now = 60
+        r.control.update_capture()
+    elif ending == "new_decision":
+        r.capture.enter_decision()
+    elif ending == "dispose":
+        r.build._bip_diagnostic = r.capture
+        r.build.Dispose()
+    elif ending == "reload":
+        exec(
+            compile(Path(r.control.__file__).read_text(encoding="utf-8"), r.control.__file__, "exec"),
+            cast(dict[str, Any], vars(r.control)),
+        )
+    elif ending == "widget_disable":
+        r.core.PyImGui = SimpleNamespace()
+        widget = controller.admission._load(
+            monkeypatch, "_mend_capture_widget", "Widgets/Coding/Debug/Py4GW/Smart BiP Diagnostic.py"
+        )
+        widget.on_disable()
+    else:
+        r.control.stop_capture()
+    if ending in {"stop", "expiry", "new_decision"}:
+        # Ending diagnostics must not change casting; even a real later return
+        # cannot resurrect this closed evidence token.
+        assert controller.finish(coroutine) is True
+    r.capture.mend_return(token, True)
+    assert r.capture._mend_counts["healthy_queued"] == 0, r.output
+    assert any("MBASV2 CANCELLED" in line for line in r.output), r.output
+    assert not any("MBASV2 SUBMISSION" in line for line in r.output), r.output
+    coroutine.close()
+
+
+@pytest.mark.parametrize("failure", ["sink", "candidate", "admission", "return", "cancel"])
+def test_evidence_failures_cannot_block_cast(evidence: Any, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    r = evidence
+    r.publish("Blind")
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("private exception must not escape")
+
+    monkeypatch.setattr(r.capture, "emit" if failure == "sink" else "mend_" + failure, broken)
+    evidence_cast(r, "urgent", True)
+    assert "private exception" not in "\n".join(r.output)
+
+
+def test_evidence_partial_output_failure_is_inconclusive(evidence: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    r = evidence
+    r.publish("Blind")
+
+    def emit(message: str) -> None:
+        if "CANDIDATE" in message:
+            raise RuntimeError("private")
+        r.output.append(message)
+
+    monkeypatch.setattr(r.capture, "emit", emit)
+    evidence_cast(r, "urgent", True)
+    r.now = 60
+    r.control.update_capture()
+    assert any("MBASV2 DONE result=INCONCLUSIVE_DIAGNOSTIC_ERROR" in line for line in r.output), r.output
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+def test_evidence_output_rate_and_attempt_limits(
+    evidence: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    rejected: bool,
+) -> None:
+    r = evidence
+    r.publish("Blind")
+    if rejected:
+        original: Callable[..., Generator[Any, None, bool]] = r.build.CastSkillIDAndRestoreTarget
+
+        def reject(*args: Any, **kwargs: Any) -> Generator[Any, None, bool]:
+            r.build._generation += 1
+            return (yield from original(*args, **kwargs))
+
+        monkeypatch.setattr(r.build, "CastSkillIDAndRestoreTarget", reject)
+    for index in range(200):
+        r.now = index / 10
+        r.frame.reset_cache()
+        r.build._local_cast_timer.Stop()
+        controller.finish(r.mend.try_cast(mode="urgent"))
+    assert r.capture._mend_counts["candidates"] == 8, r.output
+    assert r.capture._mend_counts["suppressed"] > 0
+    candidates = [line for line in r.output if line.startswith("MBASV2 CANDIDATE")]
+    assert len(candidates) == 8
+    assert r.capture._mend_counts["healthy_queued"] == (0 if rejected else 8)
+    # Exercise the output guard independently of today's two-callback BuildMgr.
+    for _ in range(100):
+        r.capture._mend_write("ADMISSION limit_probe=1")
+    r.now = 60
+    r.control.update_capture()
+    lines = [line for line in r.output if line.startswith("MBASV2 ")]
+    assert len(lines) == 49 and lines[-1].startswith("MBASV2 DONE "), lines
+    assert max(map(len, lines)) < 1024
+    count = len(r.output)
+    r.control.update_capture()
+    assert len(r.output) == count and not r.control._armed
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_evidence_decisions_and_native_reads_identical(
+    evidence: Any, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    r = evidence
+    r.publish("Blind")
+    if not enabled:
+        r.control.stop_capture()
+    reads: list[str] = []
+    # Count all existing native-facade calls, excluding neither health nor context.
+    for owner in (r.core.Agent, r.core.Player, r.core.Map):
+        for name in tuple(cast(dict[str, Any], vars(owner))):
+            original = getattr(owner, name)
+            if not callable(original):
+                continue
+
+            def counted(*args: Any, _read: Any = original, _name: str = name, **kwargs: Any) -> Any:
+                reads.append(_name)
+                return _read(*args, **kwargs)
+
+            monkeypatch.setattr(owner, name, counted)
+    evidence_cast(r, "urgent", True)
+    first_reads, first_submissions = list(reads), list(r.world.submissions)
+    reads.clear()
+    r.world.submissions.clear()
+    r.frame.reset_cache()
+    r.build._local_cast_timer.Stop()
+    r.mend.bip_diagnostic = None
+    assert controller.finish(r.mend.try_cast(mode="urgent")) is True
+    assert reads == first_reads and r.world.submissions == first_submissions, (first_reads, reads)
+    if not enabled:
+        assert not any("MBASV2 CANDIDATE" in line for line in r.output), r.output
+
+
+@pytest.mark.parametrize("change", ["character", "map"])
+def test_evidence_context_change_stops_capture(evidence: Any, change: str) -> None:
+    r = evidence
+    identity = (1, "changed" if change == "character" else "private-character", r.state.map + int(change == "map"))
+    r.capture.begin(identity, True, r.control.Snapshot)
+    r.publish("Blind")
+    evidence_cast(r, "urgent", True)
+    assert r.capture.done and not r.control._armed
+    assert not any("MBASV2 CANDIDATE" in line for line in r.output), r.output
 
 
 def test_emergency_health_wins_over_condition_preference(mend_runtime: Any) -> None:

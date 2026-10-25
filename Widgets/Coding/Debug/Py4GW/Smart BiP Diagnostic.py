@@ -1,20 +1,18 @@
 """Temporary, independent controls for combat capture and manual item comparison."""
 
-from importlib import import_module
 import json
+from importlib import import_module
 from math import isfinite
 from time import monotonic_ns
-from typing import Any, cast
+from typing import Any
+from typing import cast
 
 from Py4GWCoreLib import PyImGui
-
-from Py4GWCoreLib.Builds.Skills.BipDiagnostic import (
-    arm_capture,
-    capture_status,
-    inspect_account_evidence,
-    stop_capture,
-    update_capture,
-)
+from Py4GWCoreLib.Builds.Skills.BipDiagnostic import arm_capture
+from Py4GWCoreLib.Builds.Skills.BipDiagnostic import capture_status
+from Py4GWCoreLib.Builds.Skills.BipDiagnostic import inspect_account_evidence
+from Py4GWCoreLib.Builds.Skills.BipDiagnostic import stop_capture
+from Py4GWCoreLib.Builds.Skills.BipDiagnostic import update_capture
 
 MODULE_NAME = "Smart BiP Diagnostic"
 MODULE_CATEGORY = "Coding"
@@ -408,7 +406,10 @@ class _Comparison:
                     "case": self.case,
                     "mode": "record" if self.recording else "snapshot",
                     "skill_ids": {"Kaolai": self.ids[0], "Vorizun": self.ids[1]},
-                    "semantics": "observations_only; sequential_nonatomic; held_and_weapon_type_share_one_signal; hand_ids_may_be_equipment",
+                    "semantics": (
+                        "observations_only; sequential_nonatomic; held_and_weapon_type_share_one_signal; "
+                        "hand_ids_may_be_equipment"
+                    ),
                     "duration_unit": "seconds",
                     "elapsed_remaining_unit": "milliseconds",
                     "followup_late_tolerance_ms": 100,
@@ -447,6 +448,7 @@ class _Comparison:
 _previous_stop = globals().get("_stop_comparison")
 if callable(_previous_stop):
     _previous_stop("RELOADED")
+    stop_capture("ABORTED_RELOADED")
 _comparison: _Comparison | None = None
 
 
@@ -489,13 +491,15 @@ def draw() -> None:
         PyImGui.text("One 60-second capture; starts in explorable aggro.")
         PyImGui.text("Owner: My Blood is Power (exact PvE bar).")
         if PyImGui.button("Arm one capture"):
-            arm_capture()
+            arm_capture(mbas=True)
         PyImGui.same_line()
         if PyImGui.button("Stop"):
             stop_capture()
         if PyImGui.button("Inspect account evidence"):
             inspect_account_evidence()
         PyImGui.text("Results: SmartBiP3B in the Py4GW console.")
+        PyImGui.text("Includes MBASV2: healthy remote condition-only admission and queued return.")
+        PyImGui.text("Queued return does not prove execution or condition removal.")
         PyImGui.separator()
         PyImGui.text("Held-item comparison (temporary, local observations only)")
         PyImGui.text("Pause automatic skill use yourself; cast and drop manually.")

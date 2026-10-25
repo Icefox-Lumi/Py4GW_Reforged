@@ -4,19 +4,26 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from math import dist, isfinite
-from typing import TYPE_CHECKING, Any, Literal, cast
+from math import dist
+from math import isfinite
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Literal
+from typing import cast
 
-from Py4GWCoreLib import Range, Routines
+from Py4GWCoreLib import Range
+from Py4GWCoreLib import Routines
 from Py4GWCoreLib.Agent import Agent
 from Py4GWCoreLib.BuildMgr import BuildCoroutine
 from Py4GWCoreLib.Player import Player
-from Py4GWCoreLib.Skill import Skill
 from Py4GWCoreLib.py4gwcorelib_src.FrameCache import frame_cache
+from Py4GWCoreLib.Skill import Skill
 
 if TYPE_CHECKING:
     from Py4GWCoreLib.BuildMgr import BuildMgr
     from Py4GWCoreLib.Builds.Skills.BipDiagnostic import BipDiagnostic
+    from Py4GWCoreLib.Builds.Skills.BipDiagnostic import MendAttempt
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.ConditionObservations import Observation
 
 MendMode = Literal["emergency", "urgent", "routine", "preventive", "opportunistic"]
 _Context = tuple[object, ...]
@@ -41,6 +48,7 @@ class _Remote:
     health: float
     conditions: frozenset[str] | None = None
     bar: tuple[int, ...] = ()
+    observation: Observation | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +63,7 @@ class _Value:
     severity: int = 6
     useful: int = 0
     capacity: int = 0
+    ranked_conditions: tuple[str, ...] = ()
 
 
 class SmartMendBodyAndSoul:
@@ -67,7 +76,8 @@ class SmartMendBodyAndSoul:
         self._condition_names = {Skill.GetID(name): name for name in _CONDITIONS}
 
     def _context(self) -> _Context:
-        from Py4GWCoreLib import Map, SkillBar
+        from Py4GWCoreLib import Map
+        from Py4GWCoreLib import SkillBar
 
         slot_id: Callable[[int], int] = cast(Any, SkillBar).GetSkillIDBySlot
         return (
@@ -108,11 +118,11 @@ class SmartMendBodyAndSoul:
         return self._read_publications(details)
 
     def _read_publications(self, details: bool) -> dict[int, _Remote | None]:
-        from Py4GWCoreLib import GLOBAL_CACHE, Map, Party
-        from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import (
-            get_uncached_tick_count64,
-            publication_is_live,
-        )
+        from Py4GWCoreLib import GLOBAL_CACHE
+        from Py4GWCoreLib import Map
+        from Py4GWCoreLib import Party
+        from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import get_uncached_tick_count64
+        from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import publication_is_live
 
         remote: dict[int, _Remote | None] = {}
         try:
@@ -178,6 +188,27 @@ class SmartMendBodyAndSoul:
             except Exception:
                 # An uncertain remote publication cannot authorize a decision.
                 continue
+        if details:
+            try:
+                read: Callable[[int, int, str], Observation | None] = cast(
+                    Any, GLOBAL_CACHE.ShMem
+                ).ReadConditionObservation
+            except AttributeError:
+                return remote
+            for aid in members - {Player.GetAgentID()}:
+                try:
+                    observation = read(aid, Agent.GetLoginNumber(aid), Agent.GetNameByID(aid))
+                    if observation is None:
+                        continue
+                    previous = remote.get(aid)
+                    # Condition age is independent of the 250 ms health gate.
+                    # Health-only modes still use the unchanged first-pass allies.
+                    hp = previous.health if previous is not None else Agent.GetHealth(aid)
+                    remote[aid] = _Remote(
+                        hp, observation.conditions, previous.bar if previous is not None else (), observation
+                    )
+                except Exception:
+                    continue
         return remote
 
     def _allies(self, remote: dict[int, _Remote | None]) -> list[_Ally]:
@@ -247,7 +278,8 @@ class SmartMendBodyAndSoul:
 
     @staticmethod
     def _spellcaster(aid: int, publication: _Remote | None) -> bool:
-        from Py4GWCoreLib import Party, SkillBar
+        from Py4GWCoreLib import Party
+        from Py4GWCoreLib import SkillBar
 
         bar = publication.bar if publication is not None else ()
         try:
@@ -291,7 +323,9 @@ class SmartMendBodyAndSoul:
         martial = Routines.Checks.Agents.IsMartial(aid)
         melee = Routines.Checks.Agents.IsMelee(aid)
         ranks: list[int] = []
+        ranked_conditions: list[str] = []
         for condition in conditions:
+            before = len(ranks)
             if condition == "Deep_Wound":
                 ranks.append(0 if ally.health < 0.60 else 4)
             elif condition == "Dazed" and self._spellcaster(aid, publication):
@@ -311,9 +345,11 @@ class SmartMendBodyAndSoul:
                 ranks.append(4)
             elif condition in ("Poison", "Bleeding", "Disease"):
                 ranks.append(5)
+            if len(ranks) > before:
+                ranked_conditions.append(condition)
         # Capacity counts observed identities, including low-value ones: the game
         # chooses removal order, so no particular useful condition is promised.
-        return _Value(min(ranks, default=6), len(ranks), min(spirits, len(conditions)))
+        return _Value(min(ranks, default=6), len(ranks), min(spirits, len(conditions)), tuple(ranked_conditions))
 
     @staticmethod
     def _eligible(mode: MendMode, ally: _Ally, value: _Value) -> bool:
@@ -341,7 +377,11 @@ class SmartMendBodyAndSoul:
             return False
         if spirits:
             remote = self._publications(context, True)
-        ranked: list[tuple[tuple[float, ...], _Ally]] = []
+            if cleansing:
+                allies = self._allies(remote)
+                if any(ally.health < 0.40 for ally in allies):
+                    return False
+        ranked: list[tuple[tuple[float, ...], _Ally, _Value]] = []
         for ally in allies:
             # Filter health before considering any condition preference.
             if mode in _THRESHOLDS and ally.health >= _THRESHOLDS[mode]:
@@ -355,32 +395,115 @@ class SmartMendBodyAndSoul:
                 key = (value.severity, -value.capacity, ally.health, ally.order, ally.agent_id)
             else:
                 key = (ally.health, value.severity, -value.capacity, ally.order, ally.agent_id)
-            ranked.append((key, ally))
+            ranked.append((key, ally, value))
         if not ranked:
             return False
-        target = min(ranked, key=lambda entry: entry[0])[1].agent_id
+        _, selected_ally, selected_value = min(ranked, key=lambda entry: entry[0])
+        target = selected_ally.agent_id
+        selected = remote.get(target)
+        selected_observation = selected.observation if selected is not None else None
+        diagnostic = self.bip_diagnostic
+        attempt: MendAttempt | None = None
+        if diagnostic is not None:
+            try:
+                attempt = diagnostic.mend_candidate(
+                    target,
+                    selected_ally.health,
+                    mode,
+                    selected_observation,
+                    selected_value.ranked_conditions,
+                    spirits,
+                    selected_value.severity,
+                    selected_value.useful,
+                    selected_value.capacity,
+                )
+            except Exception:
+                pass
+
+        def admission(
+            accepted: bool,
+            reason: str,
+            *,
+            health: float | None = None,
+            spirits: int | None = None,
+            observation: Observation | None = None,
+            binding: str = "NOT_CHECKED",
+        ) -> bool:
+            if attempt is not None and diagnostic is not None:
+                try:
+                    diagnostic.mend_admission(
+                        attempt,
+                        accepted,
+                        reason,
+                        health=health,
+                        spirits=spirits,
+                        observation=observation,
+                        binding=binding,
+                    )
+                except Exception:
+                    pass
+            return accepted
 
         def still_eligible() -> bool:
             if context != self._context() or not Routines.Checks.Skills.CanCast() or not self._mode_allowed(mode):
-                return False
-            current_remote = self._read_publications(False)
+                return admission(False, "CONTEXT_OR_CAST_OR_MODE")
+            current_remote = self._read_publications(cleansing)
             current_allies = self._allies(current_remote)
             proposed = next((ally for ally in current_allies if ally.agent_id == target), None)
             if proposed is None or (cleansing and any(ally.health < 0.40 for ally in current_allies)):
-                return False
+                return admission(False, "TARGET_OR_EMERGENCY")
             if not cleansing:
                 return proposed.health < _THRESHOLDS[mode]
             current_spirits = self._spirit_count()
             if not current_spirits or (mode == "opportunistic" and not self._reserve_available()):
-                return False
-            value = self._value(proposed, current_spirits, self._read_publications(True), context, fresh=True)
-            return self._eligible(mode, proposed, value)
+                return admission(False, "SPIRITS_OR_RESERVE", health=proposed.health, spirits=current_spirits)
+            current = current_remote.get(target)
+            observation = current.observation if current is not None else None
+            if selected_observation is not None:
+                if (
+                    observation is None
+                    or observation.binding != selected_observation.binding
+                    or observation.sequence < selected_observation.sequence
+                ):
+                    return admission(
+                        False,
+                        "PUBLICATION_OR_BINDING",
+                        health=proposed.health,
+                        spirits=current_spirits,
+                        observation=observation,
+                        binding="REJECTED_OR_UNAVAILABLE",
+                    )
+            elif observation is not None:
+                return admission(False, "SOURCE_CHANGED")
+            value = self._value(proposed, current_spirits, current_remote, context, fresh=True)
+            return admission(
+                self._eligible(mode, proposed, value),
+                "CURRENT_POLICY",
+                health=proposed.health,
+                spirits=current_spirits,
+                observation=observation,
+                binding="VALID" if observation is not None else "NOT_OWNER_PUBLICATION",
+            )
 
-        accepted = yield from self.build.CastSkillIDAndRestoreTarget(
-            self._skill_id,
-            target,
-            extra_condition=still_eligible,
-        )
+        try:
+            accepted = yield from self.build.CastSkillIDAndRestoreTarget(
+                self._skill_id,
+                target,
+                extra_condition=still_eligible,
+            )
+            if attempt is not None and diagnostic is not None:
+                try:
+                    diagnostic.mend_return(attempt, accepted)
+                except Exception:
+                    pass
+        finally:
+            # A closed/abandoned coroutine proves no return, even if work was
+            # already queued before target restoration yielded. Never retract it.
+            if attempt is not None and diagnostic is not None:
+                try:
+                    diagnostic.mend_cancel(attempt)
+                except Exception:
+                    pass
         if accepted and self.bip_diagnostic is not None:
             self.bip_diagnostic.submission("heal", target)
         return accepted

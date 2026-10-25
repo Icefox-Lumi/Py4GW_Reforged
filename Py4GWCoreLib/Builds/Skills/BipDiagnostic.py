@@ -4,17 +4,23 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from math import isfinite
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Protocol
+from typing import cast
 
 if TYPE_CHECKING:
     from Py4GWCoreLib import ThrottledTimer
     from Py4GWCoreLib.BuildMgr import BuildMgr
     from Py4GWCoreLib.Builds.Skills import SkillsTemplate
-    from Py4GWCoreLib.Builds.Skills.SmartKaolai import KaolaiCapture, KaolaiObservation
+    from Py4GWCoreLib.Builds.Skills.SmartKaolai import KaolaiCapture
+    from Py4GWCoreLib.Builds.Skills.SmartKaolai import KaolaiObservation
     from Py4GWCoreLib.GlobalCache.shared_memory_src.AccountStruct import AccountStruct
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.ConditionObservations import Observation
 
     # Narrow read interfaces for the existing unannotated Python facades.
     class _PartyIdentity(Protocol):
@@ -39,6 +45,11 @@ if TYPE_CHECKING:
         def GetSkillIDBySlot(self, slot: int) -> int: ...
 
 
+# Also terminate an in-place module reload before replacing the process-local arm.
+_previous_stop = globals().get("stop_capture")
+if callable(_previous_stop):
+    _previous_stop("ABORTED_RELOADED")
+
 # Process-local only. Widget activation never arms; an explicit button click does.
 ARM_BIP_CAPTURE = False
 _armed = ARM_BIP_CAPTURE
@@ -46,12 +57,12 @@ _arm_consumed = False
 _capture: BipDiagnostic | None = None
 
 
-def arm_capture() -> bool:
+def arm_capture(*, mbas: bool = False) -> bool:
     """Request one fresh capture; repeated clicks while waiting/running are harmless."""
     global _armed, _arm_consumed, _capture
     if _armed or (_capture is not None and not _capture.done):
         return False
-    _capture = BipDiagnostic()
+    _capture = BipDiagnostic(mbas=mbas)
     _arm_consumed = False
     _armed = True
     return True
@@ -141,8 +152,18 @@ def observe_build(
     target_allowed: Callable[[int, int], bool],
 ) -> Snapshot:
     """Read the owner using its explicitly lent, non-mutating admission checks."""
-    from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, Map, Player, Range, Routines, Skill, SkillBar, Utils
-    from Py4GWCoreLib.GlobalCache.WhiteboardLocks import BLOOD_ENERGY_BUFF_LOCK_KEY, is_buff_target_lock_blocked
+    from Py4GWCoreLib import GLOBAL_CACHE
+    from Py4GWCoreLib import Agent
+    from Py4GWCoreLib import AgentArray
+    from Py4GWCoreLib import Map
+    from Py4GWCoreLib import Player
+    from Py4GWCoreLib import Range
+    from Py4GWCoreLib import Routines
+    from Py4GWCoreLib import Skill
+    from Py4GWCoreLib import SkillBar
+    from Py4GWCoreLib import Utils
+    from Py4GWCoreLib.GlobalCache.WhiteboardLocks import BLOOD_ENERGY_BUFF_LOCK_KEY
+    from Py4GWCoreLib.GlobalCache.WhiteboardLocks import is_buff_target_lock_blocked
 
     player_id = Player.GetAgentID()
     bip = Skill.GetID("Blood_is_Power")
@@ -243,7 +264,8 @@ def publication_values(
 ) -> tuple[bool, float | None, bool | None, int | None]:
     """Read one unambiguous current player publication, never a retained PartyCache entry."""
     from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
-    from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import get_uncached_tick_count64, publication_is_live
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import get_uncached_tick_count64
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import publication_is_live
 
     unknown = (False, None, None, None)
     gate = "candidate_fields"
@@ -340,11 +362,9 @@ def publication_values(
 def _account_evidence(account: Any, accounts: list[AccountStruct]) -> dict[str, Any]:
     """Read only the numeric/boolean fields we may print; never serialize an account."""
     from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
-    from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import (
-        get_uncached_tick_count64,
-        publication_age,
-        publication_is_live,
-    )
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import get_uncached_tick_count64
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import publication_age
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import publication_is_live
 
     values: dict[str, Any] = {}
     for path in (
@@ -394,11 +414,14 @@ def inspect_account_evidence() -> None:
     import json
     import sys
 
-    from Py4GWCoreLib import Agent, Console, GLOBAL_CACHE, Map, Player, Skill
-    from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import (
-        SHMEM_MAX_PLAYERS,
-        SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS,
-    )
+    from Py4GWCoreLib import GLOBAL_CACHE
+    from Py4GWCoreLib import Agent
+    from Py4GWCoreLib import Console
+    from Py4GWCoreLib import Map
+    from Py4GWCoreLib import Player
+    from Py4GWCoreLib import Skill
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import SHMEM_MAX_PLAYERS
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
 
     def emit(kind: str, values: dict[str, Any]) -> None:
         Console.Log(
@@ -517,7 +540,10 @@ def inspect_account_evidence() -> None:
             dict(
                 expected=expected,
                 published=selected["published"],
-                selection="rejected first (locally observed Mesmer preferred); all valid: verified Mesmer preferred; agent/login order",
+                selection=(
+                    "rejected first (locally observed Mesmer preferred); "
+                    "all valid: verified Mesmer preferred; agent/login order"
+                ),
             ),
         )
         published = selected["published"]
@@ -559,7 +585,10 @@ def inspect_account_evidence() -> None:
                 failed_fields=failed,
                 unavailable_fields=unavailable,
                 diagnostic_accepted=selected["valid"],
-                detail="candidate_count uses exact agent+map/Region/district/language; details are separate nearby reads",
+                detail=(
+                    "candidate_count uses exact agent+map/Region/district/language; "
+                    "details are separate nearby reads"
+                ),
             ),
         )
 
@@ -591,7 +620,10 @@ def inspect_account_evidence() -> None:
                 cache_party=cache_party,
                 cache_entry=cache_values,
                 energy_lookup_rule_accepts=energy_rule,
-                comparison="source rules evaluated on printed fields; no cache refresh; not a target/cast decision or frame-cached lookup result",
+                comparison=(
+                    "source rules evaluated on printed fields; no cache refresh; "
+                    "not a target/cast decision or frame-cached lookup result"
+                ),
             ),
         )
     except Exception:
@@ -656,10 +688,28 @@ def effective_ranks(attributes: list[Any]) -> tuple[int | None, int | None]:
     return ranks.get(33), ranks.get(4)
 
 
+@dataclass
+class MendAttempt:
+    """One capture-local evidence token; target is an anonymized label, not an agent ID."""
+
+    number: int
+    target: int
+    healthy: bool
+    admissions: int = 0
+    rejected: bool = False
+    closed: bool = False
+
+
 class BipDiagnostic:
     """One client/build-owned capture; all callbacks fail closed for diagnostics only."""
 
-    def __init__(self, clock: Callable[[], float] = perf_counter, emit: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], float] = perf_counter,
+        emit: Callable[[str], None] | None = None,
+        *,
+        mbas: bool = False,
+    ) -> None:
         self.clock = clock
         self.emit = emit or self._console
         self.started: float | None = None
@@ -692,6 +742,131 @@ class BipDiagnostic:
         self.submitted_targets: dict[int, float] = {}
         self.records = 0
         self.kaolai: KaolaiCapture | None = None
+        self._mbas = mbas
+        self._mend_attempt: MendAttempt | None = None
+        self._mend_targets: dict[int, int] = {}
+        self._mend_next: dict[tuple[int, str], float] = {}
+        self._mend_counts: Counter[str] = Counter()
+        self._mend_records = 0
+
+    def _mend_write(self, message: str, *, final: bool = False) -> None:
+        # Independent budget: never consume or alter the historical BIP3B records.
+        try:
+            if self._mend_records < 48 or final:
+                self._mend_records += 1
+                self.emit("MBASV2 " + message)
+            else:
+                self._mend_counts["omitted"] += 1
+        except Exception:
+            self._mend_counts["output_error"] += 1
+
+    @staticmethod
+    def _mend_age(observation: Observation | None) -> str:
+        if observation is None:
+            return "unavailable"
+        from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import get_uncached_tick_count64
+
+        return str(get_uncached_tick_count64() - observation.sampled_at)
+
+    def mend_candidate(
+        self,
+        target: int,
+        health: float,
+        mode: str,
+        observation: Observation | None,
+        ranked_conditions: tuple[str, ...],
+        spirits: int,
+        severity: int,
+        useful: int,
+        capacity: int,
+    ) -> MendAttempt | None:
+        """Copy a real selected remote publication; never evaluate eligibility here."""
+        try:
+            now = self.clock()
+            if (
+                not self._mbas
+                or not self._active(now)
+                or observation is None
+                or mode not in {"urgent", "opportunistic"}
+            ):
+                return None
+            if self._mend_counts["candidates"] >= 8 or now < self._mend_next.get((target, mode), -1.0):
+                self._mend_counts["suppressed"] += 1
+                return None
+            self._mend_cancel()
+            self._mend_next[target, mode] = now + 2.0
+            self._mend_counts["candidates"] += 1
+            label = self._mend_targets.setdefault(target, len(self._mend_targets) + 1)
+            attempt = MendAttempt(self._mend_counts["candidates"], label, health >= 0.85)
+            self._mend_attempt = attempt
+            self._mend_write(
+                f"CANDIDATE attempt={attempt.number} target=remote{label} remote_human=1 "
+                f"hp_pct={health * 100:.3f} healthy_attribution={int(attempt.healthy)} mode={mode} "
+                f"conditions={','.join(sorted(observation.conditions))} ranked={','.join(sorted(ranked_conditions))} "
+                f"source=authorized_owner_publication age_ms={self._mend_age(observation)} binding=VALID "
+                f"spirits={spirits} severity={severity} useful={useful} capacity={capacity} "
+                "selection_gates=PASS emergency_preemption=0 "
+                f"reserve={'PASS' if mode == 'opportunistic' else 'NOT_REQUIRED'}"
+            )
+            return attempt
+        except Exception:
+            self._mend_counts["observation_error"] += 1
+            return None
+
+    def mend_admission(
+        self,
+        attempt: MendAttempt | None,
+        accepted: bool,
+        reason: str,
+        *,
+        health: float | None = None,
+        spirits: int | None = None,
+        observation: Observation | None = None,
+        binding: str = "NOT_CHECKED",
+    ) -> None:
+        try:
+            if attempt is None or attempt.closed or not self._active(self.clock()):
+                return
+            attempt.admissions += 1
+            attempt.rejected |= not accepted
+            self._mend_write(
+                f"ADMISSION attempt={attempt.number} target=remote{attempt.target} call={attempt.admissions} "
+                f"accepted={int(accepted)} reason={reason} scope=MBAS_CALLBACK "
+                f"hp_pct={health * 100 if health is not None else 'unavailable'} spirits={spirits} "
+                f"age_ms={self._mend_age(observation)} binding={binding}"
+            )
+        except Exception:
+            self._mend_counts["observation_error"] += 1
+
+    def mend_return(self, attempt: MendAttempt | None, accepted: bool) -> None:
+        try:
+            if attempt is None or attempt.closed or not self._active(self.clock()):
+                return
+            attempt.closed = True
+            positive = accepted and attempt.healthy and attempt.admissions > 0 and not attempt.rejected
+            self._mend_counts["queued"] += int(accepted)
+            self._mend_counts["healthy_queued"] += int(positive)
+            self._mend_write(
+                f"SUBMISSION attempt={attempt.number} target=remote{attempt.target} accepted={int(accepted)} "
+                f"healthy_condition_only={int(positive)} reason={'RETURN_TRUE' if accepted else 'BUILDMGR_DECLINED'} "
+                "native_execution=UNVERIFIED"
+            )
+        except Exception:
+            self._mend_counts["observation_error"] += 1
+
+    def _mend_cancel(self) -> None:
+        attempt = self._mend_attempt
+        if attempt is not None and not attempt.closed:
+            attempt.closed = True
+            self._mend_counts["cancelled"] += 1
+            self._mend_write(
+                f"CANCELLED attempt={attempt.number} target=remote{attempt.target} "
+                "return=UNOBSERVED queued=UNKNOWN queued_work_not_retracted=1"
+            )
+
+    def mend_cancel(self, attempt: MendAttempt | None) -> None:
+        if attempt is not None and attempt is self._mend_attempt:
+            self._mend_cancel()
 
     @staticmethod
     def _console(message: str) -> None:
@@ -709,6 +884,7 @@ class BipDiagnostic:
 
     def discard_pending(self) -> None:
         """At a new decision entry, abandon evidence whose pass never finished."""
+        self._mend_cancel()
         if self._decision_unfinished or self.pending is not None:
             if self.kaolai is not None and self.pending is not None and self.pending.kaolai is not None:
                 self.kaolai.counts["inconclusive_cancelled_pass"] += 1
@@ -777,6 +953,8 @@ class BipDiagnostic:
         self.started = now
         self.next_sample = now
         self._write("BIP3B START duration_s=60 max_hz=4 scope=player_party decision_passes_only=1")
+        if self._mbas:
+            self._mend_write("START duration_s=60 max_attempts=8 max_records=49 repeat_interval_s=2")
 
     def advance(self, now: float) -> bool:
         if self.done or self.started is None:
@@ -976,6 +1154,33 @@ class BipDiagnostic:
             return
         self.done = True
         self.result = reason
+        self._mend_cancel()
+        if self._mbas and self.started is not None:
+            result = (
+                "HEALTHY_CONDITION_ONLY_QUEUED"
+                if self._mend_counts["healthy_queued"]
+                else "EXERCISED_NO_HEALTHY_QUEUE_PROOF" if self._mend_counts["candidates"] else "NOT_EXERCISED"
+            )
+            if self._mend_counts["output_error"] or self._mend_counts["observation_error"]:
+                result = "INCONCLUSIVE_DIAGNOSTIC_ERROR"
+            self._mend_write(
+                f"DONE result={result} completion={reason} "
+                + " ".join(
+                    f"{key}={self._mend_counts[key]}"
+                    for key in (
+                        "candidates",
+                        "queued",
+                        "healthy_queued",
+                        "cancelled",
+                        "suppressed",
+                        "omitted",
+                        "output_error",
+                        "observation_error",
+                    )
+                )
+                + " native_execution=UNVERIFIED condition_removal=UNVERIFIED",
+                final=True,
+            )
         if _capture is self:
             _armed = False
         self._decision_unfinished = False

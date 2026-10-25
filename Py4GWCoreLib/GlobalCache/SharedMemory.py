@@ -46,6 +46,13 @@ from .shared_memory_src.AccountStruct import AccountStruct
 from .shared_memory_src.AllAccounts import AllAccounts
 from .shared_memory_src.AllAccounts import InterruptClaimResult
 from .shared_memory_src.AllAccounts import InterruptLockReceipt
+from .shared_memory_src.ConditionObservations import ConditionTable
+from .shared_memory_src.ConditionObservations import Context
+from .shared_memory_src.ConditionObservations import Observation
+from .shared_memory_src.ConditionObservations import Owner
+from .shared_memory_src.ConditionObservations import current_context
+from .shared_memory_src.ConditionObservations import local_owner
+from .shared_memory_src.ConditionObservations import read_authorized
 from Py4GWCoreLib.HeroAI.follow.leader_publish import FollowFormationPublisher
 from ..py4gwcorelib_src.FrameCache import frame_cache
 
@@ -66,6 +73,7 @@ class Py4GWSharedMemoryManager:
             self.size = sizeof(AllAccounts)
             self.follow_publisher = FollowFormationPublisher(self)
             self.shm = None
+            self._condition_table: ConditionTable | None = None
 
         # Attach-only: the C++ multibox module now owns creation of this region
         # (it creates + zeroes it on the first client). Python never creates it;
@@ -93,6 +101,37 @@ class Py4GWSharedMemoryManager:
 
     def PublishFormationFollowPoints(self):
         self.follow_publisher.publish()
+
+    def GetConditionTable(self) -> ConditionTable:
+        """Lazy Python-only mapping; creating this owner does not open shared memory."""
+        if self._condition_table is None:
+            self._condition_table = ConditionTable()
+        return self._condition_table
+
+    def _condition_accounts(self) -> AllAccounts:
+        # Bypass frame-cached registry resolution at final cast admission.
+        if not self._attach() or self.shm is None or self.shm.buf is None:
+            raise RuntimeError("Account registry unavailable")
+        return AllAccounts.from_buffer(self.shm.buf)
+
+    def GetConditionOwner(self, context: Context) -> Owner | None:
+        try:
+            return local_owner(self._condition_accounts(), context)
+        except Exception:
+            return None
+
+    def ReadConditionObservation(self, agent: int, login: int, character: str) -> Observation | None:
+        """Uncached, authorized observation; absent optional publisher means unknown."""
+        try:
+            context = current_context()
+            if context is None:
+                return None
+            result = read_authorized(
+                self.GetConditionTable(), self._condition_accounts(), context, agent, login, character
+            )
+            return result if current_context() == context else None
+        except Exception:
+            return None
         
     #Base Methods
     def GetBaseTimestamp(self):

@@ -452,6 +452,13 @@ class AllAccounts(Structure):
         # both ungrouped: legacy
         return not s_isolated and not r_isolated
 
+    def GetAuthorizedAccountSlot(self, sender_email: str, receiver_email: str) -> int:
+        """Resolve one live receiver using the ordinary communication policy."""
+        receiver = self._get_message_account_snapshot(receiver_email)
+        if receiver is None or not self._can_communicate(sender_email, receiver_email, receiver[0]):
+            return -1
+        return receiver[0]
+
     @staticmethod
     def _is_system_control_command(command: SharedCommandType | int) -> bool:
         """Only explicit local-control commands may cross gameplay isolation groups."""

@@ -9,8 +9,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
-from test_account_publication import ROOT, WIRE, account_world as _account_world_fixture, load_module
+from test_account_publication import ROOT
+from test_account_publication import WIRE
+from test_account_publication import account_world as _account_world_fixture
+from test_account_publication import load_module
 
 account_world = _account_world_fixture
 
@@ -52,6 +54,28 @@ def _live_pair(world: Any, sender_group: int = 1, receiver_group: int = 1) -> No
         row.IsolationGroupID = group
         row.AgentPartyData.PartyID = 10 + index
         world.table.Keys[index].HWND = 100 + index
+
+
+@pytest.mark.parametrize("same_party", [False, True])
+@pytest.mark.parametrize("sender_group,receiver_group", [(0, 0), (0, 1), (1, 1), (1, 2)])
+@pytest.mark.parametrize("isolated", [False, True])
+def test_condition_accessor_preserves_communication_policy(
+    world: Any,
+    same_party: bool,
+    sender_group: int,
+    receiver_group: int,
+    isolated: bool,
+) -> None:
+    _live_pair(world, sender_group, receiver_group)
+    world.table.AccountData[0].IsIsolated = isolated
+    if same_party:
+        world.table.AccountData[1].AgentPartyData.PartyID = 10
+    expected = same_party or (sender_group == receiver_group and (sender_group > 0 or not isolated))
+    before = bytes(world.table)
+    assert world.table.GetAuthorizedAccountSlot(world.sender, world.receiver) == (1 if expected else -1)
+    assert bytes(world.table) == before
+    world.table.AccountData[2] = world.table.AccountData[1]
+    assert world.table.GetAuthorizedAccountSlot(world.sender, world.receiver) == -1
 
 
 def _queue(world: Any) -> None:

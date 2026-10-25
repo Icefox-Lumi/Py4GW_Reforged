@@ -6,10 +6,13 @@ import ast
 import importlib.util
 import json
 import sys
-from collections.abc import Callable, Generator
+from collections.abc import Callable
+from collections.abc import Generator
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
-from typing import Any, cast
+from types import ModuleType
+from types import SimpleNamespace
+from typing import Any
+from typing import cast
 
 import pytest
 
@@ -1831,6 +1834,16 @@ def test_widget_restored_enabled_state_never_arms(widget_control: Any) -> None:
     assert not ctx.output and not ctx.observations and not ctx.events
 
 
+def test_widget_reload_disarms_v2_capture(widget_control: Any) -> None:
+    ctx = widget_control
+    ctx.click("Arm one capture")
+    capture = ctx.control.pending_capture()
+    _finish(ctx.rotation(ctx.owner))
+    exec(compile(WIDGET.read_text(encoding="utf-8"), str(WIDGET), "exec"), cast(dict[str, Any], vars(ctx.widget)))
+    assert capture.done and not ctx.control._armed
+    assert any("MBASV2 DONE" in line and "ABORTED_RELOADED" in line for line in ctx.output), ctx.output
+
+
 def test_widget_explicit_arm_attaches_existing_owner_once(widget_control: Any) -> None:
     ctx = widget_control
     ctx.host.enable()
@@ -1845,7 +1858,8 @@ def test_widget_explicit_arm_attaches_existing_owner_once(widget_control: Any) -
     assert ctx.owner.skills.Necromancer.BloodMagic.bip_diagnostic is pending
     assert ctx.owner.skills.Ritualist.RestorationMagic.bip_diagnostic is pending
     ctx.click("Arm one capture")
-    assert ctx.control.pending_capture() is None and len(ctx.output) == 1
+    assert ctx.control.pending_capture() is None and len(ctx.output) == 2
+    assert ctx.output[-1].startswith("MBASV2 START ")
     assert ctx.control.capture_status() == "Capturing"
     assert not ctx.events
 
@@ -1874,7 +1888,7 @@ def test_widget_waits_for_later_eligible_owner_and_only_one_claims(widget_contro
     assert later._bip_diagnostic is pending and pending.started == 60
     ctx.owner._diagnostic_begin()
     assert ctx.owner._bip_diagnostic is None and ctx.observations == [60]
-    assert len(ctx.output) == 1
+    assert len(ctx.output) == 2
 
 
 @pytest.mark.parametrize("active", [False, True])
@@ -1895,7 +1909,7 @@ def test_widget_stop_and_disable_cancel_without_auto_rearm(
     expected = "ABORTED_WIDGET_DISABLED" if via_disable else "ABORTED_MANUAL_STOP"
     assert capture.done and capture.result == expected and not ctx.control._armed
     assert ctx.control.pending_capture() is None
-    assert len(ctx.output) == (2 if active else 0)
+    assert len(ctx.output) == (4 if active else 0)
     if active:
         assert expected in ctx.output[-1] and "stopped" in ctx.control.capture_status()
     ctx.host.enable()
@@ -1913,11 +1927,12 @@ def test_widget_completion_disarms_and_explicit_rearm_uses_fresh_state(widget_co
         ctx.clock.now = milliseconds / 1000
         assert _finish(ctx.rotation(ctx.owner)) == ([], False)
     assert first.done and first.result == "COMPLETE" and first.samples == 240
-    assert len(ctx.output) == 8 and sum(line.startswith("BIP3B AGG") for line in ctx.output) == 6
+    assert len(ctx.output) == 10 and sum(line.startswith("BIP3B AGG") for line in ctx.output) == 6
+    assert any("MBASV2 DONE result=NOT_EXERCISED" in line for line in ctx.output)
     assert not ctx.control._armed and "complete" in ctx.control.capture_status()
     ctx.host.enable()
     ctx.widget.draw()
-    assert ctx.owner._bip_diagnostic is first and len(ctx.output) == 8
+    assert ctx.owner._bip_diagnostic is first and len(ctx.output) == 10
     ctx.click("Arm one capture")
     second = ctx.control.pending_capture()
     assert second is not first and second.samples == 0 and second.started is None
@@ -2037,7 +2052,7 @@ def test_widget_clock_finishes_without_new_decisions_and_never_samples(widget_co
         ctx.widget.update()
     assert capture.done and not ctx.control._armed and capture.samples == 1
     assert ctx.observations == [100] and not ctx.events
-    assert len(ctx.output) == 8 and sum(line.startswith("BIP3B AGG") for line in ctx.output) == 6
+    assert len(ctx.output) == 10 and sum(line.startswith("BIP3B AGG") for line in ctx.output) == 6
     assert ctx.control.capture_status() == "Finished - complete (disarmed)"
 
 

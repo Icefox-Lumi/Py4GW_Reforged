@@ -2517,6 +2517,16 @@ def capture_runtime(bip_runtime: Any, spirit_runtime: Any, monkeypatch: pytest.M
     r.widget = admission._load(monkeypatch, "_custom_bip_widget", "Widgets/Coding/Debug/Py4GW/Smart BiP Diagnostic.py")
     r.now = 0.0
     r.output = []
+    mbas_output: list[str] = []
+    r.mbas_output = mbas_output
+
+    def emit(message: str) -> None:
+        # Keep historical BIP3B byte/count assertions separate from the opt-in
+        # V2 extension, whose attempt evidence is covered in the MBaS suite.
+        if message.startswith("MBASV2 "):
+            mbas_output.append(message)
+        else:
+            r.output.append(message)
 
     def click(label: str) -> Any:
         r.ui.clicked = label
@@ -2525,7 +2535,7 @@ def capture_runtime(bip_runtime: Any, spirit_runtime: Any, monkeypatch: pytest.M
         pending = r.control.pending_capture()
         if pending is not None:
             pending.clock = lambda: r.now
-            pending.emit = r.output.append
+            pending.emit = emit
         return pending
 
     r.click = click
@@ -2573,6 +2583,7 @@ def test_custom_capture_claim_requires_selected_execution(capture_runtime: Any, 
     assert capture.samples == 1 and capture.totals["demand40_mesmer"] == 1
     assert capture.last.restoration == 12 and capture.last.blood == 13 and capture.last.hr == "False"
     assert r.control.pending_capture() is None and len(r.output) == 1
+    assert len(r.mbas_output) == 1 and r.mbas_output[0].startswith("MBASV2 START ")
 
 
 @pytest.mark.parametrize("success_at", [None, *range(1, 23)])
