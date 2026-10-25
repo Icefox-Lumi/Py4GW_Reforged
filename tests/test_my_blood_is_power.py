@@ -223,6 +223,7 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     load("Py4GWCoreLib.Builds.Skills.SmartKaolai", "Py4GWCoreLib/Builds/Skills/SmartKaolai.py")
     load("Py4GWCoreLib.Builds.Skills.SmartBloodIsPower", "Py4GWCoreLib/Builds/Skills/SmartBloodIsPower.py")
     load("Py4GWCoreLib.Builds.Skills.SmartSpiritTransfer", "Py4GWCoreLib/Builds/Skills/SmartSpiritTransfer.py")
+    load("Py4GWCoreLib.Builds.Skills.SmartSpiritLight", "Py4GWCoreLib/Builds/Skills/SmartSpiritLight.py")
     restoration = cast(Any, type(world.helper))
 
     def necromancer(owner: Any) -> SimpleNamespace:
@@ -381,6 +382,8 @@ def trace_rotation(build: Any, book: Any, success_at: int | None) -> tuple[Any, 
         build._smart_bip.try_cast = handler("Blood_is_Power")
     if hasattr(build, "_smart_spirit_transfer"):
         build._smart_spirit_transfer.try_cast = handler("Spirit_Transfer")
+    if hasattr(build, "_smart_spirit_light"):
+        build._smart_spirit_light.try_cast = handler("Spirit_Light")
     coroutine = build._run_local_skill_logic()
     while True:
         try:
@@ -593,11 +596,12 @@ def test_real_healing_thresholds_targets_and_submissions_match_generic(
     results: list[Any] = []
     for custom in (False, True):
         build, book = mechanics_build(r, custom, monkeypatch)
-        helper = (
-            build._smart_spirit_transfer.try_cast
-            if custom and skill == 962
-            else getattr(book.Ritualist.RestorationMagic, NAMES[IDS.index(skill)])
-        )
+        if custom and skill == 962:
+            helper = build._smart_spirit_transfer.try_cast
+        elif custom and skill == 915:
+            helper = build._smart_spirit_light.try_cast
+        else:
+            helper = getattr(book.Ritualist.RestorationMagic, NAMES[IDS.index(skill)])
         r.world.submissions.clear()
         result = finish(helper(health_threshold=threshold))
         results.append((result, list(r.world.submissions)))
@@ -613,17 +617,13 @@ def test_new_owner_uses_actual_spirit_admission(
     runtime: Any, monkeypatch: pytest.MonkeyPatch, skill: int, range_limit: float, outside: bool, pet: bool
 ) -> None:
     r = runtime
-    build, book = mechanics_build(r, True, monkeypatch)
+    build, _ = mechanics_build(r, True, monkeypatch)
     r.world.place(10, range_limit + (0.01 if outside else -0.01))
     if pet:
         r.world.spirits.clear()
         r.world.pets.append(10)
         r.world.spawned.clear()
-    helper = (
-        build._smart_spirit_transfer.try_cast
-        if skill == 962
-        else getattr(book.Ritualist.RestorationMagic, NAMES[IDS.index(skill)])
-    )
+    helper = build._smart_spirit_transfer.try_cast if skill == 962 else build._smart_spirit_light.try_cast
     assert finish(helper(health_threshold=0.30)) is (not outside and not pet)
     assert bool(r.world.submissions) is (not outside and not pet)
 

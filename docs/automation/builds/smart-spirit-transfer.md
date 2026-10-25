@@ -1,6 +1,6 @@
 # Smart Spirit Transfer
 
-Status: current; Stage 1 implementation, awaiting independent review
+Status: current; Stage 1 committed as `f1406579f4fd19c0b6de21280b8c8cea25845bd3`
 Scope: My Blood is Power's Spirit Transfer extraction and historical stock admission restoration
 Authority: production Python, history through `6306a9a34e6734bed7a2f10f50a128e0885f39d0`, and offline regression evidence
 
@@ -67,9 +67,10 @@ Commit `74259a5e228ee3f56be300f6627785b96c5fa597` added the Spirit Transfer
 exception in `BuildMgr._meets_custom_skill_shared_conditions`. Stage 1 removes
 only that exception. Transfer again uses parent
 `d65d7df2db1804bdf0fa787e066bb516045e3830`'s living SpiritPet-array check within
-earshot (1,012 units). The later Spirit Light
-exception from `423fda782b5240e25633a83115712d919fa636bd` remains intact, as do
-unrelated shared improvements. The stock RestorationMagic helper is unchanged.
+earshot (1,012 units). At the Transfer checkpoint, the later Spirit Light
+exception from `423fda782b5240e25633a83115712d919fa636bd` remained intact. Its
+subsequent restoration is documented in [Smart Spirit Light](smart-spirit-light.md).
+Unrelated shared improvements and the stock RestorationMagic helper are unchanged.
 
 The affected stock helper consumers are:
 
@@ -136,8 +137,9 @@ Validation on 2026-10-24:
 
 This is offline verification. No TESTS runtime, injected client, native memory,
 network, deployment, or live healing was exercised. SmartKaolai and
-SmartBloodIsPower are unchanged. SmartSpiritLight and restoration of its shared
-exception remain a separate milestone.
+SmartBloodIsPower are unchanged. The subsequent
+[SmartSpiritLight milestone](smart-spirit-light.md) has its own implementation
+and evidence; the counts above remain the historical Transfer validation results.
 
 ## Review file set and preservation
 
@@ -158,5 +160,6 @@ The workspace started clean on `Personal/Builds` at the pinned HEAD above.
 Branch, HEAD, and index are preserved. No staging, commits, pushes, deployment,
 ignore-rule changes, or access to the protected TESTS workspace occurred. The
 nearest README is updated; the current human-maintained documentation index
-needs no top-level route change. The next checkpoint is independent Sol High
-review.
+needs no top-level route change. This milestone subsequently completed independent
+review and was committed as `f1406579f4fd19c0b6de21280b8c8cea25845bd3`, as recorded
+in the Spirit Light task's user-provided checkpoint.

@@ -1201,7 +1201,7 @@ def runtime_reads(diagnostic: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[Any
         "Skill": skill,
         "SkillBar": SimpleNamespace(GetSkillIDBySlot=_return(119)),
         "AgentArray": SimpleNamespace(GetAllyArray=lambda: [1, 2]),
-        "Range": SimpleNamespace(Spellcast=SimpleNamespace(value=1248)),
+        "Range": SimpleNamespace(Spellcast=SimpleNamespace(value=1248), Earshot=SimpleNamespace(value=1012)),
         "Utils": SimpleNamespace(Distance=_return(100.0)),
         "GLOBAL_CACHE": SimpleNamespace(
             Party=SimpleNamespace(
@@ -1404,6 +1404,13 @@ def real_pass(
     exec(compile(ast.Module(body=[smart_class], type_ignores=[]), str(smart_path), "exec"), namespace)
     owner._smart_spirit_transfer = namespace["SmartSpiritTransfer"](owner)
     owner._smart_spirit_transfer.bip_diagnostic = capture
+    smart_path = ROOT / "Py4GWCoreLib/Builds/Skills/SmartSpiritLight.py"
+    smart_class = next(
+        node for node in ast.parse(smart_path.read_text(encoding="utf-8")).body if isinstance(node, ast.ClassDef)
+    )
+    exec(compile(ast.Module(body=[smart_class], type_ignores=[]), str(smart_path), "exec"), namespace)
+    owner._smart_spirit_light = namespace["SmartSpiritLight"](owner)
+    owner._smart_spirit_light.bip_diagnostic = capture
     owner._active = True
     owner._diagnostic_path = request.param
     # Optional Blood Bond is absent from the exact BiP bar.

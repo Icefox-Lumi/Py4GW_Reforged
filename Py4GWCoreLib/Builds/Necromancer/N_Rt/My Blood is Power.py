@@ -16,6 +16,7 @@ from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 from Py4GWCoreLib.Builds.Skills import SkillsTemplate
 from Py4GWCoreLib.Builds.Skills.SmartBloodIsPower import SmartBloodIsPower
 from Py4GWCoreLib.Builds.Skills.SmartKaolai import SmartKaolai
+from Py4GWCoreLib.Builds.Skills.SmartSpiritLight import SmartSpiritLight
 from Py4GWCoreLib.Builds.Skills.SmartSpiritTransfer import SmartSpiritTransfer
 from Py4GWCoreLib.Skill import Skill
 from Py4GWCoreLib.Skillbar import SkillBar
@@ -70,6 +71,7 @@ class MyBloodIsPower(BuildMgr):
         self.skillbook = SkillsTemplate(self)
         self._smart_bip = SmartBloodIsPower(self, self.skillbook.Necromancer.BloodMagic)
         self._smart_kaolai = SmartKaolai(self, self.skillbook.Ritualist.RestorationMagic)
+        self._smart_spirit_light = SmartSpiritLight(self)
         self._smart_spirit_transfer = SmartSpiritTransfer(self)
         self.SetSkillCastingFn(self._run_local_skill_logic)
 
@@ -230,6 +232,7 @@ class MyBloodIsPower(BuildMgr):
         self.skillbook.Necromancer.BloodMagic.bip_diagnostic = None
         self.skillbook.Ritualist.RestorationMagic.bip_diagnostic = None
         self._smart_kaolai.bip_diagnostic = None
+        self._smart_spirit_light.bip_diagnostic = None
         self._smart_spirit_transfer.bip_diagnostic = None
 
     def _diagnostic_begin(self) -> None:
@@ -266,6 +269,7 @@ class MyBloodIsPower(BuildMgr):
                 self.skillbook.Necromancer.BloodMagic.bip_diagnostic = diagnostic
                 self.skillbook.Ritualist.RestorationMagic.bip_diagnostic = diagnostic
                 self._smart_kaolai.bip_diagnostic = diagnostic
+                self._smart_spirit_light.bip_diagnostic = diagnostic
                 self._smart_spirit_transfer.bip_diagnostic = diagnostic
         except Exception:
             if diagnostic is not None:
@@ -307,7 +311,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from self._smart_spirit_transfer.try_cast(health_threshold=0.30)):
             self._diagnostic_finish("Spirit_Transfer", preempted=True)
             return True
-        if (yield from restoration.Spirit_Light(health_threshold=0.30)):
+        if (yield from self._smart_spirit_light.try_cast(health_threshold=0.30)):
             self._diagnostic_finish("Spirit_Light", preempted=True)
             return True
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.40)):
@@ -377,7 +381,7 @@ class MyBloodIsPower(BuildMgr):
         if (yield from restoration.Mend_Body_and_Soul(health_threshold=0.85)):
             self._diagnostic_finish("Mend_Body_and_Soul", preempted=False)
             return True
-        if (yield from restoration.Spirit_Light()):
+        if (yield from self._smart_spirit_light.try_cast()):
             self._diagnostic_finish("Spirit_Light", preempted=False)
             return True
         self._diagnostic_finish("none")

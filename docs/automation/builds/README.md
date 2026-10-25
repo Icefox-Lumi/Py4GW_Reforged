@@ -9,6 +9,8 @@ This folder contains build authoring workflow, prompt guidance, and the
   contract between `BuildMgr`, `SkillsTemplate`, and skill modules.
 - [Smart Spirit Transfer](smart-spirit-transfer.md) records the Stage 1 owner-local
   extraction, historical stock admission changes, and offline verification boundary.
+- [Smart Spirit Light](smart-spirit-light.md) records the genuine-spirit-only My BiP
+  extraction and the historical stock sacrifice-fallback consequences.
 - [Smart Kaolai extraction](smart-kaolai-extraction.md) preserves the historical
   extraction and generic release restoration, with a dated reconciliation of
   current ownership, flexible matching, adaptive release, and Option A.

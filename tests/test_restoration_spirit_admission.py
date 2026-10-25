@@ -483,7 +483,7 @@ def test_spirit_light_earshot_through_helper_and_admission(
 
 
 @pytest.mark.parametrize("kind", ["absent", "dead", "unspawned", "invalid"])
-def test_spirit_light_rejects_missing_or_invalid_spirit(light_world: _SpiritWorld, kind: str) -> None:
+def test_stock_spirit_light_restores_unspawned_admission(light_world: _SpiritWorld, kind: str) -> None:
     if kind == "absent":
         light_world.spirits.clear()
     elif kind == "dead":
@@ -492,21 +492,22 @@ def test_spirit_light_rejects_missing_or_invalid_spirit(light_world: _SpiritWorl
         light_world.spawned.clear()
     else:
         light_world.valid.remove(10)
-    assert light_world.build.CanCastSkillID(LIGHT) is False, (kind, light_world)
-    assert _finish(light_world.helper.Spirit_Light()) is False, (kind, light_world)
-    assert light_world.submissions == [], light_world
+    expected = kind == "unspawned"
+    assert light_world.build.CanCastSkillID(LIGHT) is expected, (kind, light_world)
+    assert _finish(light_world.helper.Spirit_Light()) is expected, (kind, light_world)
+    assert light_world.submissions == ([(2, 2, 250)] if expected else []), light_world
 
 
 @pytest.mark.parametrize("skill_id", [TRANSFER, LIGHT], ids=["transfer", "light"])
-def test_pet_only_cannot_admit_either_spirit_heal(pet_world: _SpiritWorld, skill_id: int) -> None:
+def test_pet_only_stock_admission_and_helper_behavior(pet_world: _SpiritWorld, skill_id: int) -> None:
     pet_world.equipped_skill_id = skill_id
     helper = pet_world.helper.Spirit_Transfer if skill_id == TRANSFER else pet_world.helper.Spirit_Light
     assert pet_world.routines.Agents.GetNearestSpirit(pet_world.ranges.Earshot.value) == 0, pet_world
     assert pet_world.health[1] > pet_world.metadata[LIGHT].Conditions.SacrificeHealth, pet_world
-    assert _finish(helper()) is False, pet_world
-    assert pet_world.build.CanCastSkillID(skill_id) is (skill_id == TRANSFER), pet_world
-    assert pet_world.build.CanCastSkillSlot(2) is (skill_id == TRANSFER), pet_world
-    assert pet_world.submissions == [], pet_world
+    assert pet_world.build.CanCastSkillID(skill_id) is True, pet_world
+    assert pet_world.build.CanCastSkillSlot(2) is True, pet_world
+    assert _finish(helper()) is (skill_id == LIGHT), pet_world
+    assert pet_world.submissions == ([(2, 2, 250)] if skill_id == LIGHT else []), pet_world
 
 
 def test_pet_does_not_hide_qualifying_spirit(pet_world: _SpiritWorld) -> None:

@@ -288,7 +288,7 @@ class BuildMgr:
 
         conditions = custom_skill.Conditions
 
-        from Py4GWCoreLib import Agent, AgentArray, Player, Range, Routines, Skill
+        from Py4GWCoreLib import Agent, AgentArray, Player, Range, Routines
 
         player_id = Player.GetAgentID()
         player_x, player_y = Player.GetXY()
@@ -305,23 +305,18 @@ class BuildMgr:
                 return False
 
         if conditions.RequiresSpiritInEarshot:
-            if skill_id == Skill.GetID("Spirit_Light"):
-                # Pets must not enable Spirit Light's health-sacrificing fallback.
-                if not Routines.Agents.GetNearestSpirit(Range.Earshot.value):
-                    return False
-            else:
-                spirit_array = AgentArray.GetSpiritPetArray()
-                spirit_array = AgentArray.Filter.ByDistance(
-                    spirit_array,
-                    (player_x, player_y),
-                    Range.Earshot.value,
-                )
-                spirit_array = AgentArray.Filter.ByCondition(
-                    spirit_array,
-                    lambda agent_id: Agent.IsAlive(agent_id),
-                )
-                if not spirit_array:
-                    return False
+            spirit_array = AgentArray.GetSpiritPetArray()
+            spirit_array = AgentArray.Filter.ByDistance(
+                spirit_array,
+                (player_x, player_y),
+                Range.Earshot.value,
+            )
+            spirit_array = AgentArray.Filter.ByCondition(
+                spirit_array,
+                lambda agent_id: Agent.IsAlive(agent_id),
+            )
+            if not spirit_array:
+                return False
 
         if conditions.EnemyCount != 0:
             enemy_array = Routines.Agents.GetFilteredEnemyArray(
