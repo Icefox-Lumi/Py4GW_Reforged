@@ -7,6 +7,8 @@ This folder contains build authoring workflow, prompt guidance, and the
 
 - `buildmgr-and-skills-template.md` describes the current ownership and package
   contract between `BuildMgr`, `SkillsTemplate`, and skill modules.
+- [Smart Spirit Transfer](smart-spirit-transfer.md) records the Stage 1 owner-local
+  extraction, historical stock admission changes, and offline verification boundary.
 - [Smart Kaolai extraction](smart-kaolai-extraction.md) preserves the historical
   extraction and generic release restoration, with a dated reconciliation of
   current ownership, flexible matching, adaptive release, and Option A.

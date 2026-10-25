@@ -7,6 +7,7 @@ import importlib
 import subprocess
 import sys
 from collections.abc import Generator
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -221,6 +222,7 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     ashes = load("_phase_a_ashes", "Py4GWCoreLib/Builds/Skills/ritualist/NoAttribute.py")
     load("Py4GWCoreLib.Builds.Skills.SmartKaolai", "Py4GWCoreLib/Builds/Skills/SmartKaolai.py")
     load("Py4GWCoreLib.Builds.Skills.SmartBloodIsPower", "Py4GWCoreLib/Builds/Skills/SmartBloodIsPower.py")
+    load("Py4GWCoreLib.Builds.Skills.SmartSpiritTransfer", "Py4GWCoreLib/Builds/Skills/SmartSpiritTransfer.py")
     restoration = cast(Any, type(world.helper))
 
     def necromancer(owner: Any) -> SimpleNamespace:
@@ -250,6 +252,13 @@ def runtime(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     )
     metadata.NecromancerSkills(world.metadata)
     cast(Any, sys.modules["Py4GWCoreLib.HeroAI.custom_skill_src.ritualist"]).RitualistSkills(world.metadata)
+
+    def skill_registry() -> SimpleNamespace:
+        # Match production's per-BuildMgr registry, including mutable Conditions.
+        skills = deepcopy(world.metadata)
+        return SimpleNamespace(get_skill=skills.__getitem__)
+
+    cast(Any, sys.modules["Py4GWCoreLib.HeroAI.custom_skill"]).CustomSkillClass = skill_registry
     registry: Any = sys.modules["Py4GWCoreLib.BuildMgr"].BuildRegistry
     monkeypatch.setattr(
         registry,
@@ -370,6 +379,8 @@ def trace_rotation(build: Any, book: Any, success_at: int | None) -> tuple[Any, 
         # This branch-order test substitutes all skill attempts. Real proposal
         # and execution behavior is covered by the integration comparisons.
         build._smart_bip.try_cast = handler("Blood_is_Power")
+    if hasattr(build, "_smart_spirit_transfer"):
+        build._smart_spirit_transfer.try_cast = handler("Spirit_Transfer")
     coroutine = build._run_local_skill_logic()
     while True:
         try:
@@ -563,7 +574,6 @@ def test_registry_discovers_the_new_file_with_its_nr_t_neighbors(runtime: Any, m
 def mechanics_build(runtime: Any, custom: bool, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any]:
     build = runtime.Custom() if custom else runtime.Generic()
     build.set_cached_data(runtime.cache)
-    build._custom_skill_data_handler = SimpleNamespace(get_skill=runtime.world.metadata.__getitem__)
     monkeypatch.setattr(build, "SpiritBuffExists", false)
     book = build.skillbook if custom else build.skills
     return build, book
@@ -579,11 +589,15 @@ def test_real_healing_thresholds_targets_and_submissions_match_generic(
     r = runtime
     r.world.health.update({1: 1.0, 2: threshold + delta})
     # Outside earshot avoids the optional condition-preferring MBaS tier here.
-    r.world.place(10, 500 if skill == 915 else 1100)
+    r.world.place(10, 500 if skill in (915, 962) else 1100)
     results: list[Any] = []
     for custom in (False, True):
-        _, book = mechanics_build(r, custom, monkeypatch)
-        helper = getattr(book.Ritualist.RestorationMagic, NAMES[IDS.index(skill)])
+        build, book = mechanics_build(r, custom, monkeypatch)
+        helper = (
+            build._smart_spirit_transfer.try_cast
+            if custom and skill == 962
+            else getattr(book.Ritualist.RestorationMagic, NAMES[IDS.index(skill)])
+        )
         r.world.submissions.clear()
         result = finish(helper(health_threshold=threshold))
         results.append((result, list(r.world.submissions)))
@@ -599,13 +613,17 @@ def test_new_owner_uses_actual_spirit_admission(
     runtime: Any, monkeypatch: pytest.MonkeyPatch, skill: int, range_limit: float, outside: bool, pet: bool
 ) -> None:
     r = runtime
-    _, book = mechanics_build(r, True, monkeypatch)
+    build, book = mechanics_build(r, True, monkeypatch)
     r.world.place(10, range_limit + (0.01 if outside else -0.01))
     if pet:
         r.world.spirits.clear()
         r.world.pets.append(10)
         r.world.spawned.clear()
-    helper = getattr(book.Ritualist.RestorationMagic, NAMES[IDS.index(skill)])
+    helper = (
+        build._smart_spirit_transfer.try_cast
+        if skill == 962
+        else getattr(book.Ritualist.RestorationMagic, NAMES[IDS.index(skill)])
+    )
     assert finish(helper(health_threshold=0.30)) is (not outside and not pet)
     assert bool(r.world.submissions) is (not outside and not pet)
 
@@ -924,7 +942,6 @@ def smart_bip_runtime(
 
     def owner(kind: Any = None) -> Any:
         build = (kind or r.Custom)(cached_data=r.cache)
-        build._custom_skill_data_handler = SimpleNamespace(get_skill=r.world.metadata.__getitem__)
         build._local_cast_timer = r.timer_type(0)
         build._local_cast_timer.Stop()
         return build
@@ -2289,7 +2306,6 @@ def test_recuperation_replacement_uses_existing_metadata(spirit_runtime: Any, he
     r.world.place(10, 500)
     r.world.health[10] = health
     custom = r.Custom(cached_data=r.cache)
-    custom._custom_skill_data_handler = SimpleNamespace(get_skill=r.world.metadata.__getitem__)
     assert custom.SpiritBuffExists(981) is present
     r.spirit_model = int(r.core.SpiritModelID.LIFE)
     assert custom.SpiritBuffExists(1251) is True, "Life retains its existing no-refresh rule."
@@ -2308,7 +2324,6 @@ def test_life_preparation_and_real_spirit_wait_interruption(
 
     monkeypatch.setattr(r.core.BuildMgr, "IsCloseToAggro", approach)
     custom = r.Custom(cached_data=r.cache)
-    custom._custom_skill_data_handler = SimpleNamespace(get_skill=r.world.metadata.__getitem__)
     custom.OnContractActivated()
     custom.SetSkillCastingFn(custom.skillbook.Ritualist.RestorationMagic.Life)
     if not approaching:
@@ -2458,10 +2473,6 @@ def capture_runtime(bip_runtime: Any, spirit_runtime: Any, monkeypatch: pytest.M
 
     r.click = click
     r.outer = r.Hero(cached_data=r.cache)
-    # Real metadata, while unavailable world/weapon details use the Phase A
-    # native stubs. No owner method or diagnostic observation is replaced.
-    metadata_module: Any = sys.modules["Py4GWCoreLib.HeroAI.custom_skill"]
-    metadata_module.CustomSkillClass = lambda: SimpleNamespace(get_skill=r.world.metadata.__getitem__)
     return r
 
 
@@ -2981,7 +2992,6 @@ def test_kaolai_remove_and_readd_uses_same_owner_and_generic_bundle(
     r.world.health.update(dict.fromkeys(r.world.allies, health))
     outer = r.Hero(cached_data=r.cache)
     custom = outer.EnsureBuildContract()
-    custom._custom_skill_data_handler = SimpleNamespace(get_skill=r.world.metadata.__getitem__)
     r.state.bar[4] = r.world.skill_id("Mighty_Was_Vorizun")
     assert outer.EnsureBuildContract() is custom
     finish(outer.ProcessCombat())

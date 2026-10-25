@@ -305,11 +305,7 @@ class BuildMgr:
                 return False
 
         if conditions.RequiresSpiritInEarshot:
-            # Spirit Transfer uses casting range; retain the shared metadata for other casting paths.
-            if skill_id == Skill.GetID("Spirit_Transfer"):
-                if not Routines.Agents.GetNearestSpirit(Range.Spellcast.value):
-                    return False
-            elif skill_id == Skill.GetID("Spirit_Light"):
+            if skill_id == Skill.GetID("Spirit_Light"):
                 # Pets must not enable Spirit Light's health-sacrificing fallback.
                 if not Routines.Agents.GetNearestSpirit(Range.Earshot.value):
                     return False

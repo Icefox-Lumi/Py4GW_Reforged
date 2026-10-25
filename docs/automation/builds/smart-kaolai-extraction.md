@@ -12,6 +12,9 @@ Their present tense refers to that historical snapshot. The original full-bar
 fallback mask and positive-identity prerequisite are superseded, not current
 requirements. Historical evidence has not been rerun or re-dated here.
 
+The subsequent [Smart Spirit Transfer extraction](smart-spirit-transfer.md)
+records the Stage 1 implementation after this reconciliation checkpoint.
+
 ### Ownership and Matching
 
 The dedicated [My Blood is Power controller](<../../../Py4GWCoreLib/Builds/Necromancer/N_Rt/My Blood is Power.py>)

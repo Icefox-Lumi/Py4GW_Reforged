@@ -1,4 +1,4 @@
-"""Offline Smart admission coverage; no DLL observation or completed-healing claim."""
+"""Offline stock admission coverage; no DLL observation or completed-healing claim."""
 
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ class _SpiritWorld:
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch) -> _SpiritWorld:
     state = _SpiritWorld()
-    state.place(10, 1100.0)
+    state.place(10, 500.0)
     state.place(2, 300.0)
     core = _module(monkeypatch, "Py4GWCoreLib", Profession=SimpleNamespace())
     core.__path__ = []
@@ -318,7 +318,9 @@ def pet_world(light_world: _SpiritWorld) -> _SpiritWorld:
     return light_world
 
 
-@pytest.mark.parametrize("distance, expected", [(500.0, True), (1100.0, True), (1248.0, True), (1248.01, False)])
+@pytest.mark.parametrize(
+    "distance, expected", [(500.0, True), (1012.0, True), (1012.01, False), (1100.0, False), (1248.0, False)]
+)
 def test_spirit_range_through_helper_and_shared_admission(world: _SpiritWorld, distance: float, expected: bool) -> None:
     world.place(10, distance)
     assert world.build.CanCastSkillID(TRANSFER) is expected, world
@@ -338,7 +340,9 @@ def test_invalid_donor_never_admits(world: _SpiritWorld, kind: str) -> None:
         world.spawned.clear()
     else:
         world.valid.remove(10)
-    assert world.build.CanCastSkillID(TRANSFER) is False, (kind, world)
+    # Historical shared admission accepts living unspawned SpiritPet entries;
+    # the stock helper still requires a genuine donor before targeting.
+    assert world.build.CanCastSkillID(TRANSFER) is (kind == "unspawned"), (kind, world)
     assert _finish(world.helper.Spirit_Transfer()) is False, (kind, world)
     assert world.submissions == [], world
 
@@ -500,8 +504,8 @@ def test_pet_only_cannot_admit_either_spirit_heal(pet_world: _SpiritWorld, skill
     assert pet_world.routines.Agents.GetNearestSpirit(pet_world.ranges.Earshot.value) == 0, pet_world
     assert pet_world.health[1] > pet_world.metadata[LIGHT].Conditions.SacrificeHealth, pet_world
     assert _finish(helper()) is False, pet_world
-    assert pet_world.build.CanCastSkillID(skill_id) is False, pet_world
-    assert pet_world.build.CanCastSkillSlot(2) is False, pet_world
+    assert pet_world.build.CanCastSkillID(skill_id) is (skill_id == TRANSFER), pet_world
+    assert pet_world.build.CanCastSkillSlot(2) is (skill_id == TRANSFER), pet_world
     assert pet_world.submissions == [], pet_world
 
 

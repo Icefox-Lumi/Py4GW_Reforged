@@ -1397,6 +1397,13 @@ def real_pass(
     )
     exec(compile(ast.Module(body=[smart_class], type_ignores=[]), str(smart_path), "exec"), namespace)
     owner._smart_bip = namespace["SmartBloodIsPower"](owner, blood)
+    smart_path = ROOT / "Py4GWCoreLib/Builds/Skills/SmartSpiritTransfer.py"
+    smart_class = next(
+        node for node in ast.parse(smart_path.read_text(encoding="utf-8")).body if isinstance(node, ast.ClassDef)
+    )
+    exec(compile(ast.Module(body=[smart_class], type_ignores=[]), str(smart_path), "exec"), namespace)
+    owner._smart_spirit_transfer = namespace["SmartSpiritTransfer"](owner)
+    owner._smart_spirit_transfer.bip_diagnostic = capture
     owner._active = True
     owner._diagnostic_path = request.param
     # Optional Blood Bond is absent from the exact BiP bar.
