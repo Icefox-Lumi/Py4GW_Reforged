@@ -9,6 +9,10 @@ from ..native_src.internals.types import Vec3f
 
 #region rework
 from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .shared_memory_src.PartyFormation import FormationService
 from ctypes import sizeof, c_float
 import ctypes
 import math
@@ -44,6 +48,15 @@ from .shared_memory_src.HeroAIOptionStruct import HeroAIOptionStruct
 from .shared_memory_src.AgentDataStruct import AgentDataStruct
 from .shared_memory_src.AccountStruct import AccountStruct
 from .shared_memory_src.AllAccounts import AllAccounts
+from .shared_memory_src.AllAccounts import InterruptClaimResult
+from .shared_memory_src.AllAccounts import InterruptLockReceipt
+from .shared_memory_src.ConditionObservations import ConditionTable
+from .shared_memory_src.ConditionObservations import Context
+from .shared_memory_src.ConditionObservations import Observation
+from .shared_memory_src.ConditionObservations import Owner
+from .shared_memory_src.ConditionObservations import current_context
+from .shared_memory_src.ConditionObservations import local_owner
+from .shared_memory_src.ConditionObservations import read_authorized
 from Py4GWCoreLib.HeroAI.follow.leader_publish import FollowFormationPublisher
 from ..py4gwcorelib_src.FrameCache import frame_cache
 
@@ -64,6 +77,8 @@ class Py4GWSharedMemoryManager:
             self.size = sizeof(AllAccounts)
             self.follow_publisher = FollowFormationPublisher(self)
             self.shm = None
+            self._condition_table: ConditionTable | None = None
+            self._party_formation: FormationService | None = None
 
         # Attach-only: the C++ multibox module now owns creation of this region
         # (it creates + zeroes it on the first client). Python never creates it;
@@ -89,8 +104,60 @@ class Py4GWSharedMemoryManager:
             self.shm = None
             return False
 
+    def GetPartyFormation(self) -> "FormationService":
+        """Lazy formation-only owner; never changes ordinary discovery or authority."""
+        if self._party_formation is None:
+            from .shared_memory_src.PartyFormation import FormationService
+            from .shared_memory_src.PartyFormationRuntime import FormationRuntime
+
+            self._party_formation = FormationService(FormationRuntime(self._formation_accounts))
+        return self._party_formation
+
+    def _formation_accounts(self) -> AllAccounts:
+        if not self._attach() or self.shm is None or self.shm.buf is None:
+            raise RuntimeError("Account registry unavailable")
+        return AllAccounts.from_buffer(self.shm.buf)
+
+    def TickPartyFormation(self, owner: object) -> None:
+        try:
+            self.GetPartyFormation().tick(owner)
+        except Exception as exc:
+            if self._party_formation is not None:
+                self._party_formation.status = f"failed: {exc}"
+
     def PublishFormationFollowPoints(self):
         self.follow_publisher.publish()
+
+    def GetConditionTable(self) -> ConditionTable:
+        """Lazy Python-only mapping; creating this owner does not open shared memory."""
+        if self._condition_table is None:
+            self._condition_table = ConditionTable()
+        return self._condition_table
+
+    def _condition_accounts(self) -> AllAccounts:
+        # Bypass frame-cached registry resolution at final cast admission.
+        if not self._attach() or self.shm is None or self.shm.buf is None:
+            raise RuntimeError("Account registry unavailable")
+        return AllAccounts.from_buffer(self.shm.buf)
+
+    def GetConditionOwner(self, context: Context) -> Owner | None:
+        try:
+            return local_owner(self._condition_accounts(), context)
+        except Exception:
+            return None
+
+    def ReadConditionObservation(self, agent: int, login: int, character: str) -> Observation | None:
+        """Uncached, authorized observation; absent optional publisher means unknown."""
+        try:
+            context = current_context()
+            if context is None:
+                return None
+            result = read_authorized(
+                self.GetConditionTable(), self._condition_accounts(), context, agent, login, character
+            )
+            return result if current_context() == context else None
+        except Exception:
+            return None
         
     #Base Methods
     def GetBaseTimestamp(self):
@@ -477,6 +544,27 @@ class Py4GWSharedMemoryManager:
             owner_email, skill_id, target_agent_id, expires_at_tick, isolation_group_id
         )
 
+    def TryPostInterruptLock(
+        self,
+        owner_email: str,
+        enemy_skill_id: int,
+        target_agent_id: int,
+        expires_at_tick: int,
+        isolation_group_id: int,
+    ) -> InterruptClaimResult:
+        """Atomically claim one fixed-contract interrupt lease."""
+        return self.GetAllAccounts().TryPostInterruptLock(
+            owner_email,
+            enemy_skill_id,
+            target_agent_id,
+            expires_at_tick,
+            isolation_group_id,
+        )
+
+    def ClearInterruptLockIfMatch(self, receipt: InterruptLockReceipt) -> bool:
+        """Clear an interrupt lease only when its exact receipt still matches."""
+        return self.GetAllAccounts().ClearInterruptLockIfMatch(receipt)
+
     def PostLock(
         self,
         owner_email: str,
@@ -504,9 +592,53 @@ class Py4GWSharedMemoryManager:
             claim_strength,
         )
 
+    def UpsertLockByOwnerKindTarget(
+        self,
+        owner_email: str,
+        kind_id: int,
+        key_id: int,
+        target_id: int,
+        expires_at_tick: int,
+        isolation_group_id: int,
+        lock_mode: int = 1,
+        max_holders: int = 1,
+        reentry_policy: int = 1,
+        claim_strength: int = 1,
+    ) -> int:
+        """Atomically renew an owner-scoped generic lock or publish it once."""
+        return self.GetAllAccounts().UpsertLockByOwnerKindTarget(
+            owner_email,
+            kind_id,
+            key_id,
+            target_id,
+            expires_at_tick,
+            isolation_group_id,
+            lock_mode,
+            max_holders,
+            reentry_policy,
+            claim_strength,
+        )
+
     def ClearIntentsByOwner(self, owner_email: str) -> int:
         """Zero every intent slot whose OwnerEmail matches."""
         return self.GetAllAccounts().ClearIntentsByOwner(owner_email)
+
+    def ClearIntentIfMatch(
+        self,
+        index: int,
+        owner_email: str,
+        skill_id: int,
+        target_agent_id: int,
+        group_id: int,
+    ) -> bool:
+        """Clear one matching skill-target claim."""
+        return self.GetAllAccounts().ClearIntentIfMatch(
+            index,
+            owner_email,
+            skill_id,
+            target_agent_id,
+            group_id,
+        )
 
     @frame_cache(category="SharedMemory", source_lib="IsIntentClaimed")
     def IsIntentClaimed(

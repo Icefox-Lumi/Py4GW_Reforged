@@ -134,8 +134,11 @@ class HeroAICommandAPI:
         self._run(HeroAICommands().DisbandParty)
 
     def form_party(self) -> None:
-        """Invite all heroes to the party (traveling those on another map first). Outpost only."""
-        self._run(HeroAICommands().FormParty)
+        """Request consent-checked, same-instance formation. Never travels accounts."""
+        try:
+            HeroAICommands().FormParty([])
+        except Exception as exc:
+            ConsoleLog("HeroAI", f"Unable to request party formation: {exc}")
 
     def travel_alts_to_leader_map(self) -> None:
         """Send every alt account to the leader's current map. Outpost only."""

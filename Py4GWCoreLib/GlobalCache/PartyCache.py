@@ -1,6 +1,12 @@
 import PyParty
+from typing import Callable
+from typing import Protocol
 from Py4GWCoreLib import Player, Map, Party
 from Py4GWCoreLib.Py4GWcorelib import ActionQueueManager
+
+class _FormationActionQueue(Protocol):
+    def AddAction(self, queue_name: str, action: Callable[[], None]) -> None: ...
+
 
 class PartyCache:
     def __init__(self, action_queue_manager):
@@ -201,6 +207,27 @@ class PartyCache:
         def GetPlayerNameByLoginNumber(self, login_number):
             return self._parent._party_instance.GetPlayerNameByLoginNumber(login_number)
         
+        def QueueFormationInvite(self, dispatch: Callable[[Callable[[int], bool]], None]) -> None:
+            """Run formation validation at the terminal queued native call.
+
+            InvitePlayer's integer is a native player/login number, not an agent
+            ID. The callback must validate that identity in the current scene.
+            Existing invitation callers retain their original queue behavior.
+            """
+            from typing import cast
+
+            parent = cast("PartyCache", self._parent)
+
+            def execute() -> None:
+                try:
+                    dispatch(parent._party_instance.InvitePlayer)
+                except Exception:
+                    # Formation failure must not stop the shared action queue.
+                    return
+
+            queue = cast("_FormationActionQueue", parent._action_queue_manager)
+            queue.AddAction("ACTION", execute)
+
         def InvitePlayer(self, agent_id_or_name):
             """
             Invite a player by ID (int) or name (str).

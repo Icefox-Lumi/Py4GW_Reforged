@@ -1,4 +1,3 @@
-import math
 from typing import Callable
 
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
@@ -183,65 +182,9 @@ class HeroAICommands:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.DonateToGuild, (0, 0, 0, 0))
     
     def __invite_all_command(self, accounts: list[AccountStruct]):
-        sender_email = Player.GetAccountEmail()
-        sender_id = Player.GetAgentID()
-
-        def SetWaitingActions(delay_ms: int):
-            delays = math.ceil(delay_ms // 50)
-            for _ in range(delays):
-                GLOBAL_CACHE._ActionQueueManager.AddAction("ACTION", lambda: None)  # Adding a no-op to ensure spacing between invites
-
-        # Invite order priority:
-        # 1) melee-like first (R/W/A/D), 2) Mesmer, 3) Paragon, 4) Necro, 5) Ritualist, 6) others.
-        melee_professions = {1, 2, 7, 10}
-        priority_by_profession = {5: 1, 9: 2, 4: 3, 8: 4}
-
-        def _invite_priority(account: AccountStruct) -> tuple[int, str]:
-            prof = int(account.AgentData.Profession[0]) if account.AgentData.Profession else 0
-            char_name = str(account.AgentData.CharacterName or "")
-            if prof in melee_professions:
-                return (0, char_name)
-            return (priority_by_profession.get(prof, 5), char_name)
-
-        accounts = sorted(accounts, key=_invite_priority)
-
-        for account in accounts:
-            if account.AccountEmail == sender_email:
-                continue
-            
-            same_map = Map.GetMapID() == account.AgentData.Map.MapID and Map.GetRegion()[0] == account.AgentData.Map.Region and Map.GetDistrict() == account.AgentData.Map.District and Map.GetLanguage()[0] == account.AgentData.Map.Language
-            
-            if same_map and not GLOBAL_CACHE.Party.IsPartyMember(account.AgentData.AgentID):        
-                char_name = account.AgentData.CharacterName
-                def send_invite(name = char_name):
-                    ConsoleLog("HeroAI", f"Inviting {name} to party.")
-                    # /invite needs the REAL name; name obfuscation may make the shared name an alias.
-                    from Py4GWCoreLib.py4gwcorelib_src.system_settings.name_obfuscation.resolve import require_real_name
-                    Player.SendChatCommand("invite " + require_real_name(name))
-                    SetWaitingActions(250)
-                    
-                send_invite()
-                
-                
-            if same_map:
-                GLOBAL_CACHE.ShMem.SendMessage(
-                    sender_email,
-                    account.AccountEmail,
-                    SharedCommandType.InviteToParty,
-                    (sender_id, 0, 0, 0),
-                )
-            else:
-                GLOBAL_CACHE.ShMem.SendMessage(
-                    sender_email,
-                    account.AccountEmail,
-                    SharedCommandType.TravelToGuildHall if Map.IsGuildHall() else SharedCommandType.TravelToMap,
-                    (0, 0, 0, 0) if Map.IsGuildHall() else (
-                        Map.GetMapID(),
-                        Map.GetRegion()[0],
-                        Map.GetDistrict(),
-                        Map.GetLanguage()[0],
-                    ),
-                )
+        # Formation owns its narrow discovery and consent, including same-group
+        # targets. No legacy invite or travel fallback may bypass that consent.
+        GLOBAL_CACHE.ShMem.GetPartyFormation().request()
              
     def __travel_alts_to_leader_map_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()

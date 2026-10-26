@@ -6,6 +6,9 @@ categories remain distinct in the documentation index.
 
 ## Authority and status
 
+- [HeroAI Actions resumption](heroai-actions-resumption.md) records the paused
+  Option A v3 work, preservation/checkpoint state, diagnostic limits, and the
+  required comparison against newer shared code before any future deployment.
 - `heroai-combat-handover.md` is a performance and decision-pipeline handover;
   verify its optimization claims against current `Py4GWCoreLib/HeroAI/` and routine sources.
 - `hero-ai-interrupt-feasibility.md` documents the two evaluator gates, logging,
