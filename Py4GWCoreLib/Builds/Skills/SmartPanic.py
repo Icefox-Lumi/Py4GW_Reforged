@@ -1136,7 +1136,7 @@ class SmartPanic(BuildMgr):
             or finish_timestamp_ms > receipt.receipt_deadline_ms
             or now_ms < finish_timestamp_ms
             or self._read_player_alive(receipt.player_agent_id) is not True
-            or not self._agent_is_countable(receipt.target_agent_id)
+            or not self._agent_is_live_hostile(receipt.target_agent_id)
         ):
             self._pending_receipt = None
             return
@@ -1165,9 +1165,8 @@ class SmartPanic(BuildMgr):
             self._pending_receipt = None
             return
         events = self._peek_agent_events()
-        if events is None:
-            return
-        parsed_events = [self._parse_agent_event(event) for event in events]
+        # Unavailable evidence skips processing, but the receipt deadline still applies.
+        parsed_events = [self._parse_agent_event(event) for event in events] if events is not None else []
         ordered_events = sorted(
             (event for event in parsed_events if event is not None),
             key=lambda event: event[0],

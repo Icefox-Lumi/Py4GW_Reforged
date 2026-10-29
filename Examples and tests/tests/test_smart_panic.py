@@ -6,11 +6,14 @@ import importlib.util
 import sys
 import types
 from contextlib import contextmanager
+from dataclasses import replace
 from enum import IntEnum
 from pathlib import Path
 from typing import Any
 from typing import Iterator
 from typing import cast
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "Py4GWCoreLib" / "Builds" / "Skills" / "SmartPanic.py"
@@ -1054,8 +1057,8 @@ def _add_three_enemy_cluster(runtime: _Runtime, start: int = 1, x: float = 0.0) 
         runtime.add_enemy(start + offset, x=x + offset * 3.0)
 
 
-def _cast_three_enemy_cluster(module: Any, runtime: _Runtime) -> Any:
-    _add_three_enemy_cluster(runtime)
+def _cast_three_enemy_cluster(module: Any, runtime: _Runtime, *, start: int = 1) -> Any:
+    _add_three_enemy_cluster(runtime, start=start)
     handler = _new_handler(module, runtime)
     assert _drain(handler.try_cast()) is True
     assert handler._pending_receipt is not None
@@ -1202,6 +1205,253 @@ def test_receipt_timeout_grants_no_coverage() -> None:
         _advance_to(runtime, receipt.receipt_deadline_ms + 1)
         handler.update_lifecycle(0)
         assert handler._pending_receipt is None
+        assert handler._coverage_expiry_by_agent == {}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("npc_flags_available", False),
+        ("agent_is_spirit_available", False),
+        ("agent_is_spirit", True),
+        ("npc_flags", 0x4000),
+    ),
+)
+def test_receipt_center_classification_does_not_discard_eligible_original_members(
+    field: str, value: bool | int
+) -> None:
+    with _loaded_runtime() as (module, runtime):
+        _set_domination_duration(runtime)
+        for agent_id in range(10, 18):
+            runtime.add_enemy(agent_id, x=float(agent_id - 10))
+        handler = _new_handler(module, runtime)
+        assert _drain(handler.try_cast()) is True
+        receipt = handler._pending_receipt
+        assert receipt is not None
+        assert receipt.target_agent_id == 10
+        assert set(receipt.affected_agent_ids) == set(range(10, 18))
+
+        # Classification changes after dispatch; the center remains a live hostile.
+        setattr(runtime.states[10], field, value)
+        runtime.states[13].agent_is_spirit = True
+        runtime.states[14].alive = False
+        runtime.states[15].valid = False
+        runtime.states[16].npc_flags_available = False
+        runtime.states[17].hostile = False
+        runtime.add_enemy(99, x=0.0)
+        assert handler._agent_is_live_hostile(10) is True
+        assert handler._agent_is_countable(10) is False
+        assert handler._agent_is_countable(99) is True
+        assert receipt.panic_duration_ms is not None
+        expiry = receipt.dispatch_timestamp_ms + 2 + receipt.panic_duration_ms
+        handler._coverage_expiry_by_agent[11] = expiry + 1000
+
+        _complete_receipt(handler, runtime)
+
+        assert handler._pending_receipt is None
+        assert handler._coverage_expiry_by_agent == {11: expiry + 1000, 12: expiry}, (field, value)
+
+
+@pytest.mark.parametrize("field", ("valid", "living", "alive", "hostile"))
+def test_receipt_completion_still_rejects_invalid_center(field: str) -> None:
+    with _loaded_runtime() as (module, runtime):
+        _set_domination_duration(runtime)
+        handler = _cast_three_enemy_cluster(module, runtime, start=10)
+        setattr(runtime.states[10], field, False)
+
+        _complete_receipt(handler, runtime)
+
+        assert handler._pending_receipt is None
+        assert handler._coverage_expiry_by_agent == {}, field
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("npc_flags_available", False),
+        ("agent_is_spirit_available", False),
+        ("agent_is_spirit", True),
+        ("npc_flags", 0x4000),
+    ),
+)
+def test_receipt_center_restoration_does_not_bypass_direct_target_validation(field: str, value: bool | int) -> None:
+    with _loaded_runtime() as (module, runtime):
+        for agent_id in range(10, 14):
+            runtime.add_enemy(agent_id, x=float(agent_id - 10))
+        setattr(runtime.states[10], field, value)
+        runtime.target_allowed[10] = False
+        handler = _new_handler(module, runtime)
+        parameters = handler._resolve_runtime_parameters()
+        assert parameters is not None
+        decision = handler._evaluate_live(parameters)
+        assert decision is not None and decision.selected is not None
+        assert decision.selected.target_agent_id != 10
+        assert next(candidate for candidate in decision.candidates if candidate.target_agent_id == 10).eligible is False
+
+        assert _drain(handler._dispatch_selected(10, parameters)) is False, (field, value)
+        assert runtime.cast_calls == []
+        assert handler._pending_receipt is None
+
+
+def test_receipt_for_legal_unclassified_center_covers_only_selected_neighbors() -> None:
+    with _loaded_runtime() as (module, runtime):
+        _set_domination_duration(runtime)
+        for agent_id in range(10, 14):
+            runtime.add_enemy(agent_id, x=float(agent_id - 10))
+        runtime.states[10].npc_flags_available = False
+        handler = _new_handler(module, runtime)
+        assert _drain(handler.try_cast()) is True
+        receipt = handler._pending_receipt
+        assert receipt is not None
+        assert receipt.target_agent_id == 10
+        assert receipt.affected_agent_ids == (11, 12, 13)
+        assert receipt.panic_duration_ms is not None
+        expiry = receipt.dispatch_timestamp_ms + 2 + receipt.panic_duration_ms
+
+        _complete_receipt(handler, runtime)
+
+        assert handler._pending_receipt is None
+        assert handler._coverage_expiry_by_agent == {11: expiry, 12: expiry, 13: expiry}
+
+
+@pytest.mark.parametrize("deadline_offset", (-1, 0, 1))
+def test_missing_snapshot_obeys_receipt_deadline_and_dispatch_barrier(deadline_offset: int) -> None:
+    with _loaded_runtime() as (module, runtime):
+        handler = _cast_three_enemy_cluster(module, runtime, start=10)
+        receipt = handler._pending_receipt
+        assert receipt is not None
+        handler._peek_agent_events = lambda: None
+        runtime.now_ms = receipt.receipt_deadline_ms + deadline_offset
+        assert handler.has_active_dispatch() is True
+
+        handler.update_lifecycle(0)
+
+        expected = receipt if deadline_offset <= 0 else None
+        assert handler._pending_receipt is expected, (deadline_offset, runtime.now_ms, receipt.receipt_deadline_ms)
+        assert handler.has_active_dispatch() is (deadline_offset <= 0)
+        assert handler._coverage_expiry_by_agent == {}
+
+
+def test_recovered_events_cannot_resurrect_receipt_expired_without_snapshot() -> None:
+    with _loaded_runtime() as (module, runtime):
+        _set_domination_duration(runtime)
+        handler = _cast_three_enemy_cluster(module, runtime, start=10)
+        receipt = handler._pending_receipt
+        assert receipt is not None
+        original_peek = handler._peek_agent_events
+        handler._peek_agent_events = lambda: None
+        runtime.now_ms = receipt.receipt_deadline_ms + 1
+        handler.update_lifecycle(0)
+        assert handler._pending_receipt is None
+
+        runtime.events.extend(
+            (
+                _event(receipt.dispatch_timestamp_ms + 1, 1, target_id=receipt.target_agent_id),
+                _event(receipt.receipt_deadline_ms, 4, value=0),
+            )
+        )
+        handler._peek_agent_events = original_peek
+        runtime.now_ms += 1
+        handler.update_lifecycle(0)
+
+        assert handler._pending_receipt is None
+        assert handler.has_active_dispatch() is False
+        assert handler._coverage_expiry_by_agent == {}
+        assert runtime.cast_calls == [(52, receipt.target_agent_id)]
+
+
+@pytest.mark.parametrize("pending_kind", ("local_attempt", "base_cast"))
+def test_missing_snapshot_timeout_preserves_independent_work_without_external_cancellation(pending_kind: str) -> None:
+    with _loaded_runtime() as (module, runtime):
+        handler = _cast_three_enemy_cluster(module, runtime, start=10)
+        receipt = handler._pending_receipt
+        assert receipt is not None
+        pending_attempt = (receipt.target_agent_id, receipt.lifecycle_id) if pending_kind == "local_attempt" else None
+        handler._pending_local_attempt = pending_attempt
+        runtime.local_cast_pending = pending_kind == "base_cast"
+        handler._peek_agent_events = lambda: None
+        forbidden_calls: list[str] = []
+
+        def forbidden(*_args: Any, **_kwargs: Any) -> None:
+            forbidden_calls.append("cancellation")
+            raise AssertionError("receipt timeout must not cancel independent work")
+
+        class ForbiddenOwner:
+            def __getattr__(self, name: str) -> Any:
+                forbidden_calls.append(name)
+                raise AssertionError(f"receipt timeout must not access claim/queue owner: {name}")
+
+        handler.cancel_pending = forbidden
+        root_package: Any = sys.modules["Py4GWCoreLib"]
+        root_package.GLOBAL_CACHE.ShMem = ForbiddenOwner()
+        queue_module = types.ModuleType("Py4GWCoreLib.py4gwcorelib_src.ActionQueue")
+        setattr(queue_module, "__getattr__", ForbiddenOwner().__getattr__)
+        sys.modules[queue_module.__name__] = queue_module
+        handler._poll_pending_receipt(receipt.receipt_deadline_ms + 1)
+
+        assert handler._pending_receipt is None
+        assert handler._pending_local_attempt is pending_attempt
+        assert runtime.local_cast_pending is (pending_kind == "base_cast")
+        assert handler.has_active_dispatch() is True
+        assert handler._coverage_expiry_by_agent == {}
+        assert runtime.cast_calls == [(52, receipt.target_agent_id)]
+        assert forbidden_calls == []
+
+
+@pytest.mark.parametrize("boundary", ("lifecycle", "composition"))
+def test_receipt_lifecycle_rejection_precedes_event_read(boundary: str) -> None:
+    with _loaded_runtime() as (module, runtime):
+        handler = _cast_three_enemy_cluster(module, runtime, start=10)
+        receipt = handler._pending_receipt
+        assert receipt is not None
+        reads: list[str] = []
+
+        def forbidden_peek() -> None:
+            reads.append("peek")
+            raise AssertionError("obsolete lifecycle must be rejected before reading events")
+
+        handler._peek_agent_events = forbidden_peek
+        if boundary == "lifecycle":
+            handler._lifecycle_id = (*receipt.lifecycle_id[:2], receipt.lifecycle_id[2] + 1)
+        else:
+            handler._composition_generation += 1
+        handler._poll_pending_receipt(receipt.receipt_deadline_ms + 1)
+
+        assert reads == []
+        assert handler._pending_receipt is None
+        assert handler._coverage_expiry_by_agent == {}
+
+
+def test_obsolete_receipt_completion_preserves_replacement() -> None:
+    with _loaded_runtime() as (module, runtime):
+        _set_domination_duration(runtime)
+        handler = _cast_three_enemy_cluster(module, runtime, start=10)
+        receipt = handler._pending_receipt
+        assert receipt is not None
+        receipt.activation_timestamp_ms = receipt.dispatch_timestamp_ms + 1
+        replacement = replace(receipt, receipt_deadline_ms=receipt.receipt_deadline_ms + 1000)
+        handler._pending_receipt = replacement
+        handler._complete_pending_receipt(receipt, receipt.dispatch_timestamp_ms + 2, receipt.dispatch_timestamp_ms + 2)
+
+        assert handler._pending_receipt is replacement
+        assert handler._coverage_expiry_by_agent == {}
+
+
+def test_missing_snapshot_timeout_cannot_clear_receipt_replaced_during_read() -> None:
+    with _loaded_runtime() as (module, runtime):
+        handler = _cast_three_enemy_cluster(module, runtime, start=10)
+        receipt = handler._pending_receipt
+        assert receipt is not None
+        replacement = replace(receipt, receipt_deadline_ms=receipt.receipt_deadline_ms + 1000)
+
+        def replace_during_peek() -> None:
+            handler._pending_receipt = replacement
+
+        handler._peek_agent_events = replace_during_peek
+        handler._poll_pending_receipt(receipt.receipt_deadline_ms + 1)
+
+        assert handler._pending_receipt is replacement
+        assert handler.has_active_dispatch() is True
         assert handler._coverage_expiry_by_agent == {}
 
 
