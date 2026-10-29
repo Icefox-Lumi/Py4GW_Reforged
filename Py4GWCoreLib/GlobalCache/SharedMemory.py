@@ -53,6 +53,11 @@ from .shared_memory_src.ConditionObservations import Owner
 from .shared_memory_src.ConditionObservations import current_context
 from .shared_memory_src.ConditionObservations import local_owner
 from .shared_memory_src.ConditionObservations import read_authorized
+from .shared_memory_src.HrHexObservations import MAX_AGE_MS as HR_HEX_MAX_AGE_MS
+from .shared_memory_src.HrHexObservations import HrHexObservation
+from .shared_memory_src.HrHexObservations import HrHexTable
+from .shared_memory_src.HrHexObservations import read_authorized as read_hr_hex_authorized
+from .shared_memory_src.IntentSync import get_uncached_tick_count64
 from Py4GWCoreLib.HeroAI.follow.leader_publish import FollowFormationPublisher
 from ..py4gwcorelib_src.FrameCache import frame_cache
 
@@ -74,6 +79,7 @@ class Py4GWSharedMemoryManager:
             self.follow_publisher = FollowFormationPublisher(self)
             self.shm = None
             self._condition_table: ConditionTable | None = None
+            self._hr_hex_table: HrHexTable | None = None
 
         # Attach-only: the C++ multibox module now owns creation of this region
         # (it creates + zeroes it on the first client). Python never creates it;
@@ -133,6 +139,32 @@ class Py4GWSharedMemoryManager:
         except Exception:
             return None
         
+    def GetHrHexTable(self) -> HrHexTable:
+        if self._hr_hex_table is None:
+            self._hr_hex_table = HrHexTable()
+        return self._hr_hex_table
+
+    def GetHrHexOwner(self, context: Context) -> Owner | None:
+        try:
+            return local_owner(self._condition_accounts(), context)
+        except Exception:
+            return None
+
+    def ReadHrHexObservation(self, agent: int, login: int, character: str) -> HrHexObservation | None:
+        """Uncached registry, authorization and copied HR evidence at every admission."""
+        try:
+            context = current_context()
+            if context is None:
+                return None
+            result = read_hr_hex_authorized(
+                self.GetHrHexTable(), self._condition_accounts(), context, agent, login, character
+            )
+            if result is None or current_context() != context:
+                return None
+            return result if 0 <= get_uncached_tick_count64() - result.sampled_at < HR_HEX_MAX_AGE_MS else None
+        except Exception:
+            return None
+
     #Base Methods
     def GetBaseTimestamp(self):
         return PySystem.get_tick_count64()

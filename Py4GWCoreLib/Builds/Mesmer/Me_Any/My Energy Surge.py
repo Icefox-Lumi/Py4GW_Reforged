@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from collections.abc import Iterator
 from typing import Any
 from typing import cast
 
 from Py4GWCoreLib.BuildMgr import BuildMgr
+from Py4GWCoreLib.Builds.Skills import SmartShatterObservation as ShatterObservation
 from Py4GWCoreLib.Builds.Skills.SmartComplicate import COMPLICATE_SKILL_ID
 from Py4GWCoreLib.Builds.Skills.SmartComplicateController import SmartComplicateController
 from Py4GWCoreLib.Builds.Skills.SmartComplicateController import SmartCryComplicateCoordinator
@@ -246,10 +248,41 @@ class MyMesmer(BuildMgr):
         self.SetBlockedSkills(list(owned_ids))
         return True
 
-    def _handler_result(self, handler: Any) -> Generator[None, None, bool]:
-        result = handler.try_cast()
+    def _handler_result(self, handler: Any, shatter_preparation: Any = None) -> Generator[None, None, bool]:
+        result: Any = handler.try_cast()
         if hasattr(result, "__next__"):
-            result = yield from result
+            if shatter_preparation is None:
+                result = yield from cast(Generator[None, None, Any], result)
+            else:
+                # Invalidate before forwarding the first suspension. A handler
+                # that declines synchronously leaves this pass's calculations reusable.
+                iterator = cast(Iterator[None], result)
+                try:
+                    yielded = next(iterator)
+                except StopIteration as finished:
+                    return bool(finished.value)
+                while True:
+                    shatter_preparation.invalidate_parameters()
+                    try:
+                        yield yielded
+                    except GeneratorExit:
+                        close = getattr(iterator, "close", None)
+                        if callable(close):
+                            close()
+                        raise
+                    except BaseException as error:
+                        throw = getattr(iterator, "throw", None)
+                        if not callable(throw):
+                            raise
+                        try:
+                            yielded = cast(None, throw(error))
+                        except StopIteration as finished:
+                            return bool(finished.value)
+                    else:
+                        try:
+                            yielded = next(iterator)
+                        except StopIteration as finished:
+                            return bool(finished.value)
         return bool(result)
 
     @staticmethod
@@ -273,9 +306,12 @@ class MyMesmer(BuildMgr):
             return True
 
     def ProcessSkillCasting(self) -> Generator[None, None, Any]:
+        observation_epoch = ShatterObservation.scheduler_entry()
+        shatter_offered = False
         if False:
             yield
         if self._disposed:
+            ShatterObservation.scheduler(observation_epoch, "disposed")
             yield
             return False
 
@@ -286,6 +322,12 @@ class MyMesmer(BuildMgr):
         # Lifecycle/bar ownership must settle before any process gate or fallback.
         self.ResetTickState()
         self._refresh_composition()
+        ShatterObservation.composition(
+            observation_epoch,
+            self._composition_generation,
+            self._equipped_bar,
+            self._skill_slots.get(SHATTER_HEX_SKILL_ID),
+        )
 
         ready_handlers: list[tuple[int, Any]] = []
         for skill_id, handler in tuple(self._active_handlers.items()):
@@ -294,10 +336,12 @@ class MyMesmer(BuildMgr):
                 ready_handlers.append((skill_id, handler))
             except Exception as error:
                 handler.cancel_pending("handler_lifecycle_exception")
+                ShatterObservation.scheduler(observation_epoch, "lifecycle_exception", skill_id)
                 self._report_composition_error(f"smart handler {skill_id} failed: {type(error).__name__}")
 
         shatter_handler = self._active_handlers.get(SHATTER_HEX_SKILL_ID)
         if shatter_handler is not None and self._handler_has_active_dispatch(shatter_handler):
+            ShatterObservation.scheduler(observation_epoch, "dispatch_barrier")
             yield
             return False
 
@@ -305,9 +349,11 @@ class MyMesmer(BuildMgr):
         if callable(can_process):
             try:
                 if not can_process():
+                    ShatterObservation.scheduler(observation_epoch, "process_gate")
                     yield
                     return False
             except Exception:
+                ShatterObservation.scheduler(observation_epoch, "process_exception")
                 yield
                 return False
 
@@ -337,6 +383,7 @@ class MyMesmer(BuildMgr):
                     coordinator = SmartCryComplicateCoordinator()
                     if (yield from coordinator.try_cast(smart_interrupt_handlers)):
                         self.SetTickSuccess()
+                        ShatterObservation.scheduler(observation_epoch, "coordinator_handled")
                         return True
                 except Exception as error:
                     for handler in smart_interrupt_handlers:
@@ -354,10 +401,29 @@ class MyMesmer(BuildMgr):
             try:
                 if (yield from self._handler_result(interrupt_handler)):
                     self.SetTickSuccess()
+                    ShatterObservation.scheduler(observation_epoch, "interrupt_handled", interrupt_skill_id)
                     return True
             except Exception as error:
                 interrupt_handler.cancel_pending("handler_exception")
                 self._report_composition_error(f"smart handler {interrupt_skill_id} failed: {type(error).__name__}")
+
+        shatter_preparation = None
+        if (
+            shatter_handler is not None
+            and any(handler is shatter_handler for _skill_id, handler in ready_handlers)
+            and callable(getattr(shatter_handler, "try_cast_urgent", None))
+            and not any(self._handler_has_active_dispatch(handler) for _skill_id, handler in ready_handlers)
+        ):
+            try:
+                shatter_preparation = shatter_handler.prepare_pass()
+                if (yield from shatter_handler.try_cast_urgent(shatter_preparation, observation_epoch)):
+                    self.SetTickSuccess()
+                    # The unchanged recorder has no urgency scheduler category.
+                    # The handler records the attempt and its owner-evidence source.
+                    return True
+            except Exception as error:
+                shatter_handler.cancel_pending("urgent_handler_exception")
+                self._report_composition_error(f"urgent Shatter failed: {type(error).__name__}")
 
         try:
             energy_surge_skill_id: int | None = get_energy_surge_id()
@@ -375,8 +441,9 @@ class MyMesmer(BuildMgr):
             energy_surge_skill_id, energy_surge_handler = energy_surge_entry
             prioritized_skill_ids.add(energy_surge_skill_id)
             try:
-                if (yield from self._handler_result(energy_surge_handler)):
+                if (yield from self._handler_result(energy_surge_handler, shatter_preparation)):
                     self.SetTickSuccess()
+                    ShatterObservation.scheduler(observation_epoch, "energy_handled", energy_surge_skill_id)
                     return True
             except Exception as error:
                 energy_surge_handler.cancel_pending("handler_exception")
@@ -386,17 +453,29 @@ class MyMesmer(BuildMgr):
             if skill_id in prioritized_skill_ids:
                 continue
             try:
-                if (yield from self._handler_result(handler)):
+                if skill_id == SHATTER_HEX_SKILL_ID:
+                    shatter_offered = True
+                    ShatterObservation.offer(observation_epoch, handler)
+                result = bool(
+                    (yield from cast(Generator[None, None, bool], handler.try_cast(shatter_preparation)))
+                    if skill_id == SHATTER_HEX_SKILL_ID and shatter_preparation is not None
+                    else (yield from self._handler_result(handler, shatter_preparation))
+                )
+                if result:
                     self.SetTickSuccess()
+                    ShatterObservation.scheduler(observation_epoch, "residual_handled", skill_id, shatter_offered)
                     return True
             except Exception as error:
                 handler.cancel_pending("handler_exception")
+                ShatterObservation.scheduler(observation_epoch, "handler_exception", skill_id, shatter_offered)
                 self._report_composition_error(f"smart handler {skill_id} failed: {type(error).__name__}")
 
         fallback = self.ResolveFallback()
         if fallback is not None:
+            ShatterObservation.scheduler(observation_epoch, "fallback", offered=shatter_offered)
             return (yield from fallback.ProcessSkillCasting())
 
+        ShatterObservation.scheduler(observation_epoch, "idle", offered=shatter_offered)
         yield
         return False
 

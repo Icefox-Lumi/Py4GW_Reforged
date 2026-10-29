@@ -5,11 +5,13 @@ from __future__ import annotations
 import importlib.util
 import sys
 import types
+from collections.abc import Generator
 from contextlib import contextmanager
 from enum import IntEnum
 from pathlib import Path
 from typing import Any
 from typing import Iterator
+from typing import Never
 from typing import cast
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +43,15 @@ def _load_module(name: str, path: Path) -> Any:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _isolate_observation_dependencies() -> None:
+    # Import the safe clock/claim arithmetic without running GlobalCache.__init__.
+    # Composition diagnostics must never escape into embedded callback modules.
+    _install_package("Py4GWCoreLib.GlobalCache", ROOT / "Py4GWCoreLib" / "GlobalCache")
+    _install_package(
+        "Py4GWCoreLib.GlobalCache.shared_memory_src", ROOT / "Py4GWCoreLib" / "GlobalCache" / "shared_memory_src"
+    )
 
 
 class _FakeBuildMgr:
@@ -328,6 +339,7 @@ def _loaded_runtime() -> Iterator[tuple[Any, _Runtime, Any]]:
             COMPOSITION_PATH.parent,
         )
         _install_package("Py4GWCoreLib.Builds.Any", ROOT / "Py4GWCoreLib" / "Builds" / "Any")
+        _isolate_observation_dependencies()
 
         root_package: Any = sys.modules["Py4GWCoreLib"]
         root_package.Profession = _Profession
@@ -425,6 +437,7 @@ def _loaded_real_heroai_runtime() -> Iterator[
             COMPOSITION_PATH.parent,
         )
         _install_package("Py4GWCoreLib.Builds.Any", ROOT / "Py4GWCoreLib" / "Builds" / "Any")
+        _isolate_observation_dependencies()
 
         root_package: Any = sys.modules["Py4GWCoreLib"]
         root_package.Profession = _Profession
@@ -1491,3 +1504,267 @@ def test_real_heroai_lifecycle_preserves_contract_through_cinematic() -> None:
 
 def test_real_heroai_lifecycle_preserves_contract_through_player_death() -> None:
     _assert_real_heroai_transient_gate_preserves_contract("player_alive", False)
+
+
+def _arm_shatter_capture(observation: Any, clock: list[int], label: str = "SH1") -> object:
+    context = observation.ContextSample(42, 1, 1, 0, 1000, 23, 7, (11, 22), 77)
+    epoch = observation.arm_capture(
+        "mesmer", label, 2, context, ((11, 23), (22, 77)), lambda: clock[0], clock[0], clock[0], 13
+    )
+    assert epoch is not None
+    return epoch
+
+
+def _trace_generator(generator: Any) -> tuple[list[Any], Any]:
+    yielded: list[Any] = []
+    while True:
+        try:
+            yielded.append(next(generator))
+        except StopIteration as finished:
+            return yielded, finished.value
+
+
+def test_shatter_capture_preserves_scheduler_calls_yields_masks_and_fallback() -> None:
+    for earlier_accepts in (False, True):
+        expected: Any = None
+        for state in ("inactive", "active", "failed", "exhausted", "stopped", "expired", "stale"):
+            with _loaded_runtime() as (module, runtime, _smart_energy):
+                _use_fake_priority_handlers(module, runtime)
+                module.SmartShatterHex = runtime.factory
+                runtime.bar = [67, 39, 979, 0, 0, 0, 0, 0]
+                runtime.handler_results[39] = earlier_accepts
+                build = module.MyMesmer()
+                observation = module.ShatterObservation
+                clock = [10_000]
+                if state != "inactive":
+                    _arm_shatter_capture(observation, clock)
+                if state == "failed":
+
+                    def fail_clock() -> int:
+                        raise OSError("fixture clock fault")
+
+                    observation._capture.clock = fail_clock
+                elif state == "exhausted":
+                    observation._capture.hooks = observation.MAX_HOOKS
+                elif state in ("stopped", "stale"):
+                    observation.stop_capture()
+                elif state == "expired":
+                    clock[0] += 30_000
+                trace = _trace_generator(build.ProcessSkillCasting())
+                actual = (
+                    trace,
+                    runtime.attempt_order[:],
+                    build.blocked_skills[:],
+                    build.fallback.calls,
+                    [(handler.skill_id, handler.lifecycle_updates, handler.attempts) for handler in runtime.handlers],
+                )
+                if state == "inactive":
+                    expected = actual
+                assert actual == expected, (state, earlier_accepts, expected, actual)
+                assert runtime.attempt_order == ([39] if earlier_accepts else [39, 67, 979])
+                if state == "active":
+                    row = observation._capture.scheduler[0]
+                    assert observation._capture.profile_seen is False
+                    if earlier_accepts:
+                        assert row["counts"]["not_offered"] == 1 and "offered" not in row["counts"]
+                        assert observation._capture.decisions == {}, "no shadow Shatter evaluation"
+                    else:
+                        assert row["counts"]["offered"] == 1 and row["counts"]["offered_pass"] == 1
+
+
+def test_suspended_scheduler_cannot_adopt_a_new_capture() -> None:
+    for pre_arm in (True, False):
+        with _loaded_runtime() as (module, runtime, _smart_energy):
+            _use_fake_priority_handlers(module, runtime)
+            module.SmartShatterHex = runtime.factory
+            runtime.bar = [55, 67, 0, 0, 0, 0, 0, 0]
+            build = module.MyMesmer()
+            build._refresh_composition()
+            interrupt = build._active_handlers[55]
+            shatter = build._active_handlers[67]
+
+            def suspended_interrupt():
+                yield None
+                return False
+
+            interrupt.try_cast = suspended_interrupt
+            observation = module.ShatterObservation
+            clock = [10_000]
+            old_epoch = None if pre_arm else _arm_shatter_capture(observation, clock)
+            generator = build.ProcessSkillCasting()
+            assert next(generator) is None
+            if not pre_arm:
+                observation.stop_capture()
+                for _ in range(40):
+                    observation.drain_console_draw()
+            new_epoch = _arm_shatter_capture(observation, clock, "SH2")
+            assert new_epoch is not old_epoch
+            assert _drain(generator) is True
+            assert shatter._shatter_observation_epoch is old_epoch
+            assert observation._capture.scheduler == {} and observation._capture.decisions == {}
+
+
+class _UrgentShatterHandler(_FakeHandler):
+    def __init__(self, runtime: _Runtime, skill_id: int) -> None:
+        super().__init__(runtime, skill_id)
+        self.urgent_result = False
+        self.preparations: list[object] = []
+        self.ordinary_preparations: list[object | None] = []
+
+    def prepare_pass(self) -> object:
+        preparation = object()
+        self.preparations.append(preparation)
+        return preparation
+
+    def try_cast_urgent(
+        self, preparation: object, observation_epoch: object | None = None
+    ) -> Generator[None, None, bool]:
+        assert preparation is self.preparations[-1]
+        self.runtime.attempt_order.append(-67)
+        if False:
+            yield
+        return self.urgent_result
+
+    def try_cast(self, preparation: object | None = None) -> Generator[Never, None, bool]:
+        self.ordinary_preparations.append(preparation)
+        return (yield from super().try_cast())
+
+
+def _install_urgent_shatter(module: Any, runtime: _Runtime) -> None:
+    def create(*, skill_id: int) -> _UrgentShatterHandler:
+        return _UrgentShatterHandler(runtime, skill_id)
+
+    module.SmartShatterHex = create
+
+
+def test_hr_urgent_partial_order_and_single_interrupt_coordinator() -> None:
+    for interrupt_handles, urgent_handles, expected in (
+        (True, True, [55]),
+        (False, True, [-67]),
+        (False, False, [-67, 39, 934, 67]),
+    ):
+        with _loaded_runtime() as (module, runtime, _smart_energy):
+            _use_fake_priority_handlers(module, runtime)
+            _install_urgent_shatter(module, runtime)
+            runtime.bar[:] = [934, 67, 39, 932, 55, 0, 0, 0]
+            runtime.coordinator_selected_skill_id = 55 if interrupt_handles else None
+            runtime.handler_results[55] = True
+            composition = _composition(runtime, module)
+            composition._refresh_composition()
+            shatter = composition.active_handlers[67]
+            shatter.urgent_result = urgent_handles
+            assert _drain(composition.ProcessSkillCasting()) is True
+            assert runtime.coordinator_attempts == 1
+            assert runtime.attempt_order == expected
+            if not interrupt_handles and not urgent_handles:
+                assert shatter.ordinary_preparations == shatter.preparations
+                assert composition.fallback.calls == 1
+
+
+def test_pending_other_work_blocks_urgent_probe_without_cancellation() -> None:
+    for active_skill in (39, 934, 67, 55, 932):
+        with _loaded_runtime() as (module, runtime, _smart_energy):
+            _use_fake_priority_handlers(module, runtime)
+            _install_urgent_shatter(module, runtime)
+            runtime.bar[:] = [934, 67, 39, 932, 55, 0, 0, 0]
+            composition = _composition(runtime, module)
+            composition._refresh_composition()
+            shatter = composition.active_handlers[67]
+            shatter.urgent_result = True
+            active = composition.active_handlers[active_skill]
+            active.active_dispatch = True
+            _drain(composition.ProcessSkillCasting())
+            assert -67 not in runtime.attempt_order
+            assert active.cancel_reasons == []
+            assert shatter.preparations == []
+
+
+def test_shatter_preparation_is_new_each_scheduler_pass() -> None:
+    with _loaded_runtime() as (module, runtime, _smart_energy):
+        _use_fake_priority_handlers(module, runtime)
+        _install_urgent_shatter(module, runtime)
+        runtime.bar[:] = [67, 39, 0, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, module)
+        for _ in range(2):
+            assert _drain(composition.ProcessSkillCasting()) is True
+        shatter = composition.active_handlers[67]
+        assert len(shatter.preparations) == 2 and shatter.preparations[0] is not shatter.preparations[1]
+        assert shatter.ordinary_preparations == shatter.preparations
+
+
+def test_scheduler_invalidates_real_shatter_parameters_before_forwarding_offense_yield() -> None:
+    with _loaded_runtime() as (module, runtime, _smart_energy):
+        real_shatter = object.__new__(module.SmartShatterHex)
+        real_shatter._composition_generation = 1
+        preparation = real_shatter.prepare_pass()
+        marker = object()
+
+        class Shatter(_UrgentShatterHandler):
+            def prepare_pass(self) -> Any:
+                preparation.parameters = marker
+                self.preparations.append(preparation)
+                return preparation
+
+            def try_cast(self, preparation: object | None = None) -> Generator[Never, None, bool]:
+                assert preparation is self.preparations[-1] and getattr(preparation, "parameters") is None
+                return (yield from super().try_cast(preparation))
+
+        def factory(*, skill_id: int) -> Shatter:
+            return Shatter(runtime, skill_id)
+
+        module.SmartShatterHex = factory
+        runtime.bar[:] = [67, 39, 0, 0, 0, 0, 0, 0]
+        composition = _composition(runtime, module)
+        composition._refresh_composition()
+        energy = composition.active_handlers[39]
+
+        def yielding_offense() -> Generator[None, None, bool]:
+            assert preparation.parameters is marker
+            yield
+            assert preparation.parameters is None
+            return False
+
+        energy.try_cast = yielding_offense
+        scheduler = composition.ProcessSkillCasting()
+        assert next(scheduler) is None
+        assert preparation.parameters is None, "invalidate before control leaves the scheduler"
+        assert _drain(scheduler) is True
+        assert composition.fallback.calls == 1
+
+
+def test_preparation_yield_forwarding_preserves_throw_close_and_synchronous_result() -> None:
+    with _loaded_runtime() as (module, runtime, _smart_energy):
+        real_shatter = object.__new__(module.SmartShatterHex)
+        real_shatter._composition_generation = 1
+        preparation = real_shatter.prepare_pass()
+        composition = _composition(runtime, module)
+        events: list[str] = []
+
+        def interrupted() -> Generator[None, None, bool]:
+            try:
+                try:
+                    yield
+                except ValueError:
+                    events.append("throw forwarded")
+                    yield
+                return True
+            finally:
+                events.append("closed")
+
+        handler = types.SimpleNamespace(try_cast=interrupted)
+        result = composition._handler_result(handler, preparation)
+        assert next(result) is None
+        assert result.throw(ValueError("fixture")) is None
+        result.close()
+        assert events == ["throw forwarded", "closed"]
+
+        def synchronous() -> Generator[Never, None, bool]:
+            if False:
+                yield
+            return False
+
+        marker = object()
+        preparation.parameters = marker
+        handler.try_cast = synchronous
+        assert _drain(composition._handler_result(handler, preparation)) is False
+        assert preparation.parameters is marker, "uninterrupted decline keeps pass-local calculations"

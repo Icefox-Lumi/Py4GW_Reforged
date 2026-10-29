@@ -3,19 +3,27 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Callable
+from collections.abc import Generator
 from collections.abc import Iterable
 from dataclasses import dataclass
+from dataclasses import field
 from enum import Enum
 from enum import IntEnum
+from hashlib import sha256
+from threading import Lock
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Final
+from typing import cast
 
 from Py4GWCoreLib.BuildMgr import BuildMgr
+from Py4GWCoreLib.Builds.Skills import SmartShatterObservation as ShatterObservation
 
 if TYPE_CHECKING:
     from Py4GWCoreLib.GlobalCache.shared_memory_src.AllAccounts import HexRemovalClaimToken
+    from Py4GWCoreLib.GlobalCache.shared_memory_src.HrHexObservations import HrHexObservation
 
 SHATTER_HEX_SKILL_ID: Final[int] = 67
 SHATTER_HEX_NAME: Final[str] = "Shatter_Hex"
@@ -23,6 +31,18 @@ LOW_SPLASH_MINIMUM_DAMAGE: Final[float] = 90.0
 CLAIM_ACTIVATION_MULTIPLIER: Final[float] = 2.5
 MINIMUM_NATIVE_AFTERCAST_MS: Final[int] = 250
 MINIMUM_OBSERVED_PING_MS: Final[int] = 150
+
+# TEMPORARY LIVE EVIDENCE: remove this block after injected-client validation.
+LIVE_EVIDENCE_PREFIX: Final[str] = "SMART_SHATTER_LIVE_V1"
+LIVE_EVIDENCE_MAX_CANDIDATES: Final[int] = 3
+LIVE_EVIDENCE_MAX_HEX_IDS: Final[int] = 4
+LIVE_EVIDENCE_MAX_ALLY_DETAILS: Final[int] = 16
+LIVE_EVIDENCE_MAX_DEFERRED_EVENTS: Final[int] = 32
+LIVE_EVIDENCE_MAX_LOGS_PER_MINUTE: Final[int] = 60
+LIVE_EVIDENCE_MAX_THROTTLE_KEYS: Final[int] = 16
+LIVE_EVIDENCE_MAX_MESSAGE_LENGTH: Final[int] = 1600
+LIVE_EVIDENCE_DECISION_INTERVAL_MS: Final[int] = 10_000
+LIVE_EVIDENCE_CLAIM_FAILURE_INTERVAL_MS: Final[int] = 5_000
 
 
 class DecisionReason(str, Enum):
@@ -602,6 +622,7 @@ class _RuntimeParameters:
     policy: ShatterHexPolicy
     claim_duration_ms: int
     local_dispatch_duration_ms: int
+    player_agent_id: int = 0
 
 
 @dataclass(slots=True)
@@ -618,6 +639,33 @@ class _PendingShatterAttempt:
     admission_lane: AdmissionLane
     claim_token: HexRemovalClaimToken
     state: str = "queued"
+    diagnostic_id: int = 0
+    observation_epoch: object | None = None
+    observation_index: int = -1
+    hr_observation: HrHexObservation | None = None
+    enqueue_accepted: bool = False
+    hr_accounting_complete: bool = False
+    hr_accounting_failed: bool = False
+    hr_read_age_ms: int | None = None
+    hr_sample_age_ms: int | None = None
+    hr_enqueue_observation: HrHexObservation | None = None
+    hr_enqueue_age_ms: int | None = None
+
+
+@dataclass(slots=True)
+class _ShatterPass:
+    handler: object
+    composition_generation: int | None
+    # Target offers persist for this pass; calculated parameters are discarded
+    # before suspension. Owner evidence and actual admission are always fresh.
+    attempted_targets: set[int] = field(default_factory=set[int])
+    failed_claim_targets: set[int] = field(default_factory=set[int])
+    parameters: _RuntimeParameters | None = None
+    parameter_context: tuple[tuple[int, int, int, str, int], int, int] | None = None
+
+    def invalidate_parameters(self) -> None:
+        self.parameters = None
+        self.parameter_context = None
 
 
 class SmartShatterHex(BuildMgr):
@@ -647,6 +695,19 @@ class SmartShatterHex(BuildMgr):
         self._attempt_generation = 0
         self._pending_attempt: _PendingShatterAttempt | None = None
         self._last_lifecycle_inputs: tuple[int, int, int, str, int] | None = None
+        self._live_diagnostic_sequence = 0
+        self._live_hex_details: dict[int, tuple[tuple[int, ...], int]] = {}
+        self._live_capture_hex_details = False
+        self._live_last_detail_capture: float | None = None
+        self._live_log_timestamps: list[float] = []
+        self._live_log_throttle_times: dict[str, float] = {}
+        self._hr_samples_used: dict[int, HrHexObservation] = {}
+        self._hr_sample_generations: dict[int, int] = {}
+        # v1 has 64 owner slots. Retain at most one attempt per slot, including
+        # uncertain accounting; routine lifecycle cleanup must not erase it.
+        self._hr_accounting_attempts: list[_PendingShatterAttempt | None] = [None] * 64
+        self._submission_gate = Lock()
+        self._hr_accounting_lock = Lock()
 
     @property
     def skill_id(self) -> int:
@@ -681,6 +742,7 @@ class SmartShatterHex(BuildMgr):
             self._composition_generation = generation
 
         lifecycle_inputs = self._read_lifecycle_inputs()
+        ShatterObservation.lifecycle(getattr(self, "_shatter_observation_epoch", None), lifecycle_inputs)
         if lifecycle_inputs is None:
             self.cancel_pending("lifecycle_unavailable")
             return
@@ -703,43 +765,175 @@ class SmartShatterHex(BuildMgr):
             if self._resolve_current_slot() != self._pending_attempt.slot_index:
                 self.cancel_pending("equipped_slot_changed")
 
-    def try_cast(self):
+    def prepare_pass(self) -> _ShatterPass:
+        return _ShatterPass(self, self._composition_generation)
+
+    def try_cast(self, preparation: _ShatterPass | None = None) -> Generator[None, None, bool]:
+        return (yield from self._try_cast(urgent=False, preparation=preparation))
+
+    def try_cast_urgent(
+        self, preparation: _ShatterPass, observation_epoch: object | None = None
+    ) -> Generator[None, None, bool]:
+        return (yield from self._try_cast(urgent=True, preparation=preparation, urgent_epoch=observation_epoch))
+
+    def _try_cast(
+        self, *, urgent: bool, preparation: _ShatterPass | None, urgent_epoch: object | None = None
+    ) -> Generator[None, None, bool]:
+        # No callback or cancellation takes this gate. In particular, a callback
+        # may finish before QueueGuardedUseSkill returns without deadlocking the
+        # submitter. Another scheduler cannot submit until acceptance is recorded.
+        gate = self._local_lock("_submission_gate")
+        if not gate.acquire(blocking=False):
+            return False
+        try:
+            return (
+                yield from self._prepare_and_dispatch(urgent=urgent, preparation=preparation, urgent_epoch=urgent_epoch)
+            )
+        finally:
+            gate.release()
+
+    def _local_lock(self, name: str) -> Lock:
+        lock = getattr(self, name, None)
+        if lock is None:
+            # Also supports the established offline object.__new__ fixtures.
+            # CPython's setdefault installs one lock even on concurrent first use.
+            lock = self.__dict__.setdefault(name, Lock())
+        return cast(Lock, lock)
+
+    def _prepare_and_dispatch(
+        self, *, urgent: bool, preparation: _ShatterPass | None, urgent_epoch: object | None = None
+    ) -> Generator[None, None, bool]:
+        observation_epoch = urgent_epoch if urgent else getattr(self, "_shatter_observation_epoch", None)
+        self._live_evidence_source = "hr_owner_vm" if urgent else "legacy_merged"
+        if preparation is not None and (
+            preparation.handler is not self or preparation.composition_generation != self._composition_generation
+        ):
+            preparation.invalidate_parameters()
+            return False
         if False:
             yield
-        if getattr(self, "_disposed", True) or self.has_active_dispatch():
+        if getattr(self, "_disposed", True) or self._has_pending_dispatch():
+            if preparation is not None:
+                preparation.invalidate_parameters()
+            ShatterObservation.gate(observation_epoch, "active_or_disposed")
             return False
         if self._composition_generation is None:
+            if preparation is not None:
+                preparation.invalidate_parameters()
+            ShatterObservation.gate(observation_epoch, "composition")
             return False
         if not self._runtime_gate():
+            if preparation is not None:
+                preparation.invalidate_parameters()
+            ShatterObservation.gate(observation_epoch, "runtime")
+            return False
+        hr_observations = self._find_urgent_observations() if urgent else {}
+        if urgent and not hr_observations:
             return False
         slot = self._resolve_current_slot()
         if slot is None or not self._skill_readiness(slot, at_execution=False):
+            if preparation is not None:
+                preparation.invalidate_parameters()
+            ShatterObservation.gate(observation_epoch, "slot_or_readiness")
             return False
-        parameters = self._resolve_runtime_parameters()
+        parameters = self._pass_parameters(preparation, slot)
         if parameters is None:
+            ShatterObservation.gate(observation_epoch, "parameters")
             return False
-        snapshot = self._build_snapshot(parameters)
+        # The recorder's effect fields describe the legacy merged reader only.
+        # Urgent evidence is identified in bounded handler diagnostics instead.
+        observation = None if urgent else ShatterObservation.begin_evaluation(observation_epoch)
+        detail_capture_time = self._live_begin_detail_capture()
+        self._live_capture_hex_details = detail_capture_time is not None
+        try:
+            if urgent:
+                snapshot = self._build_urgent_snapshot(hr_observations)
+            else:
+                snapshot = self._build_snapshot(parameters, observation=observation)
+        finally:
+            self._live_capture_hex_details = False
         if snapshot is None:
+            ShatterObservation.gate(observation_epoch, "snapshot")
             return False
+        if urgent:
+            ShatterObservation.offer(observation_epoch, self)
+        if detail_capture_time is not None:
+            self._live_last_detail_capture = detail_capture_time
         decision = evaluate_smart_shatter_hex(
             snapshot[0],
             snapshot[1],
             policy=parameters.policy,
         )
+        diagnostic_id = self._next_live_diagnostic_id()
+        ShatterObservation.snapshot_event(observation, "decision", decision)
         if not decision.ranked_candidates:
+            self._log_live_decision(diagnostic_id, slot, parameters, snapshot, decision)
+            ShatterObservation.gate(observation_epoch, "no_candidates")
             return False
 
         lifecycle_inputs = self._read_lifecycle_inputs()
+        ShatterObservation.lifecycle(observation_epoch, lifecycle_inputs)
         if lifecycle_inputs is None:
+            self._log_live_decision(diagnostic_id, slot, parameters, snapshot, decision)
+            self._live_log(
+                "claim_skipped",
+                f"id=d{diagnostic_id} local={parameters.player_agent_id} reason=lifecycle_context_unavailable",
+                throttle_key="claim_skipped",
+                throttle_interval_ms=LIVE_EVIDENCE_CLAIM_FAILURE_INTERVAL_MS,
+            )
+            ShatterObservation.gate(observation_epoch, "lifecycle")
             return False
         from Py4GWCoreLib.GlobalCache.WhiteboardLocks import try_acquire_hex_removal_claim
 
-        for candidate in decision.ranked_candidates:
+        deferred_events: list[tuple[str, str | Callable[[], str], str | None, int]] = []
+        fallback_reason: str | None = None
+        previous_target_id: int | None = None
+        unchecked_claim_failures = set(preparation.failed_claim_targets) if preparation is not None else set[int]()
+        for candidate_rank, candidate in enumerate(decision.ranked_candidates, start=1):
+            if preparation is not None and candidate.target_agent_id in preparation.attempted_targets:
+                continue
+            if not urgent and candidate.admission_lane != AdmissionLane.HIGH:
+                # HIGH candidates sort first. Preserve Shatter only while a failed
+                # target still qualifies now; a prior claim failure is not a latch.
+                if any(
+                    self._failed_hr_claim_is_urgent(target, parameters.policy) for target in unchecked_claim_failures
+                ):
+                    break
+                unchecked_claim_failures.clear()
+            if preparation is not None:
+                preparation.attempted_targets.add(candidate.target_agent_id)
+            if fallback_reason is not None:
+                self._defer_live_event(
+                    deferred_events,
+                    "candidate_fallback",
+                    f"id=d{diagnostic_id} local={parameters.player_agent_id} from={previous_target_id} "
+                    f"to={candidate.target_agent_id} reason={fallback_reason}",
+                    f"fallback:{previous_target_id}:{candidate.target_agent_id}",
+                    LIVE_EVIDENCE_CLAIM_FAILURE_INTERVAL_MS,
+                )
+                fallback_reason = None
             token = try_acquire_hex_removal_claim(
                 candidate.target_agent_id,
                 parameters.claim_duration_ms,
             )
+            ShatterObservation.snapshot_event(observation, "claim", candidate.target_agent_id, token is not None)
             if token is None:
+                unchecked_claim_failures.add(candidate.target_agent_id)
+                if preparation is not None:
+                    preparation.failed_claim_targets.add(candidate.target_agent_id)
+                self._defer_live_event(
+                    deferred_events,
+                    "claim_attempt",
+                    f"id=d{diagnostic_id} local={parameters.player_agent_id} rank={candidate_rank} "
+                    f"target={candidate.target_agent_id} lane={self._lane_name(candidate.admission_lane)} "
+                    "claim_kind=HEX_REMOVAL_TARGET key=0 result=not_acquired "
+                    "reason=claim_api_returned_none owner_reason=not_exposed "
+                    f"group={lifecycle_inputs[4]} lease_ms={parameters.claim_duration_ms}",
+                    f"claim_failure:{candidate.target_agent_id}",
+                    LIVE_EVIDENCE_CLAIM_FAILURE_INTERVAL_MS,
+                )
+                previous_target_id = candidate.target_agent_id
+                fallback_reason = "claim_not_acquired"
                 continue
             self._attempt_generation += 1
             attempt = _PendingShatterAttempt(
@@ -754,19 +948,82 @@ class SmartShatterHex(BuildMgr):
                 target_agent_id=candidate.target_agent_id,
                 admission_lane=candidate.admission_lane or AdmissionLane.UNCLASSIFIED,
                 claim_token=token,
+                diagnostic_id=diagnostic_id,
+                observation_epoch=observation_epoch,
+                hr_observation=hr_observations.get(candidate.target_agent_id),
             )
             self._pending_attempt = attempt
+            self._defer_live_event(
+                deferred_events,
+                "claim_attempt",
+                f"id=d{diagnostic_id} attempt={attempt.attempt_generation} local={parameters.player_agent_id} "
+                f"rank={candidate_rank} target={candidate.target_agent_id} lane={self._lane_name(candidate.admission_lane)} "
+                f"claim_kind=HEX_REMOVAL_TARGET result=acquired lease_ms={parameters.claim_duration_ms} "
+                f"{self._live_token_identity(token)}",
+            )
+            attempt.observation_index = ShatterObservation.acquired(
+                observation_epoch,
+                attempt.attempt_generation,
+                attempt.composition_generation,
+                attempt.target_agent_id,
+                parameters.claim_duration_ms,
+            )
             validated = self._revalidate_selected(attempt, at_execution=False)
+            status, status_detail = getattr(self, "_live_revalidation_result", ("unknown", "not_reported"))
+            self._defer_live_event(
+                deferred_events,
+                "post_acquisition_revalidation",
+                f"id=d{diagnostic_id} attempt={attempt.attempt_generation} local={parameters.player_agent_id} "
+                f"target={attempt.target_agent_id} result={status} detail={status_detail}",
+            )
             if not validated:
-                self._abort_pre_send(attempt)
+                self._abort_pre_send(attempt, "post_acquisition_revalidation_declined", emit_diagnostic=False)
+                self._defer_live_event(
+                    deferred_events,
+                    "queued_attempt_cancelled",
+                    f"id=d{diagnostic_id} attempt={attempt.attempt_generation} local={parameters.player_agent_id} "
+                    f"slot={slot} target={attempt.target_agent_id} reason=post_acquisition_revalidation_declined "
+                    f"local_state=cancelled active_dispatch=0 exact_release_attempted=1 "
+                    f"{self._live_token_identity(attempt.claim_token)}",
+                )
+                previous_target_id = candidate.target_agent_id
+                fallback_reason = "post_acquisition_revalidation_declined"
                 continue
             if not self._enqueue_guarded(attempt):
-                self._abort_pre_send(attempt)
+                self._abort_pre_send(attempt, "action_queue_rejected", emit_diagnostic=False)
+                self._defer_live_event(
+                    deferred_events,
+                    "queued_attempt_cancelled",
+                    f"id=d{diagnostic_id} attempt={attempt.attempt_generation} local={parameters.player_agent_id} "
+                    f"slot={slot} target={attempt.target_agent_id} reason=action_queue_rejected "
+                    f"local_state=cancelled active_dispatch=0 exact_release_attempted=1 "
+                    f"{self._live_token_identity(attempt.claim_token)}",
+                )
+                self._log_live_decision(diagnostic_id, slot, parameters, snapshot, decision)
+                self._emit_deferred_live_events(deferred_events)
                 return False
+            self._defer_live_event(
+                deferred_events,
+                "action_queued",
+                lambda: (
+                    f"id=d{diagnostic_id} attempt={attempt.attempt_generation} local={parameters.player_agent_id} "
+                    f"slot={slot} target={candidate.target_agent_id} lease_ms={parameters.claim_duration_ms} "
+                    f"evidence={'hr_owner_vm' if urgent else 'legacy_merged'}"
+                    f"{self._live_hr_evidence(attempt, at_enqueue=True)}"
+                ),
+            )
+            self._log_live_decision(diagnostic_id, slot, parameters, snapshot, decision)
+            self._emit_deferred_live_events(deferred_events)
             return True
+        self._log_live_decision(diagnostic_id, slot, parameters, snapshot, decision)
+        self._emit_deferred_live_events(deferred_events)
         return False
 
     def has_active_dispatch(self) -> bool:
+        gate = getattr(self, "_submission_gate", None)
+        return (gate is not None and gate.locked()) or self._has_pending_dispatch()
+
+    def _has_pending_dispatch(self) -> bool:
         attempt = getattr(self, "_pending_attempt", None)
         if attempt is None:
             return False
@@ -794,7 +1051,31 @@ class SmartShatterHex(BuildMgr):
         self._attempt_generation = getattr(self, "_attempt_generation", 0) + 1
         self._pending_attempt = None
         if attempt is not None and attempt.state == "queued":
+            event = "orphan_recovered" if _reason == "claim_expired_or_lost" else "queued_attempt_cancelled"
             self._release_claim(attempt.claim_token)
+            self._live_log(
+                event,
+                f"id=d{attempt.diagnostic_id} attempt={attempt.attempt_generation} "
+                f"local={attempt.player_agent_id} slot={attempt.slot_index} target={attempt.target_agent_id} "
+                f"reason={_reason} local_state=cancelled active_dispatch=0 exact_release_attempted=1 "
+                f"{self._live_token_identity(attempt.claim_token)}",
+            )
+        if attempt is not None:
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch,
+                attempt.observation_index,
+                "cancel" if attempt.state == "queued" else "clear_sent",
+                _reason,
+            )
+        if _reason in (
+            "composition_changed",
+            "lifecycle_changed",
+            "lifecycle_unavailable",
+            "equipped_slot_changed",
+            "handler_disposed",
+            "composition_disposed",
+        ):
+            ShatterObservation.lifecycle(getattr(self, "_shatter_observation_epoch", None), None)
 
     def dispose(self, reason: str = "handler_disposed") -> None:
         if not getattr(self, "_disposed", True):
@@ -805,6 +1086,245 @@ class SmartShatterHex(BuildMgr):
         self._disposed = False
         if cached_data is not None:
             self.set_cached_data(cached_data)
+
+    # TEMPORARY LIVE EVIDENCE: this isolated block can be removed after validation.
+    def _next_live_diagnostic_id(self) -> int:
+        diagnostic_id = getattr(self, "_live_diagnostic_sequence", 0) + 1
+        self._live_diagnostic_sequence = diagnostic_id
+        return diagnostic_id
+
+    def _live_begin_detail_capture(self) -> float | None:
+        try:
+            now = time.monotonic()
+            previous_time = getattr(self, "_live_last_detail_capture", None)
+            if previous_time is not None and now - previous_time < LIVE_EVIDENCE_DECISION_INTERVAL_MS / 1000.0:
+                return None
+            return now
+        except Exception:
+            return None
+
+    def _live_log(
+        self,
+        event: str,
+        details: str | Callable[[], str],
+        *,
+        throttle_key: str | None = None,
+        throttle_interval_ms: int = 0,
+    ) -> None:
+        try:
+            now = time.monotonic()
+            timestamps = getattr(self, "_live_log_timestamps", None)
+            if not isinstance(timestamps, list):
+                timestamps = []
+                self._live_log_timestamps = timestamps
+            while timestamps and now - timestamps[0] >= 60.0:
+                timestamps.pop(0)
+            if len(timestamps) >= LIVE_EVIDENCE_MAX_LOGS_PER_MINUTE:
+                return
+
+            if throttle_key is not None:
+                throttle_times = getattr(self, "_live_log_throttle_times", None)
+                if not isinstance(throttle_times, dict):
+                    throttle_times = {}
+                    self._live_log_throttle_times = throttle_times
+                previous_time = throttle_times.get(throttle_key)
+                if previous_time is not None and now - previous_time < throttle_interval_ms / 1000.0:
+                    return
+                if throttle_key not in throttle_times and len(throttle_times) >= LIVE_EVIDENCE_MAX_THROTTLE_KEYS:
+                    oldest_key = min(throttle_times, key=throttle_times.__getitem__)
+                    del throttle_times[oldest_key]
+                throttle_times[throttle_key] = now
+
+            detail_text = details() if callable(details) else details
+            message = f"{LIVE_EVIDENCE_PREFIX} event={event} {detail_text}"[:LIVE_EVIDENCE_MAX_MESSAGE_LENGTH]
+            import PySystem
+
+            timestamps.append(now)
+            PySystem.Console.Log("SmartShatterHex", message, PySystem.Console.MessageType.Info)
+        except Exception:
+            return
+
+    def _log_live_decision(
+        self,
+        diagnostic_id: int,
+        slot: int,
+        parameters: _RuntimeParameters,
+        snapshot: tuple[tuple[ShatterHexAllyObservation, ...], tuple[ShatterHexEnemyObservation, ...]],
+        decision: ShatterHexDecision,
+    ) -> None:
+        self._live_log(
+            "decision",
+            lambda: self._format_live_decision(
+                diagnostic_id,
+                slot,
+                parameters,
+                snapshot[0],
+                snapshot[1],
+                decision,
+            ),
+            throttle_key="decision",
+            throttle_interval_ms=LIVE_EVIDENCE_DECISION_INTERVAL_MS,
+        )
+
+    @staticmethod
+    def _defer_live_event(
+        events: list[tuple[str, str | Callable[[], str], str | None, int]],
+        event: str,
+        details: str | Callable[[], str],
+        throttle_key: str | None = None,
+        throttle_interval_ms: int = 0,
+    ) -> None:
+        try:
+            if len(events) < LIVE_EVIDENCE_MAX_DEFERRED_EVENTS:
+                events.append((event, details, throttle_key, throttle_interval_ms))
+        except Exception:
+            return
+
+    def _emit_deferred_live_events(self, events: list[tuple[str, str | Callable[[], str], str | None, int]]) -> None:
+        for event, details, throttle_key, throttle_interval_ms in events:
+            self._live_log(
+                event,
+                details,
+                throttle_key=throttle_key,
+                throttle_interval_ms=throttle_interval_ms,
+            )
+
+    @staticmethod
+    def _live_hr_evidence(attempt: _PendingShatterAttempt, *, at_enqueue: bool) -> str:
+        # Called lazily inside _live_log's exception boundary, never by accounting.
+        observation = attempt.hr_enqueue_observation if at_enqueue else attempt.hr_observation
+        if observation is None:
+            return ""
+        age = attempt.hr_enqueue_age_ms if at_enqueue else attempt.hr_sample_age_ms
+        started, nonce, generation = observation.incarnation
+        owner_bind = sha256(observation.owner.digest() + observation.instance + nonce).hexdigest()[:16]
+        remaining = observation.census.vm_remaining_ms
+        sampled_remaining = "unknown" if remaining is None else f"{remaining:.1f}"
+        aged_remaining = "unknown" if remaining is None or age is None else f"{max(0.0, remaining - age):.1f}"
+        enqueued = attempt.hr_enqueue_observation
+        return (
+            ("" if at_enqueue else " evidence=hr_owner_vm")
+            + f" sample_stage={'accepted_enqueue' if at_enqueue else 'final_guard'} "
+            f"owner_bind={owner_bind} pub_nonce={nonce.hex()} pub_started_ms={started} context_gen={generation} "
+            f"sample_seq={observation.sequence} sample_tick_ms={observation.sampled_at} "
+            f"sample_age_ms={age if age is not None else 'unknown'} age_basis=owner_read "
+            f"vm_sample_ms={sampled_remaining} vm_aged_ms={aged_remaining} "
+            f"enqueue_seq={enqueued.sequence if enqueued is not None else 'pending'}"
+        )
+
+    @staticmethod
+    def _lane_name(lane: AdmissionLane | None) -> str:
+        if lane is None:
+            return "declined"
+        try:
+            return AdmissionLane(lane).name
+        except (TypeError, ValueError):
+            return "unknown"
+
+    @staticmethod
+    def _live_token_identity(token: HexRemovalClaimToken) -> str:
+        try:
+            return (
+                f"claim_slot={token.intent_slot_index} owner_slot={token.owner_slot_index} "
+                f"generation={token.local_generation} kind={token.kind_id} key={token.key_id} "
+                f"target={token.target_agent_id} group={token.isolation_group_id} "
+                f"posted_tick={token.posted_at_tick64} expires_tick={token.expires_at_tick64}"
+            )
+        except Exception:
+            return "claim_identity=unavailable"
+
+    @staticmethod
+    def _diagnostic_hostile_count(
+        ally: ShatterHexAllyObservation,
+        enemies: tuple[ShatterHexEnemyObservation, ...],
+        policy: ShatterHexPolicy,
+    ) -> int | None:
+        unique_enemies = _unique_enemies(enemies)
+        ally_x = _finite_float(ally.x)
+        ally_y = _finite_float(ally.y)
+        if unique_enemies is None or ally_x is None or ally_y is None:
+            return None
+        radius_squared = policy.splash_radius * policy.splash_radius
+        count = 0
+        for enemy in unique_enemies:
+            if not _enemy_is_usable(enemy):
+                continue
+            enemy_x = _finite_float(enemy.x)
+            enemy_y = _finite_float(enemy.y)
+            if enemy_x is None or enemy_y is None:
+                continue
+            delta_x = enemy_x - ally_x
+            delta_y = enemy_y - ally_y
+            if delta_x * delta_x + delta_y * delta_y <= radius_squared:
+                count += 1
+        return count
+
+    def _format_live_decision(
+        self,
+        diagnostic_id: int,
+        slot: int,
+        parameters: _RuntimeParameters,
+        allies: tuple[ShatterHexAllyObservation, ...],
+        enemies: tuple[ShatterHexEnemyObservation, ...],
+        decision: ShatterHexDecision,
+    ) -> str:
+        policy = parameters.policy
+        observations = {ally.agent_id: ally for ally in allies}
+        hex_details = getattr(self, "_live_hex_details", {})
+        selected_id = 0 if decision.selected is None else decision.selected.target_agent_id
+        candidate_details: list[str] = []
+        for candidate in decision.candidates[:LIVE_EVIDENCE_MAX_CANDIDATES]:
+            ally = observations.get(candidate.target_agent_id)
+            if ally is None:
+                health = "?"
+                distance = "?"
+                hexed = "?"
+                usable_ids = False
+                retained_ids: tuple[int, ...] = ()
+                excluded_count = 0
+                hostile_count: int | None = None
+            else:
+                health_value = _finite_float(ally.health_fraction)
+                health = "?" if health_value is None else f"{health_value:.3f}"
+                distance_squared = candidate.caster_distance_squared
+                distance = "?" if distance_squared is None else f"{math.sqrt(max(0.0, distance_squared)):.1f}"
+                hexed = "?" if ally.is_hexed is None else str(int(ally.is_hexed))
+                usable_ids = ally.retained_hex_count > 0
+                details = hex_details.get(candidate.target_agent_id, ((), 0))
+                retained_ids = details[0]
+                excluded_count = details[1]
+                hostile_count = self._diagnostic_hostile_count(ally, enemies, policy)
+
+            retained_text = ",".join(str(skill_id) for skill_id in retained_ids)
+            if ally is not None and ally.retained_hex_count > len(retained_ids):
+                retained_text = (
+                    f"{retained_text},+{ally.retained_hex_count - len(retained_ids)}" if retained_text else "..."
+                )
+            if not retained_text:
+                retained_text = "-"
+            lane_basis = self._lane_name(candidate.admission_lane)
+            lane = (
+                lane_basis
+                if candidate.eligible
+                else (f"declined/{lane_basis}" if candidate.admission_lane else "declined")
+            )
+            result = "selected" if candidate.target_agent_id == selected_id else "not_selected"
+            hostile_text = "?" if hostile_count is None else str(hostile_count)
+            candidate_details.append(
+                f"{{ally={candidate.target_agent_id},hp={health},dist={distance},hexed={hexed},"
+                f"ids_ok={int(usable_ids)},hex_ids={retained_text},priority={candidate.cleanse_priority},"
+                f"duration_filtered={int(excluded_count > 0)},hostiles={hostile_text},"
+                f"splash={candidate.useful_splash_damage:.1f},lane={lane},result={result},reason={candidate.reason.value}}}"
+            )
+
+        candidate_text = "[" + ";".join(candidate_details) + "]"
+        return (
+            f"id=d{diagnostic_id} local={parameters.player_agent_id} slot={slot} "
+            f"evidence={getattr(self, '_live_evidence_source', 'legacy_merged')} "
+            f"effective_cost={policy.effective_energy_cost:.2f} energy_fraction={policy.energy_fraction:.3f} "
+            f"considered={len(allies)} eligible={len(decision.ranked_candidates)} selected={selected_id or 'none'} "
+            f"top_cap={LIVE_EVIDENCE_MAX_CANDIDATES} candidates={candidate_text}"
+        )
 
     @staticmethod
     def _read_lifecycle_inputs() -> tuple[int, int, int, str, int] | None:
@@ -930,6 +1450,42 @@ class SmartShatterHex(BuildMgr):
         except Exception:
             return False
 
+    def _pass_parameters(self, preparation: _ShatterPass | None, slot: int) -> _RuntimeParameters | None:
+        if preparation is None:
+            return self._resolve_runtime_parameters()
+        lifecycle = self._read_lifecycle_inputs()
+        context = None if lifecycle is None else (lifecycle, slot, self._attempt_generation)
+        if (
+            context is not None
+            and preparation.parameter_context == context
+            and preparation.parameters is not None
+            and self._parameter_inputs_match(preparation.parameters)
+        ):
+            return preparation.parameters
+        preparation.invalidate_parameters()
+        parameters = self._resolve_runtime_parameters()
+        if context is not None and self._read_lifecycle_inputs() == lifecycle:
+            preparation.parameters = parameters
+            preparation.parameter_context = context
+        return parameters
+
+    def _parameter_inputs_match(self, parameters: _RuntimeParameters) -> bool:
+        from Py4GWCoreLib import Agent
+        from Py4GWCoreLib import Player
+
+        try:
+            player = int(Player.GetAgentID() or 0)
+            policy = parameters.policy
+            return (
+                player == parameters.player_agent_id
+                and _position(Player.GetXY()) == (policy.caster_x, policy.caster_y)
+                and _finite_float(Agent.GetEnergy(player)) == policy.energy_fraction
+                and _finite_float(Agent.GetMaxEnergy(player)) == policy.maximum_energy
+                and resolve_shatter_hex_damage(self._current_domination_rank(Agent, player)) == policy.nominal_damage
+            )
+        except Exception:
+            return False
+
     def _resolve_runtime_parameters(self) -> _RuntimeParameters | None:
         try:
             from Py4GWCoreLib import Agent
@@ -999,6 +1555,7 @@ class SmartShatterHex(BuildMgr):
                 policy=policy,
                 claim_duration_ms=claim_duration_ms,
                 local_dispatch_duration_ms=local_dispatch_duration_ms,
+                player_agent_id=player_id,
             )
         except Exception:
             return None
@@ -1033,7 +1590,11 @@ class SmartShatterHex(BuildMgr):
         except Exception:
             return 0
 
-    def _hex_identity_evidence(self, agent_id: int) -> HexIdentityEvidence:
+    def _hex_identity_evidence(
+        self,
+        agent_id: int,
+        observation: ShatterObservation.SnapshotTicket | None = None,
+    ) -> HexIdentityEvidence:
         try:
             from Py4GWCoreLib.GlobalCache.HexRemovalPriority import MIN_HEX_REMAINING_MS_TO_REMOVE
             from Py4GWCoreLib.GlobalCache.HexRemovalPriority import classify_hex_for_removal
@@ -1043,11 +1604,57 @@ class SmartShatterHex(BuildMgr):
                 HexRemovalEffectObservation(int(skill_id), remaining_ms)
                 for skill_id, remaining_ms in get_hex_removal_effect_observations(agent_id)
             )
+            ShatterObservation.snapshot_event(observation, "effects", agent_id, effects)
+
+            def classify(skill_id: int) -> int:
+                if observation is None:
+                    return int(classify_hex_for_removal(skill_id, agent_id))
+                try:
+                    priority = int(classify_hex_for_removal(skill_id, agent_id))
+                except Exception:
+                    if skill_id == ShatterObservation.VOCAL_MINORITY:
+                        ShatterObservation.snapshot_event(observation, "classification_error", agent_id)
+                    raise
+                if skill_id == ShatterObservation.VOCAL_MINORITY:
+                    ShatterObservation.snapshot_event(observation, "classification", agent_id, priority)
+                return priority
+
             evidence = summarize_hex_identity_evidence(
                 effects,
-                classify_priority=lambda skill_id: int(classify_hex_for_removal(skill_id, agent_id)),
+                classify_priority=classify,
                 minimum_remaining_ms=MIN_HEX_REMAINING_MS_TO_REMOVE,
             )
+            if getattr(self, "_live_capture_hex_details", False):
+                try:
+                    remaining_by_skill: dict[int, list[float | None]] = {}
+                    for effect in effects:
+                        skill_id = _positive_integer(effect.skill_id)
+                        if skill_id is None:
+                            continue
+                        remaining_by_skill.setdefault(skill_id, []).append(_finite_float(effect.remaining_ms))
+                    retained_ids = tuple(
+                        sorted(
+                            skill_id
+                            for skill_id, durations in remaining_by_skill.items()
+                            if any(
+                                remaining is None
+                                or (remaining > 0.0 and remaining > float(MIN_HEX_REMAINING_MS_TO_REMOVE))
+                                for remaining in durations
+                            )
+                        )
+                    )
+                    details = getattr(self, "_live_hex_details", None)
+                    if not isinstance(details, dict):
+                        details = {}
+                        self._live_hex_details = details
+                    if agent_id in details or len(details) < LIVE_EVIDENCE_MAX_ALLY_DETAILS:
+                        details[agent_id] = (
+                            retained_ids[:LIVE_EVIDENCE_MAX_HEX_IDS],
+                            max(0, evidence.confirmed_hex_count - evidence.retained_hex_count),
+                        )
+                except Exception:
+                    pass
+            ShatterObservation.snapshot_event(observation, "summary", agent_id, evidence)
             return evidence
         except Exception:
             return HexIdentityEvidence(0, 0, None)
@@ -1066,6 +1673,9 @@ class SmartShatterHex(BuildMgr):
     def _observe_ally(
         self,
         agent_id: int,
+        observation: ShatterObservation.SnapshotTicket | None = None,
+        *,
+        hex_evidence: HexIdentityEvidence | None = None,
     ) -> ShatterHexAllyObservation:
         from Py4GWCoreLib import Agent
         from Py4GWCoreLib import Routines
@@ -1091,7 +1701,11 @@ class SmartShatterHex(BuildMgr):
                 health_fraction = _finite_float(Agent.GetHealth(agent_id))
                 is_hexed = bool(Agent.IsHexed(agent_id))
                 target_allowed = bool(self._validate_target_for_skill_cast(self._skill_id, agent_id))
-                evidence = self._hex_identity_evidence(agent_id) if is_hexed else HexIdentityEvidence(0, 0, None)
+                evidence = (
+                    (hex_evidence if hex_evidence is not None else self._hex_identity_evidence(agent_id, observation))
+                    if is_hexed
+                    else HexIdentityEvidence(0, 0, None)
+                )
         except Exception:
             pass
         return ShatterHexAllyObservation(
@@ -1191,7 +1805,9 @@ class SmartShatterHex(BuildMgr):
         parameters: _RuntimeParameters,
         *,
         selected_agent_id: int | None = None,
+        observation: ShatterObservation.SnapshotTicket | None = None,
     ) -> tuple[tuple[ShatterHexAllyObservation, ...], tuple[ShatterHexEnemyObservation, ...]] | None:
+        self._live_hex_details = {}
         from Py4GWCoreLib import AgentArray
         from Py4GWCoreLib import Player
         from Py4GWCoreLib import Routines
@@ -1221,12 +1837,177 @@ class SmartShatterHex(BuildMgr):
                         continue
                 except Exception:
                     continue
-            allies.append(self._observe_ally(agent_id))
+            allies.append(self._observe_ally(agent_id, observation))
 
         enemies = self._build_enemy_snapshot()
         if enemies is None:
             return None
         return tuple(allies), enemies
+
+    def _read_urgent_hr(
+        self, agent_id: int, *, attempt: _PendingShatterAttempt | None = None
+    ) -> HrHexObservation | None:
+        from Py4GWCoreLib import GLOBAL_CACHE
+        from Py4GWCoreLib import Agent
+        from Py4GWCoreLib import Profession
+        from Py4GWCoreLib.GlobalCache.HexRemovalPriority import MIN_HEX_REMAINING_MS_TO_REMOVE
+        from Py4GWCoreLib.GlobalCache.HexRemovalPriority import HexRemovalPriority
+        from Py4GWCoreLib.GlobalCache.HexRemovalPriority import TargetRole
+        from Py4GWCoreLib.GlobalCache.HexRemovalPriority import classify_hex_with_role
+        from Py4GWCoreLib.GlobalCache.shared_memory_src.HrHexObservations import MAX_AGE_MS
+        from Py4GWCoreLib.GlobalCache.shared_memory_src.HrHexObservations import VM_SKILL_ID
+        from Py4GWCoreLib.GlobalCache.shared_memory_src.IntentSync import get_uncached_tick_count64
+
+        try:
+            result = GLOBAL_CACHE.ShMem.ReadHrHexObservation(
+                agent_id, Agent.GetLoginNumber(agent_id), Agent.GetNameByID(agent_id)
+            )
+            if result is None or not result.hr_qualified or VM_SKILL_ID not in result.census.hex_ids:
+                return None
+            # The publication proves primary Paragon locally. Use that role with
+            # the cleanser's existing effective profile, not a remote role cache.
+            if (
+                classify_hex_with_role(VM_SKILL_ID, TargetRole.RANGED_MARTIAL, Profession.Paragon.value)
+                != HexRemovalPriority.HIGH
+            ):
+                return None
+            age = get_uncached_tick_count64() - result.sampled_at
+            remaining = _finite_float(result.census.vm_remaining_ms)
+            if not 0 <= age < MAX_AGE_MS or remaining is None or remaining - age <= MIN_HEX_REMAINING_MS_TO_REMOVE:
+                return None
+            if attempt is not None:
+                attempt.hr_read_age_ms = age
+            return result
+        except Exception:
+            return None
+
+    def _failed_hr_claim_is_urgent(self, agent_id: int, policy: ShatterHexPolicy) -> bool:
+        try:
+            observation = self._read_urgent_hr(agent_id)
+            # Reuse current target gates and VM's effective HIGH priority. HIGH
+            # admission needs no splash, legacy effects or another energy scan.
+            return (
+                observation is not None
+                and _candidate_evaluation(self._observe_urgent_ally(observation), (), policy).eligible
+            )
+        except Exception:
+            return False
+
+    def _hr_sample_is_new(self, observation: HrHexObservation) -> bool:
+        with self._local_lock("_hr_accounting_lock"):
+            attempts = getattr(self, "_hr_accounting_attempts", None)
+            guarded = None if attempts is None else attempts[observation.owner.slot]
+            if (
+                guarded is not None
+                and guarded.hr_observation is not None
+                and guarded.hr_observation.binding == observation.binding
+                and (not guarded.hr_accounting_complete or guarded.hr_accounting_failed)
+            ):
+                return False
+            previous = getattr(self, "_hr_samples_used", {}).get(observation.owner.slot)
+            return (
+                previous is None or previous.binding != observation.binding or observation.sequence > previous.sequence
+            )
+
+    def _record_hr_sample(self, attempt: _PendingShatterAttempt) -> None:
+        """Caller holds the local accounting lock; no getters, queue or claims here."""
+        observation = attempt.hr_observation
+        if observation is None:
+            return
+        slot = observation.owner.slot
+        attempts = getattr(self, "_hr_accounting_attempts", None)
+        latest = None if attempts is None else attempts[slot]
+        # The generation dictionary itself may have failed after the sample write.
+        if latest is not None and latest.attempt_generation > attempt.attempt_generation:
+            return
+        samples = getattr(self, "_hr_samples_used", None)
+        if samples is None:
+            samples = self._hr_samples_used = {}
+        generations = getattr(self, "_hr_sample_generations", None)
+        if generations is None:
+            generations = self._hr_sample_generations = {}
+        if generations.get(slot, -1) > attempt.attempt_generation:
+            return
+        previous = samples.get(slot)
+        if previous is None or previous.binding != observation.binding or observation.sequence > previous.sequence:
+            samples[slot] = observation
+        generations[slot] = attempt.attempt_generation
+
+    def _record_accepted_hr_sample(self, attempt: _PendingShatterAttempt) -> None:
+        # Caller holds the accounting lock. The attempt is already retained in a
+        # fixed slot before enqueue. Arm its existing boolean BEFORE any fallible
+        # write: an exception needs no allocation or recovery write to fail closed.
+        # A later successful callback cannot repair an earlier accounting failure;
+        # only a genuinely different owner binding admits a new urgent attempt.
+        previously_failed = attempt.hr_accounting_failed
+        attempt.hr_accounting_failed = True
+        self._record_hr_sample(attempt)
+        attempt.hr_accounting_complete = True
+        attempt.hr_accounting_failed = previously_failed
+
+    def _consume_accepted_hr_sample(self, attempt: _PendingShatterAttempt) -> None:
+        # Acceptance is irreversible. Cancellation/current-generation checks must
+        # never refund it, including a callback that completed before submission returned.
+        with self._local_lock("_hr_accounting_lock"):
+            attempt.enqueue_accepted = True
+            self._record_accepted_hr_sample(attempt)
+            # Retain exactly what was consumed, while the same accounting lock
+            # still excludes callback advancement. No formatting or reads here.
+            attempt.hr_enqueue_observation = attempt.hr_observation
+            attempt.hr_enqueue_age_ms = attempt.hr_sample_age_ms
+
+    def _advance_hr_sample(
+        self, attempt: _PendingShatterAttempt, observation: HrHexObservation, observed_age_ms: int | None = None
+    ) -> bool:
+        with self._local_lock("_hr_accounting_lock"):
+            if (
+                self._pending_attempt is not attempt
+                or self._attempt_generation != attempt.attempt_generation
+                or attempt.hr_observation is None
+                or observation.binding != attempt.hr_observation.binding
+                or observation.sequence < attempt.hr_observation.sequence
+            ):
+                return False
+            attempt.hr_observation = observation
+            if attempt.enqueue_accepted:
+                self._record_accepted_hr_sample(attempt)
+            attempt.hr_sample_age_ms = observed_age_ms
+            return True
+
+    def _observe_urgent_ally(self, observation: HrHexObservation) -> ShatterHexAllyObservation:
+        # Only VM's retained identity supplies HIGH admission; other published
+        # hexes and observed entry count do not supply duration or priority.
+        return self._observe_ally(
+            observation.owner.agent,
+            hex_evidence=HexIdentityEvidence(len(observation.census.hex_ids), 1, int(AdmissionLane.HIGH)),
+        )
+
+    def _find_urgent_observations(self) -> dict[int, HrHexObservation]:
+        from Py4GWCoreLib import Party
+
+        observations: dict[int, HrHexObservation] = {}
+        try:
+            for member in Party.GetPlayers() or ():
+                if not member.is_connected:
+                    continue
+                agent_id = Party.Players.GetAgentIDByLoginNumber(member.login_number)
+                observation = self._read_urgent_hr(agent_id)
+                if observation is not None and self._hr_sample_is_new(observation):
+                    observations[agent_id] = observation
+        except Exception:
+            return {}
+        return observations
+
+    def _build_urgent_snapshot(
+        self, observations: dict[int, HrHexObservation]
+    ) -> tuple[tuple[ShatterHexAllyObservation, ...], tuple[ShatterHexEnemyObservation, ...]] | None:
+        self._live_hex_details = {}
+        allies = tuple(self._observe_urgent_ally(value) for _, value in sorted(observations.items()))
+        enemies = self._build_enemy_snapshot()
+        if enemies is None:
+            return None
+        self._live_hex_details = {agent_id: ((883,), 0) for agent_id in observations}
+        return allies, enemies
 
     def _revalidate_selected(
         self,
@@ -1234,32 +2015,134 @@ class SmartShatterHex(BuildMgr):
         *,
         at_execution: bool,
     ) -> _RuntimeParameters | None:
+        stage = "final_guard" if at_execution else "post_acquisition"
+        self._live_revalidation_result: tuple[str, str] = ("declined", "not_started")
+
+        def declined(reason: str) -> None:
+            self._live_revalidation_result = ("declined", reason)
+
+        observation = (
+            None
+            if attempt.hr_observation is not None
+            else ShatterObservation.begin_revalidation(
+                attempt.observation_epoch,
+                attempt.observation_index,
+                at_execution,
+            )
+        )
+        observation_stage = "exec" if at_execution else "pre"
         if not self._attempt_is_current(attempt):
+            declined("generation_or_lifecycle_changed")
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, observation_stage, "attempt_not_current"
+            )
             return None
         if not self._runtime_gate():
+            declined("runtime_gate_closed")
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, observation_stage, "runtime_gate"
+            )
             return None
         if self._resolve_current_slot() != attempt.slot_index:
+            declined("equipped_slot_invalid")
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, observation_stage, "slot_changed"
+            )
             return None
         if not self._skill_readiness(attempt.slot_index, at_execution=at_execution):
+            declined("energy_or_ready_state_invalid")
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, observation_stage, "readiness"
+            )
             return None
         parameters = self._resolve_runtime_parameters()
         if parameters is None:
+            declined("runtime_parameters_unavailable")
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, observation_stage, "parameters"
+            )
             return None
-        snapshot = self._build_snapshot(parameters, selected_agent_id=attempt.target_agent_id)
+        hr_observation: HrHexObservation | None = None
+        if attempt.hr_observation is not None:
+            hr_observation = self._read_urgent_hr(attempt.target_agent_id, attempt=attempt)
+            if (
+                hr_observation is None
+                or hr_observation.binding != attempt.hr_observation.binding
+                or hr_observation.sequence < attempt.hr_observation.sequence
+            ):
+                declined("hr_owner_vm_evidence_changed")
+                return None
+            if not self._attempt_is_current(attempt):
+                declined("generation_or_lifecycle_changed")
+                return None
+            if not self._advance_hr_sample(attempt, hr_observation, attempt.hr_read_age_ms):
+                declined("generation_or_lifecycle_changed")
+                return None
+            enemies = self._build_enemy_snapshot()
+            snapshot = None if enemies is None else ((self._observe_urgent_ally(hr_observation),), enemies)
+        else:
+            snapshot = self._build_snapshot(
+                parameters, selected_agent_id=attempt.target_agent_id, observation=observation
+            )
         if snapshot is None:
+            declined("ally_observation_unavailable")
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, observation_stage, "snapshot"
+            )
             return None
         decision = evaluate_smart_shatter_hex(snapshot[0], snapshot[1], policy=parameters.policy)
+        ShatterObservation.snapshot_event(observation, "decision", decision)
         selected = decision.selected
         if selected is None or selected.target_agent_id != attempt.target_agent_id:
+            reason = "admission_no_longer_qualifies"
+            if decision.candidates:
+                reason = f"admission_no_longer_qualifies:{decision.candidates[0].reason.value}"
+            declined(reason)
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, observation_stage, "decision_rejected"
+            )
             return None
         if not at_execution:
             try:
                 from Py4GWCoreLib.GlobalCache.WhiteboardLocks import hex_removal_claim_is_owned
 
                 if not hex_removal_claim_is_owned(attempt.claim_token):
+                    declined("claim_lost_or_expired")
+                    ShatterObservation.attempt_event(
+                        attempt.observation_epoch, attempt.observation_index, observation_stage, "claim_not_owned"
+                    )
                     return None
             except Exception:
+                declined("claim_ownership_unavailable")
+                ShatterObservation.attempt_event(
+                    attempt.observation_epoch, attempt.observation_index, observation_stage, "ownership_exception"
+                )
                 return None
+        # Getters may release control. An obsolete callback must not advance a
+        # successor's accounting or renew its claim.
+        if attempt.hr_observation is not None:
+            latest = self._read_urgent_hr(attempt.target_agent_id, attempt=attempt)
+            if (
+                latest is None
+                or hr_observation is None
+                or latest.binding != hr_observation.binding
+                or latest.sequence < hr_observation.sequence
+            ):
+                declined("hr_owner_vm_evidence_changed")
+                return None
+            if not self._attempt_is_current(attempt):
+                declined("generation_or_lifecycle_changed")
+                return None
+            if not self._advance_hr_sample(attempt, latest, attempt.hr_read_age_ms):
+                declined("generation_or_lifecycle_changed")
+                return None
+        self._live_revalidation_result = (
+            "passed",
+            f"stage={stage} lane={self._lane_name(selected.admission_lane)} splash={selected.useful_splash_damage:.1f}",
+        )
+        ShatterObservation.attempt_event(
+            attempt.observation_epoch, attempt.observation_index, observation_stage, "accepted"
+        )
         return parameters
 
     def _attempt_is_current(self, attempt: _PendingShatterAttempt) -> bool:
@@ -1283,21 +2166,54 @@ class SmartShatterHex(BuildMgr):
         )
 
     def _enqueue_guarded(self, attempt: _PendingShatterAttempt) -> bool:
+        accounting: list[_PendingShatterAttempt | None] | None = None
+        previous: _PendingShatterAttempt | None = None
+        owner_slot = 0
         try:
             from Py4GWCoreLib import GLOBAL_CACHE
 
             queue_guard = getattr(GLOBAL_CACHE.SkillBar, "QueueGuardedUseSkill", None)
             if not callable(queue_guard):
+                ShatterObservation.attempt_event(
+                    attempt.observation_epoch, attempt.observation_index, "queue_unavailable"
+                )
                 return False
+            if attempt.hr_observation is not None:
+                with self._local_lock("_hr_accounting_lock"):
+                    accounting = getattr(self, "_hr_accounting_attempts", None)
+                    if accounting is None:
+                        # Lazy initialization also supports the offline fixtures;
+                        # allocation must finish before any ACTION submission.
+                        accounting = self._hr_accounting_attempts = [None] * 64
+                    owner_slot = attempt.hr_observation.owner.slot
+                    previous = accounting[owner_slot]
+                    accounting[owner_slot] = attempt
             result = queue_guard(
                 lambda native_use_skill: self._execute_queued_guard(
                     attempt,
                     native_use_skill,
                 )
             )
-            return result is not False
-        except Exception:
+        except Exception as error:
+            # The owning queue rejects a missing queue/bad callback before append.
+            # Other exceptions may follow append (step IDs/aftercast metadata),
+            # so retain uncertainty even when no acceptance return was observed.
+            if accounting is not None and isinstance(error, (TypeError, ValueError)):
+                with self._local_lock("_hr_accounting_lock"):
+                    accounting[owner_slot] = previous
+            ShatterObservation.attempt_event(attempt.observation_epoch, attempt.observation_index, "queue_exception")
             return False
+        # Current QueueGuardedUseSkill returns None after AddAction completes.
+        # Keep ordinary compatibility, but never interpret an arbitrary truthy
+        # value as acceptance for sample use.
+        accepted = result is None if attempt.hr_observation is not None else result is not False
+        if accepted:
+            self._consume_accepted_hr_sample(attempt)
+        elif accounting is not None:
+            with self._local_lock("_hr_accounting_lock"):
+                accounting[owner_slot] = previous
+        ShatterObservation.attempt_event(attempt.observation_epoch, attempt.observation_index, "queue", result)
+        return accepted
 
     def _execute_queued_guard(
         self,
@@ -1305,9 +2221,19 @@ class SmartShatterHex(BuildMgr):
         native_use_skill: Callable[[int, int], Any],
     ) -> bool:
         parameters = self._revalidate_selected(attempt, at_execution=True)
+        validation_result, validation_detail = getattr(self, "_live_revalidation_result", ("declined", "not_reported"))
         if parameters is None:
-            self._abort_pre_send(attempt)
+            self._abort_pre_send(attempt, "final_revalidation_declined", emit_diagnostic=False)
+            self._live_log(
+                "final_guard_declined",
+                f"id=d{attempt.diagnostic_id} attempt={attempt.attempt_generation} local={attempt.player_agent_id} "
+                f"slot={attempt.slot_index} target={attempt.target_agent_id} callback=entered "
+                f"revalidation={validation_result} reason={validation_detail} native_send_attempted=0 "
+                f"local_state=cancelled active_dispatch=0 exact_release_attempted=1 "
+                f"{self._live_token_identity(attempt.claim_token)}",
+            )
             return False
+        renewal_error = False
         try:
             from Py4GWCoreLib.GlobalCache.WhiteboardLocks import renew_hex_removal_claim
 
@@ -1317,8 +2243,21 @@ class SmartShatterHex(BuildMgr):
             )
         except Exception:
             renewed_token = None
+            renewal_error = True
+        ShatterObservation.attempt_event(
+            attempt.observation_epoch, attempt.observation_index, "renew", renewed_token is not None
+        )
         if renewed_token is None:
-            self._abort_pre_send(attempt)
+            self._abort_pre_send(attempt, "exact_claim_renewal_declined", emit_diagnostic=False)
+            self._live_log(
+                "claim_renewal",
+                f"id=d{attempt.diagnostic_id} attempt={attempt.attempt_generation} local={attempt.player_agent_id} "
+                f"target={attempt.target_agent_id} callback=entered final_revalidation=passed "
+                f"detail={validation_detail} result=declined "
+                f"reason={'exception' if renewal_error else 'token_not_returned'} native_send_attempted=0 "
+                f"local_state=cancelled active_dispatch=0 exact_release_attempted=1 "
+                f"{self._live_token_identity(attempt.claim_token)}",
+            )
             return False
 
         attempt.claim_token = renewed_token
@@ -1327,19 +2266,53 @@ class SmartShatterHex(BuildMgr):
             self._mark_local_cast_pending(parameters.local_dispatch_duration_ms)
         except Exception:
             pass
+        self._live_log(
+            "native_send_attempted",
+            lambda: (
+                f"id=d{attempt.diagnostic_id} attempt={attempt.attempt_generation} local={attempt.player_agent_id} "
+                f"slot={attempt.slot_index} target={attempt.target_agent_id} callback=entered "
+                f"final_revalidation={validation_result} detail={validation_detail} claim_renewal=passed "
+                f"lease_ms={parameters.claim_duration_ms} "
+                f"{self._live_token_identity(renewed_token)}{self._live_hr_evidence(attempt, at_enqueue=False)}"
+            ),
+        )
+        ShatterObservation.attempt_event(attempt.observation_epoch, attempt.observation_index, "binding_enter")
         try:
-            native_use_skill(attempt.slot_index, attempt.target_agent_id)
-        except Exception:
+            binding_return = native_use_skill(attempt.slot_index, attempt.target_agent_id)
+        except Exception as error:
             # The native boundary was entered; keep the finite shared lease.
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, "binding_exception", error
+            )
             return False
+        ShatterObservation.attempt_event(
+            attempt.observation_epoch, attempt.observation_index, "binding_return", binding_return
+        )
         return True
 
-    def _abort_pre_send(self, attempt: _PendingShatterAttempt) -> None:
+    def _abort_pre_send(
+        self,
+        attempt: _PendingShatterAttempt,
+        reason: str = "pre_send_declined",
+        *,
+        emit_diagnostic: bool = True,
+    ) -> None:
         if self._pending_attempt is attempt and attempt.state == "queued":
             self._pending_attempt = None
             self._attempt_generation += 1
         if attempt.state == "queued":
             self._release_claim(attempt.claim_token)
+            if emit_diagnostic:
+                self._live_log(
+                    "queued_attempt_cancelled",
+                    f"id=d{attempt.diagnostic_id} attempt={attempt.attempt_generation} local={attempt.player_agent_id} "
+                    f"slot={attempt.slot_index} target={attempt.target_agent_id} reason={reason} "
+                    "local_state=cancelled active_dispatch=0 exact_release_attempted=1 "
+                    f"{self._live_token_identity(attempt.claim_token)}",
+                )
+            ShatterObservation.attempt_event(
+                attempt.observation_epoch, attempt.observation_index, "abort", "release_requested"
+            )
 
     @staticmethod
     def _release_claim(token: HexRemovalClaimToken) -> None:
