@@ -16,7 +16,6 @@ import time
 import traceback
 import unicodedata
 from collections import Counter
-from collections import OrderedDict
 from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Iterable
@@ -110,6 +109,7 @@ from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_target_ite
 from Sources.icefox.MerchantRules.catalog import normalize_weapon_mod_variant_parts as _normalize_weapon_mod_variant_parts
 from Sources.icefox.MerchantRules.catalog import resolve_rune_description_template as _catalog_resolve_rune_description_template
 from Sources.icefox.MerchantRules.catalog import format_weapon_mod_variant_label as _format_weapon_mod_variant_label
+from Sources.icefox.MerchantRules.catalog_search import RankedCatalogSearch
 
 
 _build_catalog_alias_labels = _catalog_build_catalog_alias_labels
@@ -7411,6 +7411,11 @@ class MerchantRulesWidget:
 
     def __init__(self):
         self.initialized = False
+        self._ranked_catalog_search = RankedCatalogSearch(
+            normalize_text=_normalize_catalog_search_text,
+            coerce_int=_safe_int,
+            capacity=RANKED_SEARCH_CACHE_CAPACITY,
+        )
         self._profile_store = ProfileStore(
             normalize_payload=self._normalize_profile_payload,
             profile_version=PROFILE_VERSION,
@@ -7671,12 +7676,6 @@ class MerchantRulesWidget:
         ] = {}
         self._catalog_generation = 0
         self._catalog_building = False
-        self._flat_ranked_search_cache: OrderedDict[
-            tuple[int, str], tuple[dict[str, object], ...]
-        ] = OrderedDict()
-        self._exact_ranked_search_cache: OrderedDict[
-            tuple[int, str], tuple[dict[str, object], ...]
-        ] = OrderedDict()
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
         )
@@ -15089,8 +15088,7 @@ class MerchantRulesWidget:
         self._cleanup_deposit_filter_targets_cache = []
 
     def _clear_ranked_search_caches(self) -> None:
-        self._flat_ranked_search_cache.clear()
-        self._exact_ranked_search_cache.clear()
+        self._ranked_catalog_search.clear()
 
     @staticmethod
     def _catalog_entry_search_signature(entry: dict[str, object]) -> tuple[object, ...]:
@@ -16962,104 +16960,18 @@ class MerchantRulesWidget:
                 visible_results.append(entry)
         return visible_results[:expanded_limit]
 
-    def _get_ranked_search_cache_entry(
-        self,
-        cache: OrderedDict[tuple[int, str], tuple[dict[str, object], ...]],
-        query: str,
-    ) -> tuple[dict[str, object], ...] | None:
-        cache_key = (int(self._catalog_generation), query)
-        cached_results = cache.get(cache_key)
-        if cached_results is None:
-            return None
-        cache.move_to_end(cache_key)
-        return cached_results
-
-    def _store_ranked_search_cache_entry(
-        self,
-        cache: OrderedDict[tuple[int, str], tuple[dict[str, object], ...]],
-        query: str,
-        ranked_results: tuple[dict[str, object], ...],
-    ) -> None:
-        cache_key = (int(self._catalog_generation), query)
-        cache[cache_key] = ranked_results
-        cache.move_to_end(cache_key)
-        while len(cache) > RANKED_SEARCH_CACHE_CAPACITY:
-            cache.popitem(last=False)
-
-    def _build_ranked_exact_catalog_search_results(
-        self,
-        query: str,
-    ) -> tuple[dict[str, object], ...]:
-        matches: list[tuple[tuple[object, ...], dict[str, object]]] = []
-        for entry in self._iter_exact_catalog_entries():
-            name = str(entry.get("name", "")).strip()
-            model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
-            if model_id <= 0 or not name:
-                continue
-
-            item_type = _normalize_catalog_search_text(entry.get("item_type", ""))
-            material_type = _normalize_catalog_search_text(entry.get("material_type", ""))
-            model_id_text = str(model_id)
-            name_lower = _normalize_catalog_search_text(name)
-            alias_labels = entry.get("alias_labels", {})
-            alias_matches: list[str] = []
-            if isinstance(alias_labels, dict):
-                alias_matches = [
-                    normalized_alias
-                    for normalized_alias in alias_labels.keys()
-                    if query in str(normalized_alias or "")
-                ]
-            if (
-                query not in name_lower
-                and query not in model_id_text
-                and query not in item_type
-                and query not in material_type
-                and not alias_matches
-            ):
-                continue
-
-            exact_alias_hit = any(alias == query for alias in alias_matches)
-            prefix_alias_hit = any(alias.startswith(query) for alias in alias_matches)
-            raw_item_type_id = entry.get("item_type_id")
-            type_sort = _safe_int(raw_item_type_id, -1) if raw_item_type_id is not None else -1
-            score = (
-                0 if query == model_id_text else 1,
-                0 if name_lower.startswith(query) else 1,
-                0 if query in name_lower else 1,
-                0 if exact_alias_hit else 1,
-                0 if prefix_alias_hit else 1,
-                0 if alias_matches else 1,
-                0 if query in item_type or query in material_type else 1,
-                len(name),
-                name_lower,
-                type_sort,
-            )
-            matches.append((score, entry))
-
-        matches.sort(key=lambda match: match[0])
-        return tuple(entry for _, entry in matches)
-
     def _search_exact_catalog(
         self,
         raw_query: str,
         limit: int = SEARCH_RESULT_LIMIT,
     ) -> list[dict[str, object]]:
-        query = _normalize_catalog_search_text(raw_query)
-        if not query:
-            return []
-
-        ranked_results = self._get_ranked_search_cache_entry(
-            self._exact_ranked_search_cache,
-            query,
+        return self._ranked_catalog_search.search_exact(
+            raw_query,
+            generation=self._catalog_generation,
+            typed_entries=self.exact_catalog_by_item_key,
+            untyped_entries=self.exact_catalog_untyped_by_model_id,
+            limit=limit,
         )
-        if ranked_results is None:
-            ranked_results = self._build_ranked_exact_catalog_search_results(query)
-            self._store_ranked_search_cache_entry(
-                self._exact_ranked_search_cache,
-                query,
-                ranked_results,
-            )
-        return list(ranked_results[: max(1, int(limit))])
 
     def _search_exact_catalog_with_predicate(
         self,
@@ -17134,72 +17046,13 @@ class MerchantRulesWidget:
                 visible_results.append(entry)
         return visible_results[:expanded_limit]
 
-    def _build_ranked_catalog_search_results(
-        self,
-        query: str,
-    ) -> tuple[dict[str, object], ...]:
-        matches: list[tuple[tuple[int, int, int, int, int, int, int, int], dict[str, object]]] = []
-        for entry in self.catalog_by_model_id.values():
-            name = str(entry.get("name", "")).strip()
-            model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
-            if model_id <= 0 or not name:
-                continue
-
-            item_type = _normalize_catalog_search_text(entry.get("item_type", ""))
-            material_type = _normalize_catalog_search_text(entry.get("material_type", ""))
-            model_id_text = str(model_id)
-            name_lower = _normalize_catalog_search_text(name)
-            alias_labels = entry.get("alias_labels", {})
-            alias_matches: list[str] = []
-            if isinstance(alias_labels, dict):
-                alias_matches = [
-                    normalized_alias
-                    for normalized_alias in alias_labels.keys()
-                    if query in str(normalized_alias or "")
-                ]
-            if (
-                query not in name_lower
-                and query not in model_id_text
-                and query not in item_type
-                and query not in material_type
-                and not alias_matches
-            ):
-                continue
-
-            exact_alias_hit = any(alias == query for alias in alias_matches)
-            prefix_alias_hit = any(alias.startswith(query) for alias in alias_matches)
-            score = (
-                0 if query == model_id_text else 1,
-                0 if name_lower.startswith(query) else 1,
-                0 if query in name_lower else 1,
-                0 if exact_alias_hit else 1,
-                0 if prefix_alias_hit else 1,
-                0 if alias_matches else 1,
-                0 if query in item_type or query in material_type else 1,
-                len(name),
-            )
-            matches.append((score, entry))
-
-        matches.sort(key=lambda match: match[0])
-        return tuple(entry for _, entry in matches)
-
     def _search_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
-        query = _normalize_catalog_search_text(raw_query)
-        if not query:
-            return []
-
-        ranked_results = self._get_ranked_search_cache_entry(
-            self._flat_ranked_search_cache,
-            query,
+        return self._ranked_catalog_search.search_flat(
+            raw_query,
+            generation=self._catalog_generation,
+            entries=self.catalog_by_model_id,
+            limit=limit,
         )
-        if ranked_results is None:
-            ranked_results = self._build_ranked_catalog_search_results(query)
-            self._store_ranked_search_cache_entry(
-                self._flat_ranked_search_cache,
-                query,
-                ranked_results,
-            )
-        return list(ranked_results[: max(1, int(limit))])
 
     def _search_catalog_with_predicate(
         self,
