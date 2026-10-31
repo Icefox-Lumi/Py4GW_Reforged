@@ -37783,6 +37783,540 @@ print("PASS: normal formatter import; no runtime dependencies, initialization, o
     _expect(result.returncode == 0, f"Formatter import isolation failed: {result.stdout}\n{result.stderr}")
 
 
+
+def _capture_service_observation_case(module: Any, case: str) -> dict[str, Any]:
+    """Capture facade access order and values without consulting the live runtime."""
+    import builtins
+    from dataclasses import MISSING
+    from dataclasses import FrozenInstanceError
+
+    core: Any = sys.modules["Py4GWCoreLib"]
+    saved: dict[str, Any] = {name: getattr(core, name, None) for name in ("Agent", "AgentArray")}
+    present = {name: hasattr(core, name) for name in saved}
+    original_player = module.Player
+    original_coerce = module._safe_int
+    original_import = builtins.__import__
+    trace: list[Any] = []
+    raw_ids = [3, 2, 1, 1, 4, 5, 6, 0, -1]
+    ordered_ids = [2, 1, 1, 3, 4, 5, 6, 0, -1]
+    positions: dict[int, Any] = {
+        99: (10.0, 10.0),
+        1: (20.0, 10.0),
+        2: (20.0, 10.0),
+        3: (30.0, 10.0),
+        4: (40.0, 10.0),
+        5: (50.0, 10.0),
+        6: (60.0, 10.0),
+    }
+    names: dict[int, Any] = {
+        1: "First [Merchant]",
+        2: "Tie [Marchande]",
+        3: "The Merchant Prince",
+        4: "",
+        5: RuntimeError("name unavailable"),
+        6: "Rune [Rune Trader]",
+    }
+
+    class Facade:
+        def __init__(self, label: str, members: dict[str, Any]) -> None:
+            self.label = label
+            self.members = members
+
+        def __getattr__(self, name: str) -> Any:
+            trace.append(("get", self.label, name))
+            if case == "origin_attribute_throws" and self.label == "Player" and name == "GetAgentID":
+                raise RuntimeError("attribute unavailable")
+            if name not in self.members:
+                raise AttributeError(name)
+            return self.members[name]
+
+    def call(label: str, result: Any) -> Any:
+        def invoke(*args: Any) -> Any:
+            trace.append(("call", label, args))
+            if case == label + "_throws":
+                raise RuntimeError(label)
+            if case == "player_interrupt" and label == "Player.GetAgentID":
+                raise KeyboardInterrupt("do not catch BaseException")
+            return result(*args) if callable(result) else result
+
+        return invoke
+
+    def read_name(agent_id: int) -> Any:
+        value = names[agent_id]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    if case == "invalid_player":
+        player_id: Any = 0
+    elif case == "unparseable_player":
+        player_id = "invalid"
+    else:
+        player_id = 99
+    if case == "nonfinite_player":
+        positions[99] = (float("nan"), 1.0)
+    if case == "invalid_player_coordinates":
+        positions[99] = ["bad", 1]
+    if case == "distinct_tie":
+        positions[1] = (10.0, 20.0)
+    if case == "invalid_nearest":
+        positions[2] = (float("inf"), 0.0)
+    if case == "invalid_role_coordinates":
+        positions[1] = positions[2] = None
+    if case == "empty":
+        raw_ids = []
+        ordered_ids = []
+    if case == "unknown":
+        names = {key: "Harbor Guide" for key in names}
+    if case == "multilingual":
+        names[2] = "Ari [  MARCHANDE   DE   MAT\u00c9RIAUX  ]"
+        names[1] = "Bela [\u0422\u043e\u0440\u0433\u043e\u0432\u0435\u0446 \u0440\u0443\u043d\u0430\u043c\u0438]"
+        names[6] = "Cori [Rare Scroll Trader]"
+    if case == "partial":
+        names[2] = "Ari [Merchant] extra"
+        names[1] = "Ari [Merchant"
+        names[6] = "Xunlai Agent"
+
+    def read_xy(agent_id: int) -> Any:
+        return positions[agent_id]
+
+    def filter_ids(agent_ids: list[int], _position: tuple[float, float], _distance: float) -> list[int]:
+        return agent_ids
+
+    def sort_ids(_agent_ids: list[int], _position: tuple[float, float]) -> list[int]:
+        return list(ordered_ids)
+
+    player_members: dict[str, Any] = {
+        "GetAgentID": call("Player.GetAgentID", player_id),
+        "GetXY": call("Player.GetXY", (900.0, 900.0)),
+    }
+    agent_members: dict[str, Any] = {
+        "GetXY": call("Agent.GetXY", read_xy),
+        "GetNameByID": call("Agent.GetNameByID", read_name),
+    }
+    if case in ("absent_player_api", "fallback_invalid", "Player.GetXY_throws"):
+        player_members.pop("GetAgentID")
+    if case == "fallback_invalid":
+        player_members["GetXY"] = call("Player.GetXY", (1.0, float("inf")))
+    if case == "absent_position_api":
+        agent_members.pop("GetXY")
+    if case == "absent_name_api":
+        agent_members.pop("GetNameByID")
+    array_members: dict[str, Any] = {
+        "GetNPCMinipetArray": call("Array.GetNPCMinipetArray", lambda: list(raw_ids)),
+        "Filter": Facade("Filter", {"ByDistance": call("Filter.ByDistance", filter_ids)}),
+        "Sort": Facade("Sort", {"ByDistance": call("Sort.ByDistance", sort_ids)}),
+    }
+    if case == "absent_population_api":
+        array_members.pop("GetNPCMinipetArray")
+    if case == "absent_filter_api":
+        array_members.pop("Filter")
+    if case == "absent_sort_api":
+        array_members.pop("Sort")
+
+    def traced_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
+        if name == "Py4GWCoreLib":
+            trace.append(("import", tuple(fromlist)))
+        return original_import(name, globals, locals, fromlist, level)
+
+    def coerce(value: object, default: int = 0) -> int:
+        trace.append(("coerce", value, default))
+        return int(original_coerce(value, default))
+
+    widget = _make_widget(module)
+    try:
+        core.Agent = Facade("Agent", agent_members)
+        core.AgentArray = Facade("Array", array_members)
+        if case == "absent_agent":
+            del core.Agent
+        if case == "absent_array":
+            del core.AgentArray
+        module.Player = Facade("Player", player_members)
+        module._safe_int = coerce
+        builtins.__import__ = traced_import
+        try:
+            snapshot = widget._get_live_service_candidate_snapshot()
+        except BaseException as exc:
+            _expect(
+                case == "player_interrupt" and isinstance(exc, KeyboardInterrupt),
+                f"{case}: unexpected propagated exception {type(exc).__name__}",
+            )
+            return {"exception": type(exc).__name__, "message": str(exc), "trace": trace}
+        snapshot_trace = list(trace)
+        widget._get_live_service_candidate_snapshot = lambda: snapshot
+        recorded: list[Any] = []
+        widget._record_live_service_role_scan = recorded.append
+        if case == "scan_agent_missing":
+            del core.Agent
+        scan = widget._scan_live_service_roles(record_lifecycle=False)
+        _expect(not recorded, f"{case}: record_lifecycle=False recorded a scan")
+        _expect(type(scan) is module.LiveServiceRoleScan, f"{case}: scan class identity changed")
+        _expect(
+            scan.player_xy is snapshot[0]
+            and scan.candidate_ids is snapshot[2]
+            and scan.candidate_fingerprint is snapshot[3],
+            f"{case}: snapshot references were copied",
+        )
+        _expect(
+            tuple(scan.__dataclass_fields__)
+            == (
+                "player_xy",
+                "player_xy_source",
+                "candidate_ids",
+                "candidate_fingerprint",
+                "resolved_coords",
+                "pending_agent_ids",
+            ),
+            f"{case}: scan fields changed",
+        )
+        _expect_raises(
+            FrozenInstanceError, lambda: setattr(scan, "player_xy", None), f"{case}: scan must remain shallowly frozen"
+        )
+        fields = cast(dict[str, Any], scan.__dataclass_fields__)
+        _expect(
+            all(field.default is MISSING and field.default_factory is MISSING for field in fields.values()),
+            f"{case}: scan fields acquired defaults",
+        )
+        _expect(
+            tuple(field.type for field in fields.values())
+            == (
+                tuple[float, float] | None,
+                str,
+                tuple[int, ...],
+                tuple[int, ...],
+                dict[str, tuple[float, float]],
+                frozenset[int],
+            ),
+            f"{case}: scan field types changed",
+        )
+        _expect_raises(
+            TypeError, lambda: module.LiveServiceRoleScan(), f"{case}: scan construction stopped requiring all fields"
+        )
+        _expect_raises(
+            TypeError, lambda: hash(scan), f"{case}: shallowly frozen scan stopped containing an unhashable dictionary"
+        )
+        scan_values = {
+            "player_xy": scan.player_xy,
+            "player_xy_source": scan.player_xy_source,
+            "candidate_ids": scan.candidate_ids,
+            "candidate_fingerprint": scan.candidate_fingerprint,
+            "resolved_coords": dict(scan.resolved_coords),
+            "pending_agent_ids": sorted(scan.pending_agent_ids),
+        }
+        scan.resolved_coords["mutation_probe"] = (1.0, 2.0)
+        _expect(
+            scan.resolved_coords.pop("mutation_probe") == (1.0, 2.0),
+            f"{case}: dictionary field became deeply immutable",
+        )
+        complete_trace = list(trace)
+        second = widget._scan_live_service_roles(record_lifecycle=True)
+        _expect(len(recorded) == 1 and recorded[0] is second, f"{case}: recording did not receive returned object")
+        _expect(
+            second is not scan and second.resolved_coords is not scan.resolved_coords,
+            f"{case}: observations retained mutable results across calls",
+        )
+        return {
+            "snapshot": snapshot,
+            "scan": scan_values,
+            "snapshot_trace": snapshot_trace,
+            "trace": complete_trace,
+            "identity_preserved": True,
+            "recording_preserved": True,
+        }
+    finally:
+        builtins.__import__ = original_import
+        module.Player = original_player
+        module._safe_int = original_coerce
+        for name, value in saved.items():
+            if present[name]:
+                setattr(core, name, value)
+            elif hasattr(core, name):
+                delattr(core, name)
+
+
+def _test_service_observation_characterization(module: Any) -> dict[str, Any]:
+    cases = (
+        "normal",
+        "distinct_tie",
+        "empty",
+        "absent_agent",
+        "absent_array",
+        "absent_population_api",
+        "absent_filter_api",
+        "absent_sort_api",
+        "Array.GetNPCMinipetArray_throws",
+        "Filter.ByDistance_throws",
+        "Sort.ByDistance_throws",
+        "Player.GetAgentID_throws",
+        "Agent.GetXY_throws",
+        "invalid_player",
+        "unparseable_player",
+        "nonfinite_player",
+        "invalid_player_coordinates",
+        "absent_player_api",
+        "absent_position_api",
+        "fallback_invalid",
+        "Player.GetXY_throws",
+        "origin_attribute_throws",
+        "player_interrupt",
+        "absent_name_api",
+        "Agent.GetNameByID_throws",
+        "scan_agent_missing",
+        "invalid_nearest",
+        "invalid_role_coordinates",
+        "unknown",
+        "multilingual",
+        "partial",
+    )
+    results = {case: _capture_service_observation_case(module, case) for case in cases}
+    normal = results["normal"]
+    expected_snapshot = ((10.0, 10.0), "player agent", (2, 1, 1, 3, 4, 5, 6), (1, 2, 3, 4, 5, 6))
+    _expect(normal["snapshot"] == expected_snapshot, f"normal: snapshot differs: {normal['snapshot']!r}")
+    _expect(
+        normal["scan"]
+        == {
+            "player_xy": (10.0, 10.0),
+            "player_xy_source": "player agent",
+            "candidate_ids": (2, 1, 1, 3, 4, 5, 6),
+            "candidate_fingerprint": (1, 2, 3, 4, 5, 6),
+            "resolved_coords": {"merchant": (20.0, 10.0), "rune_trader": (60.0, 10.0)},
+            "pending_agent_ids": [4, 5],
+        },
+        f"normal: complete scan differs: {normal['scan']!r}",
+    )
+    expected_calls = [
+        ("call", "Player.GetAgentID", ()),
+        ("call", "Agent.GetXY", (99,)),
+        ("call", "Array.GetNPCMinipetArray", ()),
+        ("call", "Filter.ByDistance", ([3, 2, 1, 1, 4, 5, 6, 0, -1], (10.0, 10.0), 15000.0)),
+        ("call", "Sort.ByDistance", ([3, 2, 1, 1, 4, 5, 6, 0, -1], (10.0, 10.0))),
+        ("call", "Agent.GetNameByID", (2,)),
+        ("call", "Agent.GetXY", (2,)),
+        ("call", "Agent.GetNameByID", (1,)),
+        ("call", "Agent.GetXY", (1,)),
+        ("call", "Agent.GetNameByID", (1,)),
+        ("call", "Agent.GetXY", (1,)),
+        ("call", "Agent.GetNameByID", (3,)),
+        ("call", "Agent.GetNameByID", (4,)),
+        ("call", "Agent.GetNameByID", (5,)),
+        ("call", "Agent.GetNameByID", (6,)),
+        ("call", "Agent.GetXY", (6,)),
+    ]
+    _expect(
+        [event for event in normal["trace"] if event[0] == "call"] == expected_calls,
+        f"normal: native facade call order/count changed: {normal['trace']!r}",
+    )
+    _expect(
+        [event for event in normal["trace"] if event[0] == "import"]
+        == [
+            ("import", ("Agent",)),
+            ("import", ("AgentArray",)),
+            ("import", ("Agent",)),
+        ],
+        "normal: lazy native imports changed",
+    )
+    _expect(
+        results["empty"]["snapshot"] == ((10.0, 10.0), "player agent", (), ()), "empty population fabricated candidates"
+    )
+    for case in ("invalid_player", "unparseable_player"):
+        _expect(results[case]["snapshot"] == (None, "player agent unavailable", (), ()), case)
+    for case in ("Player.GetAgentID_throws", "Agent.GetXY_throws", "nonfinite_player", "invalid_player_coordinates"):
+        _expect(results[case]["snapshot"] == (None, "player agent coordinates unavailable", (), ()), case)
+        _expect(
+            not any(event[:2] == ("call", "Player.GetXY") for event in results[case]["trace"]),
+            f"{case}: failed fresh API fell back to stale coordinates",
+        )
+    for case in ("fallback_invalid", "Player.GetXY_throws"):
+        _expect(results[case]["snapshot"] == (None, "player coordinates unavailable", (), ()), case)
+    for case in ("absent_player_api", "absent_position_api"):
+        _expect(results[case]["snapshot"][:2] == ((900.0, 900.0), "Player.GetXY fallback"), case)
+    for case in ("absent_agent", "absent_array"):
+        _expect(results[case]["snapshot"] == (None, "service candidate APIs unavailable (ImportError)", (), ()), case)
+    for case in ("absent_population_api", "absent_filter_api", "absent_sort_api"):
+        _expect(
+            results[case]["snapshot"] == (None, "service candidate APIs unavailable (AttributeError)", (), ()), case
+        )
+    for case in (
+        "Array.GetNPCMinipetArray_throws",
+        "Filter.ByDistance_throws",
+        "Sort.ByDistance_throws",
+        "origin_attribute_throws",
+    ):
+        _expect(results[case]["snapshot"] == (None, "service candidate APIs unavailable (RuntimeError)", (), ()), case)
+    for case in ("absent_name_api", "Agent.GetNameByID_throws", "scan_agent_missing"):
+        _expect(results[case]["scan"]["pending_agent_ids"] == [1, 2, 3, 4, 5, 6], case)
+        _expect(results[case]["scan"]["resolved_coords"] == {}, case)
+    _expect(
+        results["unknown"]["scan"]["pending_agent_ids"] == [] and results["unknown"]["scan"]["resolved_coords"] == {},
+        "unknown roles must not be pending",
+    )
+    _expect(results["partial"]["scan"]["resolved_coords"] == {}, "partial names/Xunlai became service roles")
+    _expect(
+        results["multilingual"]["scan"]["resolved_coords"]
+        == {
+            "material_trader": (20.0, 10.0),
+            "rune_trader": (20.0, 10.0),
+            "rare_scroll_trader": (60.0, 10.0),
+        },
+        "multilingual roles changed",
+    )
+    _expect(
+        results["invalid_nearest"]["scan"]["resolved_coords"]["merchant"] == (20.0, 10.0),
+        "invalid nearest coordinates prevented next valid match",
+    )
+    _expect(
+        "merchant" not in results["invalid_role_coordinates"]["scan"]["resolved_coords"],
+        "invalid coordinates authorized a role",
+    )
+    _expect(
+        results["distinct_tie"]["scan"]["resolved_coords"]["merchant"] == (20.0, 10.0),
+        "Equal-distance candidates stopped preserving facade sort order",
+    )
+    return results
+
+
+def _test_service_observation_recording_and_busy_preview(module: Any) -> dict[str, Any]:
+    fixture_state, restore_agents = _install_service_resolution_agent_fixture(module)
+    agent_state = cast(dict[str, Any], fixture_state)
+    original_clock = module.time.monotonic
+    clock = {"now": 100.0}
+    try:
+        module.time.monotonic = lambda: clock["now"]
+        agent_state["npc_ids"] = [1]
+        agent_state["positions"] = {99: (0.0, 0.0), 1: (100.0, 0.0)}
+        agent_state["names"] = {1: ""}
+        widget = _make_widget(module)
+        before = {
+            key: value for key, value in cast(dict[str, Any], vars(widget)).items() if key.startswith("_service_role_")
+        }
+        scan = widget._scan_live_service_roles(record_lifecycle=False)
+        _expect(
+            before
+            == {
+                key: value
+                for key, value in cast(dict[str, Any], vars(widget)).items()
+                if key.startswith("_service_role_")
+            },
+            "Observation without recording changed lifecycle state",
+        )
+        _expect(scan.pending_agent_ids == frozenset({1}), "Unrecorded observation lost pending candidate")
+        widget._scan_live_service_roles()
+        _expect(
+            widget._service_role_name_retry_deadline_at == 108.0 and widget._service_role_next_poll_at == 100.25,
+            "Recorded observation changed retry timing",
+        )
+
+        widget.preview_ready = True
+        widget.preview_plan = module.PlanResult()
+        widget.cached_context_map_id = int(module.Map.GetMapID())
+        widget.cached_supported_context = (False, "old", {module.MERCHANT_TYPE_MERCHANT: None})
+        busy = {"value": True}
+        builds: list[Any] = []
+        scans: list[Any] = []
+        widget._merchant_rules_has_pending_or_active_work = lambda: busy["value"]
+
+        def context(**kwargs: Any) -> Any:
+            scans.append(kwargs["role_scan_override"])
+            widget.cached_context_map_id = int(module.Map.GetMapID())
+            widget.cached_supported_context = (
+                True,
+                "new",
+                {module.MERCHANT_TYPE_MERCHANT: (100.0, 0.0)},
+            )
+            return widget.cached_supported_context
+
+        def build(**kwargs: Any) -> Any:
+            builds.append(kwargs["supported_context_override"])
+            return module.PlanResult(coords=kwargs["supported_context_override"][2])
+
+        widget._get_supported_context = context
+        widget._build_plan = build
+        agent_state["names"][1] = "Late [Merchant]"
+        widget._refresh_supported_context_from_service_lifecycle(force_context_refresh=True)
+        _expect(
+            len(scans) == 1 and scans[0].resolved_coords == {"merchant": (100.0, 0.0)},
+            "Context refresh did not share the observed scan",
+        )
+        _expect(not builds and widget._service_role_preview_refresh_pending, "Busy work did not defer Preview rebuild")
+        _expect(
+            widget._service_role_observed_coords == {"merchant": (100.0, 0.0)}
+            and widget._service_role_name_retry_deadline_at == 0.0
+            and widget._service_role_next_poll_at == 100.5,
+            "Retained observation/settled poll timing changed",
+        )
+        busy["value"] = False
+        widget._update_service_resolution_lifecycle()
+        _expect(
+            len(builds) == 1 and not widget._service_role_preview_refresh_pending,
+            "Idle transition did not consume exactly one deferred Preview",
+        )
+        widget._update_service_resolution_lifecycle()
+        _expect(len(builds) == 1, "Deferred Preview rebuilt more than once")
+        return {
+            "retry_deadline": 108.0,
+            "retry_poll": 100.25,
+            "settled_poll": widget._service_role_next_poll_at,
+            "retained": dict(widget._service_role_observed_coords),
+            "builds": builds,
+            "pending_refresh": widget._service_role_preview_refresh_pending,
+        }
+    finally:
+        module.time.monotonic = original_clock
+        restore_agents()
+
+
+def _test_service_observation_import_isolation() -> None:
+    script = r'''
+import dataclasses
+import math
+import pathlib
+import re
+import sys
+import typing
+import unicodedata
+
+source = pathlib.Path.cwd() / "Sources/icefox/MerchantRules/service_observation.py"
+source_name = str(source.resolve()).casefold()
+calls = []
+events = []
+def audit(event, args):
+    if event != "open" and not event.startswith(("os.", "subprocess.", "socket.", "_thread.")):
+        return
+    frame = sys._getframe(1)
+    while frame is not None:
+        if frame.f_code.co_filename.casefold() == source_name:
+            events.append(event)
+            raise AssertionError(f"Observer initiated import-time I/O/runtime work: {event}")
+        frame = frame.f_back
+def profile(frame, event, arg):
+    if event == "call" and frame.f_code.co_filename.casefold() == source_name:
+        calls.append(frame.f_code.co_name)
+sys.addaudithook(audit)
+sys.setprofile(profile)
+from Sources.icefox.MerchantRules import service_observation
+sys.setprofile(None)
+assert calls == ["<module>", "LiveServiceRoleScan"], calls
+assert not events, events
+assert not any(name.startswith(("Py4GWCoreLib", "PyImGui", "PySystem", "Widgets", "MerchantRules")) for name in sys.modules)
+assert not any("MerchantRules." + part in name for name in sys.modules for part in ("profiles", "catalog", "catalog_search", "preview_text"))
+assert "merchant_rules_regression_target" not in sys.modules
+assert service_observation.coerce_agent_xy((1, 2)) == (1.0, 2.0)
+print("PASS: ordinary observer import without runtime dependencies or observation work")
+'''
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-B", "-S", "-c", script],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    _expect(result.returncode == 0, f"Observer import isolation failed: {result.stdout}\n{result.stderr}")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -37791,6 +38325,12 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            ("service_observation_characterization", lambda: _test_service_observation_characterization(module)),
+            (
+                "service_observation_recording_and_busy_preview",
+                lambda: _test_service_observation_recording_and_busy_preview(module),
+            ),
+            ("service_observation_import_isolation", _test_service_observation_import_isolation),
             ("preview_text_literal_contract", lambda: _test_preview_text_literal_contract(module)),
             ("preview_text_adapter_access_contract", lambda: _test_preview_text_adapter_access_contract(module)),
             ("preview_text_travel_and_plan_contract", lambda: _test_preview_text_travel_and_plan_contract(module)),

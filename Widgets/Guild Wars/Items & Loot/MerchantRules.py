@@ -111,8 +111,24 @@ from Sources.icefox.MerchantRules.catalog import resolve_rune_description_templa
 from Sources.icefox.MerchantRules.catalog import format_weapon_mod_variant_label as _format_weapon_mod_variant_label
 from Sources.icefox.MerchantRules.catalog_search import RankedCatalogSearch
 from Sources.icefox.MerchantRules.preview_text import normalize_preview_entry_reason_display_text
+# Compatibility helpers remain accessible through the widget module.
+from Sources.icefox.MerchantRules.service_observation import LiveServiceRoleScan
+from Sources.icefox.MerchantRules.service_observation import (
+    agent_name_matches_service_role as _service_name_matches_role,
+)
+from Sources.icefox.MerchantRules.service_observation import canonical_service_role as _service_canonical_role
+from Sources.icefox.MerchantRules.service_observation import coerce_agent_xy as _coerce_agent_xy
+from Sources.icefox.MerchantRules.service_observation import extract_agent_role_suffix as _service_extract_role_suffix
+from Sources.icefox.MerchantRules.service_observation import get_agent_search_origin as _service_search_origin
+from Sources.icefox.MerchantRules.service_observation import (
+    get_live_service_candidate_snapshot as _service_candidate_snapshot,
+)
+from Sources.icefox.MerchantRules.service_observation import normalize_service_role_text as _service_normalize_role_text
+from Sources.icefox.MerchantRules.service_observation import scan_live_service_roles as _service_role_scan
 
 
+_extract_agent_role_suffix = _service_extract_role_suffix
+_normalize_service_role_text = _service_normalize_role_text
 _build_catalog_alias_labels = _catalog_build_catalog_alias_labels
 _iter_item_handling_catalog_entries = _catalog_iter_item_handling_catalog_entries
 _resolve_rune_description_template = _catalog_resolve_rune_description_template
@@ -2350,18 +2366,6 @@ class MerchantStockTarget:
     max_per_run: int = 0
     after_purchase: str = AFTER_PURCHASE_KEEP
     check_xunlai_first: bool = False
-
-
-@dataclass(frozen=True)
-class LiveServiceRoleScan:
-    """One bounded view of currently materialized outpost service candidates."""
-
-    player_xy: tuple[float, float] | None
-    player_xy_source: str
-    candidate_ids: tuple[int, ...]
-    candidate_fingerprint: tuple[int, ...]
-    resolved_coords: dict[str, tuple[float, float]]
-    pending_agent_ids: frozenset[int]
 
 
 @dataclass(frozen=True)
@@ -5011,57 +5015,13 @@ def _get_named_agent_target_definition(agent_kind: object, target_key: object) -
         return None
 
 
-def _normalize_service_role_text(value: object) -> str:
-    """Normalize a localized service-role label for exact comparisons."""
-
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(character for character in text if not unicodedata.combining(character))
-    text = text.casefold()
-    return re.sub(r"\s+", " ", text).strip(" []\t\r\n")
-
-
-def _extract_agent_role_suffix(value: object) -> str:
-    """Return only a final complete ``[role]`` suffix, or a role-only name."""
-
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    suffix_match = re.search(r"\[([^\[\]]+)\]\s*$", text)
-    if suffix_match is not None:
-        return str(suffix_match.group(1) or "").strip()
-    if "[" in text or "]" in text:
-        return ""
-    return text
-
-
-def _canonical_service_role(value: object) -> str:
-    """Map a localized role suffix or role-only name to its service key."""
-
-    normalized = _normalize_service_role_text(_extract_agent_role_suffix(value))
-    if not normalized:
-        return ""
-    for service_key, aliases in SERVICE_ROLE_ALIASES.items():
-        if any(normalized == _normalize_service_role_text(alias) for alias in aliases):
-            return service_key
-    return ""
+# Retain the existing helper for callers outside this module.
+def _canonical_service_role(value: object) -> str:  # pyright: ignore[reportUnusedFunction]
+    return _service_canonical_role(value, role_aliases=SERVICE_ROLE_ALIASES)
 
 
 def _agent_name_matches_service_role(agent_name: object, expected_role: object) -> bool:
-    """Match a live NPC only by an exact localized service role."""
-
-    safe_expected_role = str(expected_role or "").strip()
-    canonical_expected = (
-        safe_expected_role
-        if safe_expected_role in SERVICE_ROLE_ALIASES
-        else _canonical_service_role(safe_expected_role)
-    )
-    if not canonical_expected:
-        return False
-    canonical_live = _canonical_service_role(agent_name)
-    return bool(canonical_live and canonical_live == canonical_expected)
+    return _service_name_matches_role(agent_name, expected_role, role_aliases=SERVICE_ROLE_ALIASES)
 
 
 def _agent_encoded_name_matches(agent_id: int, encoded_names: object) -> bool:
@@ -5091,45 +5051,8 @@ def _agent_encoded_name_matches(agent_id: int, encoded_names: object) -> bool:
         return False
 
 
-def _coerce_agent_xy(value: object) -> tuple[float, float] | None:
-    if not isinstance(value, (tuple, list)) or len(value) < 2:
-        return None
-    try:
-        x = float(value[0])
-        y = float(value[1])
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(x) or not math.isfinite(y):
-        return None
-    return x, y
-
-
 def _get_agent_search_origin(agent_api: object) -> tuple[tuple[float, float] | None, str]:
-    """Prefer the live player agent and use the legacy position only when that API is absent."""
-
-    get_player_agent_id = getattr(Player, "GetAgentID", None)
-    get_agent_xy = getattr(agent_api, "GetXY", None)
-    if callable(get_player_agent_id) and callable(get_agent_xy):
-        try:
-            player_agent_id = max(0, _safe_int(get_player_agent_id(), 0))
-            if player_agent_id <= 0:
-                return None, "player agent unavailable"
-            fresh_xy = _coerce_agent_xy(get_agent_xy(player_agent_id))
-            if fresh_xy is None:
-                return None, "player agent coordinates unavailable"
-            return fresh_xy, "player agent"
-        except Exception:
-            # If the live-agent path exists but fails, an older Player.GetXY value may belong
-            # to the previous map instance. Fail closed instead of searching from stale data.
-            return None, "player agent coordinates unavailable"
-
-    try:
-        fallback_xy = _coerce_agent_xy(Player.GetXY())
-    except Exception:
-        fallback_xy = None
-    if fallback_xy is None:
-        return None, "player coordinates unavailable"
-    return fallback_xy, "Player.GetXY fallback"
+    return _service_search_origin(agent_api, player_api=Player, coerce_int=_safe_int)
 
 
 def _normalize_vendor_encoded_identity(raw_identity: object) -> tuple[int, ...] | None:
@@ -19248,34 +19171,11 @@ class MerchantRulesWidget:
     def _get_live_service_candidate_snapshot(
         self,
     ) -> tuple[tuple[float, float] | None, str, tuple[int, ...], tuple[int, ...]]:
-        """Read the current in-range NPC population without requesting names."""
-
-        try:
-            from Py4GWCoreLib import Agent
-            from Py4GWCoreLib import AgentArray
-
-            player_xy, player_xy_source = _get_agent_search_origin(Agent)
-            if player_xy is None:
-                return None, player_xy_source, (), ()
-
-            in_range_ids = AgentArray.Filter.ByDistance(
-                AgentArray.GetNPCMinipetArray(),
-                player_xy,
-                OUTPOST_SERVICE_SEARCH_MAX_DIST,
-            )
-            candidate_ids = tuple(
-                max(0, _safe_int(agent_id, 0))
-                for agent_id in AgentArray.Sort.ByDistance(in_range_ids, player_xy)
-                if max(0, _safe_int(agent_id, 0)) > 0
-            )
-            return (
-                player_xy,
-                player_xy_source,
-                candidate_ids,
-                tuple(sorted(set(candidate_ids))),
-            )
-        except Exception as exc:
-            return None, f"service candidate APIs unavailable ({type(exc).__name__})", (), ()
+        return _service_candidate_snapshot(
+            player_api=Player,
+            coerce_int=_safe_int,
+            search_distance=OUTPOST_SERVICE_SEARCH_MAX_DIST,
+        )
 
     def _record_live_service_role_scan(self, scan: LiveServiceRoleScan) -> None:
         """Retain safe role observations and maintain one bounded name-retry window."""
@@ -19319,45 +19219,8 @@ class MerchantRulesWidget:
         *,
         record_lifecycle: bool = True,
     ) -> LiveServiceRoleScan:
-        """Decode each current candidate once and resolve nearest exact service roles."""
-
-        player_xy, player_xy_source, candidate_ids, fingerprint = (
-            self._get_live_service_candidate_snapshot()
-        )
-        resolved_coords: dict[str, tuple[float, float]] = {}
-        pending_agent_ids: set[int] = set()
-
-        if player_xy is not None:
-            try:
-                from Py4GWCoreLib import Agent
-
-                for agent_id in candidate_ids:
-                    try:
-                        live_name = str(Agent.GetNameByID(agent_id) or "").strip()
-                    except Exception:
-                        live_name = ""
-                    pending = not bool(live_name)
-                    if pending:
-                        pending_agent_ids.add(agent_id)
-                    service_role = _canonical_service_role(live_name) if live_name else ""
-                    if service_role:
-                        try:
-                            agent_xy = _coerce_agent_xy(Agent.GetXY(agent_id))
-                        except Exception:
-                            agent_xy = None
-                        if service_role not in resolved_coords and agent_xy is not None:
-                            resolved_coords[service_role] = agent_xy
-            except Exception:
-                pending_agent_ids.update(candidate_ids)
-
-        scan = LiveServiceRoleScan(
-            player_xy=player_xy,
-            player_xy_source=player_xy_source,
-            candidate_ids=candidate_ids,
-            candidate_fingerprint=fingerprint,
-            resolved_coords=resolved_coords,
-            pending_agent_ids=frozenset(pending_agent_ids),
-        )
+        snapshot = self._get_live_service_candidate_snapshot()
+        scan = _service_role_scan(snapshot, role_aliases=SERVICE_ROLE_ALIASES)
         if record_lifecycle:
             self._record_live_service_role_scan(scan)
         return scan
