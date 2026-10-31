@@ -75,6 +75,8 @@ class BuildMgr:
         self._was_in_aggro = False
         self._local_cast_timer = ThrottledTimer(0)
         self._local_cast_timer.Stop()
+        self._policy_generation: int = 0
+        self._local_action_sequence: int = 0
         self._auto_attack_timer = ThrottledTimer(0)
         self._auto_attack_timer.Stop()
         self._auto_attack_time = 0
@@ -95,13 +97,41 @@ class BuildMgr:
     def OnContractActivated(self, cached_data: Any = None) -> None:
         """Notify a cached build that it is the active runtime contract again."""
 
+        BuildMgr.InvalidatePolicyWork(self)
         if cached_data is not None:
             self.set_cached_data(cached_data)
 
     def Dispose(self, reason: str = "contract_disposed") -> None:
         """Hook for build-owned pending work when its runtime contract leaves."""
 
+        BuildMgr.InvalidatePolicyWork(self)
         del reason
+
+    def GetPolicyGeneration(self) -> int:
+        """Generation consumed only by controllers opting into guarded policy work."""
+        return int(getattr(self, "_policy_generation", 0))
+
+    def InvalidatePolicyWork(self) -> None:
+        """Invalidate unsubmitted policy tokens without touching actions or timers."""
+        self._policy_generation = BuildMgr.GetPolicyGeneration(self) + 1
+
+    def GetLocalActionSequence(self) -> int:
+        """Identify local admissions or fallback handoffs when interpreting resources."""
+        return int(getattr(self, "_local_action_sequence", 0))
+
+    def AdmitPolicySkill(self, skill_id: int, target_agent_id: int = 0) -> bool:
+        """Apply ordinary owner admission immediately before guarded submission."""
+        if not self.CanCastSkillID(skill_id) or not self._validate_target_for_skill_cast(skill_id, target_agent_id):
+            return False
+        if self._is_whiteboard_skill(skill_id):
+            if self._whiteboard_is_claimed(skill_id, target_agent_id):
+                return False
+            self._whiteboard_post_intent(skill_id, target_agent_id)
+        return True
+
+    def MarkPolicySkillSubmitted(self, aftercast_delay: int) -> None:
+        """Start the existing owner-local guard only after a native call."""
+        self._mark_local_cast_pending(aftercast_delay)
 
     def GetEffectAndBuffIds(self, agent_id: int) -> list[int]:
         from Py4GWCoreLib.HeroAI.utils import GetEffectAndBuffIds
@@ -989,6 +1019,7 @@ class BuildMgr:
         return True
 
     def _mark_local_cast_pending(self, aftercast_delay: int) -> None:
+        self._local_action_sequence = BuildMgr.GetLocalActionSequence(self) + 1
         self._local_cast_timer.SetThrottleTime(max(0, int(aftercast_delay)))
         self._local_cast_timer.Reset()
 
@@ -1533,6 +1564,9 @@ class BuildMgr:
 
         fallback = self.ResolveFallback()
         if fallback is not None:
+            # The fallback may admit work through a different owner. Conservatively
+            # stop attributing subsequent resources to this owner's earlier action.
+            self._local_action_sequence = BuildMgr.GetLocalActionSequence(self) + 1
             if is_in_combat:
                 yield from fallback.ProcessCombat()
             else:

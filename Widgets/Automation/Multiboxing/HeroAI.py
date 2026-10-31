@@ -93,6 +93,7 @@ def HandleOutOfCombat(cached_data: CacheData):
     options = cached_data.account_options
     
     if not options or not options.Combat:  # halt operation if combat is disabled
+        heroai_build.InvalidateContractPolicyWork()
         heroai_build.ResetTickExecution()
         return False
     
@@ -100,6 +101,7 @@ def HandleOutOfCombat(cached_data: CacheData):
         return False
 
     if is_follow_recovery_active(cached_data, follow_execution_state):
+        heroai_build.InvalidateContractPolicyWork()
         heroai_build.ResetTickExecution()
         return False
 
@@ -119,10 +121,12 @@ def HandleCombat(cached_data: CacheData):
     options = cached_data.account_options
     
     if not options or not options.Combat:  # halt operation if combat is disabled
+        heroai_build.InvalidateContractPolicyWork()
         heroai_build.ResetTickExecution()
         return False
 
     if is_follow_recovery_active(cached_data, follow_execution_state):
+        heroai_build.InvalidateContractPolicyWork()
         heroai_build.ResetTickExecution()
         return False
     
@@ -238,6 +242,7 @@ def initialize(cached_data: CacheData) -> bool:
         return False
     
     if not GLOBAL_CACHE.Party.IsPartyLoaded():
+        heroai_build.InvalidateContractPolicyWork()
         heroai_build.ResetTickExecution()
         return False
         
@@ -246,6 +251,7 @@ def initialize(cached_data: CacheData) -> bool:
         return False
 
     if Map.IsInCinematic():  # halt operation during cinematic
+        heroai_build.InvalidateContractPolicyWork()
         heroai_build.ResetTickExecution()
         return False
     
@@ -254,6 +260,7 @@ def initialize(cached_data: CacheData) -> bool:
     heroai_build.set_cached_data(cached_data)
     player_agent_id = Player.GetAgentID()
     if not Agent.IsAlive(player_agent_id) or Agent.IsKnockedDown(player_agent_id):
+        heroai_build.InvalidateContractPolicyWork()
         heroai_build.ResetTickExecution()
     cached_data.UpdateCombat()
     return True
@@ -523,4 +530,13 @@ def on_enable():
     HeroAI_FloatingWindows.settings.reset()
     HeroAI_FloatingWindows.SETTINGS_THROTTLE.SetThrottleTime(50)
 
-__all__ = ['main', 'configure', 'on_enable']
+
+def on_disable() -> None:
+    heroai_build.InvalidateContractPolicyWork()
+
+
+def on_pause() -> None:
+    heroai_build.InvalidateContractPolicyWork()
+
+
+__all__ = ['main', 'configure', 'on_enable', 'on_disable', 'on_pause']

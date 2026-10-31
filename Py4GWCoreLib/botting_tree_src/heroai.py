@@ -190,6 +190,8 @@ class BottingTreeHeroAIMixin:
         return self.headless_heroai.IsCombatEnabled()
 
     def SetHeadlessHeroAIEnabled(self: _BottingTreeHeroAIHost, enabled: bool, reset_runtime: bool = True):
+        if not enabled:
+            self.headless_heroai.heroai_build.InvalidateContractPolicyWork()
         self.headless_heroai_enabled = enabled
         self._last_heroai_state = None
         self.ApplyAccountIsolation()

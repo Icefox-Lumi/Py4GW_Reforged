@@ -52,6 +52,11 @@ def _finish(coroutine: Generator[Any, None, Any]) -> Any:
             return result.value
 
 
+finish_coroutine = _finish
+load_test_module = _load
+install_test_module = _module
+
+
 @dataclass
 class _Timer:
     deadline: int | None = None

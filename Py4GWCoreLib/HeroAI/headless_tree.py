@@ -76,6 +76,8 @@ class HeroAIHeadlessTree:
         )
 
     def SetCombatEnabled(self, enabled: bool) -> None:
+        if not enabled:
+            self.heroai_build.InvalidateContractPolicyWork()
         self._headless_combat_enabled = bool(enabled)
 
     def IsCombatEnabled(self) -> bool:
@@ -183,6 +185,7 @@ class HeroAIHeadlessTree:
 
         options = self.cached_data.account_options
         if not options or not options.Combat:
+            self.heroai_build.InvalidateContractPolicyWork()
             self.heroai_build.ResetTickExecution()
             return False
 
@@ -190,6 +193,7 @@ class HeroAIHeadlessTree:
             return False
 
         if is_follow_recovery_active(self.cached_data, self._follow_state):
+            self.heroai_build.InvalidateContractPolicyWork()
             self.heroai_build.ResetTickExecution()
             return False
 
@@ -211,10 +215,12 @@ class HeroAIHeadlessTree:
 
         options = self.cached_data.account_options
         if not options or not options.Combat:
+            self.heroai_build.InvalidateContractPolicyWork()
             self.heroai_build.ResetTickExecution()
             return False
 
         if is_follow_recovery_active(self.cached_data, self._follow_state):
+            self.heroai_build.InvalidateContractPolicyWork()
             self.heroai_build.ResetTickExecution()
             return False
 
@@ -272,6 +278,7 @@ class HeroAIHeadlessTree:
             return False
 
         if not GLOBAL_CACHE.Party.IsPartyLoaded():
+            self.heroai_build.InvalidateContractPolicyWork()
             self.heroai_build.ResetTickExecution()
             return False
 
@@ -280,11 +287,13 @@ class HeroAIHeadlessTree:
             return False
 
         if Map.IsInCinematic():
+            self.heroai_build.InvalidateContractPolicyWork()
             self.heroai_build.ResetTickExecution()
             return False
 
         player_agent_id = Player.GetAgentID()
         if not Agent.IsAlive(player_agent_id) or Agent.IsKnockedDown(player_agent_id):
+            self.heroai_build.InvalidateContractPolicyWork()
             self.heroai_build.ResetTickExecution()
 
         self.heroai_build.set_cached_data(self.cached_data)

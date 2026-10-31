@@ -321,6 +321,8 @@ def _load_widget_module() -> types.ModuleType:
     return subject
 
 
+load_widget_module = _load_widget_module
+
 SUBJECT: Any = _load_widget_module()
 
 

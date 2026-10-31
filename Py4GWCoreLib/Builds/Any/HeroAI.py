@@ -69,6 +69,7 @@ class HeroAI_Build(BuildMgr):
         )
 
     def _dispose_contract(self, reason: str) -> None:
+        self.InvalidateContractPolicyWork()
         contract_build = self._contract_build
         if contract_build is None or contract_build is self:
             return
@@ -99,8 +100,17 @@ class HeroAI_Build(BuildMgr):
                 pass
 
     def ClearBuildContract(self) -> None:
+        self.InvalidateContractPolicyWork()
         self.ResetTickExecution()
         self._reset_contract("contract_cleared")
+
+    def InvalidateContractPolicyWork(self) -> None:
+        """Revoke policy tokens even when there is no scheduler coroutine."""
+        BuildMgr.InvalidatePolicyWork(self)
+        contract_build = self._contract_build
+        if contract_build is not None and contract_build is not self:
+            # This is a primitive, not a new virtual lifecycle/cleanup hook.
+            BuildMgr.InvalidatePolicyWork(contract_build)
 
     def EnsureBuildContract(self, cached_data=None):
         if cached_data is not None:
@@ -117,6 +127,7 @@ class HeroAI_Build(BuildMgr):
                 self.set_cached_data(cached_data)
             return self._contract_build
 
+        self.InvalidateContractPolicyWork()
         if self._standalone_fallback:
             self.set_cached_data(cached_data)
             self._contract_signature = contract_signature
@@ -181,9 +192,11 @@ class HeroAI_Build(BuildMgr):
             return None
 
         if not Map.IsExplorable() or Map.IsInCinematic():
+            self.InvalidateContractPolicyWork()
             return None
 
         if not Agent.IsAlive(Player.GetAgentID()) or Agent.IsKnockedDown(Player.GetAgentID()):
+            self.InvalidateContractPolicyWork()
             return None
 
         cached_data.Update()

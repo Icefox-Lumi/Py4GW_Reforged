@@ -216,6 +216,7 @@ class BottingTree(
     def Pause(self, pause: bool = True):
         if pause and not self.paused:
             self.paused = True
+            self.headless_heroai.heroai_build.InvalidateContractPolicyWork()
             self._restore_heroai_widget_after_headless()
             self._sync_multibox_heroai_widget(False)
             PySystem.Console.Log('BottingTree', 'Botting tree paused.', PySystem.Console.MessageType.Info)

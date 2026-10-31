@@ -348,6 +348,7 @@ class Widget:
     
     on_enable: Optional[Callable] = field(default=None, init=False)
     on_disable: Optional[Callable] = field(default=None, init=False)
+    on_pause: Optional[Callable[[], None]] = field(default=None, init=False)
     
     module: Optional[ModuleType] = field(default=None, init=False, repr=False)
     __enabled: bool = field(default=False, init=False,)
@@ -436,6 +437,9 @@ class Widget:
             self.minimal = getattr(self.module, "minimal", None) if callable(getattr(self.module, "minimal", None)) else None
             self.on_enable = getattr(self.module, "on_enable", None) if callable(getattr(self.module, "on_enable", None)) else None
             self.on_disable = getattr(self.module, "on_disable", None) if callable(getattr(self.module, "on_disable", None)) else None
+            self.on_pause = (
+                getattr(self.module, "on_pause", None) if callable(getattr(self.module, "on_pause", None)) else None
+            )
             
             self.name = getattr(self.module, 'MODULE_NAME', "") if hasattr(self.module, 'MODULE_NAME') else self.cleaned_name()
             self.category = getattr(self.module, 'MODULE_CATEGORY', "") if hasattr(self.module, 'MODULE_CATEGORY') else (self.widget_path.split('/')[0] if self.widget_path else "") #get first folder after Widgets 
@@ -469,8 +473,21 @@ class Widget:
         self.set_configuring(False)
         
     def pause(self):
-        """Pause the widget"""
+        """Pause callbacks, notifying opted-in widgets once before scheduler cleanup."""
+        was_paused = self.__paused
         self.__paused = True
+        if not was_paused and self.on_pause is not None:
+            try:
+                self.on_pause()
+            except Exception as e:
+                PySystem.Console.Log(
+                    "WidgetManager",
+                    f"Error during on_pause of widget {self.folder_script_name}: {str(e)}",
+                    PySystem.Console.MessageType.Error,
+                )
+                PySystem.Console.Log(
+                    "WidgetManager", f"Stack trace: {traceback.format_exc()}", PySystem.Console.MessageType.Error
+                )
         self.PauseCallbacks()
         
     def resume(self):
@@ -616,6 +633,7 @@ class Widget:
         self.minimal : Optional[Callable] = None
         self.on_enable : Optional[Callable] = None
         self.on_disable : Optional[Callable] = None
+        self.on_pause: Optional[Callable[[], None]] = None
         self.optional = True  
         self.__paused = True
         
