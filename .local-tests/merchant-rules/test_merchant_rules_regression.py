@@ -37134,6 +37134,655 @@ def _test_jsonfactory_backup_restore_without_window_geometry(module, temp_root: 
     )
 
 
+def _preview_text_literal_cases() -> list[tuple[str, str, str, str, str]]:
+    # Independent wording oracles: action, raw reason, exact display text.
+    ordinary = [
+        ("", " \t\n", ""),
+        ("unknown", "  Unrecognized  text\nsecond line.  ", "Unrecognized  text\nsecond line."),
+        ("unknown", "hard-protected by all-Weapons Perfect-base", "hard-protected by all-Weapons Perfect-base"),
+        ("sell", "1 individual trade(s).", "1 individual trades."),
+        ("sell", "Standalone rune / insignia item.", "Sell this standalone rune or insignia."),
+        ("sell", "Standalone weapon upgrade component.", "Sell this standalone weapon upgrade component."),
+        (
+            "sell",
+            "Kept by Weapons: reserved to satisfy keep count 2.",
+            "Will remain in inventory because Weapons keeps at least 2.",
+        ),
+        (
+            "sell",
+            "Kept by Weapons: reserved to satisfy keep count 2",
+            "Will remain in inventory because Weapons keeps at least 2.",
+        ),
+        ("unknown", "Protected by Protected Items: exact model.", "Protected by exact Protected Items."),
+        ("unknown", "Protected by Protected Items: exact model", "Protected by exact Protected Items."),
+        (
+            "unknown",
+            "Blocked by Rule 1: Hard-protected by Protected Items: exact model.",
+            "Blocked by Rule 1: protected by exact Protected Items.",
+        ),
+        (
+            "unknown",
+            "Kept by Rule 1: Protected by Protected Items: exact model.",
+            "Kept by Rule 1: protected by exact Protected Items.",
+        ),
+        (
+            "unknown",
+            "Matched by Rule 1: Protected by Protected Items: exact model.",
+            "Matched by Rule 1: protected by exact Protected Items.",
+        ),
+        (
+            "unknown",
+            "Blocked by Rule 1: Hard-protected by Weapons: Protected by model perfect-base range: Axe req 9.",
+            "Blocked by Rule 1: protected by Weapons, requirement range for this model with maximum base stats, Axe req 9.",
+        ),
+        (
+            "unknown",
+            "Protected by Weapons: Protected by all-weapons perfect-base range: Shield req 9.",
+            "Protected by Weapons: requirement range for all weapon types with maximum base stats, Shield req 9.",
+        ),
+        ("unknown", "Kept by Rule: Protected by Weapons: detail.", "Kept by Rule: protected by Weapons, detail."),
+        ("unknown", "Matched by Rule: Protected by Weapons: detail.", "Matched by Rule: protected by Weapons, detail."),
+        ("unknown", "X: Protected by requirement range: detail.", "X: requirement range: detail."),
+        (
+            "unknown",
+            "X: Protected by all-weapons requirement range: detail.",
+            "X: requirement range for all weapon types: detail.",
+        ),
+        ("unknown", "all-weapons perfect-base", "all weapon types maximum base stats"),
+        (
+            "unknown",
+            "rune / insignia; 2 unit(s), 3 batch(es), 4 trade(s), 5 free slot(s).",
+            "rune or insignia; 2 items, 3 lots, 4 trades, 5 free inventory slots.",
+        ),
+        ("unknown", "No material model whitelist configured.", "This rule has no material targets configured."),
+        ("unknown", "No explicit model whitelist configured", "This rule has no exact item targets configured."),
+        ("unknown", "Model ID is required.", "Choose an item for this rule."),
+        ("unknown", "Merchant could not be found in the current map.", "Merchant is not available here."),
+        ("unknown", "Map is not ready.", "Cannot evaluate Merchant Rules because the map is not ready."),
+        (
+            "unknown",
+            "Current map is not an outpost or Guild Hall.",
+            "Cannot use merchant services because the current map is not an outpost or Guild Hall.",
+        ),
+        (
+            "unknown",
+            "Outpost ready: Harbor. Using specific merchant selectors. No merchant or trader NPCs were found.",
+            "No matching merchant or trader service is available here.",
+        ),
+        (
+            "unknown",
+            "Guild Hall ready: Hall. Using generic merchant selectors. No merchant or trader NPCs were found.",
+            "No matching merchant or trader service is available here.",
+        ),
+        (
+            "travel",
+            "Travel first, then rebuild the merchant plan in specific selectors.",
+            "After arrival, Merchant Rules will recheck current items and available services before executing.",
+        ),
+        (
+            "travel",
+            "Travel first, then rebuild the merchant plan in generic selectors",
+            "After arrival, Merchant Rules will recheck current items and available services before executing.",
+        ),
+        (
+            "travel",
+            "Travel to Embark Beach first for Consumable Crafter buys.",
+            "First stop: travel to Embark Beach to craft the selected consumables.",
+        ),
+        (
+            "travel",
+            "Travel to the selected Auto Travel destination for remaining Merchant Rules work.",
+            "After crafting, travel here and recheck current items and available services.",
+        ),
+        ("identify", "SELECTED EXACT RARITY Gold", "Matched exact rarity: Gold."),
+        (
+            "identify",
+            "No unidentified items found for the selected exact rarities.",
+            "No matching unidentified inventory items were found for the selected rarities.",
+        ),
+        (
+            "identify",
+            "No ID kit found.",
+            "Cannot identify this item because no Identification Kit with uses remaining is available.",
+        ),
+        ("buy", "No consumable crafter items selected.", "This rule has no Consumable Crafter items selected."),
+        (
+            "buy",
+            "Selected item is not a supported Embark Beach consumable crafter recipe.",
+            "This item has no supported Consumable Crafter recipe.",
+        ),
+        (
+            "buy",
+            "Consumable crafters are currently supported at Embark Beach only.",
+            "Cannot craft this item because its Consumable Crafter is available only at Embark Beach.",
+        ),
+        (
+            "buy",
+            "Needs exact Xunlai/material-storage scan before crafting.",
+            "Xunlai Storage has not been scanned; crafting will be confirmed after stored items and materials are checked.",
+        ),
+        (
+            "buy",
+            "Will attempt this buy only if the currently opened merchant offers the item.",
+            "Live check: buy only if the Merchant offers this item with a usable price.",
+        ),
+        (
+            "buy",
+            "Will request a Scroll Trader quote and buy only if the trader currently offers the item.",
+            "Live check: buy only if the available Scroll Trader offers this item and returns a valid quote.",
+        ),
+        (
+            "buy",
+            "Will attempt this exact Rune Trader buy after any storage withdrawals if the trader currently offers the item.",
+            "Live check: after planned withdrawals, buy the remaining quantity only if the Rune Trader still offers it.",
+        ),
+        (
+            "withdraw",
+            "Withdraw from Xunlai before buying.",
+            "Move the quantity shown from Xunlai Storage to inventory before any remaining purchase.",
+        ),
+        (
+            "deposit",
+            "No matching inventory items found for this deposit target.",
+            "No matching items are expected to remain in inventory when deposits run.",
+        ),
+        (
+            "deposit",
+            "Skipped by deposit keep-out.",
+            "Will remain in inventory because this target is in Deposit Keep-outs.",
+        ),
+        ("deposit", "Deposit reserve keeps 2 on character.", "Will remain in inventory because this target keeps 2."),
+        (
+            "deposit",
+            "Deposit target keeps 2 on character.",
+            "Move the quantity shown from inventory to Xunlai Storage; keep 2 in inventory.",
+        ),
+        (
+            "deposit",
+            "Deposit reserve left nothing eligible to move.",
+            "All matching items are reserved to remain in inventory.",
+        ),
+        (
+            "deposit",
+            "Linked sell rule no longer exists.",
+            "Cannot deposit from this protection link because its Sell rule was deleted.",
+        ),
+        (
+            "deposit",
+            "Linked deposit sources only support weapon or armor sell protections.",
+            "Cannot use this link because protected-item deposits support only Weapons and Armor Sell rules.",
+        ),
+        (
+            "deposit",
+            "No protected inventory items matched this linked deposit source.",
+            "No inventory items match this linked Weapons or Armor protection rule.",
+        ),
+        ("salvage", "selected model Axe", "Matched exact item target: Axe"),
+        ("salvage", "selected rarity Gold", "Matched rarity Gold"),
+        ("salvage", "Selected model Axe", "Selected model Axe"),
+        (
+            "salvage",
+            "Skipped 1 no normal salvage kit.",
+            "1 inventory entry was not salvaged: no Salvage Kit is available.",
+        ),
+        (
+            "salvage",
+            "Skipped 2 no upgrade salvage kit.",
+            "2 inventory entries were not salvaged: no compatible upgrade Salvage Kit is available.",
+        ),
+        (
+            "salvage",
+            "Skipped 0 no normal salvage kit; no upgrade salvage kit.",
+            "0 inventory entries were not salvaged: no Salvage Kit is available; no compatible upgrade Salvage Kit is available.",
+        ),
+        ("salvage", "Skipped x no normal salvage kit.", "Skipped x no normal salvage kit."),
+        (
+            "destroy",
+            "selected for MR Salvage; salvage wins over destroy.",
+            "reserved for Salvage; Destroy is suppressed because Salvage has priority. The item remains untouched if Salvage cannot run.",
+        ),
+        ("destroy", "Matched by Rule 2.", "Matched Rule 2."),
+        (
+            "destroy",
+            "Included protected item: exact model.",
+            "Protected-item override is active; this item will be permanently destroyed despite: exact model.",
+        ),
+        ("destroy", "Keep count requires splitting a stack of 3.", "Cannot safely split this stack of 3."),
+    ]
+    cases = [(action, "skipped", "merchant", reason, expected) for action, reason, expected in ordinary]
+    for state in ("will execute", "conditional", "skipped", "", "unknown"):
+        cases.append(
+            (
+                "buy",
+                state,
+                "consumable_crafter",
+                "2 unit(s).",
+                "2 items." if state == "skipped" else "Craft the quantity shown. 2 items.",
+            )
+        )
+        cases.append(("buy", state, "consumable_crafter", "CRAFT 2 unit(s).", "CRAFT 2 items."))
+        cases.append(
+            (
+                "destroy",
+                state,
+                "inventory",
+                "Matched by Rule.",
+                "Matched Rule. Permanently destroy the quantity shown." if state == "will execute" else "Matched Rule.",
+            )
+        )
+        cases.append(
+            (
+                "deposit",
+                state,
+                "storage",
+                "Protected by Protected Items: exact model.",
+                (
+                    "Protected by exact Protected Items."
+                    if state == "skipped"
+                    else "Move this item from inventory to Xunlai Storage; it is protected from sale by exact Protected Items."
+                ),
+            )
+        )
+    cases.extend(
+        [
+            (" BUY ", " CONDITIONAL ", "consumable_crafter", "2 unit(s).", "Craft the quantity shown. 2 items."),
+            ("buy", "will execute", " Consumable_Crafter ", "2 unit(s).", "2 items."),
+            ("destroy", " WILL EXECUTE ", "inventory", "PERMANENT override.", "PERMANENT override."),
+            (
+                "destroy",
+                "will execute",
+                "inventory",
+                "Included protected item: exact model.",
+                "Protected-item override is active; this item will be permanently destroyed despite: exact model.",
+            ),
+        ]
+    )
+    return cases
+
+
+def _test_preview_text_literal_contract(module: Any) -> None:
+    widget = _prime_initialized_widget(module, _make_widget(module))
+    for action, state, merchant, reason, expected in _preview_text_literal_cases():
+        entry = module.ExecutionPlanEntry(action, merchant, "Fixture", 1, state, reason)
+        actual = widget._get_preview_reason_for_display(entry)
+        _expect(
+            actual == expected,
+            f"Preview literal action={action!r} state={state!r} merchant={merchant!r} reason={reason!r}: expected={expected!r}, actual={actual!r}",
+        )
+
+
+def _test_preview_text_adapter_access_contract(module: Any) -> None:
+    widget = _prime_initialized_widget(module, _make_widget(module))
+    events: list[str] = []
+
+    class EntryProbe:
+        def __init__(self, action: str, state: str, fail_at: str = "") -> None:
+            self.action_type = action
+            self.state = state
+            self.merchant_type = "consumable_crafter"
+            self.fail_at = fail_at
+
+        def __getattribute__(self, name: str) -> Any:
+            if name in ("action_type", "state", "merchant_type"):
+                events.append(name)
+                if name == object.__getattribute__(self, "fail_at"):
+                    raise ValueError(f"probe:{name}")
+            return object.__getattribute__(self, name)
+
+    for blank in ("", " \n\t", None, 0):
+        events.clear()
+        actual = widget._normalize_preview_entry_reason_display_text(EntryProbe("buy", "skipped", "action_type"), blank)
+        _expect(actual == "" and not events, f"Blank reason {blank!r} accessed entry: {events!r}")
+    for action in ("sell", "unknown", "", " BUY "):
+        for state in ("skipped", "conditional", " WILL EXECUTE "):
+            events.clear()
+            widget._normalize_preview_entry_reason_display_text(EntryProbe(action, state), "2 unit(s).")
+            expected = ["action_type", "state"] + (["merchant_type"] if action.strip().lower() == "buy" else [])
+            _expect(
+                events == expected,
+                f"Entry access action={action!r} state={state!r}: expected={expected}, actual={events}",
+            )
+    for field in ("action_type", "state", "merchant_type"):
+        events.clear()
+        _expect_raises(
+            ValueError,
+            lambda: widget._normalize_preview_entry_reason_display_text(EntryProbe("buy", "skipped", field), "x"),
+            f"Expected original exception at {field}",
+        )
+        expected = ["action_type", "state", "merchant_type"][
+            : ["action_type", "state", "merchant_type"].index(field) + 1
+        ]
+        _expect(events == expected, f"Exception access order for {field}: {events!r}")
+    _expect_raises(
+        ValueError,
+        lambda: widget._normalize_preview_entry_reason_display_text(
+            EntryProbe("salvage", "skipped"), "Skipped " + "9" * 5000 + " no normal salvage kit."
+        ),
+        "Oversized salvage integer must retain ValueError",
+    )
+
+
+def _test_preview_text_travel_and_plan_contract(module: Any) -> None:
+    from dataclasses import asdict
+
+    widget = _prime_initialized_widget(module, _make_widget(module))
+    widget.preview_ready = True
+    widget.preview_requires_execute_travel = True
+    widget.preview_execute_travel_target_outpost_id = 2
+    widget.preview_execute_travel_target_outpost_name = "Regression Harbor"
+    suffixes = [
+        (
+            module.MERCHANT_TYPE_MERCHANT,
+            "Projected after travel to Regression Harbor. Travel + Execute will confirm live Merchant access on arrival.",
+        ),
+        (
+            module.MERCHANT_TYPE_STORAGE,
+            "Projected after travel to Regression Harbor. Travel + Execute will reopen Xunlai after arrival.",
+        ),
+        (
+            "unknown",
+            "Projected after travel to Regression Harbor. Travel + Execute will confirm live merchant handling access on arrival.",
+        ),
+    ]
+    for merchant, current in suffixes:
+        for suffix in (current, current.replace("Travel + Execute", "Execute")):
+            variants = [
+                (suffix, ""),
+                ("1 trade(s). " + suffix, "1 trades."),
+                ("1 trade(s)." + suffix, "1 trades."),
+                (suffix + " trailing", suffix + " trailing"),
+                (suffix.replace("Regression Harbor", "Elsewhere"), suffix.replace("Regression Harbor", "Elsewhere")),
+                (" \n1 trade(s).\n" + suffix + "  ", "1 trades."),
+            ]
+            for pending in (True, False):
+                widget.preview_requires_execute_travel = pending
+                for raw, stripped in variants:
+                    entry = module.ExecutionPlanEntry(
+                        "sell", merchant, "Fixture", 1, module.PLAN_STATE_CONDITIONAL, raw
+                    )
+                    plan = module.PlanResult(
+                        entries=[entry], travel_to_outpost_id=2, travel_to_outpost_name="Regression Harbor"
+                    )
+                    before = asdict(plan)
+                    entries = plan.entries
+                    expected = stripped if pending else raw.strip().replace("trade(s)", "trades")
+                    actual = widget._get_preview_reason_for_display(entry)
+                    _expect(
+                        actual == expected,
+                        f"Travel pending={pending} merchant={merchant!r} raw={raw!r}: expected={expected!r}, actual={actual!r}",
+                    )
+                    _expect(
+                        plan.entries is entries and plan.entries[0] is entry and asdict(plan) == before,
+                        "Display mutated complete plan contents or identities",
+                    )
+    widget.preview_requires_execute_travel = True
+    entry = module.ExecutionPlanEntry("sell", "merchant", "Fixture", 1, "conditional", "1 trade(s).")
+    original_suffix = widget._get_projected_preview_reason_suffix
+
+    def empty_suffix(_merchant_type: str, _target: str) -> str:
+        return ""
+
+    try:
+        widget._get_projected_preview_reason_suffix = empty_suffix
+        _expect(widget._get_preview_reason_for_display(entry) == "1 trades.", "Empty suffix path changed")
+    finally:
+        widget._get_projected_preview_reason_suffix = original_suffix
+
+
+def _test_preview_text_table_contract(module: Any) -> None:
+    from dataclasses import asdict
+
+    widget = _prime_initialized_widget(module, _make_widget(module))
+    widget.preview_ready = True
+    cases: list[tuple[str, str, str, bool, bool, list[tuple[str, object]], str]] = [
+        ("sell", "will execute", "1 trade(s).", False, False, [], module.PREVIEW_STATUS_READY),
+        (
+            "sell",
+            "will execute",
+            "1 trade(s).",
+            True,
+            False,
+            [("1 trades.", module.PREVIEW_STATUS_COLORS[module.PREVIEW_STATUS_READY])],
+            module.PREVIEW_STATUS_READY,
+        ),
+        (
+            "buy",
+            "conditional",
+            "Will attempt this buy only if the currently opened merchant offers the item.",
+            False,
+            False,
+            [
+                (
+                    "Live check: buy only if the Merchant offers this item with a usable price.",
+                    module.PREVIEW_STATUS_COLORS[module.PREVIEW_STATUS_LIVE_CHECK],
+                )
+            ],
+            module.PREVIEW_STATUS_LIVE_CHECK,
+        ),
+        (
+            "sell",
+            "skipped",
+            "Protected by Protected Items: exact model.",
+            False,
+            True,
+            [("Protected by exact Protected Items.", module.UI_COLOR_PURPLE_ACCENT)],
+            module.PREVIEW_STATUS_PROTECTED,
+        ),
+        (
+            "destroy",
+            "will execute",
+            "Matched by Rule.",
+            False,
+            False,
+            [("Matched Rule. Permanently destroy the quantity shown.", module.UI_COLOR_DANGER)],
+            module.PREVIEW_STATUS_READY,
+        ),
+        (
+            "identify",
+            "skipped",
+            "No ID kit found.",
+            False,
+            True,
+            [
+                (
+                    "Cannot identify this item because no Identification Kit with uses remaining is available.",
+                    module.PREVIEW_STATUS_COLORS[module.PREVIEW_STATUS_BLOCKED],
+                )
+            ],
+            module.PREVIEW_STATUS_BLOCKED,
+        ),
+        ("destroy", "will execute", " \n", True, False, [], module.PREVIEW_STATUS_READY),
+    ]
+    imgui = module.PyImGui
+    names = (
+        "begin_table",
+        "table_setup_column",
+        "table_next_row",
+        "table_set_column_index",
+        "text_colored",
+        "text",
+        "end_table",
+    )
+    originals = {name: getattr(imgui, name, None) for name in names}
+    notes: list[tuple[str, object]] = []
+    cells: list[tuple[str, object]] = []
+    columns: list[str] = []
+    tables: list[str] = []
+
+    def begin_table(table_id: str, *_args: object) -> bool:
+        tables.append(table_id)
+        return True
+
+    def setup_column(label: str, *_args: object) -> None:
+        columns.append(label)
+
+    def noop(*_args: object, **_kwargs: object) -> None:
+        pass
+
+    def draw_cell(text: str, color: object) -> None:
+        cells.append((text, color))
+
+    def draw_note(text: str, color: object, **_kwargs: object) -> None:
+        notes.append((text, color))
+
+    def available_here(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    def unavailable_reason(*_args: object, **_kwargs: object) -> str:
+        return ""
+
+    def item_label(entry: Any) -> str:
+        return str(entry.label)
+
+    def item_color(*_args: object) -> object:
+        return module.UI_COLOR_MUTED
+
+    try:
+        imgui.begin_table = begin_table
+        imgui.table_setup_column = setup_column
+        imgui.table_next_row = noop
+        imgui.table_set_column_index = noop
+        imgui.text_colored = draw_cell
+        imgui.text = noop
+        imgui.end_table = noop
+        widget._draw_secondary_text = noop
+        widget._draw_colored_text = draw_note
+        widget._is_preview_entry_available_here = available_here
+        widget._get_preview_unavailable_here_reason = unavailable_reason
+        widget._format_preview_item_label = item_label
+        widget._get_preview_item_text_color = item_color
+        for action, state, raw, detailed, muted, expected_notes, expected_status in cases:
+            notes.clear()
+            cells.clear()
+            columns.clear()
+            tables.clear()
+            widget.detailed_preview = detailed
+            entry = module.ExecutionPlanEntry(action, module.MERCHANT_TYPE_MERCHANT, "Fixture", 1, state, raw)
+            plan = module.PlanResult(entries=[entry])
+            widget.preview_plan = plan
+            before = asdict(plan)
+            entries = plan.entries
+            widget._draw_preview_entries_table(
+                "stage2_preview_contract", entries, show_reasons=muted, muted=muted, plan=plan
+            )
+            _expect(
+                notes == expected_notes,
+                f"Table action={action!r} state={state!r} detailed={detailed}: expected={expected_notes!r}, actual={notes!r}",
+            )
+            _expect(
+                (module.PREVIEW_STATUS_LABELS[expected_status], module.PREVIEW_STATUS_COLORS[expected_status]) in cells,
+                f"Wrong table status for {action}: {cells!r}",
+            )
+            _expect(
+                tables == ["stage2_preview_contract"]
+                and columns == ["Action", "Status", "Where", "Item / Rule", "Qty"],
+                f"Table identity/columns changed: {tables!r}, {columns!r}",
+            )
+            _expect(
+                widget.preview_plan is plan
+                and plan.entries is entries
+                and entries[0] is entry
+                and asdict(plan) == before,
+                "Rendering changed complete plan or identities",
+            )
+    finally:
+        for name, original in originals.items():
+            if original is None:
+                delattr(imgui, name)
+            else:
+                setattr(imgui, name, original)
+    done = module.ExecutionPlanEntry(
+        "buy", "merchant", "Fixture", 0, "skipped", "Unrecognized", status_hint=module.PREVIEW_STATUS_ALREADY_DONE
+    )
+    blocked = module.ExecutionPlanEntry("identify", "inventory", "Fixture", 1, "skipped", "No ID kit found.")
+    _expect(
+        widget._get_skipped_preview_status_key(blocked, "protected unsafe") == module.PREVIEW_STATUS_BLOCKED,
+        "Friendly wording must not drive skipped status",
+    )
+    _expect(
+        widget._get_not_changed_status_counts([done, blocked])
+        == {module.PREVIEW_STATUS_ALREADY_DONE: 1, module.PREVIEW_STATUS_BLOCKED: 1},
+        "Not Changed counts changed",
+    )
+    widget.preview_not_changed_hide_already_done = True
+    visible = widget._get_visible_not_changed_entries([done, blocked])
+    _expect(len(visible) == 1 and visible[0] is blocked, "Not Changed filtering changed")
+    _expect(
+        widget._get_not_changed_group_header_id("sell") == "merchant_rules_preview_not_changed_group_sell"
+        and widget._get_not_changed_group_table_id("sell") == "merchant_rules_preview_not_changed_table_sell",
+        "Stable Not Changed IDs changed",
+    )
+
+
+def _test_preview_text_direct_literals() -> None:
+    from Sources.icefox.MerchantRules.preview_text import normalize_preview_entry_reason_display_text
+
+    for action, state, merchant, reason, expected in _preview_text_literal_cases():
+        actual = normalize_preview_entry_reason_display_text(
+            reason,
+            action_type=action.strip().lower(),
+            is_skipped=state.strip().lower() == "skipped",
+            will_execute=state.strip().lower() == "will execute",
+            is_consumable_crafter=merchant == "consumable_crafter",
+        )
+        _expect(
+            actual == expected,
+            f"Direct formatter input={(action, state, merchant, reason)!r}: expected={expected!r}, actual={actual!r}",
+        )
+
+
+def _test_preview_text_import_isolation() -> None:
+    script = r'''
+import ast
+import pathlib
+import re
+import sys
+
+source = pathlib.Path.cwd() / "Sources/icefox/MerchantRules/preview_text.py"
+source_name = str(source.resolve()).casefold()
+tree = ast.parse(source.read_text(encoding="utf-8"))
+assert all(isinstance(node, (ast.Expr, ast.Import, ast.FunctionDef)) for node in tree.body)
+assert [alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names] == ["re"]
+calls = []
+events = []
+def audit(event, args):
+    if event != "open" and not event.startswith(("os.", "subprocess.", "socket.", "_thread.")):
+        return
+    frame = sys._getframe(1)
+    while frame is not None:
+        if frame.f_code.co_filename.casefold() == source_name:
+            events.append(event)
+            raise AssertionError(f"Formatter initiated I/O/runtime work: {event}, {args!r}")
+        frame = frame.f_back
+def profile(frame, event, arg):
+    if event == "call" and frame.f_code.co_filename.casefold() == source_name:
+        calls.append(frame.f_code.co_name)
+sys.addaudithook(audit)
+sys.setprofile(profile)
+from Sources.icefox.MerchantRules.preview_text import normalize_preview_entry_reason_display_text
+sys.setprofile(None)
+assert calls == ["<module>"], calls
+assert not events, events
+assert not any(name.startswith(("Py4GWCoreLib", "PyImGui", "PySystem", "Widgets", "MerchantRules")) for name in sys.modules)
+assert not any("MerchantRules." + part in name for name in sys.modules for part in ("profiles", "catalog", "catalog_search"))
+assert "merchant_rules_regression_target" not in sys.modules
+assert normalize_preview_entry_reason_display_text("1 individual trade(s).", action_type="sell", is_skipped=False, will_execute=True, is_consumable_crafter=False) == "1 individual trades."
+print("PASS: normal formatter import; no runtime dependencies, initialization, or module-initiated I/O")
+'''
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-B", "-S", "-c", script],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    _expect(result.returncode == 0, f"Formatter import isolation failed: {result.stdout}\n{result.stderr}")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -37142,6 +37791,12 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            ("preview_text_literal_contract", lambda: _test_preview_text_literal_contract(module)),
+            ("preview_text_adapter_access_contract", lambda: _test_preview_text_adapter_access_contract(module)),
+            ("preview_text_travel_and_plan_contract", lambda: _test_preview_text_travel_and_plan_contract(module)),
+            ("preview_text_table_contract", lambda: _test_preview_text_table_contract(module)),
+            ("preview_text_direct_literals", _test_preview_text_direct_literals),
+            ("preview_text_import_isolation", _test_preview_text_import_isolation),
             ("malformed_profile_is_preserved", lambda: _test_malformed_profile_is_preserved(module, temp_root)),
             (
                 "live_config_version_gates_and_preserves_state",
