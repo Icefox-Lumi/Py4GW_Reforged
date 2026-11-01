@@ -36,9 +36,14 @@ import types
 from collections.abc import Callable, Generator
 from collections.abc import Iterator
 from collections.abc import Mapping
+from collections.abc import Sequence
+from dataclasses import dataclass
 from dataclasses import replace
+from itertools import permutations
+from itertools import product
 from pathlib import Path
 from typing import Any
+from typing import Protocol
 from typing import cast
 
 
@@ -38317,6 +38322,241 @@ print("PASS: ordinary observer import without runtime dependencies or observatio
     _expect(result.returncode == 0, f"Observer import isolation failed: {result.stdout}\n{result.stderr}")
 
 
+class _StackSelectionItem(Protocol):
+    @property
+    def item_id(self) -> int: ...
+
+    @property
+    def quantity(self) -> int: ...
+
+
+@dataclass(frozen=True)
+class _StackSelectionRow:
+    item_id: int
+    quantity: int
+
+
+_StackSelectionAtLeast = Callable[[Sequence[_StackSelectionItem], int], set[int]]
+_StackSelectionAtMost = Callable[[Sequence[_StackSelectionItem], int], tuple[set[int], int]]
+
+
+def _exercise_stack_selection_objectives(
+    choose: _StackSelectionAtLeast,
+    at_most: _StackSelectionAtMost,
+) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    cases: list[tuple[list[tuple[int, int]], int, set[int], tuple[set[int], int]]] = [
+        ([(91, 3), (4, 3), (62, 6)], 6, {91, 4}, ({91, 4}, 6)),
+        ([(91, 3), (4, 2), (62, 4), (18, 1)], 4, {62}, ({62}, 4)),
+        ([(91, 4), (4, 3)], 5, {91, 4}, ({91}, 4)),
+        ([(91, 8), (4, 7)], 5, {4}, (set[int](), 0)),
+        ([(7, 2), (7, 3)], 5, {7}, ({7}, 5)),
+        ([(91, 0), (4, -2)], 1, {91}, ({91}, 1)),
+        ([], 3, set[int](), (set[int](), 0)),
+        ([(91, 2)], -1, set[int](), (set[int](), 0)),
+        ([(91, 2)], 0, set[int](), (set[int](), 0)),
+        ([(91, 2), (4, 3)], 20, {91, 4}, ({91, 4}, 5)),
+    ]
+    for pairs, keep, expected_least, expected_most in cases:
+        items = [_StackSelectionRow(*pair) for pair in pairs]
+        observed_least, observed_most = choose(items, keep), at_most(items, keep)
+        _expect(
+            observed_least == expected_least and observed_most == expected_most,
+            f"Selection literal: input={pairs!r}, keep={keep}, "
+            f"expected={(expected_least, expected_most)!r}, observed={(observed_least, observed_most)!r}",
+        )
+        records.append(
+            {
+                "input": pairs,
+                "keep": keep,
+                "least": sorted(observed_least),
+                "most": [sorted(observed_most[0]), observed_most[1]],
+            }
+        )
+
+    # Numerical objectives use unique IDs; literal/original comparisons own tie identity.
+    for size in range(5):
+        for quantities in product(range(1, 4), repeat=size):
+            items = [_StackSelectionRow(item_id, quantity) for item_id, quantity in zip((91, 4, 62, 18), quantities)]
+            sums = {
+                sum(quantity for index, quantity in enumerate(quantities) if mask & (1 << index))
+                for mask in range(1 << size)
+            }
+            for keep in range(sum(quantities) + 3):
+                before = [(id(item), item.item_id, item.quantity) for item in items]
+                least = choose(items, keep)
+                most, retained = at_most(items, keep)
+                least_total = sum(item.quantity for item in items if item.item_id in least)
+                most_total = sum(item.quantity for item in items if item.item_id in most)
+                expected_least = min((value for value in sums if value >= keep), default=sum(quantities))
+                expected_most = max(value for value in sums if value <= keep)
+                _expect(
+                    (least_total, most_total, retained) == (expected_least, expected_most, expected_most),
+                    f"Subset objective: quantities={quantities}, keep={keep}, IDs={(least, most)}, "
+                    f"expected={(expected_least, expected_most, expected_most)}, "
+                    f"observed={(least_total, most_total, retained)}",
+                )
+                again_least, again_most = choose(items, keep), at_most(items, keep)
+                _expect(
+                    least == again_least and (most, retained) == again_most,
+                    f"Repeated selection changed: quantities={quantities}, keep={keep}",
+                )
+                _expect(
+                    least is not again_least and most is not again_most[0],
+                    f"Selection reused a result set: quantities={quantities}, keep={keep}",
+                )
+                _expect(
+                    before == [(id(item), item.item_id, item.quantity) for item in items],
+                    f"Selection mutated input: quantities={quantities}, keep={keep}",
+                )
+                records.append(
+                    {
+                        "input": [(item.item_id, item.quantity) for item in items],
+                        "keep": keep,
+                        "least": sorted(least),
+                        "most": [sorted(most), retained],
+                    }
+                )
+
+    for pairs in permutations(((91, 3), (4, 3), (62, 6))):
+        items = [_StackSelectionRow(*pair) for pair in pairs]
+        least, most = choose(items, 6), at_most(items, 6)
+        records.append({"permutation": pairs, "least": sorted(least), "most": [sorted(most[0]), most[1]]})
+    return records
+
+
+def _exercise_stack_selection_access(
+    choose: _StackSelectionAtLeast,
+    at_most: _StackSelectionAtMost,
+) -> list[dict[str, object]]:
+    events: list[str] = []
+    records: list[dict[str, object]] = []
+
+    class Keep:
+        def __init__(self, value: object) -> None:
+            self.value = value
+
+        def __int__(self) -> int:
+            events.append("keep")
+            return int(cast(int, self.value))
+
+    class Row:
+        def __init__(self, name: str, item_id: int, values: tuple[object, ...]) -> None:
+            self.name = name
+            self.value = item_id
+            self.values = values
+            self.reads = 0
+
+        @property
+        def item_id(self) -> int:
+            events.append(self.name + ".id")
+            return self.value
+
+        @property
+        def quantity(self) -> int:
+            events.append(self.name + ".quantity")
+            value = self.values[min(self.reads, len(self.values) - 1)]
+            self.reads += 1
+            return cast(int, value)
+
+    for policy, function in (("least", choose), ("most", at_most)):
+
+        def capture(items: Sequence[_StackSelectionItem], keep: object) -> str | tuple[str, str]:
+            events.clear()
+            try:
+                value = function(items, cast(int, Keep(keep)))
+                output: str | tuple[str, str] = repr(value)
+            except (TypeError, ValueError, AttributeError) as exc:
+                output = (type(exc).__name__, str(exc))
+            records.append({"policy": policy, "keep": repr(keep), "events": list(events), "output": output})
+            return output
+
+        rows = [Row("A", 91, (2,)), Row("B", 4, (3,)), Row("C", 62, (5,))]
+        capture(rows, 5)
+        expected = ["keep"] + ["A.quantity", "B.quantity", "C.quantity"] * (3 if policy == "least" else 1)
+        expected += ["B.id", "A.id"]
+        _expect(events == expected, f"{policy}: field access expected={expected!r}, observed={events!r}")
+
+        capture([Row("bad", 91, ("bad",))], 0)
+        _expect(events == ["keep"], f"{policy}: zero keep touched quantity: {events!r}")
+        capture([Row("bad", 91, ("bad",))], -2)
+        _expect(events == ["keep"], f"{policy}: negative keep touched quantity: {events!r}")
+        failure = capture([], "invalid")
+        _expect(
+            isinstance(failure, tuple) and failure[0] == "ValueError" and events == ["keep"],
+            f"{policy}: invalid empty keep did not preserve failure: {failure!r}, {events!r}",
+        )
+        failure = capture([Row("bad", 91, ("bad",))], 1)
+        _expect(
+            isinstance(failure, tuple) and failure[0] == "ValueError" and events == ["keep", "bad.quantity"],
+            f"{policy}: invalid quantity failure changed: {failure!r}, {events!r}",
+        )
+        failure = capture([Row("bad", 91, (None,))], 1)
+        _expect(
+            isinstance(failure, tuple) and failure[0] == "TypeError",
+            f"{policy}: None quantity failure changed: {failure!r}",
+        )
+
+        capture([Row("A", 91, (2,)), Row("B", 4, (3,))], 20)
+        expected = ["keep", "A.quantity", "B.quantity"] + (["A.id", "B.id"] if policy == "least" else ["B.id", "A.id"])
+        _expect(events == expected, f"{policy}: total shortcut/access changed: {events!r}")
+
+        # Deliberately malformed compatibility input: IDs are returned without int conversion.
+        raw_id = cast(int, "physical-A")
+        raw_result = function([_StackSelectionRow(raw_id, 1)], 1)
+        selected = raw_result if isinstance(raw_result, set) else raw_result[0]
+        _expect(selected == {raw_id}, f"{policy}: physical ID was normalized: {selected!r}")
+
+    events.clear()
+    fallback = choose([Row("A", 91, (3, 1, 10)), Row("B", 4, (3, 1, 10))], 5)
+    _expect(fallback == {91, 4}, f"At-least fallback changed: {fallback!r}")
+    _expect(
+        events == ["A.quantity", "B.quantity"] * 3 + ["A.id", "B.id"], f"At-least fallback reads changed: {events!r}"
+    )
+    records.append({"fallback": sorted(fallback), "events": list(events)})
+    return records
+
+
+def _test_stack_selection_objectives() -> None:
+    from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset
+    from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset_at_most
+
+    _exercise_stack_selection_objectives(choose_keep_subset, choose_keep_subset_at_most)
+
+
+def _test_stack_selection_access() -> None:
+    from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset
+    from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset_at_most
+
+    _exercise_stack_selection_access(choose_keep_subset, choose_keep_subset_at_most)
+
+
+def _test_stack_selection_import_isolation() -> None:
+    script = r'''
+import sys
+from Sources.icefox.MerchantRules import stack_selection
+assert not any(name.startswith(("Py4GW", "PyImGui", "PySystem", "Widgets")) for name in sys.modules)
+assert "merchant_rules_regression_target" not in sys.modules
+for sibling in ("profiles", "catalog", "catalog_search", "preview_text", "service_observation"):
+    assert "Sources.icefox.MerchantRules." + sibling not in sys.modules
+assert stack_selection.choose_keep_subset([], 1) == set()
+assert stack_selection.choose_keep_subset_at_most([], 1) == (set(), 0)
+print("PASS: ordinary stack_selection import without runtime dependencies")
+'''
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-B", "-S", "-c", script],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    _expect(result.returncode == 0, f"Selector import isolation failed: {result.stdout}\n{result.stderr}")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -38325,6 +38565,9 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            ("stack_selection_objectives", _test_stack_selection_objectives),
+            ("stack_selection_access", _test_stack_selection_access),
+            ("stack_selection_import_isolation", _test_stack_selection_import_isolation),
             ("service_observation_characterization", lambda: _test_service_observation_characterization(module)),
             (
                 "service_observation_recording_and_busy_preview",

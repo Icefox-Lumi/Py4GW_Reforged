@@ -111,6 +111,8 @@ from Sources.icefox.MerchantRules.catalog import resolve_rune_description_templa
 from Sources.icefox.MerchantRules.catalog import format_weapon_mod_variant_label as _format_weapon_mod_variant_label
 from Sources.icefox.MerchantRules.catalog_search import RankedCatalogSearch
 from Sources.icefox.MerchantRules.preview_text import normalize_preview_entry_reason_display_text
+from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset as _choose_keep_subset
+from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset_at_most as _choose_keep_subset_at_most
 # Compatibility helpers remain accessible through the widget module.
 from Sources.icefox.MerchantRules.service_observation import LiveServiceRoleScan
 from Sources.icefox.MerchantRules.service_observation import (
@@ -22529,7 +22531,7 @@ class MerchantRulesWidget:
                 continue
 
             keep_count = max(0, int(rune_target.keep_count))
-            keep_ids = self._choose_keep_subset(matching_items, keep_count)
+            keep_ids = _choose_keep_subset(matching_items, keep_count)
             for item in matching_items:
                 claimed_item_ids.add(item.item_id)
                 if item.item_id not in keep_ids:
@@ -23604,7 +23606,7 @@ class MerchantRulesWidget:
         if not normalized_items:
             return []
 
-        keep_ids, kept_quantity = self._choose_keep_subset_at_most(normalized_items, safe_keep_count)
+        keep_ids, kept_quantity = _choose_keep_subset_at_most(normalized_items, safe_keep_count)
         remaining_keep_quantity = max(0, safe_keep_count - kept_quantity)
         transfers: list[PlannedStorageTransfer] = []
         for item in normalized_items:
@@ -24041,65 +24043,6 @@ class MerchantRulesWidget:
             or self._has_cleanup_sources()
         )
 
-    def _choose_keep_subset(self, items: list[InventoryItemInfo], keep_count: int) -> set[int]:
-        keep_count = max(0, int(keep_count))
-        if keep_count <= 0 or not items:
-            return set()
-
-        total_quantity = sum(max(1, int(item.quantity)) for item in items)
-        if keep_count >= total_quantity:
-            return {item.item_id for item in items}
-
-        max_quantity = max(max(1, int(item.quantity)) for item in items)
-        sum_cap = min(total_quantity, keep_count + max_quantity)
-
-        parents: dict[int, tuple[int, int] | None] = {0: None}
-        for index, item in enumerate(items):
-            item_quantity = max(1, int(item.quantity))
-            existing_sums = sorted(parents.keys(), reverse=True)
-            for current_sum in existing_sums:
-                new_sum = current_sum + item_quantity
-                if new_sum > sum_cap or new_sum in parents:
-                    continue
-                parents[new_sum] = (current_sum, index)
-
-        candidate_sums = [value for value in parents.keys() if value >= keep_count]
-        if not candidate_sums:
-            return {item.item_id for item in items}
-
-        best_sum = min(candidate_sums)
-        keep_ids: set[int] = set()
-        cursor = best_sum
-        while cursor and parents.get(cursor) is not None:
-            previous_sum, index = parents[cursor]
-            keep_ids.add(items[index].item_id)
-            cursor = previous_sum
-        return keep_ids
-
-    def _choose_keep_subset_at_most(self, items: list[InventoryItemInfo], keep_count: int) -> tuple[set[int], int]:
-        keep_count = max(0, int(keep_count))
-        if keep_count <= 0 or not items:
-            return set(), 0
-
-        parents: dict[int, tuple[int, int] | None] = {0: None}
-        for index, item in enumerate(items):
-            item_quantity = max(1, int(item.quantity))
-            existing_sums = sorted(parents.keys(), reverse=True)
-            for current_sum in existing_sums:
-                new_sum = current_sum + item_quantity
-                if new_sum > keep_count or new_sum in parents:
-                    continue
-                parents[new_sum] = (current_sum, index)
-
-        best_sum = max(parents.keys())
-        keep_ids: set[int] = set()
-        cursor = best_sum
-        while cursor and parents.get(cursor) is not None:
-            previous_sum, index = parents[cursor]
-            keep_ids.add(items[index].item_id)
-            cursor = previous_sum
-        return keep_ids, best_sum
-
     def _find_inventory_empty_slot(self, inventory_items: list[InventoryItemInfo] | None = None) -> DestroySplitDestination | None:
         if inventory_items is None:
             inventory_items = self._collect_inventory_items()
@@ -24152,7 +24095,7 @@ class MerchantRulesWidget:
         if keep_count >= total_quantity:
             return [], {item.item_id: max(1, int(item.quantity)) for item in items}, "", 0
 
-        whole_keep_ids, kept_total = self._choose_keep_subset_at_most(items, keep_count)
+        whole_keep_ids, kept_total = _choose_keep_subset_at_most(items, keep_count)
         keep_quantities: dict[int, int] = {
             int(item.item_id): max(1, int(item.quantity))
             for item in items
@@ -24438,7 +24381,7 @@ class MerchantRulesWidget:
                         effective_keep_count,
                     )
                 else:
-                    keep_ids = self._choose_keep_subset(destroy_items, effective_keep_count)
+                    keep_ids = _choose_keep_subset(destroy_items, effective_keep_count)
                     keep_quantities = {
                         int(item.item_id): max(1, int(item.quantity))
                         for item in destroy_items
@@ -26578,7 +26521,7 @@ class MerchantRulesWidget:
                         )
                         continue
 
-                    keep_ids = self._choose_keep_subset(matching_items, target_keep_count)
+                    keep_ids = _choose_keep_subset(matching_items, target_keep_count)
                     for item in matching_items:
                         claimed_item_ids.add(item.item_id)
                         if item.item_id not in keep_ids:
