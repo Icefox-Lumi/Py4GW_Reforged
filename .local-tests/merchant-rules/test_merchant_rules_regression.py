@@ -40848,6 +40848,794 @@ def _test_weapon_mod_normalization_identity(module: Any) -> None:
     _expect_raises(AttributeError, lambda: setattr(value, "value", 1), "Stage 9 match remains frozen.")
 
 
+# Frozen from verified Stage 10 checkpoint, HEAD 27b4fb87da45bd35c3610a8d0b65ff6af10b5bfd.
+_SALVAGE_OPTIONS_ORIGINAL_SOURCE = r'''
+SALVAGE_OPTION_DEFAULT = "default"
+SALVAGE_OPTION_MATERIALS = "materials"
+SALVAGE_OPTION_AUTO_UPGRADE = "auto_upgrade"
+SALVAGE_OPTION_PREFIX = "prefix"
+SALVAGE_OPTION_SUFFIX = "suffix"
+SALVAGE_OPTION_INSCRIPTION = "inscription"
+# Rule modes are the only values accepted from persisted SalvageRule records.
+# Prefix/suffix/inscription remain internal extraction-operation tokens used by
+# the current Specific upgrade resolver and execution path.
+SALVAGE_RULE_MODE_ORDER: tuple[tuple[str, str], ...] = (
+    (SALVAGE_OPTION_MATERIALS, "Materials"),
+    (SALVAGE_OPTION_AUTO_UPGRADE, "Specific upgrade"),
+)
+SALVAGE_RULE_MODE_VALUES: frozenset[str] = frozenset(
+    option for option, _label in SALVAGE_RULE_MODE_ORDER
+)
+SALVAGE_OPERATION_ORDER: tuple[tuple[str, str], ...] = (
+    (SALVAGE_OPTION_MATERIALS, "Salvage materials"),
+    (SALVAGE_OPTION_AUTO_UPGRADE, "Specific upgrade"),
+    (SALVAGE_OPTION_PREFIX, "Salvage prefix"),
+    (SALVAGE_OPTION_SUFFIX, "Salvage suffix"),
+    (SALVAGE_OPTION_INSCRIPTION, "Salvage inscription"),
+)
+SALVAGE_OPERATION_VALUES: frozenset[str] = frozenset(
+    option for option, _label in SALVAGE_OPERATION_ORDER
+)
+SALVAGE_OPTION_DROPDOWN_ORDER: tuple[tuple[str, str], ...] = SALVAGE_RULE_MODE_ORDER
+SALVAGE_UPGRADE_OPTIONS: frozenset[str] = frozenset({
+    SALVAGE_OPTION_PREFIX,
+    SALVAGE_OPTION_SUFFIX,
+    SALVAGE_OPTION_INSCRIPTION,
+})
+
+
+def _canonicalize_salvage_option(raw_option: object) -> str:
+    safe_option = str(raw_option or "").strip().lower()
+    aliases = {
+        "": SALVAGE_OPTION_MATERIALS,
+        "current": SALVAGE_OPTION_MATERIALS,
+        "default": SALVAGE_OPTION_MATERIALS,
+        "default/current behavior": SALVAGE_OPTION_MATERIALS,
+        "salvage materials": SALVAGE_OPTION_MATERIALS,
+        "material": SALVAGE_OPTION_MATERIALS,
+        "auto": SALVAGE_OPTION_AUTO_UPGRADE,
+        "auto upgrade": SALVAGE_OPTION_AUTO_UPGRADE,
+        "auto exact upgrade": SALVAGE_OPTION_AUTO_UPGRADE,
+        "auto exact upgrade slot": SALVAGE_OPTION_AUTO_UPGRADE,
+        "automatic exact upgrade slot": SALVAGE_OPTION_AUTO_UPGRADE,
+        "specific upgrade": SALVAGE_OPTION_AUTO_UPGRADE,
+        "prefix": SALVAGE_OPTION_PREFIX,
+        "salvage prefix": SALVAGE_OPTION_PREFIX,
+        "suffix": SALVAGE_OPTION_SUFFIX,
+        "salvage suffix": SALVAGE_OPTION_SUFFIX,
+        "inscription": SALVAGE_OPTION_INSCRIPTION,
+        "salvage inscription": SALVAGE_OPTION_INSCRIPTION,
+    }
+    return aliases.get(safe_option, safe_option)
+
+
+def _normalize_salvage_operation(raw_option: object) -> str:
+    safe_option = _canonicalize_salvage_option(raw_option)
+    return safe_option if safe_option in SALVAGE_OPERATION_VALUES else SALVAGE_OPTION_MATERIALS
+
+
+def _normalize_salvage_rule_mode(raw_option: object) -> str:
+    safe_option = _canonicalize_salvage_option(raw_option)
+    if safe_option in SALVAGE_RULE_MODE_VALUES:
+        return safe_option
+    raise ValueError(
+        f"Unsupported Merchant Rules persisted Salvage rule mode {str(raw_option or '').strip()!r}. "
+        "Use Materials or Specific upgrade."
+    )
+
+
+def _resolve_salvage_operation(raw_option: object) -> str:
+    safe_option = _normalize_salvage_operation(raw_option)
+    if safe_option == SALVAGE_OPTION_DEFAULT:
+        return SALVAGE_OPTION_MATERIALS
+    return safe_option
+
+
+def _get_salvage_option_label(raw_option: object) -> str:
+    safe_option = _normalize_salvage_operation(raw_option)
+    for option, label in SALVAGE_OPERATION_ORDER:
+        if option == safe_option:
+            return label
+    return "Salvage materials"
+
+
+def _get_salvage_option_dropdown_label(raw_option: object) -> str:
+    safe_option = _normalize_salvage_rule_mode(raw_option)
+    for option, label in SALVAGE_OPTION_DROPDOWN_ORDER:
+        if option == safe_option:
+            return label
+    raise ValueError(f"Unsupported Merchant Rules persisted Salvage rule mode {safe_option!r}.")
+
+
+def _is_auto_exact_upgrade_salvage_option(raw_option: object) -> bool:
+    return _normalize_salvage_operation(raw_option) == SALVAGE_OPTION_AUTO_UPGRADE
+'''
+
+
+_SALVAGE_OPTIONS_FUNCTIONS = (
+    "_canonicalize_salvage_option",
+    "_normalize_salvage_operation",
+    "_normalize_salvage_rule_mode",
+    "_resolve_salvage_operation",
+    "_get_salvage_option_label",
+    "_get_salvage_option_dropdown_label",
+    "_is_auto_exact_upgrade_salvage_option",
+)
+
+_SALVAGE_OPTIONS_CONSTANTS: dict[str, object] = {
+    "SALVAGE_OPTION_DEFAULT": "default",
+    "SALVAGE_OPTION_MATERIALS": "materials",
+    "SALVAGE_OPTION_AUTO_UPGRADE": "auto_upgrade",
+    "SALVAGE_OPTION_PREFIX": "prefix",
+    "SALVAGE_OPTION_SUFFIX": "suffix",
+    "SALVAGE_OPTION_INSCRIPTION": "inscription",
+    "SALVAGE_RULE_MODE_ORDER": (("materials", "Materials"), ("auto_upgrade", "Specific upgrade")),
+    "SALVAGE_RULE_MODE_VALUES": frozenset({"materials", "auto_upgrade"}),
+    "SALVAGE_OPERATION_ORDER": (
+        ("materials", "Salvage materials"),
+        ("auto_upgrade", "Specific upgrade"),
+        ("prefix", "Salvage prefix"),
+        ("suffix", "Salvage suffix"),
+        ("inscription", "Salvage inscription"),
+    ),
+    "SALVAGE_OPERATION_VALUES": frozenset({"materials", "auto_upgrade", "prefix", "suffix", "inscription"}),
+    "SALVAGE_OPTION_DROPDOWN_ORDER": (("materials", "Materials"), ("auto_upgrade", "Specific upgrade")),
+    "SALVAGE_UPGRADE_OPTIONS": frozenset({"prefix", "suffix", "inscription"}),
+}
+
+
+def _salvage_options_original_api() -> Any:
+    original = types.ModuleType("merchant_rules_stage10_original")
+    exec(
+        compile(_SALVAGE_OPTIONS_ORIGINAL_SOURCE, "<frozen Stage 10 original>", "exec", dont_inherit=True),
+        original.__dict__,
+    )
+    return original
+
+
+def _salvage_options_expect(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f"Stage 10 {context}: expected {expected!r}; observed {actual!r}")
+
+
+def _salvage_options_outcome(callback: Callable[[], object]) -> tuple[object, ...]:
+    try:
+        return ("return", callback())
+    except Exception as exc:
+        return ("raise", type(exc), str(exc))
+
+
+def _salvage_options_mode_error(display: str) -> tuple[object, ...]:
+    return (
+        "raise",
+        ValueError,
+        f"Unsupported Merchant Rules persisted Salvage rule mode {display!r}. Use Materials or Specific upgrade.",
+    )
+
+
+def _test_salvage_options_literals(module: Any) -> None:
+    aliases = {
+        "": "materials",
+        "current": "materials",
+        "default": "materials",
+        "default/current behavior": "materials",
+        "salvage materials": "materials",
+        "material": "materials",
+        "materials": "materials",
+        "auto": "auto_upgrade",
+        "auto upgrade": "auto_upgrade",
+        "auto exact upgrade": "auto_upgrade",
+        "auto exact upgrade slot": "auto_upgrade",
+        "automatic exact upgrade slot": "auto_upgrade",
+        "specific upgrade": "auto_upgrade",
+        "auto_upgrade": "auto_upgrade",
+        "prefix": "prefix",
+        "salvage prefix": "prefix",
+        "suffix": "suffix",
+        "salvage suffix": "suffix",
+        "inscription": "inscription",
+        "salvage inscription": "inscription",
+        "unsupported": "unsupported",
+        "auto  upgrade": "auto  upgrade",
+        "specific\nupgrade": "specific\nupgrade",
+    }
+    cases: list[tuple[object, str, str]] = []
+    for raw, canonical in aliases.items():
+        cases.extend((value, canonical, value.strip()) for value in (raw, " \t" + raw.upper() + "\r\n"))
+    cases.extend(
+        [
+            (None, "materials", ""),
+            (False, "materials", ""),
+            (0, "materials", ""),
+            (0.0, "materials", ""),
+            ([], "materials", ""),
+            ({}, "materials", ""),
+            ((), "materials", ""),
+            (b"", "materials", ""),
+            (True, "true", "True"),
+            (7, "7", "7"),
+            (1.25, "1.25", "1.25"),
+            (b"suffix", "b'suffix'", "b'suffix'"),
+            (["suffix"], "['suffix']", "['suffix']"),
+            ({"mode": "suffix"}, "{'mode': 'suffix'}", "{'mode': 'suffix'}"),
+        ]
+    )
+    labels = {
+        "materials": "Salvage materials",
+        "auto_upgrade": "Specific upgrade",
+        "prefix": "Salvage prefix",
+        "suffix": "Salvage suffix",
+        "inscription": "Salvage inscription",
+    }
+    dropdown = {"materials": "Materials", "auto_upgrade": "Specific upgrade"}
+    observations: list[list[tuple[object, ...]]] = []
+    for api in (_salvage_options_original_api(), module):
+        _salvage_options_expect(
+            {name: getattr(api, name) for name in _SALVAGE_OPTIONS_CONSTANTS},
+            _SALVAGE_OPTIONS_CONSTANTS,
+            "literal constants",
+        )
+        _expect(api.SALVAGE_OPTION_DROPDOWN_ORDER is api.SALVAGE_RULE_MODE_ORDER, "Stage 10 tuple alias identity.")
+        observed: list[tuple[object, ...]] = []
+        for raw, canonical, display in cases:
+            operation = canonical if canonical in labels else "materials"
+            mode = ("return", canonical) if canonical in dropdown else _salvage_options_mode_error(display)
+            expected = (
+                ("return", canonical),
+                ("return", operation),
+                mode,
+                ("return", operation),
+                ("return", labels[operation]),
+                ("return", dropdown[canonical]) if canonical in dropdown else mode,
+                ("return", operation == "auto_upgrade"),
+            )
+            for name, outcome in zip(_SALVAGE_OPTIONS_FUNCTIONS, expected):
+                actual = _salvage_options_outcome(lambda: getattr(api, name)(raw))
+                _salvage_options_expect(actual, outcome, f"{name} input={raw!r}")
+                observed.append(actual)
+        observations.append(observed)
+    _salvage_options_expect(observations[1], observations[0], "original/final literal matrix")
+
+
+class _SalvageOptionsConversionProbe:
+    def __init__(self, truth: list[object], strings: list[object], events: list[str]) -> None:
+        self.truth = list(truth)
+        self.strings = list(strings)
+        self.events = events
+
+    def __bool__(self) -> bool:
+        self.events.append("bool")
+        value = self.truth.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return cast(bool, value)
+
+    def __str__(self) -> str:
+        self.events.append("str")
+        value = self.strings.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return cast(str, value)
+
+
+def _test_salvage_options_access(module: Any) -> None:
+    cases: list[tuple[str, list[object], list[object], tuple[object, ...] | None, list[str]]] = [
+        ("false", [False], [], None, ["bool"]),
+        ("truth failure", [RuntimeError("truth failure")], [], ("raise", RuntimeError, "truth failure"), ["bool"]),
+        (
+            "string failure",
+            [True],
+            [LookupError("string failure")],
+            ("raise", LookupError, "string failure"),
+            ["bool", "str"],
+        ),
+        ("bad bool", [1], [], ("raise", TypeError, "__bool__ should return bool, returned int"), ["bool"]),
+        ("bad string", [True], [3], ("raise", TypeError, "__str__ returned non-string (type int)"), ["bool", "str"]),
+        ("stateful diagnostic", [True, True], [" Unsupported ", " Diagnostic "], None, ["bool", "str"]),
+        ("false diagnostic", [True, False], [" Unsupported "], None, ["bool", "str"]),
+        ("second truth failure", [True, RuntimeError("second truth")], [" Unsupported "], None, ["bool", "str"]),
+        ("second string failure", [True, True], [" Unsupported ", LookupError("second string")], None, ["bool", "str"]),
+        ("valid alias", [True], [" SpEcIfIc UpGrAdE "], None, ["bool", "str"]),
+    ]
+    observations: list[list[object]] = []
+    for api in (_salvage_options_original_api(), module):
+        observed: list[object] = []
+        for label, truth, strings, fixed, initial_trace in cases:
+            for name in _SALVAGE_OPTIONS_FUNCTIONS:
+                events: list[str] = []
+                probe = _SalvageOptionsConversionProbe(truth, strings, events)
+                actual = _salvage_options_outcome(lambda: getattr(api, name)(probe))
+                trace = list(initial_trace)
+                if fixed is not None:
+                    expected = fixed
+                elif label == "valid alias":
+                    expected = (
+                        "return",
+                        (
+                            True
+                            if name == "_is_auto_exact_upgrade_salvage_option"
+                            else "Specific upgrade" if "label" in name else "auto_upgrade"
+                        ),
+                    )
+                elif label == "false":
+                    expected = (
+                        "return",
+                        (
+                            False
+                            if name == "_is_auto_exact_upgrade_salvage_option"
+                            else (
+                                "Materials"
+                                if "dropdown_label" in name
+                                else "Salvage materials" if "label" in name else "materials"
+                            )
+                        ),
+                    )
+                elif name in ("_normalize_salvage_rule_mode", "_get_salvage_option_dropdown_label"):
+                    trace.append("bool")
+                    if label == "second truth failure":
+                        expected = ("raise", RuntimeError, "second truth")
+                    elif label == "false diagnostic":
+                        expected = _salvage_options_mode_error("")
+                    else:
+                        trace.append("str")
+                        expected = (
+                            ("raise", LookupError, "second string")
+                            if label == "second string failure"
+                            else _salvage_options_mode_error("Diagnostic")
+                        )
+                else:
+                    expected = (
+                        "return",
+                        (
+                            "unsupported"
+                            if name == "_canonicalize_salvage_option"
+                            else (
+                                False
+                                if name == "_is_auto_exact_upgrade_salvage_option"
+                                else "Salvage materials" if name == "_get_salvage_option_label" else "materials"
+                            )
+                        ),
+                    )
+                _salvage_options_expect((actual, events), (expected, trace), f"{name}, {label}")
+                observed.append((actual, list(events)))
+        observations.append(observed)
+    _salvage_options_expect(observations[1], observations[0], "original/final conversion traces")
+
+
+def _salvage_options_config_ui_observations(module: Any) -> dict[str, Any]:
+    observed: dict[str, Any] = {}
+    imgui_names = ("begin_combo", "selectable", "end_combo", "push_item_width", "pop_item_width")
+    saved_imgui = {name: getattr(module.PyImGui, name) for name in imgui_names}
+    try:
+        for token, expected in (
+            ("default", "materials"),
+            ("auto exact upgrade slot", "auto_upgrade"),
+            ("specific upgrade", "auto_upgrade"),
+        ):
+            widget = _make_widget(module)
+            widget.destroy_include_protected_items = True
+            raw_rule = module.SalvageRule(model_ids=[835], salvage_option=token)
+            before = module.asdict(raw_rule)
+            normalized = module._normalize_salvage_rule(raw_rule)
+            _expect(normalized is not raw_rule, "Stage 10 normalization retains its copy boundary.")
+            _salvage_options_expect(module.asdict(raw_rule), before, "input rule unchanged")
+            _salvage_options_expect(normalized.salvage_option, expected, "normalized saved token")
+            payload = _minimal_profile_payload(module)
+            payload["salvage_settings"] = {"rules": [{"model_ids": [835], "salvage_option": token}]}
+            profile = widget._normalize_profile_payload(payload)
+            settings = module.SalvageSettings(rules=[raw_rule])
+            observed[token] = {
+                "rule": module.asdict(normalized),
+                "serialized": module._serialize_salvage_rule(raw_rule),
+                "settings": module._serialize_salvage_settings(settings),
+                "profile": profile,
+                "profile_json": widget._serialize_profile_payload(profile),
+            }
+            _expect(
+                widget.destroy_include_protected_items is True,
+                "Stage 10 normalization cannot clear session authorization.",
+            )
+            _expect(
+                "destroy_include_protected_items" not in profile, "Stage 10 session authorization cannot be persisted."
+            )
+        for token in ("suffix", "salvage prefix", "inscription", "UNKNOWN"):
+            widget = _make_widget(module)
+            rule = module.SalvageRule(model_ids=[835], salvage_option=token)
+            payload = _minimal_profile_payload(module)
+            payload["salvage_settings"] = {"rules": [{"model_ids": [835], "salvage_option": token}]}
+            calls = cast(dict[str, Any], _install_salvage_option_combo_stubs(module, opened=True))
+            outcomes = [
+                _salvage_options_outcome(lambda: module._normalize_salvage_rule(rule)),
+                _salvage_options_outcome(lambda: module._serialize_salvage_rule(rule)),
+                _salvage_options_outcome(lambda: widget._normalize_profile_payload(payload)),
+                _salvage_options_outcome(lambda: widget._collect_salvage_candidates([], [], manual_salvage_rule=rule)),
+                _salvage_options_outcome(lambda: widget._draw_salvage_option_combo(0, rule)),
+            ]
+            _salvage_options_expect(outcomes, [_salvage_options_mode_error(token)] * 5, "invalid saved token " + token)
+            _salvage_options_expect(calls["begin"], [], "rejection precedes UI rendering")
+            observed["invalid_" + token] = (outcomes, calls)
+        for initial, click, expected in (
+            ("default", "Specific upgrade", "auto_upgrade"),
+            ("auto_upgrade", "Materials", "materials"),
+        ):
+            widget = _make_widget(module)
+            rule = module.SalvageRule(model_ids=[835], salvage_option=initial)
+            rules = [rule]
+            widget.salvage_settings = module.SalvageSettings(rules=rules)
+            calls = cast(dict[str, Any], _install_salvage_option_combo_stubs(module, opened=True, clicked_label=click))
+            changed = widget._draw_salvage_option_combo(0, rule)
+            _expect(
+                widget.salvage_settings.rules is rules and rules[0] is rule, "Stage 10 UI retains list/rule identity."
+            )
+            _salvage_options_expect((changed, rule.salvage_option), (True, expected), "UI choice " + click)
+            observed["ui_" + click] = (changed, module.asdict(rule), calls)
+    finally:
+        for name, value in saved_imgui.items():
+            setattr(module.PyImGui, name, value)
+    return observed
+
+
+def _salvage_options_plan_observations(module: Any) -> dict[str, Any]:
+    observed: dict[str, Any] = {}
+    original_db = _install_weapon_mod_catalog_fixture(module)
+    missing = object()
+    original_item_api = getattr(module.GLOBAL_CACHE, "Item", missing)
+    try:
+        for case in (
+            "materials",
+            "default",
+            "prefix",
+            "suffix",
+            "inscription",
+            "no_kit",
+            "no_upgrade_kit",
+            "no_target",
+            "no_backend",
+            "protected",
+            "typed_protected",
+            "customized",
+            "blocked_sell",
+            "blocked_destroy",
+            "nonmatch_sell",
+            "nonmatch_destroy",
+            "keep_floor",
+        ):
+            widget = _make_widget(module)
+            events: list[object] = []
+            if case in ("materials", "default", "no_kit"):
+                item = cast(
+                    Any,
+                    _make_item(
+                        module,
+                        item_id=83501,
+                        model_id=835,
+                        name="Stage 10 material stack",
+                        quantity=5,
+                        rarity="White",
+                        identified=True,
+                        salvageable=True,
+                        is_stackable=True,
+                    ),
+                )
+                rule = module.SalvageRule(
+                    model_ids=[835], salvage_option="default" if case == "default" else "materials"
+                )
+            else:
+                item_builder = cast(
+                    Callable[[Any], Any],
+                    (
+                        _make_specific_prefix_item
+                        if case == "prefix"
+                        else _make_specific_inscription_item if case == "inscription" else _make_specific_suffix_item
+                    ),
+                )
+                rule_builder = cast(
+                    Callable[[Any, str], Any],
+                    (
+                        _make_specific_prefix_salvage_rule
+                        if case == "prefix"
+                        else (
+                            _make_specific_inscription_salvage_rule
+                            if case == "inscription"
+                            else _make_specific_suffix_salvage_rule
+                        )
+                    ),
+                )
+                item = item_builder(module)
+                rule = rule_builder(module, "auto_upgrade")
+            if case == "no_target":
+                rule = module.SalvageRule(model_ids=[item.model_id], salvage_option="auto_upgrade")
+            if case.startswith("nonmatch") or case == "keep_floor":
+                item.weapon_mod_identifiers = []
+                item.weapon_mod_matches = []
+            if case == "customized":
+                item.is_customized = True
+            rules = [rule, module.SalvageRule(model_ids=[item.model_id], salvage_option="materials")]
+            if case.startswith("nonmatch") or case == "keep_floor":
+                rules = [rule]
+            widget.salvage_settings = module.SalvageSettings(rules=rules)
+            if case == "protected":
+                widget.protected_item_model_ids = [item.model_id]
+            if case == "typed_protected":
+                widget.protected_item_targets = [
+                    module.ExactProtectionTarget(model_id=item.model_id, item_type_id=item.item_type_id)
+                ]
+            if case in ("blocked_sell", "nonmatch_sell", "keep_floor", "materials", "customized"):
+                widget.sell_rules = [
+                    module._normalize_sell_rule(
+                        module.SellRule(
+                            enabled=True,
+                            kind=module.SELL_KIND_EXPLICIT_MODELS,
+                            whitelist_targets=[
+                                module.WhitelistTarget(
+                                    model_id=item.model_id, keep_count=1 if case == "keep_floor" else 0
+                                )
+                            ],
+                            skip_customized=True,
+                        )
+                    )
+                ]
+            if case in ("blocked_destroy", "nonmatch_destroy", "protected", "typed_protected"):
+                widget.destroy_rules = [
+                    module._normalize_destroy_rule(
+                        module.DestroyRule(
+                            enabled=True,
+                            kind=module.DESTROY_KIND_EXPLICIT_MODELS,
+                            whitelist_targets=[module.WhitelistTarget(model_id=item.model_id, keep_count=0)],
+                        )
+                    )
+                ]
+            items = [item]
+            before_item = module.asdict(item)
+            before_rules = [module.asdict(value) for value in rules]
+            widget._collect_inventory_items = lambda: items
+            widget._get_inventory_item_ids = lambda: (
+                [] if case == "no_kit" else [901] if case == "no_upgrade_kit" else [901, 902]
+            )
+            widget._get_supported_context = lambda *, passive=False: (
+                True,
+                "Ready",
+                {module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)},
+            )
+
+            def model_id(item_id: int) -> int:
+                events.append(("kit_model", item_id))
+                return int(
+                    module.NORMAL_SALVAGE_KIT_MODEL_IDS[0]
+                    if item_id == 901
+                    else module.UPGRADE_SALVAGE_KIT_MODEL_IDS[0]
+                )
+
+            def uses(item_id: int) -> int:
+                events.append(("kit_uses", item_id))
+                return 5
+
+            module.GLOBAL_CACHE.Item = types.SimpleNamespace(
+                GetModelID=model_id, Usage=types.SimpleNamespace(GetUses=uses)
+            )
+            bridge = module._MerchantRulesExactUpgradeSalvageBridge()
+
+            def dependencies() -> tuple[bool, str]:
+                events.append("backend")
+                available = case not in ("no_backend", "blocked_sell", "blocked_destroy")
+                return available, "" if available else "slot UI temporarily unavailable"
+
+            bridge._load_dependencies = dependencies
+            widget._exact_upgrade_salvage_bridge = bridge
+            widget._salvage_upgrade_support_cache = None
+            enabled_sell_rules = widget._collect_enabled_sell_rules()
+            candidates, blocked = widget._collect_salvage_candidates(
+                items, enabled_sell_rules, require_salvage_kit=True
+            )
+            for candidate in candidates:
+                _expect(candidate.item is item, f"Stage 10 {case}: candidate retains observed item.")
+                _expect(candidate.rule is not rule, f"Stage 10 {case}: normalized candidate rule remains a copy.")
+                _salvage_options_expect(candidate.rule_index, 0, "first matching owner " + case)
+            plan = widget._build_plan()
+            entries = plan.entries
+            before_plan = module.asdict(plan)
+            widget.preview_plan = plan
+            widget._split_preview_entries(entries)
+            _expect(
+                widget.preview_plan is plan and plan.entries is entries, "Stage 10 preview keeps plan/list identity."
+            )
+            _salvage_options_expect(module.asdict(plan), before_plan, "presentation leaves complete plan unchanged")
+            _expect(
+                widget.salvage_settings.rules is rules and rules[0] is rule and items[0] is item,
+                "Stage 10 input ownership.",
+            )
+            _salvage_options_expect(module.asdict(item), before_item, "item facts unchanged " + case)
+            _salvage_options_expect([module.asdict(value) for value in rules], before_rules, "rules unchanged " + case)
+            if case in ("materials", "default", "prefix", "suffix", "inscription"):
+                _salvage_options_expect(plan.salvage_item_ids, [item.item_id], "literal executable salvage " + case)
+            if case in (
+                "blocked_sell",
+                "blocked_destroy",
+                "protected",
+                "typed_protected",
+                "no_backend",
+                "no_target",
+                "no_kit",
+                "no_upgrade_kit",
+                "customized",
+            ):
+                _salvage_options_expect(plan.salvage_item_ids, [], "literal blocked salvage " + case)
+            if case == "blocked_sell":
+                _salvage_options_expect(plan.merchant_sell_item_ids, [], "blocked owner cannot fall through to Sell")
+            if case == "blocked_destroy":
+                _salvage_options_expect(plan.destroy_item_ids, [], "blocked owner cannot fall through to Destroy")
+            if case == "nonmatch_sell":
+                _salvage_options_expect(plan.merchant_sell_item_ids, [item.item_id], "legitimate Sell fallthrough")
+            if case == "nonmatch_destroy":
+                _salvage_options_expect(plan.destroy_item_ids, [item.item_id], "legitimate Destroy fallthrough")
+            if case == "keep_floor":
+                _salvage_options_expect(plan.merchant_sell_item_ids, [], "Sell keep floor retained")
+            if case in ("protected", "typed_protected", "customized"):
+                _expect("backend" not in events, "Stage 10 protection precedes backend observation.")
+            if case in ("prefix", "suffix", "inscription"):
+                resolution = widget._get_auto_salvage_upgrade_slot_resolution(rule, item)
+                _salvage_options_expect(resolution.selected_option, case, "literal automatic slot inference")
+            for owner in plan.salvage_specific_upgrade_owners.values():
+                _expect(owner.rule_snapshot is not rule, "Stage 10 plan retains independent owner snapshot.")
+                _salvage_options_expect(owner.rule_index, 0, "plan first-owner index")
+            observed[case] = {
+                "plan": before_plan,
+                "candidates": [module.asdict(value) for value in candidates],
+                "blocked": dict(blocked),
+                "events": list(events),
+                "reservation": widget._get_specific_upgrade_salvage_reservation_reason(item),
+                "destroy_claim": widget._get_salvage_destroy_claim_reason(item, enabled_sell_rules),
+                "authorization": (widget.destroy_include_protected_items, widget.execute_reservation_scope_active),
+            }
+            _salvage_options_expect(
+                observed[case]["authorization"], (False, False), "no session authorization acquired"
+            )
+    finally:
+        module.MOD_DB = original_db
+        if original_item_api is missing and hasattr(module.GLOBAL_CACHE, "Item"):
+            delattr(module.GLOBAL_CACHE, "Item")
+        elif original_item_api is not missing:
+            module.GLOBAL_CACHE.Item = original_item_api
+    return observed
+
+
+def _salvage_options_compare_integrations(module: Any, observer: Callable[[Any], dict[str, Any]]) -> None:
+    actual = observer(module)
+    original = _salvage_options_original_api()
+    saved = {name: getattr(module, name) for name in _SALVAGE_OPTIONS_FUNCTIONS}
+    try:
+        for name in _SALVAGE_OPTIONS_FUNCTIONS:
+            setattr(module, name, getattr(original, name))
+        expected = observer(module)
+    finally:
+        for name, value in saved.items():
+            setattr(module, name, value)
+    _salvage_options_expect(actual, expected, observer.__name__ + " complete original/final observations")
+
+
+def _test_salvage_options_config_ui(module: Any) -> None:
+    _salvage_options_compare_integrations(module, _salvage_options_config_ui_observations)
+
+
+def _test_salvage_options_plans(module: Any) -> None:
+    _salvage_options_compare_integrations(module, _salvage_options_plan_observations)
+
+
+def _salvage_options_bridge_observations(module: Any) -> dict[str, Any]:
+    observed: dict[str, Any] = {}
+    slot_objects = {name: object() for name in ("Prefix", "Suffix", "Inscription")}
+    mode_objects = {name: object() for name in ("Prefix", "Suffix", "Inscription")}
+    bridge = module._MerchantRulesExactUpgradeSalvageBridge()
+    bridge._load_dependencies = lambda: (True, "")
+    bridge._Item = types.SimpleNamespace(Mods=types.SimpleNamespace(Slot=types.SimpleNamespace(**slot_objects)))
+    bridge._SalvageMode = types.SimpleNamespace(**mode_objects)
+    armor_bridge = module._MerchantRulesArmorUpgradeSalvageBridge()
+    armor_bridge._load_dependencies = lambda: (True, "")
+    armor_bridge._SalvageMode = bridge._SalvageMode
+    for token, expected in (
+        ("prefix", "Prefix"),
+        (" SALVAGE SUFFIX ", "Suffix"),
+        ("salvage inscription", "Inscription"),
+        ("default", None),
+        ("specific upgrade", None),
+        ("unknown", None),
+    ):
+        slot = bridge.option_to_slot(token)
+        mode = bridge.option_to_mode(token)
+        armor_mode = armor_bridge._option_to_mode(token)
+        _expect(slot is (slot_objects[expected] if expected else None), "Stage 10 original slot identity " + token)
+        _expect(mode is (mode_objects[expected] if expected else None), "Stage 10 original mode identity " + token)
+        armor_expected = None if expected == "Inscription" else expected
+        _expect(
+            armor_mode is (mode_objects[armor_expected] if armor_expected else None),
+            "Stage 10 armor accepts prefix/suffix only: " + token,
+        )
+        observed[token] = (
+            expected,
+            mode is (mode_objects[expected] if expected else None),
+            armor_mode is (mode_objects[armor_expected] if armor_expected else None),
+        )
+    events: list[str] = []
+    unavailable = _SalvageOptionsConversionProbe([RuntimeError("must not coerce")], [], events)
+    bridge._load_dependencies = lambda: (False, "missing")
+    _salvage_options_expect(
+        (bridge.option_to_slot(unavailable), bridge.option_to_mode(unavailable), events),
+        (None, None, list[str]()),
+        "bridge unavailable early return",
+    )
+    return observed
+
+
+def _test_salvage_options_bridge(module: Any) -> None:
+    _salvage_options_compare_integrations(module, _salvage_options_bridge_observations)
+
+
+def _test_salvage_options_identity(module: Any) -> None:
+    from Sources.icefox.MerchantRules import salvage_options as component
+
+    for name in _SALVAGE_OPTIONS_CONSTANTS:
+        _expect(getattr(module, name) is getattr(component, name), "Stage 10 direct constant identity: " + name)
+    for name in _SALVAGE_OPTIONS_FUNCTIONS:
+        function = getattr(component, name[1:])
+        _expect(getattr(module, name) is function, "Stage 10 direct function identity: " + name)
+        _salvage_options_expect(
+            (function.__module__, function.__name__), (component.__name__, name[1:]), "honest reflective metadata"
+        )
+        _expect(function.__globals__ is vars(component), "Stage 10 sibling globals belong to component.")
+    _expect(
+        component.SALVAGE_OPTION_DROPDOWN_ORDER is component.SALVAGE_RULE_MODE_ORDER, "Stage 10 component tuple alias."
+    )
+    _expect(module.SalvageRule.__module__ == module.__name__, "Stage 10 rule class owner remains widget.")
+
+
+def _test_salvage_options_import_isolation() -> None:
+    script = r'''
+import pathlib
+import sys
+source = str((pathlib.Path.cwd() / "Sources/icefox/MerchantRules/salvage_options.py").resolve()).casefold()
+calls = []
+def audit(event, args):
+    if event != "open" and not event.startswith(("os.", "subprocess.", "socket.", "_thread.")):
+        return
+    frame = sys._getframe(1)
+    while frame is not None:
+        if frame.f_code.co_filename.casefold() == source:
+            raise AssertionError(("component initiated I/O", event, args))
+        frame = frame.f_back
+def profile(frame, event, arg):
+    if event == "call" and frame.f_code.co_filename.casefold() == source:
+        calls.append(frame.f_code.co_name)
+sys.addaudithook(audit)
+sys.setprofile(profile)
+from Sources.icefox.MerchantRules import salvage_options
+sys.setprofile(None)
+assert set(calls) <= {"<module>", "<genexpr>"}, calls
+assert not any(name.startswith(("Py4GWCoreLib", "PyImGui", "PySystem", "Widgets")) for name in sys.modules)
+assert not any(name.startswith("Sources.icefox.MerchantRules.") and name != salvage_options.__name__ for name in sys.modules)
+assert "merchant_rules_regression_target" not in sys.modules
+assert salvage_options.SALVAGE_OPTION_DROPDOWN_ORDER is salvage_options.SALVAGE_RULE_MODE_ORDER
+assert salvage_options.normalize_salvage_operation("unknown") == "materials"
+try:
+    salvage_options.normalize_salvage_rule_mode("suffix")
+except ValueError as exc:
+    assert str(exc) == "Unsupported Merchant Rules persisted Salvage rule mode 'suffix'. Use Materials or Specific upgrade."
+else:
+    raise AssertionError("persisted suffix accepted")
+print("PASS: dependency-free ordinary import, immutable vocabulary initialization, no component I/O")
+'''
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-B", "-S", "-c", script],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    _expect(result.returncode == 0, f"Stage 10 import isolation: {result.stdout}\n{result.stderr}")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -40856,6 +41644,13 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            ("salvage_options_literals", lambda: _test_salvage_options_literals(module)),
+            ("salvage_options_access", lambda: _test_salvage_options_access(module)),
+            ("salvage_options_config_ui", lambda: _test_salvage_options_config_ui(module)),
+            ("salvage_options_plans", lambda: _test_salvage_options_plans(module)),
+            ("salvage_options_bridge", lambda: _test_salvage_options_bridge(module)),
+            ("salvage_options_identity", lambda: _test_salvage_options_identity(module)),
+            ("salvage_options_import_isolation", _test_salvage_options_import_isolation),
             (
                 "weapon_mod_normalization_literals",
                 lambda: _test_weapon_mod_normalization_literals(module),
