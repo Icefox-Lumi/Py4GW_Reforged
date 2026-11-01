@@ -38557,6 +38557,398 @@ print("PASS: ordinary stack_selection import without runtime dependencies")
     _expect(result.returncode == 0, f"Selector import isolation failed: {result.stdout}\n{result.stderr}")
 
 
+def _preview_status_literal_cases() -> list[tuple[dict[str, object], str]]:
+    cases: list[tuple[dict[str, object], str]] = []
+    for key in ("unsafe", "blocked", "protected", "warning", "skipped", "no_match", "already_done"):
+        for hint in (key, key.upper(), " \t" + key.upper() + "\n "):
+            cases.append(
+                (dict(status_hint=hint, reason="protected unsafe", action_type="buy", label="Inventory Space"), key)
+            )
+    markers = (
+        ("protected", "protected"),
+        ("unsafe", "unsafe"),
+        ("safely", "unsafe"),
+        ("safe split", "unsafe"),
+        ("target already met", "already_done"),
+        ("no matching", "no_match"),
+        ("nothing found", "no_match"),
+        ("no unidentified items found", "no_match"),
+        ("blocked", "blocked"),
+        ("could not", "blocked"),
+        ("not available", "blocked"),
+        ("unavailable", "blocked"),
+        ("no id kit", "blocked"),
+        ("no normal salvage kit", "blocked"),
+        ("no upgrade salvage kit", "blocked"),
+        ("identify before salvaging", "blocked"),
+        ("cannot infer", "blocked"),
+        ("ambiguous", "blocked"),
+        ("requires rank", "blocked"),
+        ("map is not ready", "blocked"),
+        ("not an outpost or guild hall", "blocked"),
+    )
+    for marker, expected in markers:
+        cases.append((dict(reason=" \t" + marker.upper() + "\n", action_type="sell", label="Item"), expected))
+    cases.extend(
+        [
+            (dict(status_hint=" BLOCKED ", reason="protected unsafe", action_type="sell", label="Item"), "blocked"),
+            (dict(reason="protected", action_type=" BUY ", label=" Inventory Space "), "warning"),
+            (dict(reason="deposit keep-out unsafe", action_type=" DEPOSIT ", label="Item"), "protected"),
+            (dict(reason="protected unsafe", action_type="sell", label="Item"), "protected"),
+            (dict(reason="target already met; no matching; blocked", action_type="sell", label="Item"), "already_done"),
+            (dict(reason="no matching; blocked", action_type="sell", label="Item"), "no_match"),
+            (dict(status_hint="invalid", reason="unrecognized", action_type="unknown", label="Item"), "skipped"),
+            (dict(status_hint="ready", reason="blocked", action_type="", label=""), "blocked"),
+            (dict(status_hint=None, reason=None, action_type=None, label=None), "skipped"),
+            (dict(reason="", action_type="", label=""), "skipped"),
+            (dict(reason=0, action_type=0, label=0), "skipped"),
+            (dict(reason="deposit keep-out", action_type="sell", label="Item"), "skipped"),
+        ]
+    )
+    return cases
+
+
+def _test_preview_status_literals(module: Any) -> None:
+    from Sources.icefox.MerchantRules import preview_status
+
+    widget = _make_widget(module)
+    for values, expected in _preview_status_literal_cases():
+        entry = types.SimpleNamespace(**values)
+        before = dict(vars(entry))
+        direct = preview_status.classify_skipped_preview_entry(cast(Any, entry))
+        adapted = widget._get_skipped_preview_status_key(entry, "protected unsafe blocked")
+        _expect(
+            direct == adapted == expected,
+            f"Status input={values!r}: expected={expected!r}, helper={direct!r}, adapter={adapted!r}",
+        )
+        _expect(vars(entry) == before, f"Classification mutated entry: {values!r}")
+    order = ("unsafe", "blocked", "protected", "warning", "skipped", "no_match", "already_done")
+    _expect(preview_status.PREVIEW_NOT_CHANGED_STATUS_ORDER == order, "Not Changed semantic order changed")
+    names = ["PREVIEW_STATUS_" + key.upper() for key in order] + ["PREVIEW_NOT_CHANGED_STATUS_ORDER"]
+    for name in names:
+        _expect(
+            getattr(module, name) is getattr(preview_status, name), f"Widget constant {name} is not the imported object"
+        )
+
+
+def _preview_status_access_observation(
+    classifier: Callable[[Any], str],
+    values: dict[str, object],
+    failure: str = "",
+) -> tuple[tuple[str, ...], list[str]]:
+    events: list[str] = []
+
+    class ConversionProbe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __bool__(self) -> bool:
+            events.append("bool:" + self.name)
+            if failure == "bool:" + self.name:
+                raise ValueError(failure)
+            return True
+
+        def __str__(self) -> str:
+            events.append("str:" + self.name)
+            raise ValueError(failure)
+
+    class EntryProbe:
+        def __getattribute__(self, name: str) -> Any:
+            events.append("read:" + name)
+            if failure == "get:" + name:
+                raise RuntimeError(failure)
+            if failure == "missing:" + name:
+                raise AttributeError(failure)
+            if name not in values:
+                raise AttributeError(name)
+            if failure in {"str:" + name, "bool:" + name}:
+                return ConversionProbe(name)
+            return values[name]
+
+    entry = EntryProbe()
+    before = dict(values)
+    try:
+        outcome = ("return", classifier(entry))
+    except Exception as exc:
+        outcome = ("raise", type(exc).__name__, str(exc))
+    _expect(values == before and object.__getattribute__(entry, "__dict__") == {}, "Classifier mutated source state")
+    return outcome, events
+
+
+def _test_preview_status_access(module: Any) -> None:
+    from Sources.icefox.MerchantRules.preview_status import classify_skipped_preview_entry
+
+    widget = _make_widget(module)
+
+    class UnreadDisplayReason:
+        def __bool__(self) -> bool:
+            raise AssertionError("displayed_reason truthiness was inspected")
+
+        def __str__(self) -> str:
+            raise AssertionError("displayed_reason was converted")
+
+    def adapter(entry: Any) -> str:
+        return cast(str, widget._get_skipped_preview_status_key(entry, UnreadDisplayReason()))
+
+    fields = ("status_hint", "reason", "action_type", "label")
+    values: dict[str, object] = dict(status_hint="invalid", reason="unknown", action_type="sell", label="Item")
+    reads = ["read:" + field for field in fields]
+    for classifier in (classify_skipped_preview_entry, adapter):
+        for fixture in (values, {key: value for key, value in values.items() if key != "status_hint"}):
+            actual = _preview_status_access_observation(classifier, fixture)
+            _expect(actual == (("return", "skipped"), reads), f"Fallback access input={fixture!r}: {actual!r}")
+        for field in fields[1:]:
+            actual = _preview_status_access_observation(
+                classifier, dict(values, status_hint=" PROTECTED "), "get:" + field
+            )
+            _expect(
+                actual == (("return", "protected"), ["read:status_hint"]),
+                f"Hint short circuit read {field}: {actual!r}",
+            )
+        for index, field in enumerate(fields):
+            for kind in ("get", "missing", "str", "bool"):
+                failure = kind + ":" + field
+                expected_reads = reads[: index + 1]
+                error_type = (
+                    "RuntimeError" if kind == "get" else "AttributeError" if kind == "missing" else "ValueError"
+                )
+                expected_outcome: tuple[str, ...] = ("raise", error_type, failure)
+                if kind == "missing" and field == "status_hint":
+                    expected_reads = reads
+                    expected_outcome = ("return", "skipped")
+                elif kind == "str":
+                    expected_reads += ["bool:" + field, "str:" + field]
+                elif kind == "bool":
+                    expected_reads += ["bool:" + field]
+                actual = _preview_status_access_observation(classifier, values, failure)
+                _expect(
+                    actual == (expected_outcome, expected_reads),
+                    f"Failure={failure}: expected={(expected_outcome, expected_reads)!r}, actual={actual!r}",
+                )
+
+
+def _test_preview_status_widget_contract(module: Any) -> None:
+    from copy import deepcopy
+    from dataclasses import asdict
+
+    widget = _prime_initialized_widget(module, _make_widget(module))
+    widget.preview_ready = True
+    entries = [
+        module.ExecutionPlanEntry(action, "merchant", "Fixture", 0, "skipped", "Unrecognized", status_hint=status)
+        for action, status in (
+            ("sell", "protected"),
+            ("buy", "already_done"),
+            ("sell", "blocked"),
+            ("deposit", "no_match"),
+            ("sell", "unsafe"),
+            ("sell", "warning"),
+            ("sell", "skipped"),
+        )
+    ]
+    plan = module.PlanResult(entries=entries)
+    widget.preview_plan = plan
+    before_plan = asdict(plan)
+    original_entries = tuple(entries)
+    state_names = (
+        "preview_not_changed_group_open",
+        "preview_not_changed_group_initialized",
+        "active_preview_plan_workspace",
+        "detailed_preview",
+    )
+    before_state = {name: deepcopy(getattr(widget, name)) for name in state_names}
+    events: list[tuple[str, int]] = []
+    original_reason = widget._get_preview_reason_for_display
+    original_classifier = widget._get_skipped_preview_status_key
+
+    def reason(entry: Any) -> str:
+        events.append(("reason", id(entry)))
+        return cast(str, original_reason(entry))
+
+    def classify(entry: Any, displayed_reason: str) -> str:
+        events.append(("classify", id(entry)))
+        return cast(str, original_classifier(entry, displayed_reason))
+
+    widget._get_preview_reason_for_display = reason
+    widget._get_skipped_preview_status_key = classify
+    try:
+        _expect(
+            widget._get_not_changed_entry_status_key(entries[0]) == "protected",
+            "Not Changed caller classification changed",
+        )
+        _expect(
+            events == [("reason", id(entries[0])), ("classify", id(entries[0]))],
+            f"Reason/classifier timing changed: {events!r}",
+        )
+        events.clear()
+        _expect(
+            widget._get_preview_entry_status_key(
+                entries[0],
+                "unsafe",
+                is_conditional=False,
+                available_here=False,
+                unavailable_here_reason="",
+                muted=True,
+                plan=plan,
+            )
+            == "protected",
+            "Muted caller classification changed",
+        )
+        _expect(events == [("classify", id(entries[0]))], f"Muted caller added work: {events!r}")
+        events.clear()
+        widget.preview_not_changed_hide_already_done = False
+        visible = widget._get_visible_not_changed_entries(entries)
+        _expect(
+            visible is not entries and all(a is b for a, b in zip(visible, entries)) and len(visible) == len(entries),
+            "Unfiltered list lost entry identity/order",
+        )
+        _expect(not events, f"Disabled filtering classified entries: {events!r}")
+        _expect(widget._get_not_changed_group_default_open([]) is False, "Empty group opened")
+        _expect(widget._get_not_changed_group_default_open([entries[0]] * 20) is False, "Large group opened")
+        _expect(not events, f"Default expansion lost its early exits: {events!r}")
+        grouped = widget._group_preview_entries_by_action(entries)
+        _expect([action for action, _ in grouped] == ["sell", "buy", "deposit"], f"Group order changed: {grouped!r}")
+        sell_entries = [entries[index] for index in (0, 2, 4, 5, 6)]
+        _expect(all(a is b for a, b in zip(grouped[0][1], sell_entries)), "Grouping copied or reordered entries")
+        counts = widget._get_not_changed_status_counts(entries)
+        _expect(
+            counts
+            == {
+                "protected": 1,
+                "already_done": 1,
+                "blocked": 1,
+                "no_match": 1,
+                "unsafe": 1,
+                "warning": 1,
+                "skipped": 1,
+            },
+            f"Status counts changed: {counts!r}",
+        )
+        header = widget._get_not_changed_group_header_text("sell", sell_entries, sell_entries)
+        _expect(
+            header
+            == (
+                "Sell (5) | Unsafe 1 | Blocked 1 | Protected 1 | +2 more",
+                "Sell: showing 5 of 5 entries. Visible statuses: Unsafe 1, Blocked 1, Protected 1, Warning 1, Skipped 1.",
+            ),
+            f"Header/tooltip order changed: {header!r}",
+        )
+        widget.preview_not_changed_hide_already_done = True
+        events.clear()
+        visible = widget._get_visible_not_changed_entries(entries)
+        _expect(
+            len(visible) == 6
+            and all(
+                actual is expected
+                for actual, expected in zip(visible, [entry for entry in entries if entry is not entries[1]])
+            ),
+            "Already-done filtering changed identity/order",
+        )
+        _expect(
+            events == [(kind, id(entry)) for entry in entries for kind in ("reason", "classify")],
+            f"Filtering evaluation order changed: {events!r}",
+        )
+        hidden_header = widget._get_not_changed_group_header_text("buy", [], [entries[1]])
+        _expect(
+            hidden_header
+            == (
+                "Buy (0 shown of 1)",
+                "Buy: showing 0 of 1 entries. Full statuses: Already done 1. Hidden by Hide Already done: 1.",
+            ),
+            f"Hidden tooltip changed: {hidden_header!r}",
+        )
+        _expect(widget._get_not_changed_group_default_open([entries[0]]) is True, "Attention group should open")
+        _expect(
+            widget._get_not_changed_group_default_open([entries[1], entries[3]]) is False,
+            "Quiet group should stay collapsed",
+        )
+        _expect(
+            widget._get_not_changed_group_header_id("sell") == "merchant_rules_preview_not_changed_group_sell",
+            "Group ID changed",
+        )
+        _expect(
+            widget._get_not_changed_group_table_id("sell") == "merchant_rules_preview_not_changed_table_sell",
+            "Table ID changed",
+        )
+        for raw, color in (
+            ("Protected-item override", (0.97, 0.29, 0.29, 1.0)),
+            ("protected", (0.79, 0.57, 0.96, 1.0)),
+            ("unsafe", (0.97, 0.29, 0.29, 1.0)),
+        ):
+            warning_entry = module.ExecutionPlanEntry("destroy", "inventory", "Fixture", 1, "will execute", raw)
+            _expect(widget._should_show_preview_reason(warning_entry, raw), f"Compact Destroy warning hidden: {raw!r}")
+            _expect(widget._get_preview_note_color(raw, muted=True) == color, f"Warning color changed: {raw!r}")
+        _expect(
+            widget.preview_plan is plan
+            and plan.entries is entries
+            and all(a is b for a, b in zip(entries, original_entries))
+            and asdict(plan) == before_plan,
+            "Presentation mutated complete plan or identities",
+        )
+        _expect(
+            {name: getattr(widget, name) for name in state_names} == before_state,
+            "Classifier/group helpers changed widget UI state",
+        )
+        _expect(widget.preview_not_changed_hide_already_done is True, "Helper changed the explicit filter selection")
+    finally:
+        widget._get_preview_reason_for_display = original_reason
+        widget._get_skipped_preview_status_key = original_classifier
+
+
+def _test_preview_status_import_isolation() -> None:
+    script = r'''
+import ast
+import pathlib
+import sys
+import typing
+
+source = pathlib.Path.cwd() / "Sources/icefox/MerchantRules/preview_status.py"
+source_name = str(source.resolve()).casefold()
+tree = ast.parse(source.read_text(encoding="utf-8"))
+assert all(isinstance(node, (ast.Expr, ast.ImportFrom, ast.Assign, ast.AnnAssign, ast.ClassDef, ast.FunctionDef)) for node in tree.body)
+assert [node.module for node in tree.body if isinstance(node, ast.ImportFrom)] == ["typing"]
+assert [node.name for node in tree.body if isinstance(node, ast.ClassDef)] == ["_SkippedPreviewEntry"]
+events = []
+calls = []
+def audit(event, args):
+    if event != "open" and not event.startswith(("os.", "subprocess.", "socket.", "_thread.")):
+        return
+    frame = sys._getframe(1)
+    while frame is not None:
+        if frame.f_code.co_filename.casefold() == source_name:
+            events.append(event)
+            raise AssertionError(f"Status module initiated runtime work: {event}, {args!r}")
+        frame = frame.f_back
+def profile(frame, event, arg):
+    if event == "call" and frame.f_code.co_filename.casefold() == source_name:
+        calls.append(frame.f_code.co_name)
+sys.addaudithook(audit)
+sys.setprofile(profile)
+from Sources.icefox.MerchantRules.preview_status import classify_skipped_preview_entry
+sys.setprofile(None)
+assert calls == ["<module>", "_SkippedPreviewEntry"], calls
+assert not events, events
+assert not any(name.startswith(("Py4GWCoreLib", "PyImGui", "PySystem", "Widgets", "merchant_rules_regression_target")) for name in sys.modules)
+assert not any("MerchantRules." + part in name for name in sys.modules for part in ("profiles", "catalog", "catalog_search", "preview_text", "service_observation", "stack_selection"))
+class Entry:
+    reason = "protected unsafe"
+    action_type = "sell"
+    label = "Fixture"
+assert classify_skipped_preview_entry(Entry()) == "protected"
+print("PASS: normal status import, isolated definitions, no runtime initialization")
+'''
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(
+        [sys.executable, "-B", "-S", "-c", script],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _expect(result.returncode == 0, f"Status import isolation failed: {result.stdout}\n{result.stderr}")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -38565,6 +38957,10 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            ("preview_status_literals", lambda: _test_preview_status_literals(module)),
+            ("preview_status_access", lambda: _test_preview_status_access(module)),
+            ("preview_status_widget_contract", lambda: _test_preview_status_widget_contract(module)),
+            ("preview_status_import_isolation", _test_preview_status_import_isolation),
             ("stack_selection_objectives", _test_stack_selection_objectives),
             ("stack_selection_access", _test_stack_selection_access),
             ("stack_selection_import_isolation", _test_stack_selection_import_isolation),
