@@ -40077,6 +40077,777 @@ def _test_requirement_policy_authorization_contract(module: types.ModuleType) ->
     _requirement_policy_authorization_observations(module)
 
 
+# Frozen Stage 9 oracle: widget SHA256 E101143794EDB6B3D07601B7C88C9726A8582AC0B85728B349D9B8B0D7EAA726.
+_WEAPON_MOD_ORIGINAL_SOURCE = r'''
+WEAPON_MOD_TARGET_ITEM_TYPE_MODIFIER_ID = 9656
+
+
+@dataclass(frozen=True)
+class ParsedUpgradeMatch:
+    identifier: str = ""
+    target_item_type: str = ""
+    component_kind: str = ""
+    mod_type: str = ""
+    value: int | None = None
+    min_value: int = 0
+    max_value: int = 0
+    is_maxed: bool = False
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        if isinstance(value, str):
+            return int(value.strip(), 0)
+        return int(value)
+    except Exception:
+        return default
+
+
+def _get_weapon_mod_variable_range(weapon_mod: object) -> tuple[int, int] | None:
+    for modifier in getattr(weapon_mod, "modifiers", []) or []:
+        value_arg = getattr(modifier, "modifier_value_arg", None)
+        value_arg_name = str(getattr(value_arg, "name", value_arg) or "")
+        if value_arg_name not in ("Arg1", "Arg2"):
+            continue
+        min_value = _safe_int(getattr(modifier, "min", 0), 0)
+        max_value = _safe_int(getattr(modifier, "max", 0), 0)
+        if min_value == max_value:
+            continue
+        if min_value > max_value:
+            min_value, max_value = max_value, min_value
+        return min_value, max_value
+    return None
+
+
+def _get_weapon_mod_component_kind_for_target(weapon_mod: object, target_item_type: object) -> str:
+    safe_target_item_type = _normalize_weapon_mod_target_item_type(target_item_type)
+    if not safe_target_item_type:
+        return ""
+    item_mods = getattr(weapon_mod, "item_mods", {}) or {}
+    if not isinstance(item_mods, dict):
+        return ""
+    for raw_target_item_type, raw_component_kind in item_mods.items():
+        if _normalize_weapon_mod_target_item_type(raw_target_item_type) == safe_target_item_type:
+            return _normalize_weapon_mod_component_kind(raw_component_kind)
+    return ""
+
+
+def _get_weapon_mod_target_item_type_from_raw_modifiers(raw_modifiers: object) -> str:
+    for raw_modifier in raw_modifiers or ():
+        try:
+            identifier, arg1, _arg2 = raw_modifier
+        except Exception:
+            continue
+        if _safe_int(identifier, 0) != WEAPON_MOD_TARGET_ITEM_TYPE_MODIFIER_ID:
+            continue
+        return _normalize_weapon_mod_target_item_type(arg1)
+    return ""
+
+
+def _resolve_parsed_weapon_mod_variant_context(
+    match: object,
+    raw_modifiers: object,
+    item_type_enum: ItemType,
+    parse_item_type: ItemType,
+) -> tuple[str, str, str]:
+    weapon_mod = getattr(match, "weapon_mod", None)
+    mod_type_name = _get_weapon_mod_type_name(match) or _get_weapon_mod_type_name(weapon_mod)
+    if weapon_mod is None:
+        return "", "", mod_type_name
+
+    if item_type_enum == ItemType.Rune_Mod:
+        target_item_type = _get_weapon_mod_target_item_type_from_raw_modifiers(raw_modifiers)
+    else:
+        target_item_type = _normalize_weapon_mod_target_item_type(parse_item_type)
+
+    component_kind = _get_weapon_mod_component_kind_for_target(weapon_mod, target_item_type)
+    if not component_kind:
+        return "", "", mod_type_name
+    return target_item_type, component_kind, mod_type_name
+
+
+def _build_parsed_weapon_mod_match(
+    match: object,
+    *,
+    raw_modifiers: object = (),
+    item_type_enum: ItemType = ItemType.Unknown,
+    parse_item_type: ItemType = ItemType.Unknown,
+) -> ParsedUpgradeMatch | None:
+    weapon_mod = getattr(match, "weapon_mod", None)
+    identifier = str(getattr(weapon_mod, "identifier", "") or "").strip()
+    if not identifier:
+        return None
+    range_values = _get_weapon_mod_variable_range(weapon_mod)
+    raw_value = getattr(match, "value", None) if hasattr(match, "value") else None
+    parsed_value = None if raw_value is None else _safe_int(raw_value, 0)
+    target_item_type, component_kind, mod_type = _resolve_parsed_weapon_mod_variant_context(
+        match,
+        raw_modifiers,
+        item_type_enum,
+        parse_item_type,
+    )
+    return ParsedUpgradeMatch(
+        identifier=identifier,
+        target_item_type=target_item_type,
+        component_kind=component_kind,
+        mod_type=mod_type,
+        value=parsed_value,
+        min_value=int(range_values[0]) if range_values is not None else 0,
+        max_value=int(range_values[1]) if range_values is not None else 0,
+        is_maxed=bool(getattr(match, "is_maxed", False)),
+    )
+'''
+
+
+def _weapon_mod_original_api(module: Any) -> Any:
+    original = types.ModuleType("merchant_rules_weapon_mod_original")
+    original.__dict__.update(
+        dataclass=dataclass,
+        ItemType=module.ItemType,
+        _normalize_weapon_mod_target_item_type=module._normalize_weapon_mod_target_item_type,
+        _normalize_weapon_mod_component_kind=module._normalize_weapon_mod_component_kind,
+        _get_weapon_mod_type_name=module._get_weapon_mod_type_name,
+    )
+    sys.modules[original.__name__] = original
+    exec(compile(_WEAPON_MOD_ORIGINAL_SOURCE, "<frozen Stage 9 original>", "exec"), original.__dict__)
+    return original
+
+
+def _weapon_mod_expect(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f"Stage 9 {context}: expected {expected!r}; observed {actual!r}")
+
+
+def _weapon_mod_fields(match: Any) -> object:
+    if match is None:
+        return None
+    return (
+        match.identifier,
+        match.target_item_type,
+        match.component_kind,
+        match.mod_type,
+        match.value,
+        match.min_value,
+        match.max_value,
+        match.is_maxed,
+    )
+
+
+def _weapon_mod_literal_observations(module: Any, api: Any = None) -> dict[str, Any]:
+    api = module if api is None else api
+    observations: dict[str, Any] = {}
+    ns = types.SimpleNamespace
+    ranges: list[tuple[str, list[Any], object]] = [
+        ("empty", [], None),
+        ("fixed", [ns(modifier_value_arg="Arg1", min=4, max=4)], None),
+        ("reverse", [ns(modifier_value_arg="Arg2", min="0x14", max="0xa")], (10, 20)),
+        ("malformed", [ns(modifier_value_arg="Arg1", min="08", max=8)], (0, 8)),
+        (
+            "first",
+            [
+                ns(modifier_value_arg="None", min=1, max=99),
+                ns(modifier_value_arg="Arg1", min=2, max=2),
+                ns(modifier_value_arg="Arg2", min=5, max=9),
+                ns(modifier_value_arg="Arg1", min=1, max=20),
+                ns(modifier_value_arg="Arg2", min=5, max=9),
+            ],
+            (5, 9),
+        ),
+    ]
+    for label, modifiers, expected in ranges:
+        weapon = ns(modifiers=modifiers)
+        before: list[dict[str, Any]] = [dict(value.__dict__) for value in modifiers]
+        actual = api._get_weapon_mod_variable_range(weapon)
+        _weapon_mod_expect(actual, expected, "range " + label)
+        after: list[dict[str, Any]] = [dict(value.__dict__) for value in modifiers]
+        _weapon_mod_expect(after, before, "range input unchanged")
+        _expect(weapon.modifiers is modifiers, "Stage 9 range retains original input list.")
+        observations["range_" + label] = actual
+
+    weapon = ns(
+        identifier=" Contract Mod ",
+        mod_type="Suffix",
+        modifiers=[ns(modifier_value_arg="Arg2", min=10, max=20)],
+        item_mods={module.ItemType.Hammer: " HammerHaft ", "Hammer": "wrong", "Axe": "AxeHaft"},
+    )
+    missing = object()
+    for label, raw_value, expected_value in [
+        ("missing", missing, None),
+        ("none", None, None),
+        ("decimal", "19", 19),
+        ("hex", " 0x14 ", 20),
+        ("binary", "0b10011", 19),
+        ("bad", "bad", 0),
+        ("leading_zero", "08", 0),
+        ("bytes", b"08", 8),
+        ("hex_bytes", b"0x14", 0),
+        ("float", 19.8, 19),
+        ("bool", True, 1),
+    ]:
+        match = ns(weapon_mod=weapon, mod_type="Prefix", is_maxed=True)
+        if raw_value is not missing:
+            match.value = raw_value
+        raw = [(9656, int(module.ItemType.Axe), 0)]
+        actual = api._build_parsed_weapon_mod_match(
+            match,
+            raw_modifiers=raw,
+            item_type_enum=module.ItemType.Hammer,
+            parse_item_type=module.ItemType.Hammer,
+        )
+        expected = ("Contract Mod", "Hammer", "HammerHaft", "Prefix", expected_value, 10, 20, True)
+        _weapon_mod_expect(_weapon_mod_fields(actual), expected, "roll " + label)
+        _weapon_mod_expect(raw, [(9656, int(module.ItemType.Axe), 0)], "raw input unchanged")
+        _expect(match.weapon_mod is weapon, "Stage 9 must retain the caller's weapon object.")
+        observations["roll_" + label] = _weapon_mod_fields(actual)
+
+    match = ns(weapon_mod=weapon, value=None, mod_type="", is_maxed=False)
+    for label, raw, expected_context in [
+        ("first", [(9656, int(module.ItemType.Axe), 0), (9656, int(module.ItemType.Hammer), 0)], ("Axe", "AxeHaft")),
+        ("malformed_then_valid", [None, (1,), ("0x25b8", int(module.ItemType.Hammer), 0)], ("Hammer", "HammerHaft")),
+        ("empty_first", [(9656, None, 0), (9656, int(module.ItemType.Hammer), 0)], ("", "")),
+        ("unknown_first", [(9656, "unusable", 0), (9656, int(module.ItemType.Hammer), 0)], ("", "")),
+        ("duplicates", [(9656, int(module.ItemType.Hammer), 0)] * 2, ("Hammer", "HammerHaft")),
+    ]:
+        raw_before = list(raw)
+        actual = api._build_parsed_weapon_mod_match(
+            match,
+            raw_modifiers=raw,
+            item_type_enum=module.ItemType.Rune_Mod,
+            parse_item_type=module.ItemType.Axe,
+        )
+        _weapon_mod_expect(
+            _weapon_mod_fields(actual),
+            ("Contract Mod", *expected_context, "Suffix", None, 10, 20, False),
+            "standalone " + label,
+        )
+        _weapon_mod_expect(raw, raw_before, "standalone input unchanged")
+        observations["standalone_" + label] = _weapon_mod_fields(actual)
+    for mapping in ({module.ItemType.Hammer: "", "Hammer": "HammerHaft"}, [("Hammer", "HammerHaft")]):
+        weapon.item_mods = mapping
+        actual = api._build_parsed_weapon_mod_match(
+            match,
+            item_type_enum=module.ItemType.Hammer,
+            parse_item_type=module.ItemType.Hammer,
+        )
+        _weapon_mod_expect(
+            _weapon_mod_fields(actual), ("Contract Mod", "", "", "Suffix", None, 10, 20, False), "unusable component"
+        )
+    for identifier in ("", "  ", None):
+        _weapon_mod_expect(
+            api._build_parsed_weapon_mod_match(ns(weapon_mod=ns(identifier=identifier))), None, "empty identifier"
+        )
+    _weapon_mod_expect(api._build_parsed_weapon_mod_match(ns()), None, "missing weapon")
+    return observations
+
+
+class _WeaponModAccessProbe:
+    def __init__(
+        self,
+        prefix: str,
+        values: dict[str, Any],
+        events: list[str],
+        failure: tuple[str, int] | None = None,
+    ) -> None:
+        self._prefix = prefix
+        self._values = values
+        self._events = events
+        self._failure = failure
+        self._counts: dict[str, int] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        event = self._prefix + "." + name
+        self._events.append(event)
+        count = self._counts.get(name, 0) + 1
+        self._counts[name] = count
+        if self._failure == (event, count):
+            raise RuntimeError(event + ":" + str(count))
+        if name not in self._values:
+            raise AttributeError(name)
+        value = self._values[name]
+        return value() if callable(value) else value
+
+
+def _weapon_mod_access_observations(module: Any, api: Any = None) -> dict[str, Any]:
+    api = module if api is None else api
+    expected = [
+        "match.weapon_mod",
+        "weapon.identifier",
+        "weapon.modifiers",
+        "range.modifier_value_arg",
+        "range.min",
+        "range.max",
+        "match.value",
+        "match.value",
+        "match.weapon_mod",
+        "match.mod_type",
+        "weapon.item_mods",
+        "match.is_maxed",
+    ]
+    observations: dict[str, Any] = {}
+    failures: list[tuple[str, int] | None] = [None]
+    counts: dict[str, int] = {}
+    for event in expected:
+        counts[event] = counts.get(event, 0) + 1
+        failures.append((event, counts[event]))
+    for index, failure in enumerate(failures):
+        events: list[str] = []
+        bounds = _WeaponModAccessProbe("range", {"modifier_value_arg": "Arg2", "min": 10, "max": 20}, events, failure)
+        weapon = _WeaponModAccessProbe(
+            "weapon",
+            {"identifier": "Contract Mod", "modifiers": [bounds], "item_mods": {"Hammer": "HammerHaft"}},
+            events,
+            failure,
+        )
+        match = _WeaponModAccessProbe(
+            "match",
+            {"weapon_mod": weapon, "value": 19, "mod_type": "Prefix", "is_maxed": False},
+            events,
+            failure,
+        )
+        result: object = None
+        error: object = None
+        try:
+            result = _weapon_mod_fields(
+                api._build_parsed_weapon_mod_match(
+                    match,
+                    item_type_enum=module.ItemType.Hammer,
+                    parse_item_type=module.ItemType.Hammer,
+                )
+            )
+        except RuntimeError as exc:
+            error = (type(exc).__name__, str(exc))
+        if failure is None:
+            _weapon_mod_expect(
+                result, ("Contract Mod", "Hammer", "HammerHaft", "Prefix", 19, 10, 20, False), "access result"
+            )
+            _weapon_mod_expect(events, expected, "complete access order")
+        else:
+            _weapon_mod_expect(events, expected[:index], "exception access prefix")
+            _weapon_mod_expect(error, ("RuntimeError", failure[0] + ":" + str(failure[1])), "exception propagation")
+        observations[str(index)] = {"events": events, "result": result, "error": error}
+
+    events = []
+    blank = _WeaponModAccessProbe("weapon", {"identifier": ""}, events)
+    _weapon_mod_expect(
+        api._build_parsed_weapon_mod_match(_WeaponModAccessProbe("match", {"weapon_mod": blank}, events)),
+        None,
+        "early return",
+    )
+    _weapon_mod_expect(events, ["match.weapon_mod", "weapon.identifier"], "early return prefix")
+    values = iter([18, 20])
+    weapon = types.SimpleNamespace(identifier="Contract Mod", modifiers=[], item_mods={"Hammer": "HammerHaft"})
+    changing = _WeaponModAccessProbe(
+        "match", {"weapon_mod": weapon, "value": lambda: next(values), "mod_type": "Prefix"}, []
+    )
+    _weapon_mod_expect(api._build_parsed_weapon_mod_match(changing).value, 20, "second property read wins")
+
+    raw_events: list[str] = []
+
+    def raw_values() -> Iterator[Any]:
+        for label, row in [("malformed", (1,)), ("first", (9656, None, 0)), ("later", (9656, 1, 0))]:
+            raw_events.append(label)
+            yield row
+
+    raw_iterator = raw_values()
+    _weapon_mod_expect(
+        api._get_weapon_mod_target_item_type_from_raw_modifiers(raw_iterator), "", "first unusable target"
+    )
+    _weapon_mod_expect(raw_events, ["malformed", "first"], "iterator early stop")
+    _weapon_mod_expect(next(raw_iterator), (9656, 1, 0), "original iterator remainder")
+
+    def broken_values() -> Iterator[Any]:
+        yield (1,)
+        raise RuntimeError("raw iterator failed")
+
+    for callback, expected_type in [
+        (lambda: api._get_weapon_mod_target_item_type_from_raw_modifiers(broken_values()), RuntimeError),
+        (lambda: api._get_weapon_mod_target_item_type_from_raw_modifiers(7), TypeError),
+        (lambda: api._get_weapon_mod_variable_range(types.SimpleNamespace(modifiers=7)), TypeError),
+    ]:
+        _expect_raises(expected_type, callback, "Stage 9 malformed iteration must propagate.")
+    observations["raw_events"] = raw_events
+
+    class BrokenInt:
+        def __int__(self) -> int:
+            raise RuntimeError("integer conversion failed")
+
+    class BrokenBool:
+        def __bool__(self) -> bool:
+            raise RuntimeError("boolean conversion failed")
+
+    failing_match = types.SimpleNamespace(weapon_mod=weapon, value=BrokenInt(), is_maxed=False)
+    _weapon_mod_expect(api._build_parsed_weapon_mod_match(failing_match).value, 0, "integer failure fallback")
+    failing_match.is_maxed = BrokenBool()
+    _expect_raises(
+        RuntimeError, lambda: api._build_parsed_weapon_mod_match(failing_match), "Stage 9 boolean failure propagates."
+    )
+    return observations
+
+
+def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
+    widget = _make_widget(module)
+    events: list[str] = []
+    state: dict[str, Any] = {
+        "model": 111,
+        "quantity": 1,
+        "value": 100,
+        "type": module.ItemType.Hammer,
+        "raw": [(9656, int(module.ItemType.Hammer), 0), (999999, 1, 2), (999999, 1, 2)],
+        "failure": "",
+        "roll": 19,
+    }
+    cache = widget.inventory_modifier_cache
+    ns = types.SimpleNamespace
+
+    def read(label: str, value: Callable[[], Any]) -> Callable[..., Any]:
+        def getter(*_args: Any) -> Any:
+            events.append(label)
+            if state["failure"] == label:
+                raise RuntimeError(label)
+            return value()
+
+        return getter
+
+    def modifiers() -> list[Any]:
+        return [
+            ns(
+                GetIdentifier=read(f"mod{index}.id", lambda row=row: row[0]),
+                GetArg1=read(f"mod{index}.arg1", lambda row=row: row[1]),
+                GetArg2=read(f"mod{index}.arg2", lambda row=row: row[2]),
+            )
+            for index, row in enumerate(state["raw"])
+        ] + [None]
+
+    weapon = ns(
+        identifier="Contract Mod",
+        mod_type="Prefix",
+        modifiers=[ns(modifier_value_arg="Arg2", min=10, max=20)],
+        item_mods={"Hammer": "HammerHaft", "Axe": "AxeHaft"},
+    )
+    parsed_inputs: list[Any] = []
+
+    def parse(raw: Any, item_type: Any, model: int, database: Any) -> Any:
+        events.append("parse")
+        _expect(database is module.MOD_DB, "Stage 9 uses the original database object.")
+        parsed_inputs.append((tuple(raw), int(item_type), model))
+        if state["failure"] == "parse":
+            raise RuntimeError("parse")
+        match = ns(weapon_mod=weapon, value=state["roll"], mod_type="Prefix", is_maxed=False)
+        return ns(
+            runes=[], weapon_mods=[match, match], is_rune=False, requirements=9, damage=(15, 22), shield_armor=(0, 0)
+        )
+
+    item_api = ns(
+        GetModelID=read("model", lambda: state["model"]),
+        GetItemType=read("type", lambda: (int(state["type"]), state["type"].name)),
+        GetName=read("name", lambda: "Stage 9 Hammer"),
+        Properties=ns(
+            GetQuantity=read("quantity", lambda: state["quantity"]),
+            GetValue=read("value", lambda: state["value"]),
+            IsCustomized=read("customized", lambda: False),
+            IsInscribable=read("inscribable", lambda: True),
+        ),
+        Rarity=ns(GetRarity=read("rarity", lambda: (3, "Gold"))),
+        Type=ns(
+            IsArmor=read("armor", lambda: False),
+            IsMaterial=read("material", lambda: False),
+            IsRareMaterial=read("rare", lambda: False),
+            IsTome=read("tome", lambda: False),
+        ),
+        Mods=ns(GetModifiers=read("modifiers", modifiers)),
+        Usage=ns(
+            IsIdentified=read("identified", lambda: True),
+            IsSalvageable=read("salvageable", lambda: True),
+            IsIDKit=read("idkit", lambda: False),
+            IsSalvageKit=read("salvagekit", lambda: False),
+        ),
+        Customization=ns(IsStackable=read("stackable", lambda: False)),
+    )
+    missing_item = object()
+    original_item = getattr(module.GLOBAL_CACHE, "Item", missing_item)
+    original_parser = module.parse_modifiers
+    module.GLOBAL_CACHE.Item = item_api
+    module.parse_modifiers = parse
+    observations: dict[str, Any] = {}
+    try:
+        first = widget._build_inventory_item_info(101)
+        first_entry = cache[101]
+        first_trace = list(events)
+        events.clear()
+        second = widget._build_inventory_item_info(101)
+        second_trace = list(events)
+        _expect(first is not None and second is not None, "Stage 9 real snapshot builder must succeed.")
+        head = ["model", "quantity", "value", "type", "rarity", "armor", "modifiers"]
+        raw_reads = [f"mod{index}.{field}" for index in range(3) for field in ("id", "arg1", "arg2")]
+        tail = [
+            "name",
+            "identified",
+            "salvageable",
+            "customized",
+            "inscribable",
+            "material",
+            "rare",
+            "idkit",
+            "salvagekit",
+            "stackable",
+            "tome",
+        ]
+        _weapon_mod_expect(first_trace, head + raw_reads + ["parse"] + tail, "cold native/parser order")
+        _weapon_mod_expect(second_trace, head + raw_reads + tail, "warm native/parser order")
+        _weapon_mod_expect(
+            (widget.inventory_modifier_cache_hits, widget.inventory_modifier_cache_misses), (1, 1), "cold/warm counters"
+        )
+        _expect(
+            cache is widget.inventory_modifier_cache and cache[101] is first_entry,
+            "Stage 9 cache dictionary/entry identity.",
+        )
+        _expect(
+            first is not second and first.weapon_mod_matches is not second.weapon_mod_matches,
+            "Stage 9 fresh snapshot/list.",
+        )
+        _expect(
+            first.weapon_mod_matches[0] is second.weapon_mod_matches[0] is first_entry.parsed.weapon_mod_matches[0],
+            "Stage 9 shared cached match.",
+        )
+        _expect(
+            first.weapon_mod_matches[0] is not first.weapon_mod_matches[1],
+            "Stage 9 repeated parser matches remain distinct normalized objects.",
+        )
+        _expect(
+            first.raw_modifiers is second.raw_modifiers is first_entry.parsed.raw_modifiers,
+            "Stage 9 raw tuple reference.",
+        )
+        _expect(
+            first.rune_identifiers is not second.rune_identifiers
+            and first.weapon_mod_identifiers is not second.weapon_mod_identifiers,
+            "Stage 9 snapshot identifier lists.",
+        )
+        _weapon_mod_expect(first.weapon_mod_identifiers, ["Contract Mod"], "identifier deduplication only")
+        expected_match = dict(
+            identifier="Contract Mod",
+            target_item_type="Hammer",
+            component_kind="HammerHaft",
+            mod_type="Prefix",
+            value=19,
+            min_value=10,
+            max_value=20,
+            is_maxed=False,
+        )
+        expected_snapshot = dict(
+            item_id=101,
+            model_id=111,
+            name="Stage 9 Hammer",
+            quantity=1,
+            value=100,
+            item_type_id=int(module.ItemType.Hammer),
+            item_type_name="Hammer",
+            rarity="Gold",
+            identified=True,
+            salvageable=True,
+            is_customized=False,
+            is_inscribable=True,
+            is_material=False,
+            is_rare_material=False,
+            is_weapon_like=True,
+            is_armor_piece=False,
+            is_id_kit=False,
+            is_salvage_kit=False,
+            is_stackable=False,
+            is_tome=False,
+            requirement=9,
+            requirement_attribute_id=0,
+            requirement_attribute_name="",
+            damage_min=15,
+            damage_max=22,
+            energy=0,
+            armor=0,
+            standalone_kind="",
+            rune_identifiers=[],
+            weapon_mod_identifiers=["Contract Mod"],
+            weapon_mod_matches=[expected_match, expected_match],
+            raw_modifiers=tuple(state["raw"]),
+            armor_upgrade_identifiers=[],
+            armor_upgrade_matches=[],
+            armor_upgrade_parse_error="",
+        )
+        _weapon_mod_expect(module.asdict(first), expected_snapshot, "all snapshot fields")
+        _weapon_mod_expect(module.asdict(second), expected_snapshot, "warm snapshot fields")
+        observations["snapshots"] = [module.asdict(first), module.asdict(second)]
+        observations["traces"] = [first_trace, second_trace]
+
+        events.clear()
+        cached_result = widget._get_cached_inventory_modifiers(
+            101,
+            111,
+            module.ItemType.Hammer,
+            module.ItemType.Hammer,
+            is_weapon_like=True,
+            is_armor_piece=False,
+        )
+        _expect(cached_result is first_entry.parsed, "Stage 9 hit returns the original parsed object.")
+        _weapon_mod_expect(events, ["modifiers"] + raw_reads, "direct hit rereads raw values only")
+        observations["direct_hit"] = {"events": list(events), "same_parsed": cached_result is first_entry.parsed}
+        state["failure"] = "modifiers"
+        counters = (widget.inventory_modifier_cache_hits, widget.inventory_modifier_cache_misses)
+        events.clear()
+        _weapon_mod_expect(widget._build_inventory_item_info(101), None, "raw read failure")
+        _weapon_mod_expect(
+            (widget.inventory_modifier_cache_hits, widget.inventory_modifier_cache_misses),
+            counters,
+            "raw failure precedes accounting",
+        )
+        _expect(cache[101] is first_entry, "Stage 9 raw failure retains original cache entry.")
+        observations["raw_failure"] = {"events": list(events), "counters": counters}
+        state["failure"] = ""
+
+        widget.weapon_mod_generic_names["Contract Mod"] = "Contract Mod Label"
+        rule = module._normalize_sell_rule(
+            module.SellRule(
+                enabled=True,
+                kind=module.SELL_KIND_WEAPONS,
+                name="Mod owner",
+                rule_id="stage9-owner",
+                rarities=_rarity_flags("gold"),
+                protected_weapon_mod_identifiers=["Contract Mod"],
+            )
+        )
+        detail = "Contains protected weapon mod: Contract Mod Label."
+        owner = widget._get_hard_protection_match(first, [(4, rule), (7, replace(rule))])
+        _expect(owner is not None and owner[1] is rule, "Stage 9 first original protection rule retained.")
+        _weapon_mod_expect(
+            (owner[0], owner[2], owner[3]),
+            (4, module.MERCHANT_TYPE_MERCHANT, detail),
+            "protection owner and exact reason",
+        )
+        plan_widget, _coords = _requirement_contract_plan_widget(module, [first])
+        plan_widget.weapon_mod_generic_names["Contract Mod"] = "Contract Mod Label"
+        plan_widget.sell_rules = [rule]
+        plan = plan_widget._build_plan()
+        _weapon_mod_expect(plan.merchant_sell_item_ids, [], "protected physical ID cannot sell")
+        _weapon_mod_expect(
+            plan.entries[0].reason, "Hard-protected by Mod owner (#1): " + detail, "full sale-plan reason"
+        )
+        observations["protected_plan"] = module.asdict(plan)
+        threshold = replace(
+            rule,
+            protected_weapon_mod_identifiers=[],
+            protected_weapon_mod_thresholds=[module.WeaponModThresholdRule(identifier="Contract Mod", min_value=20)],
+        )
+        _weapon_mod_expect(widget._get_equippable_hard_protection_reason(first, threshold), None, "roll 19 below 20")
+        threshold.protected_weapon_mod_thresholds[0].min_value = 19
+        _expect(
+            widget._get_equippable_hard_protection_reason(first, threshold) is not None, "Stage 9 inclusive threshold."
+        )
+        destroy = module.DestroyRule(
+            enabled=True, kind=module.DESTROY_KIND_WEAPONS, rarities=_rarity_flags("gold"), name="Destroy owner"
+        )
+        destroy_plan = module.PlanResult()
+        claims: set[int] = set()
+        widget._plan_destroy_rule(destroy_plan, [first], destroy, 2, claims, [(4, rule)])
+        _weapon_mod_expect(claims, {101}, "protected Destroy claim")
+        _weapon_mod_expect(destroy_plan.destroy_item_ids, [], "protected Destroy plan")
+        observations["destroy"] = {"claims": sorted(claims), "plan": module.asdict(destroy_plan)}
+
+        # Signature misses use the real parser adapter; failures must preserve the old entry.
+        for label, failure in [("parse_failure", "parse"), ("normalization_failure", "normalization")]:
+            state["raw"] = [(9656, int(module.ItemType.Hammer), 0), (999999, 2, 3)]
+            state["failure"] = failure
+            if failure == "normalization":
+                weapon.modifiers = 7
+            events.clear()
+            _weapon_mod_expect(widget._build_inventory_item_info(101), None, label)
+            _expect(cache[101] is first_entry, "Stage 9 failed miss retains original entry.")
+            observations[label] = {
+                "events": list(events),
+                "cache": module.asdict(cache[101]),
+                "counters": (widget.inventory_modifier_cache_hits, widget.inventory_modifier_cache_misses),
+            }
+        weapon.modifiers = [ns(modifier_value_arg="Arg2", min=10, max=20)]
+        state["failure"] = "name"
+        events.clear()
+        _weapon_mod_expect(widget._build_inventory_item_info(101), None, "late name failure")
+        rebuilt_entry = cache[101]
+        _expect(rebuilt_entry is not first_entry, "Stage 9 late failure retains newly committed entry.")
+        observations["late_failure"] = {"events": list(events), "cache": module.asdict(rebuilt_entry)}
+        state["failure"] = ""
+        state["type"] = module.ItemType.Rune_Mod
+        state["quantity"] = 0
+        state["value"] = -5
+        standalone = widget._build_inventory_item_info(101, include_runtime_name=False)
+        _expect(standalone is not None, "Stage 9 standalone snapshot.")
+        _weapon_mod_expect(
+            (standalone.standalone_kind, standalone.quantity, standalone.value, standalone.name),
+            ("weapon_mod", 1, 0, "Model 111"),
+            "standalone facts and clamps",
+        )
+        observations["standalone"] = module.asdict(standalone)
+        _expect(cache[101] is not rebuilt_entry, "Stage 9 actual type change invalidates signature.")
+        widget._prune_inventory_modifier_cache(set())
+        _weapon_mod_expect(cache, {}, "pruning keeps dictionary identity and removes inactive ID")
+        observations["parsed_inputs"] = parsed_inputs
+    finally:
+        if original_item is missing_item:
+            delattr(module.GLOBAL_CACHE, "Item")
+        else:
+            module.GLOBAL_CACHE.Item = original_item
+        module.parse_modifiers = original_parser
+    return observations
+
+
+def _test_weapon_mod_normalization_literals(module: Any) -> None:
+    original = _weapon_mod_original_api(module)
+    _weapon_mod_expect(
+        _weapon_mod_literal_observations(module),
+        _weapon_mod_literal_observations(module, original),
+        "original/final literals",
+    )
+
+
+def _test_weapon_mod_normalization_access(module: Any) -> None:
+    original = _weapon_mod_original_api(module)
+    _weapon_mod_expect(
+        _weapon_mod_access_observations(module),
+        _weapon_mod_access_observations(module, original),
+        "original/final access",
+    )
+
+
+def _test_weapon_mod_normalization_integration(module: Any) -> None:
+    actual = _weapon_mod_integration_observations(module)
+    original = _weapon_mod_original_api(module)
+    current_builder = module._build_parsed_weapon_mod_match
+    try:
+        module._build_parsed_weapon_mod_match = original._build_parsed_weapon_mod_match
+        expected = _weapon_mod_integration_observations(module)
+    finally:
+        module._build_parsed_weapon_mod_match = current_builder
+    _weapon_mod_expect(actual, expected, "original/final real cache, snapshots and plans")
+
+
+def _test_weapon_mod_normalization_identity(module: Any) -> None:
+    from Sources.icefox.MerchantRules import weapon_mod_normalization as component
+
+    _expect(module.ParsedUpgradeMatch is component.ParsedUpgradeMatch, "Stage 9 canonical match class.")
+    for name in (
+        "_get_weapon_mod_component_kind_for_target",
+        "_get_weapon_mod_target_item_type_from_raw_modifiers",
+        "_resolve_parsed_weapon_mod_variant_context",
+        "_normalize_weapon_mod_component_kind",
+        "_normalize_weapon_mod_target_item_type",
+    ):
+        _expect(getattr(module, name) is getattr(component, name), "Stage 9 historical alias identity: " + name)
+    _expect(
+        module._build_parsed_weapon_mod_match is component.build_parsed_weapon_mod_match,
+        "Stage 9 direct builder alias.",
+    )
+    _expect(
+        module._get_weapon_mod_variable_range is component.get_weapon_mod_variable_range, "Stage 9 direct range alias."
+    )
+    _weapon_mod_expect(component.ParsedUpgradeMatch.__module__, component.__name__, "honest class metadata")
+    value = module.ParsedUpgradeMatch()
+    _weapon_mod_expect(_weapon_mod_fields(value), ("", "", "", "", None, 0, 0, False), "dataclass defaults")
+    _expect_raises(AttributeError, lambda: setattr(value, "value", 1), "Stage 9 match remains frozen.")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -40085,6 +40856,22 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            (
+                "weapon_mod_normalization_literals",
+                lambda: _test_weapon_mod_normalization_literals(module),
+            ),
+            (
+                "weapon_mod_normalization_access",
+                lambda: _test_weapon_mod_normalization_access(module),
+            ),
+            (
+                "weapon_mod_normalization_integration",
+                lambda: _test_weapon_mod_normalization_integration(module),
+            ),
+            (
+                "weapon_mod_normalization_identity",
+                lambda: _test_weapon_mod_normalization_identity(module),
+            ),
             (
                 "requirement_policy_literal_contract",
                 lambda: _test_requirement_policy_literal_contract(module),
