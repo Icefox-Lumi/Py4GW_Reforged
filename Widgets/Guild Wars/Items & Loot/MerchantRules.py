@@ -668,7 +668,6 @@ class _InventoryPlusPauseHandle:
             return False
         return True
 GOLD_BALANCE_DISABLED_ACTION_MESSAGE = "Enable Maintain carried gold before balancing."
-MAX_WEAPON_REQUIREMENT = 13
 MODIFIER_IDENTIFIER_ATTRIBUTE_REQUIREMENT = 0x279
 MODIFIER_IDENTIFIER_DAMAGE = 0x27A
 MODIFIER_IDENTIFIER_DAMAGE_NO_REQ = 0x248
@@ -694,7 +693,6 @@ ARMOR_UPGRADE_HOLDING_NAMES = frozenset({
 })
 ARMOR_UPGRADE_SOURCE_KIND = "armor"
 WEAPON_UPGRADE_SOURCE_KIND = "weapon"
-ATTRIBUTE_NONE_REAL_VALUE = 45
 
 
 class _MerchantRulesOwnedQueueCallback:
@@ -2180,37 +2178,30 @@ WEAPON_ITEM_TYPE_NAMES: dict[int, str] = {
     int(item_type.value): label
     for item_type, label in WEAPON_ITEM_TYPE_OPTIONS
 }
-PERFECT_BASE_DAMAGE_RANGES: dict[int, tuple[int, int]] = {
-    int(ItemType.Sword): (15, 22),
-    int(ItemType.Axe): (6, 28),
-    int(ItemType.Hammer): (19, 35),
-    int(ItemType.Bow): (15, 28),
-    int(ItemType.Daggers): (7, 17),
-    int(ItemType.Scythe): (9, 41),
-    int(ItemType.Spear): (14, 27),
-    int(ItemType.Wand): (11, 22),
-    int(ItemType.Staff): (11, 22),
-}
-PERFECT_BASE_ENERGY_VALUES: dict[int, int] = {
-    int(ItemType.Staff): 10,
-    int(ItemType.Offhand): 12,
-}
-PERFECT_BASE_ARMOR_VALUES: dict[int, int] = {
-    int(ItemType.Shield): 16,
-}
-PERFECT_BASE_ITEM_TYPE_LABELS: dict[int, str] = {
-    int(ItemType.Offhand): "Focus",
-    int(ItemType.Shield): "Shield",
-    int(ItemType.Staff): "Staff",
-    int(ItemType.Wand): "Wand",
-    int(ItemType.Sword): "Sword",
-    int(ItemType.Axe): "Axe",
-    int(ItemType.Hammer): "Hammer",
-    int(ItemType.Bow): "Bow",
-    int(ItemType.Daggers): "Daggers",
-    int(ItemType.Scythe): "Scythe",
-    int(ItemType.Spear): "Spear",
-}
+# Keep policy table initialization after the modifier database initialization above.
+from Sources.icefox.MerchantRules.requirement_protection import ATTRIBUTE_NONE_REAL_VALUE as ATTRIBUTE_NONE_REAL_VALUE
+from Sources.icefox.MerchantRules.requirement_protection import MAX_WEAPON_REQUIREMENT as MAX_WEAPON_REQUIREMENT
+from Sources.icefox.MerchantRules.requirement_protection import PERFECT_BASE_ARMOR_VALUES as PERFECT_BASE_ARMOR_VALUES
+from Sources.icefox.MerchantRules.requirement_protection import PERFECT_BASE_DAMAGE_RANGES as PERFECT_BASE_DAMAGE_RANGES
+from Sources.icefox.MerchantRules.requirement_protection import PERFECT_BASE_ENERGY_VALUES as PERFECT_BASE_ENERGY_VALUES
+from Sources.icefox.MerchantRules.requirement_protection import (
+    PERFECT_BASE_ITEM_TYPE_LABELS as PERFECT_BASE_ITEM_TYPE_LABELS,
+)
+from Sources.icefox.MerchantRules.requirement_protection import (
+    get_perfect_only_unidentified_hold_reason as _requirement_get_perfect_only_unidentified_hold_reason,
+)
+from Sources.icefox.MerchantRules.requirement_protection import (
+    get_weapon_requirement_hit_reason as _requirement_get_weapon_requirement_hit_reason,
+)
+from Sources.icefox.MerchantRules.requirement_protection import (
+    is_weapon_requirement_range_active as _is_weapon_requirement_range_active,
+)
+from Sources.icefox.MerchantRules.requirement_protection import (
+    normalize_weapon_requirement_level as _normalize_weapon_requirement_level,
+)
+from Sources.icefox.MerchantRules.requirement_protection import (
+    normalize_weapon_requirement_range as _normalize_weapon_requirement_range,
+)
 WEAPON_LIKE_ITEM_TYPES: frozenset[ItemType] = frozenset(item_type for item_type, _label in WEAPON_ITEM_TYPE_OPTIONS)
 ARMOR_PIECE_TYPES: frozenset[ItemType] = frozenset({
     ItemType.Headpiece,
@@ -5353,18 +5344,6 @@ def _get_material_batch_size_for_model(model_id: object) -> int:
     return MATERIAL_BATCH_SIZE if _is_common_crafting_material_model(model_id) else 1
 
 
-def _normalize_weapon_requirement_level(value: object) -> int:
-    return min(MAX_WEAPON_REQUIREMENT, max(0, _safe_int(value, 0)))
-
-
-def _normalize_weapon_requirement_range(min_value: object, max_value: object) -> tuple[int, int]:
-    min_requirement = _normalize_weapon_requirement_level(min_value)
-    max_requirement = _normalize_weapon_requirement_level(max_value)
-    if min_requirement > 0 and max_requirement > 0 and min_requirement > max_requirement:
-        min_requirement, max_requirement = max_requirement, min_requirement
-    return min_requirement, max_requirement
-
-
 def _should_defer_weapon_requirement_range_commit(min_value: object, max_value: object, *, input_active: bool) -> bool:
     min_requirement = _normalize_weapon_requirement_level(min_value)
     max_requirement = _normalize_weapon_requirement_level(max_value)
@@ -5431,26 +5410,6 @@ def _format_requirement_attribute_value(attribute: object) -> tuple[int, str]:
     return attribute_id, label
 
 
-def _has_real_requirement_attribute(item: InventoryItemInfo) -> bool:
-    attribute_name = str(getattr(item, "requirement_attribute_name", "") or "").strip()
-    if attribute_name and attribute_name.lower() not in ("none", "none_"):
-        return True
-    attribute_id = _safe_int(getattr(item, "requirement_attribute_id", 0), 0)
-    return attribute_id > 0 and attribute_id != ATTRIBUTE_NONE_REAL_VALUE
-
-
-def _get_item_requirement_attribute_label(item: InventoryItemInfo) -> str:
-    attribute_name = str(getattr(item, "requirement_attribute_name", "") or "").strip()
-    if attribute_name.lower() in ("none", "none_"):
-        return ""
-    if attribute_name:
-        return attribute_name
-    attribute_id = _safe_int(getattr(item, "requirement_attribute_id", 0), 0)
-    if attribute_id <= 0 or attribute_id == ATTRIBUTE_NONE_REAL_VALUE:
-        return ""
-    return f"Attribute {attribute_id}"
-
-
 def _get_last_imgui_item_active() -> bool:
     is_item_active = getattr(PyImGui, "is_item_active", None)
     if not callable(is_item_active):
@@ -5459,11 +5418,6 @@ def _get_last_imgui_item_active() -> bool:
         return bool(is_item_active())
     except Exception:
         return False
-
-
-def _is_weapon_requirement_range_active(min_requirement: object, max_requirement: object) -> bool:
-    normalized_min, normalized_max = _normalize_weapon_requirement_range(min_requirement, max_requirement)
-    return normalized_min > 0 and normalized_max > 0
 
 
 def _normalize_all_weapons_requirement_range_from_payload(entry: dict[str, object]) -> tuple[int, int]:
@@ -20938,226 +20892,41 @@ class MerchantRulesWidget:
             return f"Item {item_id}"
         return "Unknown Item"
 
-    def _get_perfect_base_spec(self, item: InventoryItemInfo) -> tuple[tuple[int, int] | None, int, int]:
-        item_type_id = int(getattr(item, "item_type_id", 0))
-        return (
-            PERFECT_BASE_DAMAGE_RANGES.get(item_type_id),
-            max(0, int(PERFECT_BASE_ENERGY_VALUES.get(item_type_id, 0))),
-            max(0, int(PERFECT_BASE_ARMOR_VALUES.get(item_type_id, 0))),
-        )
-
-    def _is_perfect_base_candidate_type(self, item: InventoryItemInfo) -> bool:
-        item_type_id = int(getattr(item, "item_type_id", 0))
-        return bool(
-            item_type_id in PERFECT_BASE_DAMAGE_RANGES
-            or item_type_id in PERFECT_BASE_ENERGY_VALUES
-            or item_type_id in PERFECT_BASE_ARMOR_VALUES
-        )
-
-    def _get_perfect_base_unavailable_reason(self, item: InventoryItemInfo) -> str:
-        if bool(getattr(item, "identified", False)):
-            return ""
-        if not bool(getattr(item, "is_weapon_like", False)):
-            return ""
-        if str(getattr(item, "standalone_kind", "") or "") == WEAPON_MOD_STANDALONE_KIND:
-            return ""
-        if not self._is_perfect_base_candidate_type(item):
-            return ""
-
-        expected_damage, expected_energy, expected_armor = self._get_perfect_base_spec(item)
-        if _normalize_weapon_requirement_level(getattr(item, "requirement", 0)) <= 0:
-            return "Protected until identified: perfect-base stats unavailable."
-        if not _has_real_requirement_attribute(item):
-            return "Protected until identified: perfect-base stats unavailable."
-        if expected_damage is not None and (
-            max(0, _safe_int(getattr(item, "damage_min", 0), 0)) <= 0
-            or max(0, _safe_int(getattr(item, "damage_max", 0), 0)) <= 0
-        ):
-            return "Protected until identified: perfect-base stats unavailable."
-        if expected_energy > 0 and max(0, _safe_int(getattr(item, "energy", 0), 0)) <= 0:
-            return "Protected until identified: perfect-base stats unavailable."
-        if expected_armor > 0 and max(0, _safe_int(getattr(item, "armor", 0), 0)) <= 0:
-            return "Protected until identified: perfect-base stats unavailable."
-        return ""
-
-    def _format_perfect_base_stats(self, item: InventoryItemInfo) -> str:
-        item_type_id = int(getattr(item, "item_type_id", 0))
-        parts: list[str] = []
-        damage = PERFECT_BASE_DAMAGE_RANGES.get(item_type_id)
-        if damage is not None:
-            parts.append(f"{damage[0]}-{damage[1]}")
-        energy = max(0, int(PERFECT_BASE_ENERGY_VALUES.get(item_type_id, 0)))
-        if energy > 0:
-            parts.append(f"Energy +{energy}")
-        armor = max(0, int(PERFECT_BASE_ARMOR_VALUES.get(item_type_id, 0)))
-        if armor > 0:
-            parts.append(f"Armor {armor}")
-        return ", ".join(parts)
-
-    def _get_perfect_base_range_hit_reason(
-        self,
-        item: InventoryItemInfo,
-        min_requirement: int,
-        max_requirement: int,
-        *,
-        source: str,
-    ) -> str:
-        if not bool(getattr(item, "is_weapon_like", False)):
-            return ""
-        if str(getattr(item, "standalone_kind", "") or "") == WEAPON_MOD_STANDALONE_KIND:
-            return ""
-        if not self._is_perfect_base_candidate_type(item):
-            return ""
-
-        requirement = _normalize_weapon_requirement_level(getattr(item, "requirement", 0))
-        if requirement > 0 and not (min_requirement <= requirement <= max_requirement):
-            return ""
-
-        unavailable_reason = self._get_perfect_base_unavailable_reason(item)
-        if unavailable_reason:
-            return unavailable_reason
-
-        if requirement <= 0 or not _has_real_requirement_attribute(item):
-            return ""
-        if not (min_requirement <= requirement <= max_requirement):
-            return ""
-
-        expected_damage, expected_energy, expected_armor = self._get_perfect_base_spec(item)
-        if expected_damage is not None:
-            actual_damage = (
-                max(0, _safe_int(getattr(item, "damage_min", 0), 0)),
-                max(0, _safe_int(getattr(item, "damage_max", 0), 0)),
-            )
-            if actual_damage != expected_damage:
-                return ""
-        if expected_energy > 0 and max(0, _safe_int(getattr(item, "energy", 0), 0)) != expected_energy:
-            return ""
-        if expected_armor > 0 and max(0, _safe_int(getattr(item, "armor", 0), 0)) != expected_armor:
-            return ""
-
-        if source == "model":
-            label = self._get_requirement_rule_item_label(item)
-            prefix = "model"
-        else:
-            label = PERFECT_BASE_ITEM_TYPE_LABELS.get(
-                int(getattr(item, "item_type_id", 0)),
-                self._get_weapon_item_type_label(int(getattr(item, "item_type_id", 0))),
-            )
-            prefix = "all-weapons"
-        stats = self._format_perfect_base_stats(item)
-        attribute_label = _get_item_requirement_attribute_label(item)
-        attribute_suffix = f" {attribute_label}" if attribute_label else ""
-        return f"Protected by {prefix} perfect-base range: {label} {stats}, req {requirement}{attribute_suffix}."
-
     def _get_perfect_only_unidentified_hold_reason(self, item: InventoryItemInfo, rule: SellRule) -> str:
-        if rule.kind != SELL_KIND_WEAPONS or bool(getattr(item, "identified", False)):
-            return ""
-        if not bool(getattr(item, "is_weapon_like", False)):
-            return ""
-        if str(getattr(item, "standalone_kind", "") or "") == WEAPON_MOD_STANDALONE_KIND:
-            return ""
-
-        has_model_requirement_range = False
-        for requirement_rule in rule.protected_weapon_requirement_rules:
-            if item.model_id != int(requirement_rule.model_id):
-                continue
-            min_requirement, max_requirement = _normalize_weapon_requirement_range(
-                getattr(requirement_rule, "min_requirement", 0),
-                getattr(requirement_rule, "max_requirement", 0),
-            )
-            if not _is_weapon_requirement_range_active(min_requirement, max_requirement):
-                continue
-            has_model_requirement_range = True
-            if bool(getattr(requirement_rule, "perfect_stats_only", False)):
-                perfect_reason = self._get_perfect_base_range_hit_reason(
-                    item,
-                    min_requirement,
-                    max_requirement,
-                    source="model",
-                )
-                if perfect_reason:
-                    return perfect_reason
-                if not self._should_fall_back_to_global_weapon_requirement(item.model_id):
-                    return ""
-                continue
-
-        if has_model_requirement_range and not self._should_fall_back_to_global_weapon_requirement(item.model_id):
-            return ""
-
-        all_weapons_min_requirement, all_weapons_max_requirement = _normalize_weapon_requirement_range(
-            getattr(rule, "all_weapons_min_requirement", 0),
-            getattr(rule, "all_weapons_max_requirement", 0),
+        should_fall_back_to_global: Callable[[Callable[[], object]], bool] = (
+            lambda read_model_id: self._should_fall_back_to_global_weapon_requirement(read_model_id())
         )
-        if (
-            bool(getattr(rule, "all_weapons_perfect_stats_only", False))
-            and _is_weapon_requirement_range_active(all_weapons_min_requirement, all_weapons_max_requirement)
-        ):
-            return self._get_perfect_base_range_hit_reason(
-                item,
-                all_weapons_min_requirement,
-                all_weapons_max_requirement,
-                source="all",
-            )
-        return ""
+        item_label: Callable[[InventoryItemInfo], str] = lambda candidate: self._get_requirement_rule_item_label(candidate)
+        item_type_label: Callable[[Callable[[], int]], str] = lambda read_item_type_id: self._get_weapon_item_type_label(
+            read_item_type_id()
+        )
+        return _requirement_get_perfect_only_unidentified_hold_reason(
+            item,
+            rule,
+            weapon_rule_kind=SELL_KIND_WEAPONS,
+            weapon_mod_standalone_kind=WEAPON_MOD_STANDALONE_KIND,
+            should_fall_back_to_global=should_fall_back_to_global,
+            item_label=item_label,
+            item_type_label=item_type_label,
+        )
 
     def _get_weapon_requirement_hit_reason(self, item: InventoryItemInfo, rule: SellRule) -> str:
-        if rule.kind != SELL_KIND_WEAPONS:
-            return ""
-        if not item.is_weapon_like or item.standalone_kind == WEAPON_MOD_STANDALONE_KIND:
-            return ""
-
-        requirement = _normalize_weapon_requirement_level(item.requirement)
-        has_model_requirement_range = False
-        for requirement_rule in rule.protected_weapon_requirement_rules:
-            if item.model_id != int(requirement_rule.model_id):
-                continue
-            min_requirement, max_requirement = _normalize_weapon_requirement_range(
-                getattr(requirement_rule, "min_requirement", 0),
-                getattr(requirement_rule, "max_requirement", 0),
-            )
-            if not _is_weapon_requirement_range_active(min_requirement, max_requirement):
-                continue
-            has_model_requirement_range = True
-            if bool(getattr(requirement_rule, "perfect_stats_only", False)):
-                perfect_reason = self._get_perfect_base_range_hit_reason(
-                    item,
-                    min_requirement,
-                    max_requirement,
-                    source="model",
-                )
-                if perfect_reason:
-                    return perfect_reason
-                continue
-            if requirement <= 0:
-                continue
-            if min_requirement <= requirement <= max_requirement:
-                item_label = self._get_requirement_rule_item_label(item)
-                return f"Protected by requirement range: {item_label} req {requirement} in {min_requirement}-{max_requirement}."
-
-        if has_model_requirement_range and not self._should_fall_back_to_global_weapon_requirement(item.model_id):
-            return ""
-
-        all_weapons_min_requirement, all_weapons_max_requirement = _normalize_weapon_requirement_range(
-            getattr(rule, "all_weapons_min_requirement", 0),
-            getattr(rule, "all_weapons_max_requirement", 0),
+        should_fall_back_to_global: Callable[[Callable[[], object]], bool] = (
+            lambda read_model_id: self._should_fall_back_to_global_weapon_requirement(read_model_id())
         )
-        if (
-            bool(getattr(rule, "all_weapons_perfect_stats_only", False))
-            and _is_weapon_requirement_range_active(all_weapons_min_requirement, all_weapons_max_requirement)
-        ):
-            return self._get_perfect_base_range_hit_reason(
-                item,
-                all_weapons_min_requirement,
-                all_weapons_max_requirement,
-                source="all",
-            )
-        if (
-            _is_weapon_requirement_range_active(all_weapons_min_requirement, all_weapons_max_requirement)
-            and all_weapons_min_requirement <= requirement <= all_weapons_max_requirement
-        ):
-            item_label = self._get_requirement_rule_item_label(item)
-            return f"Protected by all-weapons requirement range: {item_label} req {requirement} in {all_weapons_min_requirement}-{all_weapons_max_requirement}."
-        return ""
+        item_label: Callable[[InventoryItemInfo], str] = lambda candidate: self._get_requirement_rule_item_label(candidate)
+        item_type_label: Callable[[Callable[[], int]], str] = lambda read_item_type_id: self._get_weapon_item_type_label(
+            read_item_type_id()
+        )
+        return _requirement_get_weapon_requirement_hit_reason(
+            item,
+            rule,
+            weapon_rule_kind=SELL_KIND_WEAPONS,
+            weapon_mod_standalone_kind=WEAPON_MOD_STANDALONE_KIND,
+            should_fall_back_to_global=should_fall_back_to_global,
+            item_label=item_label,
+            item_type_label=item_type_label,
+        )
 
     def _get_equippable_hard_protection_reason(self, item: InventoryItemInfo, rule: SellRule) -> tuple[str, str] | None:
         destination = self._get_equippable_rule_destination(item, rule)

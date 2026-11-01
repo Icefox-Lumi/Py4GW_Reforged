@@ -38949,6 +38949,1134 @@ print("PASS: normal status import, isolated definitions, no runtime initializati
     _expect(result.returncode == 0, f"Status import isolation failed: {result.stdout}\n{result.stderr}")
 
 
+def _requirement_contract_expect(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f"{context}: expected {expected!r}, observed {actual!r}")
+
+
+def _requirement_contract_item(module: types.ModuleType, **changes: object) -> Any:
+    item = module.InventoryItemInfo(
+        item_id=970001,
+        model_id=970,
+        name="Runtime Axe",
+        quantity=1,
+        value=100,
+        item_type_id=int(module.ItemType.Axe),
+        item_type_name="Axe",
+        rarity="Gold",
+        identified=True,
+        salvageable=False,
+        is_customized=False,
+        is_inscribable=False,
+        is_material=False,
+        is_rare_material=False,
+        is_weapon_like=True,
+        is_armor_piece=False,
+        requirement=7,
+        requirement_attribute_id=1,
+        requirement_attribute_name="Axe Mastery",
+        damage_min=6,
+        damage_max=28,
+    )
+    return replace(item, **changes) if changes else item
+
+
+def _requirement_contract_rule(module: types.ModuleType, **changes: object) -> Any:
+    rule = module.SellRule(
+        enabled=True,
+        kind=module.SELL_KIND_WEAPONS,
+        rule_id="requirement-contract-owner",
+        name="Requirement owner",
+        rarities=_rarity_flags("gold"),
+        skip_customized=False,
+        skip_unidentified=False,
+        all_weapons_min_requirement=1,
+        all_weapons_max_requirement=8,
+    )
+    return replace(rule, **changes) if changes else rule
+
+
+def _requirement_contract_catalog(
+    module: types.ModuleType, widget: Any, *, collision: bool = True
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = [
+        {"item_type_id": int(module.ItemType.Axe), "model_id": 970, "name": "Typed Axe", "item_type": "Axe"},
+    ]
+    if collision:
+        rows.append(
+            {"item_type_id": int(module.ItemType.Sword), "model_id": 970, "name": "Typed Sword", "item_type": "Sword"}
+        )
+    widget.exact_catalog_by_item_key = {(row["item_type_id"], row["model_id"]): row for row in rows}
+    widget._equipment_typed_entries_by_model_id = {}
+    widget._equipment_model_search_entry_cache = {"sentinel": "unchanged until rebuild"}
+    widget.catalog_by_model_id[970] = {"model_id": 970, "name": "Flat Model"}
+    return rows
+
+
+def _requirement_policy_literal_observations(module: types.ModuleType) -> dict[str, object]:
+    widget = _make_widget(module)
+    _requirement_contract_catalog(module, widget)
+    rule = _requirement_contract_rule(module)
+    observations: dict[str, object] = {}
+    for requirement, expected in (
+        (0, ""),
+        (-3, ""),
+        (1, "Protected by all-weapons requirement range: Typed Axe req 1 in 1-8."),
+        (8, "Protected by all-weapons requirement range: Typed Axe req 8 in 1-8."),
+        (9, ""),
+        (99, ""),
+    ):
+        reason = widget._get_weapon_requirement_hit_reason(
+            _requirement_contract_item(module, requirement=requirement), rule
+        )
+        _requirement_contract_expect(reason, expected, f"global requirement {requirement}")
+        observations[f"global_{requirement}"] = reason
+
+    levels = [
+        (" 0x8 ", 8),
+        ("0b101", 5),
+        ("08", 0),
+        ("bad", 0),
+        (b"08", 8),
+        (b"0x8", 0),
+        (7.9, 7),
+        (-1, 0),
+        (99, 13),
+        (True, 1),
+        (None, 0),
+    ]
+    for value, expected in levels:
+        actual = module._normalize_weapon_requirement_level(value)
+        _requirement_contract_expect(actual, expected, f"level normalization {value!r}")
+        observations[f"level_{value!r}"] = actual
+    for left, right, expected in ((8, 1, (1, 8)), (8, 0, (8, 0)), (-3, 9, (0, 9)), (99, 2, (2, 13))):
+        actual = module._normalize_weapon_requirement_range(left, right)
+        _requirement_contract_expect(actual, expected, f"range normalization {left!r}, {right!r}")
+        _requirement_contract_expect(
+            module._is_weapon_requirement_range_active(left, right),
+            expected[0] > 0 and expected[1] > 0,
+            f"range activity {left!r}, {right!r}",
+        )
+        observations[f"range_{left}_{right}"] = actual
+
+    class ConversionFailure:
+        def __int__(self) -> int:
+            raise RuntimeError("conversion sentinel")
+
+    bad = ConversionFailure()
+    _requirement_contract_expect(module._normalize_weapon_requirement_level(bad), 0, "caught scalar conversion")
+
+    class IndexedValue:
+        def __index__(self) -> int:
+            return 8
+
+    class TruncatedValue:
+        def __trunc__(self) -> int:
+            return 6
+
+    class InvalidIntValue:
+        def __int__(self) -> str:
+            return "8"
+
+    class ConversionAbort(BaseException):
+        pass
+
+    abort = ConversionAbort("base-exception sentinel")
+
+    class AbortingValue:
+        def __int__(self) -> int:
+            raise abort
+
+    for name, value, expected in (
+        ("index", IndexedValue(), 8),
+        ("trunc", TruncatedValue(), 6),
+        ("invalid_int", InvalidIntValue(), 0),
+    ):
+        actual = module._normalize_weapon_requirement_level(value)
+        _requirement_contract_expect(actual, expected, f"scalar protocol {name}")
+        observations[f"scalar_{name}"] = actual
+    try:
+        module._normalize_weapon_requirement_level(AbortingValue())
+    except ConversionAbort as exc:
+        _expect(exc is abort, "Scalar conversion must not catch BaseException or replace its identity.")
+    else:
+        raise AssertionError("Scalar conversion caught an original BaseException.")
+    observations["scalar_abort"] = (type(abort).__name__, str(abort))
+    perfect = replace(rule, all_weapons_perfect_stats_only=True)
+    perfect_cases: tuple[tuple[str, dict[str, object], str], ...] = (
+        ("axe", {}, "Protected by all-weapons perfect-base range: Axe 6-28, req 7 Axe Mastery."),
+        ("above", {"damage_max": 29}, ""),
+        ("below", {"damage_min": 5}, ""),
+        ("missing_identified", {"damage_min": 0}, ""),
+        (
+            "missing_unidentified",
+            {"identified": False, "damage_min": 0},
+            "Protected until identified: perfect-base stats unavailable.",
+        ),
+        ("outside_unidentified", {"identified": False, "requirement": 9, "damage_min": 0}, ""),
+        (
+            "zero_unidentified",
+            {"identified": False, "requirement": 0},
+            "Protected until identified: perfect-base stats unavailable.",
+        ),
+        (
+            "attribute_unidentified",
+            {"identified": False, "requirement_attribute_name": "None", "requirement_attribute_id": 45},
+            "Protected until identified: perfect-base stats unavailable.",
+        ),
+        ("attribute_identified", {"requirement_attribute_name": "None", "requirement_attribute_id": 45}, ""),
+        (
+            "attribute_id",
+            {"requirement_attribute_name": "", "requirement_attribute_id": 2},
+            "Protected by all-weapons perfect-base range: Axe 6-28, req 7 Attribute 2.",
+        ),
+        (
+            "staff",
+            {"item_type_id": int(module.ItemType.Staff), "damage_min": 11, "damage_max": 22, "energy": 10},
+            "Protected by all-weapons perfect-base range: Staff 11-22, Energy +10, req 7 Axe Mastery.",
+        ),
+        (
+            "staff_energy",
+            {"item_type_id": int(module.ItemType.Staff), "damage_min": 11, "damage_max": 22, "energy": 11},
+            "",
+        ),
+        (
+            "focus",
+            {"item_type_id": int(module.ItemType.Offhand), "energy": 12},
+            "Protected by all-weapons perfect-base range: Focus Energy +12, req 7 Axe Mastery.",
+        ),
+        (
+            "shield",
+            {"item_type_id": int(module.ItemType.Shield), "armor": 16},
+            "Protected by all-weapons perfect-base range: Shield Armor 16, req 7 Axe Mastery.",
+        ),
+        ("standalone", {"standalone_kind": module.WEAPON_MOD_STANDALONE_KIND}, ""),
+        ("nonweapon", {"is_weapon_like": False}, ""),
+    )
+    for name, changes, expected in perfect_cases:
+        item = _requirement_contract_item(module, **changes)
+        actual = widget._get_weapon_requirement_hit_reason(item, perfect)
+        _requirement_contract_expect(actual, expected, f"perfect case {name}")
+        observations[f"perfect_{name}"] = actual
+
+    first = module.WeaponRequirementRule(model_id=970, min_requirement=1, max_requirement=5, perfect_stats_only=True)
+    second = module.WeaponRequirementRule(model_id=970, min_requirement=6, max_requirement=8, perfect_stats_only=True)
+    repeated = replace(perfect, protected_weapon_requirement_rules=[first, second])
+    unid = _requirement_contract_item(module, identified=False)
+    _requirement_contract_catalog(module, widget, collision=False)
+    original_list = repeated.protected_weapon_requirement_rules
+    original_item = module.asdict(unid)
+    original_rule = module.asdict(repeated)
+    held = widget._get_perfect_only_unidentified_hold_reason(unid, repeated)
+    normal = widget._get_weapon_requirement_hit_reason(unid, repeated)
+    _requirement_contract_expect(held, "", "unidentified loop stops after first failed unique-model perfect row")
+    _requirement_contract_expect(
+        normal,
+        "Protected by model perfect-base range: Typed Axe 6-28, req 7 Axe Mastery.",
+        "normal loop continues to second matching model row",
+    )
+    _expect(
+        repeated.protected_weapon_requirement_rules is original_list,
+        "Requirement evaluation must retain the supplied sequence object.",
+    )
+    _expect(
+        original_list[0] is first and original_list[1] is second,
+        "Requirement evaluation must retain supplied row identities.",
+    )
+    _requirement_contract_expect(module.asdict(unid), original_item, "unchanged input item")
+    _requirement_contract_expect(module.asdict(repeated), original_rule, "unchanged input rule")
+    observations["repeated"] = {"hold": held, "normal": normal}
+
+    for bad_item, bad_rule, message in (
+        (_requirement_contract_item(module, item_type_id=bad), perfect, "direct item-type conversion"),
+        (
+            _requirement_contract_item(module),
+            replace(rule, protected_weapon_requirement_rules=[replace(first, model_id=bad)]),
+            "direct row-model conversion",
+        ),
+    ):
+        try:
+            widget._get_weapon_requirement_hit_reason(bad_item, bad_rule)
+        except RuntimeError as exc:
+            _requirement_contract_expect(str(exc), "conversion sentinel", message)
+            observations[message] = (type(exc).__name__, str(exc))
+        else:
+            raise AssertionError(f"{message}: expected RuntimeError, observed return")
+    return observations
+
+
+def _test_requirement_policy_literal_contract(module: types.ModuleType) -> None:
+    _requirement_policy_literal_observations(module)
+
+
+class _RequirementContractReadProbe:
+    def __init__(self, label: str, values: dict[str, object], events: list[tuple[str, str]]) -> None:
+        object.__setattr__(self, "_label", label)
+        object.__setattr__(self, "_values", values)
+        object.__setattr__(self, "_events", events)
+
+    def __getattribute__(self, name: str) -> Any:
+        if name.startswith("_"):
+            return object.__getattribute__(self, name)
+        events = object.__getattribute__(self, "_events")
+        events.append((object.__getattribute__(self, "_label"), name))
+        values = object.__getattribute__(self, "_values")
+        if name not in values:
+            raise AttributeError(name)
+        return values[name]
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AssertionError(f"Policy attempted to mutate {name} to {value!r}.")
+
+
+class _RequirementContractPolicyHost:
+    """Bind real dynamically loaded policy methods while observing dependency resolution."""
+
+    _should_fall_back_to_global_weapon_requirement: Callable[[object], bool]
+    _get_requirement_rule_item_label: Callable[[object], str]
+    _get_weapon_item_type_label: Callable[[int], str]
+
+    def __init__(self, module: types.ModuleType, events: list[tuple[str, str]]) -> None:
+        self._module = module
+        self._events = events
+
+    def configure_callbacks(
+        self,
+        fallback: Callable[[object], bool],
+        label: Callable[[object], str],
+        type_label: Callable[[int], str],
+    ) -> None:
+        self._should_fall_back_to_global_weapon_requirement = fallback
+        self._get_requirement_rule_item_label = label
+        self._get_weapon_item_type_label = type_label
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in (
+            "_should_fall_back_to_global_weapon_requirement",
+            "_get_requirement_rule_item_label",
+            "_get_weapon_item_type_label",
+        ):
+            events: list[tuple[str, str]] = object.__getattribute__(self, "_events")
+            events.append(("resolve", name))
+        return object.__getattribute__(self, name)
+
+    def __getattr__(self, name: str) -> Any:
+        method = getattr(self._module.MerchantRulesWidget, name)
+        return method.__get__(self, type(self))
+
+
+def _requirement_policy_access_observations(module: types.ModuleType) -> dict[str, object]:
+    observations: dict[str, object] = {}
+    events: list[tuple[str, str]] = []
+    callbacks: list[tuple[str, object]] = []
+
+    widget = _RequirementContractPolicyHost(module, events)
+
+    def fallback(model_id: object) -> bool:
+        callbacks.append(("fallback", model_id))
+        return True
+
+    def label(item: object) -> str:
+        callbacks.append(("label", item is original_item))
+        return "Trace Axe"
+
+    def type_label(item_type: int) -> str:
+        callbacks.append(("type_label", item_type))
+        return "Fallback Axe"
+
+    widget.configure_callbacks(fallback, label, type_label)
+    item_values: dict[str, object] = module.asdict(_requirement_contract_item(module))
+    rule_values: dict[str, object] = module.asdict(_requirement_contract_rule(module))
+    original_item = _RequirementContractReadProbe("item", item_values, events)
+    rule = _RequirementContractReadProbe("rule", rule_values, events)
+
+    actual = widget._get_weapon_requirement_hit_reason(original_item, rule)
+    _requirement_contract_expect(
+        actual, "Protected by all-weapons requirement range: Trace Axe req 7 in 1-8.", "traced global result"
+    )
+    expected = [
+        ("rule", "kind"),
+        ("item", "is_weapon_like"),
+        ("item", "standalone_kind"),
+        ("item", "requirement"),
+        ("rule", "protected_weapon_requirement_rules"),
+        ("rule", "all_weapons_min_requirement"),
+        ("rule", "all_weapons_max_requirement"),
+        ("rule", "all_weapons_perfect_stats_only"),
+        ("resolve", "_get_requirement_rule_item_label"),
+    ]
+    _requirement_contract_expect(events, expected, "global field and method-resolution order")
+    _requirement_contract_expect(callbacks, [("label", True)], "global callback arguments and original-item identity")
+    observations["global"] = {"events": list(events), "callbacks": list(callbacks), "reason": actual}
+
+    events.clear()
+    callbacks.clear()
+    wrong_rule = _RequirementContractReadProbe("rule", {"kind": module.SELL_KIND_ARMOR}, events)
+    _requirement_contract_expect(
+        widget._get_weapon_requirement_hit_reason(original_item, wrong_rule), "", "nonweapon short circuit"
+    )
+    _requirement_contract_expect(events, [("rule", "kind")], "nonweapon must resolve no callback or item field")
+    _requirement_contract_expect(callbacks, [], "nonweapon callbacks")
+    observations["nonweapon"] = list(events)
+
+    events.clear()
+    rule_values["all_weapons_perfect_stats_only"] = True
+    actual = widget._get_weapon_requirement_hit_reason(original_item, rule)
+    _requirement_contract_expect(
+        actual, "Protected by all-weapons perfect-base range: Axe 6-28, req 7 Axe Mastery.", "global perfect label"
+    )
+    _requirement_contract_expect(
+        callbacks, [("type_label", int(module.ItemType.Axe))], "dict.get default label must run even for known Axe"
+    )
+    expected = [
+        ("rule", "kind"),
+        ("item", "is_weapon_like"),
+        ("item", "standalone_kind"),
+        ("item", "requirement"),
+        ("rule", "protected_weapon_requirement_rules"),
+        ("rule", "all_weapons_min_requirement"),
+        ("rule", "all_weapons_max_requirement"),
+        ("rule", "all_weapons_perfect_stats_only"),
+        ("item", "is_weapon_like"),
+        ("item", "standalone_kind"),
+        ("item", "item_type_id"),
+        ("item", "requirement"),
+        ("item", "identified"),
+        ("item", "requirement_attribute_name"),
+        ("item", "item_type_id"),
+        ("item", "damage_min"),
+        ("item", "damage_max"),
+        ("item", "item_type_id"),
+        ("resolve", "_get_weapon_item_type_label"),
+        ("item", "item_type_id"),
+        ("item", "item_type_id"),
+        ("item", "requirement_attribute_name"),
+    ]
+    _requirement_contract_expect(events, expected, "global perfect repeated reads and method-resolution order")
+    observations["perfect"] = {"events": list(events), "callbacks": list(callbacks), "reason": actual}
+
+    events.clear()
+    callbacks.clear()
+    identified_rule = _RequirementContractReadProbe("rule", {"kind": module.SELL_KIND_WEAPONS}, events)
+    _requirement_contract_expect(
+        widget._get_perfect_only_unidentified_hold_reason(original_item, identified_rule),
+        "",
+        "identified hold short circuit",
+    )
+    _requirement_contract_expect(events, [("rule", "kind"), ("item", "identified")], "identified hold reads")
+    _requirement_contract_expect(callbacks, [], "identified hold callbacks")
+    observations["identified_hold"] = list(events)
+
+    item_values["identified"] = False
+    item_values["requirement"] = 9
+    first = module.WeaponRequirementRule(model_id=970, min_requirement=1, max_requirement=5, perfect_stats_only=True)
+    second = module.WeaponRequirementRule(model_id=970, min_requirement=6, max_requirement=8, perfect_stats_only=True)
+    rule_values["protected_weapon_requirement_rules"] = [first, second]
+    for method_name, expected_count in (
+        ("_get_perfect_only_unidentified_hold_reason", 3),
+        ("_get_weapon_requirement_hit_reason", 1),
+    ):
+        events.clear()
+        callbacks.clear()
+        reason = getattr(widget, method_name)(original_item, rule)
+        _requirement_contract_expect(reason, "", f"repeated failed perfect rows {method_name}")
+        _requirement_contract_expect(
+            callbacks, [("fallback", 970)] * expected_count, f"distinct fallback count {method_name}"
+        )
+        _requirement_contract_expect(
+            [event for event in events if event[0] == "resolve"],
+            [("resolve", "_should_fall_back_to_global_weapon_requirement")] * expected_count,
+            f"distinct fallback resolution count {method_name}",
+        )
+        observations[method_name] = {"events": list(events), "callbacks": list(callbacks), "reason": reason}
+    return observations
+
+
+def _test_requirement_policy_access_contract(module: types.ModuleType) -> None:
+    _requirement_policy_access_observations(module)
+
+
+def _requirement_policy_catalog_observations(module: types.ModuleType) -> dict[str, object]:
+    observations: dict[str, object] = {}
+    item = _requirement_contract_item(module)
+    row = module.WeaponRequirementRule(model_id=970, min_requirement=1, max_requirement=5)
+    rule = _requirement_contract_rule(module, protected_weapon_requirement_rules=[row])
+    expected_global = "Protected by all-weapons requirement range: Typed Axe req 7 in 1-8."
+    for collision in (False, True):
+        widget = _make_widget(module)
+        rows = _requirement_contract_catalog(module, widget, collision=collision)
+        old_index = widget._equipment_typed_entries_by_model_id
+        old_search = widget._equipment_model_search_entry_cache
+        expected_reason = expected_global if collision else ""
+        reason = widget._get_weapon_requirement_hit_reason(item, rule)
+        _requirement_contract_expect(reason, expected_reason, f"cold catalog collision={collision}")
+        _expect(
+            widget._equipment_typed_entries_by_model_id is not old_index, "Cold lookup must replace the typed index."
+        )
+        _expect(
+            widget._equipment_model_search_entry_cache is not old_search,
+            "Cold lookup must replace the search cache object.",
+        )
+        _requirement_contract_expect(
+            old_search, {"sentinel": "unchanged until rebuild"}, "old search-cache object retained contents"
+        )
+        indexed = widget._equipment_typed_entries_by_model_id[970]
+        _expect(
+            all(actual is original for actual, original in zip(indexed, rows)),
+            "Index rows must preserve exact catalog dictionary identities.",
+        )
+        first_list = widget._get_equipment_typed_entries_for_model(970)
+        second_list = widget._get_equipment_typed_entries_for_model(970)
+        _expect(
+            first_list is not second_list and first_list[0] is rows[0],
+            "Each lookup returns a fresh list retaining original rows.",
+        )
+        warm_index = widget._equipment_typed_entries_by_model_id
+        warm_search = widget._equipment_model_search_entry_cache
+        warm = widget._get_weapon_requirement_hit_reason(item, rule)
+        _requirement_contract_expect(warm, expected_reason, f"warm catalog collision={collision}")
+        _expect(widget._equipment_typed_entries_by_model_id is warm_index, "Warm lookup must retain the index object.")
+        _expect(
+            widget._equipment_model_search_entry_cache is warm_search,
+            "Warm lookup must retain the search-cache object.",
+        )
+        observations[f"catalog_{collision}"] = {
+            "cold": reason,
+            "warm": warm,
+            "rows": [dict(entry) for entry in indexed],
+        }
+
+    widget = _make_widget(module)
+    widget.catalog_by_model_id[970] = {"model_id": 970, "name": "Flat Model"}
+    widget.exact_catalog_by_item_key = {}
+    empty_index: dict[object, object] = {}
+    search = {"sentinel": "empty exact map does not rebuild"}
+    widget._equipment_typed_entries_by_model_id = empty_index
+    widget._equipment_model_search_entry_cache = search
+    reason = widget._get_weapon_requirement_hit_reason(item, rule)
+    _requirement_contract_expect(
+        reason,
+        "Protected by all-weapons requirement range: Flat Model req 7 in 1-8.",
+        "absent typed evidence still evaluates global range",
+    )
+    _expect(
+        widget._equipment_typed_entries_by_model_id is empty_index
+        and widget._equipment_model_search_entry_cache is search,
+        "An empty exact map must not rebuild either cache.",
+    )
+    observations["absent"] = reason
+
+    rows = _requirement_contract_catalog(module, widget)
+    rows[1]["item_type_id"] = int(module.ItemType.Axe)
+    _requirement_contract_expect(
+        widget._get_weapon_requirement_hit_reason(item, rule),
+        "",
+        "payload types, not conflicting map keys, decide concrete ambiguity",
+    )
+    observations["conflicting"] = ""
+    rows[0]["item_type_id"] = -1
+    rows[1]["item_type_id"] = -1
+    _requirement_contract_expect(
+        widget._get_weapon_requirement_hit_reason(item, rule),
+        expected_global,
+        "unverifiable warm row payload allows global fallback",
+    )
+    observations["unverifiable_payload"] = expected_global
+
+    widget = _make_widget(module)
+    _requirement_contract_catalog(module, widget)
+    original_index = widget._equipment_typed_entries_by_model_id
+    original_search = widget._equipment_model_search_entry_cache
+    widget.exact_catalog_by_item_key[(int(module.ItemType.Axe),)] = {
+        "item_type_id": int(module.ItemType.Axe),
+        "model_id": 971,
+    }
+    try:
+        widget._get_weapon_requirement_hit_reason(item, rule)
+    except ValueError as exc:
+        observations["malformed_key"] = {"type": type(exc).__name__, "message": str(exc)}
+        _requirement_contract_expect(
+            str(exc), "not enough values to unpack (expected 2, got 1)", "malformed typed key exception"
+        )
+    else:
+        raise AssertionError("Malformed typed key must retain the original unpacking ValueError.")
+    _expect(
+        widget._equipment_typed_entries_by_model_id is original_index,
+        "Failed rebuild must leave the prior typed index assigned.",
+    )
+    _expect(
+        widget._equipment_model_search_entry_cache is not original_search,
+        "Failed rebuild must already have replaced the search cache.",
+    )
+    _requirement_contract_expect(widget._equipment_model_search_entry_cache, {}, "failed rebuild search-cache value")
+    _requirement_contract_expect(
+        original_search, {"sentinel": "unchanged until rebuild"}, "failed rebuild old cache reference"
+    )
+
+    widget = _make_widget(module)
+    _requirement_contract_catalog(module, widget)
+    prior_index = widget._equipment_typed_entries_by_model_id
+    prior_search = widget._equipment_model_search_entry_cache
+    failure = RuntimeError("label sentinel after rebuild")
+
+    def failing_label(_item: object) -> str:
+        raise failure
+
+    widget._get_requirement_rule_item_label = failing_label
+    try:
+        widget._get_weapon_requirement_hit_reason(item, rule)
+    except RuntimeError as exc:
+        _expect(exc is failure, "Label failure must propagate the original exception object.")
+    else:
+        raise AssertionError("Expected exact label exception after cold catalog fallback.")
+    _expect(
+        widget._equipment_typed_entries_by_model_id is not prior_index,
+        "Label failure must not undo the preceding index rebuild.",
+    )
+    _expect(
+        widget._equipment_model_search_entry_cache is not prior_search,
+        "Label failure must preserve preceding search-cache replacement.",
+    )
+    observations["label_failure"] = {
+        "type": type(failure).__name__,
+        "message": str(failure),
+        "index_models": list(widget._equipment_typed_entries_by_model_id),
+    }
+
+    widget = _make_widget(module)
+    _requirement_contract_catalog(module, widget)
+    widget.exact_catalog_by_item_key[(1,)] = {}
+    before_index = widget._equipment_typed_entries_by_model_id
+    before_search = widget._equipment_model_search_entry_cache
+    direct = replace(rule, protected_weapon_requirement_rules=[replace(row, max_requirement=8)])
+    reason = widget._get_weapon_requirement_hit_reason(item, direct)
+    _requirement_contract_expect(
+        reason,
+        "Protected by requirement range: Typed Axe req 7 in 1-8.",
+        "matching model label does not rebuild equipment index",
+    )
+    _expect(
+        widget._equipment_typed_entries_by_model_id is before_index
+        and widget._equipment_model_search_entry_cache is before_search,
+        "Direct typed label lookup must leave malformed unrelated equipment keys unvisited.",
+    )
+    observations["no_rebuild"] = reason
+
+    # These fixtures exercise the policy assertions previously downstream of real-catalog count/search checks.
+    widget = _make_widget(module)
+    _requirement_contract_catalog(module, widget)
+    perfect = replace(
+        rule,
+        all_weapons_perfect_stats_only=True,
+        protected_weapon_requirement_rules=[replace(row, perfect_stats_only=True)],
+    )
+    _requirement_contract_expect(
+        widget._get_weapon_requirement_hit_reason(item, perfect),
+        "Protected by all-weapons perfect-base range: Axe 6-28, req 7 Axe Mastery.",
+        "in-memory ambiguous perfect fallback",
+    )
+    unidentified = replace(item, identified=False, damage_min=0, damage_max=0)
+    _requirement_contract_expect(
+        widget._get_perfect_only_unidentified_hold_reason(unidentified, perfect),
+        "Protected until identified: perfect-base stats unavailable.",
+        "in-memory ambiguous unidentified hold",
+    )
+    _requirement_contract_expect(
+        widget._get_weapon_requirement_hit_reason(replace(item, requirement=10), perfect),
+        "",
+        "global fallback is not blanket protection",
+    )
+    observations["unmasked_fallback"] = [
+        widget._get_weapon_requirement_hit_reason(item, perfect),
+        widget._get_perfect_only_unidentified_hold_reason(unidentified, perfect),
+        "",
+    ]
+    return observations
+
+
+def _test_requirement_policy_catalog_contract(module: types.ModuleType) -> None:
+    _requirement_policy_catalog_observations(module)
+
+
+def _requirement_contract_plan_widget(
+    module: types.ModuleType, items: list[Any]
+) -> tuple[Any, dict[str, tuple[float, float]]]:
+    widget = _make_widget(module)
+    widget.buy_rules = []
+    widget.sell_rules = []
+    widget.destroy_rules = []
+    widget.salvage_settings = module.SalvageSettings(rules=[])
+    _requirement_contract_catalog(module, widget)
+    coords: dict[str, tuple[float, float]] = {
+        module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0),
+        module.MERCHANT_TYPE_MATERIALS: (2.0, 2.0),
+        module.MERCHANT_TYPE_RUNE_TRADER: (3.0, 3.0),
+        module.MERCHANT_TYPE_RARE_MATERIALS: (4.0, 4.0),
+    }
+    widget._get_supported_context = lambda *, passive=False: (True, "Ready", coords)
+    widget._collect_inventory_items = lambda: items
+    widget._is_storage_open = lambda: False
+    return widget, coords
+
+
+def _requirement_policy_integration_observations(module: types.ModuleType) -> dict[str, object]:
+    observations: dict[str, object] = {}
+    item = _requirement_contract_item(module, quantity=2, salvageable=True)
+    free = replace(item, item_id=970002, name="Outside Range Axe", requirement=10, quantity=3)
+    row = module.WeaponRequirementRule(model_id=970, min_requirement=1, max_requirement=5)
+    rule = _requirement_contract_rule(module, protected_weapon_requirement_rules=[row])
+    detail = "Protected by all-weapons requirement range: Typed Axe req 7 in 1-8."
+    widget, coords = _requirement_contract_plan_widget(module, [item, free])
+    later = replace(rule, rule_id="later-owner", name="Later owner")
+    owner = widget._get_hard_protection_match(item, [(4, rule), (9, later)])
+    _expect(owner is not None and owner[1] is rule, "First composed match must retain the exact supplied rule object.")
+    _requirement_contract_expect(
+        (owner[0], owner[2], owner[3]), (4, module.MERCHANT_TYPE_MERCHANT, detail), "complete hard-match fields"
+    )
+    _requirement_contract_expect(
+        widget._get_hard_protection_hit(item, [(4, rule), (9, later)]),
+        (module.MERCHANT_TYPE_MERCHANT, "Hard-protected by Requirement owner (#5): " + detail),
+        "complete hard-protection result",
+    )
+    observations["owner"] = {
+        "index": owner[0],
+        "same_object": owner[1] is rule,
+        "destination": owner[2],
+        "detail": owner[3],
+    }
+    widget.protected_item_model_ids = [970]
+    widget.protected_item_targets = [module.ExactProtectionTarget(model_id=970, item_type_id=int(module.ItemType.Axe))]
+    _requirement_contract_expect(
+        widget._get_hard_protection_hit(item, [(4, rule)]),
+        (module.MERCHANT_TYPE_MERCHANT, "Protected by Protected Items: exact model."),
+        "broad exact precedes typed and equipment",
+    )
+    widget.protected_item_model_ids = []
+    _requirement_contract_expect(
+        widget._get_hard_protection_hit(item, [(4, rule)]),
+        (module.MERCHANT_TYPE_MERCHANT, "Protected by Protected Items: exact item type and model."),
+        "typed exact precedes equipment",
+    )
+    sibling = replace(item, item_id=970004, item_type_id=int(module.ItemType.Sword), item_type_name="Sword")
+    unrelated = replace(item, item_id=970005, model_id=971)
+    _requirement_contract_expect(
+        widget._get_exact_model_protection_hit(sibling), None, "typed exact must not protect a colliding sibling type"
+    )
+    _requirement_contract_expect(
+        widget._get_exact_model_protection_hit(unrelated), None, "typed exact must not protect another model"
+    )
+    widget.protected_item_model_ids = [970]
+    _requirement_contract_expect(
+        widget._get_exact_model_protection_hit(sibling),
+        (module.MERCHANT_TYPE_MERCHANT, "Protected by Protected Items: exact model."),
+        "broad wildcard covers colliding sibling",
+    )
+    _requirement_contract_expect(
+        widget._get_exact_model_protection_hit(unrelated), None, "broad wildcard remains model scoped"
+    )
+    observations["unmasked_typed_exact"] = {
+        "typed_axe": (module.MERCHANT_TYPE_MERCHANT, "Protected by Protected Items: exact item type and model."),
+        "typed_sword": None,
+        "unrelated": None,
+        "broad_sword": widget._get_exact_model_protection_hit(sibling),
+    }
+    widget.protected_item_model_ids = []
+    widget.protected_item_targets = []
+    mod_rule = replace(rule, protected_weapon_mod_identifiers=["Contract Mod"])
+    widget.weapon_mod_generic_names["Contract Mod"] = "Contract Mod Label"
+    modified = replace(free, weapon_mod_identifiers=["Contract Mod"])
+    _requirement_contract_expect(
+        widget._get_equippable_hard_protection_reason(modified, mod_rule),
+        (module.MERCHANT_TYPE_MERCHANT, "Contains protected weapon mod: Contract Mod Label."),
+        "nonmatching requirement retains modifier composition",
+    )
+
+    widget.sell_rules = [rule]
+    sell_plan = widget._build_plan()
+    _requirement_contract_expect(
+        sell_plan.merchant_sell_item_ids, [970002], "ordinary sale retains only unprotected physical ID"
+    )
+    _requirement_contract_expect(
+        sell_plan.entries[0].reason, "Hard-protected by Requirement owner (#1): " + detail, "sale preclaim reason"
+    )
+    _requirement_contract_expect(sell_plan.entries[0].quantity, 2, "sale preclaim quantity")
+    observations["sell_plan"] = module.asdict(sell_plan)
+
+    destroy = module.DestroyRule(
+        enabled=True, kind=module.DESTROY_KIND_WEAPONS, rarities=_rarity_flags("gold"), name="Destroy owner"
+    )
+    for include in (False, True):
+        widget.destroy_include_protected_items = include
+        plan = module.PlanResult()
+        claims: set[int] = set()
+        widget._plan_destroy_rule(plan, [item, free], destroy, 2, claims, [(4, rule)])
+        _requirement_contract_expect(
+            claims, {970001, 970002}, f"Destroy claims including protected match, include={include}"
+        )
+        _requirement_contract_expect(
+            plan.destroy_item_ids, [970001, 970002] if include else [970002], f"Destroy selected IDs include={include}"
+        )
+        if include:
+            _requirement_contract_expect(
+                plan.entries[0].reason,
+                "Matched by Destroy owner (#3). Included protected item: Hard-protected by Requirement owner (#5): "
+                + detail,
+                "authorized Destroy full reason",
+            )
+        else:
+            _requirement_contract_expect(
+                plan.entries[0].reason,
+                "Blocked by Destroy owner (#3): Hard-protected by Requirement owner (#5): " + detail,
+                "default Destroy full reason",
+            )
+        observations[f"destroy_{include}"] = {"claims": sorted(claims), "plan": module.asdict(plan)}
+
+    widget.destroy_rules = [destroy]
+    for include in (False, True):
+        widget.destroy_include_protected_items = include
+        plan = widget._build_plan()
+        _requirement_contract_expect(
+            plan.destroy_item_ids,
+            [970001, 970002] if include else [970002],
+            f"complete plan Destroy inclusion={include}",
+        )
+        _requirement_contract_expect(
+            plan.merchant_sell_item_ids, [], "Destroy matching claims prevent subsequent selling"
+        )
+        observations[f"full_destroy_{include}"] = module.asdict(plan)
+
+    widget.destroy_rules = []
+    widget.destroy_include_protected_items = True
+    widget.salvage_settings = module.SalvageSettings(
+        rules=[
+            module.SalvageRule(
+                enabled=True,
+                model_ids=[970],
+                rarities=_rarity_flags("gold"),
+                salvage_option=module.SALVAGE_OPTION_MATERIALS,
+            )
+        ]
+    )
+    blocker = widget._get_salvage_candidate_block_reason(item, [(4, rule)], require_salvage_kit=True, salvage_kit_id=77)
+    _requirement_contract_expect(
+        blocker,
+        "protected: Hard-protected by Requirement owner (#5): " + detail,
+        "Destroy flag does not bypass salvage protection",
+    )
+    observations["salvage_blocker"] = blocker
+
+    widget.salvage_settings = module.SalvageSettings(rules=[])
+    linked_rule = replace(rule, deposit_protected_matches=True)
+    linked_later = replace(later, deposit_protected_matches=True)
+    widget.sell_rules = [linked_rule, linked_later]
+    widget.cleanup_protection_sources = [module.CleanupProtectionSource(sell_rule_id=linked_later.rule_id)]
+    plan = module.PlanResult()
+    widget._plan_cleanup_actions(
+        plan, [item], widget._collect_enabled_sell_rules(), storage_open=False, storage_context_available=True
+    )
+    _requirement_contract_expect(len(plan.storage_transfers), 1, "linked protected deposit uses first winning rule")
+    _requirement_contract_expect(
+        plan.storage_transfers[0].reason,
+        "Protected by Requirement owner (#1): " + detail,
+        "linked deposit retains original owner/detail",
+    )
+    _requirement_contract_expect(
+        (plan.storage_transfers[0].item_id, plan.storage_transfers[0].quantity),
+        (970001, 2),
+        "linked physical transfer identity/quantity",
+    )
+    observations["linked_deposit"] = module.asdict(plan)
+    blocked_owner = replace(linked_rule, deposit_protected_matches=False)
+    widget.sell_rules = [blocked_owner, linked_later]
+    stolen_plan = module.PlanResult()
+    widget._plan_cleanup_actions(
+        stolen_plan, [item], widget._collect_enabled_sell_rules(), storage_open=False, storage_context_available=True
+    )
+    _requirement_contract_expect(
+        stolen_plan.storage_transfers, [], "later linked rule cannot steal first protection owner"
+    )
+    observations["linked_owner_not_stolen"] = module.asdict(stolen_plan)
+
+    widget, coords = _requirement_contract_plan_widget(module, [])
+    xunlai_rule = replace(
+        rule,
+        rule_id="xunlai-seller",
+        name="Xunlai seller",
+        protected_weapon_requirement_rules=[],
+        all_weapons_min_requirement=0,
+        all_weapons_max_requirement=0,
+        sell_from_xunlai=True,
+    )
+    widget.sell_rules = [rule, xunlai_rule]
+    previews: list[Any] = []
+    transfers, adjusted = widget._plan_xunlai_sell_withdrawals(
+        widget._collect_enabled_xunlai_sell_rules(),
+        current_items=[],
+        regular_storage_items=[item],
+        material_storage_items=[],
+        coords=coords,
+        protected_preview_entries=previews,
+    )
+    _requirement_contract_expect(transfers, [], "non-Xunlai protection owner blocks Xunlai seller")
+    _requirement_contract_expect(adjusted, [], "protected Xunlai item produces no adjusted sale")
+    _requirement_contract_expect(len(previews), 1, "one protected Xunlai preview")
+    _expect(
+        "Hard-protected by Requirement owner (#1): " + detail in previews[0].reason,
+        "Xunlai preview retains the non-Xunlai owner and full reason.",
+    )
+    observations["xunlai"] = {
+        "transfers": [module.asdict(value) for value in transfers],
+        "adjusted": [(index, module.asdict(value)) for index, value in adjusted],
+        "previews": [module.asdict(value) for value in previews],
+    }
+
+    # Missing service owns a matching sale; a true rarity nonmatch may reach a later rule.
+    widget, _coords = _requirement_contract_plan_widget(module, [free])
+    sell_rule = replace(
+        rule, all_weapons_min_requirement=0, all_weapons_max_requirement=0, protected_weapon_requirement_rules=[]
+    )
+    plan = module.PlanResult()
+    claims = set()
+    widget._plan_equippable_rule_sales(plan, [free], sell_rule, 0, claims, {}, set())
+    _requirement_contract_expect(claims, {970002}, "blocked service remains owning")
+    observations["blocked_owner"] = {"claims": sorted(claims), "plan": module.asdict(plan)}
+    plan = module.PlanResult()
+    claims = set()
+    nonmatching = replace(sell_rule, rarities=_rarity_flags("blue"))
+    widget._plan_equippable_rule_sales(plan, [free], nonmatching, 0, claims, coords, set())
+    _requirement_contract_expect(claims, set[int](), "rarity nonmatch permits fallthrough")
+    observations["nonmatching_fallthrough"] = {"claims": sorted(claims), "plan": module.asdict(plan)}
+    return observations
+
+
+def _test_requirement_policy_integration_contract(module: types.ModuleType) -> None:
+    _requirement_policy_integration_observations(module)
+
+
+def _requirement_policy_authorization_observations(module: types.ModuleType) -> dict[str, object]:
+    observations: dict[str, object] = {}
+    widget: Any
+    original_db = _install_weapon_mod_catalog_fixture(module)
+    try:
+        item = _requirement_contract_item(
+            module,
+            item_id=970003,
+            name="Dagger Handle of Defense",
+            item_type_id=int(module.ItemType.Daggers),
+            item_type_name="Daggers",
+            salvageable=True,
+            requirement_attribute_id=0,
+            requirement_attribute_name="",
+            damage_min=0,
+            damage_max=0,
+            weapon_mod_identifiers=["of Defense"],
+            weapon_mod_matches=[
+                module.ParsedUpgradeMatch(
+                    identifier="of Defense",
+                    target_item_type="Daggers",
+                    component_kind="DaggerHandle",
+                    mod_type="Suffix",
+                    value=5,
+                    min_value=0,
+                    max_value=0,
+                    is_maxed=False,
+                )
+            ],
+        )
+        widget, _coords = _requirement_contract_plan_widget(module, [item])
+        widget.sell_rules = [_requirement_contract_rule(module)]
+        widget.destroy_rules = [
+            module.DestroyRule(
+                enabled=True, kind=module.DESTROY_KIND_WEAPONS, rarities=_rarity_flags("gold"), name="Destroy owner"
+            )
+        ]
+        widget.destroy_include_protected_items = True
+        widget.salvage_settings = _salvage_settings(
+            module, rules=[_make_specific_suffix_salvage_rule(module, module.SALVAGE_OPTION_AUTO_UPGRADE)]
+        )
+        reservation = widget._get_specific_upgrade_salvage_reservation_reason(item)
+        _expect(bool(reservation), "Real specific-upgrade selector must reserve the fixture.")
+        plan = widget._build_plan()
+        _requirement_contract_expect(
+            plan.destroy_actions, [], "specific-upgrade reservation remains protected with session inclusion enabled"
+        )
+        _requirement_contract_expect(
+            plan.merchant_sell_item_ids, [], "reserved protected item cannot fall through to sale"
+        )
+        observations["override_with_reservation"] = {"reservation": reservation, "plan": module.asdict(plan)}
+    finally:
+        setattr(module, "MOD_DB", original_db)
+
+    widget = _make_widget(module)
+    _requirement_contract_expect(
+        (widget.destroy_auto_enabled, widget.destroy_instant_enabled, widget.destroy_include_protected_items),
+        (False, False, False),
+        "default Destroy flags",
+    )
+    widget.destroy_auto_enabled = True
+    widget.destroy_instant_enabled = True
+    widget.destroy_include_protected_items = True
+    payload = widget._build_profile_payload()
+    _expect(payload.get("destroy_auto_enabled") is True, "Saved auto enable remains persisted.")
+    _expect(
+        "destroy_instant_enabled" not in payload and "destroy_include_protected_items" not in payload,
+        "Both session values remain excluded from persistence.",
+    )
+    widget._reset_runtime_after_profile_load()
+    _requirement_contract_expect(
+        (widget.destroy_auto_enabled, widget.destroy_instant_enabled, widget.destroy_include_protected_items),
+        (True, False, False),
+        "existing profile-reset flag scope",
+    )
+    observations["session_reset"] = {
+        "auto": widget.destroy_auto_enabled,
+        "instant": widget.destroy_instant_enabled,
+        "include": widget.destroy_include_protected_items,
+    }
+
+    item = _requirement_contract_item(module, quantity=3, is_stackable=True)
+    widget = _make_widget(module)
+    widget.protected_item_model_ids = [970]
+    widget.destroy_include_protected_items = False
+    widget._pause_inventory_plus = lambda: None
+    live_item_for_action: Callable[[int, int], tuple[Any, str]] = lambda item_id, model_id: (item, "")
+    widget._get_inventory_shortcut_live_item_for_action = live_item_for_action
+    captured: list[Any] = []
+
+    def capture_destroy(actions: list[Any]) -> Generator[None, None, Any]:
+        captured.extend(actions)
+        if False:
+            yield None
+        return module.ExecutionPhaseOutcome(label="Destroy", measure_label="items", attempted=1, completed=1)
+
+    widget._execute_destroy_phase = capture_destroy
+    existed = hasattr(module.GLOBAL_CACHE, "Coroutines")
+    prior_coroutines = getattr(module.GLOBAL_CACHE, "Coroutines", None)
+    try:
+        queued_coroutines: list[Any] = []
+        module.GLOBAL_CACHE.Coroutines = queued_coroutines
+        _requirement_contract_expect(
+            widget._handle_inventory_shortcut_live_destroy_click(item), False, "protected direct Destroy first click"
+        )
+        warning = widget.status_message
+        _requirement_contract_expect(
+            warning, "Click 'Confirm Destroy Protected Stack' to destroy only this stack.", "protected direct warning"
+        )
+        _requirement_contract_expect(queued_coroutines, [], "first click does not queue")
+        _requirement_contract_expect(
+            widget._handle_inventory_shortcut_live_destroy_click(item), True, "protected direct Destroy second click"
+        )
+        _drain_generator_return(queued_coroutines.pop(0))
+        _requirement_contract_expect(
+            [module.asdict(action) for action in captured],
+            [
+                {
+                    "item_id": 970001,
+                    "model_id": 970,
+                    "label": "Runtime Axe x3",
+                    "quantity_to_destroy": 3,
+                    "source_quantity": 3,
+                    "keep_quantity": 0,
+                    "requires_split": False,
+                }
+            ],
+            "direct confirmed action independent of session checkbox",
+        )
+        _requirement_contract_expect(
+            widget.destroy_include_protected_items,
+            False,
+            "direct action must not enable rule-driven protected inclusion",
+        )
+        observations["direct_destroy"] = {
+            "warning": warning,
+            "actions": [module.asdict(action) for action in captured],
+            "session_include": False,
+        }
+    finally:
+        if existed:
+            module.GLOBAL_CACHE.Coroutines = prior_coroutines
+        else:
+            delattr(module.GLOBAL_CACHE, "Coroutines")
+
+    for operation in ("preview", "execute"):
+        for fail in (False, True):
+            widget, _coords = _requirement_contract_plan_widget(module, [_requirement_contract_item(module)])
+            widget.sell_rules = [_requirement_contract_rule(module)]
+            widget.destroy_rules = [
+                module.DestroyRule(enabled=True, kind=module.DESTROY_KIND_WEAPONS, rarities=_rarity_flags("gold"))
+            ]
+            widget._ensure_initialized = lambda: None
+
+            def account_noop(_email: str) -> None:
+                return None
+
+            def restore_noop(_email: str, _snapshot: object) -> None:
+                return None
+
+            def accept_status(*_args: object, **_kwargs: object) -> bool:
+                return True
+
+            widget._snapshot_multibox_hero_ai_options = account_noop
+            widget._disable_multibox_hero_ai_options = account_noop
+            widget._restore_multibox_hero_ai_options = restore_noop
+            widget._send_multibox_status_message = accept_status
+            sent: list[dict[str, object]] = []
+
+            def record_result(_email: str, **kwargs: object) -> bool:
+                sent.append(dict(kwargs))
+                return True
+
+            widget._send_multibox_result_message = record_result
+            seen: list[tuple[bool, bool]] = []
+
+            def build_request_plan() -> None:
+                seen.append((bool(widget.destroy_include_protected_items), bool(widget.destroy_instant_enabled)))
+                widget.preview_plan = widget._build_plan()
+                if fail:
+                    raise RuntimeError("request sentinel")
+
+            def execute_request(**_kwargs: object) -> Generator[None, None, None]:
+                build_request_plan()
+                if False:
+                    yield None
+
+            widget._scan_preview = build_request_plan
+            widget._execute_now = execute_request
+            opcode = (
+                module.MERCHANT_RULES_OPCODE_PREVIEW if operation == "preview" else module.MERCHANT_RULES_OPCODE_EXECUTE
+            )
+            message = types.SimpleNamespace(
+                SenderEmail="leader@example.com",
+                ReceiverEmail="follower@example.com",
+                Params=(float(opcode), 0.0, 0.0, 0.0),
+                ExtraData=("requirement-contract", "", "1", "1"),
+            )
+            _drain_generator_return(widget.handle_shared_multibox_message(message))
+            _requirement_contract_expect(
+                seen, [(True, True)], f"{operation} request flags visible during real planning, failure={fail}"
+            )
+            _requirement_contract_expect(
+                (widget.destroy_include_protected_items, widget.destroy_instant_enabled),
+                (False, False),
+                f"{operation} request finally restores flags, failure={fail}",
+            )
+            _requirement_contract_expect(
+                widget.preview_plan.destroy_item_ids, [970001], "request-authorized real plan includes protected item"
+            )
+            if fail:
+                _requirement_contract_expect(sent[-1]["detail"], "request sentinel", "request failure is attributable")
+            observations[f"request_{operation}_{fail}"] = {
+                "seen": seen,
+                "flags_after": [False, False],
+                "plan": module.asdict(widget.preview_plan),
+                "sent": sent,
+            }
+    return observations
+
+
+def _test_requirement_policy_authorization_contract(module: types.ModuleType) -> None:
+    _requirement_policy_authorization_observations(module)
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -38957,6 +40085,26 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            (
+                "requirement_policy_literal_contract",
+                lambda: _test_requirement_policy_literal_contract(module),
+            ),
+            (
+                "requirement_policy_access_contract",
+                lambda: _test_requirement_policy_access_contract(module),
+            ),
+            (
+                "requirement_policy_catalog_contract",
+                lambda: _test_requirement_policy_catalog_contract(module),
+            ),
+            (
+                "requirement_policy_integration_contract",
+                lambda: _test_requirement_policy_integration_contract(module),
+            ),
+            (
+                "requirement_policy_authorization_contract",
+                lambda: _test_requirement_policy_authorization_contract(module),
+            ),
             ("preview_status_literals", lambda: _test_preview_status_literals(module)),
             ("preview_status_access", lambda: _test_preview_status_access(module)),
             ("preview_status_widget_contract", lambda: _test_preview_status_widget_contract(module)),
