@@ -6,14 +6,15 @@ Scalar readers preserve widget-method resolution before argument evaluation.
 from collections.abc import Callable
 from collections.abc import Sequence
 from typing import Protocol
-from typing import SupportsIndex
-from typing import SupportsInt
 from typing import TypeVar
-from typing import cast
 
 from Py4GWCoreLib.enums_src.Item_enums import ItemType
+from Sources.icefox.MerchantRules.item_values import MAX_WEAPON_REQUIREMENT as MAX_WEAPON_REQUIREMENT
+from Sources.icefox.MerchantRules.item_values import (
+    normalize_weapon_requirement_level as normalize_weapon_requirement_level,
+)
+from Sources.icefox.MerchantRules.item_values import safe_int as _safe_int
 
-MAX_WEAPON_REQUIREMENT = 13
 ATTRIBUTE_NONE_REAL_VALUE = 45
 
 PERFECT_BASE_DAMAGE_RANGES: dict[int, tuple[int, int]] = {
@@ -119,19 +120,6 @@ class _RequirementRule(Protocol):
 
 
 _ItemT = TypeVar("_ItemT", bound=_RequirementItem)
-
-
-def _safe_int(value: object, default: int = 0) -> int:
-    try:
-        if isinstance(value, str):
-            return int(value.strip(), 0)
-        return int(cast("SupportsInt | SupportsIndex | bytes | bytearray", value))
-    except Exception:
-        return default
-
-
-def normalize_weapon_requirement_level(value: object) -> int:
-    return min(MAX_WEAPON_REQUIREMENT, max(0, _safe_int(value, 0)))
 
 
 def normalize_weapon_requirement_range(min_value: object, max_value: object) -> tuple[int, int]:

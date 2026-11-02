@@ -4646,7 +4646,7 @@ def _test_inventory_shortcut_header_counts_readable_scopes(module) -> None:
     widget = _make_inventory_shortcut_test_widget(module)
     book_model_id = 930001
     plank_model_id = 921
-    widget._is_storage_open = lambda: True
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
     widget._get_material_storage_quantity_and_slot = lambda _model_id: (_ for _ in ()).throw(
         AssertionError("Right-click header must not live-probe Material Storage counts.")
     )
@@ -4695,7 +4695,7 @@ def _test_inventory_shortcut_header_counts_readable_scopes(module) -> None:
 def _test_inventory_shortcut_header_falls_back_when_storage_unavailable(module) -> None:
     widget = _make_inventory_shortcut_test_widget(module)
     widget._collect_inventory_items = lambda: (_ for _ in ()).throw(RuntimeError("inventory scan unavailable"))
-    widget._is_storage_open = lambda: False
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: False
 
     normal_header = widget._format_inventory_shortcut_menu_header(
         _make_item(module, item_id=721, model_id=930002, name="Book of Secrets", quantity=2)
@@ -4756,7 +4756,7 @@ def _test_inventory_shortcut_xunlai_display_cache_reuses_draw_state_and_refreshe
             )
         ]
 
-    widget._is_storage_open = lambda: bool(storage_open["value"])
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: bool(storage_open["value"])
     widget._collect_inventory_items = collect_inventory_items
     widget._collect_storage_items = collect_storage_items
     widget._get_inventory_free_slot_count = lambda: 1
@@ -4874,7 +4874,7 @@ def _test_inventory_shortcut_xunlai_display_cache_context_and_popup_lifecycle(mo
         storage_scan_count["value"] += 1
         return [replace(first_shield, item_id=743, quantity=3)]
 
-    widget._is_storage_open = lambda: True
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
     widget._collect_inventory_items = collect_inventory_items
     widget._collect_storage_items = collect_storage_items
     widget.account_key = "context-account-a"
@@ -5427,7 +5427,7 @@ def _test_inventory_shortcut_deposit_all_matching_split_material_stacks(module) 
             rows.append((label, action_key, bool(enabled)))
             return bool(action_key == module.INVENTORY_SHORTCUT_LIVE_ACTION_DEPOSIT_ALL_MATCHING and enabled)
 
-        widget._is_storage_open = lambda: False
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: False
         widget._collect_storage_items = lambda: (_ for _ in ()).throw(
             AssertionError("Closed Xunlai must not be scanned for Deposit All Matching drawing.")
         )
@@ -5533,7 +5533,7 @@ def _test_inventory_shortcut_deposit_all_matching_manual_protections_allowed(mod
             )
             module.GLOBAL_CACHE.Coroutines.clear()
             rows = []
-            widget._is_storage_open = lambda: False
+            cast(Any, widget)._inventory_evidence.is_storage_open = lambda: False
             widget._draw_inventory_shortcut_live_menu_item = (
                 lambda item_label, _item, action_key, _color=None, enabled=True: rows.append(
                     (item_label, action_key, bool(enabled))
@@ -5642,7 +5642,7 @@ def _test_inventory_shortcut_deposit_all_matching_excludes_unsafe_items(module) 
         ),
     ]
 
-    widget._is_storage_open = lambda: False
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: False
     for unsafe_item in unsafe_items:
         _expect(
             not widget._is_inventory_shortcut_all_matching_deposit_candidate(unsafe_item),
@@ -5751,7 +5751,7 @@ def _test_inventory_shortcut_xunlai_pane_withdraw_label_and_guards(module) -> No
     )
 
     storage_open = {"value": True}
-    widget._is_storage_open = lambda: bool(storage_open["value"])
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: bool(storage_open["value"])
     widget._collect_inventory_items = lambda: [material]
     widget._collect_storage_items = lambda: [
         _make_item(module, item_id=761, model_id=material_model_id, name="Bone", quantity=250, is_material=True),
@@ -5863,7 +5863,7 @@ def _test_inventory_shortcut_xunlai_pane_withdraw_uses_fresh_sources(module) -> 
     had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
     try:
         module.GLOBAL_CACHE.Coroutines = []
-        widget._is_storage_open = lambda: True
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
         widget._collect_inventory_items = lambda: list(inventory_items)
         widget._collect_storage_items = lambda: list(storage_sources)
         widget._get_inventory_free_slot_count = lambda: int(free_slots["value"])
@@ -5917,7 +5917,7 @@ def _test_inventory_shortcut_xunlai_pane_withdraw_uses_fresh_sources(module) -> 
         _expect(resumed == [True], "Pane-only withdraw should resume Inventory+ after the live move.")
 
         queued_transfers.clear()
-        widget._is_storage_open = lambda: False
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: False
         _drain_generator_return(
             widget._run_inventory_shortcut_live_xunlai_pane_withdraw(
                 material.item_id,
@@ -6007,7 +6007,7 @@ def _test_inventory_shortcut_safe_stackable_xunlai_pane_withdraw_labels(module) 
         ),
     ]
 
-    widget._is_storage_open = lambda: True
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
     widget._get_inventory_free_slot_count = lambda: 1
     widget._get_material_storage_quantity_and_slot = lambda _model_id: (_ for _ in ()).throw(
         AssertionError("Non-material pane withdraw must not probe Material Storage.")
@@ -6193,7 +6193,7 @@ def _test_inventory_shortcut_exact_usable_wrong_gate_source_excluded(module) -> 
     had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
     try:
         module.GLOBAL_CACHE.Coroutines = []
-        widget._is_storage_open = lambda: True
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
         widget._collect_inventory_items = lambda: [clicked]
         widget._collect_storage_items = lambda: [wrong_gate_source]
         widget._get_inventory_free_slot_count = lambda: 1
@@ -6277,7 +6277,7 @@ def _test_inventory_shortcut_mercantile_summoning_stone_exact_model(module) -> N
         is_stackable=True,
     )
 
-    widget._is_storage_open = lambda: True
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
     widget._collect_inventory_items = lambda: [clicked]
     widget._collect_storage_items = lambda: [source]
     widget._get_inventory_free_slot_count = lambda: 1
@@ -6359,7 +6359,7 @@ def _test_inventory_shortcut_stackable_xunlai_pane_withdraw_uses_fresh_sources(m
     had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
     try:
         module.GLOBAL_CACHE.Coroutines = []
-        widget._is_storage_open = lambda: True
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
         widget._collect_inventory_items = lambda: list(inventory_items)
         widget._collect_storage_items = lambda: list(storage_sources)
         widget._get_inventory_free_slot_count = lambda: 0
@@ -6459,7 +6459,7 @@ def _test_inventory_shortcut_stackable_xunlai_pane_withdraw_excludes_unsafe_item
         is_weapon_like=True,
         is_stackable=True,
     )
-    widget._is_storage_open = lambda: True
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
     widget._collect_inventory_items = lambda: [trophy]
     widget._collect_storage_items = lambda: [
         _make_item(
@@ -6680,7 +6680,7 @@ def _test_inventory_shortcut_material_storage_withdraw_label_and_draw_guards(mod
 
     storage_open = {"value": True}
     storage_scan_count = {"value": 0}
-    widget._is_storage_open = lambda: bool(storage_open["value"])
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: bool(storage_open["value"])
     widget._collect_inventory_items = lambda: [material]
 
     def collect_storage_items():
@@ -6858,7 +6858,7 @@ def _test_inventory_shortcut_material_storage_refresh_keeps_popup_open(module) -
     had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
     try:
         module.GLOBAL_CACHE.Coroutines = []
-        widget._is_storage_open = lambda: True
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
         widget._collect_inventory_items = lambda: [material]
         widget._collect_storage_items = lambda: [
             _make_item(module, item_id=921, model_id=material_model_id, name="Bone", quantity=100, is_material=True),
@@ -7119,7 +7119,7 @@ def _test_inventory_shortcut_material_storage_count_refresh_cache(module) -> Non
     had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
     try:
         module.GLOBAL_CACHE.Coroutines = []
-        widget._is_storage_open = lambda: bool(storage_open["value"])
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: bool(storage_open["value"])
         widget._collect_inventory_items = lambda: [material]
         widget._collect_storage_items = lambda: []
         widget._get_inventory_free_slot_count = lambda: 1
@@ -7292,7 +7292,7 @@ def _test_inventory_shortcut_material_storage_withdraw_uses_fresh_sources(module
     had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
     try:
         module.GLOBAL_CACHE.Coroutines = []
-        widget._is_storage_open = lambda: bool(storage_open["value"])
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: bool(storage_open["value"])
         widget._collect_inventory_items = lambda: list(inventory_items)
         widget._get_inventory_free_slot_count = lambda: int(free_slots["value"])
         widget._collect_material_storage_items = collect_material_storage_items
@@ -7459,7 +7459,7 @@ def _test_inventory_shortcut_both_withdraw_stages_sources_and_capacity(module) -
     had_coroutines = hasattr(module.GLOBAL_CACHE, "Coroutines")
     try:
         module.GLOBAL_CACHE.Coroutines = []
-        widget._is_storage_open = lambda: True
+        cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
         widget._collect_inventory_items = lambda: list(inventory_items)
         widget._collect_storage_items = lambda: list(pane_sources)
         widget._get_inventory_free_slot_count = lambda: int(free_slots["value"])
@@ -7583,7 +7583,7 @@ def _test_inventory_shortcut_both_withdraw_stops_before_material_storage_when_pa
             _make_item(module, item_id=895, model_id=material_model_id, name="Bone", quantity=250, is_material=True),
         ]
 
-    widget._is_storage_open = lambda: True
+    cast(Any, widget)._inventory_evidence.is_storage_open = lambda: True
     widget._collect_inventory_items = lambda: list(inventory_items)
     widget._collect_storage_items = lambda: list(pane_sources)
     widget._collect_material_storage_items = collect_material_storage_items
@@ -8787,7 +8787,9 @@ def _test_common_material_targeting_revalidates_item_type_drift(module) -> None:
         materials_authorized=True,
     )
     live_item = {"value": item}
-    widget._build_inventory_item_info = lambda _item_id: live_item["value"]
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+        lambda _item_id, *, include_runtime_name=True: live_item["value"]
+    )
     widget.salvage_settings = _salvage_settings(module, rules=[rule])
 
     valid, reason = widget._revalidate_materials_salvage_confirmation(transaction)
@@ -8929,7 +8931,7 @@ def _test_literal_kama_iron_salvage_plan_with_normal_kit(module) -> None:
     )
     normal_kit_item_id = 299201
     widget._collect_inventory_items = lambda: [kama]
-    widget._get_inventory_item_ids = lambda: [normal_kit_item_id]
+    cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: [normal_kit_item_id]
 
     original_item_api = getattr(module.GLOBAL_CACHE, "Item", None)
     module.GLOBAL_CACHE.Item = types.SimpleNamespace(
@@ -8974,7 +8976,7 @@ def _test_stackable_salvage_rule_drains_same_stack(module) -> None:
     quantity_by_item_id = {501: 3}
     calls: list[tuple[int, int, int]] = []
 
-    def _live_item(item_id: int):
+    def _live_item(item_id: int, *, include_runtime_name: bool = True):
         quantity = max(0, int(quantity_by_item_id.get(int(item_id), 0)))
         if int(item_id) != 501 or quantity <= 0:
             return None
@@ -9001,7 +9003,7 @@ def _test_stackable_salvage_rule_drains_same_stack(module) -> None:
             yield None
         return status
 
-    widget._build_inventory_item_info = _live_item
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
     widget._salvage_one_item_with_rule = _fake_salvage_one
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
     widget._collect_inventory_items = lambda: (_ for _ in ()).throw(
@@ -9045,7 +9047,9 @@ def _test_stackable_salvage_rule_stops_without_quantity_progress(module) -> None
             yield None
         return "salvaged"
 
-    widget._build_inventory_item_info = lambda item_id: live_item if int(item_id) == 502 else None
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = lambda item_id, *, include_runtime_name=True: (
+        live_item if int(item_id) == 502 else None
+    )
     widget._salvage_one_item_with_rule = _fake_salvage_one
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
 
@@ -9082,7 +9086,9 @@ def _test_stackable_salvage_rule_counts_item_left_inventory_success(module) -> N
             yield None
         return "salvaged_item_gone"
 
-    widget._build_inventory_item_info = lambda item_id: stale_item if int(item_id) == 505 else None
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = lambda item_id, *, include_runtime_name=True: (
+        stale_item if int(item_id) == 505 else None
+    )
     widget._salvage_one_item_with_rule = _fake_salvage_one
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
 
@@ -9105,7 +9111,7 @@ def _test_stackable_salvage_rule_stops_when_kit_becomes_unavailable(module) -> N
     kit_available = {"value": True}
     calls: list[int] = []
 
-    def _live_item(item_id: int):
+    def _live_item(item_id: int, *, include_runtime_name: bool = True):
         quantity = max(0, int(quantity_by_item_id.get(int(item_id), 0)))
         if int(item_id) != 503 or quantity <= 0:
             return None
@@ -9128,7 +9134,7 @@ def _test_stackable_salvage_rule_stops_when_kit_becomes_unavailable(module) -> N
             yield None
         return "salvaged"
 
-    widget._build_inventory_item_info = _live_item
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
     widget._salvage_one_item_with_rule = _fake_salvage_one
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77 if kit_available["value"] else 0
 
@@ -9184,8 +9190,10 @@ def _capture_normal_material_salvage_popup_timeout(
     widget._get_salvage_kit_model_id = lambda _kit_id: int(module.ModelID.Salvage_Kit.value)
     widget._queue_salvage_start = _fake_queue_salvage_start
     widget._wait_and_confirm_materials_popup = _fake_wait_and_confirm_materials_popup
-    widget._get_inventory_item_ids = lambda: []
-    widget._build_inventory_item_info = lambda item_id: live_item if int(item_id) == 506 else None
+    cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: []
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = lambda item_id, *, include_runtime_name=True: (
+        live_item if int(item_id) == 506 else None
+    )
 
     candidate = module.SalvageCandidate(item=live_item, rule_index=0, rule=rule, reason="selected model")
     status = _drain_generator_return(widget._salvage_one_item_with_rule(candidate, []))
@@ -9369,7 +9377,7 @@ def _run_normal_materials_warning_case(
     widget.salvage_settings = _salvage_settings(module, rules=[rule])
     widget.preview_ready = True
 
-    def _live_item(item_id: int):
+    def _live_item(item_id: int, *, include_runtime_name: bool = True):
         if not state.item_present or int(item_id) != state.item_id:
             return None
         return _make_item(
@@ -9424,8 +9432,8 @@ def _run_normal_materials_warning_case(
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
     widget._get_salvage_kit_model_id = lambda _kit_id: int(module.ModelID.Salvage_Kit.value)
     widget._queue_salvage_start = _queue_start
-    widget._get_inventory_item_ids = lambda: [state.item_id] if state.item_present else []
-    widget._build_inventory_item_info = _live_item
+    cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: [state.item_id] if state.item_present else []
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
 
     module.ActionQueueManager = lambda: action_queue
     module.Routines.Yield.wait = _wait
@@ -9632,8 +9640,10 @@ def _test_advanced_kit_materials_path_remains_separate(module) -> None:
     widget._wait_and_confirm_materials_popup = lambda *_args, **_kwargs: (_ for _ in ()).throw(
         AssertionError("Advanced-kit Materials must not enter the normal named Materials warning helper.")
     )
-    widget._get_inventory_item_ids = lambda: [506] if item_present["value"] else []
-    widget._build_inventory_item_info = lambda item_id: live_item if int(item_id) == 506 and item_present["value"] else None
+    cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: [506] if item_present["value"] else []
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = lambda item_id, *, include_runtime_name=True: (
+        live_item if int(item_id) == 506 and item_present["value"] else None
+    )
 
     candidate = module.SalvageCandidate(item=live_item, rule_index=0, rule=rule, reason="selected model")
     status = _drain_generator_return(widget._salvage_one_item_with_rule(candidate, []))
@@ -9652,7 +9662,7 @@ def _test_specific_upgrade_salvage_does_not_drain_stack(module) -> None:
     quantity_by_item_id = {504: 4}
     calls: list[int] = []
 
-    def _live_item(item_id: int):
+    def _live_item(item_id: int, *, include_runtime_name: bool = True):
         quantity = max(0, int(quantity_by_item_id.get(int(item_id), 0)))
         if int(item_id) != 504 or quantity <= 0:
             return None
@@ -9674,7 +9684,7 @@ def _test_specific_upgrade_salvage_does_not_drain_stack(module) -> None:
             yield None
         return "processed"
 
-    widget._build_inventory_item_info = _live_item
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
     widget._salvage_one_item_with_rule = _fake_salvage_one
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
 
@@ -9928,7 +9938,9 @@ def _test_scoped_salvage_pass_ignores_unplanned_live_rule_matches(module) -> Non
         return "salvaged"
 
     widget._collect_inventory_items = lambda: list(live_items.values())
-    widget._build_inventory_item_info = lambda item_id: live_items.get(int(item_id))
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+        lambda item_id, *, include_runtime_name=True: live_items.get(int(item_id))
+    )
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
     widget._salvage_one_item_with_rule = _fake_salvage_one
     widget._get_inventory_signature = lambda _items=None: ()
@@ -9958,7 +9970,7 @@ def _test_scoped_salvage_pass_drains_planned_stackable_item(module) -> None:
     quantity_by_item_id = {83540: 3, 83640: 3}
     salvage_calls: list[tuple[int, int]] = []
 
-    def _live_item(item_id: int):
+    def _live_item(item_id: int, *, include_runtime_name: bool = True):
         quantity = max(0, int(quantity_by_item_id.get(int(item_id), 0)))
         if quantity <= 0:
             return None
@@ -9992,7 +10004,7 @@ def _test_scoped_salvage_pass_drains_planned_stackable_item(module) -> None:
         for item in (_live_item(83540), _live_item(83640))
         if item is not None
     ]
-    widget._build_inventory_item_info = _live_item
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
     widget._salvage_one_item_with_rule = _fake_salvage_one
     widget._get_inventory_signature = lambda _items=None: ()
@@ -10028,7 +10040,7 @@ def _test_scoped_specific_upgrade_salvage_remains_one_pass(module) -> None:
         is_stackable=True,
     )
 
-    def _live_item(item_id: int):
+    def _live_item(item_id: int, *, include_runtime_name: bool = True):
         quantity = max(0, int(quantity_by_item_id.get(int(item_id), 0)))
         if int(item_id) != 83550 or quantity <= 0:
             return None
@@ -10042,7 +10054,7 @@ def _test_scoped_specific_upgrade_salvage_remains_one_pass(module) -> None:
         return "processed"
 
     widget._collect_inventory_items = lambda: [item for item in [_live_item(83550)] if item is not None]
-    widget._build_inventory_item_info = _live_item
+    cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
     widget._get_salvage_kit_id_for_option = lambda *_args, **_kwargs: 77
     widget._get_salvage_upgrade_support_status = lambda: (True, "")
     widget._salvage_one_item_with_rule = _fake_salvage_one
@@ -10728,7 +10740,9 @@ def _test_specific_upgrade_match_owns_blocked_preview_and_execute(module) -> Non
         _expect(not candidates, "Preview must fail closed when the owned Specific upgrade backend is unavailable.")
         _expect(blocked_counts, "Preview should record the Specific upgrade safety block.")
 
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         status = _drain_generator_return(
             widget._salvage_one_item_with_rule(
                 _make_salvage_candidate(module, item, specific_rule),
@@ -10937,7 +10951,9 @@ def _test_final_live_specific_owner_unchanged_executes(module) -> None:
     try:
         widget, item, _specific_rule, _later_materials_rule, fake_bridge = _make_final_live_specific_owner_fixture(module)
         widget._collect_inventory_items = lambda: [item]
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         final_plan = widget._build_plan()
 
         _expect(
@@ -11027,10 +11043,10 @@ def _test_final_live_specific_owner_preserves_live_identity_and_protection_check
             )
             live_item = item
             widget._collect_inventory_items = lambda: [live_item] if live_item is not None else []
-            widget._build_inventory_item_info = lambda item_id: (
-                live_item
-                if live_item is not None and int(item_id) == int(item.item_id)
-                else None
+            cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+                lambda item_id, *, include_runtime_name=True: (
+                    live_item if live_item is not None and int(item_id) == int(item.item_id) else None
+                )
             )
             final_plan = widget._build_plan()
             if case == "model":
@@ -11342,7 +11358,9 @@ def _test_auto_specific_upgrade_salvage_infers_suffix_option(module) -> None:
         fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=True)
         _install_fake_exact_salvage_bridge(widget, fake_bridge)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
         status = _drain_generator_return(
             widget._salvage_one_item_with_rule(
@@ -11370,7 +11388,9 @@ def _test_auto_specific_upgrade_salvage_infers_inscription_option(module) -> Non
         fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=True)
         _install_fake_exact_salvage_bridge(widget, fake_bridge)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
         status = _drain_generator_return(
             widget._salvage_one_item_with_rule(
@@ -11398,7 +11418,9 @@ def _test_auto_specific_upgrade_salvage_infers_prefix_option(module) -> None:
         fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=True)
         _install_fake_exact_salvage_bridge(widget, fake_bridge)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
 
         status = _drain_generator_return(
@@ -11490,7 +11512,9 @@ def _test_auto_specific_upgrade_salvage_multiple_slots_skip(module) -> None:
         fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=True)
         _install_fake_exact_salvage_bridge(widget, fake_bridge)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
 
         reason = widget._get_salvage_candidate_block_reason(
@@ -11588,7 +11612,9 @@ def _test_specific_upgrade_salvage_current_bridge_executes_without_native_sessio
         bridge, restore = _prepare_slot_salvage_bridge(module, state)
         widget = bridge._owner
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
 
         status = _drain_generator_return(
@@ -12187,7 +12213,7 @@ def _install_fake_slot_salvage_runtime(module, state: _FakeSlotSalvageState):
 def _prepare_slot_salvage_bridge(module, state: _FakeSlotSalvageState):
     restore_runtime = _install_fake_slot_salvage_runtime(module, state)
     widget = _make_widget(module)
-    widget._get_inventory_item_ids = lambda: [state.item_id] if state.item_present else []
+    cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: [state.item_id] if state.item_present else []
 
     def _start(item_id: int, kit_id: int, attempt: int):
         state.events.append(("start", int(item_id), int(kit_id), int(attempt)))
@@ -12420,7 +12446,7 @@ def _install_standard_rune_catalog_fixture(module):
     return {**entries, "restore": _restore}
 
 
-def _test_standard_rune_generic_carrier_identity_and_planning(module) -> None:
+def _test_standard_rune_generic_carrier_identity_and_planning(module: types.ModuleType) -> None:
     fixture = _install_standard_rune_catalog_fixture(module)
     try:
         insignia = fixture["Dreadnought Insignia [Warrior]"]
@@ -12435,6 +12461,9 @@ def _test_standard_rune_generic_carrier_identity_and_planning(module) -> None:
             raw_modifiers,
             module.ItemType.Salvage,
             151872,
+            mod_db=module.MOD_DB,
+            mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+            parser=module.parse_modifiers,
             parsed_modifiers=_parsed_armor_matches(insignia, air),
         )
         _expect(not state.error, f"The standard Rune carrier should parse safely: {state.error}")
@@ -12543,6 +12572,9 @@ def _test_standard_rune_generic_carrier_identity_and_planning(module) -> None:
                 bad_raw,
                 module.ItemType.Salvage,
                 151872,
+                mod_db=module.MOD_DB,
+                mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+                parser=module.parse_modifiers,
                 parsed_modifiers=parsed,
             )
             _expect(bool(bad_state.error), f"Malformed or conflicting carrier case must fail closed: {bad_state.error}")
@@ -12557,6 +12589,9 @@ def _test_standard_rune_generic_carrier_identity_and_planning(module) -> None:
                 ((9224, 0, carrier_id), (8680, 8, attribute_value)),
                 module.ItemType.Salvage,
                 151872,
+                mod_db=module.MOD_DB,
+                mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+                parser=module.parse_modifiers,
                 parsed_modifiers=_parsed_armor_matches(tier_rune),
             )
             _expect(not tier_state.error, f"{identifier} should resolve its generic carrier: {tier_state.error}")
@@ -12570,6 +12605,9 @@ def _test_standard_rune_generic_carrier_identity_and_planning(module) -> None:
             ((9224, 1, 1),),
             module.ItemType.Salvage,
             151872,
+            mod_db=module.MOD_DB,
+            mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+            parser=module.parse_modifiers,
             parsed_modifiers=_parsed_armor_matches(neutral),
         )
         _expect(not neutral_state.error, f"Neutral Rune carrier behavior must remain valid: {neutral_state.error}")
@@ -12645,7 +12683,7 @@ def _shared_jade_armor_upgrades(*, suffix_name: str = "RitualistRuneOfSuperiorSp
     )
 
 
-def _test_jade_armor_tooltip_multiplicity_and_linked_rune_parse(module) -> None:
+def _test_jade_armor_tooltip_multiplicity_and_linked_rune_parse(module: types.ModuleType) -> None:
     fixture = _install_jade_armor_catalog_fixture(module)
     try:
         raw_modifiers = _jade_armor_raw_modifiers()
@@ -12654,6 +12692,9 @@ def _test_jade_armor_tooltip_multiplicity_and_linked_rune_parse(module) -> None:
             raw_modifiers,
             module.ItemType.Salvage,
             679,
+            mod_db=module.MOD_DB,
+            mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+            parser=module.parse_modifiers,
             parsed_modifiers=_parsed_armor_matches(
                 fixture["insignia"],
                 fixture["spawning"],
@@ -12728,7 +12769,7 @@ def _test_jade_armor_tooltip_multiplicity_and_linked_rune_parse(module) -> None:
         fixture["restore"]()
 
 
-def _test_jade_armor_multiplicity_and_linkage_variants_fail_closed(module) -> None:
+def _test_jade_armor_multiplicity_and_linkage_variants_fail_closed(module: types.ModuleType) -> None:
     fixture = _install_jade_armor_catalog_fixture(module)
     try:
         raw_modifiers = _jade_armor_raw_modifiers()
@@ -12745,6 +12786,9 @@ def _test_jade_armor_multiplicity_and_linkage_variants_fail_closed(module) -> No
                 raw,
                 module.ItemType.Salvage,
                 679,
+                mod_db=module.MOD_DB,
+                mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+                parser=module.parse_modifiers,
                 parsed_modifiers=parsed,
                 corroborating_upgrades=shared,
             )
@@ -12922,7 +12966,7 @@ def _test_jade_armor_multiplicity_and_linkage_variants_fail_closed(module) -> No
         fixture["restore"]()
 
 
-def _test_jade_armor_post_extraction_signature_and_linkage_counts(module) -> None:
+def _test_jade_armor_post_extraction_signature_and_linkage_counts(module: types.ModuleType) -> None:
     fixture = _install_jade_armor_catalog_fixture(module)
     try:
         raw_modifiers = _jade_armor_raw_modifiers()
@@ -12930,6 +12974,9 @@ def _test_jade_armor_post_extraction_signature_and_linkage_counts(module) -> Non
             raw_modifiers,
             module.ItemType.Salvage,
             679,
+            mod_db=module.MOD_DB,
+            mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+            parser=module.parse_modifiers,
             parsed_modifiers=_parsed_armor_matches(fixture["insignia"], fixture["spawning"]),
             corroborating_upgrades=_shared_jade_armor_upgrades(),
         )
@@ -13065,7 +13112,7 @@ def _test_jade_armor_post_extraction_signature_and_linkage_counts(module) -> Non
         fixture["restore"]()
 
 
-def _test_jade_armor_bridge_component_and_source_outcomes(module) -> None:
+def _test_jade_armor_bridge_component_and_source_outcomes(module: types.ModuleType) -> None:
     fixture = _install_jade_armor_catalog_fixture(module)
     original_wait = module.Routines.Yield.wait
     try:
@@ -13074,6 +13121,9 @@ def _test_jade_armor_bridge_component_and_source_outcomes(module) -> None:
             raw_modifiers,
             module.ItemType.Salvage,
             679,
+            mod_db=module.MOD_DB,
+            mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+            parser=module.parse_modifiers,
             parsed_modifiers=_parsed_armor_matches(fixture["insignia"], fixture["spawning"]),
             corroborating_upgrades=_shared_jade_armor_upgrades(),
         )
@@ -13165,7 +13215,7 @@ def _test_jade_armor_bridge_component_and_source_outcomes(module) -> None:
                     lambda kit_id, **_kwargs: (int(kit_id), "")
                 )
                 widget._get_salvage_kit_model_id = lambda _kit_id: int(kit_model_id)
-                widget._get_inventory_item_ids = lambda: (
+                widget._inventory_evidence.get_inventory_item_ids = lambda: (
                     [] if source_destroyed and _confirmed() else [expected.item_id]
                 )
                 widget._reserve_execute_item_ids = lambda _item_ids: None
@@ -13297,7 +13347,7 @@ def _test_armor_upgrade_named_frames_preserve_rune_and_insignia_verification(mod
             widget._capture_standalone_armor_upgrade_component_quantities = _component_quantities
             widget._validate_inventory_shortcut_salvage_kit = lambda kit_id, **_kwargs: (int(kit_id), "")
             widget._get_salvage_kit_model_id = lambda _kit_id: int(module.ModelID.Perfect_Salvage_Kit.value)
-            widget._get_inventory_item_ids = lambda: [expected.item_id]
+            cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: [expected.item_id]
             widget._reserve_execute_item_ids = lambda item_ids: reserved_item_ids.update(
                 int(item_id) for item_id in item_ids
             )
@@ -13351,7 +13401,7 @@ def _test_armor_upgrade_named_frame_instance_change_blocks_confirmation(module) 
         widget._capture_standalone_armor_upgrade_component_quantities = lambda *_args: {}
         widget._validate_inventory_shortcut_salvage_kit = lambda kit_id, **_kwargs: (int(kit_id), "")
         widget._get_salvage_kit_model_id = lambda _kit_id: int(module.ModelID.Perfect_Salvage_Kit.value)
-        widget._get_inventory_item_ids = lambda: [expected.item_id]
+        cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: [expected.item_id]
         widget._reserve_execute_item_ids = lambda _item_ids: None
         module.Routines.Yield.wait = _wait
 
@@ -13750,7 +13800,9 @@ def _test_auto_specific_upgrade_salvage_customized_sell_protection_blocks_before
         rule = _make_specific_suffix_salvage_rule(module, module.SALVAGE_OPTION_AUTO_UPGRADE)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
         item = replace(_make_specific_suffix_item(module), is_customized=True)
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
 
         inference_calls = {"count": 0}
@@ -13808,7 +13860,9 @@ def _test_specific_upgrade_salvage_bridge_success_returns_processed(module) -> N
         )
         _install_fake_exact_salvage_bridge(widget, fake_bridge)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
 
         status = _drain_generator_return(
@@ -13852,8 +13906,10 @@ def _test_specific_upgrade_salvage_inferred_prefix_and_inscription_still_execute
             fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=True)
             _install_fake_exact_salvage_bridge(widget, fake_bridge)
             widget.salvage_settings = _salvage_settings(module, rules=[rule])
-            widget._build_inventory_item_info = lambda item_id, item=item: (
-                item if int(item_id) == int(item.item_id) else None
+            cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+                lambda item_id, item=item, *, include_runtime_name=True: (
+                    item if int(item_id) == int(item.item_id) else None
+                )
             )
             widget._get_salvage_kit_id_for_option = lambda _option: 777
 
@@ -13891,7 +13947,9 @@ def _test_specific_upgrade_salvage_wrong_slot_completion_returns_failed(module) 
         )
         _install_fake_exact_salvage_bridge(widget, fake_bridge)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
         material_fallback_calls = {"count": 0}
 
@@ -13932,7 +13990,9 @@ def _test_specific_upgrade_salvage_bridge_not_called_for_protected_execute(modul
         fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=True)
         _install_fake_exact_salvage_bridge(widget, fake_bridge)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
-        widget._build_inventory_item_info = lambda item_id: item if int(item_id) == int(item.item_id) else None
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
+            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
         protected_rule = module._normalize_sell_rule(
             module.SellRule(
@@ -18439,7 +18499,7 @@ def _test_rune_trader_rejects_incomplete_inventory(module) -> None:
                 yield None
             return True
 
-        def _build_item_info(item_id: int):
+        def _build_item_info(item_id: int, *, include_runtime_name: bool = True):
             if int(item_id) == 901:
                 return None
             if int(item_id) == 902:
@@ -18483,8 +18543,8 @@ def _test_rune_trader_rejects_incomplete_inventory(module) -> None:
         widget._get_standalone_rune_identifiers_for_item_id = (
             lambda item_id: ("rune_test",) if int(item_id) == trader_item_id else ()
         )
-        widget._get_inventory_item_ids = lambda: list(inventory_ids["value"])
-        widget._build_inventory_item_info = _build_item_info
+        cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: list(inventory_ids["value"])
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = _build_item_info
 
         cleanup = module.PurchaseTargetCleanup(target_count=3, completes_target=True)
         unreadable_outcome = _drain_generator_return(
@@ -20372,7 +20432,7 @@ def _test_merchant_rules_reconstructs_standalone_weapon_mod_variant_context(modu
             module.ItemType.Hammer: "HammerHaft",
         },
     )
-    original_parse_modifiers = module.parse_modifiers
+    original_parse_modifiers = cast(Any, widget)._inventory_evidence._parse_modifiers
 
     def _fake_parse_modifiers(_raw_modifiers, _parse_item_type, _model_id, _db):
         return types.SimpleNamespace(
@@ -20388,13 +20448,13 @@ def _test_merchant_rules_reconstructs_standalone_weapon_mod_variant_context(modu
             requirements=0,
         )
 
-    widget._get_item_modifier_values = lambda _item_id: (
+    cast(Any, widget)._inventory_evidence.get_item_modifier_values = lambda _item_id: (
         (module.WEAPON_MOD_TARGET_ITEM_TYPE_MODIFIER_ID, int(module.ItemType.Hammer), 0),
         (9320, 1, 226),
     )
-    module.parse_modifiers = _fake_parse_modifiers
+    cast(Any, widget)._inventory_evidence._parse_modifiers = _fake_parse_modifiers
     try:
-        parsed = widget._get_cached_inventory_modifiers(
+        parsed = cast(Any, widget)._inventory_evidence._get_cached_inventory_modifiers(
             1001,
             111,
             module.ItemType.Rune_Mod,
@@ -20403,7 +20463,7 @@ def _test_merchant_rules_reconstructs_standalone_weapon_mod_variant_context(modu
             is_armor_piece=False,
         )
     finally:
-        module.parse_modifiers = original_parse_modifiers
+        cast(Any, widget)._inventory_evidence._parse_modifiers = original_parse_modifiers
 
     _expect(parsed.standalone_kind == module.WEAPON_MOD_STANDALONE_KIND, "Standalone weapon upgrade components should keep their routing kind.")
     _expect(len(parsed.weapon_mod_matches) == 1, "Standalone weapon upgrade component should keep a parsed weapon-mod match.")
@@ -20423,7 +20483,7 @@ def _test_merchant_rules_reconstructs_equipped_weapon_mod_variant_context(module
             module.ItemType.Hammer: "HammerHaft",
         },
     )
-    original_parse_modifiers = module.parse_modifiers
+    original_parse_modifiers = cast(Any, widget)._inventory_evidence._parse_modifiers
 
     def _fake_parse_modifiers(_raw_modifiers, _parse_item_type, _model_id, _db):
         return types.SimpleNamespace(
@@ -20439,10 +20499,10 @@ def _test_merchant_rules_reconstructs_equipped_weapon_mod_variant_context(module
             requirements=0,
         )
 
-    widget._get_item_modifier_values = lambda _item_id: ((9320, 1, 226),)
-    module.parse_modifiers = _fake_parse_modifiers
+    cast(Any, widget)._inventory_evidence.get_item_modifier_values = lambda _item_id: ((9320, 1, 226),)
+    cast(Any, widget)._inventory_evidence._parse_modifiers = _fake_parse_modifiers
     try:
-        parsed = widget._get_cached_inventory_modifiers(
+        parsed = cast(Any, widget)._inventory_evidence._get_cached_inventory_modifiers(
             1001,
             111,
             module.ItemType.Hammer,
@@ -20451,7 +20511,7 @@ def _test_merchant_rules_reconstructs_equipped_weapon_mod_variant_context(module
             is_armor_piece=False,
         )
     finally:
-        module.parse_modifiers = original_parse_modifiers
+        cast(Any, widget)._inventory_evidence._parse_modifiers = original_parse_modifiers
 
     _expect(len(parsed.weapon_mod_matches) == 1, "Equipped weapon should keep a parsed weapon-mod match.")
     match = parsed.weapon_mod_matches[0]
@@ -30157,8 +30217,10 @@ def _test_trader_execution_revalidates_item_model_quantity_and_modifier_identity
     )
 
     try:
-        widget._get_inventory_item_ids = lambda: [item_id for item_id, record in live_records.items() if int(record.get("quantity", 0)) > 0]
-        widget._build_inventory_item_info = _live_item
+        cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: [
+            item_id for item_id, record in live_records.items() if int(record.get("quantity", 0)) > 0
+        ]
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
         module.GLOBAL_CACHE.Trading = types.SimpleNamespace(
             Trader=types.SimpleNamespace(
                 RequestSellQuote=lambda *_args, **_kwargs: None,
@@ -30297,12 +30359,10 @@ def _test_trader_post_sale_completion_handles_disappearance_safely(module) -> No
     )
 
     try:
-        widget._get_inventory_item_ids = lambda: [
-            item_id
-            for item_id, record in live_records.items()
-            if bool(record.get("present", True))
+        cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: [
+            item_id for item_id, record in live_records.items() if bool(record.get("present", True))
         ]
-        widget._build_inventory_item_info = _live_item
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
         widget._debug_log = lambda message: debug_lines.append(str(message))
         module.GLOBAL_CACHE.Trading = types.SimpleNamespace(
             Trader=types.SimpleNamespace(
@@ -33265,8 +33325,10 @@ def _run_material_sale_frame_scenario(module, *, blocked_action: str = "", check
         )
         if not had_coroutines:
             module.GLOBAL_CACHE.Coroutines = []
-        widget._get_inventory_item_ids = lambda: [10] if int(state["quantity"]) > 0 else []
-        widget._build_inventory_item_info = _live_item
+        cast(Any, widget)._inventory_evidence.get_inventory_item_ids = lambda: (
+            [10] if int(state["quantity"]) > 0 else []
+        )
+        cast(Any, widget)._inventory_evidence.build_inventory_item_info = _live_item
         widget._get_material_merchant_type_by_model = lambda _model_id: module.MERCHANT_TYPE_MATERIALS
 
         execution = widget._queue_merchant_rules_owned_work(
@@ -33373,7 +33435,7 @@ def _test_blocked_profile_actions_match_frame_by_frame_material_sale_control(mod
 def _test_modifier_parse_cache_reuses_hits_and_prunes_stale_entries(module) -> None:
     widget = _make_widget(module)
     parse_calls: list[tuple[tuple[tuple[int, int, int], ...], int, int]] = []
-    original_parse_modifiers = module.parse_modifiers
+    original_parse_modifiers = cast(Any, widget)._inventory_evidence._parse_modifiers
 
     def _fake_parse_modifiers(raw_modifiers, parse_item_type, model_id, _db):
         parse_calls.append((tuple(raw_modifiers), int(getattr(parse_item_type, "value", 0)), int(model_id)))
@@ -33394,10 +33456,10 @@ def _test_modifier_parse_cache_reuses_hits_and_prunes_stale_entries(module) -> N
             requirements=9,
         )
 
-    widget._get_item_modifier_values = lambda _item_id: ((101, 1, 2),)
-    module.parse_modifiers = _fake_parse_modifiers
+    cast(Any, widget)._inventory_evidence.get_item_modifier_values = lambda _item_id: ((101, 1, 2),)
+    cast(Any, widget)._inventory_evidence._parse_modifiers = _fake_parse_modifiers
     try:
-        first = widget._get_cached_inventory_modifiers(
+        first = cast(Any, widget)._inventory_evidence._get_cached_inventory_modifiers(
             1001,
             111,
             module.ItemType.Sword,
@@ -33405,7 +33467,7 @@ def _test_modifier_parse_cache_reuses_hits_and_prunes_stale_entries(module) -> N
             is_weapon_like=True,
             is_armor_piece=False,
         )
-        second = widget._get_cached_inventory_modifiers(
+        second = cast(Any, widget)._inventory_evidence._get_cached_inventory_modifiers(
             1001,
             111,
             module.ItemType.Sword,
@@ -33414,11 +33476,11 @@ def _test_modifier_parse_cache_reuses_hits_and_prunes_stale_entries(module) -> N
             is_armor_piece=False,
         )
     finally:
-        module.parse_modifiers = original_parse_modifiers
+        cast(Any, widget)._inventory_evidence._parse_modifiers = original_parse_modifiers
 
     _expect(len(parse_calls) == 1, "Matching modifier signatures should reuse the cached parse result instead of reparsing.")
-    _expect(widget.inventory_modifier_cache_misses == 1, "The first modifier lookup should count as a cache miss.")
-    _expect(widget.inventory_modifier_cache_hits == 1, "A repeated modifier lookup with the same signature should count as a cache hit.")
+    _expect(cast(Any, widget)._inventory_evidence.cache_misses == 1, "The first modifier lookup should count as a cache miss.")
+    _expect(cast(Any, widget)._inventory_evidence.cache_hits == 1, "A repeated modifier lookup with the same signature should count as a cache hit.")
     _expect(first == second, "Cache hits should return the same parsed modifier payload for the unchanged item signature.")
     _expect(
         first.weapon_mod_matches == (
@@ -33427,10 +33489,18 @@ def _test_modifier_parse_cache_reuses_hits_and_prunes_stale_entries(module) -> N
         "Modifier cache entries should retain parsed weapon-mod roll value and range metadata for threshold protection.",
     )
 
-    widget.inventory_modifier_cache[2002] = module.InventoryModifierCacheEntry(signature=(222,), parsed=module.ParsedInventoryModifiers())
-    widget._prune_inventory_modifier_cache({1001})
-    _expect(1001 in widget.inventory_modifier_cache, "Active inventory items should remain in the modifier cache after pruning.")
-    _expect(2002 not in widget.inventory_modifier_cache, "Items that leave inventory should be pruned from the modifier cache.")
+    cast(Any, widget)._inventory_evidence._modifier_cache[2002] = module.InventoryModifierCacheEntry(
+        signature=(222,), parsed=module.ParsedInventoryModifiers()
+    )
+    cast(Any, widget)._inventory_evidence.prune({1001})
+    _expect(
+        1001 in cast(Any, widget)._inventory_evidence._modifier_cache,
+        "Active inventory items should remain in the modifier cache after pruning.",
+    )
+    _expect(
+        2002 not in cast(Any, widget)._inventory_evidence._modifier_cache,
+        "Items that leave inventory should be pruned from the modifier cache.",
+    )
 
 
 def _test_supported_context_cache_partial_and_negative_entries_refresh_correctly(module) -> None:
@@ -39614,7 +39684,7 @@ def _requirement_contract_plan_widget(
     }
     widget._get_supported_context = lambda *, passive=False: (True, "Ready", coords)
     widget._collect_inventory_items = lambda: items
-    widget._is_storage_open = lambda: False
+    widget._inventory_evidence.is_storage_open = lambda: False
     return widget, coords
 
 
@@ -40483,8 +40553,12 @@ def _weapon_mod_access_observations(module: Any, api: Any = None) -> dict[str, A
     return observations
 
 
-def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
+def _weapon_mod_integration_observations(
+    module: Any, evidence_factory: Callable[[Any], Any] | None = None
+) -> dict[str, Any]:
     widget = _make_widget(module)
+    if evidence_factory is not None:
+        widget._inventory_evidence = evidence_factory(module)
     events: list[str] = []
     state: dict[str, Any] = {
         "model": 111,
@@ -40495,7 +40569,7 @@ def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
         "failure": "",
         "roll": 19,
     }
-    cache = widget.inventory_modifier_cache
+    cache = widget._inventory_evidence._modifier_cache
     ns = types.SimpleNamespace
 
     def read(label: str, value: Callable[[], Any]) -> Callable[..., Any]:
@@ -40564,9 +40638,9 @@ def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
     )
     missing_item = object()
     original_item = getattr(module.GLOBAL_CACHE, "Item", missing_item)
-    original_parser = module.parse_modifiers
+    original_parser = widget._inventory_evidence._parse_modifiers
     module.GLOBAL_CACHE.Item = item_api
-    module.parse_modifiers = parse
+    widget._inventory_evidence._parse_modifiers = parse
     observations: dict[str, Any] = {}
     try:
         first = widget._build_inventory_item_info(101)
@@ -40594,10 +40668,12 @@ def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
         _weapon_mod_expect(first_trace, head + raw_reads + ["parse"] + tail, "cold native/parser order")
         _weapon_mod_expect(second_trace, head + raw_reads + tail, "warm native/parser order")
         _weapon_mod_expect(
-            (widget.inventory_modifier_cache_hits, widget.inventory_modifier_cache_misses), (1, 1), "cold/warm counters"
+            (widget._inventory_evidence.cache_hits, widget._inventory_evidence.cache_misses),
+            (1, 1),
+            "cold/warm counters",
         )
         _expect(
-            cache is widget.inventory_modifier_cache and cache[101] is first_entry,
+            cache is widget._inventory_evidence._modifier_cache and cache[101] is first_entry,
             "Stage 9 cache dictionary/entry identity.",
         )
         _expect(
@@ -40675,7 +40751,7 @@ def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
         observations["traces"] = [first_trace, second_trace]
 
         events.clear()
-        cached_result = widget._get_cached_inventory_modifiers(
+        cached_result = widget._inventory_evidence._get_cached_inventory_modifiers(
             101,
             111,
             module.ItemType.Hammer,
@@ -40687,11 +40763,11 @@ def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
         _weapon_mod_expect(events, ["modifiers"] + raw_reads, "direct hit rereads raw values only")
         observations["direct_hit"] = {"events": list(events), "same_parsed": cached_result is first_entry.parsed}
         state["failure"] = "modifiers"
-        counters = (widget.inventory_modifier_cache_hits, widget.inventory_modifier_cache_misses)
+        counters = (widget._inventory_evidence.cache_hits, widget._inventory_evidence.cache_misses)
         events.clear()
         _weapon_mod_expect(widget._build_inventory_item_info(101), None, "raw read failure")
         _weapon_mod_expect(
-            (widget.inventory_modifier_cache_hits, widget.inventory_modifier_cache_misses),
+            (widget._inventory_evidence.cache_hits, widget._inventory_evidence.cache_misses),
             counters,
             "raw failure precedes accounting",
         )
@@ -40759,7 +40835,7 @@ def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
             observations[label] = {
                 "events": list(events),
                 "cache": module.asdict(cache[101]),
-                "counters": (widget.inventory_modifier_cache_hits, widget.inventory_modifier_cache_misses),
+                "counters": (widget._inventory_evidence.cache_hits, widget._inventory_evidence.cache_misses),
             }
         weapon.modifiers = [ns(modifier_value_arg="Arg2", min=10, max=20)]
         state["failure"] = "name"
@@ -40781,7 +40857,7 @@ def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
         )
         observations["standalone"] = module.asdict(standalone)
         _expect(cache[101] is not rebuilt_entry, "Stage 9 actual type change invalidates signature.")
-        widget._prune_inventory_modifier_cache(set())
+        widget._inventory_evidence.prune(set())
         _weapon_mod_expect(cache, {}, "pruning keeps dictionary identity and removes inactive ID")
         observations["parsed_inputs"] = parsed_inputs
     finally:
@@ -40789,7 +40865,7 @@ def _weapon_mod_integration_observations(module: Any) -> dict[str, Any]:
             delattr(module.GLOBAL_CACHE, "Item")
         else:
             module.GLOBAL_CACHE.Item = original_item
-        module.parse_modifiers = original_parser
+        widget._inventory_evidence._parse_modifiers = original_parser
     return observations
 
 
@@ -40814,12 +40890,12 @@ def _test_weapon_mod_normalization_access(module: Any) -> None:
 def _test_weapon_mod_normalization_integration(module: Any) -> None:
     actual = _weapon_mod_integration_observations(module)
     original = _weapon_mod_original_api(module)
-    current_builder = module._build_parsed_weapon_mod_match
+    current_builder = module._inventory_evidence.build_parsed_weapon_mod_match
     try:
-        module._build_parsed_weapon_mod_match = original._build_parsed_weapon_mod_match
+        module._inventory_evidence.build_parsed_weapon_mod_match = original._build_parsed_weapon_mod_match
         expected = _weapon_mod_integration_observations(module)
     finally:
-        module._build_parsed_weapon_mod_match = current_builder
+        module._inventory_evidence.build_parsed_weapon_mod_match = current_builder
     _weapon_mod_expect(actual, expected, "original/final real cache, snapshots and plans")
 
 
@@ -41388,7 +41464,7 @@ def _salvage_options_plan_observations(module: Any) -> dict[str, Any]:
             before_item = module.asdict(item)
             before_rules = [module.asdict(value) for value in rules]
             widget._collect_inventory_items = lambda: items
-            widget._get_inventory_item_ids = lambda: (
+            widget._inventory_evidence.get_inventory_item_ids = lambda: (
                 [] if case == "no_kit" else [901] if case == "no_upgrade_kit" else [901, 902]
             )
             widget._get_supported_context = lambda *, passive=False: (
@@ -41634,6 +41710,2840 @@ print("PASS: dependency-free ordinary import, immutable vocabulary initializatio
         timeout=30,
     )
     _expect(result.returncode == 0, f"Stage 10 import isolation: {result.stdout}\n{result.stderr}")
+
+
+# Frozen from the hash-verified pre-edit widget and protection definitions.
+# Original source SHA-256: 9d2638adde68c39a2d67aa4189a4f9152dc2beb001229a0d376d59ab334b0270
+_INVENTORY_EVIDENCE_ORIGINAL_SOURCE = r'''
+MAX_WEAPON_REQUIREMENT = 13
+
+MODIFIER_IDENTIFIER_ATTRIBUTE_REQUIREMENT = 0x279
+MODIFIER_IDENTIFIER_DAMAGE = 0x27A
+MODIFIER_IDENTIFIER_DAMAGE_NO_REQ = 0x248
+MODIFIER_IDENTIFIER_ARMOR1 = 0x27B
+MODIFIER_IDENTIFIER_ARMOR2 = 0x23C
+MODIFIER_IDENTIFIER_ENERGY = 0x27C
+MODIFIER_IDENTIFIER_ENERGY2 = 0x22C
+MODIFIER_IDENTIFIER_RUNE_HEALTH_LOSS = 8408
+MODIFIER_IDENTIFIER_TOOLTIP_DESCRIPTION = int(ModifierIdentifier.TooltipDescription)
+MODIFIER_IDENTIFIER_UPGRADE = int(ModifierIdentifier.Upgrade)
+MODIFIER_IDENTIFIER_ATTRIBUTE_RUNE = int(ModifierIdentifier.AttributeRune)
+ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE = (9224, 0, 0x00C2)
+SUPERIOR_SPAWNING_RUNE_CATALOG_IDENTIFIER = "Ritualist Rune of Superior Spawning Power"
+ARMOR_UPGRADE_RUNE_CARRIER_IDS = frozenset(
+    int(upgrade_id)
+    for upgrade_id in ItemUpgrade.UpgradeRune.upgrade_ids
+)
+SUPERIOR_RITUALIST_RUNE_CARRIER_ID = int(ItemUpgradeId.SuperiorRitualistRune)
+ARMOR_UPGRADE_HOLDING_NAMES = frozenset({
+    "rune of holding",
+    "superior rune of holding",
+    "rune of belt holding",
+})
+
+
+@dataclass
+class InventoryItemInfo:
+    """Capture the normalized live item facts used by matching, protection, and planning.
+
+    Instances are snapshots. Execution must reacquire the item and revalidate relevant state
+    before performing a destructive, sale, salvage, deposit, or withdrawal action.
+    """
+
+    item_id: int
+    model_id: int
+    name: str
+    quantity: int
+    value: int
+    item_type_id: int
+    item_type_name: str
+    rarity: str
+    identified: bool
+    salvageable: bool
+    is_customized: bool
+    is_inscribable: bool
+    is_material: bool
+    is_rare_material: bool
+    is_weapon_like: bool
+    is_armor_piece: bool
+    is_id_kit: bool = False
+    is_salvage_kit: bool = False
+    is_stackable: bool = False
+    is_tome: bool = False
+    requirement: int = 0
+    requirement_attribute_id: int = 0
+    requirement_attribute_name: str = ""
+    damage_min: int = 0
+    damage_max: int = 0
+    energy: int = 0
+    armor: int = 0
+    standalone_kind: str = ""
+    rune_identifiers: list[str] = field(default_factory=list)
+    weapon_mod_identifiers: list[str] = field(default_factory=list)
+    weapon_mod_matches: list["ParsedUpgradeMatch"] = field(default_factory=list)
+    raw_modifiers: tuple[tuple[int, int, int], ...] = field(default_factory=tuple)
+    armor_upgrade_identifiers: list[str] = field(default_factory=list)
+    armor_upgrade_matches: list["ArmorUpgradeIdentity"] = field(default_factory=list)
+    armor_upgrade_parse_error: str = ""
+
+
+@dataclass(frozen=True)
+class ArmorUpgradeIdentity:
+    """Bind one exact runes.json armor identity to its named salvage-option control."""
+
+    identifier: str
+    name: str
+    semantic_kind: str
+    option: str
+    signature: tuple[tuple[int, int, int], ...]
+    generic_carrier_upgrade_id: int | None = None
+
+
+@dataclass(frozen=True)
+class ArmorUpgradeLinkage:
+    """Bind one ordered auxiliary UpgradeRune carrier to its exact Rune identity."""
+
+    upgrade_identifier: str
+    option: str
+    carrier: tuple[int, int, int]
+    attribute_property: tuple[int, int, int]
+
+
+@dataclass(frozen=True)
+class ArmorUpgradeParseState:
+    """Cache strict semantic armor identities together with a fail-closed parse reason."""
+
+    upgrades: tuple[ArmorUpgradeIdentity, ...] = ()
+    linkages: tuple[ArmorUpgradeLinkage, ...] = ()
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class ArmorUpgradeSnapshot:
+    """Hold one revalidatable carried-armor identity for a permanent extraction transaction."""
+
+    item_id: int
+    model_id: int
+    item_type_id: int
+    name: str
+    raw_modifiers: tuple[tuple[int, int, int], ...]
+    upgrades: tuple[ArmorUpgradeIdentity, ...]
+    linkages: tuple[ArmorUpgradeLinkage, ...] = ()
+
+
+@dataclass(frozen=True)
+class ParsedInventoryModifiers:
+    """Cache normalized equipment requirements, base stats, runes, and exact upgrade matches."""
+
+    requirement: int = 0
+    requirement_attribute_id: int = 0
+    requirement_attribute_name: str = ""
+    damage_min: int = 0
+    damage_max: int = 0
+    energy: int = 0
+    armor: int = 0
+    standalone_kind: str = ""
+    rune_identifiers: tuple[str, ...] = field(default_factory=tuple)
+    weapon_mod_identifiers: tuple[str, ...] = field(default_factory=tuple)
+    weapon_mod_matches: tuple[ParsedUpgradeMatch, ...] = field(default_factory=tuple)
+    raw_modifiers: tuple[tuple[int, int, int], ...] = field(default_factory=tuple)
+    armor_upgrade_identifiers: tuple[str, ...] = field(default_factory=tuple)
+    armor_upgrade_matches: tuple[ArmorUpgradeIdentity, ...] = field(default_factory=tuple)
+    armor_upgrade_parse_error: str = ""
+
+
+@dataclass
+class InventoryModifierCacheEntry:
+    signature: tuple[object, ...]
+    parsed: ParsedInventoryModifiers
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        if isinstance(value, str):
+            return int(value.strip(), 0)
+        return int(value)
+    except Exception:
+        return default
+
+
+def _dedupe_identifiers(values: list[object]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        identifier = str(value or "").strip()
+        if not identifier or identifier in seen:
+            continue
+        seen.add(identifier)
+        unique.append(identifier)
+    return unique
+
+
+def _get_stripped_modifier_identifier(raw_identifier: object) -> int:
+    return (_safe_int(raw_identifier, 0) >> 4) & 0x3FF
+
+
+def _extract_base_stats_from_raw_modifiers(raw_modifiers: object) -> tuple[int, int, str, int, int, int, int]:
+    requirement = 0
+    requirement_attribute_id = 0
+    requirement_attribute_name = ""
+    damage_min = 0
+    damage_max = 0
+    energy = 0
+    armor = 0
+
+    for raw_modifier in raw_modifiers or ():
+        try:
+            identifier, arg1, arg2 = raw_modifier
+        except Exception:
+            continue
+        stripped_identifier = _get_stripped_modifier_identifier(identifier)
+        safe_arg1 = _safe_int(arg1, 0)
+        safe_arg2 = _safe_int(arg2, 0)
+        if stripped_identifier == MODIFIER_IDENTIFIER_ATTRIBUTE_REQUIREMENT:
+            requirement_attribute_id = safe_arg1
+            requirement = _normalize_weapon_requirement_level(safe_arg2)
+        elif stripped_identifier in (MODIFIER_IDENTIFIER_DAMAGE, MODIFIER_IDENTIFIER_DAMAGE_NO_REQ):
+            damage_min = max(0, safe_arg2)
+            damage_max = max(0, safe_arg1)
+        elif stripped_identifier in (MODIFIER_IDENTIFIER_ARMOR1, MODIFIER_IDENTIFIER_ARMOR2):
+            armor = max(0, safe_arg1)
+        elif stripped_identifier in (MODIFIER_IDENTIFIER_ENERGY, MODIFIER_IDENTIFIER_ENERGY2):
+            energy = max(0, safe_arg1)
+
+    return (
+        requirement,
+        requirement_attribute_id,
+        requirement_attribute_name,
+        damage_min,
+        damage_max,
+        energy,
+        armor,
+    )
+
+
+def _format_requirement_attribute_value(attribute: object) -> tuple[int, str]:
+    if attribute is None:
+        return 0, ""
+    try:
+        attribute_id = int(attribute)
+    except Exception:
+        attribute_id = _safe_int(getattr(attribute, "value", 0), 0)
+    raw_name = str(getattr(attribute, "name", "") or "").strip()
+    if raw_name in ("", "None_"):
+        return attribute_id, "" if raw_name != "None_" else "None"
+
+    label = MODEL_ID_ATTRIBUTE_FALLBACK_LABELS.get(raw_name, raw_name)
+    if label == raw_name:
+        label = re.sub(r"(?<!^)(?=[A-Z])", " ", raw_name).replace("_", " ").strip()
+    return attribute_id, label
+
+
+def _get_armor_upgrade_catalog_identity(identifier: object) -> tuple[ArmorUpgradeIdentity | None, str]:
+    """Return one validated fixed runes.json identity without consulting Item.Mods UIDs."""
+
+    safe_identifier = str(identifier or "").strip()
+    if not safe_identifier:
+        return None, "empty armor-upgrade catalog identifier"
+    if safe_identifier.casefold() in ARMOR_UPGRADE_HOLDING_NAMES:
+        return None, f"{safe_identifier} is a container upgrade"
+
+    rune = getattr(MOD_DB, "runes", {}).get(safe_identifier)
+    if rune is None:
+        return None, f"unknown runes.json identifier {safe_identifier}"
+    name = str(getattr(rune, "name", "") or safe_identifier).strip()
+    if not name:
+        return None, f"{safe_identifier} has an empty catalog name"
+    if name.casefold() in ARMOR_UPGRADE_HOLDING_NAMES:
+        return None, f"{name} is a container upgrade"
+
+    mod_type = getattr(rune, "mod_type", None)
+    mod_type_name = str(getattr(mod_type, "name", mod_type) or "")
+    if mod_type_name == "Prefix":
+        semantic_kind = "Insignia"
+        option = SALVAGE_OPTION_PREFIX
+    elif mod_type_name == "Suffix":
+        semantic_kind = "Rune"
+        option = SALVAGE_OPTION_SUFFIX
+    else:
+        return None, f"{name} has unsupported catalog type {mod_type_name or 'unknown'}"
+    if semantic_kind.casefold() not in name.casefold():
+        return None, f"{name} conflicts with its catalog semantic type {semantic_kind}"
+
+    signature: list[tuple[int, int, int]] = []
+    for modifier in list(getattr(rune, "modifiers", []) or []):
+        value_arg = getattr(modifier, "modifier_value_arg", None)
+        value_arg_name = str(getattr(value_arg, "name", value_arg) or "")
+        if value_arg_name != "Fixed":
+            return None, f"{name} has a non-fixed or malformed catalog signature"
+        triple = (
+            int(getattr(modifier, "identifier", 0)),
+            int(getattr(modifier, "arg1", 0)),
+            int(getattr(modifier, "arg2", 0)),
+        )
+        if triple in signature:
+            return None, f"{name} has a duplicate catalog signature triple"
+        signature.append(triple)
+    if not signature:
+        return None, f"{name} has an empty catalog signature"
+
+    generic_carrier_upgrade_id: int | None = None
+    if (
+        semantic_kind == "Rune"
+        and safe_identifier.casefold() != SUPERIOR_SPAWNING_RUNE_CATALOG_IDENTIFIER.casefold()
+        and name.casefold() != SUPERIOR_SPAWNING_RUNE_CATALOG_IDENTIFIER.casefold()
+        and not any(
+            _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_UPGRADE
+            for triple in signature
+        )
+    ):
+        generic_carrier_upgrade_id, carrier_error = _get_armor_rune_generic_carrier_upgrade_id(
+            safe_identifier,
+            name,
+        )
+        if carrier_error:
+            return None, carrier_error
+
+    return (
+        ArmorUpgradeIdentity(
+            identifier=safe_identifier,
+            name=name,
+            semantic_kind=semantic_kind,
+            option=option,
+            signature=tuple(signature),
+            generic_carrier_upgrade_id=generic_carrier_upgrade_id,
+        ),
+        "",
+    )
+
+
+def _is_tooltip_description_modifier(triple: tuple[int, int, int]) -> bool:
+    return _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_TOOLTIP_DESCRIPTION
+
+
+def _get_modifier_upgrade_id(triple: tuple[int, int, int]) -> int:
+    return (int(triple[1]) << 8) | int(triple[2])
+
+
+def _get_armor_upgrade_generic_carrier_triples(
+    raw_modifiers: tuple[tuple[int, int, int], ...],
+    upgrade_id: int | None,
+) -> tuple[tuple[int, int, int], ...]:
+    if upgrade_id is None:
+        return ()
+    return tuple(
+        triple
+        for triple in raw_modifiers
+        if _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_UPGRADE
+        and _get_modifier_upgrade_id(triple) == int(upgrade_id)
+    )
+
+
+def _is_armor_upgrade_carrier_triple(triple: tuple[int, int, int]) -> bool:
+    stripped_identifier = _get_stripped_modifier_identifier(triple[0])
+    return bool(
+        stripped_identifier in {
+            MODIFIER_IDENTIFIER_UPGRADE,
+            MODIFIER_IDENTIFIER_ATTRIBUTE_RUNE,
+        }
+        or int(triple[0]) == MODIFIER_IDENTIFIER_RUNE_HEALTH_LOSS
+    )
+
+
+def _has_superior_ritualist_rune_carrier(
+    raw_modifiers: tuple[tuple[int, int, int], ...],
+) -> bool:
+    if SUPERIOR_RITUALIST_RUNE_CARRIER_ID not in ARMOR_UPGRADE_RUNE_CARRIER_IDS:
+        return False
+    return any(
+        _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_UPGRADE
+        and _get_modifier_upgrade_id(triple) == SUPERIOR_RITUALIST_RUNE_CARRIER_ID
+        for triple in raw_modifiers
+    )
+
+
+def _normalize_shared_upgrade_name(value: object) -> str:
+    without_profession_suffix = re.sub(r"\[[^\]]+\]", "", str(value or ""))
+    return re.sub(r"[^a-z0-9]+", "", without_profession_suffix.casefold())
+
+
+def _iter_item_upgrade_metadata_members() -> tuple[tuple[str, object], ...]:
+    members = getattr(ItemUpgrade, "__members__", None)
+    if members is not None and callable(getattr(members, "items", None)):
+        return tuple((str(name), member) for name, member in members.items())
+    return tuple(
+        (name, getattr(ItemUpgrade, name))
+        for name in dir(ItemUpgrade)
+        if not name.startswith("_")
+        and name not in {"UpgradeRune", "AppliesToRune"}
+        and getattr(ItemUpgrade, name, None) is not None
+    )
+
+
+def _get_armor_rune_generic_carrier_upgrade_id(
+    identifier: str,
+    name: str,
+) -> tuple[int | None, str]:
+    """Resolve a class Rune's generic armor carrier from existing upgrade metadata."""
+
+    normalized_candidates = {
+        _normalize_shared_upgrade_name(identifier),
+        _normalize_shared_upgrade_name(name),
+    }
+    normalized_candidates.discard("")
+    metadata_matches: dict[str, object] = {}
+    for metadata_name, metadata_member in _iter_item_upgrade_metadata_members():
+        if _normalize_shared_upgrade_name(metadata_name) in normalized_candidates:
+            metadata_matches[metadata_name] = metadata_member
+
+    normalized_name = _normalize_shared_upgrade_name(name)
+    if not metadata_matches:
+        if "runeof" in normalized_name and not normalized_name.startswith("runeof"):
+            return None, f"{name} has no exact ItemUpgrade Rune metadata"
+        return None, ""
+    if len(metadata_matches) != 1:
+        return None, f"{name} has ambiguous exact ItemUpgrade Rune metadata"
+
+    metadata_name = next(iter(metadata_matches))
+    rune_of_index = metadata_name.find("RuneOf")
+    if rune_of_index <= 0:
+        return None, f"{name} has no class Rune carrier metadata"
+    profession = metadata_name[:rune_of_index]
+    effect_name = metadata_name[rune_of_index + len("RuneOf"):]
+    tiers = tuple(tier for tier in ("Minor", "Major", "Superior") if effect_name.startswith(tier))
+    if len(tiers) != 1:
+        return None, f"{name} has no unique Rune tier in ItemUpgrade metadata"
+
+    generic_name = f"{tiers[0]}{profession}Rune"
+    generic_member = getattr(ItemUpgradeId, generic_name, None)
+    if generic_member is None:
+        return None, f"{name} has no ItemUpgradeId.{generic_name} carrier metadata"
+    try:
+        generic_carrier_upgrade_id = int(generic_member)
+    except (TypeError, ValueError):
+        return None, f"{name} has a malformed ItemUpgradeId.{generic_name} carrier"
+    if generic_carrier_upgrade_id not in ARMOR_UPGRADE_RUNE_CARRIER_IDS:
+        return None, f"{name} has an unsupported ItemUpgradeId.{generic_name} carrier"
+    return generic_carrier_upgrade_id, ""
+
+
+def _shared_upgrades_corroborate_named_suffix(
+    shared_upgrades: object | None,
+    identity: ArmorUpgradeIdentity,
+    *,
+    read_error: str = "",
+) -> tuple[bool, str]:
+    if shared_upgrades is None:
+        return False, f"Item.Mods.GetUpgrades corroboration unavailable: {read_error or 'no result'}"
+
+    suffix_names: list[str] = []
+    try:
+        rows = list(shared_upgrades)
+    except Exception as exc:
+        return False, f"Item.Mods.GetUpgrades corroboration is malformed: {exc}"
+    for row in rows:
+        try:
+            name, slot = row
+        except Exception:
+            return False, "Item.Mods.GetUpgrades returned a malformed upgrade entry"
+        slot_name = str(getattr(slot, "name", slot) or "").strip().casefold()
+        if slot_name == "suffix":
+            suffix_names.append(_normalize_shared_upgrade_name(name))
+
+    expected_name = _normalize_shared_upgrade_name(identity.name)
+    if suffix_names != [expected_name]:
+        return (
+            False,
+            "Item.Mods.GetUpgrades did not corroborate exactly one expected named Suffix "
+            f"({identity.name}); observed={suffix_names!r}",
+        )
+    return True, ""
+
+
+def _read_item_mods_upgrades(item_id: int) -> tuple[tuple[object, ...] | None, str]:
+    try:
+        from Py4GWCoreLib.Item import Item
+
+        return tuple(Item.Mods.GetUpgrades(int(item_id)) or ()), ""
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _parse_exact_armor_upgrade_state(
+    raw_modifiers: tuple[tuple[int, int, int], ...],
+    parse_item_type: ItemType,
+    model_id: int,
+    *,
+    parsed_modifiers: object | None = None,
+    corroborating_upgrades: object | None = None,
+    corroborating_upgrades_error: str = "",
+) -> ArmorUpgradeParseState:
+    """Parse installed armor upgrades by exact full runes.json signatures and fail closed."""
+
+    try:
+        safe_raw_modifiers = tuple(
+            (int(identifier), int(arg1), int(arg2))
+            for identifier, arg1, arg2 in raw_modifiers
+        )
+    except (TypeError, ValueError):
+        return ArmorUpgradeParseState(error="malformed raw modifier tuple is unsupported")
+    if MOD_DB_LOAD_ERROR or not getattr(MOD_DB, "runes", None):
+        return ArmorUpgradeParseState(error=MOD_DB_LOAD_ERROR or "runes.json catalog is unavailable")
+    raw_modifier_counts = Counter(safe_raw_modifiers)
+    unsupported_duplicates = [
+        (triple, count)
+        for triple, count in raw_modifier_counts.items()
+        if count > 1 and not _is_tooltip_description_modifier(triple)
+    ]
+    if unsupported_duplicates:
+        formatted = ", ".join(
+            f"({identifier},{arg1},{arg2}) x{count}"
+            for (identifier, arg1, arg2), count in unsupported_duplicates
+        )
+        return ArmorUpgradeParseState(
+            error=f"duplicate non-Tooltip raw modifier triples are unsupported: {formatted}"
+        )
+    if ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE in safe_raw_modifiers:
+        return ArmorUpgradeParseState(
+            error="alternate Minor Vigor carrier 0x00C2 is intentionally unsupported"
+        )
+
+    if parsed_modifiers is None:
+        try:
+            parsed_modifiers = parse_modifiers(
+                list(safe_raw_modifiers),
+                parse_item_type,
+                int(model_id),
+                MOD_DB,
+            )
+        except Exception as exc:
+            return ArmorUpgradeParseState(error=f"runes.json modifier parsing failed: {exc}")
+
+    upgrades: list[ArmorUpgradeIdentity] = []
+    linkages: list[ArmorUpgradeLinkage] = []
+    consumed_carriers: Counter[tuple[int, int, int]] = Counter()
+    seen_identifiers: set[str] = set()
+    seen_options: set[str] = set()
+    for match in list(getattr(parsed_modifiers, "runes", []) or []):
+        rune = getattr(match, "rune", None)
+        identifier = str(getattr(rune, "identifier", "") or "").strip()
+        identity, identity_error = _get_armor_upgrade_catalog_identity(identifier)
+        if identity is None:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=identity_error or "runes.json returned an invalid armor-upgrade identity",
+            )
+
+        match_mod_type = getattr(match, "mod_type", getattr(rune, "mod_type", None))
+        match_mod_type_name = str(getattr(match_mod_type, "name", match_mod_type) or "")
+        expected_mod_type_name = "Prefix" if identity.option == SALVAGE_OPTION_PREFIX else "Suffix"
+        if match_mod_type_name != expected_mod_type_name:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=f"{identity.name} parser type conflicts with its catalog identity",
+            )
+        for triple in identity.signature:
+            if raw_modifier_counts[triple] != 1:
+                return ArmorUpgradeParseState(
+                    upgrades=tuple(upgrades),
+                    error=f"{identity.name} does not have one exact full signature on the armor",
+                )
+            if consumed_carriers[triple] > 0:
+                return ArmorUpgradeParseState(
+                    upgrades=tuple(upgrades),
+                    error=f"{identity.name} shares a signature carrier with another armor upgrade",
+                )
+        generic_carrier_triples = _get_armor_upgrade_generic_carrier_triples(
+            safe_raw_modifiers,
+            identity.generic_carrier_upgrade_id,
+        )
+        if identity.generic_carrier_upgrade_id is not None:
+            if len(generic_carrier_triples) != 1:
+                return ArmorUpgradeParseState(
+                    upgrades=tuple(upgrades),
+                    error=(
+                        f"{identity.name} does not have exactly one authoritative generic Rune carrier "
+                        f"for ItemUpgradeId {identity.generic_carrier_upgrade_id}"
+                    ),
+                )
+            generic_carrier = generic_carrier_triples[0]
+            if consumed_carriers[generic_carrier] > 0:
+                return ArmorUpgradeParseState(
+                    upgrades=tuple(upgrades),
+                    error=f"{identity.name} shares a signature carrier with another armor upgrade",
+                )
+        if identity.identifier in seen_identifiers:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=f"duplicate catalog identity {identity.identifier} is unsupported",
+            )
+        if identity.option in seen_options:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=f"multiple conflicting {identity.semantic_kind} identities are unsupported",
+            )
+
+        seen_identifiers.add(identity.identifier)
+        seen_options.add(identity.option)
+        consumed_carriers.update(identity.signature)
+        if generic_carrier_triples:
+            consumed_carriers[generic_carrier_triples[0]] += 1
+        upgrades.append(identity)
+
+    superior_ritualist_carrier_positions = [
+        index
+        for index, triple in enumerate(safe_raw_modifiers)
+        if _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_UPGRADE
+        and _get_modifier_upgrade_id(triple) == SUPERIOR_RITUALIST_RUNE_CARRIER_ID
+    ]
+    if superior_ritualist_carrier_positions:
+        if SUPERIOR_RITUALIST_RUNE_CARRIER_ID not in ARMOR_UPGRADE_RUNE_CARRIER_IDS:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="Superior Ritualist Rune carrier is unavailable in ItemUpgrade.UpgradeRune",
+            )
+        if len(superior_ritualist_carrier_positions) != 1:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="multiple Superior Ritualist Rune linkage carriers are unsupported",
+            )
+
+        spawning_identities = [
+            identity
+            for identity in upgrades
+            if identity.identifier == SUPERIOR_SPAWNING_RUNE_CATALOG_IDENTIFIER
+            and identity.option == SALVAGE_OPTION_SUFFIX
+        ]
+        if len(spawning_identities) != 1:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="Superior Ritualist Rune carrier is orphaned or mismatched",
+            )
+        spawning_identity = spawning_identities[0]
+        attribute_properties = [
+            triple
+            for triple in spawning_identity.signature
+            if _get_stripped_modifier_identifier(triple[0]) == MODIFIER_IDENTIFIER_ATTRIBUTE_RUNE
+        ]
+        if len(attribute_properties) != 1:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="Superior Spawning Rune catalog identity has an invalid AttributeRune property",
+            )
+
+        carrier_index = superior_ritualist_carrier_positions[0]
+        carrier = safe_raw_modifiers[carrier_index]
+        if raw_modifier_counts[carrier] != 1:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error="Superior Ritualist Rune linkage carrier is not singular",
+            )
+        linked_property: tuple[int, int, int] | None = None
+        for following in safe_raw_modifiers[carrier_index + 1:]:
+            if _is_tooltip_description_modifier(following):
+                continue
+            linked_property = following
+            break
+        expected_property = attribute_properties[0]
+        if linked_property != expected_property:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=(
+                    "Superior Ritualist Rune linkage carrier is reordered, interrupted, "
+                    "or does not precede Superior Spawning"
+                ),
+            )
+        corroborated, corroboration_error = _shared_upgrades_corroborate_named_suffix(
+            corroborating_upgrades,
+            spawning_identity,
+            read_error=corroborating_upgrades_error,
+        )
+        if not corroborated:
+            return ArmorUpgradeParseState(
+                upgrades=tuple(upgrades),
+                error=corroboration_error,
+            )
+
+        consumed_carriers[carrier] += 1
+        linkages.append(
+            ArmorUpgradeLinkage(
+                upgrade_identifier=spawning_identity.identifier,
+                option=spawning_identity.option,
+                carrier=carrier,
+                attribute_property=expected_property,
+            )
+        )
+
+    remaining_carriers = consumed_carriers.copy()
+    unknown_rune_triples: list[tuple[int, int, int]] = []
+    for triple in safe_raw_modifiers:
+        if not _is_armor_upgrade_carrier_triple(triple):
+            continue
+        if remaining_carriers[triple] > 0:
+            remaining_carriers[triple] -= 1
+            continue
+        unknown_rune_triples.append(triple)
+    if unknown_rune_triples:
+        formatted = ", ".join(
+            f"({identifier},{arg1},{arg2})"
+            for identifier, arg1, arg2 in unknown_rune_triples
+        )
+        return ArmorUpgradeParseState(
+            upgrades=tuple(upgrades),
+            error=f"unknown or malformed Rune/Insignia carrier signature: {formatted}",
+        )
+    if len(upgrades) > 2:
+        return ArmorUpgradeParseState(
+            upgrades=tuple(upgrades),
+            error="more than two armor-upgrade identities were parsed",
+        )
+
+    upgrades.sort(key=lambda upgrade: (upgrade.option, upgrade.identifier.casefold()))
+    linkages.sort(key=lambda linkage: (linkage.option, linkage.upgrade_identifier.casefold()))
+    return ArmorUpgradeParseState(upgrades=tuple(upgrades), linkages=tuple(linkages))
+
+
+def _armor_upgrade_signature_is_exactly_present(
+    raw_modifiers: tuple[tuple[int, int, int], ...],
+    identity: ArmorUpgradeIdentity,
+    *,
+    require_generic_carrier: bool = False,
+) -> bool:
+    """Recognize an exact selected target even when another armor identity forces a safe block."""
+
+    if not bool(
+        identity.signature
+        and all(raw_modifiers.count(triple) == 1 for triple in identity.signature)
+    ):
+        return False
+    if not require_generic_carrier or identity.generic_carrier_upgrade_id is None:
+        return True
+    return len(
+        _get_armor_upgrade_generic_carrier_triples(
+            raw_modifiers,
+            identity.generic_carrier_upgrade_id,
+        )
+    ) == 1
+
+
+def _normalize_weapon_requirement_level(value: object) -> int:
+    return min(MAX_WEAPON_REQUIREMENT, max(0, _safe_int(value, 0)))
+
+
+def _get_cached_inventory_modifiers(
+    self,
+    item_id: int,
+    model_id: int,
+    item_type_enum: ItemType,
+    parse_item_type: ItemType,
+    *,
+    is_weapon_like: bool,
+    is_armor_piece: bool,
+) -> ParsedInventoryModifiers:
+    if not (is_weapon_like or is_armor_piece or item_type_enum == ItemType.Rune_Mod):
+        return ParsedInventoryModifiers()
+
+    raw_modifiers = self._get_item_modifier_values(item_id)
+    signature = (
+        int(model_id),
+        int(getattr(item_type_enum, "value", 0)),
+        int(getattr(parse_item_type, "value", 0)),
+        raw_modifiers,
+    )
+    cached_entry = self.inventory_modifier_cache.get(item_id)
+    if cached_entry is not None and cached_entry.signature == signature:
+        self.inventory_modifier_cache_hits += 1
+        return cached_entry.parsed
+
+    self.inventory_modifier_cache_misses += 1
+    parsed_state = ParsedInventoryModifiers()
+    (
+        raw_requirement,
+        raw_requirement_attribute_id,
+        raw_requirement_attribute_name,
+        raw_damage_min,
+        raw_damage_max,
+        raw_energy,
+        raw_armor,
+    ) = _extract_base_stats_from_raw_modifiers(raw_modifiers)
+    if raw_modifiers:
+        try:
+            parsed_modifiers = parse_modifiers(
+                list(raw_modifiers),
+                parse_item_type,
+                model_id,
+                MOD_DB,
+            )
+        except Exception as exc:
+            if not is_armor_piece:
+                raise
+            parsed_state = ParsedInventoryModifiers(
+                requirement=raw_requirement,
+                requirement_attribute_id=raw_requirement_attribute_id,
+                requirement_attribute_name=raw_requirement_attribute_name,
+                damage_min=raw_damage_min,
+                damage_max=raw_damage_max,
+                energy=raw_energy,
+                armor=raw_armor,
+                raw_modifiers=raw_modifiers,
+                armor_upgrade_parse_error=f"runes.json modifier parsing failed: {exc}",
+            )
+            self.inventory_modifier_cache[item_id] = InventoryModifierCacheEntry(
+                signature=signature,
+                parsed=parsed_state,
+            )
+            return parsed_state
+        corroborating_upgrades: tuple[object, ...] | None = None
+        corroborating_upgrades_error = ""
+        if is_armor_piece and _has_superior_ritualist_rune_carrier(raw_modifiers):
+            corroborating_upgrades, corroborating_upgrades_error = _read_item_mods_upgrades(item_id)
+        armor_upgrade_state = (
+            _parse_exact_armor_upgrade_state(
+                raw_modifiers,
+                parse_item_type,
+                model_id,
+                parsed_modifiers=parsed_modifiers,
+                corroborating_upgrades=corroborating_upgrades,
+                corroborating_upgrades_error=corroborating_upgrades_error,
+            )
+            if is_armor_piece
+            else ArmorUpgradeParseState()
+        )
+        rune_identifiers = tuple(_dedupe_identifiers([match.rune.identifier for match in parsed_modifiers.runes]))
+        weapon_mod_identifier_values = [match.weapon_mod.identifier for match in parsed_modifiers.weapon_mods]
+        if getattr(parsed_modifiers, "has_increased_value", False):
+            weapon_mod_identifier_values.append('"Show me the money!"')
+        if getattr(parsed_modifiers, "is_highly_salvageable", False):
+            weapon_mod_identifier_values.append('"Measure for Measure"')
+        weapon_mod_identifiers = tuple(_dedupe_identifiers(weapon_mod_identifier_values))
+        weapon_mod_matches = tuple(
+            parsed_match
+            for parsed_match in (
+                _build_parsed_weapon_mod_match(
+                    match,
+                    raw_modifiers=raw_modifiers,
+                    item_type_enum=item_type_enum,
+                    parse_item_type=parse_item_type,
+                )
+                for match in parsed_modifiers.weapon_mods
+            )
+            if parsed_match is not None
+        )
+        standalone_kind = ""
+        if item_type_enum == ItemType.Rune_Mod:
+            if parsed_modifiers.is_rune or rune_identifiers:
+                standalone_kind = RUNE_STANDALONE_KIND
+            elif weapon_mod_identifiers:
+                standalone_kind = WEAPON_MOD_STANDALONE_KIND
+        damage = getattr(parsed_modifiers, "damage", (0, 0)) or (0, 0)
+        try:
+            parsed_damage_min, parsed_damage_max = damage
+        except Exception:
+            parsed_damage_min, parsed_damage_max = 0, 0
+        shield_armor = getattr(parsed_modifiers, "shield_armor", (0, 0)) or (0, 0)
+        try:
+            parsed_armor, _parsed_armor_secondary = shield_armor
+        except Exception:
+            parsed_armor = 0
+        parsed_requirement = _normalize_weapon_requirement_level(
+            getattr(parsed_modifiers, "requirements", 0)
+        )
+        parsed_attribute_id, parsed_attribute_name = _format_requirement_attribute_value(
+            getattr(parsed_modifiers, "attribute", None)
+        )
+        parsed_state = ParsedInventoryModifiers(
+            requirement=parsed_requirement or raw_requirement,
+            requirement_attribute_id=parsed_attribute_id or raw_requirement_attribute_id,
+            requirement_attribute_name=parsed_attribute_name or raw_requirement_attribute_name,
+            damage_min=max(0, _safe_int(parsed_damage_min, 0) or raw_damage_min),
+            damage_max=max(0, _safe_int(parsed_damage_max, 0) or raw_damage_max),
+            energy=max(0, raw_energy),
+            armor=max(0, _safe_int(parsed_armor, 0) or raw_armor),
+            standalone_kind=standalone_kind,
+            rune_identifiers=rune_identifiers,
+            weapon_mod_identifiers=weapon_mod_identifiers,
+            weapon_mod_matches=weapon_mod_matches,
+            raw_modifiers=raw_modifiers,
+            armor_upgrade_identifiers=tuple(
+                upgrade.identifier for upgrade in armor_upgrade_state.upgrades
+            ),
+            armor_upgrade_matches=armor_upgrade_state.upgrades,
+            armor_upgrade_parse_error=str(armor_upgrade_state.error or ""),
+        )
+    elif any((raw_requirement, raw_damage_min, raw_damage_max, raw_energy, raw_armor)):
+        parsed_state = ParsedInventoryModifiers(
+            requirement=raw_requirement,
+            requirement_attribute_id=raw_requirement_attribute_id,
+            requirement_attribute_name=raw_requirement_attribute_name,
+            damage_min=raw_damage_min,
+            damage_max=raw_damage_max,
+            energy=raw_energy,
+            armor=raw_armor,
+            raw_modifiers=raw_modifiers,
+        )
+
+    self.inventory_modifier_cache[item_id] = InventoryModifierCacheEntry(
+        signature=signature,
+        parsed=parsed_state,
+    )
+    return parsed_state
+
+
+def _capture_armor_upgrade_snapshot(
+    self,
+    item_id: int,
+    *,
+    allow_no_upgrades: bool = False,
+) -> tuple[ArmorUpgradeSnapshot | None, str]:
+    """Capture a strict carried-armor identity for repeated transaction revalidation."""
+
+    safe_item_id = max(0, _safe_int(item_id, 0))
+    if safe_item_id <= 0:
+        return None, "invalid item id"
+    try:
+        if safe_item_id not in {
+            int(candidate_id) for candidate_id in self._get_inventory_item_ids()
+        }:
+            return None, "item is no longer in carried inventory"
+    except Exception as exc:
+        return None, f"inventory membership check failed: {exc}"
+
+    item = self._build_inventory_item_info(safe_item_id)
+    if item is None:
+        return None, "live item snapshot is unavailable"
+    if not bool(item.is_armor_piece):
+        return None, "item is not armor"
+    if int(item.item_type_id) == int(ItemType.Rune_Mod):
+        return None, "standalone Rune/Insignia components cannot be source armor"
+    if str(item.standalone_kind or "").strip():
+        return None, "standalone upgrade components cannot be source armor"
+    if not bool(item.identified):
+        return None, "armor is not identified"
+    if not bool(item.salvageable):
+        return None, "armor is not salvageable"
+    if bool(item.is_stackable) or max(0, int(item.quantity)) != 1:
+        return None, "stacked or malformed armor quantity is unsupported"
+
+    raw_modifiers = tuple(getattr(item, "raw_modifiers", ()) or ())
+    if not raw_modifiers:
+        try:
+            raw_modifiers = self._get_item_modifier_values(safe_item_id)
+        except Exception as exc:
+            return None, f"raw modifier read failed: {exc}"
+    try:
+        item_type_enum = ItemType(int(item.item_type_id))
+    except Exception:
+        item_type_enum = ItemType.Unknown
+    try:
+        _is_weapon_like, is_armor_piece, parse_item_type = self._classify_inventory_item_type(
+            safe_item_id,
+            item_type_enum,
+        )
+    except Exception as exc:
+        return None, f"armor type classification failed: {exc}"
+    if not is_armor_piece or parse_item_type not in ARMOR_PIECE_TYPES:
+        return None, "armor type cannot be parsed deterministically"
+
+    corroborating_upgrades: tuple[object, ...] | None = None
+    corroborating_upgrades_error = ""
+    if _has_superior_ritualist_rune_carrier(raw_modifiers):
+        corroborating_upgrades, corroborating_upgrades_error = _read_item_mods_upgrades(safe_item_id)
+    parse_state = _parse_exact_armor_upgrade_state(
+        raw_modifiers,
+        parse_item_type,
+        int(item.model_id),
+        corroborating_upgrades=corroborating_upgrades,
+        corroborating_upgrades_error=corroborating_upgrades_error,
+    )
+    if parse_state.error:
+        return None, parse_state.error
+    if not parse_state.upgrades and not allow_no_upgrades:
+        return None, "no exact runes.json Rune or Insignia identity is installed"
+    return (
+        ArmorUpgradeSnapshot(
+            item_id=safe_item_id,
+            model_id=int(item.model_id),
+            item_type_id=int(item.item_type_id),
+            name=str(item.name or f"Model {int(item.model_id)}"),
+            raw_modifiers=tuple(raw_modifiers),
+            upgrades=parse_state.upgrades,
+            linkages=parse_state.linkages,
+        ),
+        "",
+    )
+'''
+
+
+def _inventory_evidence_expect(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f"Inventory evidence CP1 {context}: expected {expected!r}; observed {actual!r}")
+
+
+def _inventory_evidence_original_api(module: Any) -> Any:
+    from collections import Counter
+    from dataclasses import field
+
+    original = types.ModuleType("merchant_rules_inventory_evidence_original")
+    original.__dict__.update(
+        dataclass=dataclass,
+        field=field,
+        Counter=Counter,
+        re=re,
+        ItemType=module.ItemType,
+        ItemUpgrade=module.ItemUpgrade,
+        ItemUpgradeId=module.ItemUpgradeId,
+        ModifierIdentifier=module.ModifierIdentifier,
+        ParsedUpgradeMatch=module.ParsedUpgradeMatch,
+        SALVAGE_OPTION_PREFIX=module.SALVAGE_OPTION_PREFIX,
+        SALVAGE_OPTION_SUFFIX=module.SALVAGE_OPTION_SUFFIX,
+    )
+    sys.modules[original.__name__] = original
+    exec(
+        compile(_INVENTORY_EVIDENCE_ORIGINAL_SOURCE, "<frozen inventory evidence CP1>", "exec", dont_inherit=True),
+        original.__dict__,
+    )
+    _inventory_evidence_bind_original(original, module)
+    return original
+
+
+def _inventory_evidence_bind_original(original: Any, module: Any) -> None:
+    # These dependencies stay with their original owners; moved definitions above are never copied from current code.
+    for name in (
+        "MOD_DB",
+        "MOD_DB_LOAD_ERROR",
+        "parse_modifiers",
+        "MODEL_ID_ATTRIBUTE_FALLBACK_LABELS",
+        "_build_parsed_weapon_mod_match",
+        "RUNE_STANDALONE_KIND",
+        "WEAPON_MOD_STANDALONE_KIND",
+        "ARMOR_PIECE_TYPES",
+        "GLOBAL_CACHE",
+    ):
+        setattr(original, name, getattr(module, name))
+
+
+def _test_inventory_evidence_record_identity(module: Any) -> None:
+    from dataclasses import MISSING
+    from dataclasses import fields
+
+    from Sources.icefox.MerchantRules import inventory_evidence as component
+    from Sources.icefox.MerchantRules import item_values
+    from Sources.icefox.MerchantRules import requirement_protection
+    from Sources.icefox.MerchantRules import weapon_mod_normalization
+
+    original = _inventory_evidence_original_api(module)
+    required = dict(
+        item_id=1,
+        model_id=2,
+        name="item",
+        quantity=1,
+        value=0,
+        item_type_id=3,
+        item_type_name="armor",
+        rarity="Gold",
+        identified=True,
+        salvageable=True,
+        is_customized=False,
+        is_inscribable=False,
+        is_material=False,
+        is_rare_material=False,
+        is_weapon_like=False,
+        is_armor_piece=True,
+        identifier="id",
+        semantic_kind="Rune",
+        option="suffix",
+        signature=((1, 2, 3),),
+        upgrade_identifier="id",
+        carrier=(1, 2, 3),
+        attribute_property=(4, 5, 6),
+        raw_modifiers=((1, 2, 3),),
+        upgrades=(),
+    )
+    mutable = {"InventoryItemInfo", "InventoryModifierCacheEntry"}
+    for name in (
+        "InventoryItemInfo",
+        "ArmorUpgradeIdentity",
+        "ArmorUpgradeLinkage",
+        "ArmorUpgradeParseState",
+        "ArmorUpgradeSnapshot",
+        "ParsedInventoryModifiers",
+        "InventoryModifierCacheEntry",
+    ):
+        current_class, old_class = getattr(component, name), getattr(original, name)
+        _expect(getattr(module, name) is current_class, "CP1 canonical widget record alias: " + name)
+        _expect(current_class is not old_class, "CP1 original record must be independently defined: " + name)
+        _inventory_evidence_expect(current_class.__module__, component.__name__, "defining module " + name)
+        current_fields, old_fields = fields(current_class), fields(old_class)
+
+        def shape(row: Any) -> tuple[object, ...]:
+            factory = row.default_factory
+            return (row.name, row.default, factory, row.init, row.repr, row.compare, row.hash, row.kw_only)
+
+        _inventory_evidence_expect([shape(row) for row in current_fields], [shape(row) for row in old_fields], name)
+        kwargs: dict[str, Any] = {
+            row.name: required[row.name]
+            for row in current_fields
+            if row.default is MISSING and row.default_factory is MISSING and row.name != "parsed"
+        }
+        old_kwargs = dict(kwargs)
+        if name == "InventoryModifierCacheEntry":
+            kwargs["parsed"], old_kwargs["parsed"] = (
+                component.ParsedInventoryModifiers(),
+                original.ParsedInventoryModifiers(),
+            )
+        current, old = current_class(**kwargs), old_class(**old_kwargs)
+        _inventory_evidence_expect(module.asdict(current), module.asdict(old), "serialized fields " + name)
+        _inventory_evidence_expect(
+            tuple(module.asdict(current)), tuple(row.name for row in old_fields), "field order " + name
+        )
+        _inventory_evidence_expect(current_class.__dataclass_params__.frozen, name not in mutable, "mutability " + name)
+        first = current_fields[0].name
+        if name in mutable:
+            setattr(current, first, getattr(current, first))
+        else:
+            _expect_raises(
+                AttributeError, lambda: setattr(current, first, getattr(current, first)), "CP1 frozen record " + name
+            )
+        other = current_class(**kwargs)
+        for row in current_fields:
+            if row.default_factory is list:
+                _expect(
+                    getattr(current, row.name) is not getattr(other, row.name),
+                    "CP1 independent list factory " + row.name,
+                )
+    _inventory_evidence_expect(
+        module.asdict(component.ArmorUpgradeParseState()),
+        {"upgrades": (), "linkages": (), "error": ""},
+        "literal parse defaults",
+    )
+    _expect(
+        module.ParsedUpgradeMatch is weapon_mod_normalization.ParsedUpgradeMatch, "CP1 weapon record owner retained"
+    )
+    for private in (
+        "_extract_base_stats_from_raw_modifiers",
+        "_format_requirement_attribute_value",
+        "_get_armor_upgrade_catalog_identity",
+        "_get_armor_upgrade_generic_carrier_triples",
+        "_has_superior_ritualist_rune_carrier",
+        "_read_item_mods_upgrades",
+        "_parse_exact_armor_upgrade_state",
+        "_armor_upgrade_signature_is_exactly_present",
+    ):
+        current = getattr(component, private[1:])
+        _expect(getattr(module, private) is current, "CP1 direct helper alias " + private)
+        _expect(current.__globals__ is vars(component), "CP1 helper defining globals " + private)
+        _expect(
+            current.__code__ is not getattr(original, private).__code__, "CP1 independent original helper " + private
+        )
+    _expect(
+        module._safe_int is getattr(requirement_protection, "_safe_int") is item_values.safe_int, "CP1 scalar identity"
+    )
+    _expect(module._dedupe_identifiers is item_values.dedupe_identifiers, "CP1 dedupe identity")
+    _expect(
+        module._normalize_weapon_requirement_level
+        is requirement_protection.normalize_weapon_requirement_level
+        is item_values.normalize_weapon_requirement_level,
+        "CP1 requirement identity",
+    )
+    _inventory_evidence_expect(item_values.MAX_WEAPON_REQUIREMENT, 13, "literal requirement cap")
+    _expect(
+        not hasattr(component, "MOD_DB") and hasattr(component, "InventoryEvidence"),
+        "Evidence exposes the per-widget owner without a module-global database",
+    )
+
+
+def _inventory_evidence_scalar_observations(api: Any) -> dict[str, object]:
+    observed: dict[str, object] = {}
+    cases = [(" 0x10 ", 16), ("0b11", 3), ("08", -7), ("", -7), (None, -7), (True, 1), (3.9, 3), (b"12", 12)]
+    for value, expected in cases:
+        actual = api._safe_int(value, -7)
+        _inventory_evidence_expect(actual, expected, "scalar " + repr(value))
+        observed[repr(value)] = actual
+    events: list[str] = []
+
+    class Probe:
+        def __int__(self) -> int:
+            events.append("int")
+            raise RuntimeError("conversion")
+
+    sentinel = object()
+    _expect(api._safe_int(Probe(), sentinel) is sentinel, "CP1 default retains identity")
+    _inventory_evidence_expect(events, ["int"], "single conversion before fallback")
+
+    class Interrupt:
+        def __int__(self) -> int:
+            raise KeyboardInterrupt("not Exception")
+
+    _expect_raises(KeyboardInterrupt, lambda: api._safe_int(Interrupt()), "CP1 BaseException propagates")
+
+    class Identifier:
+        def __bool__(self) -> bool:
+            events.append("bool")
+            return True
+
+        def __str__(self) -> str:
+            events.append("str")
+            return " A "
+
+    events.clear()
+    identifiers = api._dedupe_identifiers([Identifier(), "A", "a", None, 0, False, " B ", "B"])
+    _inventory_evidence_expect(
+        (identifiers, events), (["A", "a", "B"], ["bool", "str"]), "ordered case-sensitive coercion"
+    )
+    observed["dedupe"] = identifiers
+    observed["boundaries"] = [
+        api._normalize_weapon_requirement_level(value) for value in (-1, 0, 1, 13, 14, "0xd", "08", None)
+    ]
+    _inventory_evidence_expect(observed["boundaries"], [0, 0, 1, 13, 13, 13, 0, 0], "literal requirement boundaries")
+    return observed
+
+
+def _test_inventory_evidence_scalars(module: Any) -> None:
+    original = _inventory_evidence_original_api(module)
+    _inventory_evidence_expect(
+        _inventory_evidence_scalar_observations(module),
+        _inventory_evidence_scalar_observations(original),
+        "frozen scalar behavior",
+    )
+
+
+def _test_inventory_evidence_interpretation(module: Any) -> None:
+    original = _inventory_evidence_original_api(module)
+    raw = ((0x2790, 8, 30), (0x27A0, 22, 15), (0x27C0, 10, 0), (0x27B0, 60, 0), (1, 2))
+    for api in (module, original):
+        _inventory_evidence_expect(
+            api._extract_base_stats_from_raw_modifiers(raw), (13, 8, "", 15, 22, 10, 60), "literal raw stat extraction"
+        )
+        _inventory_evidence_expect(
+            api._extract_base_stats_from_raw_modifiers(None), (0, 0, "", 0, 0, 0, 0), "absent raw stats"
+        )
+    labels = module.MODEL_ID_ATTRIBUTE_FALLBACK_LABELS
+    sentinel = object()
+    saved = labels.get("ContractAttribute", sentinel)
+    attribute = types.SimpleNamespace(value=8, name="ContractAttribute")
+    try:
+        for label in ("First label", "Changed label"):
+            labels["ContractAttribute"] = label
+            actual = module._format_requirement_attribute_value(attribute, attribute_labels=labels)
+            _inventory_evidence_expect(actual, (8, label), "same mapping reference")
+            _inventory_evidence_expect(
+                actual, original._format_requirement_attribute_value(attribute), "frozen label evaluation"
+            )
+    finally:
+        if saved is sentinel:
+            del labels["ContractAttribute"]
+        else:
+            labels["ContractAttribute"] = saved
+    fixture: dict[str, Any] = _install_jade_armor_catalog_fixture(module)
+    try:
+        _inventory_evidence_bind_original(original, module)
+        raw = _jade_armor_raw_modifiers()
+        both = _parsed_armor_matches(fixture["insignia"], fixture["spawning"])
+        shared = _shared_jade_armor_upgrades()
+        cases = [
+            ("valid", raw, both, shared, ""),
+            ("missing corroboration", raw, both, None, "corroboration unavailable"),
+            ("wrong corroboration", raw, both, (), "did not corroborate exactly one"),
+            ("malformed corroboration", raw, both, (object(),), "malformed upgrade entry"),
+            ("duplicate carrier", raw + ((9224, 1, 64),), both, shared, "duplicate non-Tooltip"),
+            ("duplicate tooltip", raw + ((9520, 2, 129),), both, shared, ""),
+            ("orphan", raw, _parsed_armor_matches(fixture["insignia"]), shared, "orphaned or mismatched"),
+            (
+                "missing signature",
+                tuple(row for row in raw if row != (8408, 0, 75)),
+                both,
+                shared,
+                "exact full signature",
+            ),
+            ("alternate vigor", ((9224, 0, 0xC2),), both, shared, "intentionally unsupported"),
+            ("malformed raw", (("bad", 0, 0),), both, shared, "malformed raw modifier tuple"),
+            ("unknown carrier", raw + ((9224, 9, 9),), both, shared, "unknown or malformed"),
+            ("malformed catalog", raw, _parsed_armor_matches(fixture["malformed"]), shared, "non-fixed or malformed"),
+            ("reordered linkage", tuple(reversed(raw)), both, shared, "reordered, interrupted"),
+        ]
+        for label, values, parsed, corroboration, fragment in cases:
+            kwargs = dict(parsed_modifiers=parsed, corroborating_upgrades=corroboration)
+            actual = module._parse_exact_armor_upgrade_state(
+                values,
+                module.ItemType.Salvage,
+                679,
+                mod_db=module.MOD_DB,
+                mod_db_load_error=module.MOD_DB_LOAD_ERROR,
+                parser=module.parse_modifiers,
+                **kwargs,
+            )
+            expected = original._parse_exact_armor_upgrade_state(values, module.ItemType.Salvage, 679, **kwargs)
+            _inventory_evidence_expect(module.asdict(actual), module.asdict(expected), "exact armor state " + label)
+            _expect(
+                fragment in actual.error if fragment else not actual.error, f"CP1 literal {label}: {actual.error!r}"
+            )
+            for identity in actual.upgrades:
+                _inventory_evidence_expect(
+                    module._armor_upgrade_signature_is_exactly_present(values, identity),
+                    original._armor_upgrade_signature_is_exactly_present(values, identity),
+                    "signature multiplicity " + label,
+                )
+        state = module._parse_exact_armor_upgrade_state(
+            raw,
+            module.ItemType.Salvage,
+            679,
+            mod_db=module.MOD_DB,
+            mod_db_load_error="explicit unavailable",
+            parser=module.parse_modifiers,
+        )
+        _inventory_evidence_expect(
+            module.asdict(state),
+            {"upgrades": (), "linkages": (), "error": "explicit unavailable"},
+            "explicit database error",
+        )
+        calls: list[tuple[object, ...]] = []
+
+        def parser(values: Any, item_type: Any, model: Any, database: Any) -> Any:
+            calls.append((values, item_type, model, database))
+            return both
+
+        actual = module._parse_exact_armor_upgrade_state(
+            raw,
+            module.ItemType.Salvage,
+            679,
+            mod_db=module.MOD_DB,
+            mod_db_load_error="",
+            parser=parser,
+            corroborating_upgrades=shared,
+        )
+        _expect(not actual.error and len(calls) == 1, "CP1 explicit parser invoked exactly once")
+        _expect(
+            calls[0][3] is module.MOD_DB and calls[0][1] is module.ItemType.Salvage, "CP1 explicit dependency identity"
+        )
+        _inventory_evidence_expect(calls[0][:3], (list(raw), module.ItemType.Salvage, 679), "parser positional inputs")
+
+        def fail(*_args: Any) -> Any:
+            raise RuntimeError("parser boundary")
+
+        failed = module._parse_exact_armor_upgrade_state(
+            raw, module.ItemType.Salvage, 679, mod_db=module.MOD_DB, mod_db_load_error="", parser=fail
+        )
+        _inventory_evidence_expect(
+            failed.error, "runes.json modifier parsing failed: parser boundary", "literal parser exception"
+        )
+    finally:
+        fixture["restore"]()
+
+
+def _test_inventory_evidence_metadata(module: Any) -> None:
+    from Sources.icefox.MerchantRules import inventory_evidence as component
+
+    original = _inventory_evidence_original_api(module)
+    previous = component.ItemUpgrade
+    events: list[str] = []
+    members: dict[str, object] = {"ElementalistRuneOfSuperiorAirMagic": object()}
+
+    class Metadata:
+        @property
+        def __members__(self) -> dict[str, object]:
+            events.append("members")
+            return members
+
+    metadata = Metadata()
+    try:
+        setattr(component, "ItemUpgrade", metadata)
+        original.ItemUpgrade = metadata
+        for api in (component, original):
+            members["ElementalistRuneOfSuperiorAirMagic"] = object()
+            events.clear()
+            first = api._get_armor_rune_generic_carrier_upgrade_id(
+                "Elementalist Rune of Superior Air Magic", "Elementalist Rune of Superior Air Magic"
+            )
+            members.clear()
+            second = api._get_armor_rune_generic_carrier_upgrade_id(
+                "Elementalist Rune of Superior Air Magic", "Elementalist Rune of Superior Air Magic"
+            )
+            _inventory_evidence_expect(first, (189, ""), "literal generic carrier")
+            _inventory_evidence_expect(
+                second,
+                (None, "Elementalist Rune of Superior Air Magic has no exact ItemUpgrade Rune metadata"),
+                "metadata changes remain visible",
+            )
+            _inventory_evidence_expect(events, ["members", "members"], "metadata is traversed per call")
+
+        class BrokenMetadata:
+            @property
+            def __members__(self) -> object:
+                raise RuntimeError("metadata access")
+
+        setattr(component, "ItemUpgrade", BrokenMetadata())
+        _expect_raises(
+            RuntimeError,
+            getattr(component, "_iter_item_upgrade_metadata_members"),
+            "CP1 metadata access exception propagates",
+        )
+    finally:
+        setattr(component, "ItemUpgrade", previous)
+
+
+def _test_inventory_evidence_catalog_binding(module: Any) -> None:
+    from Sources.icefox.MerchantRules import inventory_evidence as component
+
+    fixture: dict[str, Any] = _install_jade_armor_catalog_fixture(module)
+    try:
+        database = module.MOD_DB
+        widget = _make_widget(module)
+        loader = widget._get_catalog_loader()
+        _expect(loader.mod_db is database, "CP1 Catalog receives the exact database")
+        _expect(
+            loader.armor_upgrade_identity.func is component.get_armor_upgrade_catalog_identity,
+            "CP1 Catalog binds stateless shared callback",
+        )
+        _expect(
+            loader.armor_upgrade_identity.keywords["mod_db"] is loader.mod_db, "CP1 callback and loader share database"
+        )
+        identifier = fixture["insignia"].identifier
+        before = loader.armor_upgrade_identity(identifier)
+        module.MOD_DB = types.SimpleNamespace(runes={})
+        after = loader.armor_upgrade_identity(identifier)
+        _inventory_evidence_expect(before, after, "existing loader keeps its own database binding")
+        _expect(before[0] is not None and not before[1], "CP1 bound callback resolves the original identity")
+        new_loader = widget._get_catalog_loader()
+        _expect(new_loader.mod_db is module.MOD_DB, "CP1 new loader uses replacement database")
+        _expect(
+            new_loader.armor_upgrade_identity(identifier)[0] is None,
+            "CP1 new loader callback uses replacement database",
+        )
+    finally:
+        fixture["restore"]()
+
+
+def _test_inventory_evidence_lazy_reader(module: Any) -> None:
+    original = _inventory_evidence_original_api(module)
+    name = "Py4GWCoreLib.Item"
+    sentinel = object()
+    previous = sys.modules.get(name, sentinel)
+    native_boundary: Any = types.ModuleType(name)
+    events: list[int] = []
+    result = object()
+
+    def get_upgrades(item_id: int) -> list[object]:
+        events.append(item_id)
+        if item_id == 2:
+            raise RuntimeError("native reader failure")
+        return [result]
+
+    native_boundary.Item = types.SimpleNamespace(Mods=types.SimpleNamespace(GetUpgrades=get_upgrades))
+    try:
+        sys.modules[name] = native_boundary
+        for api in (module, original):
+            actual = api._read_item_mods_upgrades(1)
+            _expect(actual[0][0] is result and actual[1] == "", "CP1 lazy reader retains member identity")
+            _inventory_evidence_expect(
+                api._read_item_mods_upgrades(2), (None, "native reader failure"), "lazy reader error result"
+            )
+        _inventory_evidence_expect(events, [1, 2, 1, 2], "lazy read order")
+    finally:
+        if previous is sentinel:
+            del sys.modules[name]
+        else:
+            sys.modules[name] = cast(types.ModuleType, previous)
+
+
+def _test_inventory_evidence_fresh_transaction(module: Any) -> None:
+    fixture: dict[str, Any] = _install_jade_armor_catalog_fixture(module)
+    old_parser, old_reader = module.parse_modifiers, module._read_item_mods_upgrades
+    try:
+        original = _inventory_evidence_original_api(module)
+        raw = _jade_armor_raw_modifiers()
+        item = _requirement_contract_item(
+            module,
+            item_id=801,
+            model_id=679,
+            item_type_id=int(module.ItemType.Salvage),
+            is_armor_piece=True,
+            is_weapon_like=False,
+            salvageable=True,
+            raw_modifiers=raw,
+        )
+        observed: list[object] = []
+        for frozen in (False, True):
+            events: list[str] = []
+            widget = _make_widget(module)
+
+            def inventory() -> list[int]:
+                events.append("membership")
+                return [801]
+
+            def snapshot(_item_id: int, *, include_runtime_name: bool = True) -> Any:
+                events.append("snapshot")
+                return item
+
+            def classify(*_args: Any) -> tuple[bool, bool, Any]:
+                events.append("classify")
+                return False, True, module.ItemType.Salvage
+
+            def upgrades(_item_id: int) -> tuple[object, str]:
+                events.append("upgrades")
+                return _shared_jade_armor_upgrades(), ""
+
+            def parse(values: Any, item_type: Any, model: int, database: Any) -> Any:
+                events.append("parse")
+                _expect(database is module.MOD_DB, "CP1 fresh parser uses current database")
+                _inventory_evidence_expect(
+                    (values, item_type, model), (list(raw), module.ItemType.Salvage, 679), "fresh parser inputs"
+                )
+                return _parsed_armor_matches(fixture["insignia"], fixture["spawning"])
+
+            def cached(*_args: Any, **_kwargs: Any) -> Any:
+                raise AssertionError("fresh exact parsing must not use cached interpretation")
+
+            widget._inventory_evidence.get_inventory_item_ids = inventory
+            widget._inventory_evidence.build_inventory_item_info = snapshot
+            widget._classify_inventory_item_type = classify
+            widget._inventory_evidence._get_cached_inventory_modifiers = cached
+            module.parse_modifiers, module._read_item_mods_upgrades = parse, upgrades
+            _inventory_evidence_bind_original(original, module)
+            original._read_item_mods_upgrades = upgrades
+            capture = (
+                (lambda: original._capture_armor_upgrade_snapshot(widget, 801))
+                if frozen
+                else (lambda: widget._capture_armor_upgrade_snapshot(801))
+            )
+            result, error = capture()
+            _expect(result is not None and not error, "CP1 fresh capture must succeed: " + error)
+            _inventory_evidence_expect(
+                events, ["membership", "snapshot", "classify", "upgrades", "parse"], "fresh read order"
+            )
+            observed.append((module.asdict(result), list(events)))
+            events.clear()
+            item.identified = False
+            try:
+                _inventory_evidence_expect(capture(), (None, "armor is not identified"), "fresh eligibility rejection")
+                _inventory_evidence_expect(events, ["membership", "snapshot"], "eligibility precedes parser")
+            finally:
+                item.identified = True
+        _inventory_evidence_expect(observed[0], observed[1], "frozen fresh transaction capture")
+    finally:
+        module.parse_modifiers, module._read_item_mods_upgrades = old_parser, old_reader
+        fixture["restore"]()
+
+
+def _test_inventory_evidence_cache_integration(module: Any) -> None:
+    actual = _weapon_mod_integration_observations(module)
+    original = _inventory_evidence_original_api(module)
+    current = module._inventory_evidence.InventoryEvidence._get_cached_inventory_modifiers
+    calls: list[object] = []
+
+    def make_frozen(target: Any) -> Any:
+        frozen = _frozen_checkpoint1_inventory_evidence(target)
+
+        def frozen_cached(*args: Any, **kwargs: Any) -> Any:
+            _inventory_evidence_bind_original(original, module)
+            original.MOD_DB = frozen._mod_db
+            original.MOD_DB_LOAD_ERROR = frozen._mod_db_load_error
+            original.parse_modifiers = frozen._parse_modifiers
+            calls.append(original._get_cached_inventory_modifiers.__code__)
+            return original._get_cached_inventory_modifiers(frozen, *args, **kwargs)
+
+        frozen._get_cached_inventory_modifiers = frozen_cached
+        return frozen
+
+    expected = _weapon_mod_integration_observations(module, make_frozen)
+    _expect(
+        bool(calls) and all(code is not current.__code__ for code in calls),
+        "CP1 cache oracle reaches original implementation",
+    )
+    _inventory_evidence_expect(actual, expected, "frozen cache reads, aliases, failure mutation and plans")
+
+
+def _test_inventory_evidence_weapon_oracle_reachability(module: Any) -> None:
+    previous = sys.getprofile()
+    reached: set[types.CodeType] = set()
+    current_code = module._inventory_evidence.build_parsed_weapon_mod_match.__code__
+
+    def profile(frame: Any, event: str, _arg: Any) -> None:
+        if event == "call" and frame.f_code.co_name in (
+            "build_parsed_weapon_mod_match",
+            "_build_parsed_weapon_mod_match",
+        ):
+            reached.add(frame.f_code)
+
+    try:
+        sys.setprofile(profile)
+        _test_weapon_mod_normalization_integration(module)
+    finally:
+        sys.setprofile(previous)
+    _expect(current_code in reached, "CP1 builder oracle reaches current component")
+    frozen = [code for code in reached if code.co_filename == "<frozen Stage 9 original>"]
+    _expect(len(frozen) == 1 and frozen[0] is not current_code, "CP1 builder oracle reaches distinct frozen code")
+
+
+def _test_item_values_ordinary_import() -> None:
+    script = r'''
+import sys
+from Sources.icefox.MerchantRules import item_values
+assert item_values.safe_int("0x10") == 16
+assert item_values.dedupe_identifiers([" A ", "A", "a"]) == ["A", "a"]
+assert item_values.normalize_weapon_requirement_level(99) == 13
+assert not any(name.startswith(("Py4GWCoreLib", "PyImGui", "PySystem", "Widgets")) for name in sys.modules)
+assert not any(name.startswith("Sources.icefox.MerchantRules.") and name != item_values.__name__ for name in sys.modules)
+'''
+    result = subprocess.run(
+        [sys.executable, "-B", "-S", "-c", script], cwd=REPO_ROOT, capture_output=True, text=True, check=False
+    )
+    _expect(result.returncode == 0, f"CP1 ordinary item_values import failed: {result.stdout}\n{result.stderr}")
+
+
+
+# Exact CP1 observation source SHA-256: ff410aadee8106fe1269ea37bfc8e367273622adbb8e7aba35524261548d0d52
+_INVENTORY_OBSERVATION_CP1_SOURCE = r'''class FrozenCheckpoint1Observation:
+    def __init__(self):
+        self.inventory_modifier_cache = {}
+        self.inventory_modifier_cache_hits = 0
+        self.inventory_modifier_cache_misses = 0
+        self.last_inventory_snapshot_duration_ms = 0.0
+
+    def _get_bag_item_ids(self, bag_ids: tuple[int, ...] | list[int]) -> list[int]:
+        normalized_bag_ids = tuple(
+            int(bag_id)
+            for bag_id in bag_ids
+            if max(0, _safe_int(bag_id, 0)) > 0
+        )
+        if not normalized_bag_ids:
+            return []
+        bag_list = GLOBAL_CACHE.ItemArray.CreateBagList(*normalized_bag_ids)
+        return [int(item_id) for item_id in GLOBAL_CACHE.ItemArray.GetItemArray(bag_list)]
+
+    def _get_inventory_item_ids(self) -> list[int]:
+        return self._get_bag_item_ids(list(INVENTORY_BAG_IDS))
+
+    def _is_storage_open(self) -> bool:
+        storage_api = getattr(GLOBAL_CACHE, "Inventory", None)
+        if storage_api is None:
+            return False
+        try:
+            return bool(getattr(storage_api, "IsStorageOpen", lambda: False)())
+        except Exception:
+            return False
+
+    def _get_storage_item_ids(self) -> list[int]:
+        if not self._is_storage_open():
+            return []
+        return self._get_bag_item_ids(list(range(8, 22)))
+
+    def _get_item_modifier_values(self, item_id: int) -> tuple[tuple[int, int, int], ...]:
+        return tuple(
+            (int(modifier.GetIdentifier()), int(modifier.GetArg1()), int(modifier.GetArg2()))
+            for modifier in GLOBAL_CACHE.Item.Mods.GetModifiers(item_id)
+            if modifier is not None
+        )
+
+    def _classify_inventory_item_type(self, item_id: int, item_type_enum: ItemType) -> tuple[bool, bool, ItemType]:
+        is_weapon_like = bool(item_type_enum in WEAPON_LIKE_ITEM_TYPES)
+        is_armor_piece = bool(GLOBAL_CACHE.Item.Type.IsArmor(item_id) or item_type_enum in ARMOR_PIECE_TYPES)
+        parse_item_type = item_type_enum
+        if is_armor_piece and parse_item_type not in ARMOR_PIECE_TYPES:
+            parse_item_type = ItemType.Chestpiece
+        return is_weapon_like, is_armor_piece, parse_item_type
+
+    def _get_cached_inventory_modifiers(
+        self,
+        item_id: int,
+        model_id: int,
+        item_type_enum: ItemType,
+        parse_item_type: ItemType,
+        *,
+        is_weapon_like: bool,
+        is_armor_piece: bool,
+    ) -> ParsedInventoryModifiers:
+        if not (is_weapon_like or is_armor_piece or item_type_enum == ItemType.Rune_Mod):
+            return ParsedInventoryModifiers()
+
+        raw_modifiers = self._get_item_modifier_values(item_id)
+        signature = (
+            int(model_id),
+            int(getattr(item_type_enum, "value", 0)),
+            int(getattr(parse_item_type, "value", 0)),
+            raw_modifiers,
+        )
+        cached_entry = self.inventory_modifier_cache.get(item_id)
+        if cached_entry is not None and cached_entry.signature == signature:
+            self.inventory_modifier_cache_hits += 1
+            return cached_entry.parsed
+
+        self.inventory_modifier_cache_misses += 1
+        parsed_state = ParsedInventoryModifiers()
+        (
+            raw_requirement,
+            raw_requirement_attribute_id,
+            raw_requirement_attribute_name,
+            raw_damage_min,
+            raw_damage_max,
+            raw_energy,
+            raw_armor,
+        ) = _extract_base_stats_from_raw_modifiers(raw_modifiers)
+        if raw_modifiers:
+            try:
+                parsed_modifiers = parse_modifiers(
+                    list(raw_modifiers),
+                    parse_item_type,
+                    model_id,
+                    MOD_DB,
+                )
+            except Exception as exc:
+                if not is_armor_piece:
+                    raise
+                parsed_state = ParsedInventoryModifiers(
+                    requirement=raw_requirement,
+                    requirement_attribute_id=raw_requirement_attribute_id,
+                    requirement_attribute_name=raw_requirement_attribute_name,
+                    damage_min=raw_damage_min,
+                    damage_max=raw_damage_max,
+                    energy=raw_energy,
+                    armor=raw_armor,
+                    raw_modifiers=raw_modifiers,
+                    armor_upgrade_parse_error=f"runes.json modifier parsing failed: {exc}",
+                )
+                self.inventory_modifier_cache[item_id] = InventoryModifierCacheEntry(
+                    signature=signature,
+                    parsed=parsed_state,
+                )
+                return parsed_state
+            corroborating_upgrades: tuple[object, ...] | None = None
+            corroborating_upgrades_error = ""
+            if is_armor_piece and _has_superior_ritualist_rune_carrier(raw_modifiers):
+                corroborating_upgrades, corroborating_upgrades_error = _read_item_mods_upgrades(item_id)
+            armor_upgrade_state = (
+                _parse_exact_armor_upgrade_state(
+                    raw_modifiers,
+                    parse_item_type,
+                    model_id,
+                    mod_db=MOD_DB,
+                    mod_db_load_error=MOD_DB_LOAD_ERROR,
+                    parser=parse_modifiers,
+                    parsed_modifiers=parsed_modifiers,
+                    corroborating_upgrades=corroborating_upgrades,
+                    corroborating_upgrades_error=corroborating_upgrades_error,
+                )
+                if is_armor_piece
+                else ArmorUpgradeParseState()
+            )
+            rune_identifiers = tuple(_dedupe_identifiers([match.rune.identifier for match in parsed_modifiers.runes]))
+            weapon_mod_identifier_values = [match.weapon_mod.identifier for match in parsed_modifiers.weapon_mods]
+            if getattr(parsed_modifiers, "has_increased_value", False):
+                weapon_mod_identifier_values.append('"Show me the money!"')
+            if getattr(parsed_modifiers, "is_highly_salvageable", False):
+                weapon_mod_identifier_values.append('"Measure for Measure"')
+            weapon_mod_identifiers = tuple(_dedupe_identifiers(weapon_mod_identifier_values))
+            weapon_mod_matches = tuple(
+                parsed_match
+                for parsed_match in (
+                    _build_parsed_weapon_mod_match(
+                        match,
+                        raw_modifiers=raw_modifiers,
+                        item_type_enum=item_type_enum,
+                        parse_item_type=parse_item_type,
+                    )
+                    for match in parsed_modifiers.weapon_mods
+                )
+                if parsed_match is not None
+            )
+            standalone_kind = ""
+            if item_type_enum == ItemType.Rune_Mod:
+                if parsed_modifiers.is_rune or rune_identifiers:
+                    standalone_kind = RUNE_STANDALONE_KIND
+                elif weapon_mod_identifiers:
+                    standalone_kind = WEAPON_MOD_STANDALONE_KIND
+            damage = getattr(parsed_modifiers, "damage", (0, 0)) or (0, 0)
+            try:
+                parsed_damage_min, parsed_damage_max = damage
+            except Exception:
+                parsed_damage_min, parsed_damage_max = 0, 0
+            shield_armor = getattr(parsed_modifiers, "shield_armor", (0, 0)) or (0, 0)
+            try:
+                parsed_armor, _parsed_armor_secondary = shield_armor
+            except Exception:
+                parsed_armor = 0
+            parsed_requirement = _normalize_weapon_requirement_level(
+                getattr(parsed_modifiers, "requirements", 0)
+            )
+            parsed_attribute_id, parsed_attribute_name = _format_requirement_attribute_value(
+                getattr(parsed_modifiers, "attribute", None),
+                attribute_labels=MODEL_ID_ATTRIBUTE_FALLBACK_LABELS,
+            )
+            parsed_state = ParsedInventoryModifiers(
+                requirement=parsed_requirement or raw_requirement,
+                requirement_attribute_id=parsed_attribute_id or raw_requirement_attribute_id,
+                requirement_attribute_name=parsed_attribute_name or raw_requirement_attribute_name,
+                damage_min=max(0, _safe_int(parsed_damage_min, 0) or raw_damage_min),
+                damage_max=max(0, _safe_int(parsed_damage_max, 0) or raw_damage_max),
+                energy=max(0, raw_energy),
+                armor=max(0, _safe_int(parsed_armor, 0) or raw_armor),
+                standalone_kind=standalone_kind,
+                rune_identifiers=rune_identifiers,
+                weapon_mod_identifiers=weapon_mod_identifiers,
+                weapon_mod_matches=weapon_mod_matches,
+                raw_modifiers=raw_modifiers,
+                armor_upgrade_identifiers=tuple(
+                    upgrade.identifier for upgrade in armor_upgrade_state.upgrades
+                ),
+                armor_upgrade_matches=armor_upgrade_state.upgrades,
+                armor_upgrade_parse_error=str(armor_upgrade_state.error or ""),
+            )
+        elif any((raw_requirement, raw_damage_min, raw_damage_max, raw_energy, raw_armor)):
+            parsed_state = ParsedInventoryModifiers(
+                requirement=raw_requirement,
+                requirement_attribute_id=raw_requirement_attribute_id,
+                requirement_attribute_name=raw_requirement_attribute_name,
+                damage_min=raw_damage_min,
+                damage_max=raw_damage_max,
+                energy=raw_energy,
+                armor=raw_armor,
+                raw_modifiers=raw_modifiers,
+            )
+
+        self.inventory_modifier_cache[item_id] = InventoryModifierCacheEntry(
+            signature=signature,
+            parsed=parsed_state,
+        )
+        return parsed_state
+
+    def _build_inventory_item_info(
+        self,
+        item_id: int,
+        *,
+        include_runtime_name: bool = True,
+    ) -> InventoryItemInfo | None:
+        """Read and normalize one live inventory item for rule matching.
+
+        Missing native data or parsing failures return ``None`` so callers cannot plan from a
+        partial item record.
+        """
+
+        try:
+            safe_item_id = int(item_id)
+            model_id = int(GLOBAL_CACHE.Item.GetModelID(safe_item_id))
+            quantity = max(1, int(GLOBAL_CACHE.Item.Properties.GetQuantity(safe_item_id)))
+            value = max(0, int(GLOBAL_CACHE.Item.Properties.GetValue(safe_item_id)))
+            item_type_id, item_type_name = GLOBAL_CACHE.Item.GetItemType(safe_item_id)
+            try:
+                item_type_enum = ItemType(int(item_type_id))
+            except Exception:
+                item_type_enum = ItemType.Unknown
+            _, rarity = GLOBAL_CACHE.Item.Rarity.GetRarity(safe_item_id)
+            is_weapon_like, is_armor_piece, parse_item_type = self._classify_inventory_item_type(safe_item_id, item_type_enum)
+            parsed_modifiers = self._get_cached_inventory_modifiers(
+                safe_item_id,
+                model_id,
+                item_type_enum,
+                parse_item_type,
+                is_weapon_like=is_weapon_like,
+                is_armor_piece=is_armor_piece,
+            )
+            runtime_name = (
+                str(GLOBAL_CACHE.Item.GetName(safe_item_id) or f"Model {model_id}")
+                if include_runtime_name
+                else f"Model {model_id}"
+            )
+            return InventoryItemInfo(
+                item_id=safe_item_id,
+                model_id=model_id,
+                name=runtime_name,
+                quantity=quantity,
+                value=value,
+                item_type_id=int(item_type_id),
+                item_type_name=str(item_type_name or ""),
+                rarity=str(rarity or ""),
+                identified=bool(GLOBAL_CACHE.Item.Usage.IsIdentified(safe_item_id)),
+                salvageable=bool(GLOBAL_CACHE.Item.Usage.IsSalvageable(safe_item_id)),
+                is_customized=bool(GLOBAL_CACHE.Item.Properties.IsCustomized(safe_item_id)),
+                is_inscribable=bool(GLOBAL_CACHE.Item.Properties.IsInscribable(safe_item_id)),
+                is_material=bool(GLOBAL_CACHE.Item.Type.IsMaterial(safe_item_id)),
+                is_rare_material=bool(GLOBAL_CACHE.Item.Type.IsRareMaterial(safe_item_id)),
+                is_weapon_like=is_weapon_like,
+                is_armor_piece=is_armor_piece,
+                is_id_kit=bool(
+                    getattr(
+                        getattr(GLOBAL_CACHE.Item, "Usage", None),
+                        "IsIDKit",
+                        lambda _item_id: model_id in ID_KIT_MODEL_IDS,
+                    )(safe_item_id)
+                ),
+                is_salvage_kit=bool(
+                    getattr(
+                        getattr(GLOBAL_CACHE.Item, "Usage", None),
+                        "IsSalvageKit",
+                        lambda _item_id: model_id in SUPPORTED_SALVAGE_KIT_MODEL_IDS,
+                    )(safe_item_id)
+                ),
+                is_stackable=bool(
+                    getattr(
+                        getattr(GLOBAL_CACHE.Item, "Customization", None),
+                        "IsStackable",
+                        lambda _item_id: quantity > 1,
+                    )(safe_item_id)
+                ),
+                is_tome=bool(
+                    getattr(
+                        getattr(GLOBAL_CACHE.Item, "Type", None),
+                        "IsTome",
+                        lambda _item_id: False,
+                    )(safe_item_id)
+                ),
+                requirement=int(parsed_modifiers.requirement),
+                requirement_attribute_id=int(parsed_modifiers.requirement_attribute_id),
+                requirement_attribute_name=str(parsed_modifiers.requirement_attribute_name or ""),
+                damage_min=int(parsed_modifiers.damage_min),
+                damage_max=int(parsed_modifiers.damage_max),
+                energy=int(parsed_modifiers.energy),
+                armor=int(parsed_modifiers.armor),
+                standalone_kind=str(parsed_modifiers.standalone_kind or ""),
+                rune_identifiers=list(parsed_modifiers.rune_identifiers),
+                weapon_mod_identifiers=list(parsed_modifiers.weapon_mod_identifiers),
+                weapon_mod_matches=list(parsed_modifiers.weapon_mod_matches),
+                raw_modifiers=tuple(parsed_modifiers.raw_modifiers),
+                armor_upgrade_identifiers=list(parsed_modifiers.armor_upgrade_identifiers),
+                armor_upgrade_matches=list(parsed_modifiers.armor_upgrade_matches),
+                armor_upgrade_parse_error=str(parsed_modifiers.armor_upgrade_parse_error or ""),
+            )
+        except Exception:
+            return None
+
+    def _prune_inventory_modifier_cache(self, active_item_ids: set[int]):
+        stale_item_ids = [item_id for item_id in self.inventory_modifier_cache.keys() if item_id not in active_item_ids]
+        for stale_item_id in stale_item_ids:
+            self.inventory_modifier_cache.pop(stale_item_id, None)
+
+    def _collect_item_infos_from_ids(self, item_ids: list[int]) -> list[InventoryItemInfo]:
+        items: list[InventoryItemInfo] = []
+        for item_id in item_ids:
+            item_info = self._build_inventory_item_info(item_id)
+            if item_info is None:
+                continue
+            items.append(item_info)
+        return items
+
+    def _collect_inventory_items(self) -> list[InventoryItemInfo]:
+        started_at = time.perf_counter()
+        items = self._collect_item_infos_from_ids(self._get_inventory_item_ids())
+        active_item_ids = {
+            int(item.item_id)
+            for item in items
+            if int(item.item_id) > 0
+        }
+        self._prune_inventory_modifier_cache(active_item_ids)
+        self.last_inventory_snapshot_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
+        if items:
+            material_count = sum(1 for item in items if item.is_material and not item.is_rare_material)
+            rare_material_count = sum(1 for item in items if item.is_rare_material)
+            weapon_count = sum(1 for item in items if item.is_weapon_like)
+            armor_count = sum(1 for item in items if item.is_armor_piece)
+            standalone_runes = sum(1 for item in items if item.standalone_kind == RUNE_STANDALONE_KIND)
+            standalone_weapon_mods = sum(1 for item in items if item.standalone_kind == WEAPON_MOD_STANDALONE_KIND)
+            unidentified_count = sum(1 for item in items if not item.identified)
+            customized_count = sum(1 for item in items if item.is_customized)
+            self._debug_log(
+                "Inventory snapshot: "
+                f"items={len(items)} materials={material_count} rare_materials={rare_material_count} "
+                f"weapons={weapon_count} armor={armor_count} standalone_runes={standalone_runes} "
+                f"standalone_weapon_mods={standalone_weapon_mods} unidentified={unidentified_count} "
+                f"customized={customized_count} duration_ms={self.last_inventory_snapshot_duration_ms:.2f}"
+            )
+        else:
+            self._debug_log(
+                f"Inventory snapshot: no items found in bags 1-4. duration_ms={self.last_inventory_snapshot_duration_ms:.2f}"
+            )
+        return items
+
+    def _collect_storage_items(self) -> list[InventoryItemInfo]:
+        if not self._is_storage_open():
+            return []
+        return self._collect_item_infos_from_ids(self._get_storage_item_ids())
+
+    def _collect_storage_items_with_reliability(self) -> tuple[list[InventoryItemInfo], bool]:
+        """Collect regular Xunlai panes and report whether every listed item was readable."""
+
+        if not self._is_storage_open():
+            return [], False
+        item_ids = self._get_storage_item_ids()
+        items = self._collect_item_infos_from_ids(item_ids)
+        return items, len(items) == len(item_ids)
+
+    def _collect_material_storage_items(self) -> list[InventoryItemInfo]:
+        if not self._is_storage_open():
+            return []
+        return self._collect_item_infos_from_ids(self._get_bag_item_ids((MATERIAL_STORAGE_BAG_ID,)))
+
+    def _get_modifier_cache_hit_rate(self) -> float:
+        total_lookups = max(0, int(self.inventory_modifier_cache_hits) + int(self.inventory_modifier_cache_misses))
+        if total_lookups <= 0:
+            return 0.0
+        return (float(self.inventory_modifier_cache_hits) / float(total_lookups)) * 100.0
+'''
+
+
+def _frozen_checkpoint1_inventory_evidence(module: Any) -> Any:
+    """Expose the owner interface over separately compiled, unchanged CP1 observations."""
+    names = (
+        "GLOBAL_CACHE",
+        "ItemType",
+        "INVENTORY_BAG_IDS",
+        "MATERIAL_STORAGE_BAG_ID",
+        "WEAPON_LIKE_ITEM_TYPES",
+        "ARMOR_PIECE_TYPES",
+        "ID_KIT_MODEL_IDS",
+        "SUPPORTED_SALVAGE_KIT_MODEL_IDS",
+        "RUNE_STANDALONE_KIND",
+        "WEAPON_MOD_STANDALONE_KIND",
+        "MODEL_ID_ATTRIBUTE_FALLBACK_LABELS",
+        "MOD_DB",
+        "MOD_DB_LOAD_ERROR",
+        "parse_modifiers",
+        "InventoryItemInfo",
+        "ParsedInventoryModifiers",
+        "InventoryModifierCacheEntry",
+        "ArmorUpgradeParseState",
+        "_safe_int",
+        "_dedupe_identifiers",
+        "_normalize_weapon_requirement_level",
+        "_extract_base_stats_from_raw_modifiers",
+        "_has_superior_ritualist_rune_carrier",
+        "_read_item_mods_upgrades",
+        "_parse_exact_armor_upgrade_state",
+        "_build_parsed_weapon_mod_match",
+        "_format_requirement_attribute_value",
+    )
+    namespace: dict[str, Any] = {name: getattr(module, name) for name in names}
+    namespace.update(__name__="frozen_checkpoint1_inventory_observations", time=time)
+    exec(
+        compile(_INVENTORY_OBSERVATION_CP1_SOURCE, "<frozen Checkpoint 1 observations>", "exec", dont_inherit=True),
+        namespace,
+    )
+    frozen_class: Any = namespace["FrozenCheckpoint1Observation"]
+
+    def attribute_alias(name: str) -> property:
+        def read(instance: Any) -> Any:
+            return getattr(instance, name)
+
+        def write(instance: Any, value: Any) -> None:
+            setattr(instance, name, value)
+
+        return property(read, write)
+
+    for public, original in (
+        ("get_bag_item_ids", "_get_bag_item_ids"),
+        ("get_inventory_item_ids", "_get_inventory_item_ids"),
+        ("is_storage_open", "_is_storage_open"),
+        ("get_item_modifier_values", "_get_item_modifier_values"),
+        ("classify_inventory_item_type", "_classify_inventory_item_type"),
+        ("build_inventory_item_info", "_build_inventory_item_info"),
+        ("prune", "_prune_inventory_modifier_cache"),
+        ("collect_inventory_items", "_collect_inventory_items"),
+        ("collect_storage_items", "_collect_storage_items"),
+        ("collect_storage_items_with_reliability", "_collect_storage_items_with_reliability"),
+        ("collect_material_storage_items", "_collect_material_storage_items"),
+        ("_modifier_cache", "inventory_modifier_cache"),
+        ("cache_hits", "inventory_modifier_cache_hits"),
+        ("_cache_hits", "inventory_modifier_cache_hits"),
+        ("cache_misses", "inventory_modifier_cache_misses"),
+        ("_cache_misses", "inventory_modifier_cache_misses"),
+        ("last_inventory_snapshot_duration_ms", "last_inventory_snapshot_duration_ms"),
+        ("_last_inventory_snapshot_duration_ms", "last_inventory_snapshot_duration_ms"),
+    ):
+        if public != original:
+            setattr(frozen_class, public, attribute_alias(original))
+
+    def binding_alias(name: str) -> property:
+        def read(_instance: Any) -> Any:
+            return namespace[name]
+
+        def write(_instance: Any, value: Any) -> None:
+            namespace[name] = value
+
+        return property(read, write)
+
+    for public, original in (
+        ("_mod_db", "MOD_DB"),
+        ("_mod_db_load_error", "MOD_DB_LOAD_ERROR"),
+        ("_parse_modifiers", "parse_modifiers"),
+    ):
+        setattr(frozen_class, public, binding_alias(original))
+    frozen: Any = frozen_class()
+
+    def no_log(_message: str) -> None:
+        return None
+
+    frozen._debug_log = no_log
+    return frozen
+
+
+def _inventory_owner_expect(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f"CP2 {context}: expected {expected!r}, observed {actual!r}")
+
+
+def _inventory_owner_parsed(**changes: Any) -> Any:
+    fields: dict[str, Any] = dict(
+        runes=[],
+        weapon_mods=[],
+        is_rune=False,
+        requirements=0,
+        attribute=None,
+        damage=(0, 0),
+        shield_armor=(0, 0),
+    )
+    fields.update(changes)
+    return types.SimpleNamespace(**fields)
+
+
+def _test_inventory_owner_construction(module: Any) -> None:
+    component = module._inventory_evidence
+    saved_parser, saved_db, saved_error = module.parse_modifiers, module.MOD_DB, module.MOD_DB_LOAD_ERROR
+    saved_load = module.ModDatabase.__dict__["load"]
+    missing = object()
+    saved_children = {name: getattr(module.GLOBAL_CACHE, name, missing) for name in ("Item", "ItemArray", "Inventory")}
+    calls: list[str] = []
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        calls.append("parser/load")
+        raise AssertionError("Constructor performed parsing or database loading")
+
+    class Unreadable:
+        def __getattribute__(self, name: str) -> Any:
+            calls.append(name)
+            raise AssertionError("Constructor captured/read native child API: " + name)
+
+    try:
+        module.parse_modifiers, module.MOD_DB, module.MOD_DB_LOAD_ERROR = forbidden, object(), "captured error"
+        module.ModDatabase.load = staticmethod(forbidden)
+        for name in saved_children:
+            setattr(module.GLOBAL_CACHE, name, Unreadable())
+        first, second = module.MerchantRulesWidget(), module.MerchantRulesWidget()
+        owner = first._inventory_evidence
+        _expect(type(owner) is component.InventoryEvidence, "CP2 canonical defining owner")
+        _expect(owner is not second._inventory_evidence, "CP2 exactly one distinct owner per widget")
+        _expect(owner._modifier_cache is not second._inventory_evidence._modifier_cache, "CP2 caches are per widget")
+        _inventory_owner_expect(calls, [], "constructor makes no native/parser/database calls")
+        _expect(
+            owner._mod_db is module.MOD_DB and owner._parse_modifiers is forbidden, "CP2 captures exact dependencies"
+        )
+        _expect(
+            owner._attribute_labels is module.MODEL_ID_ATTRIBUTE_FALLBACK_LABELS, "CP2 captures original label mapping"
+        )
+        _expect(component.GLOBAL_CACHE is module.GLOBAL_CACHE, "CP2 uses the same facade")
+        _inventory_owner_expect(owner._mod_db_load_error, "captured error", "load-error capture")
+        for old in (
+            "inventory_modifier_cache",
+            "inventory_modifier_cache_hits",
+            "inventory_modifier_cache_misses",
+            "last_inventory_snapshot_duration_ms",
+        ):
+            _expect(not hasattr(first, old), "CP2 removed widget state: " + old)
+        for name in (
+            "cache_hits",
+            "cache_misses",
+            "cache_entry_count",
+            "cache_hit_rate",
+            "last_inventory_snapshot_duration_ms",
+        ):
+            _expect_raises(
+                AttributeError, lambda name=name: setattr(owner, name, 7), "CP2 read-only diagnostic " + name
+            )
+    finally:
+        module.parse_modifiers, module.MOD_DB, module.MOD_DB_LOAD_ERROR = saved_parser, saved_db, saved_error
+        module.ModDatabase.load = saved_load
+        for name, value in saved_children.items():
+            if value is missing:
+                delattr(module.GLOBAL_CACHE, name)
+            else:
+                setattr(module.GLOBAL_CACHE, name, value)
+
+
+def _test_inventory_owner_profile_and_resets(module: Any) -> None:
+    widget = _make_widget(module)
+    owner = widget._inventory_evidence
+    cache = owner._modifier_cache
+    entry = module.InventoryModifierCacheEntry((11,), module.ParsedInventoryModifiers())
+    cache[11], cache[22] = entry, entry
+    owner._cache_hits, owner._cache_misses, owner._last_inventory_snapshot_duration_ms = 7, 3, 42.5
+    payload = widget._normalize_profile_payload({"version": module.PROFILE_VERSION})
+    widget._apply_profile_payload(payload)
+    _expect(
+        widget._inventory_evidence is owner and owner._modifier_cache is cache,
+        "CP2 profile application preserves owners",
+    )
+    _expect(cache[11] is entry and cache[22] is entry, "CP2 profile application preserves entry identities")
+    _inventory_owner_expect(
+        (
+            owner.cache_hits,
+            owner.cache_misses,
+            owner.cache_entry_count,
+            owner.cache_hit_rate,
+            owner.last_inventory_snapshot_duration_ms,
+        ),
+        (7, 3, 2, 70.0, 42.5),
+        "profile preserves diagnostics",
+    )
+    owner.invalidate(11)
+    owner.invalidate(999)
+    _inventory_owner_expect(list(cache), [22], "invalidate removes only selected ID")
+    widget.last_plan_build_duration_ms = 12
+    widget.last_preview_compare_duration_ms = 13
+    widget.last_execution_phase_durations_ms = {"test": 14}
+    widget._clear_runtime_diagnostics()
+    _expect(owner._modifier_cache is cache and cache[22] is entry, "CP2 reset retains dictionary and entries")
+    _inventory_owner_expect(
+        (owner.cache_hits, owner.cache_misses, owner.last_inventory_snapshot_duration_ms),
+        (0, 0, 0.0),
+        "statistics reset",
+    )
+    _inventory_owner_expect(
+        (
+            widget.last_plan_build_duration_ms,
+            widget.last_preview_compare_duration_ms,
+            widget.last_execution_phase_durations_ms,
+        ),
+        (0.0, 0.0, dict[str, float]()),
+        "other diagnostics stay widget-owned",
+    )
+    owner._cache_hits, owner._cache_misses, owner._last_inventory_snapshot_duration_ms = 4, 6, 33.0
+    owner.clear_entries()
+    _expect(owner._modifier_cache is cache, "CP2 clear preserves dictionary identity")
+    _inventory_owner_expect(
+        (cache, owner.cache_hits, owner.cache_misses, owner.last_inventory_snapshot_duration_ms),
+        (dict[int, Any](), 4, 6, 33.0),
+        "entry clear retains statistics",
+    )
+    cache[1], cache[2], cache[3] = entry, entry, entry
+    owner.prune({1, 3})
+    _expect(owner._modifier_cache is cache and cache[1] is entry and cache[3] is entry, "CP2 prune identity")
+    _inventory_owner_expect(list(cache), [1, 3], "prune exact active IDs")
+
+
+def _inventory_owner_signature_case(module: Any, frozen: bool) -> dict[str, Any]:
+    owner = _frozen_checkpoint1_inventory_evidence(module) if frozen else _make_widget(module)._inventory_evidence
+    raw: tuple[tuple[int, int, int], ...] = ((9320, 1, 2), (999999, 3, 4))
+    events: list[tuple[Any, ...]] = []
+
+    def read(item_id: int) -> tuple[tuple[int, int, int], ...]:
+        events.append(("raw", item_id))
+        return raw
+
+    def parse(values: Any, item_type: Any, model_id: int, database: Any) -> Any:
+        _expect(database is owner._mod_db, "CP2 parser database reference")
+        events.append(("parse", tuple(values), int(item_type), model_id))
+        return _inventory_owner_parsed()
+
+    owner.get_item_modifier_values, owner._parse_modifiers = read, parse
+
+    def lookup(item_id: int, model: int, kind: Any, parser_kind: Any) -> Any:
+        return owner._get_cached_inventory_modifiers(
+            item_id, model, kind, parser_kind, is_weapon_like=True, is_armor_piece=False
+        )
+
+    sword, axe = module.ItemType.Sword, module.ItemType.Axe
+    first = lookup(101, 111, sword, sword)
+    first_entry = owner._modifier_cache[101]
+    warm = lookup(101, 111, sword, sword)
+    _expect(warm is first and owner._modifier_cache[101] is first_entry, "CP2 warm parsed/entry identity")
+    _inventory_owner_expect(events[-1], ("raw", 101), "raw read occurs on warm hit")
+    second = lookup(102, 111, sword, sword)
+    _expect(second is not first, "CP2 physical IDs own separate parses")
+    lookup(101, 112, sword, sword)
+    lookup(101, 112, axe, sword)
+    lookup(101, 112, axe, axe)
+    raw = tuple(reversed(raw))
+    lookup(101, 112, axe, axe)
+    raw = raw + (raw[0],)
+    lookup(101, 112, axe, axe)
+    _inventory_owner_expect(
+        owner._modifier_cache[101].signature, (112, int(axe), int(axe), raw), "ordered raw signature retains duplicates"
+    )
+    raw = ()
+    empty = lookup(101, 112, axe, axe)
+    _inventory_owner_expect(empty.raw_modifiers, (), "empty raw still publishes a cache entry")
+    before = list(events)
+    owner._get_cached_inventory_modifiers(
+        900, 1, module.ItemType.Unknown, module.ItemType.Unknown, is_weapon_like=False, is_armor_piece=False
+    )
+    _inventory_owner_expect(events, before, "inapplicable items bypass raw/parsing/counters")
+    _inventory_owner_expect((owner.cache_hits, owner.cache_misses), (1, 8), "signature accounting")
+    _inventory_owner_expect(sum(event[0] == "parse" for event in events), 7, "only applicable nonempty misses parse")
+    _inventory_owner_expect(
+        [event[0] for event in events], ["raw", "parse", "raw"] + ["raw", "parse"] * 6 + ["raw"], "literal read order"
+    )
+    return {
+        "events": events,
+        "counters": (owner.cache_hits, owner.cache_misses),
+        "keys": list(owner._modifier_cache),
+        "empty": module.asdict(empty),
+    }
+
+
+def _test_inventory_owner_signatures(module: Any) -> None:
+    _inventory_owner_expect(
+        _inventory_owner_signature_case(module, False),
+        _inventory_owner_signature_case(module, True),
+        "CP1/final signature evidence",
+    )
+
+
+def _inventory_owner_failure_case(module: Any, frozen: bool) -> dict[str, Any]:
+    owner = _frozen_checkpoint1_inventory_evidence(module) if frozen else _make_widget(module)._inventory_evidence
+    raw = ((9320, 1, 2),)
+    failure = RuntimeError("CP2 parser failure")
+    raw_failure = ValueError("CP2 raw failure")
+    mode = ""
+    events: list[str] = []
+
+    def read(_item_id: int) -> Any:
+        events.append("raw")
+        if mode == "raw":
+            raise raw_failure
+        return raw
+
+    def parse(*_args: Any) -> Any:
+        events.append("parse")
+        if mode == "parse":
+            raise failure
+        return _inventory_owner_parsed()
+
+    owner.get_item_modifier_values, owner._parse_modifiers = read, parse
+
+    def lookup(armor: bool = False) -> Any:
+        return owner._get_cached_inventory_modifiers(
+            77, 111, module.ItemType.Sword, module.ItemType.Sword, is_weapon_like=not armor, is_armor_piece=armor
+        )
+
+    initial = lookup()
+    cache = owner._modifier_cache
+    entry = cache[77]
+    raw = ((9320, 9, 8),)
+    mode = "parse"
+    try:
+        lookup()
+    except RuntimeError as exc:
+        _expect(exc is failure, "CP2 weapon parse preserves original exception identity")
+    else:
+        raise AssertionError("CP2 failed weapon miss must propagate")
+    _expect(cache[77] is entry and entry.parsed is initial, "CP2 failed weapon miss retains old entry")
+    partial = lookup(True)
+    partial_entry = cache[77]
+    _expect(
+        partial_entry is not entry and partial_entry.parsed is partial, "CP2 armor failure commits partial evidence"
+    )
+    _inventory_owner_expect(
+        partial.armor_upgrade_parse_error,
+        "runes.json modifier parsing failed: CP2 parser failure",
+        "partial armor error literal",
+    )
+    _expect(lookup(True) is partial and cache[77] is partial_entry, "CP2 partial armor hit does not reparse")
+    _inventory_owner_expect((owner.cache_hits, owner.cache_misses), (1, 3), "failed weapon/partial armor accounting")
+    mode = "raw"
+    try:
+        lookup()
+    except ValueError as exc:
+        _expect(exc is raw_failure, "CP2 raw error identity")
+    else:
+        raise AssertionError("CP2 raw read failure must propagate")
+    _expect(cache[77] is partial_entry, "CP2 raw failure retains prior entry")
+    _inventory_owner_expect((owner.cache_hits, owner.cache_misses), (1, 3), "raw failure precedes counter mutation")
+    _inventory_owner_expect(
+        events, ["raw", "parse", "raw", "parse", "raw", "parse", "raw", "raw"], "failure access ordering"
+    )
+    return {"events": events, "partial": module.asdict(partial), "counters": (owner.cache_hits, owner.cache_misses)}
+
+
+def _test_inventory_owner_parse_failures(module: Any) -> None:
+    _inventory_owner_expect(
+        _inventory_owner_failure_case(module, False),
+        _inventory_owner_failure_case(module, True),
+        "CP1/final failure mutations",
+    )
+
+
+def _test_inventory_owner_snapshot_equivalence(module: Any) -> None:
+    previous = sys.getprofile()
+    reached: set[types.CodeType] = set()
+    actual_code = module._inventory_evidence.InventoryEvidence.build_inventory_item_info.__code__
+
+    def profile(frame: Any, event: str, _arg: Any) -> None:
+        if event == "call" and frame.f_code.co_name in ("build_inventory_item_info", "_build_inventory_item_info"):
+            reached.add(frame.f_code)
+
+    try:
+        sys.setprofile(profile)
+        actual = _weapon_mod_integration_observations(module)
+        expected = _weapon_mod_integration_observations(module, _frozen_checkpoint1_inventory_evidence)
+    finally:
+        sys.setprofile(previous)
+    _inventory_owner_expect(actual, expected, "full frozen CP1 snapshot/cache/failure/read-order comparison")
+    _expect(actual_code in reached, "CP2 actual snapshot implementation reached")
+    _expect(
+        any(code.co_filename == "<frozen Checkpoint 1 observations>" and code is not actual_code for code in reached),
+        "CP2 distinct frozen snapshot implementation reached",
+    )
+
+
+def _inventory_owner_collector_case(module: Any, frozen: bool) -> dict[str, Any]:
+    widget = _make_widget(module)
+    owner = _frozen_checkpoint1_inventory_evidence(module) if frozen else widget._inventory_evidence
+    missing = object()
+    facade = module.GLOBAL_CACHE
+    saved_children = {name: getattr(facade, name, missing) for name in ("Inventory", "ItemArray")}
+    saved_clock = time.perf_counter
+    events: list[tuple[Any, ...]] = []
+    state: dict[str, Any] = {"ids": [1, 1, 2, 3], "open": [True], "error": None, "times": [1.25, 1.375]}
+    one = _requirement_contract_item(module, item_id=1)
+    three = _requirement_contract_item(module, item_id=3)
+    entry = module.InventoryModifierCacheEntry((1,), module.ParsedInventoryModifiers())
+    cache = owner._modifier_cache
+    cache.update({1: entry, 2: entry, 3: entry, 99: entry})
+
+    def clock() -> float:
+        events.append(("time", tuple(cache)))
+        return state["times"].pop(0)
+
+    def bags(*ids: int) -> Any:
+        events.append(("bags", ids))
+        return ids
+
+    def enumerate_items(ids: Any) -> list[int]:
+        events.append(("enumerate", ids))
+        if state["error"] is not None:
+            raise state["error"]
+        return state["ids"]
+
+    def storage_open() -> bool:
+        events.append(("open",))
+        value = state["open"].pop(0) if len(state["open"]) > 1 else state["open"][0]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    def snapshot(item_id: int, *, include_runtime_name: bool = True) -> Any:
+        events.append(("snapshot", item_id, include_runtime_name))
+        return {1: one, 2: None, 3: three}[item_id]
+
+    def log(message: str) -> None:
+        events.append(("log", owner.last_inventory_snapshot_duration_ms))
+        _expect("duration_ms=125.00" in message, "CP2 log observes completed timing")
+
+    owner.build_inventory_item_info = snapshot
+    widget._debug_log = log
+    if frozen:
+        owner._debug_log = log
+    facade.Inventory = types.SimpleNamespace(IsStorageOpen=storage_open)
+    facade.ItemArray = types.SimpleNamespace(CreateBagList=bags, GetItemArray=enumerate_items)
+    observations: dict[str, Any] = {}
+    try:
+        time.perf_counter = clock
+        items = owner.collect_inventory_items() if frozen else widget._collect_inventory_items()
+        _expect(items[0] is one and items[1] is one and items[2] is three, "CP2 snapshot order/shared elements")
+        _expect(
+            owner._modifier_cache is cache and cache[1] is entry and cache[3] is entry, "CP2 collector cache identity"
+        )
+        _inventory_owner_expect(list(cache), [1, 3], "carried pruning uses successful snapshots")
+        _inventory_owner_expect(
+            owner.last_inventory_snapshot_duration_ms, 125.0, "timing covers enumeration through prune"
+        )
+        _inventory_owner_expect(
+            events,
+            [
+                ("time", (1, 2, 3, 99)),
+                ("bags", (1, 2, 3, 4)),
+                ("enumerate", (1, 2, 3, 4)),
+                ("snapshot", 1, True),
+                ("snapshot", 1, True),
+                ("snapshot", 2, True),
+                ("snapshot", 3, True),
+                ("time", (1, 3)),
+                ("log", 125.0),
+            ],
+            "carried collector literal trace",
+        )
+        observations["inventory"] = list(events)
+        events.clear()
+        state["times"] = [2.0]
+        error = RuntimeError("enumeration failed")
+        state["error"] = error
+        try:
+            owner.collect_inventory_items()
+        except RuntimeError as exc:
+            _expect(exc is error, "CP2 enumeration exception identity")
+        else:
+            raise AssertionError("CP2 enumeration error propagated")
+        _inventory_owner_expect(owner.last_inventory_snapshot_duration_ms, 125.0, "failure retains stale duration")
+        _inventory_owner_expect(list(cache), [1, 3], "failed enumeration does not prune")
+        _inventory_owner_expect(
+            events,
+            [("time", (1, 3)), ("bags", (1, 2, 3, 4)), ("enumerate", (1, 2, 3, 4))],
+            "failed snapshot has no end-clock or summary",
+        )
+        observations["failure"] = list(events)
+        state["error"] = None
+        time.perf_counter = saved_clock
+        cases: tuple[tuple[str, list[bool | Exception], list[int], bool, list[int]], ...] = (
+            ("closed", [False], [], False, []),
+            ("open_error", [RuntimeError("closed read")], [], False, []),
+            ("transition", [True, False], [], True, []),
+            ("empty", [True, True], [], True, []),
+            ("unreadable", [True, True], [2], False, []),
+            ("duplicates", [True, True], [3, 1, 3, 2], False, [3, 1, 3]),
+        )
+        for label, opens, ids, reliable, expected_ids in cases:
+            events.clear()
+            state["open"], state["ids"] = list(opens), ids
+            result, observed_reliable = owner.collect_storage_items_with_reliability()
+            _inventory_owner_expect(
+                ([item.item_id for item in result], observed_reliable), (expected_ids, reliable), "storage " + label
+            )
+            expected_trace: list[object] = [("open",)]
+            if label not in ("closed", "open_error"):
+                expected_trace.append(("open",))
+                if label != "transition":
+                    expected_trace.extend([("bags", tuple(range(8, 22))), ("enumerate", tuple(range(8, 22)))])
+                    expected_trace.extend(("snapshot", item_id, True) for item_id in ids)
+            _inventory_owner_expect(events, expected_trace, "storage read order " + label)
+            if label == "duplicates":
+                _expect(result[0] is result[2] is three, "CP2 storage duplicate references")
+            observations[label] = (expected_ids, observed_reliable, list(events))
+            _inventory_owner_expect(list(cache), [1, 3], "storage does not prune")
+        events.clear()
+        state["open"], state["ids"] = [True, False], [3]
+        _inventory_owner_expect(owner.collect_storage_items(), [], "plain storage transition")
+        _inventory_owner_expect(events, [("open",), ("open",)], "plain storage retains both open checks")
+        observations["plain_transition"] = list(events)
+        events.clear()
+        state["open"], state["ids"] = [True], [3, 1, 3]
+        material = owner.collect_material_storage_items()
+        _inventory_owner_expect([item.item_id for item in material], [3, 1, 3], "material order/duplicates")
+        _inventory_owner_expect(
+            events,
+            [
+                ("open",),
+                ("bags", (6,)),
+                ("enumerate", (6,)),
+                ("snapshot", 3, True),
+                ("snapshot", 1, True),
+                ("snapshot", 3, True),
+            ],
+            "material storage trace",
+        )
+        observations["material"] = list(events)
+        events.clear()
+
+        def rebound_items(_bags: object) -> list[str]:
+            return ["9"]
+
+        facade.ItemArray = types.SimpleNamespace(CreateBagList=bags, GetItemArray=rebound_items)
+        _inventory_owner_expect(
+            owner.get_bag_item_ids((0, -1, 2, 3)), [9], "facade child replacement and bag normalization"
+        )
+        _inventory_owner_expect(events, [("bags", (2, 3))], "child APIs resolved at call time")
+        observations["child_rebinding"] = list(events)
+        delattr(facade, "Inventory")
+        _expect(not owner.is_storage_open(), "CP2 missing storage API remains closed")
+    finally:
+        time.perf_counter = saved_clock
+        for name, value in saved_children.items():
+            if value is missing:
+                delattr(facade, name)
+            else:
+                setattr(facade, name, value)
+    return observations
+
+
+def _test_inventory_owner_collectors(module: Any) -> None:
+    _inventory_owner_expect(
+        _inventory_owner_collector_case(module, False),
+        _inventory_owner_collector_case(module, True),
+        "frozen CP1 real collectors",
+    )
+
+
+def _test_inventory_owner_bindings(module: Any) -> None:
+    saved = module.MOD_DB, module.MOD_DB_LOAD_ERROR, module.parse_modifiers
+    database_a, database_b = object(), object()
+    calls: list[tuple[str, object]] = []
+
+    def parser_a(_raw: Any, _kind: Any, _model: int, database: Any) -> Any:
+        calls.append(("a", database))
+        return _inventory_owner_parsed(requirements=7)
+
+    def parser_b(_raw: Any, _kind: Any, _model: int, database: Any) -> Any:
+        calls.append(("b", database))
+        return _inventory_owner_parsed(requirements=12)
+
+    owner: Any = None
+    captured: tuple[Any, ...] = ()
+    try:
+        module.MOD_DB, module.MOD_DB_LOAD_ERROR, module.parse_modifiers = database_a, "error a", parser_a
+        owner = _make_widget(module)._inventory_evidence
+        captured = owner._mod_db, owner._mod_db_load_error, owner._parse_modifiers
+
+        def raw_values(_item_id: int) -> tuple[tuple[int, int, int], ...]:
+            return ((9320, 1, 2),)
+
+        owner.get_item_modifier_values = raw_values
+        module.MOD_DB, module.MOD_DB_LOAD_ERROR, module.parse_modifiers = database_b, "error b", parser_b
+
+        def lookup(item_id: int) -> Any:
+            return owner._get_cached_inventory_modifiers(
+                item_id, 111, module.ItemType.Sword, module.ItemType.Sword, is_weapon_like=True, is_armor_piece=False
+            )
+
+        first = lookup(51)
+        _inventory_owner_expect(first.requirement, 7, "global-only parser change cannot replace captured parser")
+        _expect(calls == [("a", database_a)] and owner._mod_db_load_error == "error a", "CP2 captured database/error")
+        owner._mod_db, owner._mod_db_load_error, owner._parse_modifiers = database_b, "error b", parser_b
+        _expect(lookup(51) is first and calls == [("a", database_a)], "CP2 hit is not evidence of rebinding")
+        rebound = lookup(52)
+        _inventory_owner_expect(rebound.requirement, 12, "explicit owner rebind affects next miss")
+        _expect(calls == [("a", database_a), ("b", database_b)], "CP2 miss reaches replacement parser/database")
+        _inventory_owner_expect((owner.cache_hits, owner.cache_misses), (1, 2), "binding case hit/miss accounting")
+    finally:
+        if owner is not None and captured:
+            owner._mod_db, owner._mod_db_load_error, owner._parse_modifiers = captured
+            _expect(
+                owner._mod_db is database_a and owner._parse_modifiers is parser_a,
+                "CP2 owner bindings restored exactly",
+            )
+        module.MOD_DB, module.MOD_DB_LOAD_ERROR, module.parse_modifiers = saved
+        _expect(module.MOD_DB is saved[0] and module.parse_modifiers is saved[2], "CP2 globals restored exactly")
+
+
+def _test_inventory_owner_adapters(module: Any) -> None:
+    widget = _make_widget(module)
+    owner = widget._inventory_evidence
+    sentinel = object()
+    cases: tuple[tuple[str, str, tuple[Any, ...], dict[str, Any], Any], ...] = (
+        ("_get_bag_item_ids", "get_bag_item_ids", ((1, 2),), {}, sentinel),
+        ("_get_inventory_item_ids", "get_inventory_item_ids", (), {}, sentinel),
+        ("_is_storage_open", "is_storage_open", (), {}, sentinel),
+        ("_get_item_modifier_values", "get_item_modifier_values", (17,), {}, sentinel),
+        ("_classify_inventory_item_type", "classify_inventory_item_type", (17, module.ItemType.Sword), {}, sentinel),
+        ("_build_inventory_item_info", "build_inventory_item_info", (17,), {"include_runtime_name": False}, sentinel),
+        ("_collect_inventory_items", "collect_inventory_items", (), {}, []),
+        ("_collect_storage_items", "collect_storage_items", (), {}, sentinel),
+        ("_collect_storage_items_with_reliability", "collect_storage_items_with_reliability", (), {}, sentinel),
+        ("_collect_material_storage_items", "collect_material_storage_items", (), {}, sentinel),
+    )
+    for adapter, operation, args, kwargs, expected in cases:
+        original = getattr(owner, operation)
+        calls: list[object] = []
+
+        def delegated(*observed_args: Any, **observed_kwargs: Any) -> Any:
+            calls.append((observed_args, observed_kwargs))
+            return expected
+
+        try:
+            setattr(owner, operation, delegated)
+            actual = getattr(widget, adapter)(*args, **kwargs)
+            _expect(actual is expected, "CP2 adapter preserves result identity: " + adapter)
+            _inventory_owner_expect(calls, [(args, kwargs)], "adapter delegation " + adapter)
+        finally:
+            setattr(owner, operation, original)
+
+    def forbidden() -> Any:
+        raise AssertionError("Owner called back through widget adapter")
+
+    widget._get_inventory_item_ids = forbidden
+
+    def empty_inventory() -> list[int]:
+        return []
+
+    owner.get_inventory_item_ids = empty_inventory
+    _inventory_owner_expect(owner.collect_inventory_items(), [], "internal collection stays on owner")
+
+
+def _test_inventory_owner_identify_invalidation(module: Any) -> None:
+    missing = object()
+    saved_inventory = sys.modules.get("Py4GWCoreLib.Inventory", missing)
+    saved_queue, saved_wait, saved_timeout = (
+        module.ActionQueueManager,
+        module.Routines.Yield.wait,
+        module.IDENTIFY_CONFIRM_TIMEOUT_MS,
+    )
+    cases = (
+        ("lifecycle", "blocked", 0),
+        ("missing", "missing_item", 0),
+        ("already", "identified", 0),
+        ("selection", "blocked", 0),
+        ("no_kit", "no_kit", 0),
+        ("queue_timeout", "failed", 1),
+        ("vanished", "missing_item", 1),
+        ("confirmation_timeout", "failed", 1),
+        ("success", "identified", 2),
+    )
+    try:
+        for case, expected_result, expected_invalidations in cases:
+            widget = _make_widget(module)
+            owner = widget._inventory_evidence
+            entry = module.InventoryModifierCacheEntry((1,), module.ParsedInventoryModifiers())
+            owner._modifier_cache[71] = entry
+            item = _requirement_contract_item(module, item_id=71, identified=False)
+            events: list[tuple[Any, ...]] = []
+            snapshot_count = 0
+            original_invalidate = owner.invalidate
+
+            def invalidate(item_id: int) -> None:
+                events.append(("invalidate", item_id))
+                original_invalidate(item_id)
+
+            owner.invalidate = invalidate
+
+            def immediate(value: Any) -> Any:
+                if False:
+                    yield None
+                return value
+
+            widget._wait_for_merchant_rules_lifecycle = lambda: immediate(None if case == "lifecycle" else 1)
+
+            def snapshot(_item_id: int, *, include_runtime_name: bool = True) -> Any:
+                nonlocal snapshot_count
+                snapshot_count += 1
+                events.append(("snapshot", snapshot_count))
+                if case == "missing":
+                    return None
+                item.identified = case == "already" or (case == "success" and snapshot_count > 1)
+                if snapshot_count > 1:
+                    owner._modifier_cache[71] = entry
+                return item
+
+            owner.build_inventory_item_info = snapshot
+            owner.get_inventory_item_ids = lambda: [] if case == "vanished" else [71]
+
+            def selection_reason(_item: Any) -> str:
+                return "" if case == "selection" else "selected"
+
+            widget._get_identify_selection_reason = selection_reason
+            widget._get_id_kit_id = lambda: 0 if case == "no_kit" else 555
+
+            def identify(*_args: Any) -> None:
+                raise AssertionError("Offline identify fixture must never execute native action")
+
+            inventory_module: Any = types.ModuleType("Py4GWCoreLib.Inventory")
+            inventory_module.Inventory = types.SimpleNamespace(IdentifyItem=identify)
+            sys.modules["Py4GWCoreLib.Inventory"] = inventory_module
+
+            def add_action(queue: str, callback: Any, *args: Any) -> None:
+                _expect(callback is identify and args == (71, 555), "CP2 unchanged identify dispatch arguments")
+                _expect(71 not in owner._modifier_cache, "CP2 invalidation precedes enqueue")
+                events.append(("queue", queue, args))
+
+            module.ActionQueueManager = lambda: types.SimpleNamespace(AddAction=add_action)
+
+            def queue_empty(*_args: Any, **_kwargs: Any) -> Any:
+                owner._modifier_cache[71] = entry
+                events.append(("queue_wait",))
+                return immediate(case != "queue_timeout")
+
+            widget._wait_for_action_queue_empty = queue_empty
+
+            def wait(milliseconds: int) -> Any:
+                return immediate(events.append(("wait", milliseconds)))
+
+            module.Routines.Yield.wait = wait
+            module.IDENTIFY_CONFIRM_TIMEOUT_MS = 0
+            observed = _drain_generator_return(widget._identify_one_item(item))
+            _inventory_owner_expect(observed, expected_result, "identify result " + case)
+            _inventory_owner_expect(
+                sum(event[0] == "invalidate" for event in events),
+                expected_invalidations,
+                "identify exact invalidations " + case,
+            )
+            if expected_invalidations:
+                _expect(
+                    events.index(("invalidate", 71)) < next(i for i, event in enumerate(events) if event[0] == "queue"),
+                    "CP2 first invalidation occurs before queue admission",
+                )
+            if case == "success":
+                _expect(
+                    events[-1] == ("invalidate", 71) and 71 not in owner._modifier_cache,
+                    "CP2 confirmation invalidation removes freshly rebuilt entry",
+                )
+            else:
+                _expect(owner._modifier_cache[71] is entry, "CP2 no extra invalidation on negative path " + case)
+            owner.invalidate = original_invalidate
+    finally:
+        module.ActionQueueManager, module.Routines.Yield.wait, module.IDENTIFY_CONFIRM_TIMEOUT_MS = (
+            saved_queue,
+            saved_wait,
+            saved_timeout,
+        )
+        if saved_inventory is missing:
+            sys.modules.pop("Py4GWCoreLib.Inventory", None)
+        else:
+            assert isinstance(saved_inventory, types.ModuleType)
+            sys.modules["Py4GWCoreLib.Inventory"] = saved_inventory
+
+
+def _test_inventory_owner_fresh_transaction(module: Any) -> None:
+    fixture: dict[str, Any] = _install_jade_armor_catalog_fixture(module)
+    saved_parser, saved_reader = module.parse_modifiers, module._read_item_mods_upgrades
+    widget = _make_widget(module)
+    owner = widget._inventory_evidence
+    saved_owner_parser = owner._parse_modifiers
+    raw = _jade_armor_raw_modifiers()
+    events: list[str] = []
+    try:
+
+        def cached_parse(*_args: Any) -> Any:
+            events.append("cached parse")
+            return _inventory_owner_parsed(**vars(_parsed_armor_matches(fixture["insignia"], fixture["spawning"])))
+
+        owner._parse_modifiers = cached_parse
+
+        def raw_values(_item_id: int) -> Any:
+            return raw
+
+        owner.get_item_modifier_values = raw_values
+        first = owner._get_cached_inventory_modifiers(
+            801, 679, module.ItemType.Salvage, module.ItemType.Salvage, is_weapon_like=False, is_armor_piece=True
+        )
+        warm = owner._get_cached_inventory_modifiers(
+            801, 679, module.ItemType.Salvage, module.ItemType.Salvage, is_weapon_like=False, is_armor_piece=True
+        )
+        _expect(warm is first and events == ["cached parse"], "CP2 transaction fixture establishes a real warm hit")
+        entry = owner._modifier_cache[801]
+        item = _requirement_contract_item(
+            module,
+            item_id=801,
+            model_id=679,
+            item_type_id=int(module.ItemType.Salvage),
+            is_armor_piece=True,
+            is_weapon_like=False,
+            salvageable=True,
+            raw_modifiers=raw,
+        )
+        owner.get_inventory_item_ids = lambda: [801]
+
+        def snapshot(_item_id: int, *, include_runtime_name: bool = True) -> Any:
+            return item
+
+        def classify(_item_id: int, _item_type: Any) -> tuple[bool, bool, Any]:
+            return False, True, module.ItemType.Salvage
+
+        def upgrades(_item_id: int) -> tuple[Any, str]:
+            return _shared_jade_armor_upgrades(), ""
+
+        owner.build_inventory_item_info = snapshot
+        owner.classify_inventory_item_type = classify
+        module._read_item_mods_upgrades = upgrades
+
+        def fresh_parse(*_args: Any) -> Any:
+            events.append("fresh parse")
+            return _inventory_owner_parsed(**vars(_parsed_armor_matches(fixture["insignia"], fixture["spawning"])))
+
+        module.parse_modifiers = fresh_parse
+        result, error = widget._capture_armor_upgrade_snapshot(801)
+        _expect(result is not None and not error, "CP2 fresh transaction parse succeeds: " + error)
+        _inventory_owner_expect(
+            events, ["cached parse", "fresh parse"], "fresh transaction bypasses captured cache parser"
+        )
+        _expect(owner._modifier_cache[801] is entry, "CP2 fresh transaction leaves warm cache entry untouched")
+        _inventory_owner_expect(
+            (owner.cache_hits, owner.cache_misses), (1, 1), "fresh exact parse is outside cache accounting"
+        )
+    finally:
+        owner._parse_modifiers = saved_owner_parser
+        module.parse_modifiers, module._read_item_mods_upgrades = saved_parser, saved_reader
+        fixture["restore"]()
 
 
 def main() -> int:
@@ -43101,6 +46011,34 @@ def main() -> int:
                 ("ranked_search_exact_lru_and_generation", lambda: _test_ranked_search_exact_lru_and_generation(module)),
                 ("ranked_search_failures_and_reload", lambda: _test_ranked_search_failures_and_reload(module)),
                 ("ranked_search_profile_replacement", lambda: _test_ranked_search_profile_replacement(module)),
+            ]
+        )
+
+        tests.extend(
+            [
+                ("inventory_evidence_record_identity", lambda: _test_inventory_evidence_record_identity(module)),
+                ("inventory_owner_construction", lambda: _test_inventory_owner_construction(module)),
+                ("inventory_owner_profile_and_resets", lambda: _test_inventory_owner_profile_and_resets(module)),
+                ("inventory_owner_signatures", lambda: _test_inventory_owner_signatures(module)),
+                ("inventory_owner_parse_failures", lambda: _test_inventory_owner_parse_failures(module)),
+                ("inventory_owner_snapshot_equivalence", lambda: _test_inventory_owner_snapshot_equivalence(module)),
+                ("inventory_owner_collectors", lambda: _test_inventory_owner_collectors(module)),
+                ("inventory_owner_bindings", lambda: _test_inventory_owner_bindings(module)),
+                ("inventory_owner_adapters", lambda: _test_inventory_owner_adapters(module)),
+                ("inventory_owner_identify_invalidation", lambda: _test_inventory_owner_identify_invalidation(module)),
+                ("inventory_owner_fresh_transaction", lambda: _test_inventory_owner_fresh_transaction(module)),
+                ("inventory_evidence_scalars", lambda: _test_inventory_evidence_scalars(module)),
+                ("inventory_evidence_interpretation", lambda: _test_inventory_evidence_interpretation(module)),
+                ("inventory_evidence_metadata", lambda: _test_inventory_evidence_metadata(module)),
+                ("inventory_evidence_catalog_binding", lambda: _test_inventory_evidence_catalog_binding(module)),
+                ("inventory_evidence_lazy_reader", lambda: _test_inventory_evidence_lazy_reader(module)),
+                ("inventory_evidence_fresh_transaction", lambda: _test_inventory_evidence_fresh_transaction(module)),
+                ("inventory_evidence_cache_integration", lambda: _test_inventory_evidence_cache_integration(module)),
+                (
+                    "inventory_evidence_weapon_oracle_reachability",
+                    lambda: _test_inventory_evidence_weapon_oracle_reachability(module),
+                ),
+                ("item_values_ordinary_import", _test_item_values_ordinary_import),
             ]
         )
 
