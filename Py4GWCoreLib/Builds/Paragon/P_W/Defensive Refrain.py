@@ -23,6 +23,8 @@ Ebon_Battle_Standard_of_Wisdom_ID = Skill.GetID("Ebon_Battle_Standard_of_Wisdom"
 Ebon_Battle_Standard_of_Honor_ID = Skill.GetID("Ebon_Battle_Standard_of_Honor")
 Protectors_Defense_ID = Skill.GetID("Protectors_Defense")
 Cant_Touch_This_ID = Skill.GetID("Cant_Touch_This")
+Aria_of_Zeal_ID = Skill.GetID("Aria_of_Zeal")
+Aria_of_Restoration_ID = Skill.GetID("Aria_of_Restoration")
 Make_Your_Time_ID = Skill.GetID("Make_Your_Time")
 Angelic_Protection_ID = Skill.GetID("Angelic_Protection")
 
@@ -47,22 +49,17 @@ Blind_ID = Skill.GetID("Blind")
 
 
 class Paragon_Refrain(BuildMgr):
-    """P/W Heroic Refrain support Paragon.
+    """P/any Heroic Refrain support Paragon.
 
-    Ports PvX "Build:P/any Heroic Refrain Spear" and its two P/W variants
-    (Mighty Throw and Motivation Support) on top of the original Defensive
-    Refrain bar. The engine is Heroic Refrain: it is stacked on ourselves first
-    so every copy we hand out is cast at the highest Leadership we can reach,
-    then spread across the party, and from then on "They're on Fire!" alone
-    renews it on everyone - a refrain is reapplied whenever a chant or shout
-    *ends* on its holder.
+    Ports PvX "Build:P/any Heroic Refrain Spear" and its variants on top of the
+    original Defensive Refrain bar. The engine is Heroic Refrain: it is stacked
+    on ourselves first so every copy we hand out is cast at the highest
+    Leadership we can reach, then spread across the party. The echoes are
+    renewed either when "They're on Fire!" expires normally or through the
+    documented special case where reapplying "Can't Touch This!" ends its
+    existing copy on affected allies.
 
-    That mechanic is why almost every shout helper on this bar refuses to
-    recast while its own copy is still running: replacing a shout is inferred
-    not to end it, so an early recast would silently skip a party-wide refrain
-    renewal. That inference is unconfirmed in an injected client and is written
-    up on Command.Cant_Touch_This. It is
-    also why the spear attacks are clamped to spear range - which is the same
+    The spear attacks are clamped to spear range - which is the same
     1012 units as earshot, so staying in range to attack is the same thing as
     staying in range to renew.
     """
@@ -71,15 +68,15 @@ class Paragon_Refrain(BuildMgr):
         super().__init__(
             name="Defensive Refrain",
             required_primary=Profession.Paragon,
-            required_secondary=Profession.Warrior,
+            # BuildMgr uses enum value zero as the wildcard profession.
+            # Warrior-only helpers below remain guarded by IsSkillEquipped.
+            required_secondary=Profession(0),
             template_code="OQGkUNlnpiy0ZNQYPWNm72G4VhoH",
-            # The three skills every PvX variant of this build carries. Keeping
-            # the gate at three is what lets one class match the original bar,
-            # the Mighty Throw variant and the Motivation Support variant.
+            # The elite is the complete archetype fingerprint. Other bar slots
+            # determine available behavior, not whether this controller owns
+            # the build.
             required_skills=[
                 Heroic_Refrain_ID,
-                Theyre_on_Fire_ID,
-                Theres_Nothing_to_Fear_ID,
             ],
             # Everything here is driven below. That is not optional: declaring a
             # skill masks it out of the HeroAI fallback, so a declared skill the
@@ -87,6 +84,8 @@ class Paragon_Refrain(BuildMgr):
             optional_skills=[
                 Save_Yourselves_luxon_ID,
                 Save_Yourselves_kurzick_ID,
+                Theres_Nothing_to_Fear_ID,
+                Theyre_on_Fire_ID,
                 Anthem_of_Flame_ID,
                 Hasty_Refrain_ID,
                 Never_Surrender_ID,
@@ -99,6 +98,8 @@ class Paragon_Refrain(BuildMgr):
                 Ebon_Battle_Standard_of_Honor_ID,
                 Protectors_Defense_ID,
                 Cant_Touch_This_ID,
+                Aria_of_Zeal_ID,
+                Aria_of_Restoration_ID,
                 Make_Your_Time_ID,
                 Angelic_Protection_ID,
                 Mighty_Throw_ID,
@@ -123,7 +124,8 @@ class Paragon_Refrain(BuildMgr):
             return
 
         self.SetFallback("HeroAI", HeroAI_Build(standalone_fallback=True))
-        self.SetSkillCastingFn(self._run_local_skill_logic)
+        self.SetOOCFn(self._run_ooc)
+        self.SetCombatFn(self._run_combat_phase)
         # Named skillbook, not skills: BuildMgr.skills is the list[int] of
         # equipped skill ids that ValidateSkills sorts, and shadowing it with
         # the helper namespace makes that call raise TypeError.
@@ -138,20 +140,35 @@ class Paragon_Refrain(BuildMgr):
         Everything here has to be reachable while travelling: the refrains are
         maintained continuously, not re-established at every pull.
         """
-        # First, and deliberately so. Aggressive Refrain is a single cast that
-        # the bar's shouts then renew forever, so the sooner it lands the sooner
-        # we stop thinking about it - after that its HasEffect guard returns
-        # False instantly and it costs nothing to keep asking. It used to sit
-        # below the in-aggro guard AND below Heroic Refrain, which is why it was
-        # effectively never cast: by the time we were in combat, Heroic Refrain
-        # was spreading across the party one ally per tick and never yielded the
-        # tick to it.
+        # The elite, and the reason for the bar, must be first. Its helper casts
+        # on self until the Leadership bootstrap reaches 20, then walks the
+        # party. Refrains cast before that bootstrap would use the lower rank.
+        if self.IsSkillEquipped(Heroic_Refrain_ID):
+            if (yield from self.skillbook.Paragon.Leadership.Heroic_Refrain()):
+                return True
+
+            # Heroic_Refrain returns False both when bootstrap is complete and
+            # when the second self cast is merely recharging. Only the live
+            # rank-20 postcondition permits lower-rank refrains to be spread.
+            if not self.skillbook.Paragon.Leadership.IsHeroicRefrainSelfReady():
+                return True
+
+        # Spread every equipped party refrain immediately after Heroic Refrain,
+        # in or out of combat. Entering combat must not postpone an incomplete
+        # distribution behind the rest of the combat rotation.
+        if (yield from self._run_refrain_spreading()):
+            return True
+
+        # Aggressive Refrain is self-only and is maintained by the same expiring
+        # shouts as the party refrains.
         if self.IsSkillEquipped(Aggressive_Refrain_ID) and (yield from self.skillbook.Paragon.Leadership.Aggressive_Refrain()):
             return True
 
-        # The elite, and the reason for the bar. Self-stacks first, then walks
-        # the party; the helper's own logic decides which.
-        if self.IsSkillEquipped(Heroic_Refrain_ID) and (yield from self.skillbook.Paragon.Leadership.Heroic_Refrain()):
+        # Reapplying CTT ends its existing party shout and renews Heroic
+        # Refrain and the other maintainable echoes on each affected ally.
+        if self.IsSkillEquipped(Cant_Touch_This_ID) and (
+            yield from self.skillbook.Paragon.Command.Cant_Touch_This(maintain_refrains=True)
+        ):
             return True
 
         if self.IsSkillEquipped(Anthem_of_Flame_ID) and (yield from self.skillbook.Paragon.Leadership.Anthem_of_Flame()):
@@ -163,14 +180,8 @@ class Paragon_Refrain(BuildMgr):
         if self.IsSkillEquipped(Theyre_on_Fire_ID) and (yield from self.skillbook.Paragon.Leadership.Theyre_on_Fire()):
             return True
 
-        # The secondary echoes are worth a tick while travelling, but not ahead
-        # of the defensive shouts once the fight starts - in combat they are
-        # retried at the tail of the rotation instead.
         if self.IsInAggro():
             return False
-
-        if (yield from self._run_refrain_spreading()):
-            return True
 
         # Travel speed. Ends on the holder's next attack, so the helper keeps it
         # to genuine out-of-combat movement.
@@ -195,8 +206,8 @@ class Paragon_Refrain(BuildMgr):
         if self.IsSkillEquipped(Energizing_Finale_ID) and (yield from self.skillbook.Paragon.Motivation.Energizing_Finale()):
             return True
 
-        # Burning Refrain and Blazing Finale both pay off through "They're on
-        # Fire!", which is permanently up on this bar.
+        # Burning Refrain and Blazing Finale pay off most on the traditional
+        # "They're on Fire!" variant, but remain valid maintainable echoes.
         if self.IsSkillEquipped(Burning_Refrain_ID) and (yield from self.skillbook.Paragon.Motivation.Burning_Refrain()):
             return True
 
@@ -219,6 +230,12 @@ class Paragon_Refrain(BuildMgr):
         if self.IsSkillEquipped(Theres_Nothing_to_Fear_ID) and (yield from self.skillbook.Any.NoAttribute.Theres_Nothing_to_Fear()):
             return True
 
+        if self.IsSkillEquipped(Aria_of_Zeal_ID) and (yield from self.skillbook.Paragon.Motivation.Aria_of_Zeal()):
+            return True
+
+        if self.IsSkillEquipped(Aria_of_Restoration_ID) and (yield from self.skillbook.Paragon.Motivation.Aria_of_Restoration()):
+            return True
+
         # Save Yourselves outranks the skills that charge it: when it is already
         # charged, spending the tick on an enabler instead delays the single
         # biggest mitigation on the bar. When it is not charged its adrenaline
@@ -234,12 +251,6 @@ class Paragon_Refrain(BuildMgr):
             return True
 
         if self.IsSkillEquipped(Never_Surrender_ID) and (yield from self.skillbook.Paragon.Motivation.Never_Surrender()):
-            return True
-
-        # min_remaining_ms=0: the helper's default lets it recast with 1.5s
-        # still on the clock, which on this bar would throw away a refrain
-        # renewal every single time.
-        if self.IsSkillEquipped(Cant_Touch_This_ID) and (yield from self.skillbook.Paragon.Command.Cant_Touch_This(min_remaining_ms=0)):
             return True
 
         if self.IsSkillEquipped(Protectors_Defense_ID) and (yield from self.skillbook.Warrior.NoAttribute.Protectors_Defense()):
@@ -349,9 +360,16 @@ class Paragon_Refrain(BuildMgr):
 
         return False
 
-    def _run_local_skill_logic(self):
+    def _run_ooc(self):
+        """Evaluate travelling upkeep from current state on every fresh tick."""
         if not Routines.Checks.Skills.CanCast():
-            yield from Routines.Yield.wait(100)
+            return False
+
+        return (yield from self._run_upkeep())
+
+    def _run_combat_phase(self):
+        """Evaluate upkeep before combat work without a cross-phase continuation."""
+        if not Routines.Checks.Skills.CanCast():
             return False
 
         if (yield from self._run_upkeep()):

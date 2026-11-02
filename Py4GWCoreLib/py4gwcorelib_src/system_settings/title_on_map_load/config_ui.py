@@ -41,4 +41,9 @@ def add_sections(win, group) -> None:
     """Add title selection and its supported-map reference to Map & Missions."""
 
     controller = get_controller()
-    win.add_section(group, "Title On Map Load", lambda c=controller: _draw_title_on_map_load(c))
+    win.add_account_section(
+        group,
+        "map.title_on_load",
+        "Title On Map Load",
+        lambda c=controller: _draw_title_on_map_load(c),
+    )

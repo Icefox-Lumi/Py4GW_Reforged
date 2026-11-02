@@ -77,9 +77,11 @@ Autosave and flush cadence are owned entirely by the native side; this module ne
 writes of its own.
 """
 
+from pathlib import Path
 from typing import Any
 
 import PySettings
+import PySystem
 
 
 class Settings:
@@ -104,6 +106,29 @@ class Settings:
     """
 
     _instances: dict[tuple[str, str], 'Settings'] = {}
+
+    @classmethod
+    def account_emails(cls) -> list[str]:
+        """Enumerate persisted account profiles under the project Settings root.
+
+        ``PySystem`` owns discovery of the active project root. This method inspects only its
+        ``Settings`` child and returns directory names that have account-email shape. It takes no
+        path argument, so callers cannot redirect enumeration outside the persistence root.
+        """
+
+        try:
+            projects_path = str(PySystem.Console.get_projects_path() or "").strip()
+            if not projects_path:
+                return []
+            settings_root = Path(projects_path) / "Settings"
+            emails = [
+                entry.name.strip()
+                for entry in settings_root.iterdir()
+                if entry.is_dir() and "@" in entry.name and entry.name.strip()
+            ]
+            return sorted(set(emails), key=str.casefold)
+        except Exception:
+            return []
 
     def __new__(cls, name: str, scope: str = 'account') -> 'Settings':
         """Return the cached instance for ``(name, scope)``, creating it on first request.

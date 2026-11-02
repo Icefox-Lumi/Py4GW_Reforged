@@ -105,6 +105,16 @@ class AgentRecolorController:
         AgentRecolor.EnableGadgets(self._gadgets_on)
         self._last_gadgets = {}
 
+    def reload_account_settings(self) -> bool:
+        toggles = store.load_toggles()
+        self._master = bool(toggles.get("enabled", False))
+        self._agents_on = bool(toggles.get("agents_on", True))
+        self._gadgets_on = bool(toggles.get("gadgets_on", True))
+        self._apply_master()
+        self._last_agents = {}
+        self._last_gadgets = {}
+        return True
+
     # ── agent-rule mutations (persist; the live pass picks them up next frame) ────────────
     def new_agent_rule(self, scope: str) -> "model.AgentRule":
         rule = model.AgentRule(id=uuid.uuid4().hex, name="New agent rule", scope=scope)

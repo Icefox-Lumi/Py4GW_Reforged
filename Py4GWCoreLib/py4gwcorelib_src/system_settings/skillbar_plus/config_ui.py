@@ -112,7 +112,7 @@ def add_sections(win, group) -> None:
     """Add Skillbar+ as a tabbed section in the Skills & Casting category."""
 
     controller = get_controller()
-    win.add_section(group, "Skillbar +")
+    win.add_account_section(group, "skills.skillbar_plus", "Skillbar +")
     win.add_tab("Skillbar +", "Skillbar", lambda c=controller: _draw_skillbar(c))
     win.add_tab("Skillbar +", "Effects", lambda c=controller: _draw_effects(c))
     win.add_tab("Skillbar +", "Auto Cast", lambda c=controller: _draw_autocast(c))

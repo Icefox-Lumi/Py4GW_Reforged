@@ -53,6 +53,13 @@ class LibrarySettingsController:
         if self.group_open.get(cat_key, True) == is_open:
             return
         self.group_open[cat_key] = is_open
+        try:
+            from .account_copy import get_copy_service
+
+            if get_copy_service().is_settings_document_locked("Widgets/System/System Settings.ini"):
+                return
+        except Exception:
+            pass
         persistence.save_group_open(cat_key, is_open)
 
     # ── native application (register options with cpp) ───────────────────────────────────
@@ -64,6 +71,15 @@ class LibrarySettingsController:
         for cat in model.CATALOG:
             for lsn in cat.listeners:
                 self._apply_listener(pl, lsn)
+
+    def reload_account_settings(self) -> bool:
+        """Rebuild account-local listener state after an acknowledged external overlay."""
+
+        self.enabled.clear()
+        self.options.clear()
+        persistence.load(self.enabled, self.options)
+        self.apply_all_to_native()
+        return True
 
     def _apply_listener(self, pl, lsn: "model.Listener") -> None:
         try:

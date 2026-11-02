@@ -34,6 +34,11 @@ class SkillbarPlusController:
         setattr(self.config, key, value)
         persistence.save(self.config)
 
+    def reload_account_settings(self) -> bool:
+        self.config = persistence.load()
+        self.runtime = SkillbarPlusRuntime(self.config, self.autocast_slots)
+        return True
+
     def reset_autocast_slots(self) -> None:
         self.autocast_slots[:] = [False] * 8
 

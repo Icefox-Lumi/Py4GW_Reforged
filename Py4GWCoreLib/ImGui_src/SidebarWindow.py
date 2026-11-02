@@ -88,18 +88,19 @@ class SidebarWindow:
     class Section:
         """A sidebar item. Renders either a single ``draw`` context or its ``tabs``."""
 
-        __slots__ = ("name", "draw", "tabs", "help", "help_file", "icon")
+        __slots__ = ("name", "draw", "tabs", "help", "help_file", "icon", "header")
 
         def __init__(self, name: str, draw: Optional[DrawFn] = None,
                      tabs: "Optional[list[SidebarWindow.Tab]]" = None,
                      help: Optional[str] = None, help_file: Optional[str] = None,
-                     icon: str = ""):
+                     icon: str = "", header: Optional[DrawFn] = None):
             self.name = name
             self.draw = draw
             self.tabs = list(tabs) if tabs else []
             self.help = help
             self.help_file = help_file
             self.icon = icon
+            self.header = header
 
     class Group:
         """A collapsible sidebar header holding an ordered list of sections."""
@@ -180,7 +181,8 @@ class SidebarWindow:
                     context: Optional[DrawFn] = None, *,
                     tabs: "Optional[list[SidebarWindow.Tab]]" = None,
                     help: Optional[str] = None, help_file: Optional[str] = None,
-                    icon: str = "", default: bool = False) -> "SidebarWindow.Section":
+                    icon: str = "", default: bool = False,
+                    header: Optional[DrawFn] = None) -> "SidebarWindow.Section":
         """Add a sidebar section bound to its ``context`` function.
 
         Clicking the section auto-shows ``context``. Omit ``context`` (and later call
@@ -189,7 +191,8 @@ class SidebarWindow:
         """
         grp = group if isinstance(group, SidebarWindow.Group) else self.add_group(group)
         section = SidebarWindow.Section(name, draw=context, tabs=tabs,
-                                        help=help, help_file=help_file, icon=icon)
+                                        help=help, help_file=help_file, icon=icon,
+                                        header=header)
         grp.sections.append(section)
         self._sections_by_name[name] = section
         if default or self._selected is None:
@@ -372,6 +375,8 @@ class SidebarWindow:
         if section is None:
             PyImGui.text_colored(f"Not available: unknown section '{self._selected}'", self.MUTED_COLOR)
             return
+        if section.header is not None:
+            self._safe_call(section.header, "%s/header" % section.name)
         self._draw_help(section, key=section.name)
         if section.tabs:
             self._draw_tabs(section)
