@@ -178,3 +178,31 @@ The guides named above carry the complete detailed rules for each domain,
 including planning depth, migration traceability, build scope, ImGui cleanup,
 and project-specific source paths. Read them before acting in that domain;
 this contract does not weaken or replace them.
+
+## Shared-Core Ownership
+
+- Before changing relevant shared infrastructure, read
+  `tools/shared_core/ownership.json` and verify the user's approved entries,
+  authority scopes and exact manifest revision. A branch-local copy must match
+  the approved authority revision. All initial entries are `PROPOSED` or
+  `UNRESOLVED`; neither status grants implementation or release approval.
+- Route approved shared-owned edits to an explicitly authorized CORE worktree.
+  Keep widget-specific implementations in their widget development branches;
+  importing a widget-owned runtime dependency does not transfer its ownership.
+  This policy does not authorize automatic cross-worktree changes.
+- Stop the affected work when ownership is unapproved, unresolved, missing or
+  conflicting, or when the necessary worktree is unauthorized. Resolve the
+  ownership or authorization boundary before editing; do not bypass it.
+- Identify affected direct and indirect consumers and require meaningful
+  compatibility checks for their APIs, wire/layout contracts, lifecycle,
+  persistence and behavior. Record checks actually run and their limits;
+  never claim that tests guarantee compatibility with every widget.
+- Preserve separate approval gates for implementation, review, integration,
+  commits and deployment. Ownership approval alone is not approval of source
+  contents, a compatible release or any of those subsequent actions.
+- Before an authorized TESTS integration, verify exact approved CORE and
+  widget revisions/artifact identities and their dependency requirements.
+  Never let stale shared infrastructure bundled in a widget branch silently
+  replace approved CORE files. Stop on missing or conflicting authority and
+  obtain explicit integration approval; preserve existing TESTS work until
+  its replacement is authorized.
