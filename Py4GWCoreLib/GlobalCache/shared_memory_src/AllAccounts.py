@@ -26,6 +26,9 @@ from .HeroAIOptionStruct import HeroAIOptionStruct
 from .AccountStruct import AccountStruct
 from .KeyStruct import KeyStruct
 from .IntentStruct import IntentStruct
+from .IntentSync import get_uncached_tick_count64
+from .IntentSync import publication_age
+from .IntentSync import publication_is_live
 
 # Master toggle for all whiteboard/lock debug logs.
 # Default is silent. Flip this single flag when you want visibility again.
@@ -76,26 +79,26 @@ class AllAccounts(Structure):
             raise IndexError(f"Index {index} is out of bounds for max players {SHMEM_MAX_PLAYERS}.")
         return self.AccountData[index]
     
-    def _is_slot_active(self, index: int) -> bool:
-        """Check if the slot at the given index is active."""
+    def _is_slot_active(self, index: int, now_tick: int | None = None) -> bool:
+        """Check freshness, optionally sharing an uncached sample within one scan."""
         slot_data = self.GetAccountData(index)
-        slot_active = slot_data.IsSlotActive    
+        if not slot_data.IsSlotActive:
+            return False
         last_updated = slot_data.LastUpdated
-        
-        base_timestamp = PySystem.get_tick_count64()
-        
-        if slot_active and (base_timestamp - last_updated) < SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS:
-            return True
-        return False
+        # A writer may publish after a scan's sample. Read again after its stamp;
+        # never substitute the reader's cached frame clock or allow future ages.
+        if now_tick is None or publication_age(now_tick, last_updated) is None:
+            now_tick = get_uncached_tick_count64()
+        return publication_is_live(now_tick, last_updated, SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS)
 
-    def _is_visible_account(self, index: int) -> bool:
-        if not self._is_slot_active(index):
+    def _is_visible_account(self, index: int, now_tick: int | None = None) -> bool:
+        if not self._is_slot_active(index, now_tick):
             return False
         account = self.AccountData[index]
         return account.IsAccount and not self._is_slot_isolated(index)
 
-    def _is_visible_slot(self, index: int) -> bool:
-        if not self._is_slot_active(index):
+    def _is_visible_slot(self, index: int, now_tick: int | None = None) -> bool:
+        if not self._is_slot_active(index, now_tick):
             return False
         return not self._is_slot_isolated(index)
 
@@ -112,19 +115,20 @@ class AllAccounts(Structure):
             return 0
         return int(self.AccountData[owner_index].IsolationGroupID)
 
-    def _get_local_group_id(self) -> int:
-        """Return the local player's IsolationGroupID."""
+    def _get_local_group_id(self) -> int | None:
+        """Return the local player's group, or None when identity is unavailable."""
         try:
             from ...Player import Player
+
             email = Player.GetAccountEmail()
             if not email:
-                return 0
+                return None
             index = self._find_account_slot_by_email(email)
             if index == -1:
-                return 0
+                return None
             return int(self.AccountData[index].IsolationGroupID)
         except Exception:
-            return 0
+            return None
 
     def _get_local_account_email(self) -> str:
         try:
@@ -155,6 +159,8 @@ class AllAccounts(Structure):
             return False
 
         local_g = self._get_local_group_id()
+        if local_g is None:
+            return True
         target_g = self._get_slot_group(index)
         if local_g > 0:
             return target_g != local_g
@@ -217,17 +223,25 @@ class AllAccounts(Structure):
         except Exception:
             local_hwnd = 0
 
+        now_tick = get_uncached_tick_count64()
         if local_hwnd:
             for i in candidates:
                 key = self.Keys[i]
-                if key.HWND == local_hwnd and key.EntityType == 0 and self._is_slot_active(i):
+                if key.HWND == local_hwnd and key.EntityType == 0 and self._is_slot_active(i, now_tick):
                     return i
 
-        active_candidates = [i for i in candidates if self._is_slot_active(i)]
-        if active_candidates:
-            return max(active_candidates, key=lambda idx: (int(self.AccountData[idx].LastUpdated), idx))
+        active_candidates = [i for i in candidates if self._is_slot_active(i, now_tick)]
+        last_updated = {i: int(self.AccountData[i].LastUpdated) for i in candidates}
+        now = get_uncached_tick_count64()
 
-        return max(candidates, key=lambda idx: (int(self.AccountData[idx].LastUpdated), idx))
+        def newest_key(candidate_index: int) -> tuple[int, int]:
+            age = publication_age(now, last_updated[candidate_index])
+            return (age if age is not None else 0x80000000, -candidate_index)
+
+        if active_candidates:
+            return min(active_candidates, key=newest_key)
+
+        return min(candidates, key=newest_key)
 
     def _find_player_slot_by_key(self, account_email: str, hwnd: int) -> int:
         if not account_email or not hwnd:
@@ -294,33 +308,81 @@ class AllAccounts(Structure):
             return 0
         return int(self.AccountData[index].IsolationGroupID)
 
-    def _can_communicate(self, sender_email: str, receiver_email: str) -> bool:
-        """Group-aware communication check between two accounts."""
-        s_idx = self._find_account_slot_by_email(sender_email)
-        r_idx = self._find_account_slot_by_email(receiver_email)
-        if s_idx == -1 or r_idx == -1:
+    def _get_message_account_snapshot(
+        self, account_email: str, expected_index: int | None = None
+    ) -> tuple[int, int, int, int, bool] | None:
+        """Return one current (slot, timestamp, party, group, isolated) identity."""
+        if not account_email:
+            return None
+        if expected_index is None:
+            expected_index = self.GetSlotByEmail(account_email)
+        if expected_index < 0:
+            return None
+        snapshot: tuple[int, int, int, int, bool] | None = None
+        for slot_index in range(SHMEM_MAX_PLAYERS):
+            account = self.AccountData[slot_index]
+            if account.AccountEmail != account_email or not account.IsAccount or not account.IsSlotActive:
+                continue
+            candidate = (
+                slot_index,
+                int(account.LastUpdated),
+                int(account.AgentPartyData.PartyID),
+                int(account.IsolationGroupID),
+                bool(account.IsIsolated),
+            )
+            if not publication_is_live(get_uncached_tick_count64(), candidate[1], SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS):
+                continue
+            # Email-addressed messages carry no account generation. Never rank
+            # competing live identities (or fall back to historical metadata).
+            if snapshot is not None:
+                return None
+            snapshot = candidate
+        # In particular, an expired local-HWND row cannot borrow a different
+        # process's current publication to authorize sending or receiving.
+        return snapshot if snapshot is not None and snapshot[0] == expected_index else None
+
+    def _can_communicate(self, sender_email: str, receiver_email: str, receiver_index: int | None = None) -> bool:
+        """Authorize current, unambiguous identities; pin send admission's receiver."""
+        try:
+            sender = self._get_message_account_snapshot(sender_email)
+            receiver = self._get_message_account_snapshot(receiver_email, receiver_index)
+            if sender is None or receiver is None:
+                return False
+            # These are live shared-memory views. Reject observed identity or
+            # permission changes during resolution; use only the copied values.
+            for email, snapshot in ((sender_email, sender), (receiver_email, receiver)):
+                account = self.AccountData[snapshot[0]]
+                if account.AccountEmail != email or not account.IsAccount or not account.IsSlotActive:
+                    return False
+                if (
+                    int(account.LastUpdated),
+                    int(account.AgentPartyData.PartyID),
+                    int(account.IsolationGroupID),
+                    bool(account.IsIsolated),
+                ) != snapshot[1:]:
+                    return False
+            now = get_uncached_tick_count64()
+            if not all(
+                publication_is_live(now, snapshot[1], SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS)
+                for snapshot in (sender, receiver)
+            ):
+                return False
+        except (AttributeError, OSError, TypeError, ValueError):
             return False
+
         if sender_email == receiver_email:
             return True
-
-        # Party members are always allowed to exchange coordination messages,
-        # even when one side is grouped/isolated differently.
-        try:
-            s_party = int(getattr(self.AccountData[s_idx].AgentPartyData, "PartyID", 0) or 0)
-            r_party = int(getattr(self.AccountData[r_idx].AgentPartyData, "PartyID", 0) or 0)
-            if s_party > 0 and s_party == r_party:
-                return True
-        except Exception:
-            pass
-
-        s_g = int(self.AccountData[s_idx].IsolationGroupID)
-        r_g = int(self.AccountData[r_idx].IsolationGroupID)
+        _, _, s_party, s_g, s_isolated = sender
+        _, _, r_party, r_g, r_isolated = receiver
+        # Preserve the existing same-party exception to group/isolation rules.
+        if s_party > 0 and s_party == r_party:
+            return True
         if s_g > 0 and r_g > 0:
             return s_g == r_g
         if s_g > 0 or r_g > 0:
             return False  # one grouped, one not
         # both ungrouped: legacy
-        return not self.AccountData[s_idx].IsIsolated and not self.AccountData[r_idx].IsIsolated
+        return not s_isolated and not r_isolated
 
     @staticmethod
     def _is_system_control_command(command: SharedCommandType | int) -> bool:
@@ -336,7 +398,8 @@ class AllAccounts(Structure):
         slot_data = self.AccountData[index]
         if not slot_data.IsSlotActive:
             return False
-        return (PySystem.get_tick_count64() - slot_data.LastUpdated) >= SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
+        age = publication_age(PySystem.get_tick_count64(), slot_data.LastUpdated)
+        return age is not None and age >= SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS
 
     def GetEmptySlot(self, allow_expired_reclaim: bool = True) -> int:
         """Find the first empty or safely reclaimable slot in shared memory."""
@@ -360,7 +423,8 @@ class AllAccounts(Structure):
             slot_active = slot_data.IsSlotActive 
             last_updated = slot_data.LastUpdated
             base_timestamp = PySystem.get_tick_count64()
-            if slot_active and (base_timestamp - last_updated) >= SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS:
+            age = publication_age(base_timestamp, last_updated)
+            if slot_active and age is not None and age >= SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS:
                 expired_slots.append(i)
                 
         return expired_slots
@@ -552,8 +616,12 @@ class AllAccounts(Structure):
         all_accounts = self.AccountData
         for i in range(SHMEM_MAX_PLAYERS):
             account = all_accounts[i]
-            if account.AccountEmail == account_email and account.IsAccount and self._is_slot_active(i):
-                return i
+            if account.AccountEmail == account_email and account.IsAccount and account.IsSlotActive:
+                # Read the publication before sampling now: another client's
+                # frame can be newer than this client's cached frame timestamp.
+                last_updated = account.LastUpdated
+                if publication_is_live(get_uncached_tick_count64(), last_updated, SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS):
+                    return i
 
         # Slot creation is owned by the C++ writer now; a miss just means the
         # account is not online yet. The read-only Python side must not submit.
@@ -577,9 +645,10 @@ class AllAccounts(Structure):
     def GetAccountDataFromPartyNumber(self, party_number: int, log : bool = False) -> AccountStruct | None:
         """Get player data for the account with the given party number."""
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = all_accounts[i]
-            if self._is_visible_account(i) and player.AgentPartyData.PartyPosition == party_number:
+            if self._is_visible_account(i, now_tick) and player.AgentPartyData.PartyPosition == party_number:
                 return player
             
         return None
@@ -640,12 +709,13 @@ class AllAccounts(Structure):
         """Get all active account players in shared memory."""
         players : list[AccountStruct] = []
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             account = all_accounts[i]
             if include_isolated:
-                if self._is_slot_active(i) and account.IsAccount:
+                if self._is_slot_active(i, now_tick) and account.IsAccount:
                     players.append(account)
-            elif self._is_visible_account(i):
+            elif self._is_visible_account(i, now_tick):
                 players.append(account)
 
         if sort_results and len(players) > 1:
@@ -669,8 +739,9 @@ class AllAccounts(Structure):
     def GetNumActiveSlots(self) -> int:
         """Get the number of active slots in shared memory."""
         count = 0
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
-            if self._is_visible_slot(i):
+            if self._is_visible_slot(i, now_tick):
                 count += 1
         return count
     
@@ -678,10 +749,11 @@ class AllAccounts(Structure):
         """Get a list of heroes owned by the specified player."""
         heroes : list[AccountStruct] = []
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):   
             account_data = all_accounts[i]
 
-            if (self._is_visible_slot(i) and account_data.IsHero and
+            if (self._is_visible_slot(i, now_tick) and account_data.IsHero and
                 account_data.AgentData.OwnerAgentID == owner_agent_id):
                 heroes.append(account_data)
         return heroes
@@ -696,10 +768,11 @@ class AllAccounts(Structure):
         """Get a list of pets owned by the specified player."""
         pets : list[AccountStruct] = []
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):   
             account_data = all_accounts[i]
 
-            if (self._is_visible_slot(i) and account_data.IsPet and
+            if (self._is_visible_slot(i, now_tick) and account_data.IsPet and
                 account_data.AgentData.OwnerAgentID == owner_agent_id):
                 pets.append(account_data)
         return pets
@@ -711,9 +784,10 @@ class AllAccounts(Structure):
     def GetAllActiveSlotsData(self) -> list[AccountStruct]:
         """Get all active slot data, ordered by PartyID, PartyPosition, PlayerLoginNumber, CharacterName."""
         accs : list[AccountStruct] = []
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             acc = self.AccountData[i]
-            if self._is_visible_slot(i):
+            if self._is_visible_slot(i, now_tick):
                 accs.append(acc)
 
         # Sort by PartyID, then PartyPosition, then PlayerLoginNumber, then CharacterName
@@ -745,9 +819,10 @@ class AllAccounts(Structure):
     def GetAllAccountHeroAIOptions(self) -> list[HeroAIOptionStruct]:
         """Get HeroAI options for all accounts."""
         options = []
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = self.AccountData[i]
-            if self._is_visible_account(i):
+            if self._is_visible_account(i, now_tick):
                 options.append(self.HeroAIOptions[i])
         return options
 
@@ -757,9 +832,10 @@ class AllAccounts(Structure):
         all_accounts = self.AccountData
         all_options = self.HeroAIOptions
 
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             account = all_accounts[i]
-            if self._is_visible_account(i):
+            if self._is_visible_account(i, now_tick):
                 pairs.append((account, all_options[i]))
 
         if sort_results and len(pairs) > 1:
@@ -789,9 +865,10 @@ class AllAccounts(Structure):
 
     def GetHeroAIOptionsByPartyNumber(self, party_number: int) -> HeroAIOptionStruct | None:
         """Get HeroAI options for the account with the given party number."""
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = self.AccountData[i]
-            if self._is_visible_account(i) and player.AgentPartyData.PartyPosition == party_number:
+            if self._is_visible_account(i, now_tick) and player.AgentPartyData.PartyPosition == party_number:
                 return self.HeroAIOptions[i]
         return None 
     
@@ -851,9 +928,10 @@ class AllAccounts(Structure):
     def GetMapsFromPlayers(self):
         """Get a list of unique maps from all active players."""
         maps = set()
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = self.AccountData[i]
-            if self._is_visible_account(i):
+            if self._is_visible_account(i, now_tick):
                 maps.add((player.AgentData.Map.MapID, player.AgentData.Map.Region, player.AgentData.Map.District, player.AgentData.Map.Language))
         return list(maps)
     
@@ -862,9 +940,10 @@ class AllAccounts(Structure):
         Get a list of unique PartyIDs for players in the specified map/region/district.
         """
         parties = set()
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             player = self.AccountData[i]
-            if (self._is_visible_account(i) and
+            if (self._is_visible_account(i, now_tick) and
                 player.AgentData.Map.MapID == map_id and
                 player.AgentData.Map.Region == map_region and
                 player.AgentData.Map.District == map_district and
@@ -876,9 +955,10 @@ class AllAccounts(Structure):
         """Get a list of players in a specific party on a specific map."""
         players = []
         all_accounts = self.AccountData
+        now_tick = get_uncached_tick_count64()
         for i in range(SHMEM_MAX_PLAYERS):
             account_data = all_accounts[i]
-            if (self._is_visible_account(i) and
+            if (self._is_visible_account(i, now_tick) and
                 account_data.AgentData.Map.MapID == map_id and
                 account_data.AgentData.Map.Region == map_region and
                 account_data.AgentData.Map.District == map_district and
@@ -946,7 +1026,9 @@ class AllAccounts(Structure):
             ConsoleLog(SHMEM_MODULE_NAME, "Sender email is empty.", PySystem.Console.MessageType.Error)
             return -1
 
-        if not self._is_system_control_command(command) and not self._can_communicate(sender_email, receiver_email):
+        if not self._is_system_control_command(command) and not self._can_communicate(
+            sender_email, receiver_email, receiver_index=index
+        ):
             ConsoleLog(SHMEM_MODULE_NAME, f"Cannot communicate between {sender_email} and {receiver_email} (isolated or different groups).", PySystem.Console.MessageType.Warning)
             return -1
         

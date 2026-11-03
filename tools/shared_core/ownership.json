@@ -1,10 +1,24 @@
 {
   "schema_version": 1,
-  "status": "PROPOSED",
+  "status": "PARTIALLY_APPROVED",
   "approval": {
-    "approved_by_user": false,
-    "approved_entries": [],
-    "release_status": "NOT_INTEGRATED_OR_VALIDATED"
+    "approved_by_user": true,
+    "approved_entries": ["package1_account_identity", "package1_intent_sync_utility", "package1_offline_verification"],
+    "release_status": "NOT_INTEGRATED_OR_VALIDATED",
+    "meaning": "User approval applies only to approved_entries within their exact authority scopes; no whole-file, parent-group or unrelated authority is implied.",
+    "package1": {
+      "record": "SC-P1-2026-11-02-R1 with governance correction G1",
+      "authorization_source": "User objective attachment 1a1a817d-6e3f-4f81-847d-b37787253747/goal-objective.md",
+      "base_head": "0897e285c908c928bc6eab9d83cde13b45ecc756",
+      "base_manifest_blob": "5023addd961997c55f6d11e43e818b50776ba57e",
+      "base_manifest_sha256": "747AEAA08B1A4782FD68D0B6BA348950C5EB4B57E3A25C3EFE08B291F2D57B73",
+      "ownership_authorization": "APPROVED_ONLY_FOR_LISTED_PACKAGE1_SCOPES",
+      "implementation_authorization": "CORE_ONLY_TWO_PRODUCTION_FILES_AND_FIVE_TEST_FILES_WITH_BOUNDED_OFFLINE_VALIDATION",
+      "successor_revision": "Authorized only after verification of this exact unique-path amendment and reporting its byte hash before production edits; the resulting hash is recorded outside this file.",
+      "design_review": "User reports independent GPT-6.1 Sol Ultra PASS WITH NON-BLOCKING NOTES, with all three corrections incorporated in R1.",
+      "independent_implementation_review": "REQUIRED_SEPARATELY_AFTER_IMPLEMENTATION_REPORT",
+      "excluded_actions": ["staging", "commits", "pushes", "merges", "branch_switching", "widget_branch_integration", "TESTS_integration_or_deployment", "native_or_runtime_activation", "other_worktree_changes"]
+    }
   },
   "baseline": {
     "branch": "Personal/Shared-Core",
@@ -23,6 +37,8 @@
     "Only exact repository-relative paths listed in entries are classified; no directory, wildcard or neighboring-file ownership is implied.",
     "PROPOSED records a reviewed recommendation awaiting user approval. UNRESOLVED records an ownership or inclusion decision still required. Neither status authorizes implementation or integration.",
     "The authority_scope of an entry limits its proposed_owner, especially for mixed files and shared extension points.",
+    "Every exact path appears in only one entry. APPROVED applies only to that entry's explicit authority_scope and selected changes; excluded responsibilities remain unapproved even within the same file.",
+    "PARTIALLY_APPROVED is a root summary: only approval.approved_entries and their exact scopes are approved. All remaining PROPOSED and UNRESOLVED entries retain their previous lack of authorization.",
     "Unlisted relevant infrastructure has unresolved ownership; stop and resolve it before changing it.",
     "A widget-owned runtime dependency remains widget-owned even when a shared facade or router imports it.",
     "Dependency groups describe review boundaries, not complete installable bundles or a release assembly order.",
@@ -87,11 +103,11 @@
     },
     {
       "id": "shared_facade_and_account_identity",
-      "paths": ["Py4GWCoreLib/GlobalCache/SharedMemory.py", "Py4GWCoreLib/GlobalCache/shared_memory_src/AllAccounts.py"],
+      "paths": ["Py4GWCoreLib/GlobalCache/SharedMemory.py"],
       "status": "PROPOSED",
       "category": "SHARED_CORE_CANDIDATE",
       "proposed_owner": "Shared-Core",
-      "authority_scope": "Shared facade, initialization, account identity/visibility/admission and separately reviewed intent operations.",
+      "authority_scope": "Remaining SharedMemory.py facade, initialization, account identity/visibility/admission and separately reviewed intent operations; all remain PROPOSED. AllAccounts.py is listed only under package1_account_identity, whose approval is limited to its selected changes.",
       "purpose": "Provide consistent account evidence and communication admission across consumers.",
       "dependent_widgets": ["merchant_rules", "htm", "smart_builds", "party_formations", "pycons", "heroai_actions", "ordinary_heroai"],
       "dependency_group": "account_identity",
@@ -104,11 +120,11 @@
     },
     {
       "id": "intent_claims_and_synchronization",
-      "paths": ["Py4GWCoreLib/GlobalCache/WhiteboardLocks.py", "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentStruct.py", "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py", "Py4GWCoreLib/enums_src/Whiteboard_enums.py"],
+      "paths": ["Py4GWCoreLib/GlobalCache/WhiteboardLocks.py", "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentStruct.py", "Py4GWCoreLib/enums_src/Whiteboard_enums.py"],
       "status": "PROPOSED",
       "category": "SHARED_CORE_CANDIDATE",
       "proposed_owner": "Shared-Core",
-      "authority_scope": "Common claims, leases, synchronization, publication and identifiers.",
+      "authority_scope": "Remaining common claims, leases, synchronization, publication and identifiers in the three listed paths; all remain PROPOSED. IntentSync.py is listed only under package1_intent_sync_utility, with no approval for new production synchronization callers.",
       "purpose": "Coordinate shared work without treating another consumer's claim as the caller's own.",
       "dependent_widgets": ["smart_builds", "ordinary_heroai"],
       "dependency_group": "intent_protocol",
@@ -116,6 +132,78 @@
         "Cover contention, expiry, timestamp wrap, exact interrupt receipts and hex tokens, delayed successor release and ordinary buff/loot/resurrection consumers.",
         "Do not equate tuple-scoped generic cleanup with exact lease ownership or writer locking/Active-last publication with coherent unsynchronized reads.",
         "Verify supported Windows loading and binding behavior for IntentSync separately; existing numeric values and wire layout remain frozen unless expressly approved."
+      ]
+    },
+    {
+      "id": "package1_account_identity",
+      "paths": ["Py4GWCoreLib/GlobalCache/shared_memory_src/AllAccounts.py"],
+      "status": "APPROVED",
+      "category": "SHARED_CORE_CANDIDATE",
+      "proposed_owner": "Shared-Core",
+      "authority_scope": "Only the exact imports and selected method changes of SC-P1-2026-11-02-R1 section B, as corrected by G1, over baseline blob c852a44dbd5a1f4791bd6e12b3750b1da0500afc. Approval of a listed method authorizes only its specified change, not arbitrary edits. All other AllAccounts methods and responsibilities remain PROPOSED/unapproved. This approval grants neither whole-file authority nor permission to alter excluded behavior.",
+      "purpose": "Integrate bounded account freshness, lookup, visibility and observed communication-admission consistency without changing claim algorithms or activating synchronization.",
+      "dependent_widgets": ["merchant_rules", "htm", "smart_builds", "party_formations", "pycons", "heroai_actions", "ordinary_heroai"],
+      "dependency_group": "account_identity",
+      "source_commits": ["dfc505d6552e1d0e91759bd7f86289e66a35cdb7", "fe6ba6c3fca5624047d930792b5ffc6536c6ff95", "83baf861f9d581f8128991330ad0a71437065fa3"],
+      "approved_imports_from_IntentSync": ["get_uncached_tick_count64", "publication_age", "publication_is_live"],
+      "approved_changes": [
+        {"methods": ["_is_slot_active", "_is_visible_account", "_is_visible_slot"], "change": "Optional shared scan time, uncached publication freshness and resampling after future/ambiguous stamps."},
+        {"methods": ["_get_local_group_id", "_is_slot_isolated"], "change": "None for unavailable local identity/group and remote visibility denial, retaining the local-owned exemption and historical single-row metadata."},
+        {"methods": ["_find_account_slot_by_email"], "change": "Modular-age duplicate ranking while retaining local-HWND preference, tie ordering and historical fallback."},
+        {"methods": ["_is_slot_expired", "GetExpiredSlots"], "change": "Conservative modular expiry with the existing cached clock; ambiguous/future ages are not reclaimable."},
+        {"methods": ["GetSlotByEmail"], "change": "Read remote publication before uncached time; retain the local-HWND shortcut and remote scan order."},
+        {"methods": ["GetAccountDataFromPartyNumber", "GetAllActivePlayers", "GetNumActiveSlots", "GetHeroesFromPlayers", "GetPetsFromPlayers", "GetAllActiveSlotsData", "GetAllAccountHeroAIOptions", "GetAllActiveAccountHeroAIPairs", "GetHeroAIOptionsByPartyNumber", "GetMapsFromPlayers", "GetPartiesFromMaps", "GetPlayersFromParty"], "change": "Share uncached time within scans without changing filtering, ordering or live return semantics."},
+        {"methods": ["_get_message_account_snapshot", "_can_communicate"], "change": "Add copied observed account evidence, reject observed live duplicates, recheck identity/permission fields and ages, and retain existing policy and exact exception boundaries."},
+        {"methods": ["SendMessage"], "change": "Pass the previously resolved receiver account index to admission; preserve separate inbox indexing and all other send behavior."}
+      ],
+      "verification_requirements": [
+        "Observed consistency is not atomicity: late duplicates, torn reads, ABA and post-check mutation remain possible; do not add generation fencing or claim stronger guarantees.",
+        "Preserve stale single local publication group metadata, all ordinary lookup fallbacks, local/group/party/isolation policy, settings-sync exceptions and listing asymmetry, payloads, deduplication, pending messages and exception propagation.",
+        "Exercise both omitted-group PostLock and GetAccountGroupByEmail/WhiteboardLocks._owner_context lookup effects, including their existing caches and fallback groups; no claim algorithm changes are authorized.",
+        "Freeze layouts, LastUpdated=c_uint, mapping, capacities, enums and persistence. Preserve the full-cycle timestamp alias limitation.",
+        "No edits to reset, SetAccountGroupByEmail, claim/lease/interrupt/hex operations, facade caches, Messaging, observations, lifecycle or widgets. TESTS already contains the selected functionality and remains unchanged."
+      ]
+    },
+    {
+      "id": "package1_intent_sync_utility",
+      "paths": ["Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py"],
+      "status": "APPROVED",
+      "category": "SHARED_CORE_CANDIDATE",
+      "proposed_owner": "Shared-Core",
+      "authority_scope": "Only complete unchanged utility source blob 5fc27e298e214880374e54dec05e021aa1c22aa1. No new production mutex/synchronization callers, claim changes or authority over neighboring files.",
+      "purpose": "Supply the pinned uncached-clock and publication helpers while retaining dormant utility compatibility.",
+      "dependent_widgets": ["merchant_rules", "htm", "smart_builds", "party_formations", "pycons", "heroai_actions", "ordinary_heroai"],
+      "dependency_group": "intent_protocol",
+      "source_blob": "5fc27e298e214880374e54dec05e021aa1c22aa1",
+      "verification_requirements": [
+        "Preserve the complete pinned utility source and use only the three approved account imports; no production intent_table_lock caller is added.",
+        "Offline checks must fake kernel binding and calls. Import binds Windows functions but does not itself acquire a mutex; native loading remains unverified until separately authorized.",
+        "Preserve clock errors, unsigned age boundaries, zero-stamp semantics and full-cycle alias limitations. TESTS and its existing active synchronization remain unchanged."
+      ]
+    },
+    {
+      "id": "package1_offline_verification",
+      "paths": ["tests/test_account_publication.py", "tests/test_active_account_clock.py", "tests/test_message_permission_identity.py", "tests/test_receiver_lookup_clock.py", "tests/test_shared_core_package1_consumers.py"],
+      "status": "APPROVED",
+      "category": "TEST_ONLY",
+      "proposed_owner": "Shared-Core",
+      "authority_scope": "Only creation/adaptation of these five CORE test files and bounded offline validation under R1 section C. No additional helper files, widget ownership transfer, production copying, native activation or writes in other worktrees.",
+      "purpose": "Verify selected real account/facade and six-widget consumer behavior with inert native/game/persistence boundaries and honest residual concurrency characterization.",
+      "dependent_widgets": ["merchant_rules", "htm", "smart_builds", "party_formations", "pycons", "heroai_actions", "ordinary_heroai"],
+      "dependency_group": "account_identity",
+      "source_test_commit": "83baf861f9d581f8128991330ad0a71437065fa3",
+      "source_test_blobs": {
+        "tests/test_account_publication.py": "4c8edb0d29edea8cc9c029e7620aa40a89dd250d",
+        "tests/test_active_account_clock.py": "53c560e05bcb048f8f77b006530231d78993e5a0",
+        "tests/test_message_permission_identity.py": "3a8596348d4fc55a65cb177b0cf656c3a883f1f4",
+        "tests/test_receiver_lookup_clock.py": "534967a7926e797abb929b4ed3d3983cffced63e"
+      },
+      "verification_requirements": [
+        "Reuse the real wire declarations, selected account functions and actual FrameCache/facade behavior; fake only external boundaries and forbid injected package initialization, real WinDLL/mutexes and shared-memory mappings.",
+        "Cover freshness/wrap/clock errors, settings exceptions, receiver pinning, cached receive results, uncached sends, historical local groups and both indirect claim-group routes.",
+        "Characterize late-live duplicates, ABA and post-check changes as possible admission, not an atomicity guarantee; native torn-read safety remains unproved.",
+        "Read exact pinned real Merchant Rules, HTM, Party Formations, Pycons, Smart Builds and current Actions source functions into memory; missing or mismatched sources must fail, not fall back or silently skip mandatory coverage.",
+        "Run strict scoped static and applicable formatting/lint checks without weakening diagnostics or formatting unrelated code. Do not run the local Merchant Rules suite in EDITS or native/process intent suites."
       ]
     },
     {
