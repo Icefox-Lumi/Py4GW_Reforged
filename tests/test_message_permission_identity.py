@@ -546,6 +546,12 @@ def test_real_messaging_dispatch_waits_for_permission_recovery(world: Any, comma
         _record_received_message=record_received,
     )
     namespace[command_name] = dispatch
+    if command_name == "MerchantRules":
+
+        def queue_merchant_rules(index: int, message: Any) -> None:
+            queued.append(dispatch(index, message))
+
+        namespace["_queue_merchant_rules_message"] = queue_merchant_rules
     process = _production_function(ROOT / "Widgets/System/Messaging.py", "ProcessMessages", namespace)
     denied = bytes(world.table)
     process()

@@ -1,8 +1,13 @@
 import time
+import weakref
 from collections import deque
+from collections.abc import Generator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+from typing import Any
+from typing import cast
 
 import Py4GW
 import ctypes
@@ -1637,34 +1642,374 @@ def MerchantMaterials(index: int, message: SharedMessageStruct):
 # endregion
 
 # region MerchantRules
-def MerchantRules(index: int, message: SharedMessageStruct):
+_merchant_rules_dispatches: dict[tuple[str, int, bytes], "_MerchantRulesDispatchReceipt"] = {}
+
+
+def _merchant_rules_message_fingerprint(message: SharedMessageStruct) -> bytes:
+    # Compare the wire representation, not float equality (NaNs and signed zero).
+    return ctypes.string_at(ctypes.addressof(message), ctypes.sizeof(message))
+
+
+class _MerchantRulesDispatchReceipt:
+    """Local dispatch ownership; neither an inbox generation nor an atomic claim."""
+
+    _fsm_dispatch_receipt = True
+
+    def __init__(self, index: int, message: SharedMessageStruct) -> None:
+        self._index = index
+        self._pending_fingerprint = _merchant_rules_message_fingerprint(message)
+        self._message = SharedMessageStruct.from_buffer_copy(self._pending_fingerprint)
+        self._receiver = self._message.ReceiverEmail
+        self._key = (self._receiver, index, self._pending_fingerprint)
+        self._running_fingerprint: bytes | None = None
+        self._widget: Any = _get_merchant_rules_widget()
+        self._owners: list[tuple[weakref.ReferenceType[Any], object, object]] = []
+        self._iterator: Iterator[Any] | None = None
+        self._accepted = False
+        self._constructing = True
+        self._publishing = False
+        self._advancing = False
+        self._cancel_requested = False
+        self._terminal = False
+        # Registration must precede the tracker's lease/reload side effects.
+        _merchant_rules_dispatches[self._key] = self
+        try:
+            if not self._row_matches():
+                self._constructing = False
+                self._finalize()
+                return
+            body = _merchant_rules_message_body(self._message, self._widget)
+            self._iterator = body
+            tracker = getattr(self._widget, "track_merchant_rules_remote_dispatch", None)
+            if callable(tracker):
+                tracked: Any = tracker(self._message, body)
+                self._iterator = tracked
+            if self._iterator is None or not callable(getattr(self._iterator, "__next__", None)):
+                raise TypeError("Merchant Rules tracker did not return an iterator")
+            if _get_merchant_rules_widget() is not self._widget or not self._row_matches():
+                self._cancel_requested = True
+        except BaseException:
+            self._constructing = False
+            self._finalize()
+            raise
+        self._constructing = False
+        if self._cancel_requested:
+            self._finalize()
+
+    def __iter__(self) -> "_MerchantRulesDispatchReceipt":
+        return self
+
+    def __next__(self) -> Any:
+        # Upkeeper removes on StopIteration without guarding a missing entry.
+        # A stale copied-list call must therefore be a harmless yield, even for
+        # a terminal receipt, if transfer/clear already removed this owner.
+        if not self._global_member():
+            self._discard_factory_result()
+            return None
+        try:
+            return self._advance()
+        except StopIteration:
+            if self._global_member():
+                raise
+            return None
+
+    def send(self, value: None) -> Any:
+        if value is not None:
+            raise TypeError("Merchant Rules dispatch accepts only send(None)")
+        return next(self)
+
+    def close(self) -> None:
+        self._finalize()
+
+    @property
+    def terminal(self) -> bool:
+        return self._terminal
+
+    @staticmethod
+    def _global_routines() -> list[Iterator[Any]]:
+        # The inherited annotation says Generator, but the scheduler only calls
+        # next(). This describes that actual iterator boundary, not a claim that
+        # the receipt implements throw() or the full generator protocol.
+        return cast(list[Iterator[Any]], getattr(GLOBAL_CACHE, "Coroutines"))
+
+    def _global_member(self) -> bool:
+        return any(routine is self for routine in self._global_routines())
+
+    def enqueue(self) -> None:
+        if self._terminal or self._accepted or self._constructing or self._publishing:
+            return
+        routines = self._global_routines()
+        self._publishing = True
+        try:
+            routines.append(self)
+            if not self._terminal:
+                self._accepted = True
+        except BaseException:
+            # Append may fail after insertion. Remove only this attempted owner.
+            for position in range(len(routines) - 1, -1, -1):
+                if routines[position] is self:
+                    del routines[position]
+            self._publishing = False
+            self._discard_factory_result()
+            raise
+        finally:
+            self._publishing = False
+        if self._terminal or self._cancel_requested:
+            self._finalize()
+
+    def reconcile(self) -> None:
+        if self._constructing or self._publishing:
+            return
+        try:
+            expired = (
+                _get_merchant_rules_widget() is not self._widget
+                or not self._row_matches()
+                or not self._has_live_owner()
+            )
+        except Exception as error:
+            expired = True
+            self._log_failure("reconciliation", error)
+        if expired:
+            self.close()
+
+    def _read_message(self) -> SharedMessageStruct | None:
+        inbox = GLOBAL_CACHE.ShMem.GetAllAccounts().Inbox
+        if not 0 <= self._index < len(inbox):
+            return None
+        return SharedMessageStruct.from_buffer_copy(_merchant_rules_message_fingerprint(inbox[self._index]))
+
+    def _row_matches(self) -> bool:
+        current = self._read_message()
+        return current is not None and _merchant_rules_message_fingerprint(current) in (
+            self._pending_fingerprint,
+            self._running_fingerprint,
+        )
+
+    def _has_live_owner(self) -> bool:
+        if self._terminal:
+            return False
+        if self._accepted and self._global_member():
+            return True
+        for owner_ref, run, attachment in tuple(self._owners):
+            owner = owner_ref()
+            if owner is not None and self._fsm_owner_is_current(owner, run, attachment):
+                return True
+        return False
+
+    def _fsm_owner_is_current(self, owner: Any, run: object, attachment: object) -> bool:
+        if not any(
+            ref() is owner and old_run is run and old_attachment is attachment
+            for ref, old_run, old_attachment in self._owners
+        ):
+            return False
+        try:
+            return bool(owner._dispatch_binding_is_current(self, run, attachment))
+        except Exception as error:
+            self._log_failure("FSM ownership check", error)
+            return False
+
+    def _attach_fsm(self, owner: Any, run: object, attachment: object) -> bool:
+        if self._terminal or self._constructing or self._cancel_requested:
+            return False
+        # The prospective binding is not in our owner records yet. It must not
+        # make an already accepted, ownerless receipt look live again.
+        if self._accepted and not self._has_live_owner():
+            self._finalize()
+            return False
+        if _get_merchant_rules_widget() is not self._widget or not self._row_matches():
+            self._discard_factory_result()
+            return False
+        if not owner._dispatch_binding_is_current(self, run, attachment):
+            return False
+        self._owners.append((weakref.ref(owner), run, attachment))
+        self._accepted = True
+        return True
+
+    def _detach_fsm(self, owner: Any, run: object, attachment: object) -> None:
+        # Passive revocation: lifecycle methods do not call into widget cleanup.
+        self._owners = [
+            binding
+            for binding in self._owners
+            if not (binding[0]() is owner and binding[1] is run and binding[2] is attachment)
+        ]
+
+    def _advance_fsm(self, owner: Any, run: object, attachment: object) -> bool:
+        if not self._fsm_owner_is_current(owner, run, attachment):
+            self._discard_factory_result()
+            return False
+        try:
+            self._advance(owner, run, attachment)
+        except StopIteration:
+            return False
+        return not self._terminal and self._fsm_owner_is_current(owner, run, attachment)
+
+    def _discard_factory_result(self) -> None:
+        # A factory may install B and return B. Rejection of the old attempt
+        # must not cancel an independently accepted result. Unaccepted cleanup
+        # releases the wrapper, but never retires the retryable pending row.
+        if not self._has_live_owner() and not self._publishing:
+            self._finalize()
+
+    def _mark_running(self) -> bool:
+        if self._running_fingerprint is not None:
+            return self._row_matches()
+        if not self._row_matches():
+            return False
+        GLOBAL_CACHE.ShMem.MarkMessageAsRunning(self._receiver, self._index)
+        current = self._read_message()
+        if current is None or not current.Active or not current.Running:
+            return False
+        observed = _merchant_rules_message_fingerprint(current)
+        # The mark is allowed to change only these three fields. Do not adopt
+        # an observed successor as our running fingerprint.
+        current.Active = self._message.Active
+        current.Running = self._message.Running
+        current.Timestamp = self._message.Timestamp
+        if _merchant_rules_message_fingerprint(current) != self._pending_fingerprint:
+            return False
+        self._running_fingerprint = observed
+        return True
+
+    def _advance(self, owner: Any = None, run: object = None, attachment: object = None) -> Any:
+        if self._terminal:
+            raise StopIteration
+        if self._advancing or self._constructing or self._publishing:
+            return None
+        self._advancing = True
+        try:
+            if (
+                not self._accepted
+                or not self._has_live_owner()
+                or _get_merchant_rules_widget() is not self._widget
+                or not self._row_matches()
+                or not self._mark_running()
+                or self._cancel_requested
+            ):
+                self._cancel_requested = True
+            elif _get_merchant_rules_widget() is not self._widget:
+                self._cancel_requested = True
+            elif owner is not None and not self._fsm_owner_is_current(owner, run, attachment):
+                return None
+            elif owner is None and not self._global_member():
+                return None
+            elif self._iterator is not None:
+                return next(self._iterator)
+        except StopIteration:
+            self._cancel_requested = True
+        except Exception as error:
+            self._cancel_requested = True
+            self._log_failure("advance", error)
+        except BaseException:
+            self._cancel_requested = True
+            raise
+        finally:
+            self._advancing = False
+            try:
+                expired = (
+                    self._cancel_requested
+                    or not self._has_live_owner()
+                    or _get_merchant_rules_widget() is not self._widget
+                    or not self._row_matches()
+                )
+            except Exception as error:
+                expired = True
+                self._log_failure("ownership check", error)
+            if expired:
+                self._finalize()
+        raise StopIteration
+
+    @staticmethod
+    def _log_failure(phase: str, error: BaseException) -> None:
+        try:
+            ConsoleLog(
+                MODULE_NAME, f"Merchant Rules dispatch {phase} failed: {error}", Console.MessageType.Error, False
+            )
+        except Exception:
+            pass
+
+    def _finalize(self) -> None:
+        if self._terminal:
+            return
+        self._cancel_requested = True
+        if self._advancing or self._constructing:
+            return
+        self._terminal = True
+        iterator, self._iterator = self._iterator, None
+        self._owners.clear()
+        try:
+            close = getattr(iterator, "close", None)
+            if callable(close):
+                close()
+        except Exception as error:
+            self._log_failure("close", error)
+        finally:
+            try:
+                if self._accepted and self._row_matches() and _merchant_rules_dispatches.get(self._key) is self:
+
+                    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(self._receiver, self._index)
+            except Exception as error:
+                self._log_failure("retirement", error)
+            finally:
+                if _merchant_rules_dispatches.get(self._key) is self:
+                    del _merchant_rules_dispatches[self._key]
+
+
+def MerchantRules(index: int, message: SharedMessageStruct) -> _MerchantRulesDispatchReceipt:
+    fingerprint = _merchant_rules_message_fingerprint(message)
+    key = (message.ReceiverEmail, index, fingerprint)
+    existing = _merchant_rules_dispatches.get(key)
+    if existing is not None and not existing.terminal:
+        return existing
+    if not message.Active or message.Running:
+        raise ValueError("Merchant Rules dispatch requires a pending request")
+    return _MerchantRulesDispatchReceipt(index, message)
+
+
+def _queue_merchant_rules_message(index: int, message: SharedMessageStruct) -> None:
+    if not message.Active or message.Running:
+        return
+    receipt = MerchantRules(index, message)
+    receipt.enqueue()
+
+
+def _reconcile_merchant_rules_dispatches() -> None:
+    for receipt in tuple(_merchant_rules_dispatches.values()):
+        receipt.reconcile()
+
+
+def on_disable() -> None:
+    for receipt in tuple(_merchant_rules_dispatches.values()):
+        receipt.close()
+
+
+def _merchant_rules_message_body(message: SharedMessageStruct, widget: Any) -> Generator[Any, None, None]:
     global _merchant_busy
-    widget = _get_merchant_rules_widget()
-    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     if widget is None:
-        ConsoleLog(MODULE_NAME, "Merchant Rules widget is not available for shared message handling.", Console.MessageType.Warning, False)
-        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        ConsoleLog(
+            MODULE_NAME,
+            "Merchant Rules widget is not available for shared message handling.",
+            Console.MessageType.Warning,
+            False,
+        )
         return
 
     needs_merchant_lock = bool(widget._multibox_message_requires_merchant_lock(message))
-    try:
-        if not needs_merchant_lock:
-            yield from widget.handle_shared_multibox_message(message)
-            return
+    if not needs_merchant_lock:
+        yield from widget.handle_shared_multibox_message(message)
+        return
 
-        ready_to_execute = yield from widget._wait_for_remote_execute_start(
-            message,
-            is_merchant_busy=lambda: _merchant_busy,
-        )
-        if not ready_to_execute:
-            return
-        _merchant_busy = True
-        try:
-            yield from widget.handle_shared_multibox_message(message)
-        finally:
-            _merchant_busy = False
+    wait = cast(
+        Generator[Any, None, bool],
+        widget._wait_for_remote_execute_start(message, is_merchant_busy=lambda: _merchant_busy),
+    )
+    ready_to_execute = yield from wait
+    if not ready_to_execute:
+        return
+    _merchant_busy = True
+    try:
+        yield from widget.handle_shared_multibox_message(message)
     finally:
-        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        _merchant_busy = False
 # endregion
 
 # region UsePcon
@@ -3578,7 +3923,7 @@ def ProcessMessages():
         case SharedCommandType.MerchantMaterials:
             GLOBAL_CACHE.Coroutines.append(MerchantMaterials(index, message))
         case SharedCommandType.MerchantRules:
-            GLOBAL_CACHE.Coroutines.append(MerchantRules(index, message))
+            _queue_merchant_rules_message(index, message)
         case SharedCommandType.Pycons:
             GLOBAL_CACHE.Coroutines.append(Pycons(index, message))
         case SharedCommandType.DisableHeroAI:
@@ -3674,6 +4019,7 @@ def ProcessMessages():
 
 
 def main():
+    _reconcile_merchant_rules_dispatches()
     HealStaleHeroAISnapshot(Player.GetAccountEmail())
     _process_pending_widget_enables()
     ProcessMessages()

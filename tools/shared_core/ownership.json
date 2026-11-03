@@ -3,7 +3,7 @@
   "status": "PARTIALLY_APPROVED",
   "approval": {
     "approved_by_user": true,
-    "approved_entries": ["package1_account_identity", "package1_intent_sync_utility", "package1_offline_verification"],
+    "approved_entries": ["package1_account_identity", "package1_intent_sync_utility", "package1_offline_verification", "package2_merchant_rules_dispatch", "package2_fsm_dispatch_lifecycle", "package2_offline_verification"],
     "release_status": "NOT_INTEGRATED_OR_VALIDATED",
     "meaning": "User approval applies only to approved_entries within their exact authority scopes; no whole-file, parent-group or unrelated authority is implied.",
     "package1": {
@@ -18,6 +18,25 @@
       "design_review": "User reports independent GPT-6.1 Sol Ultra PASS WITH NON-BLOCKING NOTES, with all three corrections incorporated in R1.",
       "independent_implementation_review": "REQUIRED_SEPARATELY_AFTER_IMPLEMENTATION_REPORT",
       "excluded_actions": ["staging", "commits", "pushes", "merges", "branch_switching", "widget_branch_integration", "TESTS_integration_or_deployment", "native_or_runtime_activation", "other_worktree_changes"]
+    },
+    "package2": {
+      "record": "SC-P2-2026-11-03-R1",
+      "authorization_source": "User objective attachment a6a8c541-b5cf-4070-bcca-27816f112101/goal-objective.md",
+      "base_head": "e1e0eed2382507f58637f5a97f43c73b74b5a202",
+      "base_manifest_blob": "3e6579fc967bfc367335d851a191985e2757baba",
+      "base_manifest_sha256": "AECC80331D4DC71D4D7188220374F5594A2FF72ACD2904CFAF12810D0C8C927A",
+      "ownership_authorization": "APPROVED_ONLY_FOR_LISTED_PACKAGE2_SCOPES_AND_THE_LABELLED_PACKAGE2_ADAPTER_ALLOWANCE_IN_PACKAGE1_OFFLINE_VERIFICATION",
+      "implementation_authorization": "CORE_ONLY_THE_EXACT_SIX_LISTED_PATHS_WITH_BOUNDED_OFFLINE_VALIDATION",
+      "authorized_paths": ["tools/shared_core/ownership.json", "Widgets/System/Messaging.py", "Py4GWCoreLib/py4gwcorelib_src/FSM.py", "tests/test_shared_core_package2_dispatch.py", "tests/test_shared_core_package2_consumers.py", "tests/test_message_permission_identity.py"],
+      "successor_revision": "Authorized only after verification of this exact unique-path amendment and reporting its actual byte hash before production edits; the resulting hash is recorded outside this file.",
+      "design_review": "User reports independent Sol PASS_WITH_NON_BLOCKING_NOTES; all three final corrections below are binding parts of R1.",
+      "binding_corrections": [
+        "Preserve ResetAndStartAtStep's trailing paused=False when its controlling operation remains current; skip that write only after supersession.",
+        "Use ownership-selective factory cleanup: preserve already-installed or independently owned receipts, clean up fresh rejected provisional resources, and terminalize expired accepted receipts under the approved ownership contract.",
+        "Removing a coroutine name invalidates an outstanding factory attempt even when no completed mapping exists; stale results and cleanup must never overwrite a successor."
+      ],
+      "independent_implementation_review": "REQUIRED_SEPARATELY_AFTER_IMPLEMENTATION_REPORT",
+      "excluded_actions": ["staging", "commits", "pushes", "merges", "resets", "restores", "branch_switching", "widget_branch_integration", "TESTS_integration_or_deployment", "native_or_runtime_activation", "other_worktree_changes", "configuration_or_permission_changes", "dependency_installation", "additional_repository_helper_files"]
     }
   },
   "baseline": {
@@ -86,11 +105,11 @@
   "entries": [
     {
       "id": "messaging_router_and_commands",
-      "paths": ["Widgets/System/Messaging.py", "Py4GWCoreLib/enums_src/Multiboxing_enums.py"],
+      "paths": ["Py4GWCoreLib/enums_src/Multiboxing_enums.py"],
       "status": "PROPOSED",
       "category": "SHARED_CORE_CANDIDATE",
       "proposed_owner": "Shared-Core",
-      "authority_scope": "Common routing, dispatch lifecycle and wire commands; feature behavior remains with each widget owner.",
+      "authority_scope": "Only the remaining common wire-command enum responsibilities, all PROPOSED/unapproved. Messaging.py is listed solely under package2_merchant_rules_dispatch, whose approval is limited to its selected M1-M4 changes; all other routing and feature responsibilities remain unapproved. No enum changes are authorized by Package 2.",
       "purpose": "Integrate reviewed MR, HTM, Pycons, Actions and account-settings-sync contracts over the selected upstream router.",
       "dependent_widgets": ["merchant_rules", "htm", "pycons", "heroai_actions"],
       "dependency_group": "messaging",
@@ -99,6 +118,118 @@
         "Preserve reviewed command IDs InviteToParty=3, PCon=12, UseItem=33, MerchantRules=57, Pycons=65, AccountSettingsSync/Result=72/73, PartyStateQuery=74 and HTM template request/result=75/76; review payload/opcode contracts separately.",
         "Cover duplicate scheduling, cancellation before first advancement, delayed callbacks, live-row reuse, same-pair different requests, retirement ownership and overlapping temporary settings.",
         "Exercise the actual separately owned MR/HTM/Pycons/Actions handlers and their admission rules; request snapshots alone do not prove exact generation identity or atomic retirement."
+      ]
+    },
+    {
+      "id": "package2_merchant_rules_dispatch",
+      "paths": ["Widgets/System/Messaging.py"],
+      "status": "APPROVED",
+      "category": "SHARED_CORE_CANDIDATE",
+      "proposed_owner": "Shared-Core",
+      "authority_scope": "Only the selected M1-M4 changes and bounded private implementation inventory of SC-P2-2026-11-03-R1 over baseline blob 0049fcc30a436c5f10927b1458b09e910b7f86bf. Approval of a method authorizes only its specified change. All other Messaging.py responsibilities, handlers and feature policy remain unapproved; this is not whole-file authority or an approved mixed-widget release.",
+      "purpose": "Own one Merchant Rules dispatch receipt from provisional reservation through accepted scheduling, exact owner advancement and idempotent terminal cleanup.",
+      "dependent_widgets": ["merchant_rules", "htm", "smart_builds", "party_formations", "pycons", "heroai_actions", "ordinary_heroai"],
+      "dependency_group": "messaging",
+      "base_source_blob": "0049fcc30a436c5f10927b1458b09e910b7f86bf",
+      "approved_changes": [
+        {"id": "M1", "methods": ["ProcessMessages"], "change": "Delegate only the MerchantRules arm to the early queue helper; preserve all other arms, admission, permission recovery and message-history behavior."},
+        {"id": "M2", "methods": ["MerchantRules", "_merchant_rules_message_body"], "change": "Use the captured widget and copied request; retain handler and lock ordering while making pending-to-running publication and inbox retirement conditional on the receipt's exact ownership."},
+        {"id": "M3", "methods": ["_queue_merchant_rules_message", "_merchant_rules_message_fingerprint", "_MerchantRulesDispatchReceipt"], "change": "Reserve the exact request provisionally before tracker side effects; suppress duplicate dispatch, capture one widget and request, distinguish provisional failure from accepted cancellation, bind exact global/FSM caller ownership, compare raw pending/running wire fingerprints and finalize idempotently without touching successors."},
+        {"id": "M4", "methods": ["main", "_reconcile_merchant_rules_dispatches", "on_disable"], "change": "Reconcile receipts first on each Messaging main invocation, including an empty inbox, and clean up on normal disable; preserve the order and behavior of all other housekeeping."}
+      ],
+      "private_implementation_inventory": {
+        "helpers_and_type": ["_queue_merchant_rules_message", "_merchant_rules_message_body", "_reconcile_merchant_rules_dispatches", "_merchant_rules_message_fingerprint", "_MerchantRulesDispatchReceipt"],
+        "registry": "Only the receipt registry and exact-identity removal needed by M1-M4.",
+        "receipt_methods": "Constructor, __iter__, __next__, send, close, owner attachment/detachment/validation, caller-bound advancement, rejected-factory disposition and finalization only.",
+        "receipt_fields": "Captured widget and copied message, receiver/index, pending and running fingerprints, publication state, owned iterator, exact owners and terminal/reentrancy guards only."
+      },
+      "verification_requirements": [
+        "D1-D4: cover provisional reservation before tracker effects, duplicate suppression before first advancement and during readiness waits, construction/enqueue failure with retryable pending state, exact pending-to-running transition, accepted cancellation, repeated terminal calls, clear/reconcile/normal-disable cleanup and cleanup exceptions.",
+        "Use exact raw wire fingerprints including NaN and signed-zero representations, timestamp and processing state; preserve changed or reused inbox rows and successor registry entries. Observed equality is not native atomicity or a generation fence.",
+        "D5-D12: cooperate only with exact current scheduler ownership; never resurrect an expired run or borrow another owner. Preserve global/FSM transfer, copy mode, independent owners, selective factory cleanup and participation rejection from YieldRoutineState.",
+        "C1-C3: exercise the pinned real Merchant Rules tracker, owned generator and handler; retain readiness and generation guards, captured-widget replacement protection, legitimate outer/inner widget leases, deferred callbacks and real completion/failure cleanup.",
+        "Keep pending requests retryable after unaccepted failure; clean fresh rejected provisional resources, preserve independently owned or already-installed receipts, and terminalize expired accepted receipts under the approved ownership contract.",
+        "Do not modify enums, transport layouts, native synchronization, other Messaging handlers, widget policy, tracker source, WidgetManager, Environment Upkeeper, Botting or any other production file. Preserve AccountSettingsSync handlers/pump and existing housekeeping.",
+        "Reconciliation depends on Messaging being invoked; global pause, unload, disabled callbacks and native/runtime failure remain outside an unconditional cleanup guarantee. No HTM onboarding, parked Actions adoption, TESTS replacement or mixed-protocol compatibility claim is authorized."
+      ]
+    },
+    {
+      "id": "package2_fsm_dispatch_lifecycle",
+      "paths": ["Py4GWCoreLib/py4gwcorelib_src/FSM.py"],
+      "status": "APPROVED",
+      "category": "SHARED_CORE_CANDIDATE",
+      "proposed_owner": "Shared-Core",
+      "authority_scope": "Only the selected F1-F12 changes and bounded private implementation inventory of SC-P2-2026-11-03-R1 over baseline blob 8696a91abdfa6514d33d1c440443bbe6cac2af84. Approval of a method authorizes only its specified change; all other methods and responsibilities remain unapproved. Preserve public signatures and ordinary FSM semantics; no general transaction framework or unrelated FSM rewrite.",
+      "purpose": "Prevent expired dispatch attachments and superseded callback/factory operations from advancing work or overwriting a successor while preserving ordinary FSM scheduling.",
+      "dependent_widgets": ["merchant_rules", "ordinary_heroai"],
+      "dependency_group": "dispatch_lifecycle",
+      "base_source_blob": "8696a91abdfa6514d33d1c440443bbe6cac2af84",
+      "approved_changes": [
+        {"id": "F1", "methods": ["FSM.__init__"], "change": "Initialize only the approved run, control, attachment, named-attempt and invocation identity records."},
+        {"id": "F2", "methods": ["_cleanup_coroutines", "start", "stop", "reset", "ResetAndStartAtStep", "terminate", "restart"], "change": "Immediately expire old run authority, issue fresh authority at the approved lifecycle boundaries and fence lifecycle reset loops and post-callback writes. Preserve ResetAndStartAtStep's trailing paused=False exactly when the controlling operation remains current; do not enable its commented recovery cleanup."},
+        {"id": "F3", "methods": ["update"], "change": "Use exact attachment snapshots and caller-bound advancement, fence all selected post-callback writes, remove only the captured attachment, invalidate completion before on_complete and claim recursive update/transition work. Preserve ordinary ordering, managed-before-pause advancement and deduplication."},
+        {"id": "F4", "methods": ["trigger_event", "jump_to_state_by_name", "jump_to_state_by_step_number"], "change": "Capture and validate source/target and control/state activation, including same-State jumps, and use checked reset/enter calls; valid same-run owners survive ordinary transitions."},
+        {"id": "F5", "methods": ["State.__init__", "State.execute", "State.reset"], "change": "Associate the owner and activation/invocation identity, invalidate direct reset work and guard timer/executed writes after callbacks."},
+        {"id": "F6", "methods": ["ConditionState.execute", "ConditionState.reset"], "change": "Fence condition callbacks, child reset/start and parent bookkeeping so superseded operations cannot resume stale work."},
+        {"id": "F7", "methods": ["SelfManagedYieldState.__init__", "SelfManagedYieldState.execute", "SelfManagedYieldState.reset", "SelfManagedYieldState.can_exit"], "change": "Keep factory results local until accepted, record the exact participating binding and preserve successor handles/waiting state during reentry; retain ordinary direct-append semantics."},
+        {"id": "F8", "methods": ["YieldRoutineState.execute", "YieldRoutineState.reset"], "change": "Guard callback/factory bookkeeping and reject participating Merchant Rules receipts before publishing a handle or appending globally; ordinary YieldRoutineState behavior remains unchanged."},
+        {"id": "F9", "methods": ["_add_managed", "_remove_managed", "AddManagedCoroutine", "RemoveManagedCoroutine", "RemoveAllManagedCoroutines", "HasManagedCoroutine", "AdoptGlobalCoroutine"], "change": "Maintain exact opt-in owner/run/attachment bindings and named factory attempts; validate destination acceptance before transfer, use ownership-selective cleanup and conditional rollback, and invalidate unfinished named attempts even without a completed mapping."},
+        {"id": "F10", "methods": ["interrupt", "interrupt.wrapped_exit", "AddWaitState", "AddWaitState.exit_fn"], "change": "Fence between composed callbacks so interruption/timeout continuations cannot run after supersession."},
+        {"id": "F11", "methods": ["run_until"], "change": "Stop a superseded condition loop and prevent nested invocation from spinning on a suppressed recursive update."},
+        {"id": "F12", "methods": ["AddState", "AddYieldRoutineStep", "AddSelfManagedYieldStep", "AddSubroutine", "AddWaitState", "AddManagedCoroutineStep", "RemoveManagedCoroutineStep"], "change": "Only associate constructed built-in states with their owning FSM; no other builder behavior changes beyond F10's separately listed AddWaitState callback fence."}
+      ],
+      "private_implementation_inventory": {
+        "FSM_fields": ["_dispatch_run_token", "_control_token", "_managed_dispatch_bindings", "_named_managed_attempts", "_active_update_claims", "_transition_claim"],
+        "State_fields": ["_owner_ref", "_activation_token", "_invocation_token"],
+        "SelfManagedYieldState_fields": ["_coroutine_binding"],
+        "helper_responsibilities": ["Issue, expire and compare run identities.", "Begin, capture and check control/state operations.", "Bind a weak state owner and perform checked reset/enter calls.", "Claim and release update/transition work.", "Attach, detach and validate exact participating receipt bindings.", "Begin, check and invalidate named factory attempts.", "Classify rejected factory results by actual resource ownership."],
+        "records": "Private immutable records containing only the approved identities and captured references; no independent scheduler, generic transaction framework, new locks or native synchronization."
+      },
+      "verification_requirements": [
+        "D5-D8: exercise actual terminate and natural completion with retained lists followed by ResetAndStartAtStep before Messaging; old receipts never delegate before or after reconciliation, while new and independent owners work. Cover same-State restart, all selected callback sites, recursive update/run_until and guarded trailing resume.",
+        "D9-D10: exercise self-managed and named factories that install successors and then return old/new/None results or raise. Preserve successor handles, mappings, lists, timers, executed and waiting state; remove unfinished named attempts without a mapping and never let stale cleanup overwrite successors.",
+        "Apply all three binding corrections in approval.package2: current-operation trailing paused=False, ownership-selective factory cleanup and invalidation of unfinished named attempts.",
+        "D11-D12: exercise global/FSM transfer, failed adoption/rollback, copy mode, multiple owners, individual revocation and copied-list mutation. Every participating FSM step presents the captured owner/run/attachment; global advancement checks current identity membership and cannot borrow FSM liveness.",
+        "Preserve ordinary generator acceptance, next/send(None), rejection of non-None send, append order, deduplication, return values, waiting, pause/resume and managed-before-pause behavior. C4 exercises real selected Botting, UI global clear, Environment Upkeeper copied iteration, events and built State wrappers.",
+        "Leave all other existing method bodies unchanged, including _as_generator, pause, resume, getters and State.enter/exit/can_exit; guard their approved callers instead. Do not import Messaging, move Merchant Rules widget policy into FSM or alter public signatures.",
+        "No support claim is added for unobserved arbitrary raw-list remove/reinsert, manually inserted unbound/custom states, cyclic sub-FSM graphs or unbounded user recursion. No additional production files, native activation, cross-worktree integration or live-runtime proof is authorized."
+      ]
+    },
+    {
+      "id": "package2_offline_verification",
+      "paths": ["tests/test_shared_core_package2_dispatch.py", "tests/test_shared_core_package2_consumers.py"],
+      "status": "APPROVED",
+      "category": "TEST_ONLY",
+      "proposed_owner": "Shared-Core",
+      "authority_scope": "Only creation of these two CORE test files for SC-P2-2026-11-03-R1 section F's D1-D12 and C1-C4 matrix and bounded offline validation. P1's single dependency adapter remains solely in package1_offline_verification. No additional helper files, mock replacement of the behavior under test, production copying, native activation or writes in other worktrees.",
+      "purpose": "Verify real selected candidate Messaging/FSM dispatch, lifecycle and consumer logic against the approved adversarial matrix using inert external boundaries.",
+      "dependent_widgets": ["merchant_rules", "ordinary_heroai"],
+      "dependency_group": "dispatch_lifecycle",
+      "required_regression_matrix": [
+        {"id": "D1", "requirement": "Duplicate pending dispatch before first next and during readiness waits has one outer reservation/enqueue; constructor and append failure preserve a retryable pending request."},
+        {"id": "D2", "requirement": "Cover constructed, provisional, accepted, first-next, waiting, running, success, failure, repeated close and terminal states without a permanently failing receipt."},
+        {"id": "D3", "requirement": "Clear before first next, while waiting and while running; reconcile with an empty inbox; normal disable and throwing cleanup release each owned resource once."},
+        {"id": "D4", "requirement": "Compare raw pending/running fingerprints, NaN, signed zero, timestamp and status; preserve changed/reused rows and successor registry entries."},
+        {"id": "D5", "requirement": "Terminate and natural completion both retain the old managed list through ResetAndStartAtStep before the pump; actual schedulers before/after the pump never delegate old work, while new and independent owners work."},
+        {"id": "D6", "requirement": "Restart during execute, can_exit, exit, transition, enter and event, including same-State and restart-then-raise; old operations cannot write state, timer, executed or binding fields."},
+        {"id": "D7", "requirement": "Exercise reset-loop, child FSM, interrupt, timeout and event reentry, recursive update/run_until and on_complete restart with attributable callback counts and ordering."},
+        {"id": "D8", "requirement": "Preserve current-operation ResetAndStartAtStep trailing paused=False; supersession preserves the successor's pause and state."},
+        {"id": "D9", "requirement": "Self-managed and named factories install B then return A, B or None, or raise; preserve B's instance, mapping, list, timer, executed and waiting state."},
+        {"id": "D10", "requirement": "Exercise all three ownership-selective cleanup dispositions with reentry/errors, removal of an unfinished name with no completed mapping and independence of other names."},
+        {"id": "D11", "requirement": "Exercise global/FSM transfer, failed destination acceptance, rollback, copy mode, multiple FSM owners, individual termination and revocation during advancement while preserving other owners and copied-list iteration."},
+        {"id": "D12", "requirement": "Exercise real _as_generator, next, send(None), rejection of non-None send and participating MR receipts in YieldRoutineState; preserve ordinary append, deduplication, returns, waiting and pause behavior."},
+        {"id": "C1", "requirement": "Use the real Merchant Rules tracker, owned generator and handler to cover widget replacement, readiness and generation guards."},
+        {"id": "C2", "requirement": "Use real outer remote and inner owned widget leases; cover unstarted/started cancellation and genuinely deferred queue callbacks."},
+        {"id": "C3", "requirement": "Use real selected handler completion/failure cleanup with inert native/inventory boundaries and verify that stale work submits no commands."},
+        {"id": "C4", "requirement": "Use real selected Botting Stop/FSM calls, UI global clear, Environment Upkeeper copied iteration, events and built State wrappers; verify callback order and scheduling before/after the Messaging pump."}
+      ],
+      "verification_requirements": [
+        "Execute actual selected candidate FSM, Messaging, scheduler, tracker and consumer definitions; do not substitute mock implementations of the behavior being proved. Keep external/native/game/persistence boundaries inert and callbacks genuinely deferred.",
+        "Reuse the existing Package 1 source fixture and pinned real Merchant Rules blob b551b8a09cb1408e1320007e6128ab7696edcbf3, real selected AllAccounts and wire declarations; missing or mismatched dependencies fail rather than silently skip or fall back.",
+        "Run these tests and the existing five-file Package 1 suite with artifact-safe offline execution. Preserve every permission-recovery assertion and the narrow P1 adapter scope.",
+        "Run strict scoped Pyright/Pylance and applicable formatting/lint checks; compare baseline diagnostics using the same effective settings and tool versions by actual diagnostic identity, not counts alone. Do not weaken checks or suppress failures.",
+        "Do not import injected package initialization, bind real native libraries, map shared memory or run live clients. No dependency installation, configuration changes, additional repository helpers or persistent temporary validation artifacts; use a narrow approval request when an operation requires a permission exception.",
+        "Report actual coverage, failures and baseline diagnostics separately from unproved runtime/concurrency guarantees. Independent implementation review, integration, commits and deployment remain separate gates."
       ]
     },
     {
@@ -197,6 +328,14 @@
         "tests/test_active_account_clock.py": "53c560e05bcb048f8f77b006530231d78993e5a0",
         "tests/test_message_permission_identity.py": "3a8596348d4fc55a65cb177b0cf656c3a883f1f4",
         "tests/test_receiver_lookup_clock.py": "534967a7926e797abb929b4ed3d3983cffced63e"
+      },
+      "package2_adapter_allowance": {
+        "record": "SC-P2-2026-11-03-R1",
+        "path": "tests/test_message_permission_identity.py",
+        "base_source_blob": "88a3335c514e2d63973f3936e3c2c0c13194b8a1",
+        "test": "test_real_messaging_dispatch_waits_for_permission_recovery",
+        "authority_scope": "Only the Merchant Rules queue-helper dependency adapter inside this test's execution namespace. Preserve all four parameters, fixtures, extractor, existing assertions and every other test body/helper; no other Package 1 test changes.",
+        "acceptance_matrix_row": "P1: Keep every existing permission-recovery assertion while supplying only the dependency adapter required by the selected M1 delegation."
       },
       "verification_requirements": [
         "Reuse the real wire declarations, selected account functions and actual FrameCache/facade behavior; fake only external boundaries and forbid injected package initialization, real WinDLL/mutexes and shared-memory mappings.",
