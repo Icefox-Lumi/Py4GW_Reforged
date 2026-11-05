@@ -3,7 +3,7 @@
   "status": "PARTIALLY_APPROVED",
   "approval": {
     "approved_by_user": true,
-    "approved_entries": ["package1_account_identity", "package1_intent_sync_utility", "package1_offline_verification", "package2_merchant_rules_dispatch", "package2_fsm_dispatch_lifecycle", "package2_offline_verification"],
+    "approved_entries": ["package1_account_identity", "package1_intent_sync_utility", "package1_offline_verification", "package2_merchant_rules_dispatch", "package2_fsm_dispatch_lifecycle", "package2_offline_verification", "messaging_router_and_commands", "combined_messaging_offline_verification"],
     "release_status": "NOT_INTEGRATED_OR_VALIDATED",
     "meaning": "User approval applies only to approved_entries within their exact authority scopes; no whole-file, parent-group or unrelated authority is implied.",
     "package1": {
@@ -18,6 +18,406 @@
       "design_review": "User reports independent GPT-6.1 Sol Ultra PASS WITH NON-BLOCKING NOTES, with all three corrections incorporated in R1.",
       "independent_implementation_review": "REQUIRED_SEPARATELY_AFTER_IMPLEMENTATION_REPORT",
       "excluded_actions": ["staging", "commits", "pushes", "merges", "branch_switching", "widget_branch_integration", "TESTS_integration_or_deployment", "native_or_runtime_activation", "other_worktree_changes"]
+    },
+    "combined_messaging": {
+      "record": "SC-CMI-2026-11-03-R1",
+      "authorization_source": "User objective attachment e0209c87-167c-4557-98f2-e81c4101e706/goal-objective.md",
+      "base_head": "83d4f9444641d4e3ded477450dca30d79c983e7e",
+      "base_manifest_blob": "8dd1307ac4241ff175a50f9ae0357de81c256fd1",
+      "base_manifest_sha256": "6846C7B3EC400E8C5088314E5F872F987B76985AEE5763158EBF474FF5C71260",
+      "ownership_authorization": "APPROVED_ONLY_FOR_LABELLED_COMBINED_INTEGRATION_GRANTS",
+      "implementation_authorization": "CORE_ONLY_SEVEN_PERSISTENT_PATHS_AND_BOUNDED_OFFLINE_VALIDATION",
+      "authorized_paths": [
+        "Widgets/System/Messaging.py",
+        "Py4GWCoreLib/enums_src/Multiboxing_enums.py",
+        "tools/shared_core/ownership.json",
+        "tests/test_shared_core_messaging_integration.py",
+        "tests/test_shared_core_package1_consumers.py",
+        "tests/test_shared_core_package2_dispatch.py",
+        "tests/test_shared_core_package2_consumers.py"
+      ],
+      "preimages": {
+        "Widgets/System/Messaging.py": {
+          "git_blob": "5c3524f867a58a7ac6327300edbd3896054d4b41",
+          "working_sha256": "4FBB6245C440A06EFB5BFE63EABEF3E6F23C83A6EA97AB7EB9C76F7DD8C4D218"
+        },
+        "Py4GWCoreLib/enums_src/Multiboxing_enums.py": {
+          "git_blob": "7598b9be6a1528ae726391fc3d61832ba2c1e94f",
+          "working_sha256": "64DDAFAF87D8118E05505BD6E36748840291E9D181933227A9301A5DC999B031"
+        },
+        "tools/shared_core/ownership.json": {
+          "git_blob": "8dd1307ac4241ff175a50f9ae0357de81c256fd1",
+          "working_sha256": "6846C7B3EC400E8C5088314E5F872F987B76985AEE5763158EBF474FF5C71260"
+        },
+        "tests/test_shared_core_package1_consumers.py": {
+          "git_blob": "ff979e63dd6eab392b8eb95537ba20cb3f2ec7a1",
+          "working_sha256": "D2C2D6B92088B4E0B8A9ECBB021E67DACAC63A728A7D2C74C465D71220AA4DFB"
+        },
+        "tests/test_shared_core_package2_dispatch.py": {
+          "git_blob": "69ac5d74bd1d926133f93a88fd2112c45f482a90",
+          "working_sha256": "E42EDD4E92973F21C8B890AE9E9B8BCDB5C4279EAF9357A3B255C339415BC0BF"
+        },
+        "tests/test_shared_core_package2_consumers.py": {
+          "git_blob": "46c0d76a4500e8db39a5b11988df3c9df582698c",
+          "working_sha256": "97E240D5E48F7BD513ACC76A483DCE4775CB52544DFD222341693E13FB57C067"
+        },
+        "tests/test_shared_core_messaging_integration.py": {
+          "state": "ABSENT_FROM_HEAD_INDEX_AND_WORKTREE"
+        }
+      },
+      "historical_scope_rule": "Historical Package 1/2 approvals, restrictions and acceptance remain intact. Labelled combined_integration_grant fields add only their exact selected changes; they do not broaden historical approvals or approve residual responsibilities.",
+      "successor_revision": "Exact diff, counts and authority scopes must be validated and the actual successor byte SHA-256 reported before production edits; no successor hash is embedded in this file.",
+      "design_review": "User reports independent Sol Ultra PASS for acquisition-selective cleanup and deferred-action preservation; PASS_WITH_NON_BLOCKING_NOTES for retained-MR completeness and seven-path readiness. All three design blockers resolved.",
+      "messaging_selection": {
+        "base_blob": "5c3524f867a58a7ac6327300edbd3896054d4b41",
+        "donor_blob": "6798b1f4f260e7d25c0a9acec3ba09c6609c0b75",
+        "definitions": [
+          "_party_state_query_cache",
+          "_party_state_cache_key",
+          "_party_state_int",
+          "_party_state_map_scalar",
+          "_party_state_map_signature",
+          "_party_state_map_text",
+          "_party_state_parse_metadata",
+          "_party_state_local_snapshot",
+          "_party_state_params",
+          "_party_state_metadata",
+          "_cache_party_state_result",
+          "_send_party_state_result",
+          "PartyStateQuery",
+          "_party_state_is_solo",
+          "_guarded_party_invite_result",
+          "_hero_team_player_template_runtime",
+          "_hero_team_player_template_map_signature",
+          "_hero_team_player_template_skill_id",
+          "_hero_team_player_template_empty_observation",
+          "_hero_team_player_template_observation",
+          "_hero_team_player_template_signature",
+          "_hero_team_player_template_flags",
+          "_hero_team_player_template_is_match",
+          "_hero_team_player_template_flags_wire",
+          "_hero_team_player_template_send_result",
+          "_hero_team_player_template_shared_sender_valid",
+          "_hero_team_player_template_guard",
+          "_hero_team_player_template_failure_code",
+          "_hero_team_player_template_parse_result_flags",
+          "HeroTeamPlayerSkillTemplateRequest",
+          "HeroTeamPlayerSkillTemplateResult"
+        ],
+        "constants": {
+          "_PARTY_STATE_QUERY_REQUEST": "party_state_request",
+          "_PARTY_STATE_QUERY_REPLY": "party_state_reply",
+          "_PARTY_STATE_GUARD_RESULT": "party_state_guard",
+          "_PARTY_INVITE_GUARD": "party_invite_guard"
+        },
+        "existing_method_changes": {
+          "InviteToParty": "Only donor guarded invitation branch; preserve existing ordinary fallback, including name read after 100-ms wait.",
+          "ProcessMessages": "Only PartyStateQuery, HeroTeamPlayerSkillTemplateRequest and HeroTeamPlayerSkillTemplateResult routing arms."
+        },
+        "required_imports": "Only imports used by selected donor definitions; preserve lazy HTM import gates."
+      },
+      "cleanup_correction": {
+        "runtime_key": "_active_request_owner_token",
+        "invocation_local": "acquisition_token",
+        "rule": "Initialize local to None before try. Publish fresh object in captured existing runtime dictionary only at existing acquisition boundary after busy/replay checks. Do not move subsequent parsing/context checks. Clear active_request_id and token only if local acquired, stored token is identical object, and request ID matches. No request-ID-only fallback. Token is not an admission, advancement or cancellation rule. Preserve same-ID overlap and replay/result semantics."
+      },
+      "cache_preservation": [
+        "GLOBAL_CACHE._hero_team_party_state_query_cache",
+        "GLOBAL_CACHE._hero_team_player_template_runtime",
+        "GLOBAL_CACHE._hero_team_player_template_result_cache",
+        "Result handler continues calling runtime cache_player_template_result(); preserve dictionary identities and replay pruning."
+      ],
+      "production_preservation": [
+        "Package 2 MR receipts, reservations, scheduler ownership, dispatch, reconciliation and cleanup remain unchanged.",
+        "AccountSettingsSync/Result handlers, filtering and account_copy service pump remain unchanged.",
+        "Existing main ordering, on_disable, CORE wider PickUpLoot cleanup and unrelated handlers remain unchanged.",
+        "Existing numeric commands and public interfaces remain unchanged."
+      ],
+      "enum_additions": {
+        "PartyStateQuery": 74,
+        "HeroTeamPlayerSkillTemplateRequest": 75,
+        "HeroTeamPlayerSkillTemplateResult": 76
+      },
+      "unchanged_fsm": {
+        "path": "Py4GWCoreLib/py4gwcorelib_src/FSM.py",
+        "blob": "5db8575679d55a2c5ee3b221b3ff3a315abd8d89",
+        "working_sha256": "4E69A1A399CFA75294AB0D669392C5C7123A5FF10F6740A2BAA1E083F12E8774"
+      },
+      "deferred_action_and_installation_limits": [
+        "Guarded invitation validates before enqueue; ordinary invitation reads the sender character name after its existing 100-ms wait.",
+        "String invitation uses PartyCache -> Player.SendChatCommand -> native chat callback on one ACTION queue owner. ActionQueue executes one entry per eligible invocation; two callbacks do not imply two frames.",
+        "Template loading queues a native callback with no final per-request Python guard. Handler timeout, failure or close does not retract an already queued load.",
+        "Template context verification follows stable matching, not every unmatched iteration. reciprocal_invite_sent means enqueue returned, not native success.",
+        "Upkeeper advances coroutines first, then clears non-transition queues during loading/cinematics. Other invalid-map states suspend ACTION processing without clearing it.",
+        "These are preserved limitations, not live-risk acceptance or final-execution authorization. Stronger checks require separate owner-layer approval.",
+        "Request-claim ownership is separate from unchanged inbox retirement. No ordinary generator-lifetime, shared-row reuse or cross-process exactly-once guarantee.",
+        "Future installation must be cold/quiescent; previously compiled old generators are not made hot-reload safe."
+      ],
+      "original_case_preservation": {
+        "count": 400,
+        "rule": "Preserve every original test identity, assertion, parametrization, fixture default and source binding; do not rebind ROOT, WIRE, MR or ITEM_VALUES. Add separately named target fixtures/cases.",
+        "MR": "b551b8a09cb1408e1320007e6128ab7696edcbf3",
+        "ITEM_VALUES": "e0364a74c072e769ce43a688402721a08eee30cc"
+      },
+      "retained_mr": {
+        "blob": "10af9d174e5c91b8636a5c841d36568e76e1fd3d",
+        "working_sha256": "EF6B121DC55E0C30348E5457A0C06D928CD7083CCD8297F9DE4BE398A02CD815",
+        "AllAccounts": "0520516cd58d3c130f8b2357f6fa8d0b348bcf82",
+        "IntentSync": "5fc27e298e214880374e54dec05e021aa1c22aa1",
+        "widget_methods": [
+          "_get_account_key",
+          "_merchant_rules_is_generation_current",
+          "_refresh_merchant_rules_lifecycle_state",
+          "_merchant_rules_map_party_ready",
+          "_merchant_rules_lifecycle_block_reason",
+          "_merchant_rules_lifecycle_is_current",
+          "_merchant_rules_owned_work_lifecycle_state",
+          "_yield_merchant_rules_lifecycle_wait",
+          "_wait_for_merchant_rules_lifecycle",
+          "_merchant_rules_operation_generation",
+          "_merchant_rules_operation_lifecycle_generation",
+          "_capture_merchant_rules_work_lifecycle_baseline",
+          "_capture_merchant_rules_remote_dispatch_lifecycle",
+          "_release_merchant_rules_owned_work",
+          "_release_merchant_rules_owned_action",
+          "_track_merchant_rules_owned_action",
+          "_begin_merchant_rules_action_capture",
+          "_end_merchant_rules_action_capture",
+          "_close_merchant_rules_generator",
+          "_advance_merchant_rules_owned_generator",
+          "_track_merchant_rules_owned_work",
+          "_release_merchant_rules_remote_dispatch",
+          "_get_staged_multibox_reload_request_key",
+          "_read_validated_multibox_profile_payload",
+          "_capture_multibox_profile_reload_payload",
+          "_clear_pending_multibox_profile_reload",
+          "_stage_multibox_profile_reload",
+          "_release_staged_multibox_profile_reload",
+          "track_merchant_rules_remote_dispatch",
+          "_extract_multibox_message_extra_data",
+          "_get_multibox_message_opcode",
+          "_is_multibox_result_opcode",
+          "_multibox_message_requires_merchant_lock",
+          "_wait_for_remote_execute_start",
+          "_snapshot_multibox_hero_ai_options",
+          "_disable_multibox_hero_ai_options",
+          "_enable_multibox_hero_ai_options",
+          "_restore_multibox_hero_ai_options",
+          "handle_shared_multibox_message",
+          "_handle_shared_multibox_message"
+        ],
+        "complete_definitions": [
+          "RequestScopedMerchantStockTarget",
+          "MerchantRulesExecutionContext",
+          "_parse_request_scoped_merchant_stock",
+          "_MerchantRulesOwnedGenerator",
+          "_MerchantRulesOwnedQueueCallback"
+        ],
+        "constants": [
+          "MERCHANT_RULES_OWNED_ACTION_QUEUES",
+          "MERCHANT_RULES_LIFECYCLE_WAIT_TIMEOUT_MS",
+          "MERCHANT_RULES_LIFECYCLE_WAIT_STEP_MS",
+          "MERCHANT_RULES_MAP_READY_UPTIME_MS",
+          "MERCHANT_RULES_PLAYER_READY_UPTIME_MS",
+          "MULTIBOX_REMOTE_IDLE_WAIT_TIMEOUT_MS",
+          "MULTIBOX_REMOTE_STATUS_UPDATE_INTERVAL_MS",
+          "MERCHANT_RULES_OPCODE_RELOAD_PROFILE",
+          "MERCHANT_RULES_OPCODE_PREVIEW",
+          "MERCHANT_RULES_OPCODE_EXECUTE",
+          "MERCHANT_RULES_OPCODE_STATUS_RESULT",
+          "MERCHANT_RULES_OPCODE_PREVIEW_RESULT",
+          "MERCHANT_RULES_OPCODE_EXECUTE_RESULT",
+          "MERCHANT_RULES_OPCODE_ERROR_RESULT",
+          "PROFILE_VERSION"
+        ],
+        "helper": "Retained widget inline _safe_int only; no newer item_values substitution.",
+        "counterpart_families": [
+          {
+            "test": "test_retained_target_c1_pinned_owner_and_generation_cancel_stale_work",
+            "parameters": {
+              "change": [
+                "widget",
+                "profile",
+                "account",
+                "lifecycle"
+              ],
+              "started": [
+                false,
+                true
+              ]
+            },
+            "cases": 8
+          },
+          {
+            "test": "test_retained_target_c1_readiness_wait_and_reload_capture_are_real_widget_paths",
+            "parameters": {},
+            "cases": 1
+          },
+          {
+            "test": "test_retained_target_c2_nested_leases_and_deferred_callbacks",
+            "parameters": {
+              "cancel_at": [
+                "unstarted",
+                "started",
+                "after_action"
+              ]
+            },
+            "cases": 3
+          },
+          {
+            "test": "test_retained_target_c2_deferred_valid_callback_runs_once_after_receipt_completes",
+            "parameters": {},
+            "cases": 1
+          },
+          {
+            "test": "test_retained_target_c3_real_handler_completion_and_failure_restore_temporary_options",
+            "parameters": {
+              "failure": [
+                false,
+                true
+              ]
+            },
+            "cases": 2
+          },
+          {
+            "test": "test_retained_target_c3_cleanup_exception_cannot_leave_receipt_retrying_forever",
+            "parameters": {},
+            "cases": 1
+          },
+          {
+            "test": "test_retained_target_c3_distinct_preview_overlap_retains_inherited_temporary_option_limit",
+            "parameters": {},
+            "cases": 1
+          }
+        ],
+        "additional_cases": 17,
+        "scope": "Selected transport/lifecycle and protection-flag behavior only; no complete inventory-policy or CP2-cache claim. Preserve characterized overlapping-option limitation.",
+        "owner_harness": "57e7ded7a88246c309b0dacd5482ae65c70363e7 remains tracked and excluded from deployment in private owner branch; full harness only against matching owner widget. No source/tracking/ignore changes or CP1/CP2 deployment."
+      },
+      "retained_dependency_retrieval": {
+        "meaning": "Pinned source inclusion for offline compatibility only; no widget edit authority, installation target or ownership transfer. Missing objects fail visibly; no fallback.",
+        "CORE_git_blobs": {
+          "Py4GWCoreLib/modular/hero_team_manager.py": "8f58e42b6e42f0e8d919e7e6808122e00e846b86",
+          "Widgets/Guild Wars/Hero Team Manager.py": "786a024c199d06f7b748b293ebd36f7e3dee7401",
+          "Py4GWCoreLib/modular/__init__.py": "f1c398ee1e1a319e643cc7a3377dba7e7bbcf3fe",
+          "Py4GWCoreLib/modular/hero_setup_model.py": "bbf9bf0b97d2a3790dcfc56bf6a5e85ddfc20209",
+          "Py4GWCoreLib/modular/json_bt_compiler.py": "7c93c695684f3f3e29fbe7b7c32fec59882b101a",
+          "Py4GWCoreLib/modular/runner.py": "e599b8688fc5089c5e43eb25bcafc78f3cf6dc22",
+          "Py4GWCoreLib/modular/paths.py": "bf376cc1781c11568304926f3c9c9dc27586db34",
+          "Py4GWCoreLib/py4gwcorelib_src/BehaviorTree.py": "d1bd887f2cc9cb3d591db276ea849fb0f9ea6f15",
+          "Py4GWCoreLib/routines_src/BehaviourTrees.py": "58384eaf4e4e4543017f364bad4ea3037825adda",
+          "Py4GWCoreLib/BottingTree.py": "751b57330657f6d950cd4794b4cb9c32f648619b",
+          "Py4GWCoreLib/py4gwcorelib_src/Utils.py": "066cd34610c1f78da9a042a91d593670a655edc2",
+          "Py4GWCoreLib/py4gwcorelib_src/JsonFactory.py": "ef60521cd72d2a76b9f51a8abb10672afcd7cb7d",
+          "Py4GWCoreLib/py4gwcorelib_src/Settings.py": "78efef3a1fd00d865b9be82d34860c030e8ddcfb",
+          "Py4GWCoreLib/Player.py": "05037041f94da16430fb3ac81c551bb8c15acce7",
+          "Py4GWCoreLib/GlobalCache/PartyCache.py": "8ae8573aa43399804e0764d3c69a3d87468aa42c",
+          "Py4GWCoreLib/GlobalCache/SkillbarCache.py": "d66ffa9f402865c67616b6acd40d879cb1bd838a",
+          "Py4GWCoreLib/py4gwcorelib_src/ActionQueue.py": "3cea63654d2eb8198468a7c20da88a8bf9269b61",
+          "Widgets/System/Environment Upkeeper.py": "db5d512886aa9c8d79e5180df437763a488325b3",
+          "Py4GWCoreLib/py4gwcorelib_src/WidgetManager.py": "75af3bdda417adb8418b4807b87e29a2de068667",
+          "Py4GWCoreLib/GlobalCache/SharedMemory.py": "cb36132fd982d1527ad1514c44a3aeb36e13ae63",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/AllAccounts.py": "0520516cd58d3c130f8b2357f6fa8d0b348bcf82",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py": "5fc27e298e214880374e54dec05e021aa1c22aa1",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentStruct.py": "8c7746c9aef11fc0170b0ebcae10f14ca2d2a068",
+          "Py4GWCoreLib/py4gwcorelib_src/system_settings/name_obfuscation/resolve.py": "144d3443bbcd96fde56f2629d3ba98b355a632ec",
+          "Py4GWCoreLib/py4gwcorelib_src/system_settings/account_copy.py": "ec712ba73d1c161601df39479029e042f0f8cb96",
+          "Py4GWCoreLib/HeroAI/party_formations.py": "a7af4d84728451173aa2e4952f598a8d6702f9e8",
+          "Widgets/Automation/Helpers/Pycons.py": "8580b005dfe021d727096326f45f6e625517151a",
+          "Py4GWCoreLib/HeroAI/commands.py": "9b95abdf10c1a3552627b65f8d9085a2fd8c3360",
+          "Py4GWCoreLib/HeroAI/command_api.py": "f17f7bbb34fc4d081b5af3803c8d6459a6ab7c1a",
+          "Py4GWCoreLib/Builds/Skills/SmartCryController.py": "7da8f89c32fb429e9227b0ad253687f8f8d6f494",
+          "Py4GWCoreLib/enums_src/GameData_enums.py": "3af5487f543ed2fe6d14067a6eafd81f5c1fc23a",
+          "Py4GWCoreLib/enums_src/Whiteboard_enums.py": "05f2d7540909c986d7aebeafb9473b0695257ee1",
+          "Widgets/Guild Wars/Items & Loot/MerchantRules.py": "10af9d174e5c91b8636a5c841d36568e76e1fd3d"
+        },
+        "CORE_wire_commit": "83d4f9444641d4e3ded477450dca30d79c983e7e",
+        "CORE_wire_paths": [
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/AccountStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/HeroAIOptionStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/SharedMessageStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/Globals.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/KeyStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/RankStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/FactionStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/TitlesStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/QuestLogStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/ExperienceStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/MissionDataStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/UnlockedSkillsStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/AvailableCharacterStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/AgentPartyStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/AgentDataStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/InventoryBagsStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/AttributesStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/BuffStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/SkillbarStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/MapStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/EnergyStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/HealthStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/InventoryBagStruct.py",
+          "Py4GWCoreLib/GlobalCache/shared_memory_src/InventorySlotStruct.py",
+          "Py4GWCoreLib/native_src/internals/types.py"
+        ],
+        "TESTS_only_git_blob": {
+          "path": "Widgets/Automation/Multiboxing/HeroAI Actions.py",
+          "blob": "7cdf5a63391983d3174ef42b9a27c5014e849cdc",
+          "repository": "C:\\Users\\O_o\\Desktop\\Py4GW_Reforged-main TESTS"
+        },
+        "separate_evidence_gates": [
+          "Isolated behavior tests",
+          "Supported-runtime package/import availability",
+          "Actual HTM command behavior"
+        ],
+        "lazy_import_requirement": "Router loading is separate from HTM command availability; retain model/compiler/runner, BehaviorTree/BehaviourTrees/BottingTree, JsonFactory/Settings/Player and real Utils decoding closure."
+      },
+      "offline_verification": {
+        "existing_suites": [
+          "tests/test_account_publication.py",
+          "tests/test_active_account_clock.py",
+          "tests/test_message_permission_identity.py",
+          "tests/test_receiver_lookup_clock.py",
+          "tests/test_shared_core_package1_consumers.py",
+          "tests/test_shared_core_package2_dispatch.py",
+          "tests/test_shared_core_package2_consumers.py"
+        ],
+        "new_suite": "tests/test_shared_core_messaging_integration.py",
+        "matrix": [
+          "Original 400 cases unchanged plus exactly 17 retained-MR counterparts; report actual combined-suite count.",
+          "Acquisition A/duplicate A/busy B/completion/pre- and post-acquisition failure/timeout/same-ID successor after replay expiry with distinct inbox rows.",
+          "Real deferred PartyCache/Player/SkillbarCache/ActionQueue layers, one queue owner, controllable eligible invocations, inert final native sinks; assert rejection/enqueue/submission/verification/clearing/suspension separately.",
+          "Candidate routing with actual pinned retained consumers and unchanged FSM/MR receipts; permission recovery, HTM query/results and three reload-surviving caches.",
+          "AccountSettings handlers/filtering/pump, loot early-return/exception cleanup and retained WidgetManager pause versus disable/reload."
+        ],
+        "execution": "Python 3.13 32-bit -B; PYTHONDONTWRITEBYTECODE=1; PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; --noconftest; pytest cache disabled; eight explicit files only. Keep callbacks deferred and mock only external/native/persistence boundaries. No production package initialization.",
+        "strict_diagnostics": "Fresh comparable baseline/current strict diagnostics for two changed production and four changed/new test files, same tool versions/settings/stubs/resolution. Compare identities/expressions, distinguish CORE debt, donor debt and new/worse findings. No inherited baseline for new suite.",
+        "formatting_lint": "Scoped non-writing checks; no unrelated reformatting or suppressed diagnostics.",
+        "temporary_directory": "C:\\Users\\O_o\\Desktop\\Py4GW_Reforged-main CORE\\.local-validation\\SC-CMI-2026-11-03-R1",
+        "temporary_scope": "Only scoped analysis snapshots, disposable checker configurations and verification output; retain decisive commands/results for independent review before bounded cleanup. One-time host command approvals where required. No project/global config edits or dependency installation.",
+        "owner_suites": "Any extra owner suite requires explicit matching source binding and temporary-write/process/native boundaries; no blanket collection or implicit native tests."
+      },
+      "independent_implementation_review": "REQUIRED_SEPARATELY_AFTER_IMPLEMENTATION_REPORT; inspect actual seven-path diff, source pins, case preservation/results, diagnostics and manifest successor hash.",
+      "excluded_actions": [
+        "staging",
+        "commits",
+        "pushes",
+        "merges",
+        "fetches",
+        "branch_switching",
+        "widget_branch_integration",
+        "TESTS_Python_installation_or_live_testing",
+        "DLL_or_offset_replacement",
+        "MR_CP1_CP2_deployment",
+        "frozen_HTM_Actions_updates",
+        "other_worktree_changes",
+        "FSM_changes",
+        "queue_owner_API_changes",
+        "shared_memory_infrastructure_changes",
+        "global_instruction_or_project_configuration_changes",
+        "native_or_runtime_activation",
+        "persistent_changes_outside_seven_paths"
+      ]
     },
     "package2": {
       "record": "SC-P2-2026-11-03-R1",
@@ -104,12 +504,21 @@
   ],
   "entries": [
     {
+      "combined_integration_grant": {
+        "record": "SC-CMI-2026-11-03-R1",
+        "scope": "Append only PartyStateQuery=74, HeroTeamPlayerSkillTemplateRequest=75 and HeroTeamPlayerSkillTemplateResult=76. Preserve every existing member/order/value; all residual enum responsibilities remain unapproved.",
+        "selected_changes": {
+          "PartyStateQuery": 74,
+          "HeroTeamPlayerSkillTemplateRequest": 75,
+          "HeroTeamPlayerSkillTemplateResult": 76
+        }
+      },
       "id": "messaging_router_and_commands",
       "paths": ["Py4GWCoreLib/enums_src/Multiboxing_enums.py"],
-      "status": "PROPOSED",
+      "status": "APPROVED",
       "category": "SHARED_CORE_CANDIDATE",
       "proposed_owner": "Shared-Core",
-      "authority_scope": "Only the remaining common wire-command enum responsibilities, all PROPOSED/unapproved. Messaging.py is listed solely under package2_merchant_rules_dispatch, whose approval is limited to its selected M1-M4 changes; all other routing and feature responsibilities remain unapproved. No enum changes are authorized by Package 2.",
+      "authority_scope": "Only the remaining common wire-command enum responsibilities, all PROPOSED/unapproved. Messaging.py is listed solely under package2_merchant_rules_dispatch, whose approval is limited to its selected M1-M4 changes; all other routing and feature responsibilities remain unapproved. No enum changes are authorized by Package 2. The preceding restrictions describe the historical package scope. SC-CMI-2026-11-03-R1 additionally approves only this entry's separately labelled combined_integration_grant; all residual responsibilities remain unapproved. Its exact source pins, preserved behavior and validation limits are in approval.combined_messaging.",
       "purpose": "Integrate reviewed MR, HTM, Pycons, Actions and account-settings-sync contracts over the selected upstream router.",
       "dependent_widgets": ["merchant_rules", "htm", "pycons", "heroai_actions"],
       "dependency_group": "messaging",
@@ -121,12 +530,18 @@
       ]
     },
     {
+      "combined_integration_grant": {
+        "record": "SC-CMI-2026-11-03-R1",
+        "scope": "Only approval.combined_messaging.messaging_selection and cleanup_correction over the exact base/donor blobs; preserve historical M1-M4 implementation and all listed production_preservation. Required imports only; no whole-file donor replacement or widget-policy authority.",
+        "intentional_behavior_change": "Acquisition-selective cleanup using _active_request_owner_token; imported handler is intentionally corrected only at acquisition/cleanup.",
+        "limits_reference": "approval.combined_messaging.deferred_action_and_installation_limits"
+      },
       "id": "package2_merchant_rules_dispatch",
       "paths": ["Widgets/System/Messaging.py"],
       "status": "APPROVED",
       "category": "SHARED_CORE_CANDIDATE",
       "proposed_owner": "Shared-Core",
-      "authority_scope": "Only the selected M1-M4 changes and bounded private implementation inventory of SC-P2-2026-11-03-R1 over baseline blob 0049fcc30a436c5f10927b1458b09e910b7f86bf. Approval of a method authorizes only its specified change. All other Messaging.py responsibilities, handlers and feature policy remain unapproved; this is not whole-file authority or an approved mixed-widget release.",
+      "authority_scope": "Only the selected M1-M4 changes and bounded private implementation inventory of SC-P2-2026-11-03-R1 over baseline blob 0049fcc30a436c5f10927b1458b09e910b7f86bf. Approval of a method authorizes only its specified change. All other Messaging.py responsibilities, handlers and feature policy remain unapproved; this is not whole-file authority or an approved mixed-widget release. The preceding restrictions describe the historical package scope. SC-CMI-2026-11-03-R1 additionally approves only this entry's separately labelled combined_integration_grant; all residual responsibilities remain unapproved. Its exact source pins, preserved behavior and validation limits are in approval.combined_messaging.",
       "purpose": "Own one Merchant Rules dispatch receipt from provisional reservation through accepted scheduling, exact owner advancement and idempotent terminal cleanup.",
       "dependent_widgets": ["merchant_rules", "htm", "smart_builds", "party_formations", "pycons", "heroai_actions", "ordinary_heroai"],
       "dependency_group": "messaging",
@@ -196,12 +611,20 @@
       ]
     },
     {
+      "combined_integration_grant": {
+        "record": "SC-CMI-2026-11-03-R1",
+        "paths": [
+          "tests/test_shared_core_package2_dispatch.py",
+          "tests/test_shared_core_package2_consumers.py"
+        ],
+        "scope": "Only separate retained-target fixture/extraction and seven counterpart families with17 cases, plus necessary explicit helper adapters preserving original public defaults/bindings and all original tests. Exact inventory/families in approval.combined_messaging.retained_mr."
+      },
       "id": "package2_offline_verification",
       "paths": ["tests/test_shared_core_package2_dispatch.py", "tests/test_shared_core_package2_consumers.py"],
       "status": "APPROVED",
       "category": "TEST_ONLY",
       "proposed_owner": "Shared-Core",
-      "authority_scope": "Only creation of these two CORE test files for SC-P2-2026-11-03-R1 section F's D1-D12 and C1-C4 matrix and bounded offline validation. P1's single dependency adapter remains solely in package1_offline_verification. No additional helper files, mock replacement of the behavior under test, production copying, native activation or writes in other worktrees.",
+      "authority_scope": "Only creation of these two CORE test files for SC-P2-2026-11-03-R1 section F's D1-D12 and C1-C4 matrix and bounded offline validation. P1's single dependency adapter remains solely in package1_offline_verification. No additional helper files, mock replacement of the behavior under test, production copying, native activation or writes in other worktrees. The preceding restrictions describe the historical package scope. SC-CMI-2026-11-03-R1 additionally approves only this entry's separately labelled combined_integration_grant; all residual responsibilities remain unapproved. Its exact source pins, preserved behavior and validation limits are in approval.combined_messaging.",
       "purpose": "Verify real selected candidate Messaging/FSM dispatch, lifecycle and consumer logic against the approved adversarial matrix using inert external boundaries.",
       "dependent_widgets": ["merchant_rules", "ordinary_heroai"],
       "dependency_group": "dispatch_lifecycle",
@@ -313,12 +736,17 @@
       ]
     },
     {
+      "combined_integration_grant": {
+        "record": "SC-CMI-2026-11-03-R1",
+        "path": "tests/test_shared_core_package1_consumers.py",
+        "scope": "Only separate retained-source descriptors/read helpers and target-world fixture support for the combined matrix. Preserve original 400 identities/assertions/parameters/defaults/bindings and original MR/ITEM_VALUES; other four Package 1 test files unchanged."
+      },
       "id": "package1_offline_verification",
       "paths": ["tests/test_account_publication.py", "tests/test_active_account_clock.py", "tests/test_message_permission_identity.py", "tests/test_receiver_lookup_clock.py", "tests/test_shared_core_package1_consumers.py"],
       "status": "APPROVED",
       "category": "TEST_ONLY",
       "proposed_owner": "Shared-Core",
-      "authority_scope": "Only creation/adaptation of these five CORE test files and bounded offline validation under R1 section C. No additional helper files, widget ownership transfer, production copying, native activation or writes in other worktrees.",
+      "authority_scope": "Only creation/adaptation of these five CORE test files and bounded offline validation under R1 section C. No additional helper files, widget ownership transfer, production copying, native activation or writes in other worktrees. The preceding restrictions describe the historical package scope. SC-CMI-2026-11-03-R1 additionally approves only this entry's separately labelled combined_integration_grant; all residual responsibilities remain unapproved. Its exact source pins, preserved behavior and validation limits are in approval.combined_messaging.",
       "purpose": "Verify selected real account/facade and six-widget consumer behavior with inert native/game/persistence boundaries and honest residual concurrency characterization.",
       "dependent_widgets": ["merchant_rules", "htm", "smart_builds", "party_formations", "pycons", "heroai_actions", "ordinary_heroai"],
       "dependency_group": "account_identity",
@@ -695,6 +1123,30 @@
       "dependency_group": "parked_actions",
       "unresolved_decisions": ["Decide whether to resume the feature and approve its ownership, consent semantics, restrictions and consumer bundle separately.", "Related changes to SharedMemory, PartyCache, command APIs and Actions UI require hunk-level review under their existing entries; path overlap does not approve the parked versions."],
       "verification_requirements": ["Exclude from automatic active assembly and do not import parked consent or guild-hall restrictions during preservation.", "If later resumed, verify complete facade/enum/API/runtime/UI dependency closure and independently approve runtime and deployment behavior."]
+    },
+    {
+      "id": "combined_messaging_offline_verification",
+      "paths": [
+        "tests/test_shared_core_messaging_integration.py"
+      ],
+      "status": "APPROVED",
+      "category": "TEST_ONLY",
+      "proposed_owner": "Shared-Core",
+      "authority_scope": "Only the new combined integration suite under SC-CMI-2026-11-03-R1 and its exact source-bound offline matrix. No extra persistent files, widget edits or deployment authority.",
+      "purpose": "Exercise selected real candidate router and pinned retained dependencies at inert external boundaries.",
+      "dependent_widgets": [
+        "merchant_rules",
+        "htm",
+        "party_formations",
+        "pycons",
+        "smart_builds",
+        "heroai_actions"
+      ],
+      "dependency_group": "messaging",
+      "verification_requirements": [
+        "Follow approval.combined_messaging.offline_verification, source pins, separate evidence gates and explicit deferred-action limits.",
+        "Preserve original400 cases and exactly17 separate retained-MR cases. Report actual additional combined coverage and failures/skips honestly."
+      ]
     }
   ]
 }

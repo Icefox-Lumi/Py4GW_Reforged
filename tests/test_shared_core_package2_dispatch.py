@@ -38,13 +38,17 @@ from test_account_publication import ROOT
 from test_account_publication import account_world as account_world
 from test_message_permission_identity import world as message_world_fixture
 from test_shared_core_package1_consumers import MR
+from test_shared_core_package1_consumers import RETAINED_MR
 from test_shared_core_package1_consumers import Source
+from test_shared_core_package1_consumers import retained_world as _retained_world_fixture
 
 ITEM_VALUES = Source("Sources/icefox/MerchantRules/item_values.py", "e0364a74c072e769ce43a688402721a08eee30cc")
 UPKEEPER = Source("Widgets/System/Environment Upkeeper.py", "2112807958413acdf225e935dc3edcf04a8d3f30")
+RETAINED_UPKEEPER = Source("Widgets/System/Environment Upkeeper.py", "db5d512886aa9c8d79e5180df437763a488325b3")
 FSM_PATH = ROOT / "Py4GWCoreLib/py4gwcorelib_src/FSM.py"
 MESSAGING_PATH = ROOT / "Widgets/System/Messaging.py"
 world = message_world_fixture
+retained_world = _retained_world_fixture
 
 
 @lru_cache(maxsize=12)
@@ -217,8 +221,19 @@ def _noop(*_args: Any, **_kwargs: Any) -> None:
 
 
 def real_widget(env: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
-    source = read_source(MR)
-    safe = selected(read_source(ITEM_VALUES), ITEM_VALUES.path, ("safe_int",), monkeypatch, {})
+    return _build_widget(env, monkeypatch, MR, inline_safe_int=False)
+
+
+def retained_real_widget(env: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    return _build_widget(env, monkeypatch, RETAINED_MR, inline_safe_int=True)
+
+
+def _build_widget(env: Any, monkeypatch: pytest.MonkeyPatch, binding: Source, *, inline_safe_int: bool) -> Any:
+    source = read_source(binding)
+    if inline_safe_int:
+        safe_int = selected(source, binding.path, ("_safe_int",), monkeypatch, {})._safe_int
+    else:
+        safe_int = selected(read_source(ITEM_VALUES), ITEM_VALUES.path, ("safe_int",), monkeypatch, {}).safe_int
     methods = (
         "_get_account_key",
         "_merchant_rules_is_generation_current",
@@ -280,7 +295,7 @@ def real_widget(env: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     )
     module = selected(
         source,
-        f"{MR.path}@{MR.blob}",
+        f"{binding.path}@{binding.blob}",
         constants
         + (
             "RequestScopedMerchantStockTarget",
@@ -292,7 +307,7 @@ def real_widget(env: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         + tuple(f"MerchantRulesWidget.{name}" for name in methods),
         monkeypatch,
         dict(
-            _safe_int=safe.safe_int,
+            _safe_int=safe_int,
             Map=env.map,
             Player=env.player,
             Routines=env.routines,
@@ -382,6 +397,21 @@ def real_widget(env: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 @pytest.fixture
 def env(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    return build_dispatch_env(world, monkeypatch, real_widget)
+
+
+@pytest.fixture
+def retained_env(retained_world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    return build_dispatch_env(retained_world, monkeypatch, retained_real_widget, scheduler_source=RETAINED_UPKEEPER)
+
+
+def build_dispatch_env(
+    world: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    widget_factory: Callable[[Any, pytest.MonkeyPatch], Any],
+    *,
+    scheduler_source: Source = UPKEEPER,
+) -> Any:
     world.clock.frame = 10000
     world.clock.uncached = 10016
     for index in (0, 1):
@@ -450,7 +480,7 @@ def env(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         dict(Timer=Timer, ThrottledTimer=Timer, Console=state.console, ConsoleLog=state.log, PySystem=world.system),
         package="Py4GWCoreLib.py4gwcorelib_src",
     ).FSM
-    state.widget = real_widget(state, monkeypatch)
+    state.widget = widget_factory(state, monkeypatch)
     state.original_widget = state.widget
     source = MESSAGING_PATH.read_text(encoding="utf-8-sig")
     tree = ast.parse(source)
@@ -463,6 +493,7 @@ def env(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
             or node.name.startswith("_MerchantRules")
             or node.name
             in (
+                "_HTMCoroutineSink",
                 "MerchantRules",
                 "_queue_merchant_rules_message",
                 "_reconcile_merchant_rules_dispatches",
@@ -474,6 +505,7 @@ def env(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     )
     assert "_MerchantRulesDispatchReceipt" in names, "Package 2 candidate receipt missing"
     namespace: dict[str, Any] = dict(
+        cast=cast,
         GLOBAL_CACHE=state.cache,
         SharedMessageStruct=world.wire.SharedMessageStruct,
         SharedCommandType=world.commands,
@@ -502,8 +534,8 @@ def env(world: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     for name in ("action", "transition", "loot", "merchant", "salvage", "identify", "fast"):
         setattr(configuration, f"throttle_{name}_queue", Timer())
     state.scheduler = selected(
-        read_source(UPKEEPER),
-        f"{UPKEEPER.path}@{UPKEEPER.blob}",
+        read_source(scheduler_source),
+        f"{scheduler_source.path}@{scheduler_source.blob}",
         ("main",),
         monkeypatch,
         dict(

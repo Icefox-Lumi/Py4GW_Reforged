@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import ast
 import builtins
+import ctypes
 import dis
 import hashlib
 import math
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
@@ -30,6 +32,7 @@ from typing import cast
 
 import pytest
 from test_account_publication import ROOT
+from test_account_publication import FakeKernel
 from test_account_publication import account_world as account_world
 from test_active_account_clock import consumers as _consumers_fixture
 from test_message_permission_identity import world as _world_fixture
@@ -60,6 +63,52 @@ ACTIONS = Source(
 COMMANDS = Source("Py4GWCoreLib/HeroAI/commands.py", "9b95abdf10c1a3552627b65f8d9085a2fd8c3360")
 COMMAND_API = Source("Py4GWCoreLib/HeroAI/command_api.py", "f17f7bbb34fc4d081b5af3803c8d6459a6ab7c1a")
 GAME_DATA = Source("Py4GWCoreLib/enums_src/GameData_enums.py", "3af5487f543ed2fe6d14067a6eafd81f5c1fc23a")
+
+# SC-CMI target bindings are separate from every original Package 1/2 binding.
+RETAINED_MR = Source("Widgets/Guild Wars/Items & Loot/MerchantRules.py", "10af9d174e5c91b8636a5c841d36568e76e1fd3d")
+RETAINED_ALL_ACCOUNTS = Source(
+    "Py4GWCoreLib/GlobalCache/shared_memory_src/AllAccounts.py", "0520516cd58d3c130f8b2357f6fa8d0b348bcf82"
+)
+RETAINED_INTENT_SYNC = Source(
+    "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py", "5fc27e298e214880374e54dec05e021aa1c22aa1"
+)
+RETAINED_WHITEBOARD = Source("Py4GWCoreLib/enums_src/Whiteboard_enums.py", "05f2d7540909c986d7aebeafb9473b0695257ee1")
+RETAINED_GLOBALS = Source(
+    "Py4GWCoreLib/GlobalCache/shared_memory_src/Globals.py", "84d8dd88442c6e94e20a084b1172000a248378af"
+)
+RETAINED_WIRE_SOURCES = (
+    RETAINED_ALL_ACCOUNTS,
+    *(
+        Source(f"Py4GWCoreLib/GlobalCache/shared_memory_src/{name}.py", blob)
+        for name, blob in (
+            ("AccountStruct", "fccc7e1ba06f5b0d84b5ac09d55d3fc5196d79b0"),
+            ("AgentDataStruct", "c0f4c3e693a96cd40e8c5b154e478ae5f48a02dc"),
+            ("AgentPartyStruct", "720127e1c8f0d9eb6c615ddf440a789f7374291c"),
+            ("AttributesStruct", "c11baf253ad49b7ef845d80cf4eb2a4a50beb9c7"),
+            ("AvailableCharacterStruct", "fb6b3d24d13feb2723ba165cb128a59be510bd77"),
+            ("BuffStruct", "44c97fdabe02d805683d906478d5150b975347d1"),
+            ("EnergyStruct", "9ec9a4ea15e245dfa3e5099c122baf44a5937c8b"),
+            ("ExperienceStruct", "98d761f76f81e4f428c7e739f44f9eaab5414009"),
+            ("FactionStruct", "2f718dd901085a27f0a2a8752c151243ddd02651"),
+            ("HealthStruct", "8043324740a488e3844bfdaf7393c55383112f4b"),
+            ("HeroAIOptionStruct", "97c0dd7891dcaed8371d83553462bdeeb25e153f"),
+            ("IntentStruct", "8c7746c9aef11fc0170b0ebcae10f14ca2d2a068"),
+            ("InventoryBagStruct", "c7f74bb9405ceab26549130f80c9a8517bfdaa44"),
+            ("InventoryBagsStruct", "5365229852ef117be54ebf51f9cd12a5ea45e729"),
+            ("InventorySlotStruct", "a7404d36293c8a912ef42a9f4fec7474beae9940"),
+            ("KeyStruct", "093886bf486bb37dd4f1899bf962feba11364788"),
+            ("MapStruct", "b530049e43b73f14ecb1bb208a431e22338c8cfc"),
+            ("MissionDataStruct", "63ea07aadeb855b5363b02258545fe53b817b1a1"),
+            ("QuestLogStruct", "772a0ad4cb20c0ca5879a8f9c65cb4c3df074901"),
+            ("RankStruct", "74cc6406aa2a932e932ba21c5c4d0ed43a3791e1"),
+            ("SharedMessageStruct", "6e09b8289ef30d39c61db7bb37bc5c1878206e4a"),
+            ("SkillbarStruct", "9d8d92e1fde9a1ff26834ebc6b862e8b8abf2be9"),
+            ("TitlesStruct", "95849a650d02a3402c7779e3311146c8deaf7fbd"),
+            ("UnlockedSkillsStruct", "3d2f873cd467b9eefb3e163ff0defb2fbc0ccd45"),
+        )
+    ),
+    Source("Py4GWCoreLib/native_src/internals/types.py", "0b55c8333757e0d673b2fdfb5a4b6e9bbe4c9abb"),
+)
 
 
 def _read_source(source: Source) -> str:
@@ -167,6 +216,131 @@ def _module(monkeypatch: pytest.MonkeyPatch, name: str, **values: Any) -> Module
     module.__dict__.update(values)
     monkeypatch.setitem(sys.modules, name, module)
     return module
+
+
+def build_retained_world(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Use pinned TESTS declarations/readers without rebinding original fixtures."""
+    namespace: dict[str, Any] = dict(vars(ctypes), IntEnum=IntEnum, __name__="_retained_wire")
+    enum_tree = ast.parse(_read_source(GAME_DATA))
+    attribute = next(node for node in enum_tree.body if isinstance(node, ast.ClassDef) and node.name == "Attribute")
+    exec(compile(ast.Module([attribute], []), GAME_DATA.path, "exec"), namespace)
+    for node in ast.parse(_read_source(RETAINED_GLOBALS)).body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            exec(compile(ast.Module([node], []), RETAINED_GLOBALS.path, "exec"), namespace)
+    pending: list[ast.ClassDef] = []
+    for source in RETAINED_WIRE_SOURCES:
+        for node in ast.parse(_read_source(source)).body:
+            if isinstance(node, ast.ClassDef) and any(
+                isinstance(base, ast.Name) and base.id == "Structure" for base in node.bases
+            ):
+                fields: list[ast.stmt] = [
+                    item
+                    for item in node.body
+                    if isinstance(item, ast.Assign)
+                    and any(
+                        isinstance(target, ast.Name) and target.id in ("_pack_", "_fields_") for target in item.targets
+                    )
+                ]
+                pending.append(ast.ClassDef(node.name, node.bases, [], fields, []))
+    while pending:
+        progress = False
+        for node in pending[:]:
+            try:
+                exec(compile(ast.fix_missing_locations(ast.Module([node], [])), "retained wire", "exec"), namespace)
+            except NameError:
+                continue
+            pending.remove(node)
+            progress = True
+        assert progress, f"unresolved retained wire declarations: {[node.name for node in pending]}"
+
+    kernel = FakeKernel()
+    monkeypatch.setattr(ctypes, "WinDLL", kernel.load, raising=False)
+    sync = _module(monkeypatch, "_retained_intent_sync")
+    exec(compile(_read_source(RETAINED_INTENT_SYNC), RETAINED_INTENT_SYNC.path, "exec"), sync.__dict__)
+    assert not kernel.calls, f"Retained IntentSync import called native functions: {kernel.calls}"
+    wire = SimpleNamespace(**namespace, clock=sync, kernel=kernel)
+    clock = SimpleNamespace(frame=10000, uncached=10000, hwnd=0)
+    logs: list[tuple[str, str, int]] = []
+
+    def log(module: str, message: str, level: int, *, log: bool = True) -> None:
+        if log:
+            logs.append((module, message, level))
+
+    system = _module(
+        monkeypatch,
+        "PySystem",
+        get_tick_count64=lambda: clock.frame,
+        Console=SimpleNamespace(
+            Log=log,
+            get_gw_window_handle=lambda: clock.hwnd,
+            MessageType=SimpleNamespace(Info=0, Warning=1, Error=2),
+        ),
+    )
+    sender, receiver = "sender@example.invalid", "receiver@example.invalid"
+    player = SimpleNamespace(GetAccountEmail=lambda: sender)
+    _module(monkeypatch, "Py4GWCoreLib", __path__=[], Player=player)
+    _module(monkeypatch, "Py4GWCoreLib.Player", Player=player)
+    whiteboard = _module(monkeypatch, "_retained_whiteboard")
+    exec(compile(_read_source(RETAINED_WHITEBOARD), RETAINED_WHITEBOARD.path, "exec"), whiteboard.__dict__)
+    enums = _module(monkeypatch, "_retained_message_enums")
+    enum_path = ROOT / "Py4GWCoreLib/enums_src/Multiboxing_enums.py"
+    exec(compile(enum_path.read_text(encoding="utf-8-sig"), str(enum_path), "exec"), enums.__dict__)
+    account_module = _module(
+        monkeypatch,
+        "_retained_account_fixture",
+        __package__="Py4GWCoreLib.GlobalCache.shared_memory_src",
+        WireAccounts=wire.AllAccounts,
+        PySystem=system,
+        ConsoleLog=log,
+        dataclass=dataclass,
+        ctypes=ctypes,
+        time=time,
+        SharedCommandType=enums.SharedCommandType,
+    )
+    account_module.__dict__.update({key: value for key, value in namespace.items() if not key.startswith("__")})
+    account_module.__dict__.update({key: value for key, value in vars(sync).items() if not key.startswith("__")})
+    account_module.__dict__.update({key: value for key, value in vars(whiteboard).items() if not key.startswith("__")})
+    account_module.__dict__["get_uncached_tick_count64"] = lambda: clock.uncached
+    body: list[ast.stmt] = [ast.ImportFrom("__future__", [ast.alias("annotations")], 0)]
+    for node in ast.parse(_read_source(RETAINED_ALL_ACCOUNTS)).body:
+        if isinstance(node, ast.ClassDef) and node.name == "AllAccounts":
+            node.bases = [ast.Name("WireAccounts", ast.Load())]
+            node.body = [item for item in node.body if not isinstance(item, (ast.Assign, ast.AnnAssign))]
+            body.append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.ClassDef, ast.FunctionDef)):
+            body.append(node)
+    exec(
+        compile(ast.fix_missing_locations(ast.Module(body, [])), RETAINED_ALL_ACCOUNTS.path, "exec"),
+        account_module.__dict__,
+    )
+    table = account_module.AllAccounts()
+    for index, email in enumerate((sender, receiver)):
+        row = table.AccountData[index]
+        row.AccountEmail = email
+        row.IsAccount = True
+        row.IsSlotActive = True
+        row.LastUpdated = clock.uncached + index
+
+    def send(target: Any = table, recipient: str = receiver, command: Any = enums.SharedCommandType.Pycons) -> int:
+        return int(target.SendMessage(sender, recipient, command, (1.0, 2.0), ("secret payload",)))
+
+    return SimpleNamespace(
+        table=table,
+        wire=wire,
+        clock=clock,
+        logs=logs,
+        sender=sender,
+        receiver=receiver,
+        system=system,
+        console_log=log,
+        commands=enums.SharedCommandType,
+        send=send,
+    )
+
+
+@pytest.fixture
+def retained_world(monkeypatch: pytest.MonkeyPatch) -> Any:
+    return build_retained_world(monkeypatch)
 
 
 def _account(runtime: Any, index: int, email: str, *, group: int = 0, party: int = 7, map_id: int = 1) -> Any:

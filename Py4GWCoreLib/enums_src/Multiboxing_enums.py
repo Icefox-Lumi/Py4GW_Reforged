@@ -89,6 +89,9 @@ class SharedCommandType(IntEnum):
     # IMPORTANT: append only; persisted/shared enum values must never shift.
     AccountSettingsSync = auto()
     AccountSettingsSyncResult = auto()
+    PartyStateQuery = 74
+    HeroTeamPlayerSkillTemplateRequest = 75
+    HeroTeamPlayerSkillTemplateResult = 76
     #endregion
 
 class ReloadType(IntEnum):

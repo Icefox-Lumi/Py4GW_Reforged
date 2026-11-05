@@ -21,6 +21,9 @@ from test_shared_core_package2_dispatch import make_message
 from test_shared_core_package2_dispatch import queue_receipt
 from test_shared_core_package2_dispatch import read_source
 from test_shared_core_package2_dispatch import real_widget
+from test_shared_core_package2_dispatch import retained_env as _retained_env_fixture
+from test_shared_core_package2_dispatch import retained_real_widget
+from test_shared_core_package2_dispatch import retained_world as retained_world
 from test_shared_core_package2_dispatch import selected
 from test_shared_core_package2_dispatch import wait_once
 from test_shared_core_package2_dispatch import world as world
@@ -30,6 +33,7 @@ STATES = Source("Py4GWCoreLib/botting_src/subclases_src/STATES_src.py", "10bda90
 EVENTS = Source("Py4GWCoreLib/botting_src/event.py", "38ae050a6c26c04752dd5cffeba047c4f66d078a")
 UI = Source("Py4GWCoreLib/botting_src/subclases_src/UI_src.py", "52e6f2d5f9bcb14436edcc821efaf9db2652fa58")
 env = dispatch_env_fixture
+retained_env = _retained_env_fixture
 
 
 @pytest.mark.parametrize("change", ["widget", "profile", "account", "lifecycle"])
@@ -547,3 +551,187 @@ def test_c4_ui_stop_reconcile_then_stale_snapshot_preserves_owners(
         assert env.events.count("scan") == 2
     assert env.widget.merchant_rules_remote_dispatch_count == 0
     assert env.widget.merchant_rules_owned_work_count == 0
+
+
+# Separately bound retained TESTS transport/lifecycle counterparts (17 cases).
+@pytest.mark.parametrize("change", ["widget", "profile", "account", "lifecycle"])
+@pytest.mark.parametrize("started", [False, True])
+def test_retained_target_c1_pinned_owner_and_generation_cancel_stale_work(
+    retained_env: Any, monkeypatch: pytest.MonkeyPatch, change: str, started: bool
+) -> None:
+    env = retained_env
+    receipt = queue_receipt(env)
+    old_widget = env.widget
+    if started:
+        env.scheduler()
+    if change == "widget":
+        env.widget = retained_real_widget(env, monkeypatch)
+    elif change == "profile":
+        old_widget.merchant_rules_profile_generation += 1
+    elif change == "account":
+        old_widget.account_key = "different@example.invalid"
+    else:
+        env.map_id = 2
+    drain(env)
+    receipt.close()
+    assert "scan" not in env.events
+    assert old_widget.merchant_rules_remote_dispatch_count == 0
+    assert old_widget.merchant_rules_owned_work_count == 0
+    assert not env.world.table.Inbox[0].Active
+    if change == "widget":
+        assert env.widget.merchant_rules_remote_dispatch_count == 0
+        assert env.widget.merchant_rules_owned_work_count == 0
+
+
+def test_retained_target_c1_readiness_wait_and_reload_capture_are_real_widget_paths(retained_env: Any) -> None:
+    env = retained_env
+    env.party_ready = False
+    receipt = queue_receipt(env)
+    env.scheduler()
+    assert env.widget.merchant_rules_remote_dispatch_count == 1
+    assert env.widget.merchant_rules_owned_work_count == 0
+    assert env.world.table.Inbox[0].Running
+    env.party_ready = True
+    env.scheduler()
+    assert env.widget.merchant_rules_owned_work_count == 1
+    receipt.close()
+    env.cache.Coroutines.clear()
+    reload_receipt = queue_receipt(env, opcode=1, request="reload")
+    captured = env.widget._pending_multibox_profile_reload_payload
+    assert captured == {"version": 1, "label": "captured"}
+    env.payload["label"] = "later"
+    assert captured["label"] == "captured"
+    assert env.widget.pending_multibox_profile_reload == ("reload", env.world.sender, env.world.receiver)
+    reload_receipt.close()
+    assert env.widget.pending_multibox_profile_reload is None
+    assert not env.widget._merchant_rules_staged_multibox_reload_requests
+    assert env.reloads == []
+
+
+@pytest.mark.parametrize("cancel_at", ["unstarted", "started", "after_action"])
+def test_retained_target_c2_nested_leases_and_deferred_callbacks(retained_env: Any, cancel_at: str) -> None:
+    env = retained_env
+    called: list[str] = []
+
+    def execute(**_kwargs: Any) -> Generator[int, None, None]:
+        env.actions.AddActionWithDelay("ACTION", 100, lambda: called.append("native-command"))
+        yield 250
+
+    env.widget._execute_now = execute
+    receipt = queue_receipt(env, opcode=3)
+    assert env.widget.merchant_rules_remote_dispatch_count == 1
+    assert env.widget.merchant_rules_owned_work_count == 0
+    if cancel_at != "unstarted":
+        env.scheduler()
+        assert env.widget.merchant_rules_remote_dispatch_count == 1
+        assert env.widget.merchant_rules_owned_work_count == 1
+    if cancel_at == "after_action":
+        env.scheduler()
+        assert env.widget.merchant_rules_owned_action_count == 1
+        assert len(env.actions.pending) == 1
+        assert not called, "submission executed a supposedly deferred callback"
+        env.widget.merchant_rules_profile_generation += 1
+    receipt.close()
+    receipt.close()
+    assert env.widget.merchant_rules_remote_dispatch_count == 0
+    assert env.widget.merchant_rules_owned_work_count == 0
+    env.actions.drain()
+    assert env.widget.merchant_rules_owned_action_count == 0
+    assert not called
+
+
+def test_retained_target_c2_deferred_valid_callback_runs_once_after_receipt_completes(retained_env: Any) -> None:
+    env = retained_env
+    called: list[str] = []
+
+    def execute(**_kwargs: Any) -> Generator[int, None, None]:
+        env.actions.AddAction("ACTION", lambda: called.append("command"))
+        yield 1
+
+    env.widget._execute_now = execute
+    queue_receipt(env, opcode=3)
+    drain(env)
+    assert not called
+    assert env.widget.merchant_rules_owned_work_count == env.widget.merchant_rules_remote_dispatch_count == 0
+    assert env.widget.merchant_rules_owned_action_count == 1
+    callback, args, kwargs = env.actions.pending[0]
+    env.actions.drain()
+    assert called == ["command"]
+    assert env.widget.merchant_rules_owned_action_count == 0
+    # Widget callback release is idempotent; transport must not replace that ownership.
+    callback.release()
+    assert env.widget.merchant_rules_owned_action_count == 0
+    assert args == () and kwargs == {}
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_retained_target_c3_real_handler_completion_and_failure_restore_temporary_options(
+    retained_env: Any, failure: bool
+) -> None:
+    env = retained_env
+    options = env.world.table.GetHeroAIOptionsFromEmail(env.world.receiver)
+    options.Following = True
+    options.Combat = True
+    env.widget.destroy_include_protected_items = False
+    row = make_message(env)
+    row.ExtraData[2].value = "1"
+    row.ExtraData[3].value = "1"
+    if failure:
+
+        def scan_failure() -> None:
+            raise ValueError("inert inventory scan failed")
+
+        env.widget._scan_preview = scan_failure
+    env.messaging._queue_merchant_rules_message(0, row)
+    env.scheduler()
+    assert env.widget.destroy_include_protected_items
+    assert not options.Following
+    drain(env)
+    assert not env.widget.destroy_include_protected_items
+    assert not env.widget.destroy_instant_enabled
+    assert options.Following and options.Combat
+    assert env.results[-1][1]["opcode"] == (199 if failure else 101)
+    assert env.widget.merchant_rules_owned_work_count == env.widget.merchant_rules_remote_dispatch_count == 0
+    assert not row.Active
+
+
+def test_retained_target_c3_cleanup_exception_cannot_leave_receipt_retrying_forever(
+    retained_env: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = retained_env
+    receipt = queue_receipt(env)
+    env.scheduler()
+
+    def unavailable_options(_email: str) -> Any:
+        raise ValueError("host options disappeared during cleanup")
+
+    monkeypatch.setattr(env.world.table, "GetHeroAIOptionsFromEmail", unavailable_options)
+    try:
+        receipt.close()
+    except ValueError:
+        pass
+    receipt.close()
+    assert_terminal(env, receipt)
+    assert env.widget.merchant_rules_owned_work_count == env.widget.merchant_rules_remote_dispatch_count == 0
+    assert not env.world.table.Inbox[0].Active
+    assert not env.messaging._merchant_rules_dispatches
+
+
+def test_retained_target_c3_distinct_preview_overlap_retains_inherited_temporary_option_limit(
+    retained_env: Any,
+) -> None:
+    env = retained_env
+    first = make_message(env, index=0, request="first")
+    first.ExtraData[2].value = "1"
+    second = make_message(env, index=1, request="second")
+    second.ExtraData[2].value = "0"
+    env.messaging._queue_merchant_rules_message(0, first)
+    env.messaging._queue_merchant_rules_message(1, second)
+    assert env.widget.merchant_rules_remote_dispatch_count == 2
+    env.scheduler()
+    assert env.widget.merchant_rules_owned_work_count == 2
+    drain(env)
+    assert env.widget.merchant_rules_remote_dispatch_count == env.widget.merchant_rules_owned_work_count == 0
+    # Two legitimate requests retain the widget's snapshot/restore overlap.
+    # The transport receipt does not claim ownership of these widget options.
+    assert env.widget.destroy_include_protected_items is True

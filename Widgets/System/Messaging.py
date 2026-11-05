@@ -1,12 +1,15 @@
 import time
 import weakref
 from collections import deque
+from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from typing import Protocol
+from typing import TypedDict
 from typing import cast
 
 import Py4GW
@@ -878,9 +881,439 @@ def EnableHeroAIOptions(account_email: str):
 # region InviteToParty
 
 
+class _HTMNormalizedTemplate(TypedDict):
+    primary_profession_id: int
+    secondary_profession_id: int
+    skill_ids: tuple[int, ...]
+    attributes: dict[int, int]
+
+
+class _HTMCoroutineSink(Protocol):
+    def append(self, value: Iterator[object], /) -> None: ...
+
+
+_HTMSendMessage = Callable[
+    [str, str, SharedCommandType, tuple[float, float, float, float], tuple[str, str, str, str]], int
+]
+
+
+_PARTY_STATE_QUERY_REQUEST = "party_state_request"
+
+_PARTY_STATE_QUERY_REPLY = "party_state_reply"
+
+_PARTY_STATE_GUARD_RESULT = "party_state_guard"
+
+_PARTY_INVITE_GUARD = "party_invite_guard"
+
+
+def _party_state_query_cache() -> dict[object, object]:
+    cache = getattr(GLOBAL_CACHE, "_hero_team_party_state_query_cache", None)
+    if not isinstance(cache, dict):
+        new_cache: dict[object, object] = {}
+        cache = new_cache
+        setattr(GLOBAL_CACHE, "_hero_team_party_state_query_cache", cache)
+    return cast(dict[object, object], cache)
+
+
+def _party_state_cache_key(sender_email: str, request_id: str) -> tuple[str, str]:
+    return (str(sender_email or "").strip().casefold(), str(request_id or "").strip())
+
+
+def _party_state_int(value: Any, default: int = -1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _party_state_map_scalar(value: Any) -> int:
+    if isinstance(value, (tuple, list)):
+        value = cast(tuple[object, ...] | list[object], value)[0] if value else 0
+    return _party_state_int(value, 0)
+
+
+def _party_state_map_signature() -> tuple[int, int, int, int] | None:
+    try:
+        region = _party_state_map_scalar(Map.GetRegion())
+        language = _party_state_map_scalar(Map.GetLanguage())
+        map_value = (
+            _party_state_int(Map.GetMapID(), 0),
+            region,
+            _party_state_int(Map.GetDistrict(), 0),
+            language,
+        )
+    except Exception:
+        return None
+    return map_value if map_value[0] > 0 else None
+
+
+def _party_state_map_text(map_signature: tuple[int, int, int, int] | None) -> str:
+    values = map_signature or (0, 0, 0, 0)
+    return ",".join(str(int(value)) for value in values)
+
+
+def _party_state_parse_metadata(value: str) -> dict[str, Any] | None:
+    parts = str(value or "").split(";")
+    if len(parts) != 6:
+        return None
+    map_parts = parts[0].split(",")
+    if len(map_parts) != 4:
+        return None
+    try:
+        map_signature = tuple(int(item) for item in map_parts)
+        party_id = int(parts[1])
+        party_position = int(parts[2])
+        is_party_leader = int(parts[3])
+        is_loaded = int(parts[4])
+        other_count = int(parts[5])
+    except (TypeError, ValueError):
+        return None
+    if is_party_leader not in (0, 1) or is_loaded not in (0, 1):
+        return None
+    return {
+        "map_signature": map_signature,
+        "party_id": party_id,
+        "party_position": party_position,
+        "is_party_leader": bool(is_party_leader),
+        "is_loaded": bool(is_loaded),
+        "other_count": other_count,
+    }
+
+
+def _party_state_local_snapshot() -> dict[str, Any]:
+    party_api = GLOBAL_CACHE.Party
+
+    def read_members(method_name: str) -> tuple[list[Any], bool]:
+        method = getattr(party_api, method_name, None)
+        if not callable(method):
+            return [], False
+        try:
+            values: Any = method()
+            return list(values or []), values is not None
+        except Exception:
+            return [], False
+
+    players, players_ok = read_members("GetPlayers")
+    heroes, heroes_ok = read_members("GetHeroes")
+    henchmen, henchmen_ok = read_members("GetHenchmen")
+    others, others_ok = read_members("GetOthers")
+
+    def read_int(method_name: str) -> int:
+        method = getattr(party_api, method_name, None)
+        if not callable(method):
+            return -1
+        try:
+            value: Any = method()
+            return int(value)
+        except Exception:
+            return -1
+
+    party_size = read_int("GetPartySize")
+    player_count = read_int("GetPlayerCount")
+    hero_count = read_int("GetHeroCount")
+    henchman_count = read_int("GetHenchmanCount")
+    party_id = read_int("GetPartyID")
+    party_position = read_int("GetOwnPartyNumber")
+    try:
+        is_party_leader = bool(party_api.IsPartyLeader())
+    except Exception:
+        is_party_leader = False
+    try:
+        is_loaded = bool(party_api.IsPartyLoaded())
+    except Exception:
+        is_loaded = False
+
+    map_signature = _party_state_map_signature()
+    character_name = ""
+    try:
+        login_number = int(Player.GetLoginNumber() or 0)
+        if login_number > 0:
+            character_name = str(
+                cast(Callable[[int], str], getattr(party_api.Players, "GetPlayerNameByLoginNumber"))(login_number) or ""
+            ).strip()
+    except Exception:
+        character_name = ""
+
+    other_count = len(others)
+    components_reconciled = (
+        players_ok
+        and heroes_ok
+        and henchmen_ok
+        and others_ok
+        and party_size >= 0
+        and player_count == len(players)
+        and hero_count == len(heroes)
+        and henchman_count == len(henchmen)
+        and party_size == len(players) + len(heroes) + len(henchmen) + other_count
+    )
+    valid = bool(
+        components_reconciled
+        and party_id > 0
+        and party_position >= 0
+        and map_signature is not None
+        and bool(character_name)
+    )
+    return {
+        "valid": valid,
+        "character_name": character_name,
+        "party_size": party_size,
+        "player_count": player_count,
+        "hero_count": hero_count,
+        "henchman_count": henchman_count,
+        "other_count": other_count,
+        "party_id": party_id,
+        "party_position": party_position,
+        "is_party_leader": is_party_leader,
+        "is_loaded": is_loaded,
+        "map_signature": map_signature,
+    }
+
+
+def _party_state_params(snapshot: dict[str, Any]) -> tuple[float, float, float, float]:
+    return (
+        float(_party_state_int(snapshot.get("party_size"), -1)),
+        float(_party_state_int(snapshot.get("player_count"), -1)),
+        float(_party_state_int(snapshot.get("hero_count"), -1)),
+        float(_party_state_int(snapshot.get("henchman_count"), -1)),
+    )
+
+
+def _party_state_metadata(snapshot: dict[str, Any]) -> str:
+    return ";".join(
+        (
+            _party_state_map_text(snapshot.get("map_signature")),
+            str(_party_state_int(snapshot.get("party_id"), -1)),
+            str(_party_state_int(snapshot.get("party_position"), -1)),
+            "1" if bool(snapshot.get("is_party_leader")) else "0",
+            "1" if bool(snapshot.get("is_loaded")) else "0",
+            str(_party_state_int(snapshot.get("other_count"), -1)),
+        )
+    )
+
+
+def _cache_party_state_result(
+    message: SharedMessageStruct,
+    mode: str,
+    request_id: str,
+    *,
+    character_name: str = "",
+    result: str = "",
+) -> None:
+    metadata = _party_state_parse_metadata(_extra_data(message)[3])
+    params = [_party_state_int(message.Params[index], -1) for index in range(4)]
+    entry = {
+        "mode": str(mode),
+        "request_id": str(request_id),
+        "sender_email": str(message.SenderEmail or "").strip(),
+        "receiver_email": str(message.ReceiverEmail or "").strip(),
+        "character_name": str(character_name or "").strip(),
+        "result": str(result or "").strip(),
+        "party_size": params[0],
+        "player_count": params[1],
+        "hero_count": params[2],
+        "henchman_count": params[3],
+        "other_count": metadata["other_count"] if metadata else -1,
+        "party_id": metadata["party_id"] if metadata else -1,
+        "party_position": metadata["party_position"] if metadata else -1,
+        "is_party_leader": metadata["is_party_leader"] if metadata else None,
+        "is_loaded": metadata["is_loaded"] if metadata else None,
+        "map_signature": metadata["map_signature"] if metadata else None,
+        "message_timestamp": _party_state_int(message.Timestamp, 0),
+        "received_at": time.monotonic(),
+    }
+    sender_email = cast(str, entry["sender_email"])
+    if sender_email and request_id:
+        _party_state_query_cache()[_party_state_cache_key(sender_email, request_id)] = entry
+
+
+def _send_party_state_result(
+    sender_email: str,
+    mode: str,
+    request_id: str,
+    snapshot: dict[str, Any],
+    *,
+    character_name: str = "",
+    result: str = "",
+) -> int:
+    local_email = str(Player.GetAccountEmail() or "").strip()
+    sender = str(sender_email or "").strip()
+    if not local_email or not sender or not request_id:
+        return -1
+    extra_value = character_name if mode == _PARTY_STATE_QUERY_REPLY else result
+    return cast(_HTMSendMessage, getattr(GLOBAL_CACHE.ShMem, "SendMessage"))(
+        local_email,
+        sender,
+        SharedCommandType.PartyStateQuery,
+        _party_state_params(snapshot),
+        (mode, request_id, extra_value, _party_state_metadata(snapshot)),
+    )
+
+
+def PartyStateQuery(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    extra0, extra1, extra2, _extra3 = _extra_data(message)
+    mode = extra0.strip().lower()
+    request_id = extra1.strip()
+    try:
+        if mode == _PARTY_STATE_QUERY_REQUEST:
+            snapshot = _party_state_local_snapshot()
+            sent_index = _send_party_state_result(
+                message.SenderEmail,
+                _PARTY_STATE_QUERY_REPLY,
+                request_id,
+                snapshot,
+                character_name=snapshot["character_name"],
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    f"[PartyStateQuery] reply request={request_id!r} "
+                    f"to={message.SenderEmail!r} party={snapshot['party_size']} "
+                    f"players={snapshot['player_count']} heroes={snapshot['hero_count']} "
+                    f"henchmen={snapshot['henchman_count']} others={snapshot['other_count']} "
+                    f"queued={sent_index >= 0}"
+                ),
+                Console.MessageType.Info if sent_index >= 0 else Console.MessageType.Warning,
+                False,
+            )
+        elif mode == _PARTY_STATE_QUERY_REPLY:
+            _cache_party_state_result(
+                message,
+                mode,
+                request_id,
+                character_name=extra2,
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                f"[PartyStateQuery] cached reply request={request_id!r} from={message.SenderEmail!r}",
+                Console.MessageType.Info,
+                False,
+            )
+        elif mode == _PARTY_STATE_GUARD_RESULT:
+            _cache_party_state_result(
+                message,
+                mode,
+                request_id,
+                result=extra2,
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    f"[PartyStateQuery] cached guard request={request_id!r} "
+                    f"from={message.SenderEmail!r} result={extra2!r}"
+                ),
+                Console.MessageType.Info if extra2 == "reciprocal_invite_sent" else Console.MessageType.Warning,
+                False,
+            )
+        else:
+            ConsoleLog(
+                MODULE_NAME,
+                f"[PartyStateQuery] ignored unsupported mode={mode!r} request={request_id!r}",
+                Console.MessageType.Warning,
+                False,
+            )
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f"[PartyStateQuery] processing failed request={request_id!r}: {exc}",
+            Console.MessageType.Error,
+            False,
+        )
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    yield
+
+
+def _party_state_is_solo(snapshot: dict[str, Any]) -> bool:
+    return bool(
+        snapshot.get("valid")
+        and snapshot.get("is_loaded") is True
+        and snapshot.get("is_party_leader") is True
+        and _party_state_int(snapshot.get("party_position"), -1) == 0
+        and _party_state_int(snapshot.get("party_size"), -1) == 1
+        and _party_state_int(snapshot.get("player_count"), -1) == 1
+        and _party_state_int(snapshot.get("hero_count"), -1) == 0
+        and _party_state_int(snapshot.get("henchman_count"), -1) == 0
+        and _party_state_int(snapshot.get("other_count"), -1) == 0
+    )
+
+
+def _guarded_party_invite_result(
+    message: SharedMessageStruct,
+    extras: tuple[str, str, str, str],
+) -> tuple[str, dict[str, Any]]:
+    request_id = extras[1].strip()
+    expected_character = extras[2].strip()
+    expected_map = extras[3].strip()
+    snapshot = _party_state_local_snapshot()
+    local_email = str(Player.GetAccountEmail() or "").strip()
+    result = "guard_failed: invalid_request"
+
+    if not request_id or local_email.casefold() != str(message.ReceiverEmail or "").strip().casefold():
+        result = "guard_failed: invalid_request"
+    elif expected_map != _party_state_map_text(snapshot.get("map_signature")):
+        result = "guard_failed: map_changed"
+    elif not snapshot.get("valid"):
+        result = "guard_failed: party_state_unavailable"
+    elif expected_character.casefold() != str(snapshot.get("character_name") or "").strip().casefold():
+        result = "guard_failed: character_changed"
+    elif not _party_state_is_solo(snapshot):
+        result = "guard_failed: party_changed"
+    else:
+        try:
+            sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
+        except Exception:
+            sender_data = None
+        sender_character = str(getattr(getattr(sender_data, "AgentData", None), "CharacterName", "") or "").strip()
+        if not sender_character:
+            result = "guard_failed: sender_identity_unavailable"
+        else:
+            try:
+                # This is intentionally the next party mutation after the
+                # authoritative local recheck; no delay belongs in this gap.
+                cast(Callable[[str], None], getattr(GLOBAL_CACHE.Party.Players, "InvitePlayer"))(sender_character)
+                result = "reciprocal_invite_sent"
+            except Exception:
+                result = "guard_failed: reciprocal_invite_failed"
+    return result, snapshot
+
+
 def InviteToParty(index :int, message: SharedMessageStruct):
     # ConsoleLog(MODULE_NAME, f"Processing InviteToParty message: {message}", Console.MessageType.Info)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    extras = _extra_data(message)
+    if extras[0].strip().lower() == _PARTY_INVITE_GUARD:
+        request_id = extras[1].strip()
+        try:
+            result, snapshot = _guarded_party_invite_result(message, extras)
+            sent_index = _send_party_state_result(
+                message.SenderEmail,
+                _PARTY_STATE_GUARD_RESULT,
+                request_id,
+                snapshot,
+                result=result,
+            )
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    f"[InviteToParty] guard request={request_id!r} sender={message.SenderEmail!r} "
+                    f"result={result!r} reply_queued={sent_index >= 0}"
+                ),
+                Console.MessageType.Info if result == "reciprocal_invite_sent" else Console.MessageType.Warning,
+                False,
+            )
+        except Exception as exc:
+            ConsoleLog(
+                MODULE_NAME,
+                f"[InviteToParty] guarded processing failed request={request_id!r}: {exc}",
+                Console.MessageType.Error,
+                False,
+            )
+        finally:
+            GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        yield
+        return
+
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
@@ -3218,6 +3651,708 @@ def SwitchCharacter(index: int, message: SharedMessageStruct):
 # endregion
 
 #region LoadSkillTemplate
+def _hero_team_player_template_runtime() -> dict[object, object]:
+    """Keep HTM request state on GLOBAL_CACHE so widget reloads do not split it."""
+
+    runtime = getattr(GLOBAL_CACHE, '_hero_team_player_template_runtime', None)
+    if not isinstance(runtime, dict):
+        initial_seen: dict[object, object] = {}
+        runtime = {'active_request_id': '', 'seen_request_ids': initial_seen}
+        setattr(GLOBAL_CACHE, '_hero_team_player_template_runtime', runtime)
+    runtime = cast(dict[object, object], runtime)
+    seen = runtime.get('seen_request_ids')
+    if not isinstance(seen, dict):
+        replacement_seen: dict[object, object] = {}
+        seen = replacement_seen
+        runtime['seen_request_ids'] = seen
+    seen = cast(dict[object, object], seen)
+    now = time.monotonic()
+    for request_id, expires_at in list(seen.items()):
+        try:
+            # Attempt conversion without assuming cached values already have a numeric type.
+            if cast(Callable[[object], float], float)(expires_at) <= now:
+                seen.pop(request_id, None)
+        except (TypeError, ValueError):
+            seen.pop(request_id, None)
+    return runtime
+
+
+def _hero_team_player_template_map_signature() -> tuple[int, int, int, int] | None:
+    try:
+        return (
+            int(Map.GetMapID()),
+            int(Map.GetRegion()[0]),
+            int(Map.GetDistrict()),
+            int(Map.GetLanguage()[0]),
+        )
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None
+
+
+def _hero_team_player_template_skill_id(skill: Any) -> int:
+    try:
+        skill_id = getattr(skill, 'id', 0)
+        skill_id = getattr(skill_id, 'id', skill_id)
+        return max(0, int(skill_id or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _hero_team_player_template_empty_observation() -> dict[str, Any]:
+    return {
+        'skill_ids': (0,) * 8,
+        'primary_profession_id': 0,
+        'secondary_profession_id': 0,
+        'base_attributes': {},
+        'effective_levels': {},
+        'encoded': '',
+        'decoded': {},
+        'normalized': None,
+        'error': '',
+    }
+
+
+def _hero_team_player_template_observation(skillbar: Any) -> dict[str, Any]:
+    from Py4GWCoreLib.modular.hero_team_manager import normalize_player_attributes
+    from Py4GWCoreLib.modular.hero_team_manager import normalize_player_template_decoded
+
+    observation = _hero_team_player_template_empty_observation()
+    try:
+        skillbar.GetContext()
+        observation['skill_ids'] = tuple(
+            _hero_team_player_template_skill_id(skillbar.GetSkill(slot)) for slot in range(1, 9)
+        )
+        agent_id = int(Player.GetAgentID() or 0)
+        if agent_id <= 0:
+            observation['error'] = 'player agent is unavailable'
+            return observation
+        primary, secondary = Agent.GetProfessionIDs(agent_id)
+        observation['primary_profession_id'] = int(primary or 0)
+        observation['secondary_profession_id'] = int(secondary or 0)
+        observation['base_attributes'], observation['effective_levels'] = normalize_player_attributes(
+            Agent.GetAttributes(agent_id)
+        )
+    except Exception as exc:
+        observation['error'] = f'direct state read failed: {exc}'
+        return observation
+
+    try:
+        import PySkillbar
+
+        encoded = str(PySkillbar.encode_skill_template() or '').strip()
+        observation['encoded'] = encoded
+        decoded = PySkillbar.decode_skill_template(encoded) if encoded else {}
+        observation['decoded'] = decoded
+        observation['normalized'] = normalize_player_template_decoded(decoded)
+    except Exception as exc:
+        observation['error'] = f'native encoding read failed: {exc}'
+    return observation
+
+
+def _hero_team_player_template_signature(observation: dict[str, Any]) -> tuple[Any, ...]:
+    normalized = observation.get('normalized')
+    normalized_signature = None
+    if isinstance(normalized, dict):
+        normalized = cast(_HTMNormalizedTemplate, normalized)
+        normalized_signature = (
+            int(normalized.get('primary_profession_id', 0) or 0),
+            int(normalized.get('secondary_profession_id', 0) or 0),
+            tuple(int(skill_id or 0) for skill_id in normalized.get('skill_ids', ())),
+            tuple(sorted((int(key), int(value)) for key, value in normalized.get('attributes', {}).items())),
+        )
+    return (
+        tuple(int(skill_id or 0) for skill_id in observation.get('skill_ids', ())),
+        int(observation.get('primary_profession_id', 0) or 0),
+        int(observation.get('secondary_profession_id', 0) or 0),
+        tuple(sorted((int(key), int(value)) for key, value in observation.get('base_attributes', {}).items())),
+        normalized_signature,
+    )
+
+
+def _hero_team_player_template_flags(spec: Any, observation: dict[str, Any]) -> dict[str, bool]:
+    from Py4GWCoreLib.modular.hero_team_manager import player_template_direct_flags
+    from Py4GWCoreLib.modular.hero_team_manager import player_template_normalized_flags
+
+    direct = player_template_direct_flags(
+        spec,
+        observation.get('skill_ids', ()),
+        observation.get('primary_profession_id', 0),
+        observation.get('secondary_profession_id', 0),
+        observation.get('base_attributes', {}),
+    )
+    normalized = player_template_normalized_flags(spec, observation.get('decoded', {}))
+    return {
+        'skills': bool(direct.get('skills')),
+        'professions': bool(direct.get('professions')),
+        'attributes': bool(direct.get('attributes')),
+        'normalized': bool(normalized.get('normalized')),
+        'raw': str(observation.get('encoded', '') or '') == spec.code,
+    }
+
+
+def _hero_team_player_template_is_match(flags: dict[str, bool]) -> bool:
+    return all(bool(flags.get(name)) for name in ('skills', 'professions', 'attributes', 'normalized'))
+
+
+def _hero_team_player_template_flags_wire(flags: dict[str, bool], detail: str = 'none') -> str:
+    from Py4GWCoreLib.modular.hero_team_manager import PLAYER_TEMPLATE_MAX_CODE_LENGTH
+
+    safe_detail = str(detail or 'none').strip().lower().replace(';', '_')
+    prefix = (
+        f'v1;S{int(bool(flags.get("skills")))};P{int(bool(flags.get("professions")))};'
+        f'A{int(bool(flags.get("attributes")))};N{int(bool(flags.get("normalized")))};'
+        f'R{int(bool(flags.get("raw")))};X'
+    )
+    if len(prefix) + len(safe_detail) > PLAYER_TEMPLATE_MAX_CODE_LENGTH:
+        safe_detail = 'detail_unavailable'
+    return prefix + safe_detail
+
+
+def _hero_team_player_template_send_result(
+    sender_email: str,
+    request_id: str,
+    result: str,
+    observation: dict[str, Any] | None,
+    flags: dict[str, bool],
+    detail: str,
+    elapsed_ms: int,
+) -> int:
+    from Py4GWCoreLib.modular.hero_team_manager import PLAYER_TEMPLATE_MAX_CODE_LENGTH
+    from Py4GWCoreLib.modular.hero_team_manager import PLAYER_TEMPLATE_PROTOCOL_VERSION
+
+    observation = observation or _hero_team_player_template_empty_observation()
+    encoded = str(observation.get('encoded', '') or '')
+    wire_encoded = encoded if len(encoded) <= PLAYER_TEMPLATE_MAX_CODE_LENGTH else ''
+    wire_detail = detail
+    if encoded and not wire_encoded:
+        wire_detail = 'encoding_wire_unavailable'
+    try:
+        params = (
+            float(PLAYER_TEMPLATE_PROTOCOL_VERSION),
+            float(max(0, int(elapsed_ms))),
+            float(int(observation.get('primary_profession_id', 0) or 0)),
+            float(int(observation.get('secondary_profession_id', 0) or 0)),
+        )
+    except (TypeError, ValueError):
+        params = (float(PLAYER_TEMPLATE_PROTOCOL_VERSION), 0.0, 0.0, 0.0)
+    return cast(_HTMSendMessage, getattr(GLOBAL_CACHE.ShMem, "SendMessage"))(
+        str(Player.GetAccountEmail() or '').strip(),
+        str(sender_email or '').strip(),
+        SharedCommandType.HeroTeamPlayerSkillTemplateResult,
+        params,
+        (
+            str(request_id or '').strip(),
+            str(result or '').strip().lower(),
+            wire_encoded,
+            _hero_team_player_template_flags_wire(flags, wire_detail),
+        ),
+    )
+
+
+def _hero_team_player_template_shared_sender_valid(
+    sender_email: str,
+    expected_map: tuple[int, int, int, int],
+    expected_party_id: int,
+    expected_sender_login: int,
+) -> tuple[str | None, str]:
+    try:
+        sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(sender_email)
+    except Exception:
+        sender_data = None
+    if sender_data is None:
+        return 'sender_identity_unavailable', 'shared-memory sender record is unavailable'
+    try:
+        if str(sender_data.AccountEmail or '').strip().casefold() != str(sender_email).strip().casefold():
+            return 'sender_identity_unavailable', 'shared-memory sender email does not match'
+        if int(sender_data.AgentData.LoginNumber or 0) != int(expected_sender_login):
+            return 'sender_identity_unavailable', 'shared-memory sender login does not match'
+        sender_map = (
+            int(sender_data.AgentData.Map.MapID),
+            int(sender_data.AgentData.Map.Region),
+            int(sender_data.AgentData.Map.District),
+            int(sender_data.AgentData.Map.Language),
+        )
+        if sender_map != tuple(int(value) for value in expected_map):
+            return 'sender_identity_unavailable', 'shared-memory sender map does not match'
+        if int(sender_data.AgentPartyData.PartyID or 0) != int(expected_party_id):
+            return 'sender_identity_unavailable', 'shared-memory sender party does not match'
+        last_updated = int(sender_data.LastUpdated or 0)
+    except (AttributeError, TypeError, ValueError):
+        return 'sender_identity_unavailable', 'shared-memory sender identity is malformed'
+
+    from Py4GWCoreLib.modular.hero_team_manager import PLAYER_TEMPLATE_REQUEST_TTL_MS
+
+    now_tick = int(PySystem.get_tick_count64())
+    age = (now_tick - last_updated) & 0xFFFFFFFF if last_updated > 0 else None
+    if age is None or age > PLAYER_TEMPLATE_REQUEST_TTL_MS or age >= 0x80000000:
+        return 'sender_identity_unavailable', 'shared-memory sender record is stale'
+    return None, ''
+
+
+def _hero_team_player_template_guard(
+    sender_email: str,
+    receiver_email: str,
+    expected_character: str,
+    expected_map: tuple[int, int, int, int],
+    expected_party_id: int,
+    expected_sender_login: int,
+) -> tuple[str | None, str]:
+    if str(Player.GetAccountEmail() or '').strip().casefold() != str(receiver_email or '').strip().casefold():
+        return 'invalid_request', 'receiver account does not match the local account'
+    if str(Player.GetName() or '').strip().casefold() != str(expected_character or '').strip().casefold():
+        return 'wrong_character', 'effective expected character does not match'
+    if not Map.IsOutpost():
+        return 'not_outpost', 'target is not in an outpost'
+    current_map = _hero_team_player_template_map_signature()
+    if current_map is None:
+        return 'wrong_map', 'target map identity is unavailable'
+    map_labels = ('map_id', 'region', 'district', 'language')
+    for label, actual, expected in zip(map_labels, current_map, expected_map):
+        if int(actual) != int(expected):
+            return 'wrong_map', label
+
+    party = GLOBAL_CACHE.Party
+    try:
+        if not bool(party.IsPartyLoaded()):
+            return 'wrong_party', 'target party is not loaded'
+        if int(party.GetPartyID() or 0) != int(expected_party_id):
+            return 'wrong_party', 'party ID does not match'
+        players = list(cast(Callable[[], list[object]], getattr(party, 'GetPlayers'))() or [])
+    except (AttributeError, TypeError, ValueError):
+        return 'wrong_party', 'target party identity is unavailable'
+    if not any(int(getattr(player, 'login_number', 0) or 0) == int(expected_sender_login) for player in players):
+        return 'sender_not_in_party', 'controller login is not in the live target party'
+    try:
+        sender_agent_id = int(
+            cast(Callable[[int], int], getattr(party.Players, 'GetAgentIDByLoginNumber'))(int(expected_sender_login))
+            or 0
+        )
+    except (AttributeError, TypeError, ValueError):
+        sender_agent_id = 0
+    if sender_agent_id <= 0:
+        return 'sender_not_in_party', 'controller login has no live target agent'
+    return _hero_team_player_template_shared_sender_valid(
+        sender_email,
+        expected_map,
+        expected_party_id,
+        expected_sender_login,
+    )
+
+
+def _hero_team_player_template_failure_code(flags: dict[str, bool], observation: dict[str, Any]) -> tuple[str, str]:
+    error = str(observation.get('error', '') or '')
+    if error:
+        if 'native encoding read failed' in error:
+            return 'encoding_mismatch', 'encoding'
+        return 'target_state_unavailable', 'state_read'
+    if not flags.get('skills'):
+        return 'skill_mismatch', 'skills'
+    if not flags.get('professions'):
+        return 'profession_mismatch', 'professions'
+    if not flags.get('attributes'):
+        return 'attribute_mismatch', 'attributes_base'
+    if not flags.get('normalized'):
+        return 'encoding_mismatch', 'encoding'
+    return 'verification_timeout', 'unstable'
+
+
+def HeroTeamPlayerSkillTemplateRequest(index: int, message: SharedMessageStruct):
+    from Py4GWCoreLib.modular.hero_team_manager import PLAYER_TEMPLATE_MAX_CODE_LENGTH
+    from Py4GWCoreLib.modular.hero_team_manager import PLAYER_TEMPLATE_REQUEST_TTL_MS
+    from Py4GWCoreLib.modular.hero_team_manager import PLAYER_TEMPLATE_STABLE_MS
+    from Py4GWCoreLib.modular.hero_team_manager import PLAYER_TEMPLATE_VERIFY_TIMEOUT_MS
+    from Py4GWCoreLib.modular.hero_team_manager import decode_player_template_guard
+    from Py4GWCoreLib.modular.hero_team_manager import parse_player_template_code
+    from Py4GWCoreLib.modular.hero_team_manager import valid_player_template_request_id
+
+    sender_email = str(message.SenderEmail or '').strip()
+    receiver_email = str(message.ReceiverEmail or '').strip()
+    request_id, template_code, expected_character, guard_text = _extra_data(message)
+    try:
+        request_timestamp = int(message.Timestamp or 0)
+    except (TypeError, ValueError, OverflowError):
+        request_timestamp = 0
+    request_params: tuple[float, ...] = ()
+    started_tick = int(PySystem.get_tick_count64())
+    result_sent = False
+    runtime = _hero_team_player_template_runtime()
+    acquisition_token: object | None = None
+
+    def send_result(
+        result: str,
+        observation: dict[str, Any] | None = None,
+        flags: dict[str, bool] | None = None,
+        detail: str = 'none',
+    ) -> None:
+        nonlocal result_sent
+        if result_sent:
+            return
+        result_sent = True
+        elapsed_ms = max(0, int(PySystem.get_tick_count64()) - started_tick)
+        sent_index = _hero_team_player_template_send_result(
+            sender_email,
+            request_id,
+            result,
+            observation,
+            flags or {},
+            detail,
+            elapsed_ms,
+        )
+        ConsoleLog(
+            MODULE_NAME,
+            (
+                f'[HeroTeamPlayerTemplate] result={result!r} request={request_id!r} '
+                f'elapsed_ms={elapsed_ms} queued={sent_index >= 0} detail={detail} '
+                f'observed_encoded={str((observation or {}).get("encoded", "") or "")!r}'
+            ),
+            Console.MessageType.Info if result in {'applied', 'already_matches'} else Console.MessageType.Warning,
+            False,
+        )
+
+    try:
+        GLOBAL_CACHE.ShMem.MarkMessageAsRunning(receiver_email, index)
+        try:
+            request_params = tuple(float(value) for value in message.Params)
+        except (TypeError, ValueError):
+            send_result('invalid_request', detail='params')
+            return
+        if len(request_params) < 1:
+            send_result('invalid_request', detail='params')
+            return
+        if not valid_player_template_request_id(request_id):
+            send_result('invalid_request', detail='request_id')
+            return
+        if request_params[0] != 1.0:
+            send_result('invalid_request', detail='protocol_version')
+            return
+        request_age = (int(PySystem.get_tick_count64()) - request_timestamp) & 0xFFFFFFFF
+        if request_timestamp <= 0 or request_age > PLAYER_TEMPLATE_REQUEST_TTL_MS or request_age >= 0x80000000:
+            send_result('stale_request', detail='request_timestamp')
+            return
+
+        seen = cast(dict[object, object], runtime['seen_request_ids'])
+        active_request_id = str(runtime.get('active_request_id', '') or '')
+        if active_request_id and active_request_id != request_id:
+            send_result('target_busy', detail='active_request')
+            return
+        if request_id in seen:
+            send_result('duplicate_request', detail='replay')
+            return
+        seen[request_id] = time.monotonic() + (PLAYER_TEMPLATE_REQUEST_TTL_MS / 1000.0)
+        acquisition_token = object()
+        runtime['active_request_id'] = request_id
+        runtime['_active_request_owner_token'] = acquisition_token
+
+        guard = decode_player_template_guard(guard_text)
+        if guard is None:
+            send_result('invalid_request', detail='guard')
+            return
+        expected_map = (
+            int(guard[0]),
+            int(guard[1]),
+            int(guard[2]),
+            int(guard[3]),
+        )
+        expected_party_id = int(guard[4])
+        expected_sender_login = int(guard[5])
+        if expected_party_id <= 0 or expected_sender_login <= 0 or not expected_character:
+            send_result('invalid_request', detail='identity_guard')
+            return
+
+        try:
+            declared_template_length = int(request_params[1])
+            declared_template_length_is_integer = request_params[1] == declared_template_length
+        except (IndexError, TypeError, ValueError, OverflowError):
+            declared_template_length = 0
+            declared_template_length_is_integer = False
+        if not declared_template_length_is_integer or declared_template_length != len(template_code):
+            if declared_template_length > PLAYER_TEMPLATE_MAX_CODE_LENGTH:
+                send_result('oversized_template', detail='template_length')
+            else:
+                send_result('invalid_request', detail='template_length')
+            return
+        if declared_template_length > PLAYER_TEMPLATE_MAX_CODE_LENGTH:
+            send_result('oversized_template', detail='template_length')
+            return
+        spec = parse_player_template_code(template_code)
+        if spec is None:
+            send_result('malformed_template', detail='template_code')
+            return
+
+        guard_failure, guard_detail = _hero_team_player_template_guard(
+            sender_email,
+            receiver_email,
+            expected_character,
+            expected_map,
+            expected_party_id,
+            expected_sender_login,
+        )
+        if guard_failure:
+            send_result(guard_failure, detail=guard_detail)
+            return
+
+        agent_id = int(Player.GetAgentID() or 0)
+        if agent_id <= 0:
+            send_result('target_state_unavailable', detail='player_agent')
+            return
+        primary_profession, _secondary_profession = Agent.GetProfessionIDs(agent_id)
+        if int(primary_profession or 0) <= 0:
+            send_result('target_state_unavailable', detail='primary_profession')
+            return
+        if int(primary_profession) != int(spec.primary_profession_id):
+            send_result('wrong_primary_profession', detail='primary_profession')
+            return
+
+        import PySkillbar
+
+        skillbar = PySkillbar.Skillbar()
+        baseline = _hero_team_player_template_observation(skillbar)
+        baseline_flags = _hero_team_player_template_flags(spec, baseline)
+        if _hero_team_player_template_is_match(baseline_flags):
+            stable_signature = _hero_team_player_template_signature(baseline)
+            stable_started = time.monotonic()
+            while (time.monotonic() - stable_started) * 1000.0 < PLAYER_TEMPLATE_STABLE_MS:
+                guard_failure, guard_detail = _hero_team_player_template_guard(
+                    sender_email,
+                    receiver_email,
+                    expected_character,
+                    expected_map,
+                    expected_party_id,
+                    expected_sender_login,
+                )
+                current = _hero_team_player_template_observation(skillbar)
+                current_flags = _hero_team_player_template_flags(spec, current)
+                if guard_failure:
+                    send_result(guard_failure, current, current_flags, guard_detail)
+                    return
+                if not _hero_team_player_template_is_match(current_flags):
+                    break
+                if _hero_team_player_template_signature(current) != stable_signature:
+                    break
+                yield
+            else:
+                final_guard_failure, final_guard_detail = _hero_team_player_template_guard(
+                    sender_email,
+                    receiver_email,
+                    expected_character,
+                    expected_map,
+                    expected_party_id,
+                    expected_sender_login,
+                )
+                final = _hero_team_player_template_observation(skillbar)
+                final_flags = _hero_team_player_template_flags(spec, final)
+                if not final_guard_failure and _hero_team_player_template_is_match(final_flags):
+                    send_result('already_matches', final, final_flags)
+                    return
+                if final_guard_failure:
+                    send_result(final_guard_failure, final, final_flags, final_guard_detail)
+                    return
+
+        preload_guard_failure, preload_guard_detail = _hero_team_player_template_guard(
+            sender_email,
+            receiver_email,
+            expected_character,
+            expected_map,
+            expected_party_id,
+            expected_sender_login,
+        )
+        if preload_guard_failure:
+            send_result(preload_guard_failure, baseline, baseline_flags, preload_guard_detail)
+            return
+
+        try:
+            cast(Callable[[str], None], getattr(GLOBAL_CACHE.SkillBar, 'LoadSkillTemplate'))(spec.code)
+        except Exception as exc:
+            ConsoleLog(
+                MODULE_NAME,
+                f'[HeroTeamPlayerTemplate] queue dispatch failed request={request_id!r}: {exc}',
+                Console.MessageType.Error,
+                False,
+            )
+            send_result('queue_dispatch_failed', baseline, baseline_flags, 'queue_exception')
+            return
+
+        verification_deadline = time.monotonic() + (PLAYER_TEMPLATE_VERIFY_TIMEOUT_MS / 1000.0)
+        last_signature = _hero_team_player_template_signature(baseline)
+        first_change_logged = False
+        first_match_logged = False
+        stable_started: float | None = None
+        transient_decode_logged = False
+        last_observation = baseline
+        last_flags = baseline_flags
+        while time.monotonic() < verification_deadline:
+            observation = _hero_team_player_template_observation(skillbar)
+            flags = _hero_team_player_template_flags(spec, observation)
+            signature = _hero_team_player_template_signature(observation)
+            if signature != last_signature:
+                if not first_change_logged:
+                    first_change_logged = True
+                    ConsoleLog(
+                        MODULE_NAME,
+                        f'[HeroTeamPlayerTemplate] first state change request={request_id!r}',
+                        Console.MessageType.Info,
+                        False,
+                    )
+                else:
+                    ConsoleLog(
+                        MODULE_NAME,
+                        f'[HeroTeamPlayerTemplate] semantic state changed request={request_id!r}',
+                        Console.MessageType.Info,
+                        False,
+                    )
+                last_signature = signature
+            if observation.get('encoded') and observation.get('normalized') is None and not transient_decode_logged:
+                transient_decode_logged = True
+                ConsoleLog(
+                    MODULE_NAME,
+                    f'[HeroTeamPlayerTemplate] transient native decode pending request={request_id!r}',
+                    Console.MessageType.Info,
+                    False,
+                )
+            matched = _hero_team_player_template_is_match(flags)
+            if matched:
+                if not first_match_logged:
+                    first_match_logged = True
+                    ConsoleLog(
+                        MODULE_NAME,
+                        f'[HeroTeamPlayerTemplate] first complete match request={request_id!r}',
+                        Console.MessageType.Info,
+                        False,
+                    )
+                if stable_started is None:
+                    stable_started = time.monotonic()
+                elif (time.monotonic() - stable_started) * 1000.0 >= PLAYER_TEMPLATE_STABLE_MS:
+                    guard_failure, guard_detail = _hero_team_player_template_guard(
+                        sender_email,
+                        receiver_email,
+                        expected_character,
+                        expected_map,
+                        expected_party_id,
+                        expected_sender_login,
+                    )
+                    final = _hero_team_player_template_observation(skillbar)
+                    final_flags = _hero_team_player_template_flags(spec, final)
+                    if not guard_failure and _hero_team_player_template_is_match(final_flags):
+                        send_result('applied', final, final_flags)
+                        return
+                    if guard_failure:
+                        send_result(guard_failure, final, final_flags, guard_detail)
+                        return
+                    stable_started = None
+            else:
+                stable_started = None
+            last_observation = observation
+            last_flags = flags
+            yield
+
+        failure, detail = _hero_team_player_template_failure_code(last_flags, last_observation)
+        send_result(failure, last_observation, last_flags, detail)
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f'[HeroTeamPlayerTemplate] request processing failed request={request_id!r}: {exc}',
+            Console.MessageType.Error,
+            False,
+        )
+        send_result('target_state_unavailable', detail='handler_exception')
+    finally:
+        if (
+            acquisition_token is not None
+            and runtime.get('_active_request_owner_token') is acquisition_token
+            and str(runtime.get('active_request_id', '') or '') == request_id
+        ):
+            runtime['active_request_id'] = ''
+            runtime.pop('_active_request_owner_token', None)
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(receiver_email, index)
+    yield
+
+
+def _hero_team_player_template_parse_result_flags(value: str) -> tuple[dict[str, bool], str]:
+    flags = {'skills': False, 'professions': False, 'attributes': False, 'normalized': False, 'raw': False}
+    detail = 'none'
+    parts = str(value or '').strip().split(';')
+    if not parts or parts[0] != 'v1':
+        return flags, 'malformed_flags'
+    for part in parts[1:]:
+        if len(part) >= 2 and part[0] in {'S', 'P', 'A', 'N', 'R'}:
+            flags[
+                {
+                    'S': 'skills',
+                    'P': 'professions',
+                    'A': 'attributes',
+                    'N': 'normalized',
+                    'R': 'raw',
+                }[part[0]]
+            ] = (
+                part[1:] == '1'
+            )
+        elif part.startswith('X'):
+            detail = part[1:] or 'none'
+    return flags, detail
+
+
+def HeroTeamPlayerSkillTemplateResult(index: int, message: SharedMessageStruct):
+    request_id, result, observed_encoded, flags_text = _extra_data(message)
+    sender_email = str(message.SenderEmail or '').strip()
+    receiver_email = str(message.ReceiverEmail or '').strip()
+    try:
+        try:
+            params = tuple(float(value) for value in message.Params)
+        except (TypeError, ValueError):
+            params = ()
+        try:
+            message_timestamp = int(message.Timestamp or 0)
+        except (TypeError, ValueError):
+            message_timestamp = 0
+        flags, detail = _hero_team_player_template_parse_result_flags(flags_text)
+
+        def result_param_int(position: int) -> int:
+            try:
+                value = float(params[position])
+                integer_value = int(value)
+                return integer_value if value == integer_value else 0
+            except (IndexError, TypeError, ValueError, OverflowError):
+                return 0
+
+        result_entry = {
+            'request_id': request_id,
+            'sender_email': sender_email,
+            'receiver_email': receiver_email,
+            'result': result.strip().lower(),
+            'observed_encoded': observed_encoded,
+            'flags': flags,
+            'detail': detail,
+            'protocol_version': result_param_int(0),
+            'elapsed_ms': result_param_int(1),
+            'primary_profession_id': result_param_int(2),
+            'secondary_profession_id': result_param_int(3),
+            'message_timestamp': message_timestamp,
+            'received_at': time.monotonic(),
+        }
+        from Py4GWCoreLib.modular.hero_team_manager import cache_player_template_result
+
+        cache_player_template_result(result_entry)
+        ConsoleLog(
+            MODULE_NAME,
+            (
+                f'[HeroTeamPlayerTemplate] cached result={result_entry["result"]!r} '
+                f'request={request_id!r} from={sender_email!r} detail={detail}'
+            ),
+            Console.MessageType.Info,
+            False,
+        )
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f'[HeroTeamPlayerTemplate] result cache failed request={request_id!r}: {exc}',
+            Console.MessageType.Error,
+            False,
+        )
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(receiver_email, index)
+    yield
+
+
 def LoadSkillTemplate(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -4004,6 +5139,16 @@ def ProcessMessages():
             AccountSettingsSync(index, message)
         case SharedCommandType.AccountSettingsSyncResult:
             AccountSettingsSyncResult(index, message)
+        case SharedCommandType.PartyStateQuery:
+            cast(_HTMCoroutineSink, getattr(GLOBAL_CACHE, 'Coroutines')).append(PartyStateQuery(index, message))
+        case SharedCommandType.HeroTeamPlayerSkillTemplateRequest:
+            cast(_HTMCoroutineSink, getattr(GLOBAL_CACHE, 'Coroutines')).append(
+                HeroTeamPlayerSkillTemplateRequest(index, message)
+            )
+        case SharedCommandType.HeroTeamPlayerSkillTemplateResult:
+            cast(_HTMCoroutineSink, getattr(GLOBAL_CACHE, 'Coroutines')).append(
+                HeroTeamPlayerSkillTemplateResult(index, message)
+            )
         case SharedCommandType.LootEx:
             # privately Handled Command, by frenkey
             pass
