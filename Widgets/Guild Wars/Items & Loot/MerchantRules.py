@@ -56,6 +56,8 @@ from Sources.marks_sources.mods_parser import parse_modifiers
 from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import DEFAULT_NPC_SELECTORS
 from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import SUPPORTED_MAP_NPC_SELECTORS
 
+from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
+from Sources.icefox.MerchantRules import item_values as _item_values
 from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_DOC_NAME
@@ -685,14 +687,10 @@ class _InventoryPlusPauseHandle:
         return True
 GOLD_BALANCE_DISABLED_ACTION_MESSAGE = "Enable Maintain carried gold before balancing."
 # Preserve eager modifier metadata initialization before the database load.
-from Sources.icefox.MerchantRules import item_values as _item_values
-
 MAX_WEAPON_REQUIREMENT = _item_values.MAX_WEAPON_REQUIREMENT
 _dedupe_identifiers = _item_values.dedupe_identifiers
 _safe_int = _item_values.safe_int
 _normalize_weapon_requirement_level = _item_values.normalize_weapon_requirement_level
-
-from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 
 MODIFIER_IDENTIFIER_ATTRIBUTE_REQUIREMENT = _inventory_evidence.MODIFIER_IDENTIFIER_ATTRIBUTE_REQUIREMENT
 MODIFIER_IDENTIFIER_DAMAGE = _inventory_evidence.MODIFIER_IDENTIFIER_DAMAGE
@@ -13972,7 +13970,6 @@ class MerchantRulesWidget:
             f"merchant_sells={len(plan.merchant_sell_item_ids)} rune_trader_sells={len(plan.rune_trader_sales)} "
         )
 
-
     def _compare_current_inventory_against_preview(self) -> bool:
         """Compare live model counts with the preview snapshot and require drift confirmation.
 
@@ -19251,8 +19248,6 @@ class MerchantRulesWidget:
         include_runtime_name: bool = True,
     ) -> InventoryItemInfo | None:
         return self._inventory_evidence.build_inventory_item_info(item_id, include_runtime_name=include_runtime_name)
-
-
 
     def _collect_inventory_items(self) -> list[InventoryItemInfo]:
         items = self._inventory_evidence.collect_inventory_items()
