@@ -3,9 +3,176 @@
   "status": "PARTIALLY_APPROVED",
   "approval": {
     "approved_by_user": true,
-    "approved_entries": ["package1_account_identity", "package1_intent_sync_utility", "package1_offline_verification", "package2_merchant_rules_dispatch", "package2_fsm_dispatch_lifecycle", "package2_offline_verification", "messaging_router_and_commands", "combined_messaging_offline_verification"],
+    "approved_entries": ["package1_account_identity", "package1_intent_sync_utility", "package1_offline_verification", "package2_merchant_rules_dispatch", "package2_fsm_dispatch_lifecycle", "package2_offline_verification", "messaging_router_and_commands", "combined_messaging_offline_verification", "merchant_rules_inventory_evidence_cp1_cp2"],
     "release_status": "NOT_INTEGRATED_OR_VALIDATED",
     "meaning": "User approval applies only to approved_entries within their exact authority scopes; no whole-file, parent-group or unrelated authority is implied.",
+    "merchant_rules_inventory_evidence_cp1_cp2": {
+      "record": "MR-IE-CP12-2026-11-06-R1",
+      "authorization_source": "Explicit user approval in attachment a8159de9-c440-452a-809f-3ace5a851572/goal-objective.md",
+      "authorization_sha256": "3e64c15249c7abaeeee078a85c0cb8f6851dfd57429f281d9741f7c32633193f",
+      "base_head": "7359f437c766e643dd57f7cdb7e95e54759c580e",
+      "base_manifest_blob": "57c23da848a9a12cea70dff0f57999fc0518b16f",
+      "base_manifest_sha256": "dcf54264de851f31a868cbe42f1be19bd17518daa39caff6b1ba061fe5406555",
+      "ownership_authorization": "APPROVED_ONLY_FOR_EXACT_CP1_CP2_EXTRACTION_AND_CORRECTION_SCOPE",
+      "development_owner": "Merchant Rules (Personal/Merchant-Rules), in EDITS; CORE holds governance only.",
+      "source_commit": "4246a4353486aa43928041bae261bc7503fd7b37",
+      "assembly": [
+        {
+          "path": "Widgets/Guild Wars/Items & Loot/MerchantRules.py",
+          "action": "replace",
+          "source_sha256": "324e287063e5f70394ac1586407c51459a67ce8538dd62004aa9b5811916019c",
+          "source_git_blob": "28597e715df8dde3e270f031b3167267fdf61cf1",
+          "target_working": {
+            "sha256": "ef6b121dc55e0c30348e5457a0c06d928cd7083ccd8297f9de4be398a02cd815",
+            "normalized_blob": "10af9d174e5c91b8636a5c841d36568e76e1fd3d"
+          },
+          "target_index_entry": "100644 01cfb49677775c208fd069f254dafe8107de88fc 0\tWidgets/Guild Wars/Items & Loot/MerchantRules.py",
+          "target_head_entry": "100644 blob 01cfb49677775c208fd069f254dafe8107de88fc\tWidgets/Guild Wars/Items & Loot/MerchantRules.py"
+        },
+        {
+          "path": "Sources/icefox/MerchantRules/requirement_protection.py",
+          "action": "replace",
+          "source_sha256": "f7994147e2469a113d4783435510234e568c28276ab6d7c4250b116d721d1274",
+          "source_git_blob": "bce442959d80977d65ebf7084662a028bba32c78",
+          "target_working": {
+            "sha256": "c2ed2562a14d4cf634d8f97c6e1aa02cd3c7c77121108df222917bc267cb60e6",
+            "normalized_blob": "4164fc52b3d4d32a7390283413fe87145d56f1a0"
+          },
+          "target_index_entry": "100644 4164fc52b3d4d32a7390283413fe87145d56f1a0 0\tSources/icefox/MerchantRules/requirement_protection.py",
+          "target_head_entry": ""
+        },
+        {
+          "path": "Sources/icefox/MerchantRules/item_values.py",
+          "action": "add",
+          "source_sha256": "19d285d4b44ee19e00428c1af2bb130ffc109f318d0f12f8473618c11661088b",
+          "source_git_blob": "e0364a74c072e769ce43a688402721a08eee30cc",
+          "target_working": {
+            "absent": true
+          },
+          "target_index_entry": "",
+          "target_head_entry": ""
+        },
+        {
+          "path": "Sources/icefox/MerchantRules/inventory_evidence.py",
+          "action": "add",
+          "source_sha256": "0d0b09b55724cced591b5c9a474bd858310876d58d5bb4c35bddb28558f1771f",
+          "source_git_blob": "117961beec31a74c00eb064911fb80214a72e5f3",
+          "target_working": {
+            "absent": true
+          },
+          "target_index_entry": "",
+          "target_head_entry": ""
+        }
+      ],
+      "retained_TESTS_dependencies": [
+        {
+          "path": "Widgets/System/Messaging.py",
+          "TESTS_working_sha256": "78d7c78113570e821e3cbf0aa600ea7af144df41722e51a9b5893a05589c1c58",
+          "normalized_blob": "33f7e0028d96be909d20260e69615e2e3e826333",
+          "deployment": "PRESERVE_ONLY_NEVER_PAYLOAD"
+        },
+        {
+          "path": "Py4GWCoreLib/py4gwcorelib_src/FSM.py",
+          "TESTS_working_sha256": "4e69a1a399cfa75294ab0d669392c5c7123a5ff10f6740a2baa1e083f12e8774",
+          "normalized_blob": "5db8575679d55a2c5ee3b221b3ff3a315abd8d89",
+          "deployment": "PRESERVE_ONLY_NEVER_PAYLOAD"
+        },
+        {
+          "path": "Py4GWCoreLib/GlobalCache/shared_memory_src/AllAccounts.py",
+          "TESTS_working_sha256": "54b3e6adc0c2f83c9598fe4a9da3537dda3d3d69a9e0896d66b75299ce018301",
+          "normalized_blob": "0520516cd58d3c130f8b2357f6fa8d0b348bcf82",
+          "deployment": "PRESERVE_ONLY_NEVER_PAYLOAD"
+        },
+        {
+          "path": "Py4GWCoreLib/GlobalCache/SharedMemory.py",
+          "TESTS_working_sha256": "09b78c340a90d929fc2ab322133f232d883698884e51ae517da3bd74113c9bf2",
+          "normalized_blob": "cb36132fd982d1527ad1514c44a3aeb36e13ae63",
+          "deployment": "PRESERVE_ONLY_NEVER_PAYLOAD"
+        },
+        {
+          "path": "Py4GWCoreLib/GlobalCache/shared_memory_src/IntentSync.py",
+          "TESTS_working_sha256": "68964a3dff9030d9ccbbbb39902477a566b45bbb09c55049787de53c84ef8d6b",
+          "normalized_blob": "5fc27e298e214880374e54dec05e021aa1c22aa1",
+          "deployment": "PRESERVE_ONLY_NEVER_PAYLOAD"
+        },
+        {
+          "path": "Py4GWCoreLib/enums_src/Multiboxing_enums.py",
+          "TESTS_working_sha256": "88968b5030de4e8f609bcf563b2b5803e419afb2acc4af1676536b1a440ba363",
+          "normalized_blob": "3a748ace3a33c25ccb8c4ea2dab48d0252d4ebca",
+          "deployment": "PRESERVE_ONLY_NEVER_PAYLOAD"
+        },
+        {
+          "path": "Widgets/System/Environment Upkeeper.py",
+          "TESTS_working_sha256": "0d401e329cc149b8bb0c17973ca8d8e5f08a6db9665bf22d5714f76d715e056e",
+          "normalized_blob": "db5d512886aa9c8d79e5180df437763a488325b3",
+          "deployment": "PRESERVE_ONLY_NEVER_PAYLOAD"
+        }
+      ],
+      "incorporated_evidence": [
+        {
+          "path": "C:\\Users\\O_o\\Desktop\\Py4GW-Recovery\\MerchantRules\\cp1-cp2-validation-20261106T084208Z-ccfc6cbe-6a8d-4c16-b435-6fd276debf88\\correction-20261106T100317Z-a2e58a7a-2fbc-45c9-a309-fa835721dabd\\reviewer-20261106T102653Z-e0fad185-0b3b-40e2-9d3b-3d5f1cf4cad4\\REVIEW.md",
+          "sha256": "a2015363cdd79a5ad8cebe5646fe9749661d8a65a6a862f53b7da1690e85ceab"
+        },
+        {
+          "path": "C:\\Users\\O_o\\Desktop\\Py4GW-Recovery\\MerchantRules\\cp1-cp2-validation-20261106T084208Z-ccfc6cbe-6a8d-4c16-b435-6fd276debf88\\correction-20261106T100317Z-a2e58a7a-2fbc-45c9-a309-fa835721dabd\\EVIDENCE-INDEX.json",
+          "sha256": "a204c5ef091bfd4871d0c1828ae4d6d7be8217a2590c6571e9289144f84368ff"
+        },
+        {
+          "path": "C:\\Users\\O_o\\Desktop\\Py4GW-Recovery\\MerchantRules\\cp1-cp2-validation-20261106T084208Z-ccfc6cbe-6a8d-4c16-b435-6fd276debf88\\correction-20261106T100317Z-a2e58a7a-2fbc-45c9-a309-fa835721dabd\\integration-preflight.json",
+          "sha256": "e70a7c967dbb5aef9db193abee42d04fdb3e226b510dae5dcab334cc26932a04"
+        },
+        {
+          "path": "C:\\Users\\O_o\\Desktop\\Py4GW-Recovery\\MerchantRules\\cp1-cp2-validation-20261106T084208Z-ccfc6cbe-6a8d-4c16-b435-6fd276debf88\\correction-20261106T100317Z-a2e58a7a-2fbc-45c9-a309-fa835721dabd\\integration-fixture-closure.json",
+          "sha256": "cc21dd56e8aa4382a676fc7d2ba2774736759f6c42ccb9203c744b1e02dfc91b"
+        },
+        {
+          "path": "C:\\Users\\O_o\\Desktop\\Py4GW-Recovery\\MerchantRules\\cp1-cp2-validation-20261106T084208Z-ccfc6cbe-6a8d-4c16-b435-6fd276debf88\\correction-20261106T100317Z-a2e58a7a-2fbc-45c9-a309-fa835721dabd\\initialization-review.json",
+          "sha256": "3d624f57d7cfcda4f4be7fea9bb549f2d658ab22c04eb47bb928afbe1d9e9bbf"
+        },
+        {
+          "path": "C:\\Users\\O_o\\Desktop\\Py4GW-Recovery\\MerchantRules\\cp1-cp2-validation-20261106T084208Z-ccfc6cbe-6a8d-4c16-b435-6fd276debf88\\correction-20261106T100317Z-a2e58a7a-2fbc-45c9-a309-fa835721dabd\\integration_adapter.py",
+          "sha256": "9e1d2615a94547b087db504c742f345020771932d42a9f13cd22b9c346fd90aa"
+        }
+      ],
+      "retrieval_distinctions": "Incorporate the exact 35-record integration-preflight and 12-record fixture-closure records by the hashes above. The executed adapter bound corrected MR to verified EDITS working bytes; retained TESTS working identities and pinned CORE object retrieval remain distinct. CORE-read Messaging/FSM equal deployed TESTS. CORE enum is a fixture source, not a replacement for retained TESTS enums. Historical combined_messaging.retained_dependency_retrieval remains unchanged; object availability is not deployment authority.",
+      "accepted_validation": {
+        "independent_review": "PASS WITH NON-BLOCKING NOTES; evidence inspection, no independent rerun. Reviewed uncommitted bytes now equal source_commit and its index/working source.",
+        "regression": "487 matched cases: 484 passed, same three inherited Catalog failures; all 20 explicit CP1/CP2 cases passed.",
+        "integration": "17 selected mixed-runtime cases, 51 phases passed, 19 constructions using corrected source bytes.",
+        "static": "Both new E402 findings and both extraction whitespace groups resolved; no new strict/Black/isort findings. Existing strict, Ruff and formatting debt remains.",
+        "limitations": [
+          "Three Catalog conflicts are inherited, not repaired or waived; subsequent assertions after failure remain unreached.",
+          "Historical 488-pass equivalence is not established.",
+          "Selected offline transport/lifecycle coverage is not complete inventory-policy, native/shared-memory, frame-cache/concurrency or supported live-startup proof.",
+          "Inherited temporary-option overlap remains characterized; no CP1/CP2 live acceptance is claimed."
+        ]
+      },
+      "private_harness": {
+        "path": ".local-tests/merchant-rules/test_merchant_rules_regression.py",
+        "git_blob": "57e7ded7a88246c309b0dacd5482ae65c70363e7",
+        "sha256": "d6b7979188f7b1e4c5dd2dcf14c0aa9e7991744cc87a14320f714128780c0320",
+        "status": "Remains tracked in EDITS; validation provenance only. Excluded from deployment and PR contents; no movement or ignore-rule change."
+      },
+      "preparation_authorization": "Only this scoped CORE ownership.json amendment and one new external four-file deployment-review package, proposed PowerShell deployment/recovery script and notes, with bounded nonexecuting syntax/static-policy verification.",
+      "independent_review_gate": "REQUIRED_SEPARATELY_FOR_ACTUAL_MANIFEST_DIFF_AND_DEPLOYMENT_PACKAGE",
+      "execution_gate": "NOT_AUTHORIZED; requires separate explicit approval of exact governance, script/package/payload and retained-dependency identities after independent review.",
+      "live_acceptance_gate": "NOT_PERFORMED_OR_AUTHORIZED; cold installation and later normal-use startup/live acceptance are separate. Saved automation is preserved.",
+      "successor_revision": "Validate exact diff, scope, unique IDs/paths and counts; report actual successor working SHA-256 and normalized identity externally. Do not embed this manifest own successor hash or write Git objects.",
+      "excluded_actions": [
+        "production_source_modifications",
+        "TESTS_writes",
+        "deployment_execution",
+        "staging",
+        "commits",
+        "pushes",
+        "client_launches",
+        "live_tests",
+        "shared_file_deployment",
+        "private_harness_deployment",
+        "DLL_or_offset_replacement",
+        "other_widget_profile_or_settings_replacement"
+      ]
+    },
     "package1": {
       "record": "SC-P1-2026-11-02-R1 with governance correction G1",
       "authorization_source": "User objective attachment 1a1a817d-6e3f-4f81-847d-b37787253747/goal-objective.md",
@@ -998,16 +1165,12 @@
     {
       "id": "merchant_rules_feature",
       "paths": [
-        "Widgets/Guild Wars/Items & Loot/MerchantRules.py",
         "Sources/icefox/MerchantRules/__init__.py",
         "Sources/icefox/MerchantRules/catalog.py",
         "Sources/icefox/MerchantRules/catalog_search.py",
-        "Sources/icefox/MerchantRules/inventory_evidence.py",
-        "Sources/icefox/MerchantRules/item_values.py",
         "Sources/icefox/MerchantRules/preview_status.py",
         "Sources/icefox/MerchantRules/preview_text.py",
         "Sources/icefox/MerchantRules/profiles.py",
-        "Sources/icefox/MerchantRules/requirement_protection.py",
         "Sources/icefox/MerchantRules/salvage_options.py",
         "Sources/icefox/MerchantRules/service_observation.py",
         "Sources/icefox/MerchantRules/stack_selection.py",
@@ -1021,6 +1184,35 @@
       "dependent_widgets": ["merchant_rules"],
       "dependency_group": "merchant_rules_bundle",
       "verification_requirements": ["Preserve inventory safety and deliberate overrides, deferred reload payload capture, profile/lifecycle generations and idempotent unstarted-close release.", "Cover overlapping temporary Destroy/HeroAI options with operation ownership; do not replace the accepted explicit iterator with a raw coroutine.", "After later MR changes, run the accessible local-only .local-tests/merchant-rules/test_merchant_rules_regression.py without moving it into the repository, adding it to PRs or changing ignore rules.", "Do not deploy only the extracted widget or only its new helpers; preserve the accepted checkpoint separately from older TESTS content."]
+    },
+    {
+      "id": "merchant_rules_inventory_evidence_cp1_cp2",
+      "paths": [
+        "Widgets/Guild Wars/Items & Loot/MerchantRules.py",
+        "Sources/icefox/MerchantRules/requirement_protection.py",
+        "Sources/icefox/MerchantRules/item_values.py",
+        "Sources/icefox/MerchantRules/inventory_evidence.py"
+      ],
+      "status": "APPROVED",
+      "category": "WIDGET_OWNED",
+      "proposed_owner": "Merchant Rules (Personal/Merchant-Rules)",
+      "authority_scope": "Only the accepted CP1/CP2 inventory-evidence extraction and reviewed import/whitespace correction at source commit 4246a4353486aa43928041bae261bc7503fd7b37 and the four exact artifact identities recorded in approval.merchant_rules_inventory_evidence_cp1_cp2. Residual responsibilities within these files remain PROPOSED/unapproved. No CP3, unrelated feature work, Catalog correction, persistence migration or shared-infrastructure authority is granted. Merchant Rules development remains in EDITS; CORE holds this governance record only.",
+      "purpose": "Record only the accepted inventory-evidence CP1/CP2 checkpoint scope without granting unrestricted Merchant Rules authority.",
+      "dependent_widgets": [
+        "merchant_rules"
+      ],
+      "dependency_group": "merchant_rules_bundle",
+      "approved_changes": [
+        "CP1 canonical scalar functions, inventory records and interpretation helpers, including requirement-protection scalar reuse.",
+        "CP2 per-widget InventoryEvidence cache, statistics, snapshot duration and transferred collection ownership; widget-supplied dependencies and delegates retain runtime, generations, reservations, execution and persistence ownership.",
+        "Exactly the independently reviewed two-import relocation and two whitespace-group corrections."
+      ],
+      "verification_requirements": [
+        "Bind accepted evidence and exact four-file assembly to approval.merchant_rules_inventory_evidence_cp1_cp2; no partial widget/helper installation.",
+        "Preserve retained TESTS mixed-runtime dependencies and all shared infrastructure; the private harness remains excluded from deployment.",
+        "Independent review of the actual governance amendment and deployment package, then separate explicit execution approval and live-acceptance gate.",
+        "Preserved residual code in the accepted artifact gains no unrestricted development or live-acceptance authority."
+      ]
     },
     {
       "id": "htm_feature",
