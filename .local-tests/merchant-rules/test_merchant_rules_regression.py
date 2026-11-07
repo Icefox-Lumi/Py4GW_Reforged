@@ -41578,13 +41578,29 @@ def _salvage_options_compare_integrations(module: Any, observer: Callable[[Any],
     actual = observer(module)
     original = _salvage_options_original_api()
     saved = {name: getattr(module, name) for name in _SALVAGE_OPTIONS_FUNCTIONS}
+    configuration = module._configuration
+    saved_configuration = {
+        name: getattr(configuration, name) for name in _SALVAGE_OPTIONS_FUNCTIONS if hasattr(configuration, name)
+    }
+    _expect(
+        "_normalize_salvage_rule_mode" in saved_configuration, "CP3 Stage 10 fixture reaches configuration globals."
+    )
     try:
         for name in _SALVAGE_OPTIONS_FUNCTIONS:
             setattr(module, name, getattr(original, name))
+        for name in saved_configuration:
+            setattr(configuration, name, getattr(original, name))
+        _expect(
+            configuration.RuleNormalizer.normalize_salvage_rule.__globals__["_normalize_salvage_rule_mode"]
+            is original._normalize_salvage_rule_mode,
+            "CP3 Stage 10 original mode normalizer reaches moved rule normalization.",
+        )
         expected = observer(module)
     finally:
         for name, value in saved.items():
             setattr(module, name, value)
+        for name, value in saved_configuration.items():
+            setattr(configuration, name, value)
     _salvage_options_expect(actual, expected, observer.__name__ + " complete original/final observations")
 
 
@@ -41660,7 +41676,11 @@ def _test_salvage_options_identity(module: Any) -> None:
     _expect(
         component.SALVAGE_OPTION_DROPDOWN_ORDER is component.SALVAGE_RULE_MODE_ORDER, "Stage 10 component tuple alias."
     )
-    _expect(module.SalvageRule.__module__ == module.__name__, "Stage 10 rule class owner remains widget.")
+    configuration = module._configuration
+    _expect(module.SalvageRule is configuration.SalvageRule, "CP3 canonical SalvageRule widget alias.")
+    _expect(
+        configuration.SalvageRule.__module__ == configuration.__name__, "CP3 honest SalvageRule configuration owner."
+    )
 
 
 def _test_salvage_options_import_isolation() -> None:
@@ -44546,6 +44566,617 @@ def _test_inventory_owner_fresh_transaction(module: Any) -> None:
         fixture["restore"]()
 
 
+_CP3_RECORD_NAMES = (
+    "MaterialTarget",
+    "MerchantStockTarget",
+    "RuneTraderTarget",
+    "RuneSellTarget",
+    "WhitelistTarget",
+    "BuyRule",
+    "SellRule",
+    "DestroyRule",
+    "SalvageRule",
+    "SalvageSettings",
+    "IdentifySettings",
+    "WeaponRequirementRule",
+    "WeaponModThresholdRule",
+    "WeaponModVariantRule",
+    "WeaponModVariantThresholdRule",
+    "CleanupTarget",
+    "CleanupProtectionSource",
+    "ExactProtectionTarget",
+)
+
+_CP3_DEPENDENCY_NAMES = {
+    "item_type": "ItemType",
+    "exact_non_runtime_item_types": "_EXACT_NON_RUNTIME_ITEM_TYPES",
+    "weapon_item_type_ids": "WEAPON_ITEM_TYPE_IDS",
+    "scroll_trader_stock_model_ids": "SCROLL_TRADER_STOCK_MODEL_IDS",
+    "ectoplasm_model_id": "ECTOPLASM_MODEL_ID",
+    "salvage_kit_model_id": "SALVAGE_KIT_MODEL_ID",
+    "buy_rule_kinds": "BUY_RULE_KINDS",
+    "sell_rule_kinds": "SELL_RULE_KINDS",
+    "destroy_rule_kinds": "DESTROY_RULE_KINDS",
+    "buy_kind_to_merchant_type": "BUY_KIND_TO_MERCHANT_TYPE",
+    "sell_kind_to_merchant_type": "SELL_KIND_TO_MERCHANT_TYPE",
+    "normalize_weapon_requirement_range": "_normalize_weapon_requirement_range",
+    "normalize_weapon_mod_variant_parts": "_normalize_weapon_mod_variant_parts",
+}
+
+
+def _cp3_expect(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f"CP3 {context}: expected {expected!r}; observed {actual!r}")
+
+
+def _cp3_expect_error(callback: Callable[[], object], message: str) -> Exception:
+    try:
+        callback()
+    except Exception as exc:
+        _cp3_expect((type(exc), str(exc)), (ValueError, message), "literal rejection")
+        return exc
+    raise AssertionError(f"CP3 expected ValueError({message!r}), but the call returned.")
+
+
+def _cp3_blank_payload(module: Any) -> dict[str, Any]:
+    return module._rule_normalizer.build_default_profile_payload(include_rule_templates=False)
+
+
+def _test_configuration_records_and_binding(module: Any) -> None:
+    from dataclasses import FrozenInstanceError
+    from inspect import Parameter
+    from inspect import signature
+
+    configuration = module._configuration
+    _expect(
+        sys.modules["Sources.icefox.MerchantRules.configuration"] is configuration,
+        "CP3 configuration is the canonical package module",
+    )
+    expected_path = REPO_ROOT / "Sources" / "icefox" / "MerchantRules" / "configuration.py"
+    _cp3_expect(Path(configuration.__file__).resolve(), expected_path.resolve(), "configuration source origin")
+    _cp3_expect(Path(configuration.__spec__.origin).resolve(), expected_path.resolve(), "configuration spec origin")
+    frozen_names = {"WeaponModVariantRule", "WeaponModVariantThresholdRule", "ExactProtectionTarget"}
+    for name in _CP3_RECORD_NAMES:
+        record = getattr(configuration, name)
+        _expect(getattr(module, name) is record, "CP3 widget canonical record alias: " + name)
+        _cp3_expect((record.__module__, record.__name__), (configuration.__name__, name), "record metadata: " + name)
+        args = (7,) if name == "ExactProtectionTarget" else ()
+        first, second = record(*args), record(*args)
+        _cp3_expect(record.__dataclass_params__.frozen, name in frozen_names, "record mutability: " + name)
+        for field_name, value in cast(dict[str, Any], vars(first)).items():
+            if isinstance(value, (list, dict, set)):
+                _expect(
+                    value is not getattr(second, field_name), "CP3 independent defaults: " + name + "." + field_name
+                )
+        if name in frozen_names:
+            field_name = next(iter(record.__dataclass_fields__))
+            _expect_raises(
+                FrozenInstanceError,
+                lambda first=first, field_name=field_name: setattr(first, field_name, 3),
+                "CP3 frozen record: " + name,
+            )
+    _expect_raises(
+        TypeError, configuration.ExactProtectionTarget, "CP3 ExactProtectionTarget retains required model ID"
+    )
+    _cp3_expect(configuration.SalvageRule().enabled, True, "existing per-rule salvage enabled default")
+    _cp3_expect(configuration.SalvageSettings().on_inventory_change, False, "salvage automation default")
+    normalizer = module._rule_normalizer
+    _expect(type(normalizer) is configuration.RuleNormalizer, "CP3 one configuration-owned module normalizer")
+    _cp3_expect(
+        set(cast(dict[str, object], vars(normalizer))),
+        {"_" + name for name in _CP3_DEPENDENCY_NAMES},
+        "thirteen stored dependencies",
+    )
+    for argument, source_name in _CP3_DEPENDENCY_NAMES.items():
+        _expect(
+            getattr(normalizer, "_" + argument) is getattr(module, source_name), "CP3 exact dependency: " + argument
+        )
+    for name in ("normalize_profile_payload", "build_default_profile_payload", "normalize_buy_rule"):
+        method = getattr(normalizer, name)
+        _expect(method.__self__ is normalizer, "CP3 bound helper owner: " + name)
+        _expect(method.__func__.__globals__ is vars(configuration), "CP3 defining globals: " + name)
+    for name in _CP3_DEPENDENCY_NAMES:
+        _cp3_expect(signature(configuration.RuleNormalizer).parameters[name].kind, Parameter.KEYWORD_ONLY, name)
+    _cp3_expect(
+        signature(normalizer.build_default_profile_payload).parameters["include_rule_templates"].kind,
+        Parameter.KEYWORD_ONLY,
+        "default payload keyword-only argument",
+    )
+    widget = _make_widget(module)
+    callback = widget._profile_store._normalize_payload
+    _expect(callback.func.__self__ is normalizer, "CP3 ProfileStore directly binds configuration owner")
+    _expect(
+        callback.func.__func__ is configuration.RuleNormalizer.normalize_profile_payload,
+        "CP3 ProfileStore callback is the configuration root",
+    )
+
+
+def _test_configuration_constructor_is_reference_only(module: Any) -> None:
+    class Unreadable:
+        def __getattribute__(self, name: str) -> Any:
+            raise AssertionError("CP3 constructor inspected a dependency: " + name)
+
+        def __call__(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("CP3 constructor invoked a dependency")
+
+        def __iter__(self) -> Any:
+            raise AssertionError("CP3 constructor copied a dependency")
+
+        def __int__(self) -> int:
+            raise AssertionError("CP3 constructor converted a dependency")
+
+        def __bool__(self) -> bool:
+            raise AssertionError("CP3 constructor validated a dependency")
+
+    dependencies = {name: Unreadable() for name in _CP3_DEPENDENCY_NAMES}
+    normalizer = module._configuration.RuleNormalizer(**dependencies)
+    _cp3_expect(
+        set(cast(dict[str, object], vars(normalizer))),
+        {"_" + name for name in dependencies},
+        "constructor stored names",
+    )
+    for name, value in dependencies.items():
+        _expect(getattr(normalizer, "_" + name) is value, "CP3 constructor exact reference: " + name)
+
+
+def _test_configuration_cold_import_isolation() -> None:
+    script = r'''
+import ast
+import importlib.abc
+import pathlib
+import sys
+
+allowed = {
+    "Sources", "Sources.icefox", "Sources.icefox.MerchantRules",
+    "Sources.icefox.MerchantRules.configuration",
+    "Sources.icefox.MerchantRules.item_values",
+    "Sources.icefox.MerchantRules.salvage_options",
+}
+attempts = []
+class RejectRuntimeImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(("Py4GW", "PyImGui", "PySystem", "PySkill", "Widgets")) or (
+            fullname.startswith("Sources") and fullname not in allowed
+        ):
+            attempts.append(fullname)
+            raise AssertionError("CP3 forbidden cold import: " + fullname)
+
+assert not any(name.startswith(("Py4GW", "PyImGui", "PySystem", "PySkill", "Widgets", "Sources")) for name in sys.modules)
+sys.meta_path.insert(0, RejectRuntimeImports())
+from Sources.icefox.MerchantRules import configuration
+expected = pathlib.Path.cwd() / "Sources/icefox/MerchantRules/configuration.py"
+assert pathlib.Path(configuration.__file__).resolve() == expected.resolve()
+assert pathlib.Path(configuration.__spec__.origin).resolve() == expected.resolve()
+assert not attempts, attempts
+assert all(name in allowed for name in sys.modules if name.startswith("Sources"))
+assert not any(name.startswith(("Py4GW", "PyImGui", "PySystem", "PySkill", "Widgets")) for name in sys.modules)
+assert configuration.SalvageRule.__module__ == configuration.__name__
+assert configuration.SalvageRule().enabled is True
+print("PASS: actual configuration cold import; forbidden imports rejected; canonical record owner")
+'''
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-B", "-S", "-c", script],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    _expect(result.returncode == 0, f"CP3 cold import failed: {result.stdout}\n{result.stderr}")
+
+
+def _test_configuration_module_lifetime(module: Any) -> None:
+    loaded: list[Any] = []
+    widgets: list[Any] = []
+    callbacks: list[Any] = []
+    names = ("merchant_rules_cp3_lifetime_first", "merchant_rules_cp3_lifetime_second")
+    _expect(all(name not in sys.modules for name in names), "CP3 lifetime fixture owns both synthetic module names")
+    try:
+        for name in names:
+            spec = importlib.util.spec_from_file_location(name, MERCHANT_RULES_PATH)
+            if spec is None or spec.loader is None:
+                raise AssertionError("CP3 lifetime source spec is unavailable")
+            fresh = importlib.util.module_from_spec(spec)
+            sys.modules[name] = fresh
+            spec.loader.exec_module(fresh)
+            loaded.append(fresh)
+            widget = fresh.MerchantRulesWidget()
+            widgets.append(widget)
+            callbacks.append(widget._profile_store._normalize_payload)
+        first, second = loaded
+        _expect(
+            first._configuration is second._configuration is module._configuration,
+            "CP3 canonical owner survives module loads",
+        )
+        _expect(
+            first._rule_normalizer is not second._rule_normalizer, "CP3 normalizers belong to loaded widget modules"
+        )
+        for name in _CP3_RECORD_NAMES:
+            _expect(
+                getattr(first, name) is getattr(second, name) is getattr(module, name), "CP3 shared record: " + name
+            )
+        for name in (
+            "BUY_RULE_KINDS",
+            "SELL_RULE_KINDS",
+            "DESTROY_RULE_KINDS",
+            "BUY_KIND_TO_MERCHANT_TYPE",
+            "SELL_KIND_TO_MERCHANT_TYPE",
+            "WEAPON_ITEM_TYPE_IDS",
+        ):
+            _expect(getattr(first, name) is not getattr(second, name), "CP3 separate mutable allocation: " + name)
+        first_widget, second_widget = widgets
+        first_callback, second_callback = callbacks
+        _expect(
+            first_widget._profile_store._normalize_payload is first_callback, "CP3 second load retains first callback"
+        )
+        _expect(first_callback.func.__self__ is first._rule_normalizer, "CP3 first callback not retargeted")
+        _expect(second_callback.func.__self__ is second._rule_normalizer, "CP3 second callback owns second normalizer")
+        first_widget.outpost_entries = [{"id": 11}]
+        second_widget.outpost_entries = [{"id": 22}]
+        payload = _cp3_blank_payload(module)
+        payload["favorite_outpost_ids"] = [11, 22]
+        _cp3_expect(first_callback(payload)["favorite_outpost_ids"], [11], "first callback observes first widget")
+        _cp3_expect(second_callback(payload)["favorite_outpost_ids"], [22], "second callback observes second widget")
+        first_widget.outpost_entries = [{"id": 33}]
+        payload["favorite_outpost_ids"] = [22, 33]
+        _cp3_expect(first_callback(payload)["favorite_outpost_ids"], [33], "first callback observes replacement")
+        _cp3_expect(second_callback(payload)["favorite_outpost_ids"], [22], "second callback remains independent")
+    finally:
+        for name in names:
+            sys.modules.pop(name, None)
+
+
+def _test_configuration_late_outposts(module: Any) -> None:
+    configuration, normalizer = module._configuration, module._rule_normalizer
+    events: list[str] = []
+    entries: list[dict[str, object]] = [{"id": 1}, {"id": 2}]
+
+    def current_entries() -> list[dict[str, object]]:
+        events.append("outposts")
+        return entries
+
+    def no_recipe(_model_id: int) -> bool:
+        raise AssertionError("CP3 blank payload unexpectedly inspected recipes")
+
+    payload = _cp3_blank_payload(module)
+    payload["favorite_outpost_ids"] = ["0x2", 1, 2, 0, -1, "bad"]
+    result = normalizer.normalize_profile_payload(
+        payload, get_outpost_entries=current_entries, has_crafter_recipe=no_recipe
+    )
+    _cp3_expect(result["favorite_outpost_ids"], [2, 1], "late outpost order/coercion/deduplication")
+    _cp3_expect(events, ["outposts"], "one late outpost provider call")
+    entries = [{"id": 1}]
+    events.clear()
+    _cp3_expect(configuration.normalize_outpost_ids([], get_outpost_entries=current_entries), [], "empty requested IDs")
+    _cp3_expect(events, ["outposts"], "empty IDs still read provider")
+    entries = [{"id": "malformed"}]
+    _expect_raises(
+        ValueError,
+        lambda: configuration.normalize_outpost_ids([], get_outpost_entries=current_entries),
+        "CP3 empty requested IDs retain malformed-provider failure",
+    )
+    events.clear()
+    invalid = dict(payload, buy_rules=None)
+    _cp3_expect_error(
+        lambda: normalizer.normalize_profile_payload(
+            invalid, get_outpost_entries=current_entries, has_crafter_recipe=no_recipe
+        ),
+        "Merchant Rules buy_rules must be a list.",
+    )
+    _cp3_expect(events, [], "earlier validation failure never reads outposts")
+    widget = _make_widget(module)
+    widget.outpost_entries = [{"id": 1}]
+
+    class ReplaceOutposts:
+        def __str__(self) -> str:
+            widget.outpost_entries = [{"id": 2}]
+            return "Late provider"
+
+    payload["buy_rules"] = [{"name": ReplaceOutposts()}]
+    payload["favorite_outpost_ids"] = [1, 2]
+    _cp3_expect(
+        widget._normalize_profile_payload(payload)["favorite_outpost_ids"],
+        [2],
+        "replacement during earlier rule normalization",
+    )
+
+    def forbidden_widget_callback(_payload: object) -> dict[str, object]:
+        raise AssertionError("CP3 ProfileStore called widget-owned payload normalization")
+
+    widget._normalize_profile_payload = forbidden_widget_callback
+    _cp3_expect(
+        widget._profile_store._normalize_payload(payload)["favorite_outpost_ids"], [2], "direct configuration callback"
+    )
+
+
+def _test_configuration_current_recipe_membership(module: Any) -> None:
+    original = module.CONSUMABLE_CRAFTER_RECIPES_BY_MODEL
+    events: list[tuple[str, object]] = []
+
+    class SecondMap:
+        def __contains__(self, model_id: object) -> bool:
+            events.append(("second", model_id))
+            return model_id == 123
+
+    class FirstMap:
+        def __contains__(self, model_id: object) -> bool:
+            events.append(("first", model_id))
+            module.CONSUMABLE_CRAFTER_RECIPES_BY_MODEL = SecondMap()
+            return True
+
+    try:
+        module.CONSUMABLE_CRAFTER_RECIPES_BY_MODEL = FirstMap()
+        rule = module.BuyRule(kind=module.BUY_KIND_CONSUMABLE_CRAFTER_TARGET, model_id="0x7b", target_count=2)
+        _expect(module._normalize_buy_rule(rule) is rule, "CP3 buy normalization preserves input record identity")
+        _cp3_expect(events, [("first", 123), ("second", 123)], "both membership sites see current map")
+        _cp3_expect([target.model_id for target in rule.merchant_stock_targets], [123], "legacy recipe target")
+        events.clear()
+        module._normalize_buy_rule(module.BuyRule(kind=module.BUY_KIND_CONSUMABLE_CRAFTER_TARGET, model_id=0))
+        _cp3_expect(events, [], "nonpositive legacy model short-circuits membership")
+        rule = module.BuyRule(
+            kind=module.BUY_KIND_CONSUMABLE_CRAFTER_TARGET,
+            model_id=999,
+            merchant_stock_targets=[module.MerchantStockTarget(model_id=123)],
+        )
+        module._normalize_buy_rule(rule)
+        _cp3_expect(events, [("second", 123)], "existing target skips legacy membership")
+        failure = RuntimeError("CP3 recipe membership failure")
+
+        def fail(_model_id: int) -> bool:
+            raise failure
+
+        try:
+            module._rule_normalizer.normalize_buy_rule(
+                module.BuyRule(kind=module.BUY_KIND_CONSUMABLE_CRAFTER_TARGET, model_id=123),
+                has_crafter_recipe=fail,
+            )
+        except RuntimeError as exc:
+            _expect(exc is failure, "CP3 recipe provider failure identity")
+        else:
+            raise AssertionError("CP3 recipe provider exception was swallowed")
+    finally:
+        module.CONSUMABLE_CRAFTER_RECIPES_BY_MODEL = original
+
+
+def _test_configuration_payload_literals(module: Any) -> None:
+    widget = _make_widget(module)
+    blank = _cp3_blank_payload(module)
+    another = _cp3_blank_payload(module)
+    _cp3_expect(blank["version"], 40, "literal profile version")
+    for key in (
+        "auto_cleanup_on_outpost_entry",
+        "gold_balance_enabled",
+        "gold_balance_on_outpost_entry",
+        "gold_balance_after_mr_trading",
+        "gold_balance_after_manual_session",
+        "auto_sell_on_manual_vendor_interaction",
+        "auto_buy_on_manual_vendor_interaction",
+        "auto_sell_to_any_merchant",
+        "auto_sell_any_merchant_normal_items",
+        "auto_sell_any_merchant_materials",
+        "auto_sell_any_merchant_runes",
+        "inventory_right_click_shortcuts_enabled",
+        "inventory_right_click_live_actions_enabled",
+        "destroy_auto_enabled",
+        "auto_travel_enabled",
+    ):
+        _cp3_expect(blank[key], False, "disabled default: " + key)
+    for key, value in blank.items():
+        if isinstance(value, (dict, list)):
+            _expect(value is not another[key], "CP3 fresh default collection: " + key)
+    _cp3_expect(
+        [len(blank[key]) for key in ("buy_rules", "sell_rules", "destroy_rules")], [0, 0, 0], "blank rule lists"
+    )
+    templates = module._rule_normalizer.build_default_profile_payload(include_rule_templates=True)
+    _cp3_expect(
+        [len(templates[key]) for key in ("buy_rules", "sell_rules", "destroy_rules")], [5, 5, 4], "template counts"
+    )
+    _expect(
+        all(not row["enabled"] for key in ("buy_rules", "sell_rules", "destroy_rules") for row in templates[key]),
+        "CP3 template rules disabled",
+    )
+    for field_name in ("buy_rules", "sell_rules", "destroy_rules"):
+        _cp3_expect_error(
+            lambda field_name=field_name: widget._normalize_profile_payload(dict(blank, **{field_name: None})),
+            "Merchant Rules " + field_name + " must be a list.",
+        )
+    for field_name in (
+        "identify_settings",
+        "salvage_settings",
+        "cleanup_targets",
+        "cleanup_blacklist_model_ids",
+        "cleanup_protection_sources",
+        "protected_item_model_ids",
+        "protected_item_targets",
+        "favorite_outpost_ids",
+    ):
+        _cp3_expect(
+            widget._normalize_profile_payload(dict(blank, **{field_name: None})),
+            widget._normalize_profile_payload(blank),
+            "null accepted as empty: " + field_name,
+        )
+    _cp3_expect_error(
+        lambda: widget._normalize_profile_payload({"buy_rules": None, "sell_rules": None, "salvage_settings": []}),
+        "Merchant Rules buy_rules must be a list.",
+    )
+    future = dict(blank, version=41)
+    _cp3_expect(
+        widget._normalize_profile_payload(future)["version"],
+        40,
+        "direct normalization retains future-marker acceptance",
+    )
+    wrapper = {
+        "schema": module.PROFILE_BACKEND.SHARED_PROFILE_SCHEMA,
+        "schema_version": 1,
+        "profile_id": "profile_" + "a" * 32,
+        "name": "CP3 future",
+        "payload": future,
+    }
+    error = _cp3_expect_error(
+        lambda: widget._profile_store.normalize_shared_profile_wrapper(wrapper, require_profile_id=True),
+        "This profile was created by a newer Merchant Rules version.",
+    )
+    _expect(isinstance(error.__cause__, ValueError), "CP3 wrapper preserves rejection cause")
+    _cp3_expect_error(
+        lambda: widget._normalize_profile_payload(
+            dict(blank, protected_item_targets=[{"model_id": True, "item_type_id": 1}])
+        ),
+        "Merchant Rules protected_item_targets contains an invalid typed target.",
+    )
+    typed = dict(
+        blank,
+        protected_item_targets=[
+            {"model_id": 17, "item_type_id": int(module.ItemType.Sword)},
+            {"model_id": 17, "item_type_id": int(module.ItemType.Sword)},
+            {"model_id": 17, "item_type_id": int(module.ItemType.Shield)},
+        ],
+        protected_item_model_ids=["0x11", 17, -1],
+    )
+    normalized = widget._normalize_profile_payload(typed)
+    _cp3_expect(normalized["protected_item_model_ids"], [17], "legacy model-wide protection retained")
+    _cp3_expect(
+        normalized["protected_item_targets"], typed["protected_item_targets"][::2], "typed identities stay separate"
+    )
+    salvage = module._normalize_salvage_rule({})
+    _cp3_expect((salvage.enabled, salvage.salvage_option), (True, "materials"), "per-rule legacy salvage defaults")
+    serialized = module._serialize_salvage_rule(salvage)
+    _cp3_expect(
+        set(serialized),
+        {"enabled", "model_ids", "rarities", "categories", "salvage_option", "name"},
+        "empty salvage selector omissions",
+    )
+    _cp3_expect_error(
+        lambda: module._normalize_salvage_rule({"salvage_option": "suffix"}),
+        "Unsupported Merchant Rules persisted Salvage rule mode 'suffix'. Use Materials or Specific upgrade.",
+    )
+
+
+def _test_configuration_distinct_rule_id_seeds(module: Any) -> None:
+    from hashlib import md5
+
+    configuration = module._configuration
+    clock = configuration.make_generated_rule_id.__globals__["time"]
+    saved = clock.time_ns
+    try:
+        clock.time_ns = lambda: 123
+        bulk = module._normalize_sell_rules(
+            [
+                module.SellRule(kind=module.LEGACY_SELL_KIND_NONSALVAGEABLE_GOLDS),
+                module.SellRule(name="Seed"),
+            ]
+        )
+        payload = _cp3_blank_payload(module)
+        payload["sell_rules"] = [{"kind": module.LEGACY_SELL_KIND_NONSALVAGEABLE_GOLDS}, {"name": "Seed"}]
+        normalized = _make_widget(module)._normalize_profile_payload(payload)
+        _cp3_expect(
+            bulk[0].rule_id,
+            "sell_" + md5(b"sell:1:sell_explicit_models:Seed:123").hexdigest()[:10],
+            "bulk input-position seed",
+        )
+        _cp3_expect(
+            normalized["sell_rules"][0]["rule_id"],
+            "sell_" + md5(b"sell:0:sell_explicit_models:Seed:123").hexdigest()[:10],
+            "payload accepted-output seed",
+        )
+        duplicates = module._normalize_sell_rules(
+            [module.SellRule(rule_id=" same! "), module.SellRule(rule_id="same", name="Second")]
+        )
+        _cp3_expect(duplicates[0].rule_id, "same", "rule ID filtering")
+        _cp3_expect(
+            duplicates[1].rule_id,
+            "sell_" + md5(b"sell:1:sell_explicit_models:Second:123").hexdigest()[:10],
+            "duplicate ID replacement",
+        )
+    finally:
+        clock.time_ns = saved
+
+
+def _test_configuration_profile_lifecycle_owner(module: Any) -> None:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    owner = widget._inventory_evidence
+    cache = owner._modifier_cache
+    entry = module.InventoryModifierCacheEntry((17,), module.ParsedInventoryModifiers())
+    cache[17] = entry
+    owner._cache_hits, owner._cache_misses, owner._last_inventory_snapshot_duration_ms = 7, 3, 42.5
+
+    def preserved(operation: str) -> None:
+        _expect(widget._inventory_evidence is owner, "CP3 owner survives " + operation)
+        _expect(owner._modifier_cache is cache and cache.get(17) is entry, "CP3 cache and entry survive " + operation)
+        _cp3_expect(
+            (owner.cache_hits, owner.cache_misses, owner.last_inventory_snapshot_duration_ms),
+            (7, 3, 42.5),
+            "diagnostics survive " + operation,
+        )
+
+    payload = _cp3_blank_payload(module)
+    payload["favorite_outpost_ids"] = [1]
+    live_doc = widget._live_config_doc()
+    live_doc.set_json("", payload)
+    _expect(live_doc.save(), "CP3 initial live fixture save")
+    widget._load_profile()
+    preserved("application")
+    _expect(widget.reload_profile_from_disk(log_profile_load_summary=False), "CP3 actual reload")
+    preserved("reload")
+    scope = module.PROFILE_SCOPE_ACCOUNT
+    widget.profile_name_inputs[scope] = "CP3 Source"
+    widget._save_current_as_new_profile(scope)
+    selected = widget._get_selected_profile(scope)
+    _expect(selected is not None, "CP3 saved profile exists")
+    saved_payload = json.loads(json.dumps(selected.raw_wrapper["payload"]))
+    widget.profile_name_inputs[scope] = "CP3 Renamed"
+    widget._rename_selected_profile(scope, selected.fingerprint)
+    renamed = widget._get_selected_profile(scope)
+    _cp3_expect(renamed.key, selected.key, "rename identity")
+    _cp3_expect(renamed.raw_wrapper["payload"], saved_payload, "rename raw payload preservation")
+    preserved("rename")
+    widget._load_selected_profile(scope, renamed.fingerprint)
+    _expect(widget.loaded_profile_provenance is not None, "CP3 actual load publishes provenance")
+    preserved("saved-profile load")
+    widget.favorite_outpost_ids = [2]
+    _expect(widget._save_profile(), "CP3 backup-producing live save")
+    _expect(widget._restore_profile_from_backup(), "CP3 actual backup restore")
+    _cp3_expect(widget.favorite_outpost_ids, [1], "restored payload")
+    preserved("restore")
+    synced = dict(payload, favorite_outpost_ids=[2])
+    live_doc.set_json("", synced)
+    _expect(live_doc.save(), "CP3 deferred source save")
+    widget.merchant_rules_owned_work_count = 1
+    _expect(not widget.reload_profile_from_disk(), "CP3 busy admission refuses actual reload")
+    _expect(
+        not widget._request_multibox_profile_reload(request_id="cp3", sender_email="leader", receiver_email="follower"),
+        "CP3 reload deferred while busy",
+    )
+    captured = widget._pending_multibox_profile_reload_payload
+    _expect(isinstance(captured, dict), "CP3 deferred request retains validated payload")
+    live_doc.set_json("", dict(payload, favorite_outpost_ids=[1]))
+    _expect(live_doc.save(), "CP3 later live-file replacement")
+    widget.merchant_rules_owned_work_count = 0
+    _expect(widget._apply_pending_multibox_profile_reload_if_idle(), "CP3 actual deferred application")
+    _cp3_expect(widget.favorite_outpost_ids, [2], "deferred application uses captured payload")
+    _expect(
+        widget.pending_multibox_profile_reload is None and widget.loaded_profile_provenance is None,
+        "CP3 deferred reload clears request/provenance",
+    )
+    preserved("deferred reload")
+    baseline_payload = json.loads(json.dumps(live_doc.get_json("", {})))
+    widget.favorite_outpost_ids = [2]
+    save_key = module.PROFILE_BACKEND.LIVE_CONFIG_DOC_NAME
+    module.JsonFactory._save_results[save_key] = False
+    try:
+        widget._load_selected_profile(scope, renamed.fingerprint)
+    finally:
+        module.JsonFactory._save_results.pop(save_key, None)
+    _cp3_expect(live_doc.get_json("", {}), baseline_payload, "failed save restores pending live document")
+    _cp3_expect(widget.favorite_outpost_ids, [2], "failed save leaves runtime settings")
+    _expect("could not save" in widget.saved_profile_warnings[scope].casefold(), "CP3 failed load is reported")
+    _expect(bool(widget._character_profile_resolution_error), "CP3 failed load retains the character failure state")
+    _expect(bool(widget._character_profile_gate_block_reason()), "CP3 failed load retains the admission gate")
+    preserved("rollback")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -44554,6 +45185,18 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            ("configuration_records_and_binding", lambda: _test_configuration_records_and_binding(module)),
+            (
+                "configuration_constructor_is_reference_only",
+                lambda: _test_configuration_constructor_is_reference_only(module),
+            ),
+            ("configuration_cold_import_isolation", _test_configuration_cold_import_isolation),
+            ("configuration_module_lifetime", lambda: _test_configuration_module_lifetime(module)),
+            ("configuration_late_outposts", lambda: _test_configuration_late_outposts(module)),
+            ("configuration_current_recipe_membership", lambda: _test_configuration_current_recipe_membership(module)),
+            ("configuration_payload_literals", lambda: _test_configuration_payload_literals(module)),
+            ("configuration_distinct_rule_id_seeds", lambda: _test_configuration_distinct_rule_id_seeds(module)),
+            ("configuration_profile_lifecycle_owner", lambda: _test_configuration_profile_lifecycle_owner(module)),
             ("salvage_options_literals", lambda: _test_salvage_options_literals(module)),
             ("salvage_options_access", lambda: _test_salvage_options_access(module)),
             ("salvage_options_config_ui", lambda: _test_salvage_options_config_ui(module)),
