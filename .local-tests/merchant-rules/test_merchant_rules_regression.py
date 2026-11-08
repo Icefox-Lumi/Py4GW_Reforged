@@ -46029,6 +46029,1932 @@ def _test_configuration_materializers_completed_cp3_differential(module: Any) ->
     )
 
 
+_CP5_STATE_FIELDS: tuple[str, ...] = (
+    "catalog_loaded",
+    "catalog_load_error",
+    "_catalog_generation",
+    "_catalog_building",
+    "catalog_by_model_id",
+    "exact_catalog_by_item_key",
+    "exact_catalog_untyped_by_model_id",
+    "catalog_alias_to_model_ids",
+    "catalog_alias_display_names",
+    "_equipment_typed_entries_by_model_id",
+    "_equipment_model_search_entry_cache",
+    "common_salvage_model_ids_by_item_key",
+    "catalog_common_material_ids",
+    "catalog_merchant_essentials",
+    "catalog_rare_materials",
+    "catalog_stats",
+    "weapon_mod_entries",
+    "rune_entries",
+    "armor_upgrade_entries",
+    "weapon_mod_names",
+    "weapon_mod_generic_names",
+    "weapon_mod_variant_names",
+    "rune_names",
+    "rune_buy_entries",
+    "rune_buy_entries_by_identifier",
+    "rune_buy_identifier_by_exact_label",
+    "rune_buy_entries_by_profession",
+    "rune_buy_professions",
+)
+_CP5_PUBLISHED_FIELDS: tuple[str, ...] = (
+    "catalog_by_model_id",
+    "exact_catalog_by_item_key",
+    "exact_catalog_untyped_by_model_id",
+    "catalog_alias_to_model_ids",
+    "catalog_alias_display_names",
+    "common_salvage_model_ids_by_item_key",
+    "catalog_common_material_ids",
+    "catalog_merchant_essentials",
+    "catalog_rare_materials",
+    "catalog_stats",
+    "catalog_load_error",
+    "weapon_mod_entries",
+    "rune_entries",
+    "armor_upgrade_entries",
+    "weapon_mod_names",
+    "weapon_mod_generic_names",
+    "weapon_mod_variant_names",
+    "rune_names",
+    "rune_buy_entries",
+    "rune_buy_entries_by_identifier",
+    "rune_buy_identifier_by_exact_label",
+    "rune_buy_entries_by_profession",
+    "rune_buy_professions",
+)
+_CP5_LIST_FIELDS: frozenset[str] = frozenset(
+    {
+        "catalog_common_material_ids",
+        "catalog_merchant_essentials",
+        "catalog_rare_materials",
+        "weapon_mod_entries",
+        "rune_entries",
+        "armor_upgrade_entries",
+        "rune_buy_entries",
+        "rune_buy_professions",
+    }
+)
+_CP5_LOAD_RESET_FIELDS: tuple[str, ...] = (
+    "catalog_by_model_id",
+    "exact_catalog_by_item_key",
+    "exact_catalog_untyped_by_model_id",
+    "catalog_alias_to_model_ids",
+    "catalog_alias_display_names",
+    "common_salvage_model_ids_by_item_key",
+    "catalog_common_material_ids",
+    "catalog_merchant_essentials",
+    "catalog_rare_materials",
+    "catalog_stats",
+    "catalog_load_error",
+)
+_CP5_SELECTED_METHODS: tuple[str, ...] = (
+    "load_modifier_catalogs",
+    "load_rune_buy_catalog",
+    "load_catalog",
+    "clear_ranked_search_caches",
+    "catalog_entry_search_signature",
+    "capture_catalog_search_state",
+    "catalog_search_state_changed",
+    "invalidate_ranked_search_caches_for_catalog_mutation",
+    "register_catalog_entry",
+    "load_catalog_group",
+    "load_drop_data_catalog",
+    "load_item_handling_catalog",
+    "load_rune_model_catalog",
+    "load_model_id_fallback_catalog",
+    "rebuild_catalog_alias_index",
+    "get_catalog_alias_group_count",
+    "get_model_entry",
+    "get_model_name",
+    "get_model_descriptor",
+    "get_model_item_type",
+    "rebuild_equipment_typed_entry_index",
+    "get_equipment_typed_entries_for_model",
+    "catalog_entry_matches_equipment_family",
+    "get_equipment_model_family_entries",
+    "get_equipment_catalog_type_label",
+    "get_equipment_model_search_entry",
+    "iter_exact_catalog_entries",
+    "get_exact_catalog_entry",
+    "get_exact_catalog_entry_key",
+    "get_exact_catalog_entries_for_model",
+    "search_exact_catalog",
+    "search_exact_catalog_with_predicate",
+    "search_catalog",
+    "search_catalog_with_predicate",
+    "search_equipment_catalog",
+    "search_catalog_alias_groups",
+    "search_identifier_catalog",
+)
+
+
+def _cp5_expect(actual: Any, expected: Any, context: str) -> None:
+    _expect(actual == expected, f"CP5 {context}: expected {expected!r}; observed {actual!r}")
+
+
+def _cp5_raise(sentinel: RuntimeError) -> None:
+    raise sentinel
+
+
+def _cp5_expect_runtime_identity(callback: Callable[[], Any], sentinel: RuntimeError, context: str) -> None:
+    caught: list[RuntimeError] = []
+
+    def capture() -> None:
+        try:
+            callback()
+        except RuntimeError as exc:
+            caught.append(exc)
+            raise
+
+    _expect_raises(RuntimeError, capture, context)
+    _cp5_expect(len(caught), 1, context + " captured exception count")
+    _cp5_expect(str(caught[0]), str(sentinel), context + " exception message")
+    _expect(caught[0] is sentinel, context + " exception identity")
+
+
+class _CP5PatchSet:
+    """Restore exact globals/descriptors and remove newly introduced instance overrides."""
+
+    def __init__(self) -> None:
+        self._saved: list[tuple[Any, str, bool, Any]] = []
+
+    def set(self, owner: Any, name: str, value: Any) -> None:
+        namespace: Mapping[str, Any] = cast(Mapping[str, Any], vars(owner))
+        self._saved.append((owner, name, name in namespace, namespace.get(name)))
+        setattr(owner, name, value)
+
+    def restore(self) -> None:
+        for owner, name, present, value in reversed(self._saved):
+            if present:
+                setattr(owner, name, value)
+                _expect(vars(owner)[name] is value, f"CP5 exact restoration failed: {name}")
+            else:
+                if name in vars(owner):
+                    delattr(owner, name)
+                _expect(name not in vars(owner), f"CP5 instance override survived: {name}")
+        self._saved.clear()
+
+
+class _CP5ResultProbe:
+    def __init__(
+        self,
+        values: dict[str, Any],
+        events: list[str],
+        fail_at: str | None = None,
+    ) -> None:
+        self._values = values
+        self._events = events
+        self._fail_at = fail_at
+        self.failure = RuntimeError(f"publication:{fail_at}")
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._values:
+            raise AttributeError(name)
+        self._events.append(name)
+        if name == self._fail_at:
+            raise self.failure
+        return self._values[name]
+
+
+def _cp5_warm_caches(widget: Any) -> None:
+    widget._search_catalog("hit")
+    widget._search_exact_catalog("hit")
+    _expect(bool(widget._ranked_catalog_search._flat_ranked_search_cache), "CP5 warm flat cache")
+    _expect(bool(widget._ranked_catalog_search._exact_ranked_search_cache), "CP5 warm exact cache")
+
+
+def _cp5_seed_catalog_state(widget: Any) -> dict[str, Any]:
+    for name in _CP5_STATE_FIELDS:
+        if name in ("catalog_loaded", "_catalog_building"):
+            value: Any = name == "catalog_loaded"
+        elif name == "_catalog_generation":
+            value = 7
+        elif name == "catalog_load_error":
+            value = "old error"
+        elif name in _CP5_LIST_FIELDS:
+            value = [object()]
+        else:
+            value = {"old": object()}
+        setattr(widget, name, value)
+    widget.catalog_by_model_id = {7: {"model_id": 7, "name": "Hit Old", "priority": 10}}
+    widget.exact_catalog_by_item_key = {(27, 7): {"model_id": 7, "name": "Hit Old", "item_type_id": 27}}
+    widget.exact_catalog_untyped_by_model_id = {8: {"model_id": 8, "name": "Hit Other"}}
+    _cp5_warm_caches(widget)
+    return {name: getattr(widget, name) for name in _CP5_STATE_FIELDS}
+
+
+def _cp5_result_values(module: Any) -> dict[str, Any]:
+    result = module.CatalogLoadResult()
+    return {name: getattr(result, name) for name in _CP5_PUBLISHED_FIELDS}
+
+
+def _test_catalog_session_ownership_construction(module: Any) -> None:
+    component: Any = sys.modules["Sources.icefox.MerchantRules.catalog"]
+    original_ranker = module.RankedCatalogSearch
+    original_session = module.CatalogSession
+    events: list[str] = []
+    patches = _CP5PatchSet()
+
+    def make_ranker(*args: Any, **kwargs: Any) -> Any:
+        events.append("ranker")
+        return original_ranker(*args, **kwargs)
+
+    def make_session(*args: Any, **kwargs: Any) -> Any:
+        events.append("session")
+        return original_session(*args, **kwargs)
+
+    try:
+        patches.set(module, "RankedCatalogSearch", make_ranker)
+        patches.set(module, "CatalogSession", make_session)
+        first, second = _make_widget(module), _make_widget(module)
+    finally:
+        patches.restore()
+    _cp5_expect(events, ["ranker", "session", "ranker", "session"], "constructor allocation order")
+    _expect(first._catalog_session is not second._catalog_session, "CP5 independent sessions")
+    _expect(first._ranked_catalog_search is not second._ranked_catalog_search, "CP5 independent rankers")
+    for widget in (first, second):
+        session = widget._catalog_session
+        _expect(session._ranked_catalog_search is widget._ranked_catalog_search, "CP5 exact ranker handoff")
+        _expect(session._item_type_enum is module.ItemType, "CP5 actual enum reference")
+        for dependency, owner_name in (
+            ("_weapon_item_type_ids", "WEAPON_ITEM_TYPE_IDS"),
+            ("_weapon_like_item_types", "WEAPON_LIKE_ITEM_TYPES"),
+            ("_armor_piece_types", "ARMOR_PIECE_TYPES"),
+        ):
+            _expect(getattr(session, dependency) is getattr(module, owner_name), "CP5 type collection " + dependency)
+
+    def unused(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("CP5 constructor invoked a dependency")
+
+    fresh = original_session(
+        ranker=first._ranked_catalog_search,
+        item_type_enum=module.ItemType,
+        weapon_item_type_ids=module.WEAPON_ITEM_TYPE_IDS,
+        weapon_like_item_types=module.WEAPON_LIKE_ITEM_TYPES,
+        armor_piece_types=module.ARMOR_PIECE_TYPES,
+        is_valid_exact_item_type_id=unused,
+        is_weapon_catalog_item_type=unused,
+        is_armor_catalog_item_type=unused,
+        is_weapon_mod_catalog_name=unused,
+        is_armor_rune_catalog_name=unused,
+        is_armor_salvage_catalog_name=unused,
+        get_search_result_limit=unused,
+    )
+    _expect(not fresh.catalog_loaded and not fresh._catalog_building, "CP5 constructor flags")
+    _cp5_expect((fresh.catalog_load_error, fresh._catalog_generation), ("", 0), "constructor scalar defaults")
+    for name in _CP5_STATE_FIELDS:
+        if name not in ("catalog_loaded", "catalog_load_error", "_catalog_generation", "_catalog_building"):
+            _expect(not getattr(fresh, name), "CP5 independent empty allocation " + name)
+            _expect(getattr(first, name) is not getattr(second, name), "CP5 cross-widget collection " + name)
+    catalog_path = (REPO_ROOT / "Sources" / "icefox" / "MerchantRules" / "catalog.py").resolve()
+    _cp5_expect(original_session.__module__, component.__name__, "session defining module")
+    for name in _CP5_SELECTED_METHODS:
+        bound = getattr(first._catalog_session, name)
+        function = getattr(bound, "__func__", bound)
+        _expect(function is getattr(original_session, name), "CP5 method function identity " + name)
+        _expect(function.__globals__ is vars(component), "CP5 actual defining globals " + name)
+        _cp5_expect(Path(function.__code__.co_filename).resolve(), catalog_path, "method source " + name)
+        if name != "catalog_entry_search_signature":
+            _expect(bound.__self__ is first._catalog_session, "CP5 method bound owner " + name)
+        delegate = getattr(first, "_" + name)
+        delegate_function = getattr(delegate, "__func__", delegate)
+        _expect(delegate_function.__globals__ is vars(module), "CP5 widget delegate defining globals " + name)
+        if name != "catalog_entry_search_signature":
+            _expect(delegate.__self__ is first, "CP5 widget delegate owner " + name)
+    _expect(component.humanize_exact_item_type.__globals__ is vars(component), "CP5 canonical humanizer globals")
+    _cp5_expect(component.humanize_exact_item_type.__module__, component.__name__, "humanizer defining module")
+    _expect(module._catalog_humanize_exact_item_type is component.humanize_exact_item_type, "CP5 humanizer alias")
+    for arguments, expected in (((0, ""), "Salvage"), ((-1, ""), "Item type -1"), ((2, "Rare_Rune  "), "Rare Rune")):
+        _cp5_expect(
+            module.MerchantRulesWidget._humanize_exact_item_type(*arguments), expected, "static humanizer literal"
+        )
+    config: Any = sys.modules["Sources.icefox.MerchantRules.configuration"]
+    values: Any = sys.modules["Sources.icefox.MerchantRules.item_values"]
+    _expect(component._session_safe_int is values.safe_int, "CP5 canonical safe-int binding")
+    _expect(component._session_dedupe_model_ids is config.dedupe_model_ids, "CP5 canonical deduplicator binding")
+    _expect(component.SELL_KIND_WEAPONS is config.SELL_KIND_WEAPONS, "CP5 canonical weapon-kind binding")
+    _expect(component.SELL_KIND_ARMOR is config.SELL_KIND_ARMOR, "CP5 canonical armor-kind binding")
+    reached: list[str] = []
+    real_safe, real_normalize, real_dedupe = (
+        component._session_safe_int,
+        component.normalize_catalog_search_text,
+        component._session_dedupe_model_ids,
+    )
+
+    def safe(*args: Any) -> Any:
+        reached.append("safe")
+        return real_safe(*args)
+
+    def normalize(value: Any) -> str:
+        reached.append("normalize")
+        return real_normalize(value)
+
+    def dedupe(value: Any) -> Any:
+        reached.append("dedupe")
+        return real_dedupe(value)
+
+    try:
+        patches.set(component, "_session_safe_int", safe)
+        patches.set(component, "normalize_catalog_search_text", normalize)
+        patches.set(component, "_session_dedupe_model_ids", dedupe)
+        first._get_model_entry(111)
+        first._catalog_entry_search_signature({"model_id": 1, "name": "Hit"})
+        first._search_catalog_alias_groups("hit")
+        _expect({"safe", "normalize", "dedupe"} <= set(reached), "CP5 canonical defining-global sentinel reachability")
+    finally:
+        patches.restore()
+
+
+def _test_catalog_session_transparent_state(module: Any) -> None:
+    widget, other = _make_widget(module), _make_widget(module)
+    _cp5_seed_catalog_state(widget)
+    other_state = {name: getattr(other, name) for name in _CP5_STATE_FIELDS}
+    flat_cache = widget._ranked_catalog_search._flat_ranked_search_cache
+    exact_cache = widget._ranked_catalog_search._exact_ranked_search_cache
+    flat_before, exact_before = tuple(flat_cache.items()), tuple(exact_cache.items())
+    _cp5_expect(len(_CP5_STATE_FIELDS), 28, "literal state inventory")
+    scalars: dict[str, Any] = {
+        "catalog_loaded": True,
+        "catalog_load_error": "kept",
+        "_catalog_generation": 19,
+        "_catalog_building": True,
+    }
+    for name in _CP5_STATE_FIELDS:
+        generation = widget._catalog_generation
+        projection_before = widget._equipment_model_search_entry_cache
+        if name in scalars:
+            supplied: Any = scalars[name]
+            replacement: Any = (
+                False if isinstance(supplied, bool) else (20 if isinstance(supplied, int) else "replaced")
+            )
+        elif name in _CP5_LIST_FIELDS:
+            supplied = [object()]
+            replacement = [object()]
+        else:
+            supplied = _RankedSearchTestEntries({"supplied": {}}, name, [])
+            replacement = {"replacement": object()}
+        descriptor: Any = cast(Mapping[str, Any], vars(module.MerchantRulesWidget))[name]
+        _expect(
+            isinstance(descriptor, property) and descriptor.fget is not None and descriptor.fset is not None,
+            "CP5 explicit read/write property " + name,
+        )
+        setattr(widget, name, supplied)
+        _expect(
+            getattr(widget, name) is supplied and getattr(widget._catalog_session, name) is supplied,
+            "CP5 transparent supplied reference " + name,
+        )
+        if name not in scalars:
+            if isinstance(supplied, list):
+                cast(list[object], supplied).append("mutation")
+                _expect(getattr(widget._catalog_session, name)[-1] == "mutation", "CP5 list mutation " + name)
+            else:
+                cast(_RankedSearchTestEntries, supplied).entries["mutation"] = {}
+                _expect("mutation" in getattr(widget._catalog_session, name), "CP5 mapping mutation " + name)
+        setattr(widget._catalog_session, name, replacement)
+        _expect(getattr(widget, name) is replacement, "CP5 reverse forwarding " + name)
+        if name != "_catalog_generation":
+            _cp5_expect(widget._catalog_generation, generation, "setter does not advance generation " + name)
+        _expect(widget._ranked_catalog_search._flat_ranked_search_cache is flat_cache, "CP5 flat cache owner survives")
+        _expect(
+            widget._ranked_catalog_search._exact_ranked_search_cache is exact_cache, "CP5 exact cache owner survives"
+        )
+        _cp5_expect(tuple(flat_cache.items()), flat_before, "setter flat cache preservation " + name)
+        _cp5_expect(tuple(exact_cache.items()), exact_before, "setter exact cache preservation " + name)
+        if name != "_equipment_model_search_entry_cache":
+            _expect(
+                widget._equipment_model_search_entry_cache is projection_before,
+                "CP5 setter projection preservation " + name,
+            )
+        _expect(getattr(other, name) is other_state[name], "CP5 other widget unchanged " + name)
+
+    session = widget._catalog_session
+    session_type: Any = cast(Any, type(session))
+    component: Any = sys.modules["Sources.icefox.MerchantRules.catalog"]
+    public_fields = (
+        ("equipment_typed_entries_by_model_id", "_equipment_typed_entries_by_model_id"),
+        ("equipment_model_search_entry_cache", "_equipment_model_search_entry_cache"),
+        ("catalog_generation", "_catalog_generation"),
+        ("catalog_building", "_catalog_building"),
+    )
+    for public_name, backing_name in public_fields:
+        public_descriptor: Any = cast(Mapping[str, Any], vars(session_type))[public_name]
+        getter: Any = public_descriptor.fget
+        setter: Any = public_descriptor.fset
+        _expect(
+            isinstance(public_descriptor, property) and getter is not None and setter is not None,
+            "CP5 explicit public session property " + public_name,
+        )
+        _expect(
+            getter.__globals__ is vars(component) and setter.__globals__ is vars(component),
+            "CP5 public property defining globals " + public_name,
+        )
+        _cp5_expect(getter.__module__, component.__name__, "public getter owner " + public_name)
+        _cp5_expect(setter.__module__, component.__name__, "public setter owner " + public_name)
+        if backing_name == "_catalog_generation":
+            public_value: Any = 31
+            widget_value: Any = 32
+        elif backing_name == "_catalog_building":
+            public_value = False
+            widget_value = True
+        else:
+            public_value = _RankedSearchTestEntries({"public": {}}, public_name, [])
+            widget_value = {"widget": object()}
+        for owner, attribute, value in (
+            (session, public_name, public_value),
+            (widget, backing_name, widget_value),
+        ):
+            session_fields = cast(Mapping[str, Any], vars(session))
+            other_fields = cast(Mapping[str, Any], vars(other._catalog_session))
+            session_before: dict[str, Any] = dict(session_fields)
+            other_before: dict[str, Any] = dict(other_fields)
+            setattr(owner, attribute, value)
+            _expect(
+                getattr(session, public_name) is value
+                and getattr(session, backing_name) is value
+                and getattr(widget, backing_name) is value,
+                "CP5 public/widget/backing identity " + attribute,
+            )
+            _cp5_expect(set(session_fields), set(session_before), "public setter adds no state " + attribute)
+            for field, previous in session_before.items():
+                if field != backing_name:
+                    _expect(session_fields[field] is previous, "CP5 public setter changes only selected field " + field)
+            _cp5_expect(set(other_fields), set(other_before), "other session field inventory")
+            for field, previous in other_before.items():
+                _expect(other_fields[field] is previous, "CP5 public setter preserves independent session " + field)
+            _expect(
+                widget._ranked_catalog_search._flat_ranked_search_cache is flat_cache,
+                "CP5 public setter retains flat cache",
+            )
+            _expect(
+                widget._ranked_catalog_search._exact_ranked_search_cache is exact_cache,
+                "CP5 public setter retains exact cache",
+            )
+            _cp5_expect(tuple(flat_cache.items()), flat_before, "public setter flat cache contents")
+            _cp5_expect(tuple(exact_cache.items()), exact_before, "public setter exact cache contents")
+
+
+def _test_catalog_session_retained_rune_writer(module: Any) -> None:
+    widget = _make_widget(module)
+    _cp5_warm_caches(widget)
+    widget.rune_buy_entries = [
+        {"identifier": "rune-a", "name": "Shared"},
+        {"identifier": "rune-b", "name": "Shared"},
+        {"identifier": "rune-c", "name": "Unique"},
+    ]
+    old_lookup = widget.rune_buy_identifier_by_exact_label
+    projection = widget._equipment_model_search_entry_cache
+    generation = widget._catalog_generation
+    ranker = widget._ranked_catalog_search
+    flat, exact = tuple(ranker._flat_ranked_search_cache.items()), tuple(ranker._exact_ranked_search_cache.items())
+    widget._rebuild_rune_exact_display_lookup()
+    _cp5_expect(
+        widget.rune_buy_identifier_by_exact_label,
+        {"rune-a": "rune-a", "rune-b": "rune-b", "unique": "rune-c", "rune-c": "rune-c"},
+        "retained rune writer literal",
+    )
+    _expect(widget.rune_buy_identifier_by_exact_label is not old_lookup, "CP5 writer replaces lookup")
+    _expect(
+        widget.rune_buy_identifier_by_exact_label is widget._catalog_session.rune_buy_identifier_by_exact_label,
+        "CP5 writer uses transparent session setter",
+    )
+    _cp5_expect(widget._catalog_generation, generation, "writer generation")
+    _expect(widget._equipment_model_search_entry_cache is projection, "CP5 writer projection identity")
+    _cp5_expect(tuple(ranker._flat_ranked_search_cache.items()), flat, "writer flat cache")
+    _cp5_expect(tuple(ranker._exact_ranked_search_cache.items()), exact, "writer exact cache")
+
+
+def _test_catalog_session_lazy_exact_iterator(module: Any) -> None:
+    widget, replacement = _make_widget(module), _make_widget(module)
+    old_session = widget._catalog_session
+    first = {"model_id": 70, "item_type_id": 27, "name": "Typed"}
+    old_untyped = {"model_id": 71, "name": "Old"}
+    new_untyped = {"model_id": 72, "name": "New"}
+    replacement.exact_catalog_by_item_key = {(27, 70): first}
+    replacement.exact_catalog_untyped_by_model_id = {71: old_untyped}
+    try:
+        iterator = widget._iter_exact_catalog_entries()
+        widget._catalog_session = replacement._catalog_session
+        _expect(next(iterator) is first, "CP5 deferred session lookup")
+        replacement.exact_catalog_untyped_by_model_id = {72: new_untyped}
+        _expect(next(iterator) is new_untyped, "CP5 deferred untyped table lookup")
+        _expect_raises(StopIteration, lambda: next(iterator), "CP5 iterator exhaustion")
+        iterator = widget._iter_exact_catalog_entries()
+        del widget._catalog_session
+        _expect_raises(AttributeError, lambda: next(iterator), "CP5 missing session fails on consumption")
+        widget._catalog_session = old_session
+
+        class FailingValues:
+            def values(self) -> Any:
+                raise RuntimeError("values during iteration")
+
+        old_table = widget.exact_catalog_by_item_key
+        try:
+            widget.exact_catalog_by_item_key = FailingValues()
+            iterator = widget._iter_exact_catalog_entries()
+            _expect_raises(RuntimeError, lambda: next(iterator), "CP5 values failure deferred")
+        finally:
+            widget.exact_catalog_by_item_key = old_table
+    finally:
+        widget._catalog_session = old_session
+
+
+def _test_catalog_session_load_reset_sets(module: Any) -> None:
+    for route in ("_load_catalog", "_reload_catalog"):
+        widget = _make_widget(module)
+        old = _cp5_seed_catalog_state(widget)
+        status = widget.status_message
+        effects: list[str] = []
+
+        def record_summary(*_args: Any) -> None:
+            effects.append("summary")
+
+        patches = _CP5PatchSet()
+        try:
+            sentinel = RuntimeError("factory failed")
+
+            def factory() -> Any:
+                _cp5_raise(sentinel)
+
+            patches.set(widget, "_get_catalog_loader", factory)
+            patches.set(widget, "_log_catalog_summary", record_summary)
+            patches.set(widget, "_invalidate_cleanup_deposit_filter_targets_cache", lambda: effects.append("filter"))
+            patches.set(widget, "_invalidate_cleanup_target_display_cache", lambda: effects.append("display"))
+            _cp5_expect_runtime_identity(lambda: getattr(widget, route)(), sentinel, "CP5 factory failure " + route)
+            for name in _CP5_LOAD_RESET_FIELDS:
+                expected: Any = "" if name == "catalog_load_error" else ([] if name in _CP5_LIST_FIELDS else {})
+                _cp5_expect(getattr(widget, name), expected, "load reset " + route + ":" + name)
+                if name != "catalog_load_error":
+                    _expect(getattr(widget, name) is not old[name], "CP5 reset creates collection " + name)
+            for name in ("_equipment_typed_entries_by_model_id", "_equipment_model_search_entry_cache"):
+                if route == "_load_catalog":
+                    _expect(getattr(widget, name) is old[name], "CP5 ordinary-load retained projection " + name)
+                else:
+                    _cp5_expect(getattr(widget, name), {}, "reload derived reset " + name)
+                    _expect(getattr(widget, name) is not old[name], "CP5 reload fresh projection " + name)
+            for name in _CP5_PUBLISHED_FIELDS:
+                if name not in _CP5_LOAD_RESET_FIELDS:
+                    _expect(getattr(widget, name) is old[name], "CP5 unpublished modifier/rune reference " + name)
+            _cp5_expect(
+                (widget.catalog_loaded, widget._catalog_building, widget._catalog_generation),
+                (False, False, 7),
+                "load failure flags " + route,
+            )
+            _cp5_expect(widget.status_message, status, "reload continuation suppressed")
+            _cp5_expect(effects, [], "load failure effects")
+            _cp5_expect(len(widget._ranked_catalog_search._flat_ranked_search_cache), 0, "failure flat clear")
+            _cp5_expect(len(widget._ranked_catalog_search._exact_ranked_search_cache), 0, "failure exact clear")
+        finally:
+            patches.restore()
+
+
+def _test_catalog_session_partial_publication(module: Any) -> None:
+    observations: list[dict[str, Any]] = []
+    for stop_index, stop_name in enumerate(_CP5_PUBLISHED_FIELDS):
+        widget = _make_widget(module)
+        old = _cp5_seed_catalog_state(widget)
+        values = _cp5_result_values(module)
+        events: list[str] = []
+        probe = _CP5ResultProbe(values, events, stop_name)
+        patches = _CP5PatchSet()
+        try:
+            patches.set(widget, "_get_catalog_loader", lambda: types.SimpleNamespace(load=lambda: probe))
+            _cp5_expect_runtime_identity(widget._load_catalog, probe.failure, "CP5 publication stop " + stop_name)
+            _cp5_expect(events, list(_CP5_PUBLISHED_FIELDS[: stop_index + 1]), "publication read order " + stop_name)
+            for index, name in enumerate(_CP5_PUBLISHED_FIELDS):
+                observed = getattr(widget, name)
+                if index < stop_index:
+                    _expect(observed is values[name], "CP5 published prefix reference " + stop_name + ":" + name)
+                elif name in _CP5_LOAD_RESET_FIELDS:
+                    expected: Any = "" if name == "catalog_load_error" else ([] if name in _CP5_LIST_FIELDS else {})
+                    _cp5_expect(observed, expected, "publication reset suffix " + stop_name + ":" + name)
+                else:
+                    _expect(observed is old[name], "CP5 unpublished suffix reference " + stop_name + ":" + name)
+            for name in ("_equipment_typed_entries_by_model_id", "_equipment_model_search_entry_cache"):
+                if stop_index <= 2:
+                    _expect(getattr(widget, name) is old[name], "CP5 pre-rebuild retained derived field " + name)
+                else:
+                    _cp5_expect(getattr(widget, name), {}, "completed rebuild empty index " + name)
+                    _expect(getattr(widget, name) is not old[name], "CP5 completed rebuild fresh index " + name)
+            _cp5_expect(
+                (widget._catalog_generation, widget.catalog_loaded, widget._catalog_building),
+                (7, False, False),
+                "partial publication state",
+            )
+            observations.append(
+                {
+                    "stop": stop_name,
+                    "reads": list(events),
+                    "generation": widget._catalog_generation,
+                    "exception_identity": True,
+                }
+            )
+        finally:
+            patches.restore()
+    widget = _make_widget(module)
+    old = _cp5_seed_catalog_state(widget)
+    values = _cp5_result_values(module)
+
+    rebuild_sentinel = RuntimeError("real equipment rebuild")
+
+    class FailingItems:
+        def items(self) -> Any:
+            raise rebuild_sentinel
+
+    broken = FailingItems()
+    values["exact_catalog_by_item_key"] = broken
+    events = []
+    probe = _CP5ResultProbe(values, events)
+    patches = _CP5PatchSet()
+    try:
+        patches.set(widget, "_get_catalog_loader", lambda: types.SimpleNamespace(load=lambda: probe))
+        _cp5_expect_runtime_identity(
+            widget._load_catalog, rebuild_sentinel, "CP5 failure inside actual equipment rebuild"
+        )
+        _cp5_expect(events, list(_CP5_PUBLISHED_FIELDS[:3]), "real rebuild follows three primary publications")
+        _expect(widget.catalog_by_model_id is values["catalog_by_model_id"], "CP5 rebuild flat prefix")
+        _expect(widget.exact_catalog_by_item_key is broken, "CP5 rebuild typed prefix")
+        _expect(
+            widget.exact_catalog_untyped_by_model_id is values["exact_catalog_untyped_by_model_id"],
+            "CP5 rebuild untyped prefix",
+        )
+        _expect(
+            widget._equipment_typed_entries_by_model_id is old["_equipment_typed_entries_by_model_id"],
+            "CP5 failed rebuild retains preceding typed index",
+        )
+        _cp5_expect(widget._equipment_model_search_entry_cache, {}, "failed rebuild already cleared projection")
+        _expect(
+            widget._equipment_model_search_entry_cache is not old["_equipment_model_search_entry_cache"],
+            "CP5 failed rebuild projection replacement",
+        )
+        _cp5_expect(
+            (widget._catalog_generation, widget.catalog_loaded, widget._catalog_building),
+            (7, False, False),
+            "real rebuild failure state",
+        )
+    finally:
+        patches.restore()
+    print("CP5 partial publication evidence: " + json.dumps(observations, sort_keys=True))
+
+
+def _test_catalog_session_load_effect_order(module: Any) -> None:
+    observations: list[dict[str, Any]] = []
+    for fail_at in ("none", "filter", "display", "warning", "initial_clear", "final_clear", "filter_and_final"):
+        widget = _make_widget(module)
+        _cp5_seed_catalog_state(widget)
+        values = _cp5_result_values(module)
+        values["catalog_load_error"] = "warning"
+        events: list[str] = []
+        states: list[tuple[str, int, bool, bool]] = []
+        reads: list[str] = []
+        probe = _CP5ResultProbe(values, reads)
+        ranker = widget._ranked_catalog_search
+        real_clear = ranker.clear
+        clear_count = 0
+        sentinels = {
+            label: RuntimeError(label) for label in ("filter", "display", "warning", "initial_clear", "final_clear")
+        }
+        patches = _CP5PatchSet()
+
+        def clear() -> None:
+            nonlocal clear_count
+            clear_count += 1
+            label = "initial_clear" if clear_count == 1 else "final_clear"
+            events.append(label)
+            states.append((label, widget._catalog_generation, widget.catalog_loaded, widget._catalog_building))
+            real_clear()
+            if fail_at == label or (fail_at == "filter_and_final" and label == "final_clear"):
+                raise sentinels[label]
+
+        def load() -> Any:
+            events.append("loader")
+            return probe
+
+        def factory() -> Any:
+            events.append("factory")
+            return types.SimpleNamespace(load=load)
+
+        def effect(label: str) -> None:
+            events.append(label)
+            states.append((label, widget._catalog_generation, widget.catalog_loaded, widget._catalog_building))
+            _cp5_expect(reads, list(_CP5_PUBLISHED_FIELDS), "all publication reads precede " + label)
+            if fail_at == label or (fail_at == "filter_and_final" and label == "filter"):
+                raise sentinels[label]
+
+        def warning(name: str, message: str, level: Any) -> None:
+            _cp5_expect(
+                (name, message, level),
+                (module.MODULE_NAME, "warning", module.Console.MessageType.Warning),
+                "warning argument values",
+            )
+            effect("warning")
+
+        try:
+            patches.set(ranker, "clear", clear)
+            patches.set(widget, "_get_catalog_loader", factory)
+            patches.set(widget, "_invalidate_cleanup_deposit_filter_targets_cache", lambda: effect("filter"))
+            patches.set(widget, "_invalidate_cleanup_target_display_cache", lambda: effect("display"))
+            patches.set(module, "ConsoleLog", warning)
+            error = ""
+            caught: RuntimeError | None = None
+            try:
+                widget._load_catalog()
+            except RuntimeError as exc:
+                caught = exc
+                error = str(exc)
+            expected_error = "" if fail_at == "none" else ("final_clear" if fail_at == "filter_and_final" else fail_at)
+            _cp5_expect(error, expected_error, "effect exception precedence " + fail_at)
+            expected_exception = None if fail_at == "none" else sentinels[expected_error]
+            _expect(caught is expected_exception, "CP5 effect exception identity " + fail_at)
+            expected_events = ["initial_clear"]
+            if fail_at != "initial_clear":
+                expected_events += ["factory", "loader", "filter"]
+                if fail_at not in ("filter", "filter_and_final"):
+                    expected_events.append("display")
+                    if fail_at != "display":
+                        expected_events.append("warning")
+            expected_events.append("final_clear")
+            _cp5_expect(events, expected_events, "publication effect order " + fail_at)
+            expected_generation = 7 if fail_at == "initial_clear" else 8
+            expected_loaded = fail_at in ("none", "warning", "final_clear")
+            _cp5_expect(
+                (widget._catalog_generation, widget.catalog_loaded, widget._catalog_building),
+                (expected_generation, expected_loaded, False),
+                "final effect state " + fail_at,
+            )
+            for label, generation, loaded, building in states:
+                if label in ("filter", "display"):
+                    _cp5_expect((generation, loaded, building), (8, False, True), "cleanup observation " + label)
+                elif label == "warning":
+                    _cp5_expect((generation, loaded, building), (8, True, True), "warning observation")
+                elif label == "final_clear":
+                    _expect(building is False, "CP5 building cleared before final ranking clear")
+                else:
+                    _cp5_expect((generation, loaded, building), (7, False, True), "initial clear observation")
+            observations.append(
+                {
+                    "failure": fail_at,
+                    "events": list(events),
+                    "states": list(states),
+                    "error": error,
+                    "exception_identity": caught is expected_exception,
+                }
+            )
+        finally:
+            patches.restore()
+        _expect(
+            ranker.clear.__self__ is ranker and ranker.clear.__func__ is real_clear.__func__,
+            "CP5 ranker clear descriptor restored",
+        )
+    print("CP5 publication effect evidence: " + json.dumps(observations, sort_keys=True))
+
+
+def _test_catalog_session_modifier_rune_publication(module: Any) -> None:
+    groups = (
+        (
+            "_load_modifier_catalogs",
+            "load_modifier_catalogs",
+            (
+                "weapon_mod_entries",
+                "rune_entries",
+                "armor_upgrade_entries",
+                "weapon_mod_names",
+                "weapon_mod_generic_names",
+                "weapon_mod_variant_names",
+                "rune_names",
+            ),
+        ),
+        (
+            "_load_rune_buy_catalog",
+            "load_rune_buy_catalog",
+            (
+                "rune_buy_entries",
+                "rune_buy_entries_by_identifier",
+                "rune_buy_identifier_by_exact_label",
+                "rune_buy_entries_by_profession",
+                "rune_buy_professions",
+            ),
+        ),
+    )
+    for route, loader_method, fields in groups:
+        for stop in (None, fields[2]):
+            widget = _make_widget(module)
+            old = _cp5_seed_catalog_state(widget)
+            values = _cp5_result_values(module)
+            events: list[str] = []
+            probe = _CP5ResultProbe(values, events, stop)
+            loader = types.SimpleNamespace(**{loader_method: lambda: probe})
+            ranker = widget._ranked_catalog_search
+            flat, exact = tuple(ranker._flat_ranked_search_cache.items()), tuple(
+                ranker._exact_ranked_search_cache.items()
+            )
+            projection = widget._equipment_model_search_entry_cache
+            patches = _CP5PatchSet()
+            try:
+                patches.set(widget, "_get_catalog_loader", lambda: loader)
+                if stop is None:
+                    getattr(widget, route)()
+                    _cp5_expect(events, list(fields), "specialized complete publication " + route)
+                else:
+                    _cp5_expect_runtime_identity(
+                        lambda: getattr(widget, route)(), probe.failure, "CP5 specialized publication failure"
+                    )
+                    _cp5_expect(events, list(fields[:3]), "specialized failed publication " + route)
+                for index, name in enumerate(fields):
+                    expected = values[name] if stop is None or index < 2 else old[name]
+                    _expect(getattr(widget, name) is expected, "CP5 specialized publication reference " + name)
+                _cp5_expect(
+                    (widget._catalog_generation, widget.catalog_loaded, widget._catalog_building),
+                    (7, True, False),
+                    "specialized state unchanged",
+                )
+                _expect(widget._equipment_model_search_entry_cache is projection, "CP5 specialized projection retained")
+                _cp5_expect(tuple(ranker._flat_ranked_search_cache.items()), flat, "specialized flat cache")
+                _cp5_expect(tuple(ranker._exact_ranked_search_cache.items()), exact, "specialized exact cache")
+            finally:
+                patches.restore()
+
+
+def _test_catalog_session_mutation_exception(module: Any) -> None:
+    routes = (
+        ("_load_catalog_group", "load_catalog_group"),
+        ("_load_drop_data_catalog", "load_drop_data_catalog"),
+        ("_load_item_handling_catalog", "load_item_handling_catalog"),
+        ("_load_rune_model_catalog", "load_rune_model_catalog"),
+        ("_load_model_id_fallback_catalog", "load_model_id_fallback_catalog"),
+        ("_rebuild_catalog_alias_index", "rebuild_catalog_alias_index"),
+    )
+    for route, loader_method in routes:
+        widget = _make_widget(module)
+        _cp5_seed_catalog_state(widget)
+        catalog = widget.catalog_by_model_id
+        projection = widget._equipment_model_search_entry_cache
+        projection_items = tuple(projection.items())
+        ranker = widget._ranked_catalog_search
+        flat, exact = ranker._flat_ranked_search_cache, ranker._exact_ranked_search_cache
+        events: list[str] = []
+        row = {"model_id": 60001, "name": "Late Arrival"}
+        sentinel = RuntimeError("after mutation")
+
+        def mutate_then_raise(target: Any, *_args: Any) -> Any:
+            _expect(target is catalog, "CP5 mutation wrapper passes exact table")
+            events.append("mutation")
+            target[60001] = row
+            raise sentinel
+
+        loader = types.SimpleNamespace(**{loader_method: mutate_then_raise})
+
+        def factory() -> Any:
+            events.append("factory")
+            return loader
+
+        patches = _CP5PatchSet()
+        try:
+            patches.set(widget, "_get_catalog_loader", factory)
+            error = ""
+            caught: RuntimeError | None = None
+            try:
+                if route == "_load_catalog_group":
+                    widget._load_catalog_group([], "fixture", 10)
+                else:
+                    getattr(widget, route)()
+            except RuntimeError as exc:
+                caught = exc
+                error = str(exc)
+            _cp5_expect(error, "after mutation", "mutation exception preserved " + route)
+            _expect(caught is sentinel, "CP5 mutation exception identity " + route)
+            _cp5_expect(events, ["factory", "mutation"], "late mutation route " + route)
+            _expect(widget.catalog_by_model_id is catalog and catalog[60001] is row, "CP5 failed mutation retained")
+            _cp5_expect(widget._catalog_generation, 8, "finally exactly-once generation " + route)
+            _expect(
+                ranker._flat_ranked_search_cache is flat and ranker._exact_ranked_search_cache is exact,
+                "CP5 ranking cache identity after clear",
+            )
+            _expect(not flat and not exact, "CP5 finally clears both ranking caches")
+            _expect(widget._equipment_model_search_entry_cache is projection, "CP5 no projection clear on mutation")
+            _cp5_expect(tuple(projection.items()), projection_items, "projection contents preserved")
+        finally:
+            patches.restore()
+
+
+def _test_catalog_session_mutation_conditions(module: Any) -> None:
+    widget = _make_widget(module)
+    _cp5_seed_catalog_state(widget)
+    row = widget.catalog_by_model_id[7]
+    projection = widget._equipment_model_search_entry_cache
+    ranker = widget._ranked_catalog_search
+    flat_before, exact_before = tuple(ranker._flat_ranked_search_cache.items()), tuple(
+        ranker._exact_ranked_search_cache.items()
+    )
+    widget._register_catalog_entry(7, "Ignored", priority=1000)
+    _expect(widget.catalog_by_model_id[7] is row, "CP5 lower-priority registration is a no-op")
+    _cp5_expect(widget._catalog_generation, 7, "no-op generation")
+    _cp5_expect(tuple(ranker._flat_ranked_search_cache.items()), flat_before, "no-op flat cache")
+    _cp5_expect(tuple(ranker._exact_ranked_search_cache.items()), exact_before, "no-op exact cache")
+    widget._register_catalog_entry(7, "Hit Replacement", priority=1)
+    _expect(widget.catalog_by_model_id[7] is not row, "CP5 meaningful registration replaces row")
+    _cp5_expect(widget._catalog_generation, 8, "meaningful registration advances once")
+    _expect(
+        not ranker._flat_ranked_search_cache and not ranker._exact_ranked_search_cache,
+        "CP5 meaningful registration clears ranking",
+    )
+    _expect(widget._equipment_model_search_entry_cache is projection, "CP5 meaningful registration keeps projection")
+    for loaded, building, generation, clear in (
+        (False, False, 7, True),
+        (True, True, 7, False),
+        (False, True, 7, False),
+    ):
+        widget = _make_widget(module)
+        _cp5_seed_catalog_state(widget)
+        widget.catalog_loaded, widget._catalog_building = loaded, building
+        projection = widget._equipment_model_search_entry_cache
+        widget._register_catalog_entry(7, "Hit Replacement", priority=1)
+        _cp5_expect(widget._catalog_generation, generation, "mutation flag-conditioned generation")
+        _cp5_expect(
+            bool(widget._ranked_catalog_search._flat_ranked_search_cache),
+            not clear,
+            "mutation flag-conditioned flat clear",
+        )
+        _cp5_expect(
+            bool(widget._ranked_catalog_search._exact_ranked_search_cache),
+            not clear,
+            "mutation flag-conditioned exact clear",
+        )
+        _expect(widget._equipment_model_search_entry_cache is projection, "CP5 flag-conditioned projection identity")
+    widget = _make_widget(module)
+    _cp5_seed_catalog_state(widget)
+    row = widget.catalog_by_model_id[7]
+    previous = widget._capture_catalog_search_state()
+    row["name"] = "Hit Renamed"
+    _expect(widget._catalog_search_state_changed(previous), "CP5 detects in-place name change")
+    row["alias_labels"] = {"old-key": "Old Display"}
+    previous = widget._capture_catalog_search_state()
+    row["alias_labels"]["old-key"] = "New Display"
+    _expect(not widget._catalog_search_state_changed(previous), "CP5 alias display values are outside signature")
+    row["alias_labels"]["new-key"] = "New Alias"
+    _expect(widget._catalog_search_state_changed(previous), "CP5 detects in-place alias KEY change")
+    projection = widget._equipment_model_search_entry_cache
+    patches = _CP5PatchSet()
+
+    def aliases_noop(target: Any) -> Any:
+        _expect(target is widget.catalog_by_model_id, "CP5 alias adapter receives current table")
+        return {"new-key": [7]}, {"new-key": "New Alias"}
+
+    try:
+        patches.set(
+            widget, "_get_catalog_loader", lambda: types.SimpleNamespace(rebuild_catalog_alias_index=aliases_noop)
+        )
+        _cp5_warm_caches(widget)
+        before_generation = widget._catalog_generation
+        before_flat = tuple(widget._ranked_catalog_search._flat_ranked_search_cache.items())
+        widget._rebuild_catalog_alias_index()
+        _cp5_expect(widget._catalog_generation, before_generation, "alias-index replacement alone is no-op signature")
+        _cp5_expect(
+            tuple(widget._ranked_catalog_search._flat_ranked_search_cache.items()),
+            before_flat,
+            "alias-index-only replacement retains ranking",
+        )
+
+        def aliases_changed(target: Any) -> Any:
+            target[7]["alias_labels"]["third-key"] = "Third Alias"
+            return {"third-key": [7]}, {"third-key": "Third Alias"}
+
+        patches.set(
+            widget, "_get_catalog_loader", lambda: types.SimpleNamespace(rebuild_catalog_alias_index=aliases_changed)
+        )
+        widget._rebuild_catalog_alias_index()
+        _cp5_expect(widget._catalog_generation, before_generation + 1, "alias-key mutation exactly-once generation")
+        _expect(
+            not widget._ranked_catalog_search._flat_ranked_search_cache
+            and not widget._ranked_catalog_search._exact_ranked_search_cache,
+            "CP5 alias mutation clears ranking",
+        )
+        _expect(widget._equipment_model_search_entry_cache is projection, "CP5 alias mutation preserves projection")
+    finally:
+        patches.restore()
+
+
+def _test_catalog_session_flat_exact_predicates(module: Any) -> None:
+    widget: Any = _make_widget(module)
+    ranker: Any = widget._ranked_catalog_search
+    events: list[str] = []
+    alpha: dict[str, object] = {"model_id": 7, "name": "Hit Alpha"}
+    zebra: dict[str, object] = {"model_id": 8, "name": "Hit Zebra"}
+    typed_alpha: dict[str, object] = {"model_id": 7, "name": "Hit Alpha", "item_type_id": 2}
+    typed_zebra: dict[str, object] = {"model_id": 8, "name": "Hit Zebra", "item_type_id": 27}
+    flat = _RankedSearchTestEntries({7: alpha, 8: zebra}, "flat", events)
+    typed = _RankedSearchTestEntries({(2, 7): typed_alpha, (27, 8): typed_zebra}, "typed", events)
+    untyped = _RankedSearchTestEntries({}, "untyped", events)
+    widget.catalog_by_model_id = flat
+    widget.exact_catalog_by_item_key = typed
+    widget.exact_catalog_untyped_by_model_id = untyped
+    original_flat = ranker.search_flat
+    original_exact = ranker.search_exact
+    patches = _CP5PatchSet()
+
+    def ranked_flat(*args: Any, **kwargs: Any) -> Any:
+        result = original_flat(*args, **kwargs)
+        events.append("flat-ranked")
+        return result
+
+    def ranked_exact(*args: Any, **kwargs: Any) -> Any:
+        result = original_exact(*args, **kwargs)
+        events.append("exact-ranked")
+        return result
+
+    try:
+        patches.set(ranker, "search_flat", ranked_flat)
+        patches.set(ranker, "search_exact", ranked_exact)
+        first_flat = widget._search_catalog("hit", limit=20)
+        first_exact = widget._search_exact_catalog("hit", limit=20)
+        _cp5_expect([row["model_id"] for row in first_flat], [7, 8], "CP5 flat literal rank")
+        _cp5_expect([row["model_id"] for row in first_exact], [7, 8], "CP5 exact literal rank")
+        _expect(first_flat[0] is alpha and first_flat[1] is zebra, "CP5 flat original rows")
+        _expect(first_exact[0] is typed_alpha and first_exact[1] is typed_zebra, "CP5 exact original rows")
+        for mapping in (flat, typed, untyped):
+            mapping.allow_iteration = False
+        for route, name, expected_rows in (
+            (widget._search_catalog_with_predicate, "flat", (alpha, zebra)),
+            (widget._search_exact_catalog_with_predicate, "exact", (typed_alpha, typed_zebra)),
+        ):
+            previous_result = None
+            for allowed, expected_row, expected_trace in (
+                (7, expected_rows[0], [f"{name}-ranked", "predicate:7"]),
+                (8, expected_rows[1], [f"{name}-ranked", "predicate:7", "predicate:8"]),
+            ):
+                events.clear()
+
+                def predicate(row: dict[str, object], selected: int = allowed) -> bool:
+                    events.append(f"predicate:{row['model_id']}")
+                    return row["model_id"] == selected
+
+                result = route("hit", entry_predicate=predicate, limit=1)
+                _expect(len(result) == 1 and result[0] is expected_row, f"CP5 warm {name} eligibility {allowed}")
+                _expect(result is not previous_result, f"CP5 {name} fresh result list")
+                _cp5_expect(events, expected_trace, f"CP5 {name} ranking-before-predicate trace")
+                previous_result = result
+            events.clear()
+
+            def throwing_predicate(_row: dict[str, object]) -> bool:
+                events.append("predicate-error")
+                raise RuntimeError("predicate failed")
+
+            _expect_raises(
+                RuntimeError, lambda: route("hit", entry_predicate=throwing_predicate), "CP5 predicate failure"
+            )
+            _cp5_expect(events, [f"{name}-ranked", "predicate-error"], f"CP5 {name} failure after ranking")
+            cache = ranker._flat_ranked_search_cache if name == "flat" else ranker._exact_ranked_search_cache
+            _expect(
+                (widget._catalog_generation, "hit") in cache, f"CP5 {name} completed cache survives predicate failure"
+            )
+
+        axe: dict[str, object] = {"model_id": 77, "name": "Repeated Axe", "item_type_id": 2}
+        sword: dict[str, object] = {"model_id": 77, "name": "Sibling Sword", "item_type_id": 27}
+        ranker._exact_ranked_search_cache[(widget._catalog_generation, "repeat")] = (axe, axe, sword)
+        visited: list[tuple[object, object]] = []
+
+        def accept_exact(row: dict[str, object]) -> bool:
+            visited.append((row.get("item_type_id"), row.get("model_id")))
+            return True
+
+        result = widget._search_exact_catalog_with_predicate("repeat", entry_predicate=accept_exact, limit=20)
+        _cp5_expect(visited, [(2, 77), (27, 77)], "CP5 duplicate exact key suppressed before predicate")
+        _expect(
+            len(result) == 2 and result[0] is axe and result[1] is sword,
+            "CP5 typed siblings survive exact deduplication",
+        )
+    finally:
+        patches.restore()
+
+
+def _test_catalog_session_equipment_predicate_projection(module: Any) -> None:
+    widget: Any = _make_widget(module)
+    nested = ["shared nested value"]
+    sword_aliases: dict[str, str] = {"sword alias": "Sword Alias"}
+    axe_aliases: dict[str, str] = {"axe alias": "Axe Alias"}
+    sword: dict[str, object] = {
+        "model_id": 70,
+        "name": "Hit Sword",
+        "item_type_id": 27,
+        "item_type": "Sword",
+        "alias_labels": sword_aliases,
+        "nested": nested,
+    }
+    axe: dict[str, object] = {
+        "model_id": 70,
+        "name": "Hit Axe",
+        "item_type_id": 2,
+        "item_type": "Axe",
+        "alias_labels": axe_aliases,
+    }
+    widget.catalog_by_model_id = {}
+    widget.exact_catalog_by_item_key = {(27, 70): sword, (2, 70): axe}
+    widget.exact_catalog_untyped_by_model_id = {}
+    projection = widget._get_equipment_model_search_entry(70, module.SELL_KIND_WEAPONS)
+    _expect(projection is not None, "CP5 actual equipment projection exists")
+    _expect(projection is not sword and projection["nested"] is nested, "CP5 projection is a shallow copy")
+    _expect(
+        projection["alias_labels"] is not sword_aliases and projection["alias_labels"] is not axe_aliases,
+        "CP5 projection owns its alias aggregate",
+    )
+    _cp5_expect(sword_aliases, {"sword alias": "Sword Alias"}, "CP5 sword aliases unchanged")
+    _cp5_expect(axe_aliases, {"axe alias": "Axe Alias"}, "CP5 axe aliases unchanged")
+    _expect(
+        widget._get_equipment_model_search_entry(70, module.SELL_KIND_WEAPONS) is projection,
+        "CP5 equipment cached projection identity",
+    )
+    events: list[str] = []
+
+    class NameProbe:
+        def __str__(self) -> str:
+            events.append("name-read")
+            raise RuntimeError("name scoring reached")
+
+    original_name = projection["name"]
+    projection["name"] = NameProbe()
+    try:
+
+        def reject(row: dict[str, object]) -> bool:
+            _expect(row is sword or row is axe, "CP5 equipment predicate sees original family rows")
+            events.append("predicate")
+            return False
+
+        result = widget._search_equipment_catalog("hit", module.SELL_KIND_WEAPONS, entry_predicate=reject)
+        _cp5_expect(result, [], "CP5 rejected equipment has no results")
+        _cp5_expect(events, ["predicate", "predicate"], "CP5 equipment filters before name matching")
+        events.clear()
+
+        def accept(row: dict[str, object]) -> bool:
+            _expect(row is sword, "CP5 equipment any() stops at first accepted family row")
+            events.append("predicate")
+            return True
+
+        _expect_raises(
+            RuntimeError,
+            lambda: widget._search_equipment_catalog("hit", module.SELL_KIND_WEAPONS, entry_predicate=accept),
+            "CP5 accepted equipment reaches later name failure",
+        )
+        _cp5_expect(events, ["predicate", "name-read"], "CP5 equipment predicate-before-scoring failure order")
+    finally:
+        projection["name"] = original_name
+
+    def allow_row(_row: dict[str, object]) -> bool:
+        return True
+
+    def reject_row(_row: dict[str, object]) -> bool:
+        return False
+
+    accepted = widget._search_equipment_catalog("hit", module.SELL_KIND_WEAPONS, entry_predicate=allow_row)
+    rejected = widget._search_equipment_catalog("hit", module.SELL_KIND_WEAPONS, entry_predicate=reject_row)
+    again = widget._search_equipment_catalog("hit", module.SELL_KIND_WEAPONS, entry_predicate=allow_row)
+    _expect(
+        len(accepted) == 1 and accepted[0] is projection and again[0] is projection and again is not accepted,
+        "CP5 fresh equipment result lists retain cached projection",
+    )
+    _cp5_expect(rejected, [], "CP5 eligibility remains current with a warm projection")
+    _expect(
+        widget._get_equipment_model_search_entry(70, module.SELL_KIND_WEAPONS) is projection,
+        "CP5 predicate changes do not clear projection cache",
+    )
+
+
+def _test_catalog_session_alias_predicates(module: Any) -> None:
+    from Sources.icefox.MerchantRules import catalog as component
+
+    widget: Any = _make_widget(module)
+    rows: dict[int, dict[str, object]] = {
+        1: {"model_id": 1, "name": "One"},
+        2: {"model_id": 2, "name": "Two"},
+        3: {"model_id": 3, "name": "Three"},
+    }
+    widget.catalog_by_model_id = rows
+    widget.catalog_alias_to_model_ids = {"shared": [1, 2, 3]}
+    events: list[str] = []
+
+    class Displays(dict[str, str]):
+        def get(self, key: str, default: Any = None) -> Any:
+            events.append("display")
+            return super().get(key, default)
+
+    widget.catalog_alias_display_names = Displays({"shared": "Shared"})
+    component_namespace: Mapping[str, Any] = cast(Mapping[str, Any], vars(component))
+    original_dedupe: Callable[[list[int]], list[int]] = component_namespace["_session_dedupe_model_ids"]
+    patches = _CP5PatchSet()
+
+    def dedupe(values: list[int]) -> list[int]:
+        events.append("dedupe")
+        return original_dedupe(values)
+
+    try:
+        patches.set(component, "_session_dedupe_model_ids", dedupe)
+
+        def accept(row: dict[str, object]) -> bool:
+            model_id = int(cast(Any, row["model_id"]))
+            _expect(row is rows[model_id], "CP5 alias predicate sees current row identity")
+            events.append(f"predicate:{model_id}")
+            return True
+
+        result = widget._search_catalog_alias_groups("shared", exclude_model_ids=[3], entry_predicate=accept)
+        _cp5_expect(
+            result, [{"alias": "shared", "display_name": "Shared", "model_ids": [1, 2]}], "CP5 alias literal result"
+        )
+        _cp5_expect(events, ["dedupe", "predicate:1", "predicate:2", "display"], "CP5 alias eligibility before score")
+        events.clear()
+
+        def reject_two(row: dict[str, object]) -> bool:
+            events.append(f"predicate:{row['model_id']}")
+            return row["model_id"] != 2
+
+        _cp5_expect(
+            widget._search_catalog_alias_groups("shared", exclude_model_ids=[3], entry_predicate=reject_two),
+            [],
+            "CP5 alias requires two remaining eligible rows",
+        )
+        _cp5_expect(events, ["dedupe", "predicate:1", "predicate:2"], "CP5 rejected alias skips display/scoring")
+        events.clear()
+        _cp5_expect(
+            widget._search_catalog_alias_groups(" ", exclude_model_ids=[3], entry_predicate=accept),
+            [],
+            "CP5 empty alias query",
+        )
+        _cp5_expect(events, [], "CP5 empty alias skips canonical dedupe and predicates")
+    finally:
+        patches.restore()
+    _expect(
+        component_namespace["_session_dedupe_model_ids"] is original_dedupe, "CP5 canonical dedupe binding restored"
+    )
+
+
+def _test_catalog_session_lazy_inputs_limits(module: Any) -> None:
+    widget: Any = _make_widget(module)
+    patches = _CP5PatchSet()
+    events: list[str] = []
+    scenarios: tuple[tuple[str, dict[str, object], str, dict[str, bool]], ...] = (
+        (
+            "_is_weapon_mod_catalog_name",
+            {"item_type_id": -1, "item_type": "Rune_Mod"},
+            module.SELL_KIND_WEAPONS,
+            {"include_standalone_weapon_mods": True},
+        ),
+        (
+            "_is_armor_rune_catalog_name",
+            {"item_type_id": 8, "item_type": "Rune_Mod"},
+            module.SELL_KIND_ARMOR,
+            {"include_standalone_runes": True},
+        ),
+        ("_is_armor_salvage_catalog_name", {"item_type_id": -1, "item_type": "Salvage"}, module.SELL_KIND_ARMOR, {}),
+    )
+    try:
+        for binding_name, initial, kind, options in scenarios:
+            events.clear()
+
+            def old_classifier(value: object) -> bool:
+                _cp5_expect(value, "Observed Name", "CP5 lazy classifier receives row value")
+                events.append("old-call")
+                return True
+
+            def new_classifier(value: object) -> bool:
+                _cp5_expect(value, "Observed Name", "CP5 replacement classifier receives row value")
+                events.append("new-call")
+                return True
+
+            class NameRead(dict[str, object]):
+                def get(self, key: str, default: object = None) -> object:
+                    if key == "name":
+                        events.append("name-read")
+                        setattr(module, binding_name, new_classifier)
+                        return "Observed Name"
+                    return super().get(key, default)
+
+            patches.set(module, binding_name, old_classifier)
+            entry = NameRead(initial)
+            _expect(
+                widget._catalog_entry_matches_equipment_family(entry, kind, **options),
+                f"CP5 classifier branch {binding_name}",
+            )
+            _cp5_expect(events, ["name-read", "old-call"], f"CP5 {binding_name} lookup precedes argument")
+            events.clear()
+            _expect(
+                widget._catalog_entry_matches_equipment_family(entry, kind, **options),
+                f"CP5 later classifier branch {binding_name}",
+            )
+            _cp5_expect(events, ["name-read", "new-call"], f"CP5 {binding_name} remains late")
+
+        for binding_name, kind in (
+            ("_is_weapon_catalog_item_type", module.SELL_KIND_WEAPONS),
+            ("_is_armor_catalog_item_type", module.SELL_KIND_ARMOR),
+        ):
+            events.clear()
+
+            def type_classifier(value: object) -> bool:
+                _cp5_expect(value, "Late Type", "CP5 precomputed type argument")
+                events.append("type-classifier")
+                return True
+
+            patches.set(module, binding_name, type_classifier)
+            _expect(
+                widget._catalog_entry_matches_equipment_family({"item_type_id": -1, "item_type": " Late Type "}, kind),
+                f"CP5 late type classifier {binding_name}",
+            )
+            _cp5_expect(events, ["type-classifier"], "CP5 retained type classifier reached")
+
+        seen_types: list[object] = []
+
+        def reject_type(value: object) -> bool:
+            seen_types.append(value)
+            return False
+
+        patches.set(module, "_is_valid_exact_item_type_id", reject_type)
+        _cp5_expect(
+            widget._get_exact_catalog_entry_key({"model_id": 7, "item_type_id": 2}),
+            None,
+            "CP5 late exact-type validator",
+        )
+        _cp5_expect(seen_types, [2], "CP5 exact-type validator sentinel reached")
+
+        def accept_row(_row: dict[str, object]) -> bool:
+            return True
+
+        def unexpected_predicate(_row: dict[str, object]) -> bool:
+            raise RuntimeError("predicate")
+
+        ranker: Any = widget._ranked_catalog_search
+        limits: list[int] = []
+        original_flat = ranker.search_flat
+
+        def record_flat(*args: Any, **kwargs: Any) -> Any:
+            limits.append(kwargs["limit"])
+            return original_flat(*args, **kwargs)
+
+        patches.set(ranker, "search_flat", record_flat)
+        widget.catalog_by_model_id = {}
+        patches.set(module, "SEARCH_RESULT_LIMIT", 3)
+        _cp5_expect(widget._search_catalog.__func__.__defaults__, (12,), "CP5 definition-time widget default")
+        widget._search_catalog("hit")
+        widget._search_catalog_with_predicate("hit", entry_predicate=accept_row, limit=1)
+        _cp5_expect(limits, [12, 12], "CP5 captured12 default and current3 oversampling")
+        module.SEARCH_RESULT_LIMIT = 5
+        widget._search_catalog_with_predicate("hit", entry_predicate=accept_row, limit=1)
+        _cp5_expect(limits, [12, 12, 20], "CP5 body-time limit remains current")
+
+        events.clear()
+
+        class EmptyMapping(_RankedSearchTestEntries):
+            def __len__(self) -> int:
+                events.append(f"len:{self.label}")
+                return 0
+
+        flat = EmptyMapping({}, "flat", events)
+        typed = EmptyMapping({}, "typed", events)
+        untyped = EmptyMapping({}, "untyped", events)
+        for mapping in (flat, typed, untyped):
+            mapping.allow_iteration = False
+        widget.catalog_by_model_id = flat
+        widget.exact_catalog_by_item_key = typed
+        widget.exact_catalog_untyped_by_model_id = untyped
+
+        class EmptyLimit:
+            def __int__(self) -> int:
+                raise AssertionError("CP5 empty route performed final limit coercion")
+
+            def __mul__(self, other: int) -> int:
+                _cp5_expect(other, 4, "CP5 preliminary oversampling multiplier")
+                events.append("limit-mul")
+                return 4
+
+        limit: Any = EmptyLimit()
+        for route in (widget._search_catalog, widget._search_exact_catalog):
+            _cp5_expect(route(" ", limit=limit), [], "CP5 empty direct ranked query")
+        _cp5_expect(events, [], "CP5 direct empty ranking avoids mapping lengths and coercion")
+        _cp5_expect(
+            widget._search_catalog_with_predicate(" ", entry_predicate=unexpected_predicate, limit=limit),
+            [],
+            "CP5 empty flat predicate query",
+        )
+        _cp5_expect(events, ["len:flat", "limit-mul"], "CP5 flat wrapper keeps preliminary calculation")
+        events.clear()
+        _cp5_expect(
+            widget._search_exact_catalog_with_predicate(" ", entry_predicate=unexpected_predicate, limit=limit),
+            [],
+            "CP5 empty exact predicate query",
+        )
+        _cp5_expect(
+            events, ["len:typed", "len:untyped", "limit-mul"], "CP5 exact wrapper keeps preliminary calculation"
+        )
+        events.clear()
+        _cp5_expect(
+            widget._search_equipment_catalog(
+                " ", module.SELL_KIND_WEAPONS, entry_predicate=unexpected_predicate, limit=limit
+            ),
+            [],
+            "CP5 empty equipment query",
+        )
+        _cp5_expect(
+            widget._search_catalog_alias_groups(" ", entry_predicate=unexpected_predicate, limit=limit),
+            [],
+            "CP5 empty alias query",
+        )
+        _cp5_expect(
+            widget._search_identifier_catalog(" ", [cast(Any, object())], limit=limit), [], "CP5 empty identifier query"
+        )
+        _cp5_expect(events, [], "CP5 empty uncached queries stop before tables/predicates/coercion")
+    finally:
+        patches.restore()
+
+
+def _test_catalog_session_loader_database_lifetime(module: Any) -> None:
+    from Sources.icefox.MerchantRules import inventory_evidence as component
+
+    fixture: dict[str, Any] = _install_jade_armor_catalog_fixture(module)
+    patches = _CP5PatchSet()
+    try:
+        widget: Any = _make_widget(module)
+        database_a = module.MOD_DB
+        loader_a = widget._get_catalog_loader()
+        identifier = fixture["insignia"].identifier
+        before = loader_a.armor_upgrade_identity(identifier)
+        _expect(before[0] is not None, "CP5 old database identity exists")
+        _expect(loader_a.mod_db is database_a, "CP5 loader A captures database A")
+        _expect(
+            loader_a.armor_upgrade_identity.func is component.get_armor_upgrade_catalog_identity,
+            "CP5 loader A owns canonical armor callback",
+        )
+        events: list[str] = []
+        weapon_mod_b = _fake_weapon_mod("B", "Prefix", {module.ItemType.Sword: "SwordHilt"})
+
+        class CurrentWeaponMods(dict[str, object]):
+            def get(self, key: str, default: Any = None) -> Any:
+                events.append(f"current-db:{key}")
+                return super().get(key, default)
+
+        database_b = types.SimpleNamespace(runes={}, weapon_mods=CurrentWeaponMods({"probe": weapon_mod_b}))
+        module.MOD_DB = database_b
+        _cp5_expect(loader_a.armor_upgrade_identity(identifier), before, "CP5 loader A survives current DB replacement")
+        original_factory = widget._get_catalog_loader
+        acquired: list[Any] = []
+        cleanup_original = widget._invalidate_cleanup_target_display_cache
+
+        def late_display() -> None:
+            events.append("late-display")
+            cleanup_original()
+
+        def acquire() -> Any:
+            events.append("factory")
+            loader_b = original_factory()
+            acquired.append(loader_b)
+
+            def load_b() -> Any:
+                events.append("load")
+                patches.set(widget, "_invalidate_cleanup_target_display_cache", late_display)
+                return module.CatalogLoadResult()
+
+            patches.set(loader_b, "load", load_b)
+            return loader_b
+
+        patches.set(widget, "_get_catalog_loader", acquire)
+        widget._load_catalog()
+        _cp5_expect(events, ["factory", "load", "late-display"], "CP5 factory/effect remain late")
+        _expect(
+            len(acquired) == 1 and acquired[0].mod_db is database_b, "CP5 session acquires current database loader B"
+        )
+        _expect(
+            acquired[0].armor_upgrade_identity.keywords["mod_db"] is database_b, "CP5 new callback shares database B"
+        )
+        _expect(acquired[0].armor_upgrade_identity(identifier)[0] is None, "CP5 loader B does not read database A")
+        _expect(
+            loader_a.armor_upgrade_identity.keywords["mod_db"] is database_a, "CP5 loader A callback remains bound to A"
+        )
+        events.clear()
+        label = widget._get_weapon_mod_variant_label("probe", "Sword", "SwordHilt")
+        _cp5_expect(label, "B Sword Hilt", "CP5 retained variant label reads current database")
+        _cp5_expect(events, ["current-db:probe"], "CP5 retained label current-database sentinel reached")
+    finally:
+        patches.restore()
+        fixture["restore"]()
+
+
+def _test_catalog_session_typed_untyped_order(module: Any) -> None:
+    widget: Any = _make_widget(module)
+    sword: dict[str, object] = {"model_id": 70, "name": "Sword", "item_type_id": 27, "item_type": "Sword"}
+    axe: dict[str, object] = {"model_id": 70, "name": "Axe", "item_type_id": 2, "item_type": "Axe"}
+    untyped_70: dict[str, object] = {"model_id": 70, "name": "Untyped 70", "item_type_id": None}
+    untyped_71: dict[str, object] = {"model_id": 71, "name": "Untyped 71", "item_type_id": None}
+    widget.exact_catalog_by_item_key = {(27, 70): sword, (2, 70): axe}
+    widget.exact_catalog_untyped_by_model_id = {70: untyped_70, 71: untyped_71}
+    result = widget._get_exact_catalog_entries_for_model(70)
+    _expect(
+        len(result) == 2 and result[0] is sword and result[1] is axe, "CP5 typed insertion order wins over fallback"
+    )
+    another = widget._get_exact_catalog_entries_for_model(70)
+    _expect(another is not result and another[0] is sword and another[1] is axe, "CP5 typed lookup returns fresh list")
+    fallback = widget._get_exact_catalog_entries_for_model(71)
+    _expect(len(fallback) == 1 and fallback[0] is untyped_71, "CP5 untyped fallback preserves row")
+    iterator_rows = list(widget._iter_exact_catalog_entries())
+    _expect(
+        len(iterator_rows) == 4
+        and all(left is right for left, right in zip(iterator_rows, (sword, axe, untyped_70, untyped_71))),
+        "CP5 iterator typed then untyped ordering and identities",
+    )
+    empty_a = widget._get_exact_catalog_entries_for_model(-1)
+    empty_b = widget._get_exact_catalog_entries_for_model(-1)
+    _expect(
+        empty_a == [] and empty_b == [] and empty_a is not empty_b, "CP5 invalid model gives independent empty lists"
+    )
+    material: dict[str, object] = {
+        "model_id": 80,
+        "name": "Material",
+        "item_type_id": 11,
+        "item_type": "Materials_Zcoins",
+    }
+    flat_weapon: dict[str, object] = {"model_id": 80, "name": "Flat Sword", "item_type_id": 27, "item_type": "Sword"}
+    widget.exact_catalog_by_item_key = {(11, 80): material}
+    widget.catalog_by_model_id = {80: flat_weapon}
+    widget._rebuild_equipment_typed_entry_index()
+    _cp5_expect(
+        widget._get_equipment_model_family_entries(80, module.SELL_KIND_WEAPONS),
+        [],
+        "CP5 valid typed rows suppress flat fallback even when their family differs",
+    )
+
+
+def _test_catalog_session_type_zero(module: Any) -> None:
+    widget: Any = _make_widget(module)
+    salvage: dict[str, object] = {"model_id": 35, "name": "Salvage Row", "item_type_id": 0, "item_type": "Salvage"}
+    fallback: dict[str, object] = {"model_id": 35, "name": "Fallback", "item_type_id": None}
+    non_runtime: dict[str, object] = {
+        "model_id": 35,
+        "name": "Abstract Weapon",
+        "item_type_id": 37,
+        "item_type": "Weapon",
+    }
+    widget.exact_catalog_by_item_key = {(0, 35): salvage, (37, 35): non_runtime}
+    widget.exact_catalog_untyped_by_model_id = {35: fallback}
+    _expect(widget._get_exact_catalog_entry(0, 35) is salvage, "CP5 type zero direct lookup")
+    _cp5_expect(widget._get_exact_catalog_entry_key(salvage), (0, 35), "CP5 type zero exact key")
+    rows = widget._get_exact_catalog_entries_for_model(35)
+    _expect(
+        len(rows) == 1 and rows[0] is salvage, "CP5 typed zero wins over untyped fallback and rejects abstract type"
+    )
+    _cp5_expect(widget._humanize_exact_item_type(0), "Salvage", "CP5 zero humanizer")
+    _cp5_expect(
+        widget._get_exact_catalog_entry_key({"model_id": 35, "item_type_id": -1}),
+        None,
+        "CP5 negative type rejected by key validator",
+    )
+    _cp5_expect(
+        widget._get_exact_catalog_entry_key(non_runtime), None, "CP5 non-runtime type37 rejected by key validator"
+    )
+    _expect(
+        widget._get_exact_catalog_entry(37, 35) is non_runtime,
+        "CP5 direct exact lookup retains its narrower nonnegative-type contract",
+    )
+    _cp5_expect(widget._get_exact_catalog_entry(-1, 35), None, "CP5 negative direct exact lookup")
+    targets = module._normalize_protected_item_targets([{"item_type_id": 0, "model_id": 35}])
+    _cp5_expect(targets, [module.ExactProtectionTarget(model_id=35, item_type_id=0)], "CP5 zero target stays typed")
+    widget.protected_item_model_ids = []
+    widget.protected_item_targets = targets
+    live: Any = cast(
+        Any,
+        _make_item(
+            module,
+            item_id=35001,
+            model_id=35,
+            name="Salvage Row",
+            item_type_id=0,
+            item_type_name="Salvage",
+            salvageable=True,
+        ),
+    )
+    other: Any = cast(
+        Any,
+        _make_item(
+            module, item_id=35002, model_id=35, name="Sword", item_type_id=27, item_type_name="Sword", salvageable=True
+        ),
+    )
+    _expect(widget._get_exact_model_protection_hit(live) is not None, "CP5 typed zero matches live Salvage")
+    _expect(widget._get_exact_model_protection_hit(other) is None, "CP5 typed zero does not become a wildcard")
+
+
+def _cp5_query_literal_loader(
+    module: Any,
+    label: str,
+    *,
+    rich_rows: list[dict[str, object]] | None,
+    members: list[tuple[str, int]],
+) -> Any:
+    raw_root = os.environ.get("MERCHANT_RULES_CP5_FIXTURE_ROOT", "")
+    _expect(bool(raw_root), "CP5 literal loader requires the recorded external fixture root")
+    fixture_root = Path(raw_root)
+    _expect(fixture_root.is_absolute(), "CP5 fixture root must be absolute")
+    root = fixture_root / label
+    root.mkdir(parents=True, exist_ok=True)
+    documents: dict[str, object] = {"catalog.json": {}, "drop.json": [], "runes.json": {}}
+    if rich_rows is not None:
+        documents["items.json"] = rich_rows
+    for name, value in documents.items():
+        path = root / name
+        expected = (json.dumps(value, ensure_ascii=True, indent=2) + "\n").encode("utf-8")
+        if path.exists():
+            _expect(path.read_bytes() == expected, f"CP5 existing owned fixture differs: {path}")
+        else:
+            with path.open("xb") as stream:
+                stream.write(expected)
+    item_path = root / ("items.json" if rich_rows is not None else "rich-input-intentionally-absent.json")
+    if rich_rows is None:
+        _expect(not item_path.exists(), "CP5 fallback fixture must genuinely lack rich input")
+
+    def no_armor_upgrade(_identifier: object) -> tuple[None, str]:
+        return None, ""
+
+    return module.CatalogLoader(
+        catalog_path=str(root / "catalog.json"),
+        drop_data_path=str(root / "drop.json"),
+        item_handling_path=str(item_path),
+        runes_catalog_path=str(root / "runes.json"),
+        mod_db=types.SimpleNamespace(weapon_mods={}, runes={}),
+        mod_db_load_error="",
+        model_id_members=lambda: list(members),
+        armor_upgrade_identity=no_armor_upgrade,
+        scroll_trader_stock_model_ids=frozenset(),
+    )
+
+
+def _test_catalog_session_typed_alias_siblings(module: Any) -> None:
+    widget: Any = _make_widget(module)
+    loader = _cp5_query_literal_loader(
+        module,
+        "typed-alias-siblings",
+        rich_rows=[
+            {"model_id": 923, "name": "Kaineng Axe", "item_type": "Axe", "skin": "axe only"},
+            {
+                "model_id": 923,
+                "name": "Monstrous Claw",
+                "item_type": "Materials_Zcoins",
+                "skin": "claw only",
+                "material_type": "rare",
+            },
+        ],
+        members=[],
+    )
+    patches = _CP5PatchSet()
+    try:
+        patches.set(widget, "_get_catalog_loader", lambda: loader)
+        widget._load_catalog()
+    finally:
+        patches.restore()
+    _cp5_expect(set(widget.exact_catalog_by_item_key), {(2, 923), (11, 923)}, "CP5 synthetic rich typed siblings")
+    axe = widget.exact_catalog_by_item_key[(2, 923)]
+    material = widget.exact_catalog_by_item_key[(11, 923)]
+    _expect(axe is not material, "CP5 typed sibling row identities differ")
+    _cp5_expect(material["material_type"], "rare", "CP5 explicit rare-material fixture metadata")
+    _cp5_expect((axe["name"], material["name"]), ("Kaineng Axe", "Monstrous Claw"), "CP5 sibling literal names")
+    _expect(
+        "axe only" in axe["alias_labels"] and "claw only" not in axe["alias_labels"], "CP5 Axe aliases remain separate"
+    )
+    _expect(
+        "claw only" in material["alias_labels"] and "axe only" not in material["alias_labels"],
+        "CP5 material aliases remain separate",
+    )
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_ALL
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+    for query, expected_row in (
+        ("Kaineng Axe", axe),
+        ("axe only", axe),
+        ("Monstrous Claw", material),
+        ("claw only", material),
+    ):
+        result = widget._search_protected_item_catalog(query)
+        _expect(len(result) == 1 and result[0] is expected_row, f"CP5 typed name/alias query {query!r}")
+    axe_target = module.ExactProtectionTarget(model_id=923, item_type_id=2)
+    wildcard = module.ExactProtectionTarget(model_id=923)
+    _expect(
+        widget._exact_protection_target_matches_search(axe_target, "Kaineng Axe")
+        and not widget._exact_protection_target_matches_search(axe_target, "Monstrous Claw"),
+        "CP5 typed target searches its own sibling",
+    )
+    _expect(
+        widget._exact_protection_target_matches_search(wildcard, "Kaineng Axe")
+        and widget._exact_protection_target_matches_search(wildcard, "Monstrous Claw"),
+        "CP5 wildcard target searches both siblings",
+    )
+    widget.protected_item_targets = [axe_target]
+    widget.protected_item_model_ids = []
+    live_axe: Any = cast(
+        Any,
+        _make_item(
+            module,
+            item_id=92302,
+            model_id=923,
+            name="Kaineng Axe",
+            item_type_id=2,
+            item_type_name="Axe",
+            salvageable=True,
+        ),
+    )
+    live_material: Any = cast(
+        Any,
+        _make_item(
+            module,
+            item_id=92311,
+            model_id=923,
+            name="Monstrous Claw",
+            item_type_id=11,
+            item_type_name="Materials_Zcoins",
+            is_material=True,
+            salvageable=True,
+        ),
+    )
+    _expect(
+        widget._get_exact_model_protection_hit(live_axe) is not None
+        and widget._get_exact_model_protection_hit(live_material) is None,
+        "CP5 typed protection excludes sibling",
+    )
+    widget.protected_item_targets = []
+    widget.protected_item_model_ids = [923]
+    _expect(
+        widget._get_exact_model_protection_hit(live_axe) is not None
+        and widget._get_exact_model_protection_hit(live_material) is not None,
+        "CP5 wildcard protects both siblings",
+    )
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_EQUIPMENT
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_EQUIPMENT_WEAPONS
+    weapons = widget._search_protected_item_catalog("923")
+    _expect(len(weapons) == 1 and weapons[0] is axe, "CP5 typed weapon filter excludes colliding material")
+    widget.protected_item_type_filter_category = module.DEPOSIT_FILTER_MATERIALS
+    widget.protected_item_type_filter_subcategory = module.DEPOSIT_FILTER_ALL
+    materials = widget._search_protected_item_catalog("923")
+    _expect(len(materials) == 1 and materials[0] is material, "CP5 typed material filter excludes colliding weapon")
+    _cp5_expect(widget._get_exact_catalog_entry_descriptor(axe), "Weapon \u00b7 Axe", "CP5 typed Axe descriptor")
+    _cp5_expect(
+        widget._get_exact_catalog_entry_descriptor(material),
+        "Crafting Material \u00b7 Rare",
+        "CP5 typed rare material descriptor",
+    )
+
+
+def _test_catalog_session_modelid_fallback_absent_rich(module: Any) -> None:
+    widget: Any = _make_widget(module)
+    loader = _cp5_query_literal_loader(
+        module, "modelid-without-rich", rich_rows=None, members=[("Literal_Sword", 62004)]
+    )
+    patches = _CP5PatchSet()
+    try:
+        patches.set(widget, "_get_catalog_loader", lambda: loader)
+        widget._load_catalog()
+        _cp5_expect(widget.catalog_stats["item_handling_present"], False, "CP5 rich input is absent")
+        _cp5_expect(widget.catalog_stats["modelid_fallback_items"], 1, "CP5 fallback literal count")
+        _cp5_expect(set(widget.catalog_by_model_id), {62004}, "CP5 fallback only model")
+        row = widget.catalog_by_model_id[62004]
+        _cp5_expect(
+            (row["model_id"], row["name"], row["source"]),
+            (62004, "Literal Sword", "modelid_enum_fallback"),
+            "CP5 fallback literal identity",
+        )
+        flat_results = widget._search_catalog("literal sword")
+        _expect(len(flat_results) == 1 and flat_results[0] is row, "CP5 flat search retains published fallback row")
+        _cp5_expect(widget.exact_catalog_by_item_key, {}, "CP5 absent rich input yields no typed row")
+        fallback = widget.exact_catalog_untyped_by_model_id[62004]
+        _expect(
+            fallback is not row and fallback["item_type_id"] is None and fallback["exact_match_mode"] == "wildcard",
+            "CP5 exact fallback is its established shallow wildcard projection",
+        )
+        _cp5_expect((fallback["model_id"], fallback["name"]), (62004, "Literal Sword"), "CP5 exact fallback values")
+        exact_results = widget._search_exact_catalog("literal sword")
+        _expect(
+            len(exact_results) == 1 and exact_results[0] is fallback, "CP5 exact search preserves fallback row identity"
+        )
+        richer: dict[str, object] = {"model_id": 62004, "name": "Richer Sword", "item_type": "Sword", "priority": 10}
+        widget.catalog_by_model_id = {62004: richer}
+        widget.catalog_loaded = True
+        widget._catalog_generation = 7
+        _cp5_warm_caches(widget)
+        ranker = widget._ranked_catalog_search
+        flat_before = dict(ranker._flat_ranked_search_cache)
+        exact_before = dict(ranker._exact_ranked_search_cache)
+        count = widget._load_model_id_fallback_catalog()
+        _cp5_expect(count, 0, "CP5 existing richer model excludes fallback")
+        _expect(widget.catalog_by_model_id[62004] is richer, "CP5 fallback preserves richer original row")
+        _cp5_expect(widget._catalog_generation, 7, "CP5 no-op fallback does not advance generation")
+        _cp5_expect(dict(ranker._flat_ranked_search_cache), flat_before, "CP5 no-op fallback preserves flat cache")
+        _cp5_expect(dict(ranker._exact_ranked_search_cache), exact_before, "CP5 no-op fallback preserves exact cache")
+    finally:
+        patches.restore()
+
+
+def _test_catalog_session_completed_cp4_differential() -> None:
+    from hashlib import sha256
+    from uuid import uuid4
+
+    raw_config = os.environ.get("MERCHANT_RULES_CP5_DIFFERENTIAL_CONFIG", "")
+    _expect(bool(raw_config), "CP5 differential requires its explicit pinned completed-CP4 configuration")
+    config_path = Path(raw_config).resolve()
+    config_bytes = config_path.read_bytes()
+    config = json.loads(config_bytes.decode("utf-8-sig"))
+    evidence_root = Path(config["evidence_root"]).resolve()
+    _expect(config_path.is_relative_to(evidence_root), "CP5 configuration must remain inside its evidence root")
+    _expect(
+        evidence_root.name.startswith(("cp5-implementation-", "cp5-correction-")),
+        "CP5 evidence root must identify this checkpoint",
+    )
+    driver = Path(config["driver"]["path"]).resolve()
+    _expect(driver.is_relative_to(evidence_root), "CP5 driver containment")
+    _expect(sha256(driver.read_bytes()).hexdigest() == config["driver"]["sha256"], "CP5 pinned driver identity")
+    pin_files: list[tuple[Path, str]] = []
+    for side in ("baseline", "candidate"):
+        source_root = Path(config[side]["root"]).resolve()
+        pins_path = Path(config[side]["pins_path"]).resolve()
+        _expect(
+            source_root.is_relative_to(evidence_root) and pins_path.is_relative_to(evidence_root),
+            "CP5 independent source/pin containment",
+        )
+        pins_hash = config[side]["pins_sha256"]
+        _expect(sha256(pins_path.read_bytes()).hexdigest() == pins_hash, "CP5 pinned source inventory " + side)
+        pin_files.append((pins_path, pins_hash))
+    _expect(
+        Path(config["baseline"]["root"]).resolve() != Path(config["candidate"]["root"]).resolve(),
+        "CP5 oracle and candidate require different frozen source roots",
+    )
+    case_root = evidence_root / ("cp5-differential-case-" + str(uuid4()))
+    _expect(not case_root.exists(), "CP5 output directory must be newly owned")
+    case_root.mkdir()
+    run_root = case_root / "run"
+    command = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-S",
+        str(driver),
+        "--config",
+        str(config_path),
+        "--run-root",
+        str(run_root),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=case_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        check=False,
+    )
+    launch = {
+        "command": command,
+        "returncode": completed.returncode,
+        "configuration_path": str(config_path),
+        "configuration_sha256": sha256(config_bytes).hexdigest(),
+        "driver_sha256": config["driver"]["sha256"],
+    }
+    for filename, content in (
+        ("coordinator-launch.json", json.dumps(launch, sort_keys=True, indent=2) + "\n"),
+        ("coordinator-stdout.txt", completed.stdout),
+        ("coordinator-stderr.txt", completed.stderr),
+    ):
+        with (case_root / filename).open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+    _expect(
+        completed.returncode == 0,
+        "CP5 differential failed; retained evidence: " + str(case_root) + "\n" + completed.stderr,
+    )
+    report_path = run_root / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    _expect(report["passed"] is True, "CP5 differential report did not prove success")
+    _expect(
+        report["matched_scenarios"]
+        == [
+            "construction_and_bindings",
+            "generator_and_specialized_publication",
+            "ordinary_reload_and_partial_publication",
+            "effects_and_exception_precedence",
+            "mutation_and_invalidation",
+            "queries_and_identities",
+            "lazy_classifiers_limits_and_database",
+            "typed_literals_and_absent_rich_fallback",
+        ],
+        "CP5 complete independent scenario inventory",
+    )
+    _expect(
+        len(report["launches"]) == 2 and all(row["returncode"] == 0 for row in report["launches"]),
+        "CP5 actual independent old/candidate child launches",
+    )
+    _expect(config_path.read_bytes() == config_bytes, "CP5 configuration changed during execution")
+    _expect(
+        sha256(driver.read_bytes()).hexdigest() == config["driver"]["sha256"], "CP5 driver changed during execution"
+    )
+    for pins_path, pins_hash in pin_files:
+        _expect(
+            sha256(pins_path.read_bytes()).hexdigest() == pins_hash, "CP5 source inventory changed during execution"
+        )
+    print(
+        "CP5 completed-CP4 differential evidence: "
+        + str(report_path)
+        + " SHA-256="
+        + sha256(report_path.read_bytes()).hexdigest()
+    )
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -47559,6 +49485,46 @@ def main() -> int:
                     lambda: _test_inventory_evidence_weapon_oracle_reachability(module),
                 ),
                 ("item_values_ordinary_import", _test_item_values_ordinary_import),
+            ]
+        )
+
+        tests.extend(
+            [
+                (
+                    "catalog_session_ownership_construction",
+                    lambda: _test_catalog_session_ownership_construction(module),
+                ),
+                ("catalog_session_transparent_state", lambda: _test_catalog_session_transparent_state(module)),
+                ("catalog_session_retained_rune_writer", lambda: _test_catalog_session_retained_rune_writer(module)),
+                ("catalog_session_lazy_exact_iterator", lambda: _test_catalog_session_lazy_exact_iterator(module)),
+                ("catalog_session_load_reset_sets", lambda: _test_catalog_session_load_reset_sets(module)),
+                ("catalog_session_partial_publication", lambda: _test_catalog_session_partial_publication(module)),
+                ("catalog_session_load_effect_order", lambda: _test_catalog_session_load_effect_order(module)),
+                (
+                    "catalog_session_modifier_rune_publication",
+                    lambda: _test_catalog_session_modifier_rune_publication(module),
+                ),
+                ("catalog_session_mutation_exception", lambda: _test_catalog_session_mutation_exception(module)),
+                ("catalog_session_mutation_conditions", lambda: _test_catalog_session_mutation_conditions(module)),
+                ("catalog_session_flat_exact_predicates", lambda: _test_catalog_session_flat_exact_predicates(module)),
+                (
+                    "catalog_session_equipment_predicate_projection",
+                    lambda: _test_catalog_session_equipment_predicate_projection(module),
+                ),
+                ("catalog_session_alias_predicates", lambda: _test_catalog_session_alias_predicates(module)),
+                ("catalog_session_lazy_inputs_limits", lambda: _test_catalog_session_lazy_inputs_limits(module)),
+                (
+                    "catalog_session_loader_database_lifetime",
+                    lambda: _test_catalog_session_loader_database_lifetime(module),
+                ),
+                ("catalog_session_typed_alias_siblings", lambda: _test_catalog_session_typed_alias_siblings(module)),
+                ("catalog_session_typed_untyped_order", lambda: _test_catalog_session_typed_untyped_order(module)),
+                ("catalog_session_type_zero", lambda: _test_catalog_session_type_zero(module)),
+                (
+                    "catalog_session_modelid_fallback_absent_rich",
+                    lambda: _test_catalog_session_modelid_fallback_absent_rich(module),
+                ),
+                ("catalog_session_completed_cp4_differential", _test_catalog_session_completed_cp4_differential),
             ]
         )
 

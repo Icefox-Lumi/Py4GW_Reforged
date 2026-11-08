@@ -95,11 +95,13 @@ from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_CHOICE_KIND_VARIANT
 from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_CHOICE_SEPARATOR
 from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_GENERIC_KEY_PREFIX
 from Sources.icefox.MerchantRules.catalog import WEAPON_MOD_VARIANT_KEY_PREFIX
+from Sources.icefox.MerchantRules.catalog import CatalogSession
 from Sources.icefox.MerchantRules.catalog import build_catalog_alias_labels as _catalog_build_catalog_alias_labels
 from Sources.icefox.MerchantRules.catalog import get_catalog_entry_priority as _catalog_get_catalog_entry_priority
 from Sources.icefox.MerchantRules.catalog import humanize_model_id_enum_name as _humanize_model_id_enum_name
 from Sources.icefox.MerchantRules.catalog import get_rune_profession_label as _get_rune_profession_label
 from Sources.icefox.MerchantRules.catalog import get_weapon_mod_type_name as _get_weapon_mod_type_name
+from Sources.icefox.MerchantRules.catalog import humanize_exact_item_type as _catalog_humanize_exact_item_type
 from Sources.icefox.MerchantRules.catalog import humanize_weapon_mod_component_kind as _humanize_weapon_mod_component_kind
 from Sources.icefox.MerchantRules.catalog import is_expandable_weapon_mod_type as _is_expandable_weapon_mod_type
 from Sources.icefox.MerchantRules.catalog import make_weapon_mod_identifier_choice_key as _make_weapon_mod_identifier_choice_key
@@ -5131,6 +5133,230 @@ class MerchantRulesWidget:
     actions remain opt-in profile settings.
     """
 
+    @property
+    def catalog_loaded(self) -> bool:
+        return self._catalog_session.catalog_loaded
+
+    @catalog_loaded.setter
+    def catalog_loaded(self, value: bool) -> None:
+        self._catalog_session.catalog_loaded = value
+
+    @property
+    def catalog_load_error(self) -> str:
+        return self._catalog_session.catalog_load_error
+
+    @catalog_load_error.setter
+    def catalog_load_error(self, value: str) -> None:
+        self._catalog_session.catalog_load_error = value
+
+    @property
+    def catalog_by_model_id(self) -> dict[int, dict[str, object]]:
+        return self._catalog_session.catalog_by_model_id
+
+    @catalog_by_model_id.setter
+    def catalog_by_model_id(self, value: dict[int, dict[str, object]]) -> None:
+        self._catalog_session.catalog_by_model_id = value
+
+    @property
+    def exact_catalog_by_item_key(self) -> dict[tuple[int, int], dict[str, object]]:
+        return self._catalog_session.exact_catalog_by_item_key
+
+    @exact_catalog_by_item_key.setter
+    def exact_catalog_by_item_key(self, value: dict[tuple[int, int], dict[str, object]]) -> None:
+        self._catalog_session.exact_catalog_by_item_key = value
+
+    @property
+    def exact_catalog_untyped_by_model_id(self) -> dict[int, dict[str, object]]:
+        return self._catalog_session.exact_catalog_untyped_by_model_id
+
+    @exact_catalog_untyped_by_model_id.setter
+    def exact_catalog_untyped_by_model_id(self, value: dict[int, dict[str, object]]) -> None:
+        self._catalog_session.exact_catalog_untyped_by_model_id = value
+
+    @property
+    def _equipment_typed_entries_by_model_id(self) -> dict[int, tuple[dict[str, object], ...]]:
+        return self._catalog_session.equipment_typed_entries_by_model_id
+
+    @_equipment_typed_entries_by_model_id.setter
+    def _equipment_typed_entries_by_model_id(self, value: dict[int, tuple[dict[str, object], ...]]) -> None:
+        self._catalog_session.equipment_typed_entries_by_model_id = value
+
+    @property
+    def _equipment_model_search_entry_cache(self) -> dict[tuple[int, str, bool, bool], dict[str, object]]:
+        return self._catalog_session.equipment_model_search_entry_cache
+
+    @_equipment_model_search_entry_cache.setter
+    def _equipment_model_search_entry_cache(self, value: dict[tuple[int, str, bool, bool], dict[str, object]]) -> None:
+        self._catalog_session.equipment_model_search_entry_cache = value
+
+    @property
+    def _catalog_generation(self) -> int:
+        return self._catalog_session.catalog_generation
+
+    @_catalog_generation.setter
+    def _catalog_generation(self, value: int) -> None:
+        self._catalog_session.catalog_generation = value
+
+    @property
+    def _catalog_building(self) -> bool:
+        return self._catalog_session.catalog_building
+
+    @_catalog_building.setter
+    def _catalog_building(self, value: bool) -> None:
+        self._catalog_session.catalog_building = value
+
+    @property
+    def catalog_alias_to_model_ids(self) -> dict[str, list[int]]:
+        return self._catalog_session.catalog_alias_to_model_ids
+
+    @catalog_alias_to_model_ids.setter
+    def catalog_alias_to_model_ids(self, value: dict[str, list[int]]) -> None:
+        self._catalog_session.catalog_alias_to_model_ids = value
+
+    @property
+    def catalog_alias_display_names(self) -> dict[str, str]:
+        return self._catalog_session.catalog_alias_display_names
+
+    @catalog_alias_display_names.setter
+    def catalog_alias_display_names(self, value: dict[str, str]) -> None:
+        self._catalog_session.catalog_alias_display_names = value
+
+    @property
+    def common_salvage_model_ids_by_item_key(self) -> dict[tuple[int, int], tuple[int, ...]]:
+        return self._catalog_session.common_salvage_model_ids_by_item_key
+
+    @common_salvage_model_ids_by_item_key.setter
+    def common_salvage_model_ids_by_item_key(self, value: dict[tuple[int, int], tuple[int, ...]]) -> None:
+        self._catalog_session.common_salvage_model_ids_by_item_key = value
+
+    @property
+    def catalog_common_material_ids(self) -> list[int]:
+        return self._catalog_session.catalog_common_material_ids
+
+    @catalog_common_material_ids.setter
+    def catalog_common_material_ids(self, value: list[int]) -> None:
+        self._catalog_session.catalog_common_material_ids = value
+
+    @property
+    def catalog_merchant_essentials(self) -> list[dict[str, object]]:
+        return self._catalog_session.catalog_merchant_essentials
+
+    @catalog_merchant_essentials.setter
+    def catalog_merchant_essentials(self, value: list[dict[str, object]]) -> None:
+        self._catalog_session.catalog_merchant_essentials = value
+
+    @property
+    def catalog_rare_materials(self) -> list[dict[str, object]]:
+        return self._catalog_session.catalog_rare_materials
+
+    @catalog_rare_materials.setter
+    def catalog_rare_materials(self, value: list[dict[str, object]]) -> None:
+        self._catalog_session.catalog_rare_materials = value
+
+    @property
+    def catalog_stats(self) -> dict[str, int | bool]:
+        return self._catalog_session.catalog_stats
+
+    @catalog_stats.setter
+    def catalog_stats(self, value: dict[str, int | bool]) -> None:
+        self._catalog_session.catalog_stats = value
+
+    @property
+    def weapon_mod_entries(self) -> list[dict[str, str]]:
+        return self._catalog_session.weapon_mod_entries
+
+    @weapon_mod_entries.setter
+    def weapon_mod_entries(self, value: list[dict[str, str]]) -> None:
+        self._catalog_session.weapon_mod_entries = value
+
+    @property
+    def rune_entries(self) -> list[dict[str, str]]:
+        return self._catalog_session.rune_entries
+
+    @rune_entries.setter
+    def rune_entries(self, value: list[dict[str, str]]) -> None:
+        self._catalog_session.rune_entries = value
+
+    @property
+    def armor_upgrade_entries(self) -> list[dict[str, str]]:
+        return self._catalog_session.armor_upgrade_entries
+
+    @armor_upgrade_entries.setter
+    def armor_upgrade_entries(self, value: list[dict[str, str]]) -> None:
+        self._catalog_session.armor_upgrade_entries = value
+
+    @property
+    def weapon_mod_names(self) -> dict[str, str]:
+        return self._catalog_session.weapon_mod_names
+
+    @weapon_mod_names.setter
+    def weapon_mod_names(self, value: dict[str, str]) -> None:
+        self._catalog_session.weapon_mod_names = value
+
+    @property
+    def weapon_mod_generic_names(self) -> dict[str, str]:
+        return self._catalog_session.weapon_mod_generic_names
+
+    @weapon_mod_generic_names.setter
+    def weapon_mod_generic_names(self, value: dict[str, str]) -> None:
+        self._catalog_session.weapon_mod_generic_names = value
+
+    @property
+    def weapon_mod_variant_names(self) -> dict[str, str]:
+        return self._catalog_session.weapon_mod_variant_names
+
+    @weapon_mod_variant_names.setter
+    def weapon_mod_variant_names(self, value: dict[str, str]) -> None:
+        self._catalog_session.weapon_mod_variant_names = value
+
+    @property
+    def rune_names(self) -> dict[str, str]:
+        return self._catalog_session.rune_names
+
+    @rune_names.setter
+    def rune_names(self, value: dict[str, str]) -> None:
+        self._catalog_session.rune_names = value
+
+    @property
+    def rune_buy_entries(self) -> list[dict[str, object]]:
+        return self._catalog_session.rune_buy_entries
+
+    @rune_buy_entries.setter
+    def rune_buy_entries(self, value: list[dict[str, object]]) -> None:
+        self._catalog_session.rune_buy_entries = value
+
+    @property
+    def rune_buy_entries_by_identifier(self) -> dict[str, dict[str, object]]:
+        return self._catalog_session.rune_buy_entries_by_identifier
+
+    @rune_buy_entries_by_identifier.setter
+    def rune_buy_entries_by_identifier(self, value: dict[str, dict[str, object]]) -> None:
+        self._catalog_session.rune_buy_entries_by_identifier = value
+
+    @property
+    def rune_buy_identifier_by_exact_label(self) -> dict[str, str]:
+        return self._catalog_session.rune_buy_identifier_by_exact_label
+
+    @rune_buy_identifier_by_exact_label.setter
+    def rune_buy_identifier_by_exact_label(self, value: dict[str, str]) -> None:
+        self._catalog_session.rune_buy_identifier_by_exact_label = value
+
+    @property
+    def rune_buy_entries_by_profession(self) -> dict[str, list[dict[str, object]]]:
+        return self._catalog_session.rune_buy_entries_by_profession
+
+    @rune_buy_entries_by_profession.setter
+    def rune_buy_entries_by_profession(self, value: dict[str, list[dict[str, object]]]) -> None:
+        self._catalog_session.rune_buy_entries_by_profession = value
+
+    @property
+    def rune_buy_professions(self) -> list[str]:
+        return self._catalog_session.rune_buy_professions
+
+    @rune_buy_professions.setter
+    def rune_buy_professions(self, value: list[str]) -> None:
+        self._catalog_session.rune_buy_professions = value
+
     def __init__(self):
         self.initialized = False
         self._ranked_catalog_search = RankedCatalogSearch(
@@ -5402,17 +5628,20 @@ class MerchantRulesWidget:
         self._service_role_next_poll_at = 0.0
         self._service_role_lifecycle_active = False
         self._service_role_preview_refresh_pending = False
-        self.catalog_loaded = False
-        self.catalog_load_error = ""
-        self.catalog_by_model_id: dict[int, dict[str, object]] = {}
-        self.exact_catalog_by_item_key: dict[tuple[int, int], dict[str, object]] = {}
-        self.exact_catalog_untyped_by_model_id: dict[int, dict[str, object]] = {}
-        self._equipment_typed_entries_by_model_id: dict[int, tuple[dict[str, object], ...]] = {}
-        self._equipment_model_search_entry_cache: dict[
-            tuple[int, str, bool, bool], dict[str, object]
-        ] = {}
-        self._catalog_generation = 0
-        self._catalog_building = False
+        self._catalog_session = CatalogSession(
+            ranker=self._ranked_catalog_search,
+            item_type_enum=ItemType,
+            weapon_item_type_ids=WEAPON_ITEM_TYPE_IDS,
+            weapon_like_item_types=WEAPON_LIKE_ITEM_TYPES,
+            armor_piece_types=ARMOR_PIECE_TYPES,
+            is_valid_exact_item_type_id=lambda value: _is_valid_exact_item_type_id(value),
+            is_weapon_catalog_item_type=lambda value: _is_weapon_catalog_item_type(value),
+            is_armor_catalog_item_type=lambda value: _is_armor_catalog_item_type(value),
+            is_weapon_mod_catalog_name=lambda read: _is_weapon_mod_catalog_name(read()),
+            is_armor_rune_catalog_name=lambda read: _is_armor_rune_catalog_name(read()),
+            is_armor_salvage_catalog_name=lambda read: _is_armor_salvage_catalog_name(read()),
+            get_search_result_limit=lambda: SEARCH_RESULT_LIMIT,
+        )
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
         )
@@ -5429,25 +5658,6 @@ class MerchantRulesWidget:
             ]
             | None
         ) = None
-        self.catalog_alias_to_model_ids: dict[str, list[int]] = {}
-        self.catalog_alias_display_names: dict[str, str] = {}
-        self.common_salvage_model_ids_by_item_key: dict[tuple[int, int], tuple[int, ...]] = {}
-        self.catalog_common_material_ids: list[int] = []
-        self.catalog_merchant_essentials: list[dict[str, object]] = []
-        self.catalog_rare_materials: list[dict[str, object]] = []
-        self.catalog_stats: dict[str, int | bool] = {}
-        self.weapon_mod_entries: list[dict[str, str]] = []
-        self.rune_entries: list[dict[str, str]] = []
-        self.armor_upgrade_entries: list[dict[str, str]] = []
-        self.weapon_mod_names: dict[str, str] = {}
-        self.weapon_mod_generic_names: dict[str, str] = {}
-        self.weapon_mod_variant_names: dict[str, str] = {}
-        self.rune_names: dict[str, str] = {}
-        self.rune_buy_entries: list[dict[str, object]] = []
-        self.rune_buy_entries_by_identifier: dict[str, dict[str, object]] = {}
-        self.rune_buy_identifier_by_exact_label: dict[str, str] = {}
-        self.rune_buy_entries_by_profession: dict[str, list[dict[str, object]]] = {}
-        self.rune_buy_professions: list[str] = []
         self.outpost_entries: list[dict[str, object]] = []
         self.shared_profile_refresh_timer = ThrottledTimer(SHARED_PROFILE_REFRESH_INTERVAL_MS)
         self._runtime_inventory_signature_provider: Callable[[], tuple[tuple[int, int], ...]] | None = None
@@ -12191,22 +12401,10 @@ class MerchantRulesWidget:
         )
 
     def _load_modifier_catalogs(self):
-        result = self._get_catalog_loader().load_modifier_catalogs()
-        self.weapon_mod_entries = result.weapon_mod_entries
-        self.rune_entries = result.rune_entries
-        self.armor_upgrade_entries = result.armor_upgrade_entries
-        self.weapon_mod_names = result.weapon_mod_names
-        self.weapon_mod_generic_names = result.weapon_mod_generic_names
-        self.weapon_mod_variant_names = result.weapon_mod_variant_names
-        self.rune_names = result.rune_names
+        return self._catalog_session.load_modifier_catalogs(get_loader=lambda: self._get_catalog_loader())
 
     def _load_rune_buy_catalog(self):
-        result = self._get_catalog_loader().load_rune_buy_catalog()
-        self.rune_buy_entries = result.rune_buy_entries
-        self.rune_buy_entries_by_identifier = result.rune_buy_entries_by_identifier
-        self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
-        self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
-        self.rune_buy_professions = result.rune_buy_professions
+        return self._catalog_session.load_rune_buy_catalog(get_loader=lambda: self._get_catalog_loader())
 
     def _debug_log(self, message: str):
         if not self.debug_logging:
@@ -12226,7 +12424,7 @@ class MerchantRulesWidget:
             return str(coords)
 
     def _get_catalog_alias_group_count(self) -> int:
-        return CatalogLoader.get_catalog_alias_group_count(self.catalog_alias_to_model_ids)
+        return self._catalog_session.get_catalog_alias_group_count()
 
     def _get_catalog_summary_text(self) -> str:
         final_models = int(self.catalog_stats.get("final_models", len(self.catalog_by_model_id)) or 0)
@@ -12434,56 +12632,25 @@ class MerchantRulesWidget:
         self._cleanup_deposit_filter_targets_cache = []
 
     def _clear_ranked_search_caches(self) -> None:
-        self._ranked_catalog_search.clear()
+        return self._catalog_session.clear_ranked_search_caches()
 
     @staticmethod
     def _catalog_entry_search_signature(entry: dict[str, object]) -> tuple[object, ...]:
-        alias_labels = entry.get("alias_labels", {})
-        alias_signature: tuple[str, ...] = ()
-        if isinstance(alias_labels, dict):
-            alias_signature = tuple(sorted(str(raw_alias) for raw_alias in alias_labels))
-        return (
-            str(entry.get("name", "")).strip(),
-            max(0, _safe_int(entry.get("model_id", 0), 0)),
-            _normalize_catalog_search_text(entry.get("item_type", "")),
-            _normalize_catalog_search_text(entry.get("material_type", "")),
-            _normalize_catalog_search_text(entry.get("category", "")),
-            _normalize_catalog_search_text(entry.get("sub_category", "")),
-            _safe_int(entry.get("item_type_id", -1), -1),
-            alias_signature,
-        )
+        return CatalogSession.catalog_entry_search_signature(entry)
 
     def _capture_catalog_search_state(
         self,
     ) -> dict[int, tuple[dict[str, object], tuple[object, ...]]]:
-        return {
-            int(model_id): (entry, self._catalog_entry_search_signature(entry))
-            for model_id, entry in self.catalog_by_model_id.items()
-        }
+        return self._catalog_session.capture_catalog_search_state()
 
     def _catalog_search_state_changed(
         self,
         previous_state: dict[int, tuple[dict[str, object], tuple[object, ...]]],
     ) -> bool:
-        if len(previous_state) != len(self.catalog_by_model_id):
-            return True
-        for model_id, entry in self.catalog_by_model_id.items():
-            previous_entry_state = previous_state.get(int(model_id))
-            if previous_entry_state is None:
-                return True
-            previous_entry, previous_signature = previous_entry_state
-            if entry is not previous_entry or self._catalog_entry_search_signature(entry) != previous_signature:
-                return True
-        return False
+        return self._catalog_session.catalog_search_state_changed(previous_state)
 
     def _invalidate_ranked_search_caches_for_catalog_mutation(self) -> None:
-        """Invalidate ranked results after a published searchable-catalog mutation."""
-        if self._catalog_building:
-            # _load_catalog publishes one fresh result after all source loaders finish.
-            return
-        if self.catalog_loaded:
-            self._catalog_generation += 1
-        self._clear_ranked_search_caches()
+        return self._catalog_session.invalidate_ranked_search_caches_for_catalog_mutation()
 
     def _invalidate_cleanup_target_display_cache(self) -> None:
         self._cleanup_target_display_cache_key = None
@@ -12503,22 +12670,9 @@ class MerchantRulesWidget:
         priority: int = 100,
         extra: dict[str, object] | None = None,
     ) -> None:
-        previous_state = self._capture_catalog_search_state()
-        try:
-            result = CatalogLoadResult(catalog_by_model_id=self.catalog_by_model_id)
-            CatalogLoader.register_catalog_entry(
-                result,
-                model_id,
-                name,
-                item_type,
-                material_type,
-                source,
-                priority,
-                extra,
-            )
-        finally:
-            if self._catalog_search_state_changed(previous_state):
-                self._invalidate_ranked_search_caches_for_catalog_mutation()
+        return self._catalog_session.register_catalog_entry(
+            model_id, name, item_type, material_type, source, priority, extra
+        )
 
     def _load_catalog_group(
         self,
@@ -12528,113 +12682,37 @@ class MerchantRulesWidget:
         default_item_type: str = "",
         default_material_type: str = "",
     ) -> list[dict[str, object]]:
-        previous_state = self._capture_catalog_search_state()
-        try:
-            return self._get_catalog_loader().load_catalog_group(
-                self.catalog_by_model_id,
-                entries,
-                source,
-                priority,
-                default_item_type,
-                default_material_type,
-            )
-        finally:
-            if self._catalog_search_state_changed(previous_state):
-                self._invalidate_ranked_search_caches_for_catalog_mutation()
+        return self._catalog_session.load_catalog_group(
+            entries,
+            source,
+            priority,
+            default_item_type,
+            default_material_type,
+            get_loader=lambda: self._get_catalog_loader(),
+        )
 
     def _load_drop_data_catalog(self) -> int:
-        previous_state = self._capture_catalog_search_state()
-        try:
-            return self._get_catalog_loader().load_drop_data_catalog(self.catalog_by_model_id)
-        finally:
-            if self._catalog_search_state_changed(previous_state):
-                self._invalidate_ranked_search_caches_for_catalog_mutation()
+        return self._catalog_session.load_drop_data_catalog(get_loader=lambda: self._get_catalog_loader())
 
     def _load_item_handling_catalog(self) -> int:
-        previous_state = self._capture_catalog_search_state()
-        try:
-            return self._get_catalog_loader().load_item_handling_catalog(self.catalog_by_model_id)
-        finally:
-            if self._catalog_search_state_changed(previous_state):
-                self._invalidate_ranked_search_caches_for_catalog_mutation()
+        return self._catalog_session.load_item_handling_catalog(get_loader=lambda: self._get_catalog_loader())
 
     def _load_rune_model_catalog(self) -> int:
-        previous_state = self._capture_catalog_search_state()
-        try:
-            return self._get_catalog_loader().load_rune_model_catalog(self.catalog_by_model_id)
-        finally:
-            if self._catalog_search_state_changed(previous_state):
-                self._invalidate_ranked_search_caches_for_catalog_mutation()
+        return self._catalog_session.load_rune_model_catalog(get_loader=lambda: self._get_catalog_loader())
 
     def _load_model_id_fallback_catalog(self) -> int:
-        previous_state = self._capture_catalog_search_state()
-        try:
-            return self._get_catalog_loader().load_model_id_fallback_catalog(self.catalog_by_model_id)
-        finally:
-            if self._catalog_search_state_changed(previous_state):
-                self._invalidate_ranked_search_caches_for_catalog_mutation()
+        return self._catalog_session.load_model_id_fallback_catalog(get_loader=lambda: self._get_catalog_loader())
 
     def _rebuild_catalog_alias_index(self) -> None:
-        previous_state = self._capture_catalog_search_state()
-        try:
-            aliases, display_names = self._get_catalog_loader().rebuild_catalog_alias_index(self.catalog_by_model_id)
-            self.catalog_alias_to_model_ids = aliases
-            self.catalog_alias_display_names = display_names
-        finally:
-            if self._catalog_search_state_changed(previous_state):
-                self._invalidate_ranked_search_caches_for_catalog_mutation()
+        return self._catalog_session.rebuild_catalog_alias_index(get_loader=lambda: self._get_catalog_loader())
 
     def _load_catalog(self):
-        self._catalog_building = True
-        try:
-            self.catalog_loaded = False
-            self._clear_ranked_search_caches()
-            self.catalog_by_model_id = {}
-            self.exact_catalog_by_item_key = {}
-            self.exact_catalog_untyped_by_model_id = {}
-            self.catalog_alias_to_model_ids = {}
-            self.catalog_alias_display_names = {}
-            self.common_salvage_model_ids_by_item_key = {}
-            self.catalog_common_material_ids = []
-            self.catalog_merchant_essentials = []
-            self.catalog_rare_materials = []
-            self.catalog_stats = {}
-            self.catalog_load_error = ""
-
-            result: CatalogLoadResult = self._get_catalog_loader().load()
-            self.catalog_by_model_id = result.catalog_by_model_id
-            self.exact_catalog_by_item_key = result.exact_catalog_by_item_key
-            self.exact_catalog_untyped_by_model_id = result.exact_catalog_untyped_by_model_id
-            self._rebuild_equipment_typed_entry_index()
-            self.catalog_alias_to_model_ids = result.catalog_alias_to_model_ids
-            self.catalog_alias_display_names = result.catalog_alias_display_names
-            self.common_salvage_model_ids_by_item_key = result.common_salvage_model_ids_by_item_key
-            self.catalog_common_material_ids = result.catalog_common_material_ids
-            self.catalog_merchant_essentials = result.catalog_merchant_essentials
-            self.catalog_rare_materials = result.catalog_rare_materials
-            self.catalog_stats = result.catalog_stats
-            self.catalog_load_error = result.catalog_load_error
-            self.weapon_mod_entries = result.weapon_mod_entries
-            self.rune_entries = result.rune_entries
-            self.armor_upgrade_entries = result.armor_upgrade_entries
-            self.weapon_mod_names = result.weapon_mod_names
-            self.weapon_mod_generic_names = result.weapon_mod_generic_names
-            self.weapon_mod_variant_names = result.weapon_mod_variant_names
-            self.rune_names = result.rune_names
-            self.rune_buy_entries = result.rune_buy_entries
-            self.rune_buy_entries_by_identifier = result.rune_buy_entries_by_identifier
-            self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
-            self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
-            self.rune_buy_professions = result.rune_buy_professions
-            self._catalog_generation += 1
-            self._invalidate_cleanup_deposit_filter_targets_cache()
-            self._invalidate_cleanup_target_display_cache()
-            self.catalog_loaded = True
-            if self.catalog_load_error:
-                ConsoleLog(MODULE_NAME, self.catalog_load_error, Console.MessageType.Warning)
-        finally:
-            self._catalog_building = False
-            self._clear_ranked_search_caches()
+        return self._catalog_session.load_catalog(
+            get_loader=lambda: self._get_catalog_loader(),
+            invalidate_cleanup_filter_targets=lambda: self._invalidate_cleanup_deposit_filter_targets_cache(),
+            invalidate_cleanup_target_display=lambda: self._invalidate_cleanup_target_display_cache(),
+            report_warning=lambda read: ConsoleLog(MODULE_NAME, read(), Console.MessageType.Warning),
+        )
 
     def _load_outpost_entries(self):
         outposts = dict(zip(Map.GetOutpostIDs(), Map.GetOutpostNames()))
@@ -12850,13 +12928,10 @@ class MerchantRulesWidget:
         return picked_outpost_id
 
     def _get_model_entry(self, model_id: int) -> dict[str, object] | None:
-        return self.catalog_by_model_id.get(max(0, _safe_int(model_id, 0)))
+        return self._catalog_session.get_model_entry(model_id)
 
     def _get_model_name(self, model_id: int) -> str:
-        entry = self._get_model_entry(model_id)
-        if entry is None:
-            return ""
-        return str(entry.get("name", "")).strip()
+        return self._catalog_session.get_model_name(model_id)
 
     def _format_model_label(self, model_id: int) -> str:
         safe_model_id = max(0, _safe_int(model_id, 0))
@@ -12868,19 +12943,10 @@ class MerchantRulesWidget:
         return f"Model {safe_model_id}"
 
     def _get_model_descriptor(self, model_id: int) -> str:
-        entry = self._get_model_entry(model_id)
-        if entry is None:
-            return ""
-        material_type = str(entry.get("material_type", "")).strip()
-        if material_type:
-            return material_type
-        return str(entry.get("item_type", "")).strip()
+        return self._catalog_session.get_model_descriptor(model_id)
 
     def _get_model_item_type(self, model_id: int) -> str:
-        entry = self._get_model_entry(model_id)
-        if entry is None:
-            return ""
-        return str(entry.get("item_type", "")).strip()
+        return self._catalog_session.get_model_item_type(model_id)
 
     def _humanize_model_attribute_label(self, raw_value: object) -> str:
         label = str(raw_value or "").strip()
@@ -12985,31 +13051,10 @@ class MerchantRulesWidget:
         return self._append_model_attribute_suffix(label, model_id)
 
     def _rebuild_equipment_typed_entry_index(self) -> None:
-        """Index the typed catalog rows used by Equipment's collision projections."""
-
-        self._equipment_model_search_entry_cache = {}
-        entries_by_model_id: dict[int, list[dict[str, object]]] = {}
-        for (raw_item_type_id, raw_model_id), entry in self.exact_catalog_by_item_key.items():
-            model_id = max(0, _safe_int(raw_model_id, 0))
-            item_type_id = _safe_int(raw_item_type_id, -1)
-            if model_id <= 0 or not _is_valid_exact_item_type_id(item_type_id) or not isinstance(entry, dict):
-                continue
-            entries_by_model_id.setdefault(model_id, []).append(entry)
-        self._equipment_typed_entries_by_model_id = {
-            model_id: tuple(entries)
-            for model_id, entries in entries_by_model_id.items()
-        }
+        return self._catalog_session.rebuild_equipment_typed_entry_index()
 
     def _get_equipment_typed_entries_for_model(self, model_id: object) -> list[dict[str, object]]:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        if safe_model_id <= 0:
-            return []
-
-        indexed_entries = getattr(self, "_equipment_typed_entries_by_model_id", {})
-        if not indexed_entries and self.exact_catalog_by_item_key:
-            self._rebuild_equipment_typed_entry_index()
-            indexed_entries = self._equipment_typed_entries_by_model_id
-        return list(indexed_entries.get(safe_model_id, ()))
+        return self._catalog_session.get_equipment_typed_entries_for_model(model_id)
 
     def _catalog_entry_matches_equipment_family(
         self,
@@ -13019,44 +13064,12 @@ class MerchantRulesWidget:
         include_standalone_weapon_mods: bool = False,
         include_standalone_runes: bool = False,
     ) -> bool:
-        item_type_id = _safe_int(entry.get("item_type_id"), -1)
-        item_type: ItemType | None = None
-        if _is_valid_exact_item_type_id(item_type_id):
-            try:
-                item_type = ItemType(item_type_id)
-            except ValueError:
-                item_type = None
-
-        if rule_kind == SELL_KIND_WEAPONS:
-            if item_type in WEAPON_LIKE_ITEM_TYPES:
-                return True
-            if item_type == ItemType.Rune_Mod:
-                return include_standalone_weapon_mods and not _is_armor_rune_catalog_name(entry.get("name", ""))
-            item_type_name = str(entry.get("item_type", "")).strip()
-            if _is_weapon_catalog_item_type(item_type_name):
-                return True
-            return (
-                include_standalone_weapon_mods
-                and item_type_name.casefold() == "rune_mod"
-                and _is_weapon_mod_catalog_name(entry.get("name", ""))
-            )
-
-        if rule_kind == SELL_KIND_ARMOR:
-            if item_type in ARMOR_PIECE_TYPES:
-                return True
-            if item_type == ItemType.Rune_Mod:
-                return include_standalone_runes and _is_armor_rune_catalog_name(entry.get("name", ""))
-            item_type_name = str(entry.get("item_type", "")).strip()
-            if _is_armor_catalog_item_type(item_type_name):
-                return True
-            if item_type_name.casefold() == "salvage":
-                return _is_armor_salvage_catalog_name(entry.get("name", ""))
-            return include_standalone_runes and (
-                item_type_name.casefold() == "rune_mod"
-                and _is_armor_rune_catalog_name(entry.get("name", ""))
-            )
-
-        return False
+        return self._catalog_session.catalog_entry_matches_equipment_family(
+            entry,
+            rule_kind,
+            include_standalone_weapon_mods=include_standalone_weapon_mods,
+            include_standalone_runes=include_standalone_runes,
+        )
 
     def _get_equipment_model_family_entries(
         self,
@@ -13066,40 +13079,15 @@ class MerchantRulesWidget:
         include_standalone_weapon_mods: bool = False,
         include_standalone_runes: bool = False,
     ) -> list[dict[str, object]]:
-        typed_entries = self._get_equipment_typed_entries_for_model(model_id)
-        if typed_entries:
-            return [
-                entry
-                for entry in typed_entries
-                if self._catalog_entry_matches_equipment_family(
-                    entry,
-                    rule_kind,
-                    include_standalone_weapon_mods=include_standalone_weapon_mods,
-                    include_standalone_runes=include_standalone_runes,
-                )
-            ]
-
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        flat_entry = self._get_model_entry(safe_model_id)
-        if flat_entry is None or not self._catalog_entry_matches_equipment_family(
-            flat_entry,
+        return self._catalog_session.get_equipment_model_family_entries(
+            model_id,
             rule_kind,
             include_standalone_weapon_mods=include_standalone_weapon_mods,
             include_standalone_runes=include_standalone_runes,
-        ):
-            return []
-        return [flat_entry]
+        )
 
     def _get_equipment_catalog_type_label(self, entry: dict[str, object], rule_kind: str) -> str:
-        item_type_id = _safe_int(entry.get("item_type_id"), -1)
-        if item_type_id == int(ItemType.Rune_Mod):
-            return "Weapon Mod" if rule_kind == SELL_KIND_WEAPONS else "Armor Upgrade"
-        raw_item_type = str(entry.get("item_type", "")).strip()
-        if raw_item_type:
-            return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw_item_type.replace("_", " ")).strip()
-        if _is_valid_exact_item_type_id(item_type_id):
-            return self._humanize_exact_item_type(item_type_id)
-        return "Item"
+        return self._catalog_session.get_equipment_catalog_type_label(entry, rule_kind)
 
     def _get_equipment_model_search_entry(
         self,
@@ -13109,96 +13097,12 @@ class MerchantRulesWidget:
         include_standalone_weapon_mods: bool = False,
         include_standalone_runes: bool = False,
     ) -> dict[str, object] | None:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        if safe_model_id <= 0:
-            return None
-        cache_key = (
-            safe_model_id,
-            str(rule_kind),
-            bool(include_standalone_weapon_mods),
-            bool(include_standalone_runes),
-        )
-        cached_entry = self._equipment_model_search_entry_cache.get(cache_key)
-        if cached_entry is not None:
-            return cached_entry
-        family_entries = self._get_equipment_model_family_entries(
-            safe_model_id,
+        return self._catalog_session.get_equipment_model_search_entry(
+            model_id,
             rule_kind,
             include_standalone_weapon_mods=include_standalone_weapon_mods,
             include_standalone_runes=include_standalone_runes,
         )
-        if not family_entries:
-            return None
-
-        def is_concrete_entry(entry: dict[str, object]) -> bool:
-            item_type_id = _safe_int(entry.get("item_type_id"), -1)
-            if rule_kind == SELL_KIND_WEAPONS:
-                return item_type_id in WEAPON_ITEM_TYPE_IDS
-            return item_type_id in {int(item_type.value) for item_type in ARMOR_PIECE_TYPES if item_type != ItemType.Salvage}
-
-        preferred_entry = next((entry for entry in family_entries if is_concrete_entry(entry)), family_entries[0])
-        ordered_entries = [preferred_entry] + [entry for entry in family_entries if entry is not preferred_entry]
-        result = dict(preferred_entry)
-        names: list[str] = []
-        type_labels: list[str] = []
-        alias_labels: dict[str, str] = {}
-
-        def add_unique(values: list[str], raw_value: object) -> None:
-            value = str(raw_value or "").strip()
-            if value and value.casefold() not in {existing.casefold() for existing in values}:
-                values.append(value)
-
-        for entry in ordered_entries:
-            add_unique(names, entry.get("name", ""))
-            add_unique(type_labels, self._get_equipment_catalog_type_label(entry, rule_kind))
-            raw_alias_labels = entry.get("alias_labels", {})
-            if isinstance(raw_alias_labels, dict):
-                for raw_alias, display_name in raw_alias_labels.items():
-                    normalized_alias = _normalize_catalog_search_text(raw_alias)
-                    if normalized_alias:
-                        alias_labels.setdefault(
-                            normalized_alias,
-                            str(display_name or raw_alias or "").strip() or normalized_alias.title(),
-                        )
-
-        for value in names + type_labels:
-            normalized_value = _normalize_catalog_search_text(value)
-            if normalized_value:
-                alias_labels.setdefault(normalized_value, value)
-
-        is_group = len(family_entries) > 1
-        group_label = ""
-        if is_group:
-            name_label = " / ".join(names) or f"Model {safe_model_id}"
-            type_label = " + ".join(type_labels)
-            group_label = f"{name_label} ({safe_model_id})"
-            if type_label:
-                group_label = f"{group_label} - {type_label}"
-            normalized_group_label = _normalize_catalog_search_text(group_label)
-            if normalized_group_label:
-                alias_labels.setdefault(normalized_group_label, group_label)
-
-        result["equipment_group"] = is_group
-        result["equipment_group_label"] = group_label
-        result["equipment_group_names"] = names
-        result["equipment_group_types"] = type_labels
-        result["equipment_family"] = rule_kind
-        result["alias_labels"] = alias_labels
-        result["equipment_search_text"] = _normalize_catalog_search_text(
-            " ".join(
-                [
-                    str(safe_model_id),
-                    str(result.get("name", "")),
-                    str(result.get("item_type", "")),
-                    group_label,
-                    " ".join(names),
-                    " ".join(type_labels),
-                    " ".join(alias_labels.keys()),
-                ]
-            )
-        )
-        self._equipment_model_search_entry_cache[cache_key] = result
-        return result
 
     def _format_equipment_model_label(
         self,
@@ -13221,37 +13125,17 @@ class MerchantRulesWidget:
         return self._format_model_label_long(max(0, _safe_int(model_id, 0)))
 
     def _iter_exact_catalog_entries(self) -> Iterable[dict[str, object]]:
-        yield from self.exact_catalog_by_item_key.values()
-        yield from self.exact_catalog_untyped_by_model_id.values()
+        yield from self._catalog_session.iter_exact_catalog_entries()
 
     def _get_exact_catalog_entry(self, item_type_id: object, model_id: object) -> dict[str, object] | None:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        safe_item_type_id = _safe_int(item_type_id, -1)
-        if safe_model_id <= 0 or safe_item_type_id < 0:
-            return None
-        return self.exact_catalog_by_item_key.get((safe_item_type_id, safe_model_id))
+        return self._catalog_session.get_exact_catalog_entry(item_type_id, model_id)
 
     def _get_exact_catalog_entry_key(self, entry: dict[str, object]) -> tuple[int | None, int] | None:
-        safe_model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
-        if safe_model_id <= 0:
-            return None
-        raw_item_type_id = entry.get("item_type_id")
-        if raw_item_type_id is None:
-            return None, safe_model_id
-        safe_item_type_id = _safe_int(raw_item_type_id, -1)
-        if not _is_valid_exact_item_type_id(safe_item_type_id):
-            return None
-        return safe_item_type_id, safe_model_id
+        return self._catalog_session.get_exact_catalog_entry_key(entry)
 
     @staticmethod
     def _humanize_exact_item_type(item_type_id: object, raw_item_type: object = "") -> str:
-        raw_name = str(raw_item_type or "").strip()
-        if not raw_name:
-            try:
-                raw_name = ItemType(_safe_int(item_type_id, -1)).name
-            except (TypeError, ValueError):
-                raw_name = f"Item type {_safe_int(item_type_id, -1)}"
-        return re.sub(r"\s+", " ", raw_name.replace("_", " ")).strip()
+        return _catalog_humanize_exact_item_type(item_type_id, raw_item_type, item_type_enum=ItemType)
 
     def _get_exact_catalog_entry_descriptor(self, entry: dict[str, object]) -> str:
         item_type = _normalize_catalog_search_text(entry.get("item_type", ""))
@@ -13309,18 +13193,7 @@ class MerchantRulesWidget:
         return f"{name} ({safe_model_id}) — {descriptor}"
 
     def _get_exact_catalog_entries_for_model(self, model_id: object) -> list[dict[str, object]]:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        if safe_model_id <= 0:
-            return []
-        typed_entries = [
-            entry
-            for (item_type_id, entry_model_id), entry in self.exact_catalog_by_item_key.items()
-            if int(entry_model_id) == safe_model_id and _is_valid_exact_item_type_id(item_type_id)
-        ]
-        if typed_entries:
-            return typed_entries
-        fallback = self.exact_catalog_untyped_by_model_id.get(safe_model_id)
-        return [fallback] if isinstance(fallback, dict) else []
+        return self._catalog_session.get_exact_catalog_entries_for_model(model_id)
 
     def _format_exact_protection_target_label(self, target: ExactProtectionTarget) -> str:
         safe_model_id = max(0, _safe_int(target.model_id, 0))
@@ -14302,13 +14175,7 @@ class MerchantRulesWidget:
         raw_query: str,
         limit: int = SEARCH_RESULT_LIMIT,
     ) -> list[dict[str, object]]:
-        return self._ranked_catalog_search.search_exact(
-            raw_query,
-            generation=self._catalog_generation,
-            typed_entries=self.exact_catalog_by_item_key,
-            untyped_entries=self.exact_catalog_untyped_by_model_id,
-            limit=limit,
-        )
+        return self._catalog_session.search_exact_catalog(raw_query, limit=limit)
 
     def _search_exact_catalog_with_predicate(
         self,
@@ -14317,21 +14184,9 @@ class MerchantRulesWidget:
         entry_predicate: Callable[[dict[str, object]], bool],
         limit: int = SEARCH_RESULT_LIMIT,
     ) -> list[dict[str, object]]:
-        catalog_limit = max(max(1, len(self.exact_catalog_by_item_key) + len(self.exact_catalog_untyped_by_model_id)), limit * 4)
-        results = self._search_exact_catalog(raw_query, limit=catalog_limit)
-        filtered_results: list[dict[str, object]] = []
-        seen_keys: set[tuple[int | None, int]] = set()
-        for entry in results:
-            entry_key = self._get_exact_catalog_entry_key(entry)
-            if entry_key is None or entry_key in seen_keys:
-                continue
-            if not entry_predicate(entry):
-                continue
-            seen_keys.add(entry_key)
-            filtered_results.append(entry)
-            if len(filtered_results) >= max(1, int(limit)):
-                break
-        return filtered_results
+        return self._catalog_session.search_exact_catalog_with_predicate(
+            raw_query, entry_predicate=entry_predicate, limit=limit
+        )
 
     def _get_addable_cleanup_deposit_filter_targets(
         self,
@@ -14384,12 +14239,7 @@ class MerchantRulesWidget:
         return visible_results[:expanded_limit]
 
     def _search_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
-        return self._ranked_catalog_search.search_flat(
-            raw_query,
-            generation=self._catalog_generation,
-            entries=self.catalog_by_model_id,
-            limit=limit,
-        )
+        return self._catalog_session.search_catalog(raw_query, limit=limit)
 
     def _search_catalog_with_predicate(
         self,
@@ -14398,21 +14248,9 @@ class MerchantRulesWidget:
         entry_predicate: Callable[[dict[str, object]], bool],
         limit: int = SEARCH_RESULT_LIMIT,
     ) -> list[dict[str, object]]:
-        catalog_limit = max(max(1, len(self.catalog_by_model_id)), limit * 4, SEARCH_RESULT_LIMIT * 4)
-        results = self._search_catalog(raw_query, limit=catalog_limit)
-        filtered_results: list[dict[str, object]] = []
-        seen_model_ids: set[int] = set()
-        for entry in results:
-            model_id = max(0, _safe_int(entry.get("model_id", 0), 0))
-            if model_id <= 0 or model_id in seen_model_ids:
-                continue
-            if not entry_predicate(entry):
-                continue
-            seen_model_ids.add(model_id)
-            filtered_results.append(entry)
-            if len(filtered_results) >= max(1, int(limit)):
-                break
-        return filtered_results
+        return self._catalog_session.search_catalog_with_predicate(
+            raw_query, entry_predicate=entry_predicate, limit=limit
+        )
 
     def _search_material_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
         results = self._search_catalog(raw_query, limit=max(limit * 3, limit))
@@ -14463,84 +14301,14 @@ class MerchantRulesWidget:
         entry_predicate: Callable[[dict[str, object]], bool] | None = None,
         limit: int = SEARCH_RESULT_LIMIT,
     ) -> list[dict[str, object]]:
-        query = _normalize_catalog_search_text(raw_query)
-        if not query or rule_kind not in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-            return []
-
-        model_ids = {
-            max(0, _safe_int(model_id, 0))
-            for model_id in self.catalog_by_model_id
-            if max(0, _safe_int(model_id, 0)) > 0
-        }
-        model_ids.update(
-            max(0, _safe_int(model_id, 0))
-            for _item_type_id, model_id in self.exact_catalog_by_item_key
-            if max(0, _safe_int(model_id, 0)) > 0
+        return self._catalog_session.search_equipment_catalog(
+            raw_query,
+            rule_kind,
+            include_standalone_weapon_mods=include_standalone_weapon_mods,
+            include_standalone_runes=include_standalone_runes,
+            entry_predicate=entry_predicate,
+            limit=limit,
         )
-
-        matches: list[tuple[tuple[object, ...], dict[str, object]]] = []
-        for model_id in model_ids:
-            entry = self._get_equipment_model_search_entry(
-                model_id,
-                rule_kind,
-                include_standalone_weapon_mods=include_standalone_weapon_mods,
-                include_standalone_runes=include_standalone_runes,
-            )
-            if entry is None:
-                continue
-            if entry_predicate is not None:
-                family_entries = self._get_equipment_model_family_entries(
-                    model_id,
-                    rule_kind,
-                    include_standalone_weapon_mods=include_standalone_weapon_mods,
-                    include_standalone_runes=include_standalone_runes,
-                )
-                if not any(entry_predicate(family_entry) for family_entry in family_entries):
-                    continue
-
-            name = str(entry.get("name", "")).strip()
-            normalized_search_text = str(entry.get("equipment_search_text", "")).strip()
-            if not name or query not in normalized_search_text:
-                continue
-
-            name_lower = _normalize_catalog_search_text(name)
-            model_id_text = str(model_id)
-            item_type = _normalize_catalog_search_text(entry.get("item_type", ""))
-            alias_labels = entry.get("alias_labels", {})
-            alias_matches = [
-                str(alias)
-                for alias in alias_labels
-                if query in str(alias or "")
-            ] if isinstance(alias_labels, dict) else []
-            exact_alias_hit = any(alias == query for alias in alias_matches)
-            prefix_alias_hit = any(alias.startswith(query) for alias in alias_matches)
-            group_search_values: list[str] = []
-            for key in ("equipment_group_names", "equipment_group_types"):
-                raw_values = entry.get(key, [])
-                if isinstance(raw_values, (list, tuple, set)):
-                    group_search_values.extend(str(value or "") for value in raw_values)
-            grouped_identity_hit = bool(
-                entry.get("equipment_group", False)
-                and query in _normalize_catalog_search_text(" ".join(group_search_values))
-            )
-            display_label = str(entry.get("equipment_group_label", "")).strip() or name
-            score = (
-                0 if query == model_id_text else 1,
-                0 if grouped_identity_hit else 1,
-                0 if name_lower.startswith(query) else 1,
-                0 if query in name_lower else 1,
-                0 if exact_alias_hit else 1,
-                0 if prefix_alias_hit else 1,
-                0 if alias_matches else 1,
-                0 if query in item_type else 1,
-                len(display_label),
-                display_label.casefold(),
-                model_id,
-            )
-            matches.append((score, entry))
-
-        matches.sort(key=lambda match: match[0])
-        return [entry for _, entry in matches[: max(1, int(limit))]]
 
     def _search_weapon_catalog(self, raw_query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, object]]:
         return self._search_equipment_catalog(
@@ -14564,73 +14332,17 @@ class MerchantRulesWidget:
         entry_predicate: Callable[[dict[str, object]], bool] | None = None,
         limit: int = SEARCH_RESULT_LIMIT,
     ) -> list[dict[str, object]]:
-        query = _normalize_catalog_search_text(raw_query)
-        if not query:
-            return []
+        return self._catalog_session.search_catalog_alias_groups(
+            raw_query,
+            exclude_model_ids=exclude_model_ids,
+            entry_predicate=entry_predicate,
+            limit=limit,
+        )
 
-        excluded_ids = set(_dedupe_model_ids(exclude_model_ids or []))
-        matches: list[tuple[tuple[int, int, int, int], dict[str, object]]] = []
-        for normalized_alias, model_ids in self.catalog_alias_to_model_ids.items():
-            if len(model_ids) < 2 or query not in normalized_alias:
-                continue
-
-            remaining_model_ids = [model_id for model_id in model_ids if model_id not in excluded_ids]
-            if entry_predicate is not None:
-                remaining_model_ids = [
-                    model_id
-                    for model_id in remaining_model_ids
-                    if entry_predicate(self.catalog_by_model_id.get(model_id, {}))
-                ]
-            if len(remaining_model_ids) < 2:
-                continue
-
-            display_name = self.catalog_alias_display_names.get(normalized_alias, normalized_alias.title())
-            score = (
-                0 if normalized_alias == query else 1,
-                0 if normalized_alias.startswith(query) else 1,
-                len(remaining_model_ids),
-                len(display_name),
-            )
-            matches.append(
-                (
-                    score,
-                    {
-                        "alias": normalized_alias,
-                        "display_name": display_name,
-                        "model_ids": remaining_model_ids,
-                    },
-                )
-            )
-
-        matches.sort(key=lambda match: match[0])
-        return [entry for _, entry in matches[: max(1, int(limit))]]
-
-    def _search_identifier_catalog(self, raw_query: str, entries: list[dict[str, str]], limit: int = SEARCH_RESULT_LIMIT) -> list[dict[str, str]]:
-        query = str(raw_query or "").strip().lower()
-        if not query:
-            return []
-
-        matches: list[tuple[tuple[int, int, int], dict[str, str]]] = []
-        for entry in entries:
-            identifier = str(entry.get("identifier", "")).strip()
-            name = str(entry.get("name", "")).strip()
-            if not identifier or not name:
-                continue
-
-            identifier_lower = identifier.lower()
-            name_lower = name.lower()
-            if query not in identifier_lower and query not in name_lower:
-                continue
-
-            score = (
-                0 if name_lower.startswith(query) else 1,
-                0 if query in name_lower else 1,
-                len(name_lower),
-            )
-            matches.append((score, entry))
-
-        matches.sort(key=lambda match: match[0])
-        return [entry for _, entry in matches[: max(1, int(limit))]]
+    def _search_identifier_catalog(
+        self, raw_query: str, entries: list[dict[str, str]], limit: int = SEARCH_RESULT_LIMIT
+    ) -> list[dict[str, str]]:
+        return self._catalog_session.search_identifier_catalog(raw_query, entries, limit=limit)
 
     def _set_buy_rule_merchant_stock_targets(self, rule: BuyRule, merchant_stock_targets: list[MerchantStockTarget]) -> bool:
         normalized_targets = _normalize_merchant_stock_targets(merchant_stock_targets)

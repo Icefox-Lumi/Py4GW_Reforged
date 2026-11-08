@@ -4,6 +4,7 @@ import json
 import os
 import re
 from collections.abc import Callable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
@@ -15,6 +16,11 @@ from Py4GWCoreLib.enums_src.GameData_enums import AttributeNames
 from Py4GWCoreLib.enums_src.Item_enums import ItemType
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
 from Sources.marks_sources.mods_parser import ModifierIdentifier as LegacyModifierIdentifier
+from Sources.icefox.MerchantRules.catalog_search import RankedCatalogSearch
+from Sources.icefox.MerchantRules.configuration import SELL_KIND_ARMOR
+from Sources.icefox.MerchantRules.configuration import SELL_KIND_WEAPONS
+from Sources.icefox.MerchantRules.configuration import dedupe_model_ids as _session_dedupe_model_ids
+from Sources.icefox.MerchantRules.item_values import safe_int as _session_safe_int
 
 # The following helpers build the Merchant Rules runtime index from normalized rows.  The shipped
 # ``CATALOG`` above remains the canonical package data; this index is deliberately fed by this
@@ -1643,7 +1649,860 @@ format_weapon_mod_variant_label = _format_weapon_mod_variant_label
 
 CatalogLoader = MerchantRulesCatalogLoader
 
+
+def humanize_exact_item_type(
+    item_type_id: object,
+    raw_item_type: object = "",
+    *,
+    item_type_enum: type[ItemType],
+) -> str:
+    raw_name = str(raw_item_type or "").strip()
+    if not raw_name:
+        try:
+            raw_name = item_type_enum(_session_safe_int(item_type_id, -1)).name
+        except (TypeError, ValueError):
+            raw_name = f"Item type {_session_safe_int(item_type_id, -1)}"
+    return re.sub(r"\s+", " ", raw_name.replace("_", " ")).strip()
+
+
+class CatalogSession:
+    """Own one widget's published Catalog state, indexes and queries."""
+
+    def __init__(
+        self,
+        *,
+        ranker: RankedCatalogSearch,
+        item_type_enum: type[ItemType],
+        weapon_item_type_ids: set[int],
+        weapon_like_item_types: frozenset[ItemType],
+        armor_piece_types: frozenset[ItemType],
+        is_valid_exact_item_type_id: Callable[[object], bool],
+        is_weapon_catalog_item_type: Callable[[object], bool],
+        is_armor_catalog_item_type: Callable[[object], bool],
+        is_weapon_mod_catalog_name: Callable[[Callable[[], object]], bool],
+        is_armor_rune_catalog_name: Callable[[Callable[[], object]], bool],
+        is_armor_salvage_catalog_name: Callable[[Callable[[], object]], bool],
+        get_search_result_limit: Callable[[], int],
+    ) -> None:
+        self._ranked_catalog_search = ranker
+        self._item_type_enum = item_type_enum
+        self._weapon_item_type_ids = weapon_item_type_ids
+        self._weapon_like_item_types = weapon_like_item_types
+        self._armor_piece_types = armor_piece_types
+        self._is_valid_exact_item_type_id = is_valid_exact_item_type_id
+        self._is_weapon_catalog_item_type = is_weapon_catalog_item_type
+        self._is_armor_catalog_item_type = is_armor_catalog_item_type
+        self._is_weapon_mod_catalog_name = is_weapon_mod_catalog_name
+        self._is_armor_rune_catalog_name = is_armor_rune_catalog_name
+        self._is_armor_salvage_catalog_name = is_armor_salvage_catalog_name
+        self._get_search_result_limit = get_search_result_limit
+        self.catalog_loaded: bool = False
+        self.catalog_load_error: str = ""
+        self.catalog_by_model_id: dict[int, dict[str, object]] = {}
+        self.exact_catalog_by_item_key: dict[tuple[int, int], dict[str, object]] = {}
+        self.exact_catalog_untyped_by_model_id: dict[int, dict[str, object]] = {}
+        self._equipment_typed_entries_by_model_id: dict[int, tuple[dict[str, object], ...]] = {}
+        self._equipment_model_search_entry_cache: dict[tuple[int, str, bool, bool], dict[str, object]] = {}
+        self._catalog_generation: int = 0
+        self._catalog_building: bool = False
+        self.catalog_alias_to_model_ids: dict[str, list[int]] = {}
+        self.catalog_alias_display_names: dict[str, str] = {}
+        self.common_salvage_model_ids_by_item_key: dict[tuple[int, int], tuple[int, ...]] = {}
+        self.catalog_common_material_ids: list[int] = []
+        self.catalog_merchant_essentials: list[dict[str, object]] = []
+        self.catalog_rare_materials: list[dict[str, object]] = []
+        self.catalog_stats: dict[str, int | bool] = {}
+        self.weapon_mod_entries: list[dict[str, str]] = []
+        self.rune_entries: list[dict[str, str]] = []
+        self.armor_upgrade_entries: list[dict[str, str]] = []
+        self.weapon_mod_names: dict[str, str] = {}
+        self.weapon_mod_generic_names: dict[str, str] = {}
+        self.weapon_mod_variant_names: dict[str, str] = {}
+        self.rune_names: dict[str, str] = {}
+        self.rune_buy_entries: list[dict[str, object]] = []
+        self.rune_buy_entries_by_identifier: dict[str, dict[str, object]] = {}
+        self.rune_buy_identifier_by_exact_label: dict[str, str] = {}
+        self.rune_buy_entries_by_profession: dict[str, list[dict[str, object]]] = {}
+        self.rune_buy_professions: list[str] = []
+
+    @property
+    def equipment_typed_entries_by_model_id(self) -> dict[int, tuple[dict[str, object], ...]]:
+        return self._equipment_typed_entries_by_model_id
+
+    @equipment_typed_entries_by_model_id.setter
+    def equipment_typed_entries_by_model_id(self, value: dict[int, tuple[dict[str, object], ...]]) -> None:
+        self._equipment_typed_entries_by_model_id = value
+
+    @property
+    def equipment_model_search_entry_cache(self) -> dict[tuple[int, str, bool, bool], dict[str, object]]:
+        return self._equipment_model_search_entry_cache
+
+    @equipment_model_search_entry_cache.setter
+    def equipment_model_search_entry_cache(self, value: dict[tuple[int, str, bool, bool], dict[str, object]]) -> None:
+        self._equipment_model_search_entry_cache = value
+
+    @property
+    def catalog_generation(self) -> int:
+        return self._catalog_generation
+
+    @catalog_generation.setter
+    def catalog_generation(self, value: int) -> None:
+        self._catalog_generation = value
+
+    @property
+    def catalog_building(self) -> bool:
+        return self._catalog_building
+
+    @catalog_building.setter
+    def catalog_building(self, value: bool) -> None:
+        self._catalog_building = value
+
+    def load_modifier_catalogs(self, *, get_loader: Callable[[], CatalogLoader]) -> None:
+        result = get_loader().load_modifier_catalogs()
+        self.weapon_mod_entries = result.weapon_mod_entries
+        self.rune_entries = result.rune_entries
+        self.armor_upgrade_entries = result.armor_upgrade_entries
+        self.weapon_mod_names = result.weapon_mod_names
+        self.weapon_mod_generic_names = result.weapon_mod_generic_names
+        self.weapon_mod_variant_names = result.weapon_mod_variant_names
+        self.rune_names = result.rune_names
+
+    def load_rune_buy_catalog(self, *, get_loader: Callable[[], CatalogLoader]) -> None:
+        result = get_loader().load_rune_buy_catalog()
+        self.rune_buy_entries = result.rune_buy_entries
+        self.rune_buy_entries_by_identifier = result.rune_buy_entries_by_identifier
+        self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
+        self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
+        self.rune_buy_professions = result.rune_buy_professions
+
+    def get_catalog_alias_group_count(self) -> int:
+        return CatalogLoader.get_catalog_alias_group_count(self.catalog_alias_to_model_ids)
+
+    def clear_ranked_search_caches(self) -> None:
+        self._ranked_catalog_search.clear()
+
+    @staticmethod
+    def catalog_entry_search_signature(entry: dict[str, object]) -> tuple[object, ...]:
+        alias_labels = entry.get("alias_labels", {})
+        alias_signature: tuple[str, ...] = ()
+        if isinstance(alias_labels, dict):
+            alias_signature = tuple(sorted(str(raw_alias) for raw_alias in alias_labels))
+        return (
+            str(entry.get("name", "")).strip(),
+            max(0, _session_safe_int(entry.get("model_id", 0), 0)),
+            normalize_catalog_search_text(entry.get("item_type", "")),
+            normalize_catalog_search_text(entry.get("material_type", "")),
+            normalize_catalog_search_text(entry.get("category", "")),
+            normalize_catalog_search_text(entry.get("sub_category", "")),
+            _session_safe_int(entry.get("item_type_id", -1), -1),
+            alias_signature,
+        )
+
+    def capture_catalog_search_state(
+        self,
+    ) -> dict[int, tuple[dict[str, object], tuple[object, ...]]]:
+        return {
+            int(model_id): (entry, self.catalog_entry_search_signature(entry))
+            for model_id, entry in self.catalog_by_model_id.items()
+        }
+
+    def catalog_search_state_changed(
+        self,
+        previous_state: dict[int, tuple[dict[str, object], tuple[object, ...]]],
+    ) -> bool:
+        if len(previous_state) != len(self.catalog_by_model_id):
+            return True
+        for model_id, entry in self.catalog_by_model_id.items():
+            previous_entry_state = previous_state.get(int(model_id))
+            if previous_entry_state is None:
+                return True
+            previous_entry, previous_signature = previous_entry_state
+            if entry is not previous_entry or self.catalog_entry_search_signature(entry) != previous_signature:
+                return True
+        return False
+
+    def invalidate_ranked_search_caches_for_catalog_mutation(self) -> None:
+        """Invalidate ranked results after a published searchable-catalog mutation."""
+        if self._catalog_building:
+            # _load_catalog publishes one fresh result after all source loaders finish.
+            return
+        if self.catalog_loaded:
+            self._catalog_generation += 1
+        self.clear_ranked_search_caches()
+
+    def register_catalog_entry(
+        self,
+        model_id: int,
+        name: str,
+        item_type: str = "",
+        material_type: str = "",
+        source: str = "",
+        priority: int = 100,
+        extra: dict[str, object] | None = None,
+    ) -> None:
+        previous_state = self.capture_catalog_search_state()
+        try:
+            result = CatalogLoadResult(catalog_by_model_id=self.catalog_by_model_id)
+            CatalogLoader.register_catalog_entry(
+                result,
+                model_id,
+                name,
+                item_type,
+                material_type,
+                source,
+                priority,
+                extra,
+            )
+        finally:
+            if self.catalog_search_state_changed(previous_state):
+                self.invalidate_ranked_search_caches_for_catalog_mutation()
+
+    def load_catalog_group(
+        self,
+        entries: list[dict[str, object]],
+        source: str,
+        priority: int,
+        default_item_type: str = "",
+        default_material_type: str = "",
+        *,
+        get_loader: Callable[[], CatalogLoader],
+    ) -> list[dict[str, object]]:
+        previous_state = self.capture_catalog_search_state()
+        try:
+            return get_loader().load_catalog_group(
+                self.catalog_by_model_id,
+                entries,
+                source,
+                priority,
+                default_item_type,
+                default_material_type,
+            )
+        finally:
+            if self.catalog_search_state_changed(previous_state):
+                self.invalidate_ranked_search_caches_for_catalog_mutation()
+
+    def load_drop_data_catalog(self, *, get_loader: Callable[[], CatalogLoader]) -> int:
+        previous_state = self.capture_catalog_search_state()
+        try:
+            return get_loader().load_drop_data_catalog(self.catalog_by_model_id)
+        finally:
+            if self.catalog_search_state_changed(previous_state):
+                self.invalidate_ranked_search_caches_for_catalog_mutation()
+
+    def load_item_handling_catalog(self, *, get_loader: Callable[[], CatalogLoader]) -> int:
+        previous_state = self.capture_catalog_search_state()
+        try:
+            return get_loader().load_item_handling_catalog(self.catalog_by_model_id)
+        finally:
+            if self.catalog_search_state_changed(previous_state):
+                self.invalidate_ranked_search_caches_for_catalog_mutation()
+
+    def load_rune_model_catalog(self, *, get_loader: Callable[[], CatalogLoader]) -> int:
+        previous_state = self.capture_catalog_search_state()
+        try:
+            return get_loader().load_rune_model_catalog(self.catalog_by_model_id)
+        finally:
+            if self.catalog_search_state_changed(previous_state):
+                self.invalidate_ranked_search_caches_for_catalog_mutation()
+
+    def load_model_id_fallback_catalog(self, *, get_loader: Callable[[], CatalogLoader]) -> int:
+        previous_state = self.capture_catalog_search_state()
+        try:
+            return get_loader().load_model_id_fallback_catalog(self.catalog_by_model_id)
+        finally:
+            if self.catalog_search_state_changed(previous_state):
+                self.invalidate_ranked_search_caches_for_catalog_mutation()
+
+    def rebuild_catalog_alias_index(self, *, get_loader: Callable[[], CatalogLoader]) -> None:
+        previous_state = self.capture_catalog_search_state()
+        try:
+            aliases, display_names = get_loader().rebuild_catalog_alias_index(self.catalog_by_model_id)
+            self.catalog_alias_to_model_ids = aliases
+            self.catalog_alias_display_names = display_names
+        finally:
+            if self.catalog_search_state_changed(previous_state):
+                self.invalidate_ranked_search_caches_for_catalog_mutation()
+
+    def load_catalog(
+        self,
+        *,
+        get_loader: Callable[[], CatalogLoader],
+        invalidate_cleanup_filter_targets: Callable[[], None],
+        invalidate_cleanup_target_display: Callable[[], None],
+        report_warning: Callable[[Callable[[], str]], None],
+    ) -> None:
+        self._catalog_building = True
+        try:
+            self.catalog_loaded = False
+            self.clear_ranked_search_caches()
+            self.catalog_by_model_id = {}
+            self.exact_catalog_by_item_key = {}
+            self.exact_catalog_untyped_by_model_id = {}
+            self.catalog_alias_to_model_ids = {}
+            self.catalog_alias_display_names = {}
+            self.common_salvage_model_ids_by_item_key = {}
+            self.catalog_common_material_ids = []
+            self.catalog_merchant_essentials = []
+            self.catalog_rare_materials = []
+            self.catalog_stats = {}
+            self.catalog_load_error = ""
+
+            result: CatalogLoadResult = get_loader().load()
+            self.catalog_by_model_id = result.catalog_by_model_id
+            self.exact_catalog_by_item_key = result.exact_catalog_by_item_key
+            self.exact_catalog_untyped_by_model_id = result.exact_catalog_untyped_by_model_id
+            self.rebuild_equipment_typed_entry_index()
+            self.catalog_alias_to_model_ids = result.catalog_alias_to_model_ids
+            self.catalog_alias_display_names = result.catalog_alias_display_names
+            self.common_salvage_model_ids_by_item_key = result.common_salvage_model_ids_by_item_key
+            self.catalog_common_material_ids = result.catalog_common_material_ids
+            self.catalog_merchant_essentials = result.catalog_merchant_essentials
+            self.catalog_rare_materials = result.catalog_rare_materials
+            self.catalog_stats = result.catalog_stats
+            self.catalog_load_error = result.catalog_load_error
+            self.weapon_mod_entries = result.weapon_mod_entries
+            self.rune_entries = result.rune_entries
+            self.armor_upgrade_entries = result.armor_upgrade_entries
+            self.weapon_mod_names = result.weapon_mod_names
+            self.weapon_mod_generic_names = result.weapon_mod_generic_names
+            self.weapon_mod_variant_names = result.weapon_mod_variant_names
+            self.rune_names = result.rune_names
+            self.rune_buy_entries = result.rune_buy_entries
+            self.rune_buy_entries_by_identifier = result.rune_buy_entries_by_identifier
+            self.rune_buy_identifier_by_exact_label = result.rune_buy_identifier_by_exact_label
+            self.rune_buy_entries_by_profession = result.rune_buy_entries_by_profession
+            self.rune_buy_professions = result.rune_buy_professions
+            self._catalog_generation += 1
+            invalidate_cleanup_filter_targets()
+            invalidate_cleanup_target_display()
+            self.catalog_loaded = True
+            if self.catalog_load_error:
+                report_warning(lambda: self.catalog_load_error)
+        finally:
+            self._catalog_building = False
+            self.clear_ranked_search_caches()
+
+    def get_model_entry(self, model_id: int) -> dict[str, object] | None:
+        return self.catalog_by_model_id.get(max(0, _session_safe_int(model_id, 0)))
+
+    def get_model_name(self, model_id: int) -> str:
+        entry = self.get_model_entry(model_id)
+        if entry is None:
+            return ""
+        return str(entry.get("name", "")).strip()
+
+    def get_model_descriptor(self, model_id: int) -> str:
+        entry = self.get_model_entry(model_id)
+        if entry is None:
+            return ""
+        material_type = str(entry.get("material_type", "")).strip()
+        if material_type:
+            return material_type
+        return str(entry.get("item_type", "")).strip()
+
+    def get_model_item_type(self, model_id: int) -> str:
+        entry = self.get_model_entry(model_id)
+        if entry is None:
+            return ""
+        return str(entry.get("item_type", "")).strip()
+
+    def rebuild_equipment_typed_entry_index(self) -> None:
+        """Index the typed catalog rows used by Equipment's collision projections."""
+
+        self._equipment_model_search_entry_cache = {}
+        entries_by_model_id: dict[int, list[dict[str, object]]] = {}
+        for (raw_item_type_id, raw_model_id), entry in self.exact_catalog_by_item_key.items():
+            model_id = max(0, _session_safe_int(raw_model_id, 0))
+            item_type_id = _session_safe_int(raw_item_type_id, -1)
+            if model_id <= 0 or not self._is_valid_exact_item_type_id(item_type_id) or not isinstance(entry, dict):
+                continue
+            entries_by_model_id.setdefault(model_id, []).append(entry)
+        self._equipment_typed_entries_by_model_id = {
+            model_id: tuple(entries)
+            for model_id, entries in entries_by_model_id.items()
+        }
+
+    def get_equipment_typed_entries_for_model(self, model_id: object) -> list[dict[str, object]]:
+        safe_model_id = max(0, _session_safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return []
+
+        indexed_entries = getattr(self, "_equipment_typed_entries_by_model_id", {})
+        if not indexed_entries and self.exact_catalog_by_item_key:
+            self.rebuild_equipment_typed_entry_index()
+            indexed_entries = self._equipment_typed_entries_by_model_id
+        return list(indexed_entries.get(safe_model_id, ()))
+
+    def catalog_entry_matches_equipment_family(
+        self,
+        entry: dict[str, object],
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+    ) -> bool:
+        item_type_id = _session_safe_int(entry.get("item_type_id"), -1)
+        item_type: ItemType | None = None
+        if self._is_valid_exact_item_type_id(item_type_id):
+            try:
+                item_type = self._item_type_enum(item_type_id)
+            except ValueError:
+                item_type = None
+
+        if rule_kind == SELL_KIND_WEAPONS:
+            if item_type in self._weapon_like_item_types:
+                return True
+            if item_type == self._item_type_enum.Rune_Mod:
+                return include_standalone_weapon_mods and not self._is_armor_rune_catalog_name(
+                    lambda: entry.get("name", "")
+                )
+            item_type_name = str(entry.get("item_type", "")).strip()
+            if self._is_weapon_catalog_item_type(item_type_name):
+                return True
+            return (
+                include_standalone_weapon_mods
+                and item_type_name.casefold() == "rune_mod"
+                and self._is_weapon_mod_catalog_name(lambda: entry.get("name", ""))
+            )
+
+        if rule_kind == SELL_KIND_ARMOR:
+            if item_type in self._armor_piece_types:
+                return True
+            if item_type == self._item_type_enum.Rune_Mod:
+                return include_standalone_runes and self._is_armor_rune_catalog_name(lambda: entry.get("name", ""))
+            item_type_name = str(entry.get("item_type", "")).strip()
+            if self._is_armor_catalog_item_type(item_type_name):
+                return True
+            if item_type_name.casefold() == "salvage":
+                return self._is_armor_salvage_catalog_name(lambda: entry.get("name", ""))
+            return include_standalone_runes and (
+                item_type_name.casefold() == "rune_mod"
+                and self._is_armor_rune_catalog_name(lambda: entry.get("name", ""))
+            )
+
+        return False
+
+    def get_equipment_model_family_entries(
+        self,
+        model_id: object,
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+    ) -> list[dict[str, object]]:
+        typed_entries = self.get_equipment_typed_entries_for_model(model_id)
+        if typed_entries:
+            return [
+                entry
+                for entry in typed_entries
+                if self.catalog_entry_matches_equipment_family(
+                    entry,
+                    rule_kind,
+                    include_standalone_weapon_mods=include_standalone_weapon_mods,
+                    include_standalone_runes=include_standalone_runes,
+                )
+            ]
+
+        safe_model_id = max(0, _session_safe_int(model_id, 0))
+        flat_entry = self.get_model_entry(safe_model_id)
+        if flat_entry is None or not self.catalog_entry_matches_equipment_family(
+            flat_entry,
+            rule_kind,
+            include_standalone_weapon_mods=include_standalone_weapon_mods,
+            include_standalone_runes=include_standalone_runes,
+        ):
+            return []
+        return [flat_entry]
+
+    def get_equipment_catalog_type_label(self, entry: dict[str, object], rule_kind: str) -> str:
+        item_type_id = _session_safe_int(entry.get("item_type_id"), -1)
+        if item_type_id == int(self._item_type_enum.Rune_Mod):
+            return "Weapon Mod" if rule_kind == SELL_KIND_WEAPONS else "Armor Upgrade"
+        raw_item_type = str(entry.get("item_type", "")).strip()
+        if raw_item_type:
+            return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw_item_type.replace("_", " ")).strip()
+        if self._is_valid_exact_item_type_id(item_type_id):
+            return humanize_exact_item_type(item_type_id, item_type_enum=self._item_type_enum)
+        return "Item"
+
+    def get_equipment_model_search_entry(
+        self,
+        model_id: object,
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+    ) -> dict[str, object] | None:
+        safe_model_id = max(0, _session_safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return None
+        cache_key = (
+            safe_model_id,
+            str(rule_kind),
+            bool(include_standalone_weapon_mods),
+            bool(include_standalone_runes),
+        )
+        cached_entry = self._equipment_model_search_entry_cache.get(cache_key)
+        if cached_entry is not None:
+            return cached_entry
+        family_entries = self.get_equipment_model_family_entries(
+            safe_model_id,
+            rule_kind,
+            include_standalone_weapon_mods=include_standalone_weapon_mods,
+            include_standalone_runes=include_standalone_runes,
+        )
+        if not family_entries:
+            return None
+
+        def is_concrete_entry(entry: dict[str, object]) -> bool:
+            item_type_id = _session_safe_int(entry.get("item_type_id"), -1)
+            if rule_kind == SELL_KIND_WEAPONS:
+                return item_type_id in self._weapon_item_type_ids
+            return item_type_id in {
+                int(item_type.value)
+                for item_type in self._armor_piece_types
+                if item_type != self._item_type_enum.Salvage
+            }
+
+        preferred_entry = next((entry for entry in family_entries if is_concrete_entry(entry)), family_entries[0])
+        ordered_entries = [preferred_entry] + [entry for entry in family_entries if entry is not preferred_entry]
+        result = dict(preferred_entry)
+        names: list[str] = []
+        type_labels: list[str] = []
+        alias_labels: dict[str, str] = {}
+
+        def add_unique(values: list[str], raw_value: object) -> None:
+            value = str(raw_value or "").strip()
+            if value and value.casefold() not in {existing.casefold() for existing in values}:
+                values.append(value)
+
+        for entry in ordered_entries:
+            add_unique(names, entry.get("name", ""))
+            add_unique(type_labels, self.get_equipment_catalog_type_label(entry, rule_kind))
+            raw_alias_labels = entry.get("alias_labels", {})
+            if isinstance(raw_alias_labels, dict):
+                for raw_alias, display_name in raw_alias_labels.items():
+                    normalized_alias = normalize_catalog_search_text(raw_alias)
+                    if normalized_alias:
+                        alias_labels.setdefault(
+                            normalized_alias,
+                            str(display_name or raw_alias or "").strip() or normalized_alias.title(),
+                        )
+
+        for value in names + type_labels:
+            normalized_value = normalize_catalog_search_text(value)
+            if normalized_value:
+                alias_labels.setdefault(normalized_value, value)
+
+        is_group = len(family_entries) > 1
+        group_label = ""
+        if is_group:
+            name_label = " / ".join(names) or f"Model {safe_model_id}"
+            type_label = " + ".join(type_labels)
+            group_label = f"{name_label} ({safe_model_id})"
+            if type_label:
+                group_label = f"{group_label} - {type_label}"
+            normalized_group_label = normalize_catalog_search_text(group_label)
+            if normalized_group_label:
+                alias_labels.setdefault(normalized_group_label, group_label)
+
+        result["equipment_group"] = is_group
+        result["equipment_group_label"] = group_label
+        result["equipment_group_names"] = names
+        result["equipment_group_types"] = type_labels
+        result["equipment_family"] = rule_kind
+        result["alias_labels"] = alias_labels
+        result["equipment_search_text"] = normalize_catalog_search_text(
+            " ".join(
+                [
+                    str(safe_model_id),
+                    str(result.get("name", "")),
+                    str(result.get("item_type", "")),
+                    group_label,
+                    " ".join(names),
+                    " ".join(type_labels),
+                    " ".join(alias_labels.keys()),
+                ]
+            )
+        )
+        self._equipment_model_search_entry_cache[cache_key] = result
+        return result
+
+    def iter_exact_catalog_entries(self) -> Iterable[dict[str, object]]:
+        yield from self.exact_catalog_by_item_key.values()
+        yield from self.exact_catalog_untyped_by_model_id.values()
+
+    def get_exact_catalog_entry(self, item_type_id: object, model_id: object) -> dict[str, object] | None:
+        safe_model_id = max(0, _session_safe_int(model_id, 0))
+        safe_item_type_id = _session_safe_int(item_type_id, -1)
+        if safe_model_id <= 0 or safe_item_type_id < 0:
+            return None
+        return self.exact_catalog_by_item_key.get((safe_item_type_id, safe_model_id))
+
+    def get_exact_catalog_entry_key(self, entry: dict[str, object]) -> tuple[int | None, int] | None:
+        safe_model_id = max(0, _session_safe_int(entry.get("model_id", 0), 0))
+        if safe_model_id <= 0:
+            return None
+        raw_item_type_id = entry.get("item_type_id")
+        if raw_item_type_id is None:
+            return None, safe_model_id
+        safe_item_type_id = _session_safe_int(raw_item_type_id, -1)
+        if not self._is_valid_exact_item_type_id(safe_item_type_id):
+            return None
+        return safe_item_type_id, safe_model_id
+
+    def get_exact_catalog_entries_for_model(self, model_id: object) -> list[dict[str, object]]:
+        safe_model_id = max(0, _session_safe_int(model_id, 0))
+        if safe_model_id <= 0:
+            return []
+        typed_entries = [
+            entry
+            for (item_type_id, entry_model_id), entry in self.exact_catalog_by_item_key.items()
+            if int(entry_model_id) == safe_model_id and self._is_valid_exact_item_type_id(item_type_id)
+        ]
+        if typed_entries:
+            return typed_entries
+        fallback = self.exact_catalog_untyped_by_model_id.get(safe_model_id)
+        return [fallback] if isinstance(fallback, dict) else []
+
+    def search_exact_catalog(
+        self,
+        raw_query: str,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        return self._ranked_catalog_search.search_exact(
+            raw_query,
+            generation=self._catalog_generation,
+            typed_entries=self.exact_catalog_by_item_key,
+            untyped_entries=self.exact_catalog_untyped_by_model_id,
+            limit=limit,
+        )
+
+    def search_exact_catalog_with_predicate(
+        self,
+        raw_query: str,
+        *,
+        entry_predicate: Callable[[dict[str, object]], bool],
+        limit: int,
+    ) -> list[dict[str, object]]:
+        catalog_limit = max(max(1, len(self.exact_catalog_by_item_key) + len(self.exact_catalog_untyped_by_model_id)), limit * 4)
+        results = self.search_exact_catalog(raw_query, limit=catalog_limit)
+        filtered_results: list[dict[str, object]] = []
+        seen_keys: set[tuple[int | None, int]] = set()
+        for entry in results:
+            entry_key = self.get_exact_catalog_entry_key(entry)
+            if entry_key is None or entry_key in seen_keys:
+                continue
+            if not entry_predicate(entry):
+                continue
+            seen_keys.add(entry_key)
+            filtered_results.append(entry)
+            if len(filtered_results) >= max(1, int(limit)):
+                break
+        return filtered_results
+
+    def search_catalog(self, raw_query: str, limit: int) -> list[dict[str, object]]:
+        return self._ranked_catalog_search.search_flat(
+            raw_query,
+            generation=self._catalog_generation,
+            entries=self.catalog_by_model_id,
+            limit=limit,
+        )
+
+    def search_catalog_with_predicate(
+        self,
+        raw_query: str,
+        *,
+        entry_predicate: Callable[[dict[str, object]], bool],
+        limit: int,
+    ) -> list[dict[str, object]]:
+        catalog_limit = max(max(1, len(self.catalog_by_model_id)), limit * 4, self._get_search_result_limit() * 4)
+        results = self.search_catalog(raw_query, limit=catalog_limit)
+        filtered_results: list[dict[str, object]] = []
+        seen_model_ids: set[int] = set()
+        for entry in results:
+            model_id = max(0, _session_safe_int(entry.get("model_id", 0), 0))
+            if model_id <= 0 or model_id in seen_model_ids:
+                continue
+            if not entry_predicate(entry):
+                continue
+            seen_model_ids.add(model_id)
+            filtered_results.append(entry)
+            if len(filtered_results) >= max(1, int(limit)):
+                break
+        return filtered_results
+
+    def search_equipment_catalog(
+        self,
+        raw_query: str,
+        rule_kind: str,
+        *,
+        include_standalone_weapon_mods: bool = False,
+        include_standalone_runes: bool = False,
+        entry_predicate: Callable[[dict[str, object]], bool] | None = None,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        query = normalize_catalog_search_text(raw_query)
+        if not query or rule_kind not in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
+            return []
+
+        model_ids = {
+            max(0, _session_safe_int(model_id, 0))
+            for model_id in self.catalog_by_model_id
+            if max(0, _session_safe_int(model_id, 0)) > 0
+        }
+        model_ids.update(
+            max(0, _session_safe_int(model_id, 0))
+            for _item_type_id, model_id in self.exact_catalog_by_item_key
+            if max(0, _session_safe_int(model_id, 0)) > 0
+        )
+
+        matches: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        for model_id in model_ids:
+            entry = self.get_equipment_model_search_entry(
+                model_id,
+                rule_kind,
+                include_standalone_weapon_mods=include_standalone_weapon_mods,
+                include_standalone_runes=include_standalone_runes,
+            )
+            if entry is None:
+                continue
+            if entry_predicate is not None:
+                family_entries = self.get_equipment_model_family_entries(
+                    model_id,
+                    rule_kind,
+                    include_standalone_weapon_mods=include_standalone_weapon_mods,
+                    include_standalone_runes=include_standalone_runes,
+                )
+                if not any(entry_predicate(family_entry) for family_entry in family_entries):
+                    continue
+
+            name = str(entry.get("name", "")).strip()
+            normalized_search_text = str(entry.get("equipment_search_text", "")).strip()
+            if not name or query not in normalized_search_text:
+                continue
+
+            name_lower = normalize_catalog_search_text(name)
+            model_id_text = str(model_id)
+            item_type = normalize_catalog_search_text(entry.get("item_type", ""))
+            alias_labels = entry.get("alias_labels", {})
+            alias_matches = [
+                str(alias)
+                for alias in alias_labels
+                if query in str(alias or "")
+            ] if isinstance(alias_labels, dict) else []
+            exact_alias_hit = any(alias == query for alias in alias_matches)
+            prefix_alias_hit = any(alias.startswith(query) for alias in alias_matches)
+            group_search_values: list[str] = []
+            for key in ("equipment_group_names", "equipment_group_types"):
+                raw_values = entry.get(key, [])
+                if isinstance(raw_values, (list, tuple, set)):
+                    group_search_values.extend(str(value or "") for value in raw_values)
+            grouped_identity_hit = bool(
+                entry.get("equipment_group", False)
+                and query in normalize_catalog_search_text(" ".join(group_search_values))
+            )
+            display_label = str(entry.get("equipment_group_label", "")).strip() or name
+            score = (
+                0 if query == model_id_text else 1,
+                0 if grouped_identity_hit else 1,
+                0 if name_lower.startswith(query) else 1,
+                0 if query in name_lower else 1,
+                0 if exact_alias_hit else 1,
+                0 if prefix_alias_hit else 1,
+                0 if alias_matches else 1,
+                0 if query in item_type else 1,
+                len(display_label),
+                display_label.casefold(),
+                model_id,
+            )
+            matches.append((score, entry))
+
+        matches.sort(key=lambda match: match[0])
+        return [entry for _, entry in matches[: max(1, int(limit))]]
+
+    def search_catalog_alias_groups(
+        self,
+        raw_query: str,
+        *,
+        exclude_model_ids: list[int] | None = None,
+        entry_predicate: Callable[[dict[str, object]], bool] | None = None,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        query = normalize_catalog_search_text(raw_query)
+        if not query:
+            return []
+
+        excluded_ids = set(_session_dedupe_model_ids(exclude_model_ids or []))
+        matches: list[tuple[tuple[int, int, int, int], dict[str, object]]] = []
+        for normalized_alias, model_ids in self.catalog_alias_to_model_ids.items():
+            if len(model_ids) < 2 or query not in normalized_alias:
+                continue
+
+            remaining_model_ids = [model_id for model_id in model_ids if model_id not in excluded_ids]
+            if entry_predicate is not None:
+                remaining_model_ids = [
+                    model_id
+                    for model_id in remaining_model_ids
+                    if entry_predicate(self.catalog_by_model_id.get(model_id, {}))
+                ]
+            if len(remaining_model_ids) < 2:
+                continue
+
+            display_name = self.catalog_alias_display_names.get(normalized_alias, normalized_alias.title())
+            score = (
+                0 if normalized_alias == query else 1,
+                0 if normalized_alias.startswith(query) else 1,
+                len(remaining_model_ids),
+                len(display_name),
+            )
+            matches.append(
+                (
+                    score,
+                    {
+                        "alias": normalized_alias,
+                        "display_name": display_name,
+                        "model_ids": remaining_model_ids,
+                    },
+                )
+            )
+
+        matches.sort(key=lambda match: match[0])
+        return [entry for _, entry in matches[: max(1, int(limit))]]
+
+    def search_identifier_catalog(
+        self, raw_query: str, entries: list[dict[str, str]], limit: int
+    ) -> list[dict[str, str]]:
+        query = str(raw_query or "").strip().lower()
+        if not query:
+            return []
+
+        matches: list[tuple[tuple[int, int, int], dict[str, str]]] = []
+        for entry in entries:
+            identifier = str(entry.get("identifier", "")).strip()
+            name = str(entry.get("name", "")).strip()
+            if not identifier or not name:
+                continue
+
+            identifier_lower = identifier.lower()
+            name_lower = name.lower()
+            if query not in identifier_lower and query not in name_lower:
+                continue
+
+            score = (
+                0 if name_lower.startswith(query) else 1,
+                0 if query in name_lower else 1,
+                len(name_lower),
+            )
+            matches.append((score, entry))
+
+        matches.sort(key=lambda match: match[0])
+        return [entry for _, entry in matches[: max(1, int(limit))]]
+
+
 __all__ = [
+    'CatalogSession',
+    'humanize_exact_item_type',
     'CatalogLoadResult',
     'CatalogLoader',
     'MerchantRulesCatalogLoader',
