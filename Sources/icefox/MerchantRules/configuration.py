@@ -1386,6 +1386,77 @@ class RuleNormalizer:
             return MERCHANT_TYPE_SCROLL_TRADER
         return self._buy_kind_to_merchant_type.get(rule.kind, MERCHANT_TYPE_MERCHANT)
 
+    def materialize_profile_buy_rules(self, raw_entries: object) -> list[BuyRule]:
+        return [
+            BuyRule(
+                enabled=bool(entry.get("enabled", False)),
+                kind=str(entry.get("kind", BUY_KIND_MERCHANT_STOCK)),
+                merchant_type=str(entry.get("merchant_type", MERCHANT_TYPE_MERCHANT)),
+                model_id=_safe_int(entry.get("model_id", 0), 0),
+                target_count=_safe_int(entry.get("target_count", 0), 0),
+                max_per_run=_safe_int(entry.get("max_per_run", 0), 0),
+                merchant_stock_targets=normalize_merchant_stock_targets(coerce_list(entry.get("merchant_stock_targets", []))),
+                material_targets=normalize_material_targets(coerce_list(entry.get("material_targets", []))),
+                rune_targets=normalize_rune_trader_targets(coerce_list(entry.get("rune_targets", []))),
+                consumable_crafter_count_mode=normalize_consumable_crafter_count_mode(
+                    entry.get("consumable_crafter_count_mode", CONSUMABLE_CRAFTER_COUNT_MODE_CRAFT_AMOUNT)
+                ),
+                name=normalize_rule_name(entry.get("name", "")),
+            )
+            for entry in coerce_list(raw_entries)
+            if isinstance(entry, dict)
+        ]
+
+    def materialize_profile_sell_rules(self, raw_entries: object) -> list[SellRule]:
+        return self.normalize_sell_rules([
+            SellRule(
+                enabled=bool(entry.get("enabled", False)),
+                kind=str(entry.get("kind", SELL_KIND_EXPLICIT_MODELS)),
+                merchant_type=str(entry.get("merchant_type", MERCHANT_TYPE_MERCHANT)),
+                rule_id=normalize_rule_id(entry.get("rule_id", "")),
+                model_ids=[_safe_int(value, 0) for value in coerce_list(entry.get("model_ids", []))],
+                keep_count=_safe_int(entry.get("keep_count", 0), 0),
+                whitelist_targets=normalize_whitelist_targets(coerce_list(entry.get("whitelist_targets", []))),
+                rarities=normalize_rarity_flags(entry.get("rarities", {})),
+                blacklist_model_ids=[_safe_int(value, 0) for value in coerce_list(entry.get("blacklist_model_ids", []))],
+                blacklist_item_type_ids=[_safe_int(value, 0) for value in coerce_list(entry.get("blacklist_item_type_ids", []))],
+                all_weapons_min_requirement=self.normalize_all_weapons_requirement_range_from_payload(entry)[0],
+                all_weapons_max_requirement=self.normalize_all_weapons_requirement_range_from_payload(entry)[1],
+                all_weapons_perfect_stats_only=bool(entry.get("all_weapons_perfect_stats_only", False)),
+                protected_weapon_requirement_rules=self.normalize_weapon_requirement_rules(coerce_list(entry.get("protected_weapon_requirement_rules", []))),
+                protected_weapon_mod_identifiers=_dedupe_identifiers(coerce_list(entry.get("protected_weapon_mod_identifiers", []))),
+                protected_weapon_mod_thresholds=normalize_weapon_mod_threshold_rules(coerce_list(entry.get("protected_weapon_mod_thresholds", []))),
+                protected_weapon_mod_variants=self.normalize_weapon_mod_variant_rules(coerce_list(entry.get("protected_weapon_mod_variants", []))),
+                protected_weapon_mod_variant_thresholds=self.normalize_weapon_mod_variant_threshold_rules(coerce_list(entry.get("protected_weapon_mod_variant_thresholds", []))),
+                rune_sell_targets=normalize_rune_sell_targets(coerce_list(entry.get("rune_sell_targets", []))),
+                protected_rune_identifiers=_dedupe_identifiers(coerce_list(entry.get("protected_rune_identifiers", []))),
+                skip_customized=bool(entry.get("skip_customized", True)),
+                skip_unidentified=bool(entry.get("skip_unidentified", True)),
+                include_standalone_runes=bool(entry.get("include_standalone_runes", False)),
+                deposit_protected_matches=bool(entry.get("deposit_protected_matches", False)),
+                sell_from_xunlai=bool(entry.get("sell_from_xunlai", False)),
+                include_material_storage=bool(entry.get("include_material_storage", False)),
+                name=normalize_rule_name(entry.get("name", "")),
+            )
+            for entry in coerce_list(raw_entries)
+            if isinstance(entry, dict)
+        ])
+
+    def materialize_profile_destroy_rules(self, raw_entries: object) -> list[DestroyRule]:
+        return self.normalize_destroy_rules([
+            DestroyRule(
+                enabled=bool(entry.get("enabled", False)),
+                kind=str(entry.get("kind", DESTROY_KIND_EXPLICIT_MODELS)),
+                model_ids=[_safe_int(value, 0) for value in coerce_list(entry.get("model_ids", []))],
+                keep_count=_safe_int(entry.get("keep_count", 0), 0),
+                whitelist_targets=normalize_whitelist_targets(coerce_list(entry.get("whitelist_targets", []))),
+                rarities=normalize_rarity_flags(entry.get("rarities", {})),
+                name=normalize_rule_name(entry.get("name", "")),
+            )
+            for entry in coerce_list(raw_entries)
+            if isinstance(entry, dict)
+        ])
+
     def normalize_buy_rule(self, rule: BuyRule, *, has_crafter_recipe: Callable[[int], bool]) -> BuyRule | None:
         """Canonicalize a buy rule and discard kinds that cannot produce a valid target."""
 

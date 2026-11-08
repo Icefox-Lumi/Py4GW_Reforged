@@ -10358,71 +10358,9 @@ class MerchantRulesWidget:
         """Replace in-memory rules and settings from an already normalized profile payload."""
 
         previous_cleanup_targets = self.cleanup_targets
-        self.buy_rules = [
-            BuyRule(
-                enabled=bool(entry.get("enabled", False)),
-                kind=str(entry.get("kind", BUY_KIND_MERCHANT_STOCK)),
-                merchant_type=str(entry.get("merchant_type", MERCHANT_TYPE_MERCHANT)),
-                model_id=_safe_int(entry.get("model_id", 0), 0),
-                target_count=_safe_int(entry.get("target_count", 0), 0),
-                max_per_run=_safe_int(entry.get("max_per_run", 0), 0),
-                merchant_stock_targets=_normalize_merchant_stock_targets(_coerce_list(entry.get("merchant_stock_targets", []))),
-                material_targets=_normalize_material_targets(_coerce_list(entry.get("material_targets", []))),
-                rune_targets=_normalize_rune_trader_targets(_coerce_list(entry.get("rune_targets", []))),
-                consumable_crafter_count_mode=_normalize_consumable_crafter_count_mode(
-                    entry.get("consumable_crafter_count_mode", CONSUMABLE_CRAFTER_COUNT_MODE_CRAFT_AMOUNT)
-                ),
-                name=_normalize_rule_name(entry.get("name", "")),
-            )
-            for entry in _coerce_list(payload.get("buy_rules", []))
-            if isinstance(entry, dict)
-        ]
-        self.sell_rules = _normalize_sell_rules([
-            SellRule(
-                enabled=bool(entry.get("enabled", False)),
-                kind=str(entry.get("kind", SELL_KIND_EXPLICIT_MODELS)),
-                merchant_type=str(entry.get("merchant_type", MERCHANT_TYPE_MERCHANT)),
-                rule_id=_normalize_rule_id(entry.get("rule_id", "")),
-                model_ids=[_safe_int(value, 0) for value in _coerce_list(entry.get("model_ids", []))],
-                keep_count=_safe_int(entry.get("keep_count", 0), 0),
-                whitelist_targets=_normalize_whitelist_targets(_coerce_list(entry.get("whitelist_targets", []))),
-                rarities=_normalize_rarity_flags(entry.get("rarities", {})),
-                blacklist_model_ids=[_safe_int(value, 0) for value in _coerce_list(entry.get("blacklist_model_ids", []))],
-                blacklist_item_type_ids=[_safe_int(value, 0) for value in _coerce_list(entry.get("blacklist_item_type_ids", []))],
-                all_weapons_min_requirement=_normalize_all_weapons_requirement_range_from_payload(entry)[0],
-                all_weapons_max_requirement=_normalize_all_weapons_requirement_range_from_payload(entry)[1],
-                all_weapons_perfect_stats_only=bool(entry.get("all_weapons_perfect_stats_only", False)),
-                protected_weapon_requirement_rules=_normalize_weapon_requirement_rules(_coerce_list(entry.get("protected_weapon_requirement_rules", []))),
-                protected_weapon_mod_identifiers=_dedupe_identifiers(_coerce_list(entry.get("protected_weapon_mod_identifiers", []))),
-                protected_weapon_mod_thresholds=_normalize_weapon_mod_threshold_rules(_coerce_list(entry.get("protected_weapon_mod_thresholds", []))),
-                protected_weapon_mod_variants=_normalize_weapon_mod_variant_rules(_coerce_list(entry.get("protected_weapon_mod_variants", []))),
-                protected_weapon_mod_variant_thresholds=_normalize_weapon_mod_variant_threshold_rules(_coerce_list(entry.get("protected_weapon_mod_variant_thresholds", []))),
-                rune_sell_targets=_normalize_rune_sell_targets(_coerce_list(entry.get("rune_sell_targets", []))),
-                protected_rune_identifiers=_dedupe_identifiers(_coerce_list(entry.get("protected_rune_identifiers", []))),
-                skip_customized=bool(entry.get("skip_customized", True)),
-                skip_unidentified=bool(entry.get("skip_unidentified", True)),
-                include_standalone_runes=bool(entry.get("include_standalone_runes", False)),
-                deposit_protected_matches=bool(entry.get("deposit_protected_matches", False)),
-                sell_from_xunlai=bool(entry.get("sell_from_xunlai", False)),
-                include_material_storage=bool(entry.get("include_material_storage", False)),
-                name=_normalize_rule_name(entry.get("name", "")),
-            )
-            for entry in _coerce_list(payload.get("sell_rules", []))
-            if isinstance(entry, dict)
-        ])
-        self.destroy_rules = _normalize_destroy_rules([
-            DestroyRule(
-                enabled=bool(entry.get("enabled", False)),
-                kind=str(entry.get("kind", DESTROY_KIND_EXPLICIT_MODELS)),
-                model_ids=[_safe_int(value, 0) for value in _coerce_list(entry.get("model_ids", []))],
-                keep_count=_safe_int(entry.get("keep_count", 0), 0),
-                whitelist_targets=_normalize_whitelist_targets(_coerce_list(entry.get("whitelist_targets", []))),
-                rarities=_normalize_rarity_flags(entry.get("rarities", {})),
-                name=_normalize_rule_name(entry.get("name", "")),
-            )
-            for entry in _coerce_list(payload.get("destroy_rules", []))
-            if isinstance(entry, dict)
-        ])
+        self.buy_rules = _rule_normalizer.materialize_profile_buy_rules(payload.get("buy_rules", []))
+        self.sell_rules = _rule_normalizer.materialize_profile_sell_rules(payload.get("sell_rules", []))
+        self.destroy_rules = _rule_normalizer.materialize_profile_destroy_rules(payload.get("destroy_rules", []))
         self.identify_settings = _normalize_identify_settings(payload.get("identify_settings", {}))
         self.salvage_settings = _normalize_salvage_settings(payload.get("salvage_settings", {}))
         self.cleanup_targets = _normalize_cleanup_targets(_coerce_list(payload.get("cleanup_targets", [])))

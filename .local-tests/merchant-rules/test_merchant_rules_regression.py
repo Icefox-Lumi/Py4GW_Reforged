@@ -45177,6 +45177,858 @@ def _test_configuration_profile_lifecycle_owner(module: Any) -> None:
     preserved("rollback")
 
 
+def _cp4_expect(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f"CP4 {context}: expected {expected!r}; observed {actual!r}")
+
+
+def _cp4_binding_evidence(module: Any, *, require_materializers: bool = True) -> dict[str, Any]:
+    from hashlib import sha256
+
+    configuration = module._configuration
+    normalizer = module._rule_normalizer
+    expected_path = REPO_ROOT / "Sources" / "icefox" / "MerchantRules" / "configuration.py"
+    _expect(sys.modules["Sources.icefox.MerchantRules.configuration"] is configuration, "CP4 canonical module")
+    _cp4_expect(Path(configuration.__file__).resolve(), expected_path.resolve(), "configuration source")
+    _cp4_expect(Path(configuration.__spec__.origin).resolve(), expected_path.resolve(), "configuration spec")
+    _expect(type(normalizer) is configuration.RuleNormalizer, "CP4 exact normalizer owner")
+    _cp4_expect(
+        set(cast(dict[str, Any], vars(normalizer))), {"_" + name for name in _CP3_DEPENDENCY_NAMES}, "stored inputs"
+    )
+    for argument, source_name in _CP3_DEPENDENCY_NAMES.items():
+        _expect(getattr(normalizer, "_" + argument) is getattr(module, source_name), "CP4 dependency " + argument)
+    names = ["normalize_buy_rule", "normalize_sell_rule", "normalize_destroy_rule"]
+    if require_materializers:
+        names.extend("materialize_profile_" + kind + "_rules" for kind in ("buy", "sell", "destroy"))
+    for name in names:
+        method = getattr(normalizer, name)
+        descriptor = getattr(configuration.RuleNormalizer, name)
+        _expect(method.__self__ is normalizer and method.__func__ is descriptor, "CP4 bound method " + name)
+        _expect(descriptor.__globals__ is vars(configuration), "CP4 defining globals " + name)
+        _cp4_expect(descriptor.__module__, configuration.__name__, "defining module " + name)
+    for kind in ("sell", "destroy"):
+        alias = getattr(module, "_normalize_" + kind + "_rules")
+        descriptor = getattr(configuration.RuleNormalizer, "normalize_" + kind + "_rules")
+        _expect(alias.__self__ is normalizer and alias.__func__ is descriptor, "CP4 captured bulk alias " + kind)
+        _expect(descriptor.__globals__ is vars(configuration), "CP4 bulk globals " + kind)
+    for name in ("BuyRule", "SellRule", "DestroyRule"):
+        record = getattr(configuration, name)
+        _expect(getattr(module, name) is record, "CP4 record alias " + name)
+        _cp4_expect(record.__module__, configuration.__name__, "record defining module " + name)
+    return {
+        "configuration_path": str(expected_path.resolve()),
+        "configuration_sha256": sha256(expected_path.read_bytes()).hexdigest(),
+        "widget_path": str(Path(module.__file__).resolve()),
+        "widget_sha256": sha256(Path(module.__file__).read_bytes()).hexdigest(),
+        "canonical_module": configuration.__name__,
+        "stored_inputs": sorted(cast(dict[str, Any], vars(normalizer))),
+    }
+
+
+def _cp4_literal_buy() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "kind": "merchant_stock_target",
+        "merchant_type": "merchant",
+        "model_id": 0,
+        "target_count": 0,
+        "max_per_run": 0,
+        "merchant_stock_targets": [],
+        "material_targets": [],
+        "rune_targets": [],
+        "consumable_crafter_count_mode": "craft_amount",
+        "name": "",
+    }
+
+
+def _cp4_literal_sell() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "kind": "sell_explicit_models",
+        "merchant_type": "merchant",
+        "rule_id": "sell_09436000ab",
+        "model_ids": [],
+        "keep_count": 0,
+        "whitelist_targets": [],
+        "rarities": {"white": True, "blue": True, "purple": True, "gold": True, "green": False},
+        "blacklist_model_ids": [],
+        "blacklist_item_type_ids": [],
+        "all_weapons_min_requirement": 0,
+        "all_weapons_max_requirement": 0,
+        "all_weapons_perfect_stats_only": False,
+        "protected_weapon_requirement_rules": [],
+        "protected_weapon_mod_identifiers": [],
+        "protected_weapon_mod_thresholds": [],
+        "protected_weapon_mod_variants": [],
+        "protected_weapon_mod_variant_thresholds": [],
+        "rune_sell_targets": [],
+        "protected_rune_identifiers": [],
+        "skip_customized": True,
+        "skip_unidentified": True,
+        "include_standalone_runes": False,
+        "deposit_protected_matches": False,
+        "sell_from_xunlai": False,
+        "include_material_storage": False,
+        "name": "",
+    }
+
+
+def _cp4_literal_destroy() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "kind": "destroy_explicit_models",
+        "model_ids": [],
+        "keep_count": 0,
+        "whitelist_targets": [],
+        "rarities": {"white": True, "blue": True, "purple": True, "gold": True, "green": False},
+        "name": "",
+    }
+
+
+def _test_configuration_materializers_literals(module: Any) -> None:
+    configuration, normalizer = module._configuration, module._rule_normalizer
+    saved_clock = configuration.time
+    configuration.time = types.SimpleNamespace(time_ns=lambda: 123)
+    try:
+        expectations = {"buy": _cp4_literal_buy(), "sell": _cp4_literal_sell(), "destroy": _cp4_literal_destroy()}
+        for kind, expected in expectations.items():
+            method = getattr(normalizer, "materialize_profile_" + kind + "_rules")
+            empty_entry: dict[str, object] = {}
+            non_list_inputs: tuple[object, ...] = (None, "text", empty_entry, (entry for entry in [empty_entry]))
+            empty_results = [method(value) for value in non_list_inputs]
+            expected_empty: list[list[object]] = [[], [], [], []]
+            _cp4_expect(empty_results, expected_empty, kind + " non-list coercion")
+            _cp4_expect(len({id(value) for value in empty_results}), 4, kind + " fresh empty lists")
+            filtered_rows: list[object] = [None, 7, "x", {}]
+            for rows in (filtered_rows, tuple(filtered_rows)):
+                actual = method(rows)
+                _cp4_expect(len(actual), 1, kind + " filtering")
+                _expect(type(actual[0]) is getattr(configuration, kind.title() + "Rule"), "CP4 canonical " + kind)
+                _cp4_expect(module.asdict(actual[0]), expected, kind + " full default record")
+        buy = normalizer.materialize_profile_buy_rules(
+            [
+                {
+                    "enabled": 1,
+                    "kind": "legacy-custom",
+                    "merchant_type": "custom",
+                    "model_id": "0x11",
+                    "target_count": -3,
+                    "max_per_run": "2",
+                    "name": "  A\r\nB  ",
+                }
+            ]
+        )[0]
+        expected_buy = dict(
+            _cp4_literal_buy(),
+            enabled=True,
+            kind="legacy-custom",
+            merchant_type="custom",
+            model_id=17,
+            target_count=-3,
+            max_per_run=2,
+            name="A B",
+        )
+        _cp4_expect(module.asdict(buy), expected_buy, "buy construction stays raw")
+        row = {
+            "rule_id": " A !",
+            "model_ids": ["0x11", 17, -1],
+            "keep_count": 3,
+            "name": " A\n B ",
+            "rarities": {"green": 1},
+        }
+        sell = normalizer.materialize_profile_sell_rules([row])[0]
+        expected_sell = dict(
+            _cp4_literal_sell(),
+            rule_id="A",
+            model_ids=[17],
+            name="A B",
+            whitelist_targets=[{"model_id": 17, "keep_count": 3, "deposit_to_storage": False}],
+            rarities={"white": True, "blue": True, "purple": True, "gold": True, "green": True},
+        )
+        _cp4_expect(module.asdict(sell), expected_sell, "sell literal normalization")
+        destroy = normalizer.materialize_profile_destroy_rules([dict(row, rarities={"gold": False, "green": True})])[0]
+        expected_destroy = dict(
+            _cp4_literal_destroy(),
+            model_ids=[17],
+            name="A B",
+            whitelist_targets=[{"model_id": 17, "keep_count": 3, "deposit_to_storage": False}],
+            rarities={"white": True, "blue": True, "purple": True, "gold": False, "green": True},
+        )
+        _cp4_expect(module.asdict(destroy), expected_destroy, "destroy literal normalization")
+    finally:
+        configuration.time = saved_clock
+    _expect(configuration.time is saved_clock, "CP4 literal clock restored")
+
+
+def _test_configuration_materializers_identity_and_inputs(module: Any) -> None:
+    from copy import deepcopy
+
+    evidence = _cp4_binding_evidence(module)
+    configuration, normalizer = module._configuration, module._rule_normalizer
+    references = dict(cast(dict[str, Any], vars(normalizer)))
+    inputs = {
+        "buy": [{"merchant_stock_targets": [{"model_id": 17, "target_count": 3}]}],
+        "sell": [{"rule_id": "identity", "model_ids": [17], "rarities": {"green": True}}],
+        "destroy": [{"model_ids": [17], "rarities": {"green": True}}],
+    }
+    original_inputs = deepcopy(inputs)
+    for kind, rows in inputs.items():
+        method = getattr(normalizer, "materialize_profile_" + kind + "_rules")
+        first, second = method(rows), method(rows)
+        _expect(first is not second and first[0] is not second[0], "CP4 independent " + kind + " result/record")
+        second_before = module.asdict(second[0])
+        _expect(type(first[0]) is getattr(configuration, kind.title() + "Rule"), "CP4 exact record type")
+        for name, value in cast(dict[str, Any], vars(first[0])).items():
+            if isinstance(value, (list, dict, set)):
+                _expect(value is not getattr(second[0], name), "CP4 independent mutable field " + kind + "." + name)
+        target_name = "merchant_stock_targets" if kind == "buy" else "whitelist_targets"
+        first_targets, second_targets = getattr(first[0], target_name), getattr(second[0], target_name)
+        _expect(first_targets[0] is not second_targets[0], "CP4 independent target record " + kind)
+        first_targets[0].model_id = 999
+        first_targets.append(first_targets[0])
+        if kind != "buy":
+            first[0].rarities["green"] = False
+        _cp4_expect(module.asdict(second[0]), second_before, "second result survives mutation " + kind)
+        _cp4_expect(inputs, original_inputs, "input non-mutation " + kind)
+    _cp4_expect(set(cast(dict[str, Any], vars(normalizer))), set(references), "no new stored state")
+    for name, reference in references.items():
+        _expect(getattr(normalizer, name) is reference, "CP4 exact preserved input " + name)
+    widget = _make_widget(module)
+    callback = widget._profile_store._normalize_payload
+    _expect(callback.func.__self__ is normalizer, "CP4 ProfileStore normalizer owner")
+    _expect(callback.func.__func__ is configuration.RuleNormalizer.normalize_profile_payload, "CP4 direct callback")
+    _expect(callback.func.__func__.__globals__ is vars(configuration), "CP4 callback defining globals")
+    print("CP4 binding evidence: " + json.dumps(evidence, sort_keys=True))
+
+
+def _test_configuration_materializers_sell_id_seeds(module: Any) -> None:
+    configuration, normalizer = module._configuration, module._rule_normalizer
+    widget = _make_widget(module)
+    saved_clock = configuration.time
+    configuration.time = types.SimpleNamespace(time_ns=lambda: 123)
+    try:
+        rows = [{"kind": "sell_identified_nonsalvageable_golds"}, {"name": "Seed"}]
+        rules = normalizer.materialize_profile_sell_rules(rows)
+        _cp4_expect([rule.rule_id for rule in rules], ["sell_ae79ffb1fa"], "bulk input-position seed")
+        payload = _cp3_blank_payload(module)
+        payload["sell_rules"] = rows
+        normalized = widget._normalize_profile_payload(payload)
+        _cp4_expect(
+            [row["rule_id"] for row in normalized["sell_rules"]], ["sell_4395cc8571"], "payload accepted-count seed"
+        )
+        duplicate_rows = [{"rule_id": " same! "}, {"rule_id": "same", "name": "Second"}]
+        duplicates = normalizer.materialize_profile_sell_rules(duplicate_rows)
+        _cp4_expect([rule.rule_id for rule in duplicates], ["same", "sell_501ced1cdb"], "duplicate IDs")
+        late = module._normalize_sell_rules(duplicates)
+        _cp4_expect([rule.rule_id for rule in late], ["same", "sell_501ced1cdb"], "late pass IDs")
+        _expect(all(left is right for left, right in zip(late, duplicates)), "CP4 late pass record identity")
+        widget._apply_profile_payload({"buy_rules": [], "sell_rules": rows, "destroy_rules": []})
+        _cp4_expect([rule.rule_id for rule in widget.sell_rules], ["sell_ae79ffb1fa"], "real application seed")
+    finally:
+        configuration.time = saved_clock
+    _expect(configuration.time is saved_clock, "CP4 seed clock restored")
+
+
+def _test_configuration_materializers_evaluation_order(module: Any) -> None:
+    configuration, normalizer = module._configuration, module._rule_normalizer
+    expected_keys = {
+        "buy": [
+            "enabled",
+            "kind",
+            "merchant_type",
+            "model_id",
+            "target_count",
+            "max_per_run",
+            "merchant_stock_targets",
+            "material_targets",
+            "rune_targets",
+            "consumable_crafter_count_mode",
+            "name",
+        ],
+        "sell": [
+            "enabled",
+            "kind",
+            "merchant_type",
+            "rule_id",
+            "model_ids",
+            "keep_count",
+            "whitelist_targets",
+            "rarities",
+            "blacklist_model_ids",
+            "blacklist_item_type_ids",
+            "all_weapons_max_requirement",
+            "all_weapons_min_requirement",
+            "all_weapons_max_requirement",
+            "all_weapons_min_requirement",
+            "all_weapons_perfect_stats_only",
+            "protected_weapon_requirement_rules",
+            "protected_weapon_mod_identifiers",
+            "protected_weapon_mod_thresholds",
+            "protected_weapon_mod_variants",
+            "protected_weapon_mod_variant_thresholds",
+            "rune_sell_targets",
+            "protected_rune_identifiers",
+            "skip_customized",
+            "skip_unidentified",
+            "include_standalone_runes",
+            "deposit_protected_matches",
+            "sell_from_xunlai",
+            "include_material_storage",
+            "name",
+        ],
+        "destroy": ["enabled", "kind", "model_ids", "keep_count", "whitelist_targets", "rarities", "name"],
+    }
+    accesses: list[str] = []
+
+    class RecordingEntry(dict[str, Any]):
+        def get(self, key: str, default: Any = None) -> Any:
+            accesses.append(key)
+            return super().get(key, default)
+
+    for kind in expected_keys:
+        accesses.clear()
+        entry = RecordingEntry(rule_id="ordered")
+        getattr(normalizer, "materialize_profile_" + kind + "_rules")([entry])
+        _cp4_expect(accesses, expected_keys[kind], "constructor access order " + kind)
+    saved_requirement = normalizer._normalize_weapon_requirement_range
+    saved_sell = configuration.RuleNormalizer.normalize_sell_rule
+    calls: list[tuple[object, object]] = []
+    constructed_ranges: list[tuple[int, int]] = []
+
+    def requirement(first: object, second: object) -> tuple[int, int]:
+        calls.append((first, second))
+        if len(calls) == 1:
+            return 1, 8
+        if len(calls) == 2:
+            return 3, 9
+        return saved_requirement(first, second)
+
+    def inspect_constructed(owner: Any, rule: Any) -> Any:
+        _expect(owner is normalizer, "CP4 range observer owner")
+        constructed_ranges.append((rule.all_weapons_min_requirement, rule.all_weapons_max_requirement))
+        return saved_sell(owner, rule)
+
+    try:
+        normalizer._normalize_weapon_requirement_range = requirement
+        configuration.RuleNormalizer.normalize_sell_rule = inspect_constructed
+        result = normalizer.materialize_profile_sell_rules([{"rule_id": "range"}])
+        _cp4_expect(constructed_ranges, [(1, 9)], "two independent constructor range results")
+        _cp4_expect(calls, [(0, 0), (0, 0), (1, 9)], "range calls include initial normalization")
+        _cp4_expect(
+            (result[0].all_weapons_min_requirement, result[0].all_weapons_max_requirement), (1, 9), "final range"
+        )
+    finally:
+        normalizer._normalize_weapon_requirement_range = saved_requirement
+        configuration.RuleNormalizer.normalize_sell_rule = saved_sell
+    for fail_at in (1, 2):
+        accesses.clear()
+        failure = RuntimeError("CP4 requirement call " + str(fail_at))
+        count = 0
+
+        def fail_requirement(first: object, second: object) -> tuple[int, int]:
+            nonlocal count
+            count += 1
+            if count == fail_at:
+                raise failure
+            return saved_requirement(first, second)
+
+        try:
+            normalizer._normalize_weapon_requirement_range = fail_requirement
+            try:
+                normalizer.materialize_profile_sell_rules([RecordingEntry(rule_id="range-failure")])
+            except RuntimeError as exc:
+                _expect(exc is failure, "CP4 requirement exception identity")
+            else:
+                raise AssertionError("CP4 requirement sentinel was unreachable")
+            _cp4_expect(count, fail_at, "requirement failure count")
+            _cp4_expect(accesses, expected_keys["sell"][: 10 + 2 * fail_at], "no later keyword access")
+        finally:
+            normalizer._normalize_weapon_requirement_range = saved_requirement
+    accesses.clear()
+    failure = RuntimeError("CP4 bool conversion")
+
+    class BadBool:
+        def __bool__(self) -> bool:
+            raise failure
+
+    try:
+        normalizer.materialize_profile_buy_rules([RecordingEntry(), RecordingEntry(enabled=BadBool())])
+    except RuntimeError as exc:
+        _expect(exc is failure, "CP4 later-row conversion exception identity")
+    else:
+        raise AssertionError("CP4 later-row conversion sentinel was unreachable")
+    _cp4_expect(accesses, expected_keys["buy"] + ["enabled"], "earlier row complete and later row stops")
+    _expect(normalizer._normalize_weapon_requirement_range is saved_requirement, "CP4 requirement restored")
+    _expect(configuration.RuleNormalizer.normalize_sell_rule is saved_sell, "CP4 per-rule descriptor restored")
+
+
+def _cp4_application_observation(
+    module: Any, failure_stage: str = "", *, require_materializers: bool = True
+) -> dict[str, Any]:
+    _expect(failure_stage in ("", "buy", "sell", "destroy"), "CP4 known failure stage")
+    _cp4_binding_evidence(module, require_materializers=require_materializers)
+    configuration, normalizer = module._configuration, module._rule_normalizer
+    widget = _make_widget(module)
+    old_buy = [module.BuyRule(name="old buy")]
+    old_sell = [module.SellRule(rule_id="old", name="old sell")]
+    old_destroy = [module.DestroyRule(name="old destroy")]
+    widget.buy_rules, widget.sell_rules, widget.destroy_rules = old_buy, old_sell, old_destroy
+    widget._cleanup_targets_revision = 77
+    widget.outpost_search_text = "preserved search"
+    widget.rule_name_edit_text = "preserved editor"
+    widget.buy_model_search_cache["CP4"] = "preserved cache"
+    owner = widget._inventory_evidence
+    cache = owner._modifier_cache
+    entry = module.InventoryModifierCacheEntry((17,), module.ParsedInventoryModifiers())
+    cache[17] = entry
+    owner._cache_hits, owner._cache_misses, owner._last_inventory_snapshot_duration_ms = 7, 3, 42.5
+    saved_settings = {
+        name: getattr(widget, name)
+        for name in (
+            "identify_settings",
+            "salvage_settings",
+            "cleanup_targets",
+            "cleanup_blacklist_model_ids",
+            "cleanup_protection_sources",
+            "protected_item_model_ids",
+            "protected_item_targets",
+            "auto_cleanup_on_outpost_entry",
+            "target_carried_gold",
+            "favorite_outpost_ids",
+            "_cleanup_targets_revision",
+            "outpost_search_text",
+            "rule_name_edit_text",
+            "loaded_profile_provenance",
+            "active_profile_display_name",
+        )
+    }
+    saved_sell = configuration.RuleNormalizer.normalize_sell_rule
+    saved_destroy = configuration.RuleNormalizer.normalize_destroy_rule
+    saved_buy = configuration.RuleNormalizer.normalize_buy_rule
+    saved_requirement = normalizer._normalize_weapon_requirement_range
+    saved_dedupe = configuration.dedupe_model_ids
+    saved_clock = configuration.time
+    saved_invalidate = widget._invalidate_cleanup_target_display_cache
+    saved_ui = widget._refresh_rule_ui_caches
+    absent = object()
+    saved_invalidate_attribute = cast(dict[str, Any], vars(widget)).get(
+        "_invalidate_cleanup_target_display_cache", absent
+    )
+    saved_ui_attribute = cast(dict[str, Any], vars(widget)).get("_refresh_rule_ui_caches", absent)
+    events: list[str] = []
+    phases: list[dict[str, object]] = []
+    sell_records: list[Any] = []
+    destroy_records: list[Any] = []
+    range_calls: list[tuple[object, object]] = []
+    settings_reached = False
+    late_buy_reached = False
+    failure = RuntimeError("CP4 assignment " + failure_stage)
+    caught = False
+
+    class BadBool:
+        def __bool__(self) -> bool:
+            raise failure
+
+    class RecordingEntry(dict[str, Any]):
+        def __init__(self, kind: str, **values: Any) -> None:
+            super().__init__(values)
+            self.kind = kind
+
+        def get(self, key: str, default: Any = None) -> Any:
+            if key == "enabled":
+                events.append("construct:" + self.kind)
+                if self.kind == "sell":
+                    _expect(
+                        widget.buy_rules is not old_buy and widget.sell_rules is old_sell,
+                        "CP4 buy assignment precedes sell RHS",
+                    )
+                if self.kind == "destroy":
+                    _expect(
+                        widget.sell_rules is not old_sell and widget.destroy_rules is old_destroy,
+                        "CP4 sell assignment precedes destroy RHS",
+                    )
+            return super().get(key, default)
+
+    class RecordingPayload(dict[str, Any]):
+        def get(self, key: str, default: Any = None) -> Any:
+            nonlocal settings_reached
+            if key == "identify_settings":
+                settings_reached = True
+                events.append("settings")
+                _expect(widget.destroy_rules is not old_destroy, "CP4 destroy assignment precedes settings")
+            return super().get(key, default)
+
+    def record_sell(bound_owner: Any, rule: Any) -> Any:
+        _expect(
+            bound_owner is normalizer and type(rule) is configuration.SellRule,
+            "CP4 sell sentinel reaches actual owner/record",
+        )
+        phase = "late" if settings_reached else "initial"
+        _expect(
+            (phase == "initial" and widget.sell_rules is old_sell) or (phase == "late" and late_buy_reached),
+            "CP4 distinct sell phase",
+        )
+        events.append("normalize:sell:" + phase)
+        phases.append(
+            {
+                "kind": "sell",
+                "phase": phase,
+                "old_assignment": widget.sell_rules is old_sell,
+                "settings_reached": settings_reached,
+                "late_buy_reached": late_buy_reached,
+            }
+        )
+        sell_records.append(rule)
+        return saved_sell(bound_owner, rule)
+
+    def record_destroy(bound_owner: Any, rule: Any) -> Any:
+        _expect(
+            bound_owner is normalizer and type(rule) is configuration.DestroyRule,
+            "CP4 destroy sentinel reaches actual owner/record",
+        )
+        phase = "late" if settings_reached else "initial"
+        _expect(
+            (phase == "initial" and widget.destroy_rules is old_destroy) or (phase == "late" and late_buy_reached),
+            "CP4 distinct destroy phase",
+        )
+        events.append("normalize:destroy:" + phase)
+        phases.append(
+            {
+                "kind": "destroy",
+                "phase": phase,
+                "old_assignment": widget.destroy_rules is old_destroy,
+                "settings_reached": settings_reached,
+                "late_buy_reached": late_buy_reached,
+            }
+        )
+        destroy_records.append(rule)
+        return saved_destroy(bound_owner, rule)
+
+    def record_buy(bound_owner: Any, rule: Any, **kwargs: Any) -> Any:
+        nonlocal late_buy_reached
+        _expect(bound_owner is normalizer and settings_reached, "CP4 buy remains late")
+        late_buy_reached = True
+        events.append("normalize:buy:late")
+        return saved_buy(bound_owner, rule, **kwargs)
+
+    def requirement(first: object, second: object) -> tuple[int, int]:
+        range_calls.append((first, second))
+        if failure_stage == "sell" and len(range_calls) == 3:
+            _expect(events[-1] == "normalize:sell:initial", "CP4 failure inside initial sell normalizer")
+            raise failure
+        return saved_requirement(first, second)
+
+    def dedupe(values: Any) -> Any:
+        if failure_stage == "destroy" and values == [919]:
+            _expect(events[-1] == "normalize:destroy:initial", "CP4 failure inside initial destroy normalizer")
+            raise failure
+        return saved_dedupe(values)
+
+    def invalidate() -> None:
+        events.append("cache")
+        saved_invalidate()
+
+    def refresh_ui() -> None:
+        events.append("ui")
+        saved_ui()
+
+    # Assign dictionary keys after construction to keep the trace label distinct from the rule's kind.
+    buys = [RecordingEntry("buy", enabled=True, model_id="0x11", target_count=-3, max_per_run="2", name="  A\r\nB  ")]
+    buys[0]["kind"] = "legacy-custom"
+    buys[0]["merchant_type"] = "custom"
+    if failure_stage == "buy":
+        buys.append(RecordingEntry("buy", enabled=BadBool()))
+    payload = RecordingPayload(
+        buy_rules=buys,
+        sell_rules=[RecordingEntry("sell", rule_id="kept", model_ids=[17], keep_count=3, name=" Sell ")],
+        destroy_rules=[
+            RecordingEntry("destroy", model_ids=[919] if failure_stage == "destroy" else [18], keep_count=2)
+        ],
+    )
+    try:
+        configuration.RuleNormalizer.normalize_sell_rule = record_sell
+        configuration.RuleNormalizer.normalize_destroy_rule = record_destroy
+        configuration.RuleNormalizer.normalize_buy_rule = record_buy
+        normalizer._normalize_weapon_requirement_range = requirement
+        configuration.dedupe_model_ids = dedupe
+        configuration.time = types.SimpleNamespace(time_ns=lambda: 123)
+        widget._invalidate_cleanup_target_display_cache = invalidate
+        widget._refresh_rule_ui_caches = refresh_ui
+        _expect(saved_sell.__globals__["dedupe_model_ids"] is dedupe, "CP4 sell defining-global dependency")
+        _expect(saved_destroy.__globals__["dedupe_model_ids"] is dedupe, "CP4 destroy defining-global dependency")
+        _expect(normalizer._normalize_weapon_requirement_range is requirement, "CP4 stored requirement dependency")
+        try:
+            widget._apply_profile_payload(payload)
+        except RuntimeError as exc:
+            _expect(bool(failure_stage) and exc is failure, "CP4 exact original assignment exception")
+            caught = True
+        _cp4_expect(caught, bool(failure_stage), "assignment failure reached")
+        _expect(
+            widget._inventory_evidence is owner and owner._modifier_cache is cache and cache[17] is entry,
+            "CP4 owner/cache/entry lifetime",
+        )
+        _cp4_expect(
+            (owner.cache_hits, owner.cache_misses, owner.last_inventory_snapshot_duration_ms),
+            (7, 3, 42.5),
+            "inventory diagnostics lifetime",
+        )
+        old_assignments = [
+            widget.buy_rules is old_buy,
+            widget.sell_rules is old_sell,
+            widget.destroy_rules is old_destroy,
+        ]
+        expected_old = {
+            "": [False, False, False],
+            "buy": [True, True, True],
+            "sell": [False, True, True],
+            "destroy": [False, False, True],
+        }
+        _cp4_expect(old_assignments, expected_old[failure_stage], "partial assignment identities")
+        if failure_stage:
+            for name, value in saved_settings.items():
+                _expect(getattr(widget, name) is value, "CP4 later field unchanged " + name)
+            _cp4_expect(widget.buy_model_search_cache, {"CP4": "preserved cache"}, "no later UI cache effects")
+            _expect(
+                not settings_reached and not late_buy_reached and "cache" not in events and "ui" not in events,
+                "CP4 no later application effects",
+            )
+            if failure_stage != "buy":
+                _cp4_expect(
+                    (widget.buy_rules[0].kind, widget.buy_rules[0].target_count),
+                    ("legacy-custom", -3),
+                    "assigned buy still raw",
+                )
+            if failure_stage == "destroy":
+                _cp4_expect(
+                    (widget.sell_rules[0].rule_id, widget.sell_rules[0].keep_count),
+                    ("kept", 0),
+                    "assigned sell already normalized",
+                )
+        else:
+            _cp4_expect(
+                events,
+                [
+                    "construct:buy",
+                    "construct:sell",
+                    "normalize:sell:initial",
+                    "construct:destroy",
+                    "normalize:destroy:initial",
+                    "settings",
+                    "normalize:buy:late",
+                    "normalize:sell:late",
+                    "normalize:destroy:late",
+                    "cache",
+                    "ui",
+                ],
+                "full application phase trace",
+            )
+            _expect(
+                len(sell_records) == 2 and sell_records[0] is sell_records[1], "CP4 sell same record across both phases"
+            )
+            _expect(
+                len(destroy_records) == 2 and destroy_records[0] is destroy_records[1],
+                "CP4 destroy same record across both phases",
+            )
+            _cp4_expect(widget.buy_model_search_cache, {}, "real UI cache cleared")
+        observation = {
+            "stage": failure_stage or "success",
+            "events": list(events),
+            "phases": phases,
+            "range_calls": [list(value) for value in range_calls],
+            "old_assignments": old_assignments,
+            "buy": [module.asdict(rule) for rule in widget.buy_rules],
+            "sell": [module.asdict(rule) for rule in widget.sell_rules],
+            "destroy": [module.asdict(rule) for rule in widget.destroy_rules],
+            "settings_reached": settings_reached,
+            "late_buy_reached": late_buy_reached,
+            "exception": [type(failure).__name__, str(failure)] if caught else None,
+            "exception_identity": caught if failure_stage else None,
+            "owner_cache_entry_preserved": True,
+            "inventory_counters": [7, 3, 42.5],
+            "cleanup_revision": widget._cleanup_targets_revision,
+            "outpost_search": widget.outpost_search_text,
+            "rule_name_edit": widget.rule_name_edit_text,
+            "ui_cache": dict(widget.buy_model_search_cache),
+        }
+    finally:
+        configuration.RuleNormalizer.normalize_sell_rule = saved_sell
+        configuration.RuleNormalizer.normalize_destroy_rule = saved_destroy
+        configuration.RuleNormalizer.normalize_buy_rule = saved_buy
+        normalizer._normalize_weapon_requirement_range = saved_requirement
+        configuration.dedupe_model_ids = saved_dedupe
+        configuration.time = saved_clock
+        if saved_invalidate_attribute is absent:
+            del widget._invalidate_cleanup_target_display_cache
+        else:
+            widget._invalidate_cleanup_target_display_cache = saved_invalidate_attribute
+        if saved_ui_attribute is absent:
+            del widget._refresh_rule_ui_caches
+        else:
+            widget._refresh_rule_ui_caches = saved_ui_attribute
+    _expect(configuration.RuleNormalizer.normalize_sell_rule is saved_sell, "CP4 sell descriptor restored")
+    _expect(configuration.RuleNormalizer.normalize_destroy_rule is saved_destroy, "CP4 destroy descriptor restored")
+    _expect(configuration.RuleNormalizer.normalize_buy_rule is saved_buy, "CP4 buy descriptor restored")
+    _expect(normalizer._normalize_weapon_requirement_range is saved_requirement, "CP4 requirement reference restored")
+    _expect(
+        configuration.dedupe_model_ids is saved_dedupe and configuration.time is saved_clock,
+        "CP4 defining globals restored",
+    )
+    _expect(
+        cast(dict[str, Any], vars(widget)).get("_invalidate_cleanup_target_display_cache", absent)
+        is saved_invalidate_attribute,
+        "CP4 cache callback attribute restored",
+    )
+    _expect(
+        cast(dict[str, Any], vars(widget)).get("_refresh_rule_ui_caches", absent) is saved_ui_attribute,
+        "CP4 UI callback attribute restored",
+    )
+    restored_invalidate: Any = getattr(widget, "_invalidate_cleanup_target_display_cache")
+    restored_ui: Any = getattr(widget, "_refresh_rule_ui_caches")
+    _expect(
+        restored_invalidate.__self__ is widget and restored_invalidate.__func__ is saved_invalidate.__func__,
+        "CP4 cache callback descriptor restored",
+    )
+    _expect(
+        restored_ui.__self__ is widget and restored_ui.__func__ is saved_ui.__func__,
+        "CP4 UI callback descriptor restored",
+    )
+    return observation
+
+
+def _test_configuration_materializers_dispatch_and_passes(module: Any) -> None:
+    observation = _cp4_application_observation(module)
+    _cp4_expect(len(observation["range_calls"]), 4, "two constructor plus initial and late requirement calls")
+    print("CP4 dispatch evidence: " + json.dumps(observation, sort_keys=True))
+
+
+def _test_configuration_materializers_assignment_failures(module: Any) -> None:
+    observations = [_cp4_application_observation(module, stage) for stage in ("buy", "sell", "destroy")]
+    expected_events = {
+        "buy": ["construct:buy", "construct:buy"],
+        "sell": ["construct:buy", "construct:sell", "normalize:sell:initial"],
+        "destroy": [
+            "construct:buy",
+            "construct:sell",
+            "normalize:sell:initial",
+            "construct:destroy",
+            "normalize:destroy:initial",
+        ],
+    }
+    for observation in observations:
+        _cp4_expect(
+            observation["events"], expected_events[observation["stage"]], "failure phase trace " + observation["stage"]
+        )
+    print("CP4 assignment failure evidence: " + json.dumps(observations, sort_keys=True))
+
+
+def _test_configuration_materializers_completed_cp3_differential(module: Any) -> None:
+    from hashlib import sha256
+    from uuid import uuid4
+
+    raw_config_path = os.environ.get("MERCHANT_RULES_CP4_DIFFERENTIAL_CONFIG", "")
+    _expect(bool(raw_config_path), "CP4 differential requires an explicit pinned completed-CP3 oracle configuration")
+    config_path = Path(raw_config_path).resolve()
+    config_bytes = config_path.read_bytes()
+    config = json.loads(config_bytes.decode("utf-8-sig"))
+    evidence_root = Path(config["evidence_root"]).resolve()
+    _expect(
+        config_path.is_relative_to(evidence_root), "CP4 differential configuration must be retained inside evidence"
+    )
+
+    def pinned_file(record: dict[str, str]) -> Path:
+        path = Path(record["path"]).resolve()
+        _expect(path.is_relative_to(evidence_root), "CP4 differential input must remain inside its evidence root")
+        _expect(
+            sha256(path.read_bytes()).hexdigest() == record["sha256"],
+            "CP4 differential artifact identity: " + str(path),
+        )
+        return path
+
+    driver = pinned_file(config["driver"])
+    support = pinned_file(config["support"])
+    source_arguments: list[str] = []
+    for label in ("baseline", "candidate"):
+        source_root = Path(config[label]["root"]).resolve()
+        pins = Path(config[label]["pins"]).resolve()
+        _expect(
+            source_root.is_relative_to(evidence_root) and pins.is_relative_to(evidence_root),
+            "CP4 source/pin containment",
+        )
+        _expect(sha256(pins.read_bytes()).hexdigest() == config[label]["pins_sha256"], "CP4 source inventory identity")
+        source_arguments.extend(["--" + label + "-root", str(source_root), "--" + label + "-pins", str(pins)])
+    case_root = evidence_root / ("differential-case-" + str(uuid4()))
+    _expect(not case_root.exists(), "CP4 differential output must be uniquely owned")
+    case_root.mkdir()
+    run_root = case_root / "run"
+    command = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-S",
+        str(driver),
+        "--evidence-root",
+        str(evidence_root),
+        "--support-file",
+        str(support),
+        "--support-sha256",
+        config["support"]["sha256"],
+        "--run-root",
+        str(run_root),
+        *source_arguments,
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=case_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    launch = {
+        "command": command,
+        "returncode": completed.returncode,
+        "configuration_path": str(config_path),
+        "configuration_sha256": sha256(config_bytes).hexdigest(),
+        "driver_sha256": config["driver"]["sha256"],
+        "support_sha256": config["support"]["sha256"],
+    }
+    for filename, text in (
+        ("coordinator-launch.json", json.dumps(launch, sort_keys=True, indent=2) + "\n"),
+        ("coordinator-stdout.txt", completed.stdout),
+        ("coordinator-stderr.txt", completed.stderr),
+    ):
+        with (case_root / filename).open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+    _expect(
+        completed.returncode == 0,
+        "CP4 differential failed; retained evidence: " + str(case_root) + "\n" + completed.stderr,
+    )
+    report_path = run_root / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    _expect(report["passed"] is True, "CP4 differential report did not prove success")
+    _expect(
+        report["compared_scenarios"] == ["success", "buy", "sell", "destroy"], "CP4 differential scenario inventory"
+    )
+    _expect(
+        len(report["launches"]) == 2 and all(row["returncode"] == 0 for row in report["launches"]),
+        "CP4 actual fresh child launches",
+    )
+    _expect(config_path.read_bytes() == config_bytes, "CP4 differential configuration changed during execution")
+    pinned_file(config["driver"])
+    pinned_file(config["support"])
+    for label in ("baseline", "candidate"):
+        _expect(
+            sha256(Path(config[label]["pins"]).read_bytes()).hexdigest() == config[label]["pins_sha256"],
+            "CP4 source inventory changed during execution",
+        )
+    print(
+        "CP4 completed-CP3 differential evidence: "
+        + str(report_path)
+        + " SHA-256="
+        + sha256(report_path.read_bytes()).hexdigest()
+    )
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -45185,6 +46037,31 @@ def main() -> int:
         module = _load_merchant_rules_module(temp_root)
 
         tests = [
+            ("configuration_materializers_literals", lambda: _test_configuration_materializers_literals(module)),
+            (
+                "configuration_materializers_identity_and_inputs",
+                lambda: _test_configuration_materializers_identity_and_inputs(module),
+            ),
+            (
+                "configuration_materializers_sell_id_seeds",
+                lambda: _test_configuration_materializers_sell_id_seeds(module),
+            ),
+            (
+                "configuration_materializers_evaluation_order",
+                lambda: _test_configuration_materializers_evaluation_order(module),
+            ),
+            (
+                "configuration_materializers_dispatch_and_passes",
+                lambda: _test_configuration_materializers_dispatch_and_passes(module),
+            ),
+            (
+                "configuration_materializers_assignment_failures",
+                lambda: _test_configuration_materializers_assignment_failures(module),
+            ),
+            (
+                "configuration_materializers_completed_cp3_differential",
+                lambda: _test_configuration_materializers_completed_cp3_differential(module),
+            ),
             ("configuration_records_and_binding", lambda: _test_configuration_records_and_binding(module)),
             (
                 "configuration_constructor_is_reference_only",
