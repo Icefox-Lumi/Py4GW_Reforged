@@ -59,6 +59,7 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import SUPPO
 from Sources.icefox.MerchantRules import configuration as _configuration
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
+from Sources.icefox.MerchantRules import planning as _planning
 from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_DOC_NAME
@@ -333,15 +334,15 @@ CRAFTING_MATERIAL_MAX_STACK_SIZE = 250
 INVENTORY_BAG_IDS: tuple[int, ...] = (1, 2, 3, 4)
 HELPER_TOOLTIPS_ENABLED_DEFAULT = _configuration.HELPER_TOOLTIPS_ENABLED_DEFAULT
 
-MERCHANT_TYPE_TRAVEL = "travel"
+MERCHANT_TYPE_TRAVEL = _configuration.MERCHANT_TYPE_TRAVEL
 MERCHANT_TYPE_MERCHANT = _configuration.MERCHANT_TYPE_MERCHANT
 MERCHANT_TYPE_MATERIALS = _configuration.MERCHANT_TYPE_MATERIALS
 MERCHANT_TYPE_RUNE_TRADER = _configuration.MERCHANT_TYPE_RUNE_TRADER
 MERCHANT_TYPE_SCROLL_TRADER = _configuration.MERCHANT_TYPE_SCROLL_TRADER
 MERCHANT_TYPE_RARE_MATERIALS = "rare_material_trader"
 MERCHANT_TYPE_CONSUMABLE_CRAFTER = _configuration.MERCHANT_TYPE_CONSUMABLE_CRAFTER
-MERCHANT_TYPE_INVENTORY = "inventory"
-MERCHANT_TYPE_STORAGE = "storage"
+MERCHANT_TYPE_INVENTORY = _configuration.MERCHANT_TYPE_INVENTORY
+MERCHANT_TYPE_STORAGE = _configuration.MERCHANT_TYPE_STORAGE
 
 BUY_KIND_MERCHANT_STOCK = _configuration.BUY_KIND_MERCHANT_STOCK
 BUY_KIND_MATERIAL_TARGET = _configuration.BUY_KIND_MATERIAL_TARGET
@@ -579,7 +580,7 @@ SALVAGE_KIT_MODEL_LABELS: dict[int, str] = {
     int(ModelID.Perfect_Salvage_Kit.value): "Perfect Salvage Kit",
 }
 EMBARK_BEACH_MAP_ID = 857
-MATERIAL_BATCH_SIZE = 10
+MATERIAL_BATCH_SIZE = _configuration.MATERIAL_BATCH_SIZE
 MATERIAL_STORAGE_BAG_ID = 6
 MATERIAL_STORAGE_BAG_NAME = "MaterialStorage"
 MATERIAL_STORAGE_MAX_STACK_SIZE = 250
@@ -1567,11 +1568,11 @@ ACTION_TYPE_LABELS = {
     "withdraw": "Withdraw",
     "deposit": "Deposit",
 }
-STORAGE_PLAN_STATE_NOT_NEEDED = "not_needed"
-STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN = "needs_exact_scan"
-STORAGE_PLAN_STATE_EXACT_READY = "exact_ready"
-STORAGE_TRANSFER_WITHDRAW = "withdraw"
-STORAGE_TRANSFER_DEPOSIT = "deposit"
+STORAGE_PLAN_STATE_NOT_NEEDED = _planning.STORAGE_PLAN_STATE_NOT_NEEDED
+STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN = _planning.STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN
+STORAGE_PLAN_STATE_EXACT_READY = _planning.STORAGE_PLAN_STATE_EXACT_READY
+STORAGE_TRANSFER_WITHDRAW = _planning.STORAGE_TRANSFER_WITHDRAW
+STORAGE_TRANSFER_DEPOSIT = _planning.STORAGE_TRANSFER_DEPOSIT
 STOCK_KEY_MODEL_PREFIX = "model:"
 STOCK_KEY_IDENTIFIER_PREFIX = "identifier:"
 MERCHANT_RULES_OPCODE_RELOAD_PROFILE = 1
@@ -1581,9 +1582,9 @@ MERCHANT_RULES_OPCODE_STATUS_RESULT = 100
 MERCHANT_RULES_OPCODE_PREVIEW_RESULT = 101
 MERCHANT_RULES_OPCODE_EXECUTE_RESULT = 102
 MERCHANT_RULES_OPCODE_ERROR_RESULT = 199
-PLAN_STATE_WILL_EXECUTE = "will execute"
-PLAN_STATE_CONDITIONAL = "conditional"
-PLAN_STATE_SKIPPED = "skipped"
+PLAN_STATE_WILL_EXECUTE = _planning.PLAN_STATE_WILL_EXECUTE
+PLAN_STATE_CONDITIONAL = _planning.PLAN_STATE_CONDITIONAL
+PLAN_STATE_SKIPPED = _planning.PLAN_STATE_SKIPPED
 PREVIEW_STATUS_READY = "ready"
 PREVIEW_STATUS_LIVE_CHECK = "live_check"
 PREVIEW_STATUS_NEEDS_XUNLAI = "needs_xunlai"
@@ -2423,18 +2424,7 @@ _strict_exact_target_integer = _configuration.strict_exact_target_integer
 _normalize_protected_item_targets = _rule_normalizer.normalize_protected_item_targets
 
 
-@dataclass
-class ExecutionPlanEntry:
-    """Represent one user-visible planned, conditional, skipped, or blocked action."""
-
-    action_type: str
-    merchant_type: str
-    label: str
-    quantity: int
-    state: str
-    reason: str = ""
-    model_id: int = 0
-    status_hint: str = ""
+ExecutionPlanEntry = _planning.ExecutionPlanEntry
 
 
 PROTECTED_DESTROY_SKIP_REASON_MARKERS = (
@@ -2511,13 +2501,7 @@ class SalvageCandidate:
     reason: str = ""
 
 
-@dataclass(frozen=True)
-class PlannedSpecificUpgradeSalvageOwner:
-    """Snapshot the Specific-upgrade rule that owns one final execution-plan item."""
-
-    model_id: int
-    rule_index: int
-    rule_snapshot: SalvageRule
+PlannedSpecificUpgradeSalvageOwner = _planning.PlannedSpecificUpgradeSalvageOwner
 
 
 @dataclass(frozen=True)
@@ -3674,64 +3658,19 @@ class _MerchantRulesArmorUpgradeSalvageBridge:
         )
 
 
-@dataclass
-class PurchaseTargetCleanup:
-    """Describe post-purchase routing and whether completing a target requires storage access."""
-
-    rule_kind: str = ""
-    rule_index: int = -1
-    target_key: str = ""
-    target_count: int = 0
-    max_per_run: int = 0
-    after_purchase: str = AFTER_PURCHASE_KEEP
-    completes_target: bool = False
-    xunlai_involved: bool = False
+PurchaseTargetCleanup = _planning.PurchaseTargetCleanup
 
 
-@dataclass
-class PlannedMerchantBuy:
-    """Represent an exact quantity to buy from ordinary merchant stock."""
-
-    model_id: int
-    quantity: int
-    label: str
-    cleanup: PurchaseTargetCleanup = field(default_factory=PurchaseTargetCleanup)
-    check_xunlai_first: bool = False
+PlannedMerchantBuy = _planning.PlannedMerchantBuy
 
 
-@dataclass
-class PlannedMaterialBuy:
-    """Represent a batch-aware material purchase from a material trader."""
-
-    merchant_type: str
-    model_id: int
-    quantity: int
-    label: str
-    batch_size: int = 1
-    cleanup: PurchaseTargetCleanup = field(default_factory=PurchaseTargetCleanup)
+PlannedMaterialBuy = _planning.PlannedMaterialBuy
 
 
-@dataclass
-class PlannedMaterialSale:
-    """Represent a quoted material sale with both batch and underlying item quantities."""
-
-    merchant_type: str
-    item_id: int
-    model_id: int
-    label: str
-    batches_to_sell: int
-    quantity_to_sell: int
-    batch_size: int = MATERIAL_BATCH_SIZE
+PlannedMaterialSale = _planning.PlannedMaterialSale
 
 
-@dataclass
-class PlannedTraderSale:
-    """Represent one standalone item sale to a specialized trader."""
-
-    item_id: int
-    model_id: int
-    label: str
-    expected_rune_identifiers: tuple[str, ...] = field(default_factory=tuple)
+PlannedTraderSale = _planning.PlannedTraderSale
 
 
 @dataclass
@@ -3744,37 +3683,13 @@ class PlannedManualMerchantSale:
     quantity_to_sell: int = 0
 
 
-@dataclass
-class PlannedTraderBuy:
-    """Represent a quantity of a rune or upgrade identifier to buy from its trader."""
-
-    identifier: str
-    quantity: int
-    label: str
-    cleanup: PurchaseTargetCleanup = field(default_factory=PurchaseTargetCleanup)
+PlannedTraderBuy = _planning.PlannedTraderBuy
 
 
-@dataclass
-class PlannedScrollTraderBuy:
-    """Represent an exact-model scroll purchase and its post-purchase cleanup policy."""
-
-    model_id: int
-    quantity: int
-    label: str
-    cleanup: PurchaseTargetCleanup = field(default_factory=PurchaseTargetCleanup)
+PlannedScrollTraderBuy = _planning.PlannedScrollTraderBuy
 
 
-@dataclass
-class PlannedConsumableCraft:
-    """Represent a consumable craft quantity together with the resolved crafter destination."""
-
-    model_id: int
-    quantity: int
-    label: str
-    vendor_key: str
-    vendor_name: str
-    coords: tuple[float, float]
-    cleanup: PurchaseTargetCleanup = field(default_factory=PurchaseTargetCleanup)
+PlannedConsumableCraft = _planning.PlannedConsumableCraft
 
 
 @dataclass(frozen=True)
@@ -3925,22 +3840,7 @@ class StockLocationCounts:
     exact: bool = False
 
 
-@dataclass
-class PlannedStorageTransfer:
-    """Represent a bounded deposit or withdrawal selected during preview planning.
-
-    Execution treats the quantity as an upper bound and revalidates the live source,
-    destination capacity, and item safety before moving anything.
-    """
-
-    direction: str
-    key: str
-    label: str
-    item_id: int
-    quantity: int
-    model_id: int = 0
-    reason: str = ""
-    xunlai_first_merchant_stock: bool = False
+PlannedStorageTransfer = _planning.PlannedStorageTransfer
 
 
 @dataclass
@@ -3960,63 +3860,10 @@ class DestroySplitDestination:
     destination_item_id: int = 0
 
 
-@dataclass
-class PlannedDestroyAction:
-    """Describe a destructive action, including any split required to preserve a keep quantity."""
-
-    item_id: int
-    model_id: int
-    label: str
-    quantity_to_destroy: int
-    source_quantity: int
-    keep_quantity: int = 0
-    requires_split: bool = False
+PlannedDestroyAction = _planning.PlannedDestroyAction
 
 
-@dataclass
-class PlanResult:
-    """Aggregate the immutable intent produced by preview for later live execution.
-
-    The plan records inventory counts, service requirements, conditional storage state, and
-    phase-specific actions. It authorizes no operation by itself; execution rechecks current
-    inventory and protection state before consuming these entries.
-    """
-
-    entries: list[ExecutionPlanEntry] = field(default_factory=list)
-    supported_map: bool = False
-    supported_reason: str = ""
-    coords: dict[str, tuple[float, float] | None] = field(default_factory=dict)
-    travel_to_outpost_id: int = 0
-    travel_to_outpost_name: str = ""
-    multi_stop_route: bool = False
-    multi_stop_consumable_outpost_id: int = 0
-    multi_stop_consumable_outpost_name: str = ""
-    multi_stop_destination_outpost_id: int = 0
-    multi_stop_destination_outpost_name: str = ""
-    merchant_stock_buys: list[PlannedMerchantBuy] = field(default_factory=list)
-    material_buys: list[PlannedMaterialBuy] = field(default_factory=list)
-    rune_trader_buys: list[PlannedTraderBuy] = field(default_factory=list)
-    scroll_trader_buys: list[PlannedScrollTraderBuy] = field(default_factory=list)
-    consumable_crafter_buys: list[PlannedConsumableCraft] = field(default_factory=list)
-    material_sales: list[PlannedMaterialSale] = field(default_factory=list)
-    storage_transfers: list[PlannedStorageTransfer] = field(default_factory=list)
-    cleanup_transfers: list[PlannedStorageTransfer] = field(default_factory=list)
-    identify_claimed_item_ids: list[int] = field(default_factory=list)
-    identify_item_ids: list[int] = field(default_factory=list)
-    salvage_item_ids: list[int] = field(default_factory=list)
-    salvage_specific_upgrade_owners: dict[int, PlannedSpecificUpgradeSalvageOwner] = field(default_factory=dict)
-    destroy_actions: list[PlannedDestroyAction] = field(default_factory=list)
-    destroy_item_ids: list[int] = field(default_factory=list)
-    merchant_sell_item_ids: list[int] = field(default_factory=list)
-    rune_trader_sales: list[PlannedTraderSale] = field(default_factory=list)
-    storage_plan_state: str = STORAGE_PLAN_STATE_NOT_NEEDED
-    storage_exact: bool = False
-    inventory_snapshot_captured: bool = False
-    inventory_model_counts: dict[int, int] = field(default_factory=dict)
-    inventory_item_count: int = 0
-    xunlai_first_merchant_stock_targets: dict[int, str] = field(default_factory=dict)
-    xunlai_first_storage_scan_reliable: bool = True
-    has_actions: bool = False
+PlanResult = _planning.PlanResult
 
 
 @dataclass
@@ -18803,10 +18650,7 @@ class MerchantRulesWidget:
         )
 
     def _get_inventory_model_counts(self, items: list[InventoryItemInfo]) -> dict[int, int]:
-        counts: dict[int, int] = {}
-        for item in items:
-            counts[item.model_id] = counts.get(item.model_id, 0) + item.quantity
-        return counts
+        return _planning.get_inventory_model_counts(items)
 
     def _apply_max_per_run(self, needed: int, max_per_run: int) -> int:
         capped_needed = max(0, int(needed))
@@ -19707,96 +19551,18 @@ class MerchantRulesWidget:
         items: list[InventoryItemInfo],
         plan: PlanResult,
     ) -> list[InventoryItemInfo]:
-        remaining_items: list[InventoryItemInfo] = []
-        destroy_quantities_by_item_id: dict[int, int] = {}
-        material_sale_quantities_by_item_id: dict[int, int] = {}
-        identify_item_ids = {
-            int(item_id)
-            for item_id in [*plan.identify_claimed_item_ids, *plan.identify_item_ids]
-            if int(item_id) > 0
-        }
-        salvage_item_ids = {int(item_id) for item_id in plan.salvage_item_ids if int(item_id) > 0}
-        merchant_sell_item_ids = {int(item_id) for item_id in plan.merchant_sell_item_ids if int(item_id) > 0}
-        rune_sale_item_ids = {
-            int(trader_sale.item_id)
-            for trader_sale in plan.rune_trader_sales
-            if int(trader_sale.item_id) > 0
-        }
-
-        if plan.destroy_actions:
-            for destroy_action in plan.destroy_actions:
-                safe_item_id = int(destroy_action.item_id)
-                if safe_item_id <= 0:
-                    continue
-                destroy_quantities_by_item_id[safe_item_id] = (
-                    destroy_quantities_by_item_id.get(safe_item_id, 0)
-                    + max(0, int(destroy_action.quantity_to_destroy))
-                )
-        else:
-            for item_id in plan.destroy_item_ids:
-                safe_item_id = int(item_id)
-                if safe_item_id <= 0:
-                    continue
-                destroy_quantities_by_item_id[safe_item_id] = max(0, int(GLOBAL_CACHE.Item.Properties.GetQuantity(safe_item_id)))
-
-        for material_sale in plan.material_sales:
-            safe_item_id = int(material_sale.item_id)
-            if safe_item_id <= 0:
-                continue
-            material_sale_quantities_by_item_id[safe_item_id] = (
-                material_sale_quantities_by_item_id.get(safe_item_id, 0)
-                + max(0, int(material_sale.quantity_to_sell))
-            )
-
-        for item in items:
-            remaining_quantity = max(0, int(item.quantity))
-            if remaining_quantity <= 0:
-                continue
-
-            safe_item_id = int(item.item_id)
-            remaining_quantity -= max(0, int(destroy_quantities_by_item_id.get(safe_item_id, 0)))
-            remaining_quantity -= max(0, int(material_sale_quantities_by_item_id.get(safe_item_id, 0)))
-            if (
-                safe_item_id in identify_item_ids
-                or safe_item_id in salvage_item_ids
-                or safe_item_id in merchant_sell_item_ids
-                or safe_item_id in rune_sale_item_ids
-            ):
-                remaining_quantity = 0
-            if remaining_quantity <= 0:
-                continue
-            if remaining_quantity == int(item.quantity):
-                remaining_items.append(item)
-            else:
-                remaining_items.append(replace(item, quantity=remaining_quantity))
-
-        return remaining_items
+        return _planning.get_items_after_planned_pre_buy_actions(
+            items,
+            plan,
+            quantity_reader=lambda item_id: GLOBAL_CACHE.Item.Properties.GetQuantity(item_id),
+        )
 
     def _apply_planned_transfer_quantities(
         self,
         items: list[InventoryItemInfo],
         transfers: list[PlannedStorageTransfer],
     ) -> list[InventoryItemInfo]:
-        quantity_by_item_id: dict[int, int] = {}
-        for transfer in transfers:
-            safe_item_id = int(transfer.item_id)
-            if safe_item_id <= 0:
-                continue
-            quantity_by_item_id[safe_item_id] = (
-                quantity_by_item_id.get(safe_item_id, 0)
-                + max(0, int(transfer.quantity))
-            )
-
-        next_items: list[InventoryItemInfo] = []
-        for item in items:
-            remaining_quantity = max(0, int(item.quantity)) - max(0, int(quantity_by_item_id.get(int(item.item_id), 0)))
-            if remaining_quantity <= 0:
-                continue
-            if remaining_quantity == int(item.quantity):
-                next_items.append(item)
-            else:
-                next_items.append(replace(item, quantity=remaining_quantity))
-        return next_items
+        return _planning.apply_planned_transfer_quantities(items, transfers)
 
     def _build_cleanup_target_transfers(
         self,
@@ -21027,59 +20793,7 @@ class MerchantRulesWidget:
             )
 
     def _build_simulated_model_counts(self, items: list[InventoryItemInfo], plan: PlanResult) -> dict[int, int]:
-        simulated_counts = self._get_inventory_model_counts(items)
-        item_by_id = {
-            int(item.item_id): item
-            for item in items
-            if int(item.item_id) > 0
-        }
-
-        def subtract_model_quantity(model_id: int, quantity: int):
-            current_quantity = max(0, int(simulated_counts.get(model_id, 0)))
-            next_quantity = max(0, current_quantity - max(0, int(quantity)))
-            if next_quantity > 0:
-                simulated_counts[model_id] = next_quantity
-            else:
-                simulated_counts.pop(model_id, None)
-
-        material_sale_quantities_by_item_id: dict[int, int] = {}
-
-        for item_id in plan.salvage_item_ids:
-            item = item_by_id.get(int(item_id))
-            if item is not None:
-                subtract_model_quantity(item.model_id, item.quantity)
-
-        if plan.destroy_actions:
-            for destroy_action in plan.destroy_actions:
-                subtract_model_quantity(destroy_action.model_id, destroy_action.quantity_to_destroy)
-        else:
-            for item_id in plan.destroy_item_ids:
-                item = item_by_id.get(int(item_id))
-                if item is not None:
-                    subtract_model_quantity(item.model_id, item.quantity)
-
-        for material_sale in plan.material_sales:
-            safe_item_id = int(material_sale.item_id)
-            material_sale_quantities_by_item_id[safe_item_id] = (
-                max(0, int(material_sale_quantities_by_item_id.get(safe_item_id, 0)))
-                + max(0, int(material_sale.quantity_to_sell))
-            )
-            subtract_model_quantity(material_sale.model_id, material_sale.quantity_to_sell)
-
-        for item_id in plan.merchant_sell_item_ids:
-            item = item_by_id.get(int(item_id))
-            if item is not None:
-                material_sold_quantity = max(0, int(material_sale_quantities_by_item_id.get(int(item_id), 0)))
-                merchant_quantity = max(0, int(item.quantity) - material_sold_quantity)
-                if merchant_quantity > 0:
-                    subtract_model_quantity(item.model_id, merchant_quantity)
-
-        for trader_sale in plan.rune_trader_sales:
-            item = item_by_id.get(int(trader_sale.item_id))
-            if item is not None:
-                subtract_model_quantity(item.model_id, item.quantity)
-
-        return simulated_counts
+        return _planning.build_simulated_model_counts(items, plan)
 
     def _plan_buy_actions(
         self,
@@ -31351,12 +31065,12 @@ class MerchantRulesWidget:
         return next_active_kind
 
     def _is_actionable_preview_entry(self, entry: ExecutionPlanEntry) -> bool:
-        return str(entry.state) in (PLAN_STATE_WILL_EXECUTE, PLAN_STATE_CONDITIONAL)
+        return _planning.is_actionable_preview_entry(entry)
 
-    def _split_preview_entries(self, entries: list[ExecutionPlanEntry]) -> tuple[list[ExecutionPlanEntry], list[ExecutionPlanEntry]]:
-        actionable = [entry for entry in entries if self._is_actionable_preview_entry(entry)]
-        skipped = [entry for entry in entries if not self._is_actionable_preview_entry(entry)]
-        return actionable, skipped
+    def _split_preview_entries(
+        self, entries: list[ExecutionPlanEntry]
+    ) -> tuple[list[ExecutionPlanEntry], list[ExecutionPlanEntry]]:
+        return _planning.split_preview_entries(entries)
 
     def _get_preview_here_availability(self) -> dict[str, bool]:
         try:
@@ -31390,15 +31104,7 @@ class MerchantRulesWidget:
         plan: PlanResult | None = None,
     ) -> bool:
         safe_plan = plan if plan is not None else self.preview_plan
-        merchant_type = str(entry.merchant_type)
-        action_type = str(entry.action_type)
-        if merchant_type == MERCHANT_TYPE_STORAGE:
-            return True
-        if merchant_type == MERCHANT_TYPE_RUNE_TRADER and action_type == "buy":
-            return self._plan_needs_exact_storage_scan(safe_plan)
-        if merchant_type == MERCHANT_TYPE_CONSUMABLE_CRAFTER and action_type == "buy":
-            return self._plan_needs_exact_storage_scan(safe_plan)
-        return False
+        return _planning.preview_entry_needs_local_storage_access(entry, plan=safe_plan)
 
     def _is_preview_entry_available_here(
         self,
@@ -31409,19 +31115,11 @@ class MerchantRulesWidget:
     ) -> bool:
         safe_plan = plan if plan is not None else self.preview_plan
         local_availability = availability_here if availability_here is not None else self._get_preview_here_availability()
-        merchant_type = str(entry.merchant_type)
-        action_type = str(entry.action_type)
-        if merchant_type == MERCHANT_TYPE_TRAVEL or action_type == "travel":
-            return False
-        if merchant_type == MERCHANT_TYPE_INVENTORY:
-            base_available = True
-        else:
-            base_available = bool(local_availability.get(merchant_type, False))
-        if not base_available:
-            return False
-        if self._preview_entry_needs_local_storage_access(entry, plan=safe_plan):
-            return bool(local_availability.get(MERCHANT_TYPE_STORAGE, False))
-        return True
+        return _planning.is_preview_entry_available_here(
+            entry,
+            availability_here=local_availability,
+            plan=safe_plan,
+        )
 
     def _get_preview_unavailable_here_reason(
         self,
@@ -31456,39 +31154,22 @@ class MerchantRulesWidget:
         availability_here: dict[str, bool] | None = None,
     ) -> tuple[int, int]:
         local_availability = availability_here if availability_here is not None else self._get_preview_here_availability()
-        actionable_entries, skipped_entries = self._split_preview_entries(plan.entries)
-        actionable_here_count = sum(
-            1
-            for entry in actionable_entries
-            if self._is_preview_entry_available_here(
-                entry,
-                availability_here=local_availability,
-                plan=plan,
-            )
-        )
-        skipped_here_count = len(skipped_entries) + max(0, len(actionable_entries) - actionable_here_count)
-        return actionable_here_count, skipped_here_count
+        return _planning.get_locally_actionable_preview_counts(plan, availability_here=local_availability)
 
     def _get_preview_entry_counts(self, entries: list[ExecutionPlanEntry]) -> tuple[int, int, int]:
-        direct_count = sum(1 for entry in entries if str(entry.state) == PLAN_STATE_WILL_EXECUTE)
-        conditional_count = sum(1 for entry in entries if str(entry.state) == PLAN_STATE_CONDITIONAL)
-        skipped_count = len(entries) - direct_count - conditional_count
-        return direct_count, conditional_count, max(0, skipped_count)
+        return _planning.get_preview_entry_counts(entries)
 
     def _plan_has_local_destroy_actions(self, plan: PlanResult) -> bool:
-        return bool(plan.destroy_actions or plan.destroy_item_ids)
+        return _planning.plan_has_local_destroy_actions(plan)
 
     def _plan_has_local_identify_actions(self, plan: PlanResult) -> bool:
-        return bool(plan.identify_item_ids)
+        return _planning.plan_has_local_identify_actions(plan)
 
     def _plan_has_local_salvage_actions(self, plan: PlanResult) -> bool:
-        return bool(plan.salvage_item_ids)
+        return _planning.plan_has_local_salvage_actions(plan)
 
     def _plan_has_local_storage_actions(self, plan: PlanResult) -> bool:
-        return bool(
-            plan.cleanup_transfers
-            or any(str(transfer.direction) == STORAGE_TRANSFER_DEPOSIT for transfer in plan.storage_transfers)
-        )
+        return _planning.plan_has_local_storage_actions(plan)
 
     def _get_plan_local_action_labels(self, plan: PlanResult) -> list[str]:
         labels: list[str] = []
@@ -31503,43 +31184,19 @@ class MerchantRulesWidget:
         return labels
 
     def _plan_has_conditional_storage_actions(self, plan: PlanResult) -> bool:
-        return any(
-            str(entry.action_type) in {"deposit", "withdraw"}
-            and str(entry.state) == PLAN_STATE_CONDITIONAL
-            for entry in plan.entries
-        )
+        return _planning.plan_has_conditional_storage_actions(plan)
 
     def _plan_has_direct_storage_actions(self, plan: PlanResult) -> bool:
-        return any(
-            str(entry.action_type) in {"deposit", "withdraw"}
-            and str(entry.state) == PLAN_STATE_WILL_EXECUTE
-            for entry in plan.entries
-        )
+        return _planning.plan_has_direct_storage_actions(plan)
 
     def _plan_has_conditional_cleanup_actions(self, plan: PlanResult) -> bool:
-        return any(
-            str(entry.action_type) == "deposit"
-            and str(entry.merchant_type) == MERCHANT_TYPE_STORAGE
-            and str(entry.state) == PLAN_STATE_CONDITIONAL
-            for entry in plan.entries
-        )
+        return _planning.plan_has_conditional_cleanup_actions(plan)
 
     def _plan_has_direct_cleanup_actions(self, plan: PlanResult) -> bool:
-        return any(
-            str(entry.action_type) == "deposit"
-            and str(entry.merchant_type) == MERCHANT_TYPE_STORAGE
-            and str(entry.state) == PLAN_STATE_WILL_EXECUTE
-            for entry in plan.entries
-        )
+        return _planning.plan_has_direct_cleanup_actions(plan)
 
     def _plan_needs_exact_storage_scan(self, plan: PlanResult) -> bool:
-        if str(plan.storage_plan_state) != STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN:
-            return False
-        return any(
-            str(entry.merchant_type) in (MERCHANT_TYPE_RUNE_TRADER, MERCHANT_TYPE_CONSUMABLE_CRAFTER, MERCHANT_TYPE_STORAGE)
-            and str(entry.state) == PLAN_STATE_CONDITIONAL
-            for entry in plan.entries
-        )
+        return _planning.plan_needs_exact_storage_scan(plan)
 
     def _can_run_preview_exact_storage_scan(self) -> bool:
         return bool(

@@ -49362,6 +49362,2030 @@ def _test_cp6_service_completed_cp5_differential() -> None:
     )
 
 
+if TYPE_CHECKING:
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+    from Sources.icefox.MerchantRules.planning import ExecutionPlanEntry
+    from Sources.icefox.MerchantRules.planning import PlannedStorageTransfer
+    from Sources.icefox.MerchantRules.planning import PlanResult
+type _CP7Trace = Callable[[types.FrameType, str, object], _CP7Trace | None]
+
+
+@runtime_checkable
+class _CP7Widget(Protocol):
+    preview_plan: PlanResult
+    execute_reservation_scope_active: bool
+    execute_reserved_item_ids: set[int]
+    execute_xunlai_first_keep_by_model: dict[int, int]
+
+    def _get_inventory_model_counts(self, items: list[InventoryItemInfo]) -> dict[int, int]: ...
+
+    def _get_items_after_planned_pre_buy_actions(
+        self, items: list[InventoryItemInfo], plan: PlanResult
+    ) -> list[InventoryItemInfo]: ...
+
+    def _apply_planned_transfer_quantities(
+        self, items: list[InventoryItemInfo], transfers: list[PlannedStorageTransfer]
+    ) -> list[InventoryItemInfo]: ...
+
+    def _build_simulated_model_counts(self, items: list[InventoryItemInfo], plan: PlanResult) -> dict[int, int]: ...
+
+    def _split_preview_entries(
+        self, entries: list[ExecutionPlanEntry]
+    ) -> tuple[list[ExecutionPlanEntry], list[ExecutionPlanEntry]]: ...
+
+    def _get_preview_entry_counts(self, entries: list[ExecutionPlanEntry]) -> tuple[int, int, int]: ...
+
+    def _get_locally_actionable_preview_counts(
+        self, plan: PlanResult, *, availability_here: dict[str, bool] | None = None
+    ) -> tuple[int, int]: ...
+
+    def _is_preview_entry_available_here(
+        self,
+        entry: ExecutionPlanEntry,
+        *,
+        availability_here: dict[str, bool] | None = None,
+        plan: PlanResult | None = None,
+    ) -> bool: ...
+
+    def _build_consumable_crafter_multi_stop_preview(self, destination_outpost_id: int) -> PlanResult: ...
+
+    def _apply_projected_preview_post_processing(self, plan: PlanResult, target_outpost_name: str) -> None: ...
+
+    def _begin_execute_reservation_scope(self) -> bool: ...
+
+    def _end_execute_reservation_scope(self, owned_scope: bool) -> None: ...
+
+    def _reserve_execute_item_ids(self, item_ids: list[int]) -> None: ...
+
+    def _build_plan(
+        self, *, supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None
+    ) -> PlanResult: ...
+
+    def build_remote_preview_result(self) -> dict[str, object]: ...
+
+    def _refresh_preview_from_service_context(
+        self, supported_context: tuple[bool, str, dict[str, tuple[float, float] | None]]
+    ) -> None: ...
+
+
+class _CP7WidgetAccess(_CP7Widget):
+
+    @staticmethod
+    def get_inventory_model_counts(widget: _CP7Widget, items: list[InventoryItemInfo]) -> dict[int, int]:
+        return widget._get_inventory_model_counts(items)
+
+    @staticmethod
+    def bound_get_inventory_model_counts(widget: _CP7Widget) -> Callable[[list[InventoryItemInfo]], dict[int, int]]:
+        return widget._get_inventory_model_counts
+
+    @staticmethod
+    def get_items_after_planned_pre_buy_actions(
+        widget: _CP7Widget, items: list[InventoryItemInfo], plan: PlanResult
+    ) -> list[InventoryItemInfo]:
+        return widget._get_items_after_planned_pre_buy_actions(items, plan)
+
+    @staticmethod
+    def bound_get_items_after_planned_pre_buy_actions(
+        widget: _CP7Widget,
+    ) -> Callable[[list[InventoryItemInfo], PlanResult], list[InventoryItemInfo]]:
+        return widget._get_items_after_planned_pre_buy_actions
+
+    @staticmethod
+    def apply_planned_transfer_quantities(
+        widget: _CP7Widget, items: list[InventoryItemInfo], transfers: list[PlannedStorageTransfer]
+    ) -> list[InventoryItemInfo]:
+        return widget._apply_planned_transfer_quantities(items, transfers)
+
+    @staticmethod
+    def bound_apply_planned_transfer_quantities(
+        widget: _CP7Widget,
+    ) -> Callable[[list[InventoryItemInfo], list[PlannedStorageTransfer]], list[InventoryItemInfo]]:
+        return widget._apply_planned_transfer_quantities
+
+    @staticmethod
+    def build_simulated_model_counts(
+        widget: _CP7Widget, items: list[InventoryItemInfo], plan: PlanResult
+    ) -> dict[int, int]:
+        return widget._build_simulated_model_counts(items, plan)
+
+    @staticmethod
+    def bound_build_simulated_model_counts(
+        widget: _CP7Widget,
+    ) -> Callable[[list[InventoryItemInfo], PlanResult], dict[int, int]]:
+        return widget._build_simulated_model_counts
+
+    @staticmethod
+    def split_preview_entries(
+        widget: _CP7Widget, entries: list[ExecutionPlanEntry]
+    ) -> tuple[list[ExecutionPlanEntry], list[ExecutionPlanEntry]]:
+        return widget._split_preview_entries(entries)
+
+    @staticmethod
+    def bound_split_preview_entries(
+        widget: _CP7Widget,
+    ) -> Callable[[list[ExecutionPlanEntry]], tuple[list[ExecutionPlanEntry], list[ExecutionPlanEntry]]]:
+        return widget._split_preview_entries
+
+    @staticmethod
+    def get_preview_entry_counts(widget: _CP7Widget, entries: list[ExecutionPlanEntry]) -> tuple[int, int, int]:
+        return widget._get_preview_entry_counts(entries)
+
+    @staticmethod
+    def bound_get_preview_entry_counts(
+        widget: _CP7Widget,
+    ) -> Callable[[list[ExecutionPlanEntry]], tuple[int, int, int]]:
+        return widget._get_preview_entry_counts
+
+    @staticmethod
+    def get_locally_actionable_preview_counts(
+        widget: _CP7Widget, plan: PlanResult, *, availability_here: dict[str, bool] | None = None
+    ) -> tuple[int, int]:
+        return widget._get_locally_actionable_preview_counts(plan, availability_here=availability_here)
+
+    @staticmethod
+    def is_preview_entry_available_here(
+        widget: _CP7Widget,
+        entry: ExecutionPlanEntry,
+        *,
+        availability_here: dict[str, bool] | None = None,
+        plan: PlanResult | None = None,
+    ) -> bool:
+        return widget._is_preview_entry_available_here(entry, availability_here=availability_here, plan=plan)
+
+    @staticmethod
+    def build_consumable_crafter_multi_stop_preview(widget: _CP7Widget, destination_outpost_id: int) -> PlanResult:
+        return widget._build_consumable_crafter_multi_stop_preview(destination_outpost_id)
+
+    @staticmethod
+    def bound_build_consumable_crafter_multi_stop_preview(widget: _CP7Widget) -> Callable[[int], PlanResult]:
+        return widget._build_consumable_crafter_multi_stop_preview
+
+    @staticmethod
+    def apply_projected_preview_post_processing(widget: _CP7Widget, plan: PlanResult, target_outpost_name: str) -> None:
+        return widget._apply_projected_preview_post_processing(plan, target_outpost_name)
+
+    @staticmethod
+    def bound_apply_projected_preview_post_processing(widget: _CP7Widget) -> Callable[[PlanResult, str], None]:
+        return widget._apply_projected_preview_post_processing
+
+    @staticmethod
+    def begin_execute_reservation_scope(widget: _CP7Widget) -> bool:
+        return widget._begin_execute_reservation_scope()
+
+    @staticmethod
+    def bound_begin_execute_reservation_scope(widget: _CP7Widget) -> Callable[[], bool]:
+        return widget._begin_execute_reservation_scope
+
+    @staticmethod
+    def end_execute_reservation_scope(widget: _CP7Widget, owned_scope: bool) -> None:
+        return widget._end_execute_reservation_scope(owned_scope)
+
+    @staticmethod
+    def bound_end_execute_reservation_scope(widget: _CP7Widget) -> Callable[[bool], None]:
+        return widget._end_execute_reservation_scope
+
+    @staticmethod
+    def reserve_execute_item_ids(widget: _CP7Widget, item_ids: list[int]) -> None:
+        return widget._reserve_execute_item_ids(item_ids)
+
+    @staticmethod
+    def bound_reserve_execute_item_ids(widget: _CP7Widget) -> Callable[[list[int]], None]:
+        return widget._reserve_execute_item_ids
+
+    @staticmethod
+    def build_plan(
+        widget: _CP7Widget,
+        *,
+        supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None,
+    ) -> PlanResult:
+        return widget._build_plan(supported_context_override=supported_context_override)
+
+    @staticmethod
+    def refresh_preview_from_service_context(
+        widget: _CP7Widget, supported_context: tuple[bool, str, dict[str, tuple[float, float] | None]]
+    ) -> None:
+        return widget._refresh_preview_from_service_context(supported_context)
+
+    @staticmethod
+    def bound_refresh_preview_from_service_context(
+        widget: _CP7Widget,
+    ) -> Callable[[tuple[bool, str, dict[str, tuple[float, float] | None]]], None]:
+        return widget._refresh_preview_from_service_context
+
+
+def _cp7_widget(module: types.ModuleType) -> _CP7Widget:
+    value: object = _make_widget(module)
+    if not isinstance(value, _CP7Widget):
+        raise AssertionError('CP7 fixture does not expose the retained widget interface')
+    return value
+
+
+def _cp7_equal(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f'CP7 {context}: expected {expected!r}; observed {actual!r}')
+
+
+def _cp7_exception(callback: Callable[[], object], error: BaseException, context: str) -> None:
+    caught: BaseException | None = None
+    try:
+        callback()
+    except BaseException as exc:
+        caught = exc
+    _expect(caught is error, f'CP7 {context}: expected original exception {error!r}; observed {caught!r}')
+
+
+def _cp7_item(item_id: int, model_id: int, quantity: int) -> InventoryItemInfo:
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+
+    return InventoryItemInfo(
+        item_id,
+        model_id,
+        f'item {item_id}',
+        quantity,
+        1,
+        2,
+        'Axe',
+        'White',
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        rune_identifiers=['nested'],
+        weapon_mod_identifiers=['nested-mod'],
+    )
+
+
+def _cp7_projection_fixture() -> tuple[list[InventoryItemInfo], PlanResult]:
+    from Sources.icefox.MerchantRules import planning as p
+
+    items = [
+        _cp7_item(*row)
+        for row in ((1, 10, 8), (2, 20, 6), (1, 10, 3), (3, 30, 5), (4, 40, 4), (5, 50, 2), (6, 60, 1), (7, 70, 7))
+    ]
+    plan = p.PlanResult(
+        identify_item_ids=[4],
+        identify_claimed_item_ids=[5],
+        salvage_item_ids=[1, 1],
+        destroy_actions=[p.PlannedDestroyAction(2, 20, 'D', 2, 6), p.PlannedDestroyAction(2, 20, 'D', 1, 6)],
+        material_sales=[p.PlannedMaterialSale('materials', 3, 30, 'M', 1, 2)],
+        merchant_sell_item_ids=[3, 3],
+        rune_trader_sales=[p.PlannedTraderSale(6, 60, 'R')],
+    )
+    return (items, plan)
+
+
+class _CP7Int(int):
+
+    def __new__(cls, value: int, label: str, trace: list[str], error: BaseException | None = None) -> '_CP7Int':
+        instance = super().__new__(cls, value)
+        instance.label = label
+        instance.trace = trace
+        instance.error = error
+        return instance
+
+    label: str
+    trace: list[str]
+    error: BaseException | None
+
+    def __int__(self) -> int:
+        self.trace.append(self.label)
+        if self.error is not None:
+            raise self.error
+        return super().__int__()
+
+
+class _CP7Str(str):
+
+    def __new__(
+        cls, values: tuple[str, ...], label: str, trace: list[str], error: BaseException | None = None
+    ) -> '_CP7Str':
+        instance = super().__new__(cls, values[0])
+        instance.values = values
+        instance.label = label
+        instance.trace = trace
+        instance.calls = 0
+        instance.error = error
+        return instance
+
+    values: tuple[str, ...]
+    label: str
+    trace: list[str]
+    calls: int
+    error: BaseException | None
+
+    def __str__(self) -> str:
+        self.trace.append(self.label)
+        if self.error is not None:
+            raise self.error
+        result = self.values[min(self.calls, len(self.values) - 1)]
+        self.calls += 1
+        return result
+
+
+class _CP7Properties:
+
+    def __init__(self, reader: Callable[[int], int]) -> None:
+        self.GetQuantity = reader
+
+
+class _CP7ItemFacade:
+
+    def __init__(self, reader: Callable[[int], int]) -> None:
+        self.Properties = _CP7Properties(reader)
+
+
+_CP7_RECORD_FIELDS: dict[str, list[tuple[str, str, str, object]]] = {
+    'ExecutionPlanEntry': [
+        ('action_type', 'str', 'required', None),
+        ('merchant_type', 'str', 'required', None),
+        ('label', 'str', 'required', None),
+        ('quantity', 'int', 'required', None),
+        ('state', 'str', 'required', None),
+        ('reason', 'str', 'scalar', ''),
+        ('model_id', 'int', 'scalar', 0),
+        ('status_hint', 'str', 'scalar', ''),
+    ],
+    'PlannedSpecificUpgradeSalvageOwner': [
+        ('model_id', 'int', 'required', None),
+        ('rule_index', 'int', 'required', None),
+        ('rule_snapshot', 'SalvageRule', 'required', None),
+    ],
+    'PurchaseTargetCleanup': [
+        ('rule_kind', 'str', 'scalar', ''),
+        ('rule_index', 'int', 'scalar', -1),
+        ('target_key', 'str', 'scalar', ''),
+        ('target_count', 'int', 'scalar', 0),
+        ('max_per_run', 'int', 'scalar', 0),
+        ('after_purchase', 'str', 'scalar', 'keep'),
+        ('completes_target', 'bool', 'scalar', False),
+        ('xunlai_involved', 'bool', 'scalar', False),
+    ],
+    'PlannedMerchantBuy': [
+        ('model_id', 'int', 'required', None),
+        ('quantity', 'int', 'required', None),
+        ('label', 'str', 'required', None),
+        ('cleanup', 'PurchaseTargetCleanup', 'factory', 'PurchaseTargetCleanup'),
+        ('check_xunlai_first', 'bool', 'scalar', False),
+    ],
+    'PlannedMaterialBuy': [
+        ('merchant_type', 'str', 'required', None),
+        ('model_id', 'int', 'required', None),
+        ('quantity', 'int', 'required', None),
+        ('label', 'str', 'required', None),
+        ('batch_size', 'int', 'scalar', 1),
+        ('cleanup', 'PurchaseTargetCleanup', 'factory', 'PurchaseTargetCleanup'),
+    ],
+    'PlannedMaterialSale': [
+        ('merchant_type', 'str', 'required', None),
+        ('item_id', 'int', 'required', None),
+        ('model_id', 'int', 'required', None),
+        ('label', 'str', 'required', None),
+        ('batches_to_sell', 'int', 'required', None),
+        ('quantity_to_sell', 'int', 'required', None),
+        ('batch_size', 'int', 'scalar', 10),
+    ],
+    'PlannedTraderSale': [
+        ('item_id', 'int', 'required', None),
+        ('model_id', 'int', 'required', None),
+        ('label', 'str', 'required', None),
+        ('expected_rune_identifiers', 'tuple[str, ...]', 'factory', 'tuple'),
+    ],
+    'PlannedTraderBuy': [
+        ('identifier', 'str', 'required', None),
+        ('quantity', 'int', 'required', None),
+        ('label', 'str', 'required', None),
+        ('cleanup', 'PurchaseTargetCleanup', 'factory', 'PurchaseTargetCleanup'),
+    ],
+    'PlannedScrollTraderBuy': [
+        ('model_id', 'int', 'required', None),
+        ('quantity', 'int', 'required', None),
+        ('label', 'str', 'required', None),
+        ('cleanup', 'PurchaseTargetCleanup', 'factory', 'PurchaseTargetCleanup'),
+    ],
+    'PlannedConsumableCraft': [
+        ('model_id', 'int', 'required', None),
+        ('quantity', 'int', 'required', None),
+        ('label', 'str', 'required', None),
+        ('vendor_key', 'str', 'required', None),
+        ('vendor_name', 'str', 'required', None),
+        ('coords', 'tuple[float, float]', 'required', None),
+        ('cleanup', 'PurchaseTargetCleanup', 'factory', 'PurchaseTargetCleanup'),
+    ],
+    'PlannedStorageTransfer': [
+        ('direction', 'str', 'required', None),
+        ('key', 'str', 'required', None),
+        ('label', 'str', 'required', None),
+        ('item_id', 'int', 'required', None),
+        ('quantity', 'int', 'required', None),
+        ('model_id', 'int', 'scalar', 0),
+        ('reason', 'str', 'scalar', ''),
+        ('xunlai_first_merchant_stock', 'bool', 'scalar', False),
+    ],
+    'PlannedDestroyAction': [
+        ('item_id', 'int', 'required', None),
+        ('model_id', 'int', 'required', None),
+        ('label', 'str', 'required', None),
+        ('quantity_to_destroy', 'int', 'required', None),
+        ('source_quantity', 'int', 'required', None),
+        ('keep_quantity', 'int', 'scalar', 0),
+        ('requires_split', 'bool', 'scalar', False),
+    ],
+    'PlanResult': [
+        ('entries', 'list[ExecutionPlanEntry]', 'factory', 'list'),
+        ('supported_map', 'bool', 'scalar', False),
+        ('supported_reason', 'str', 'scalar', ''),
+        ('coords', 'dict[str, tuple[float, float] | None]', 'factory', 'dict'),
+        ('travel_to_outpost_id', 'int', 'scalar', 0),
+        ('travel_to_outpost_name', 'str', 'scalar', ''),
+        ('multi_stop_route', 'bool', 'scalar', False),
+        ('multi_stop_consumable_outpost_id', 'int', 'scalar', 0),
+        ('multi_stop_consumable_outpost_name', 'str', 'scalar', ''),
+        ('multi_stop_destination_outpost_id', 'int', 'scalar', 0),
+        ('multi_stop_destination_outpost_name', 'str', 'scalar', ''),
+        ('merchant_stock_buys', 'list[PlannedMerchantBuy]', 'factory', 'list'),
+        ('material_buys', 'list[PlannedMaterialBuy]', 'factory', 'list'),
+        ('rune_trader_buys', 'list[PlannedTraderBuy]', 'factory', 'list'),
+        ('scroll_trader_buys', 'list[PlannedScrollTraderBuy]', 'factory', 'list'),
+        ('consumable_crafter_buys', 'list[PlannedConsumableCraft]', 'factory', 'list'),
+        ('material_sales', 'list[PlannedMaterialSale]', 'factory', 'list'),
+        ('storage_transfers', 'list[PlannedStorageTransfer]', 'factory', 'list'),
+        ('cleanup_transfers', 'list[PlannedStorageTransfer]', 'factory', 'list'),
+        ('identify_claimed_item_ids', 'list[int]', 'factory', 'list'),
+        ('identify_item_ids', 'list[int]', 'factory', 'list'),
+        ('salvage_item_ids', 'list[int]', 'factory', 'list'),
+        ('salvage_specific_upgrade_owners', 'dict[int, PlannedSpecificUpgradeSalvageOwner]', 'factory', 'dict'),
+        ('destroy_actions', 'list[PlannedDestroyAction]', 'factory', 'list'),
+        ('destroy_item_ids', 'list[int]', 'factory', 'list'),
+        ('merchant_sell_item_ids', 'list[int]', 'factory', 'list'),
+        ('rune_trader_sales', 'list[PlannedTraderSale]', 'factory', 'list'),
+        ('storage_plan_state', 'str', 'scalar', 'not_needed'),
+        ('storage_exact', 'bool', 'scalar', False),
+        ('inventory_snapshot_captured', 'bool', 'scalar', False),
+        ('inventory_model_counts', 'dict[int, int]', 'factory', 'dict'),
+        ('inventory_item_count', 'int', 'scalar', 0),
+        ('xunlai_first_merchant_stock_targets', 'dict[int, str]', 'factory', 'dict'),
+        ('xunlai_first_storage_scan_reliable', 'bool', 'scalar', True),
+        ('has_actions', 'bool', 'scalar', False),
+    ],
+}
+_CP7_SCALARS: dict[str, object] = {
+    'PLAN_STATE_WILL_EXECUTE': 'will execute',
+    'PLAN_STATE_CONDITIONAL': 'conditional',
+    'PLAN_STATE_SKIPPED': 'skipped',
+    'STORAGE_PLAN_STATE_NOT_NEEDED': 'not_needed',
+    'STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN': 'needs_exact_scan',
+    'STORAGE_PLAN_STATE_EXACT_READY': 'exact_ready',
+    'STORAGE_TRANSFER_WITHDRAW': 'withdraw',
+    'STORAGE_TRANSFER_DEPOSIT': 'deposit',
+    'MATERIAL_BATCH_SIZE': 10,
+    'MERCHANT_TYPE_INVENTORY': 'inventory',
+    'MERCHANT_TYPE_STORAGE': 'storage',
+    'MERCHANT_TYPE_TRAVEL': 'travel',
+}
+_CP7_WRAPPER_SIGNATURES: dict[str, str] = {
+    'get_inventory_model_counts': '(self, items: list[InventoryItemInfo]) -> dict[int, int]',
+    'get_items_after_planned_pre_buy_actions': '(self, items: list[InventoryItemInfo], plan: PlanResult) -> list[InventoryItemInfo]',
+    'apply_planned_transfer_quantities': '(self, items: list[InventoryItemInfo], transfers: list[PlannedStorageTransfer]) -> list[InventoryItemInfo]',
+    'build_simulated_model_counts': '(self, items: list[InventoryItemInfo], plan: PlanResult) -> dict[int, int]',
+    'is_actionable_preview_entry': '(self, entry: ExecutionPlanEntry) -> bool',
+    'split_preview_entries': '(self, entries: list[ExecutionPlanEntry]) -> tuple[list[ExecutionPlanEntry], list[ExecutionPlanEntry]]',
+    'preview_entry_needs_local_storage_access': '(self, entry: ExecutionPlanEntry, *, plan: PlanResult | None = None) -> bool',
+    'is_preview_entry_available_here': '(self, entry: ExecutionPlanEntry, *, availability_here: dict[str, bool] | None = None, plan: PlanResult | None = None) -> bool',
+    'get_locally_actionable_preview_counts': '(self, plan: PlanResult, *, availability_here: dict[str, bool] | None = None) -> tuple[int, int]',
+    'get_preview_entry_counts': '(self, entries: list[ExecutionPlanEntry]) -> tuple[int, int, int]',
+    'plan_has_local_destroy_actions': '(self, plan: PlanResult) -> bool',
+    'plan_has_local_identify_actions': '(self, plan: PlanResult) -> bool',
+    'plan_has_local_salvage_actions': '(self, plan: PlanResult) -> bool',
+    'plan_has_local_storage_actions': '(self, plan: PlanResult) -> bool',
+    'plan_has_conditional_storage_actions': '(self, plan: PlanResult) -> bool',
+    'plan_has_direct_storage_actions': '(self, plan: PlanResult) -> bool',
+    'plan_has_conditional_cleanup_actions': '(self, plan: PlanResult) -> bool',
+    'plan_has_direct_cleanup_actions': '(self, plan: PlanResult) -> bool',
+    'plan_needs_exact_storage_scan': '(self, plan: PlanResult) -> bool',
+}
+
+
+def _cp7_record_builders() -> dict[str, Callable[[], object]]:
+    from Sources.icefox.MerchantRules import planning as p
+
+    return {
+        'ExecutionPlanEntry': lambda: p.ExecutionPlanEntry('literal', 'literal', 'literal', 1, 'literal'),
+        'PlannedSpecificUpgradeSalvageOwner': lambda: p.PlannedSpecificUpgradeSalvageOwner(1, 1, p.SalvageRule()),
+        'PurchaseTargetCleanup': lambda: p.PurchaseTargetCleanup(),
+        'PlannedMerchantBuy': lambda: p.PlannedMerchantBuy(1, 1, 'literal'),
+        'PlannedMaterialBuy': lambda: p.PlannedMaterialBuy('literal', 1, 1, 'literal'),
+        'PlannedMaterialSale': lambda: p.PlannedMaterialSale('literal', 1, 1, 'literal', 1, 1),
+        'PlannedTraderSale': lambda: p.PlannedTraderSale(1, 1, 'literal'),
+        'PlannedTraderBuy': lambda: p.PlannedTraderBuy('literal', 1, 'literal'),
+        'PlannedScrollTraderBuy': lambda: p.PlannedScrollTraderBuy(1, 1, 'literal'),
+        'PlannedConsumableCraft': lambda: p.PlannedConsumableCraft(1, 1, 'literal', 'literal', 'literal', (1.0, 2.0)),
+        'PlannedStorageTransfer': lambda: p.PlannedStorageTransfer('literal', 'literal', 'literal', 1, 1),
+        'PlannedDestroyAction': lambda: p.PlannedDestroyAction(1, 1, 'literal', 1, 1),
+        'PlanResult': lambda: p.PlanResult(),
+    }
+
+
+def _cp7_delegate_sentinels(module: types.ModuleType, widget: _CP7Widget) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+
+    items: list[InventoryItemInfo] = []
+    entries: list[ExecutionPlanEntry] = []
+    transfers: list[PlannedStorageTransfer] = []
+    plan = p.PlanResult()
+    entry = p.ExecutionPlanEntry('sell', 'merchant', 'sentinel', 1, 'will execute')
+    availability: dict[str, bool] = {}
+    calls: list[tuple[object, ...]] = []
+    patches = _CP5PatchSet()
+    try:
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_get_inventory_model_counts: dict[int, int] = {991: 7}
+
+        def sentinel_get_inventory_model_counts(items: list['InventoryItemInfo']) -> dict[int, int]:
+            calls.append(('get_inventory_model_counts', items))
+            return result_get_inventory_model_counts
+
+        patches.set(p, 'get_inventory_model_counts', sentinel_get_inventory_model_counts)
+        actual = getattr(widget, '_get_inventory_model_counts')(items)
+        _expect(actual is result_get_inventory_model_counts, 'CP7 delegate result identity get_inventory_model_counts')
+        observed = calls.pop()
+        _expect(observed[0] == 'get_inventory_model_counts', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is items, 'CP7 delegate positional reference items')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_get_items_after_planned_pre_buy_actions: list['InventoryItemInfo'] = [_cp7_item(991, 99, 7)]
+
+        def sentinel_get_items_after_planned_pre_buy_actions(
+            items: list['InventoryItemInfo'], plan: PlanResult, *, quantity_reader: Callable[[int], int]
+        ) -> list['InventoryItemInfo']:
+            calls.append(('get_items_after_planned_pre_buy_actions', items, plan, quantity_reader))
+            _cp7_equal(quantity_reader(17), 73, 'delegate supplied reader reachability')
+            return result_get_items_after_planned_pre_buy_actions
+
+        patches.set(p, 'get_items_after_planned_pre_buy_actions', sentinel_get_items_after_planned_pre_buy_actions)
+        actual = getattr(widget, '_get_items_after_planned_pre_buy_actions')(items, plan)
+        _expect(
+            actual is result_get_items_after_planned_pre_buy_actions,
+            'CP7 delegate result identity get_items_after_planned_pre_buy_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'get_items_after_planned_pre_buy_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is items, 'CP7 delegate positional reference items')
+        _expect(observed[2] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_apply_planned_transfer_quantities: list['InventoryItemInfo'] = [_cp7_item(991, 99, 7)]
+
+        def sentinel_apply_planned_transfer_quantities(
+            items: list['InventoryItemInfo'], transfers: list[PlannedStorageTransfer]
+        ) -> list['InventoryItemInfo']:
+            calls.append(('apply_planned_transfer_quantities', items, transfers))
+            return result_apply_planned_transfer_quantities
+
+        patches.set(p, 'apply_planned_transfer_quantities', sentinel_apply_planned_transfer_quantities)
+        actual = getattr(widget, '_apply_planned_transfer_quantities')(items, transfers)
+        _expect(
+            actual is result_apply_planned_transfer_quantities,
+            'CP7 delegate result identity apply_planned_transfer_quantities',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'apply_planned_transfer_quantities', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is items, 'CP7 delegate positional reference items')
+        _expect(observed[2] is transfers, 'CP7 delegate positional reference transfers')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_build_simulated_model_counts: dict[int, int] = {991: 7}
+
+        def sentinel_build_simulated_model_counts(items: list['InventoryItemInfo'], plan: PlanResult) -> dict[int, int]:
+            calls.append(('build_simulated_model_counts', items, plan))
+            return result_build_simulated_model_counts
+
+        patches.set(p, 'build_simulated_model_counts', sentinel_build_simulated_model_counts)
+        actual = getattr(widget, '_build_simulated_model_counts')(items, plan)
+        _expect(
+            actual is result_build_simulated_model_counts, 'CP7 delegate result identity build_simulated_model_counts'
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'build_simulated_model_counts', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is items, 'CP7 delegate positional reference items')
+        _expect(observed[2] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_is_actionable_preview_entry: bool = True
+
+        def sentinel_is_actionable_preview_entry(entry: ExecutionPlanEntry) -> bool:
+            calls.append(('is_actionable_preview_entry', entry))
+            return result_is_actionable_preview_entry
+
+        patches.set(p, 'is_actionable_preview_entry', sentinel_is_actionable_preview_entry)
+        actual = getattr(widget, '_is_actionable_preview_entry')(entry)
+        _expect(
+            actual is result_is_actionable_preview_entry, 'CP7 delegate result identity is_actionable_preview_entry'
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'is_actionable_preview_entry', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is entry, 'CP7 delegate positional reference entry')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_split_preview_entries: tuple[list[ExecutionPlanEntry], list[ExecutionPlanEntry]] = ([entry], [])
+
+        def sentinel_split_preview_entries(
+            entries: list[ExecutionPlanEntry],
+        ) -> tuple[list[ExecutionPlanEntry], list[ExecutionPlanEntry]]:
+            calls.append(('split_preview_entries', entries))
+            return result_split_preview_entries
+
+        patches.set(p, 'split_preview_entries', sentinel_split_preview_entries)
+        actual = getattr(widget, '_split_preview_entries')(entries)
+        _expect(actual is result_split_preview_entries, 'CP7 delegate result identity split_preview_entries')
+        observed = calls.pop()
+        _expect(observed[0] == 'split_preview_entries', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is entries, 'CP7 delegate positional reference entries')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_preview_entry_needs_local_storage_access: bool = True
+
+        def sentinel_preview_entry_needs_local_storage_access(entry: ExecutionPlanEntry, *, plan: PlanResult) -> bool:
+            calls.append(('preview_entry_needs_local_storage_access', entry, plan))
+            return result_preview_entry_needs_local_storage_access
+
+        patches.set(p, 'preview_entry_needs_local_storage_access', sentinel_preview_entry_needs_local_storage_access)
+        actual = getattr(widget, '_preview_entry_needs_local_storage_access')(entry, plan=plan)
+        _expect(
+            actual is result_preview_entry_needs_local_storage_access,
+            'CP7 delegate result identity preview_entry_needs_local_storage_access',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'preview_entry_needs_local_storage_access', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is entry, 'CP7 delegate positional reference entry')
+        _expect(observed[2] is plan, 'CP7 delegate keyword reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_is_preview_entry_available_here: bool = True
+
+        def sentinel_is_preview_entry_available_here(
+            entry: ExecutionPlanEntry, *, availability_here: Mapping[str, bool], plan: PlanResult
+        ) -> bool:
+            calls.append(('is_preview_entry_available_here', entry, availability_here, plan))
+            return result_is_preview_entry_available_here
+
+        patches.set(p, 'is_preview_entry_available_here', sentinel_is_preview_entry_available_here)
+        actual = getattr(widget, '_is_preview_entry_available_here')(entry, availability_here=availability, plan=plan)
+        _expect(
+            actual is result_is_preview_entry_available_here,
+            'CP7 delegate result identity is_preview_entry_available_here',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'is_preview_entry_available_here', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is entry, 'CP7 delegate positional reference entry')
+        _expect(observed[2] is availability, 'CP7 delegate keyword reference availability_here')
+        _expect(observed[3] is plan, 'CP7 delegate keyword reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_get_locally_actionable_preview_counts: tuple[int, int] = (17, 19)
+
+        def sentinel_get_locally_actionable_preview_counts(
+            plan: PlanResult, *, availability_here: Mapping[str, bool]
+        ) -> tuple[int, int]:
+            calls.append(('get_locally_actionable_preview_counts', plan, availability_here))
+            return result_get_locally_actionable_preview_counts
+
+        patches.set(p, 'get_locally_actionable_preview_counts', sentinel_get_locally_actionable_preview_counts)
+        actual = getattr(widget, '_get_locally_actionable_preview_counts')(plan, availability_here=availability)
+        _expect(
+            actual is result_get_locally_actionable_preview_counts,
+            'CP7 delegate result identity get_locally_actionable_preview_counts',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'get_locally_actionable_preview_counts', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        _expect(observed[2] is availability, 'CP7 delegate keyword reference availability_here')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_get_preview_entry_counts: tuple[int, int, int] = (17, 19, 23)
+
+        def sentinel_get_preview_entry_counts(entries: list[ExecutionPlanEntry]) -> tuple[int, int, int]:
+            calls.append(('get_preview_entry_counts', entries))
+            return result_get_preview_entry_counts
+
+        patches.set(p, 'get_preview_entry_counts', sentinel_get_preview_entry_counts)
+        actual = getattr(widget, '_get_preview_entry_counts')(entries)
+        _expect(actual is result_get_preview_entry_counts, 'CP7 delegate result identity get_preview_entry_counts')
+        observed = calls.pop()
+        _expect(observed[0] == 'get_preview_entry_counts', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is entries, 'CP7 delegate positional reference entries')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_has_local_destroy_actions: bool = True
+
+        def sentinel_plan_has_local_destroy_actions(plan: PlanResult) -> bool:
+            calls.append(('plan_has_local_destroy_actions', plan))
+            return result_plan_has_local_destroy_actions
+
+        patches.set(p, 'plan_has_local_destroy_actions', sentinel_plan_has_local_destroy_actions)
+        actual = getattr(widget, '_plan_has_local_destroy_actions')(plan)
+        _expect(
+            actual is result_plan_has_local_destroy_actions,
+            'CP7 delegate result identity plan_has_local_destroy_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_has_local_destroy_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_has_local_identify_actions: bool = True
+
+        def sentinel_plan_has_local_identify_actions(plan: PlanResult) -> bool:
+            calls.append(('plan_has_local_identify_actions', plan))
+            return result_plan_has_local_identify_actions
+
+        patches.set(p, 'plan_has_local_identify_actions', sentinel_plan_has_local_identify_actions)
+        actual = getattr(widget, '_plan_has_local_identify_actions')(plan)
+        _expect(
+            actual is result_plan_has_local_identify_actions,
+            'CP7 delegate result identity plan_has_local_identify_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_has_local_identify_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_has_local_salvage_actions: bool = True
+
+        def sentinel_plan_has_local_salvage_actions(plan: PlanResult) -> bool:
+            calls.append(('plan_has_local_salvage_actions', plan))
+            return result_plan_has_local_salvage_actions
+
+        patches.set(p, 'plan_has_local_salvage_actions', sentinel_plan_has_local_salvage_actions)
+        actual = getattr(widget, '_plan_has_local_salvage_actions')(plan)
+        _expect(
+            actual is result_plan_has_local_salvage_actions,
+            'CP7 delegate result identity plan_has_local_salvage_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_has_local_salvage_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_has_local_storage_actions: bool = True
+
+        def sentinel_plan_has_local_storage_actions(plan: PlanResult) -> bool:
+            calls.append(('plan_has_local_storage_actions', plan))
+            return result_plan_has_local_storage_actions
+
+        patches.set(p, 'plan_has_local_storage_actions', sentinel_plan_has_local_storage_actions)
+        actual = getattr(widget, '_plan_has_local_storage_actions')(plan)
+        _expect(
+            actual is result_plan_has_local_storage_actions,
+            'CP7 delegate result identity plan_has_local_storage_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_has_local_storage_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_has_conditional_storage_actions: bool = True
+
+        def sentinel_plan_has_conditional_storage_actions(plan: PlanResult) -> bool:
+            calls.append(('plan_has_conditional_storage_actions', plan))
+            return result_plan_has_conditional_storage_actions
+
+        patches.set(p, 'plan_has_conditional_storage_actions', sentinel_plan_has_conditional_storage_actions)
+        actual = getattr(widget, '_plan_has_conditional_storage_actions')(plan)
+        _expect(
+            actual is result_plan_has_conditional_storage_actions,
+            'CP7 delegate result identity plan_has_conditional_storage_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_has_conditional_storage_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_has_direct_storage_actions: bool = True
+
+        def sentinel_plan_has_direct_storage_actions(plan: PlanResult) -> bool:
+            calls.append(('plan_has_direct_storage_actions', plan))
+            return result_plan_has_direct_storage_actions
+
+        patches.set(p, 'plan_has_direct_storage_actions', sentinel_plan_has_direct_storage_actions)
+        actual = getattr(widget, '_plan_has_direct_storage_actions')(plan)
+        _expect(
+            actual is result_plan_has_direct_storage_actions,
+            'CP7 delegate result identity plan_has_direct_storage_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_has_direct_storage_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_has_conditional_cleanup_actions: bool = True
+
+        def sentinel_plan_has_conditional_cleanup_actions(plan: PlanResult) -> bool:
+            calls.append(('plan_has_conditional_cleanup_actions', plan))
+            return result_plan_has_conditional_cleanup_actions
+
+        patches.set(p, 'plan_has_conditional_cleanup_actions', sentinel_plan_has_conditional_cleanup_actions)
+        actual = getattr(widget, '_plan_has_conditional_cleanup_actions')(plan)
+        _expect(
+            actual is result_plan_has_conditional_cleanup_actions,
+            'CP7 delegate result identity plan_has_conditional_cleanup_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_has_conditional_cleanup_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_has_direct_cleanup_actions: bool = True
+
+        def sentinel_plan_has_direct_cleanup_actions(plan: PlanResult) -> bool:
+            calls.append(('plan_has_direct_cleanup_actions', plan))
+            return result_plan_has_direct_cleanup_actions
+
+        patches.set(p, 'plan_has_direct_cleanup_actions', sentinel_plan_has_direct_cleanup_actions)
+        actual = getattr(widget, '_plan_has_direct_cleanup_actions')(plan)
+        _expect(
+            actual is result_plan_has_direct_cleanup_actions,
+            'CP7 delegate result identity plan_has_direct_cleanup_actions',
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_has_direct_cleanup_actions', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+        result_plan_needs_exact_storage_scan: bool = True
+
+        def sentinel_plan_needs_exact_storage_scan(plan: PlanResult) -> bool:
+            calls.append(('plan_needs_exact_storage_scan', plan))
+            return result_plan_needs_exact_storage_scan
+
+        patches.set(p, 'plan_needs_exact_storage_scan', sentinel_plan_needs_exact_storage_scan)
+        actual = getattr(widget, '_plan_needs_exact_storage_scan')(plan)
+        _expect(
+            actual is result_plan_needs_exact_storage_scan, 'CP7 delegate result identity plan_needs_exact_storage_scan'
+        )
+        observed = calls.pop()
+        _expect(observed[0] == 'plan_needs_exact_storage_scan', 'CP7 exact canonical sentinel reached')
+        _expect(observed[1] is plan, 'CP7 delegate positional reference plan')
+        patches.restore()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(lambda _item_id: 73))
+    finally:
+        patches.restore()
+
+
+def _test_cp7_planning_record_signatures_and_defaults(module: types.ModuleType) -> None:
+    import dataclasses
+    import inspect
+
+    from Sources.icefox.MerchantRules import configuration
+    from Sources.icefox.MerchantRules import planning as p
+
+    factories: dict[str, object] = {
+        'list': list,
+        'dict': dict,
+        'tuple': tuple,
+        'PurchaseTargetCleanup': p.PurchaseTargetCleanup,
+    }
+    for name, declared in _CP7_RECORD_FIELDS.items():
+        record = getattr(p, name)
+        parameters = list(inspect.signature(record).parameters.values())
+        _cp7_equal([v.name for v in parameters], [row[0] for row in declared], name + ' field order')
+        fields = {v.name: v for v in dataclasses.fields(record)}
+        for parameter, (field_name, annotation, kind, default) in zip(parameters, declared, strict=True):
+            _cp7_equal(parameter.kind, inspect.Parameter.POSITIONAL_OR_KEYWORD, name + '.' + field_name)
+            rendered = inspect.formatannotation(parameter.annotation)
+            for prefix in (p.__name__ + '.', configuration.__name__ + '.'):
+                rendered = rendered.replace(prefix, '')
+            _cp7_equal(rendered, annotation, name + '.' + field_name + ' annotation')
+            field = fields[field_name]
+            if kind == 'required':
+                _expect(parameter.default is inspect.Parameter.empty, name + '.' + field_name + ' required')
+            elif kind == 'factory':
+                _expect(
+                    field.default_factory is factories[str(default)], name + '.' + field_name + ' canonical factory'
+                )
+            else:
+                _cp7_equal(parameter.default, default, name + '.' + field_name + ' scalar default')
+        first, second = (_cp7_record_builders()[name](), _cp7_record_builders()[name]())
+        for field_name, _annotation, kind, _default in declared:
+            if kind == 'factory' and _default != 'tuple':
+                _expect(
+                    getattr(first, field_name) is not getattr(second, field_name),
+                    name + '.' + field_name + ' independent defaults',
+                )
+        _expect(getattr(module, name) is record, name + ' widget alias')
+    patches = _CP5PatchSet()
+    try:
+        for owner, value in ((p, 31), (configuration, 41), (module, 51)):
+            patches.set(owner, 'MATERIAL_BATCH_SIZE', value)
+        _cp7_equal(p.PlannedMaterialSale('materials', 1, 10, 'sale', 1, 1).batch_size, 10, 'captured sale batch')
+        _cp7_equal(p.PlannedMaterialBuy('materials', 10, 1, 'buy').batch_size, 1, 'captured buy batch')
+    finally:
+        patches.restore()
+
+
+def _test_cp7_planning_record_references_and_mutability(module: types.ModuleType) -> None:
+    import dataclasses
+
+    from Sources.icefox.MerchantRules import planning as p
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+
+    _expect(module.PlanResult is p.PlanResult, 'CP7 alias for reference test')
+    plan = p.PlanResult()
+    references: dict[str, object] = {}
+    for name, _annotation, kind, default in _CP7_RECORD_FIELDS['PlanResult']:
+        if kind == 'factory':
+            references[name] = {} if default == 'dict' else []
+    explicit = p.PlanResult()
+    for name, value in references.items():
+        setattr(explicit, name, value)
+    explicit = dataclasses.replace(explicit)
+    copied = dataclasses.replace(explicit)
+    _expect(copied is not explicit, 'CP7 replace creates plan')
+    for name, value in references.items():
+        _expect(
+            getattr(explicit, name) is value and getattr(copied, name) is value, 'CP7 supplied plan reference ' + name
+        )
+    cleanup = p.PurchaseTargetCleanup(target_count=7)
+    buy = p.PlannedMerchantBuy(10, 2, 'buy', cleanup)
+    _expect(buy.cleanup is cleanup and dataclasses.replace(buy).cleanup is cleanup, 'CP7 supplied cleanup reference')
+    entry = p.ExecutionPlanEntry('sell', 'merchant', 'entry', 1, 'skipped')
+    entry.state, entry.reason = ('conditional', 'changed')
+    _cp7_equal((entry.state, entry.reason), ('conditional', 'changed'), 'mutable entry')
+    for name, builder in _cp7_record_builders().items():
+        if name in {'PlannedSpecificUpgradeSalvageOwner', 'PlanResult'}:
+            continue
+        instance = builder()
+        field_name = _CP7_RECORD_FIELDS[name][0][0]
+        value = getattr(instance, field_name)
+        setattr(instance, field_name, value)
+        _expect(getattr(instance, field_name) is value, 'CP7 mutable action ' + name)
+    rule = SalvageRule()
+    owner = p.PlannedSpecificUpgradeSalvageOwner(10, 2, rule)
+    _expect_raises(
+        dataclasses.FrozenInstanceError, lambda: setattr(owner, 'model_id', 20), 'CP7 owner is shallow frozen'
+    )
+    rule.enabled = not rule.enabled
+    _expect(
+        owner.rule_snapshot is rule and owner.rule_snapshot.enabled == rule.enabled,
+        'CP7 mutable selected rule reference',
+    )
+    plan.has_actions = True
+    _expect(plan.has_actions, 'CP7 mutable plan')
+
+
+def _test_cp7_planning_canonical_bindings(module: types.ModuleType) -> None:
+    import inspect
+
+    from Sources.icefox.MerchantRules import configuration
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    _cp7_equal(
+        Path(p.__file__).resolve(),
+        (REPO_ROOT / 'Sources/icefox/MerchantRules/planning.py').resolve(),
+        'planning origin',
+    )
+    _expect(p.__spec__ is not None and p.__spec__.origin == p.__file__, 'CP7 planning spec')
+    for name in _CP7_RECORD_FIELDS:
+        record = getattr(p, name)
+        _expect(record is getattr(module, name), 'CP7 identical alias ' + name)
+        _cp7_equal(record.__module__, 'Sources.icefox.MerchantRules.planning', 'defining class ' + name)
+    _expect(p.SalvageRule is configuration.SalvageRule, 'CP7 configuration rule owner')
+    _expect(module.PlannedManualMerchantSale.__module__ == module.__name__, 'CP7 manual sale stays widget owned')
+    _expect(not hasattr(p, 'PlannedManualMerchantSale'), 'CP7 no duplicate manual sale')
+    for name, value in _CP7_SCALARS.items():
+        owner = (
+            configuration
+            if name
+            in {'MATERIAL_BATCH_SIZE', 'MERCHANT_TYPE_INVENTORY', 'MERCHANT_TYPE_STORAGE', 'MERCHANT_TYPE_TRAVEL'}
+            else p
+        )
+        _cp7_equal(getattr(owner, name), value, 'canonical scalar ' + name)
+        _expect(getattr(module, name) is getattr(owner, name), 'CP7 direct scalar alias ' + name)
+    for name, expected_signature in _CP7_WRAPPER_SIGNATURES.items():
+        function = getattr(type(widget), '_' + name)
+        rendered = str(inspect.signature(function)).replace('Sources.icefox.MerchantRules.planning.', '')
+        rendered = rendered.replace('Sources.icefox.MerchantRules.inventory_evidence.', '')
+        _cp7_equal(rendered, expected_signature, 'retained signature ' + name)
+        _expect(function.__globals__ is vars(module), 'CP7 wrapper globals ' + name)
+        _expect(getattr(widget, '_' + name).__self__ is widget, 'CP7 actual bound wrapper owner ' + name)
+        canonical = getattr(p, name)
+        _expect(canonical.__globals__ is vars(p), 'CP7 canonical globals ' + name)
+        _expect(canonical.__module__ == p.__name__, 'CP7 canonical owner ' + name)
+    _cp7_delegate_sentinels(module, widget)
+
+
+def _test_cp7_planning_model_count_and_simulation_literals(module: types.ModuleType) -> None:
+    from copy import deepcopy
+
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    items, plan = _cp7_projection_fixture()
+    before = deepcopy((items, plan))
+    for count, simulate in (
+        (p.get_inventory_model_counts, p.build_simulated_model_counts),
+        (
+            _CP7WidgetAccess.bound_get_inventory_model_counts(widget),
+            _CP7WidgetAccess.bound_build_simulated_model_counts(widget),
+        ),
+    ):
+        _cp7_equal(count(items), {10: 11, 20: 6, 30: 5, 40: 4, 50: 2, 60: 1, 70: 7}, 'raw repeated-ID counts')
+        _cp7_equal(simulate(items, plan), {10: 5, 20: 3, 40: 4, 50: 2, 70: 7}, 'literal simulated counts')
+        _cp7_equal(count([_cp7_item(1, 10, -2), _cp7_item(2, 20, 0)]), {10: -2, 20: 0}, 'unclamped raw counts')
+        special = p.PlanResult(material_sales=[p.PlannedMaterialSale('materials', 0, 10, 'zero ID', 1, 2)])
+        _cp7_equal(simulate([_cp7_item(1, 10, 8)], special), {10: 6}, 'simulation uses model for zero ID sale')
+        special = p.PlanResult(
+            destroy_item_ids=[1], destroy_actions=[p.PlannedDestroyAction(0, 10, 'ineffective', 0, 8)]
+        )
+        _cp7_equal(simulate([_cp7_item(1, 10, 8)], special), {10: 8}, 'truthy explicit destruction suppresses legacy')
+    _cp7_equal((items, plan), before, 'projection input non-mutation')
+
+
+def _test_cp7_planning_pre_buy_projection_literals(module: types.ModuleType) -> None:
+    from copy import deepcopy
+
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    items, plan = _cp7_projection_fixture()
+    before = deepcopy((items, plan))
+    calls: list[int] = []
+
+    def forbidden(item_id: int) -> int:
+        calls.append(item_id)
+        raise AssertionError('explicit destruction must not read quantities')
+
+    def canonical(rows: list[InventoryItemInfo], selected: PlanResult) -> list[InventoryItemInfo]:
+        return p.get_items_after_planned_pre_buy_actions(rows, selected, quantity_reader=forbidden)
+
+    patches = _CP5PatchSet()
+    try:
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(forbidden))
+        for project in (canonical, _CP7WidgetAccess.bound_get_items_after_planned_pre_buy_actions(widget)):
+            result = project(items, plan)
+            _cp7_equal([(r.item_id, r.quantity) for r in result], [(2, 3), (7, 7)], 'pre-buy literal rows')
+            _expect(
+                result[0] is not items[1] and result[0].rune_identifiers is items[1].rune_identifiers,
+                'CP7 shallow reduced row',
+            )
+            _expect(result[1] is items[-1], 'CP7 unchanged row identity')
+            for selected in (p.PlanResult(identify_item_ids=[4]), p.PlanResult(identify_claimed_item_ids=[4])):
+                _cp7_equal(project([items[4]], selected), [], 'identify and claims independently remove')
+            special = p.PlanResult(
+                destroy_item_ids=[1],
+                destroy_actions=[p.PlannedDestroyAction(0, 10, 'zero', 0, 8)],
+                material_sales=[p.PlannedMaterialSale('materials', 0, 10, 'zero', 1, 2)],
+            )
+            result = project([items[0]], special)
+            _expect(
+                len(result) == 1 and result[0] is items[0],
+                'CP7 ineffective explicit action and nonpositive sale preserve row',
+            )
+    finally:
+        patches.restore()
+    _cp7_equal(calls, [], 'explicit paths never use reader')
+    _cp7_equal((items, plan), before, 'pre-buy input non-mutation')
+
+
+def _test_cp7_planning_transfer_projection_literals(module: types.ModuleType) -> None:
+    from copy import deepcopy
+
+    from Sources.icefox.MerchantRules import planning as p
+
+    class TransferProbe(p.PlannedStorageTransfer):
+
+        def __getattribute__(self, name: str) -> object:
+            if name == 'direction':
+                raise AssertionError('transfer projection must not inspect direction')
+            return super().__getattribute__(name)
+
+    items = [_cp7_item(*row) for row in ((7, 70, 10), (7, 70, 4), (8, 80, 2), (9, 90, 0), (10, 100, -1), (11, 110, 5))]
+    trace: list[str] = []
+    error = RuntimeError('nonpositive transfer quantity must be skipped')
+    transfers: list[p.PlannedStorageTransfer] = [
+        TransferProbe('deposit', '', '', 7, 2),
+        TransferProbe('withdraw', '', '', 7, 1),
+        TransferProbe('deposit', '', '', 8, 2),
+        TransferProbe('deposit', '', '', 7, -4),
+        TransferProbe('deposit', '', '', 0, _CP7Int(1, 'forbidden quantity', trace, error)),
+    ]
+    before = deepcopy(items)
+    transfer_fields = [dict(vars(transfer)) for transfer in transfers]
+    widget = _cp7_widget(module)
+    for project in (
+        p.apply_planned_transfer_quantities,
+        _CP7WidgetAccess.bound_apply_planned_transfer_quantities(widget),
+    ):
+        result = project(items, transfers)
+        _cp7_equal(
+            [(r.item_id, r.model_id, r.quantity) for r in result],
+            [(7, 70, 7), (7, 70, 1), (11, 110, 5)],
+            'transfer literals',
+        )
+        for output, source in zip(result[:2], items[:2], strict=True):
+            _expect(
+                output is not source and output.rune_identifiers is source.rune_identifiers,
+                'CP7 repeated transfer shallow replacement',
+            )
+        _expect(result[-1] is items[-1], 'CP7 unchanged transfer row')
+    _cp7_equal(trace, [], 'skipped transfer quantity')
+    _cp7_equal(items, before, 'transfer input non-mutation')
+    _cp7_equal([dict(vars(transfer)) for transfer in transfers], transfer_fields, 'transfer record non-mutation')
+
+
+def _test_cp7_planning_legacy_reader_order_and_late_lookup(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    for empty in (False, True):
+        for replace_item in (True, False):
+            calls: list[tuple[str, int]] = []
+            conversions: list[str] = []
+            patches = _CP5PatchSet()
+
+            def new_reader(item_id: int) -> int:
+                _expect(type(item_id) is int, 'CP7 reader receives converted ID')
+                calls.append(('new', item_id))
+                conversions.append('read-new')
+                return _CP7Int(5, 'quantity-new', conversions)
+
+            def old_reader(item_id: int) -> int:
+                _expect(type(item_id) is int, 'CP7 old reader receives converted ID')
+                calls.append(('old', item_id))
+                conversions.append('read-old')
+                if replace_item:
+                    patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(new_reader))
+                else:
+                    patches.set(facade.Properties, 'GetQuantity', new_reader)
+                return _CP7Int(2, 'quantity-old', conversions)
+
+            facade = _CP7ItemFacade(old_reader)
+            try:
+                patches.set(module.GLOBAL_CACHE, 'Item', facade)
+                ids = [_CP7Int(v, 'id-' + str(i), conversions) for i, v in enumerate((1, 1, 0, -1))]
+                plan = p.PlanResult(destroy_item_ids=list(ids))
+                rows = [] if empty else [_cp7_item(1, 10, 10)]
+                result = _CP7WidgetAccess.get_items_after_planned_pre_buy_actions(widget, rows, plan)
+                _cp7_equal(calls, [('old', 1), ('new', 1)], 'late reader occurrence order')
+                _cp7_equal(
+                    conversions,
+                    ['id-0', 'read-old', 'quantity-old', 'id-1', 'read-new', 'quantity-new', 'id-2', 'id-3'],
+                    'immediate conversions',
+                )
+                _cp7_equal([r.quantity for r in result], [] if empty else [5], 'legacy assignment overwrites')
+            finally:
+                patches.restore()
+    order: list[str] = []
+
+    class Rows(list['InventoryItemInfo']):
+
+        def __iter__(self) -> Iterator[InventoryItemInfo]:
+            order.append('inventory')
+            return super().__iter__()
+
+    def reader(item_id: int) -> int:
+        order.append('read:' + str(item_id))
+        return 2 if len(order) == 1 else 5
+
+    plan = p.PlanResult(
+        destroy_item_ids=[1, 1, 0, -1],
+        material_sales=[p.PlannedMaterialSale('materials', _CP7Int(0, 'material', order), 10, '', 1, 9)],
+    )
+    result = p.get_items_after_planned_pre_buy_actions(Rows([_cp7_item(1, 10, 10)]), plan, quantity_reader=reader)
+    _cp7_equal(order, ['read:1', 'read:1', 'material', 'inventory'], 'reads precede material and inventory')
+    _cp7_equal([r.quantity for r in result], [5], 'canonical legacy overwrite')
+
+
+def _test_cp7_planning_projection_failure_order(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    calls: list[int] = []
+    accesses: list[str] = []
+    error = RuntimeError('CP7 exact second read')
+    conversion_error = ValueError('CP7 exact conversion')
+
+    class Rows(list['InventoryItemInfo']):
+
+        def __iter__(self) -> Iterator[InventoryItemInfo]:
+            accesses.append('inventory')
+            return super().__iter__()
+
+    def reader(item_id: int) -> int:
+        calls.append(item_id)
+        if item_id == 2:
+            raise error
+        return 1
+
+    def canonical(rows: list[InventoryItemInfo], plan: PlanResult) -> list[InventoryItemInfo]:
+        return p.get_items_after_planned_pre_buy_actions(rows, plan, quantity_reader=reader)
+
+    patches = _CP5PatchSet()
+    try:
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(reader))
+        for project in (canonical, _CP7WidgetAccess.bound_get_items_after_planned_pre_buy_actions(widget)):
+            calls.clear()
+            accesses.clear()
+            selected = p.PlanResult(
+                identify_item_ids=[_CP7Int(1, 'identify', accesses, conversion_error)], destroy_item_ids=[1, 2]
+            )
+            _cp7_exception(lambda: project(Rows(), selected), conversion_error, 'identify conversion first')
+            _cp7_equal(calls, [], 'identify fails before reader')
+            calls.clear()
+            accesses.clear()
+            selected = p.PlanResult(
+                destroy_item_ids=[1, 2],
+                material_sales=[p.PlannedMaterialSale('materials', _CP7Int(1, 'material', accesses), 10, '', 1, 1)],
+            )
+            _cp7_exception(lambda: project(Rows(), selected), error, 'second reader original exception')
+            _cp7_equal(calls, [1, 2], 'partial reader calls')
+            _cp7_equal(accesses, [], 'failure precedes material/inventory')
+            for selected in (
+                p.PlanResult(),
+                p.PlanResult(destroy_item_ids=[0, -1]),
+                p.PlanResult(destroy_item_ids=[1], destroy_actions=[p.PlannedDestroyAction(0, 0, '', 0, 0)]),
+            ):
+                calls.clear()
+                project([], selected)
+                _cp7_equal(calls, [], 'short-circuit reader exclusion')
+
+        def bad_quantity(item_id: int) -> int:
+            calls.append(item_id)
+            return _CP7Int(1, 'quantity', accesses, conversion_error)
+
+        calls.clear()
+        patches.set(module.GLOBAL_CACHE, 'Item', _CP7ItemFacade(bad_quantity))
+        _cp7_exception(
+            lambda: _CP7WidgetAccess.get_items_after_planned_pre_buy_actions(
+                widget, [], p.PlanResult(destroy_item_ids=[1, 2])
+            ),
+            conversion_error,
+            'quantity conversion first',
+        )
+        _cp7_equal(calls, [1], 'quantity failure prevents second call')
+    finally:
+        patches.restore()
+    accesses.clear()
+    transfer = p.PlannedStorageTransfer('deposit', '', '', _CP7Int(1, 'id', accesses), _CP7Int(2, 'quantity', accesses))
+    p.apply_planned_transfer_quantities([], [transfer])
+    _cp7_equal(accesses, ['id', 'quantity'], 'transfer ID precedes quantity')
+    accesses.clear()
+    transfer.item_id = 0
+    p.apply_planned_transfer_quantities([], [transfer])
+    _cp7_equal(accesses, [], 'nonpositive transfer skips quantity')
+    accesses.clear()
+    row = _cp7_item(_CP7Int(1, 'id', accesses), 10, _CP7Int(2, 'quantity', accesses))
+    p.get_items_after_planned_pre_buy_actions([row], p.PlanResult(), quantity_reader=reader)
+    _cp7_equal(accesses[:2], ['quantity', 'id'], 'inventory quantity precedes ID')
+    accesses.clear()
+    row.quantity = 0
+    p.get_items_after_planned_pre_buy_actions([row], p.PlanResult(), quantity_reader=reader)
+    _cp7_equal(accesses, [], 'nonpositive inventory skips ID')
+
+
+def _test_cp7_planning_assessment_passes_and_counts(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    for split, count in (
+        (p.split_preview_entries, p.get_preview_entry_counts),
+        (_CP7WidgetAccess.bound_split_preview_entries(widget), _CP7WidgetAccess.bound_get_preview_entry_counts(widget)),
+    ):
+        trace: list[str] = []
+        entries = [
+            p.ExecutionPlanEntry('sell', 'merchant', label, quantity, _CP7Str((state,), label, trace))
+            for label, state, quantity in (('A', 'will execute', 100), ('B', 'conditional', 0), ('C', 'mystery', -7))
+        ]
+        actionable, skipped = split(entries)
+        _expect(
+            actionable[0] is entries[0] and actionable[1] is entries[1] and (skipped[0] is entries[2]),
+            'CP7 split identities',
+        )
+        _cp7_equal(trace, ['A', 'B', 'C', 'A', 'B', 'C'], 'split two ordered passes')
+        trace.clear()
+        _cp7_equal(count(entries), (1, 1, 1), 'quantity-independent counts')
+        _cp7_equal(trace, ['A', 'B', 'C', 'A', 'B', 'C'], 'count two ordered passes')
+        changing = p.ExecutionPlanEntry(
+            'sell', 'merchant', 'changing', 1, _CP7Str(('will execute', 'conditional'), 'X', trace)
+        )
+        _cp7_equal(count([changing]), (1, 1, 0), 'state changes between count passes')
+        changing.state = _CP7Str(('will execute', 'unknown'), 'X', trace)
+        left, right = split([changing])
+        _expect(left[0] is changing and right[0] is changing, 'CP7 same entry can appear in both passes')
+        error = RuntimeError('CP7 second state conversion')
+        trace.clear()
+        entries[1].state = _CP7Str(('conditional',), 'B', trace, error)
+        _cp7_exception(lambda: split(entries), error, 'split conversion failure')
+        _cp7_equal(trace, ['A', 'B'], 'split failure position')
+
+
+def _test_cp7_planning_storage_predicates(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+
+    _expect(module.PlanResult is p.PlanResult, 'CP7 predicate plan owner')
+    for action, merchant, state, expected in (
+        ('withdraw', 'merchant', 'conditional', (True, False, False, False)),
+        ('deposit', 'merchant', 'will execute', (False, True, False, False)),
+        ('deposit', 'storage', 'will execute', (False, True, False, True)),
+        ('deposit', 'storage', 'conditional', (True, False, True, False)),
+        ('deposit', 'storage', 'mystery', (False, False, False, False)),
+    ):
+        plan = p.PlanResult(entries=[p.ExecutionPlanEntry(action, merchant, '', 1, state)])
+        _cp7_equal(
+            (
+                p.plan_has_conditional_storage_actions(plan),
+                p.plan_has_direct_storage_actions(plan),
+                p.plan_has_conditional_cleanup_actions(plan),
+                p.plan_has_direct_cleanup_actions(plan),
+            ),
+            expected,
+            'storage predicate literals',
+        )
+    _expect(
+        not p.plan_has_local_identify_actions(p.PlanResult(identify_claimed_item_ids=[1])),
+        'CP7 claims are not identify actions',
+    )
+    _expect(p.plan_has_local_identify_actions(p.PlanResult(identify_item_ids=[1])), 'CP7 actual identify actions')
+    _expect(p.plan_has_local_salvage_actions(p.PlanResult(salvage_item_ids=[1])), 'CP7 actual salvage actions')
+
+    class PlanProbe(p.PlanResult):
+        blocked: frozenset[str] = frozenset()
+
+        def __getattribute__(self, name: str) -> object:
+            if name != 'blocked' and name in super().__getattribute__('blocked'):
+                raise AssertionError('CP7 short circuit read ' + name)
+            return super().__getattribute__(name)
+
+    probe = PlanProbe(
+        destroy_actions=[p.PlannedDestroyAction(1, 10, '', 1, 1)],
+        cleanup_transfers=[p.PlannedStorageTransfer('deposit', '', '', 1, 1)],
+    )
+    probe.blocked = frozenset({'destroy_item_ids', 'storage_transfers', 'entries'})
+    _expect(p.plan_has_local_destroy_actions(probe), 'CP7 explicit destruction short circuit')
+    _expect(p.plan_has_local_storage_actions(probe), 'CP7 cleanup short circuit')
+    _expect(not p.plan_needs_exact_storage_scan(probe), 'CP7 state short circuit')
+    trace: list[str] = []
+    entry = p.ExecutionPlanEntry(
+        _CP7Str(('deposit',), 'action', trace),
+        _CP7Str(('storage',), 'merchant', trace),
+        '',
+        1,
+        _CP7Str(('conditional',), 'state', trace),
+    )
+    plan = p.PlanResult(entries=[entry], storage_plan_state=_CP7Str(('needs_exact_scan',), 'plan-state', trace))
+    p.plan_has_conditional_storage_actions(plan)
+    _cp7_equal(trace, ['action', 'state'], 'storage attribute order')
+    trace.clear()
+    p.plan_has_conditional_cleanup_actions(plan)
+    _cp7_equal(trace, ['action', 'merchant', 'state'], 'cleanup attribute order')
+    trace.clear()
+    p.plan_needs_exact_storage_scan(plan)
+    _cp7_equal(trace, ['plan-state', 'merchant', 'state'], 'exact scan attribute order')
+    for merchant in ('rune_trader', 'consumable_crafter', 'storage'):
+        plan = p.PlanResult(
+            entries=[p.ExecutionPlanEntry('sell', merchant, '', 1, 'conditional')],
+            storage_plan_state='needs_exact_scan',
+        )
+        _expect(p.plan_needs_exact_storage_scan(plan), 'CP7 exact scan does not require buy action ' + merchant)
+    error = RuntimeError('CP7 unreachable state')
+    entry = p.ExecutionPlanEntry('sell', 'merchant', '', 1, _CP7Str(('conditional',), 'forbidden', trace, error))
+    _expect(not p.plan_has_conditional_storage_actions(p.PlanResult(entries=[entry])), 'CP7 action short circuit')
+    entry.action_type = 'deposit'
+    _expect(not p.plan_has_conditional_cleanup_actions(p.PlanResult(entries=[entry])), 'CP7 merchant short circuit')
+
+
+def _test_cp7_planning_availability_and_acquisition_order(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    plan = p.PlanResult()
+    for merchant, action, mapping, expected in (
+        ('travel', 'sell', {}, False),
+        ('merchant', 'travel', {}, False),
+        ('inventory', 'sell', {}, True),
+        ('inventory', 'sell', {'inventory': False}, True),
+        ('merchant', 'sell', {}, False),
+    ):
+        entry = p.ExecutionPlanEntry(action, merchant, '', 1, 'will execute')
+        _cp7_equal(
+            p.is_preview_entry_available_here(entry, availability_here=mapping, plan=plan),
+            expected,
+            'availability literal',
+        )
+    rune = p.ExecutionPlanEntry('buy', 'rune_trader', '', 1, 'conditional')
+    scan = p.PlanResult(entries=[rune], storage_plan_state='needs_exact_scan')
+    mapping = {'rune_trader': True, 'storage': False}
+    _expect(not p.is_preview_entry_available_here(rune, availability_here=mapping, plan=scan), 'CP7 rune needs storage')
+    _expect(p.is_preview_entry_available_here(rune, availability_here=mapping, plan=plan), 'CP7 rune without scan')
+    trace: list[str] = []
+
+    class Availability(Mapping[str, bool]):
+
+        def __getitem__(self, key: str) -> bool:
+            trace.append('get:' + key)
+            raise KeyError(key)
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(())
+
+        def __len__(self) -> int:
+            return 0
+
+    class UnreadPlan(p.PlanResult):
+
+        def __getattribute__(self, name: str) -> object:
+            if name == 'storage_plan_state':
+                raise AssertionError('unavailable base must not inspect storage need')
+            return super().__getattribute__(name)
+
+    _expect(
+        not p.is_preview_entry_available_here(rune, availability_here=Availability(), plan=UnreadPlan()),
+        'CP7 base service short circuit',
+    )
+    _cp7_equal(trace, ['get:rune_trader'], 'mapping lookup order')
+    trace.clear()
+    unknown = p.ExecutionPlanEntry('sell', 'unknown', '', 1, 'will execute')
+    _expect(
+        not p.is_preview_entry_available_here(unknown, availability_here=Availability(), plan=plan),
+        'CP7 unknown unavailable',
+    )
+    _cp7_equal(trace, ['get:unknown'], 'unknown service lookup')
+    trace.clear()
+    patches = _CP5PatchSet()
+
+    def acquire() -> dict[str, bool]:
+        trace.append('availability')
+        return {'merchant': False}
+
+    selected: list[bool] = []
+
+    def observe(frame: types.FrameType, event: str, _argument: object) -> _CP7Trace | None:
+        if frame.f_code.co_name == '_is_preview_entry_available_here':
+            if event == 'line' and 'safe_plan' in frame.f_locals and (not selected):
+                _expect(frame.f_locals['safe_plan'] is widget.preview_plan, 'CP7 default plan selected by identity')
+                selected.append(True)
+                trace.append('default-plan')
+            return observe
+        return None
+
+    prior_profile = sys.getprofile()
+    prior_trace = sys.gettrace()
+    try:
+        patches.set(widget, '_get_preview_here_availability', acquire)
+        entry = p.ExecutionPlanEntry(
+            _CP7Str(('sell',), 'action', trace), _CP7Str(('merchant',), 'merchant', trace), '', 1, 'will execute'
+        )
+        _CP7WidgetAccess.is_preview_entry_available_here(widget, entry, availability_here={}, plan=plan)
+        _expect('availability' not in trace, 'CP7 explicit empty mapping never acquires')
+        trace.clear()
+        sys.settrace(observe)
+        _CP7WidgetAccess.is_preview_entry_available_here(widget, entry)
+        sys.settrace(prior_trace)
+        _cp7_equal(
+            trace[:4],
+            ['default-plan', 'availability', 'merchant', 'action'],
+            'default plan then acquisition then attributes',
+        )
+        trace.clear()
+        entries = [
+            p.ExecutionPlanEntry('sell', 'inventory', '', 1, _CP7Str(('will execute',), 'A', trace)),
+            p.ExecutionPlanEntry('buy', 'merchant', '', 1, _CP7Str(('conditional',), 'B', trace)),
+            p.ExecutionPlanEntry('sell', 'merchant', '', 1, _CP7Str(('unknown',), 'C', trace)),
+        ]
+        _cp7_equal(
+            _CP7WidgetAccess.get_locally_actionable_preview_counts(widget, p.PlanResult(entries=entries)),
+            (1, 2),
+            'local count literal',
+        )
+        _cp7_equal(trace[:7], ['availability', 'A', 'B', 'C', 'A', 'B', 'C'], 'local acquisition precedes split')
+    finally:
+        sys.setprofile(prior_profile)
+        sys.settrace(prior_trace)
+        patches.restore()
+
+
+def _test_cp7_planning_multi_stop_identity_and_projection(module: types.ModuleType) -> None:
+    from copy import deepcopy
+
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    embark = p.PlanResult(
+        entries=[p.ExecutionPlanEntry('buy', 'consumable_crafter', 'E', 1, 'will execute')],
+        has_actions=True,
+        consumable_crafter_buys=[p.PlannedConsumableCraft(10, 1, 'E', 'key', 'vendor', (1.0, 2.0))],
+        inventory_model_counts={10: 2},
+    )
+    destination = p.PlanResult(
+        entries=[p.ExecutionPlanEntry('sell', 'merchant', 'D', 1, 'will execute')],
+        has_actions=True,
+        merchant_stock_buys=[p.PlannedMerchantBuy(20, 1, 'D')],
+        inventory_model_counts={20: 3},
+        salvage_specific_upgrade_owners={7: p.PlannedSpecificUpgradeSalvageOwner(70, 0, p.SalvageRule())},
+    )
+    patches = _CP5PatchSet()
+
+    def build(
+        *,
+        projected_preview: bool,
+        projected_target_override_outpost_id: int,
+        allow_consumable_multi_stop: bool,
+        consumable_crafter_only: bool = False,
+        exclude_consumable_crafter: bool = False,
+        execution_context: object = None,
+    ) -> PlanResult:
+        _expect(
+            projected_preview and (not allow_consumable_multi_stop) and (execution_context is None),
+            'CP7 retained multi-stop arguments',
+        )
+        _expect(consumable_crafter_only != exclude_consumable_crafter, 'CP7 distinct route phases')
+        return embark if projected_target_override_outpost_id == module.EMBARK_BEACH_MAP_ID else destination
+
+    def name(outpost_id: int) -> str:
+        return 'E' if outpost_id == module.EMBARK_BEACH_MAP_ID else 'D'
+
+    def reached(outpost_id: int) -> bool:
+        return outpost_id == module.EMBARK_BEACH_MAP_ID
+
+    try:
+        patches.set(widget, '_build_plan', build)
+        patches.set(widget, '_get_outpost_name', name)
+        patches.set(widget, '_get_embark_beach_outpost_name', lambda: 'E')
+        patches.set(widget, '_is_travel_target_reached', reached)
+        embark_before = deepcopy(embark)
+        destination_before = deepcopy(destination)
+        result = _CP7WidgetAccess.build_consumable_crafter_multi_stop_preview(widget, 2)
+        _cp7_equal(embark, embark_before, 'multi-stop embark input unchanged')
+        _cp7_equal(destination, destination_before, 'multi-stop destination input unchanged')
+        _cp7_equal(
+            [(e.merchant_type, e.label) for e in result.entries],
+            [('consumable_crafter', 'E'), ('travel', 'D'), ('merchant', 'D')],
+            'multi-stop order',
+        )
+        _expect(
+            result.entries[0] is not embark.entries[0] and result.entries[2] is not destination.entries[0],
+            'CP7 copied entries',
+        )
+        for field_name, _annotation, kind, default in _CP7_RECORD_FIELDS['PlanResult']:
+            if kind != 'factory' or field_name in {'entries', 'coords', 'inventory_model_counts'}:
+                continue
+            original = embark if field_name == 'consumable_crafter_buys' else destination
+            before = getattr(original, field_name)
+            after = getattr(result, field_name)
+            _expect(after is not before and after == before, 'CP7 fresh multi-stop container ' + field_name)
+            if default == 'list':
+                _expect(
+                    all((a is b for a, b in zip(after, before, strict=True))),
+                    'CP7 nested list references ' + field_name,
+                )
+            else:
+                _expect(all((after[k] is before[k] for k in before)), 'CP7 nested mapping references ' + field_name)
+        _expect(
+            result.inventory_model_counts == {10: 2}
+            and result.inventory_model_counts is not embark.inventory_model_counts,
+            'CP7 first truthy count copy',
+        )
+        embark.has_actions = False
+        embark_before = deepcopy(embark)
+        destination_before = deepcopy(destination)
+        destination_result = _CP7WidgetAccess.build_consumable_crafter_multi_stop_preview(widget, 2)
+        _cp7_equal(embark, embark_before, 'identity-return embark input unchanged')
+        _cp7_equal(destination, destination_before, 'identity-return destination input unchanged')
+        _expect(
+            destination_result is destination,
+            'CP7 no-embark identity return',
+        )
+        entry = p.ExecutionPlanEntry('deposit', 'storage', '', 1, 'will execute')
+        selected = p.PlanResult(entries=[entry])
+        _CP7WidgetAccess.apply_projected_preview_post_processing(widget, selected, 'D')
+        _expect(selected.entries[0] is entry, 'CP7 projected mutation retains identity')
+        _cp7_equal(
+            (entry.state, entry.reason),
+            ('conditional', 'Projected after travel to D. Travel + Execute will reopen Xunlai after arrival.'),
+            'projected storage literal',
+        )
+    finally:
+        patches.restore()
+
+
+def _test_cp7_planning_retained_orchestration_and_authority(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+    from Sources.icefox.MerchantRules.configuration import DestroyRule
+    from Sources.icefox.MerchantRules.configuration import SellRule
+
+    widget = _cp7_widget(module)
+    patches = _CP5PatchSet()
+    trace: list[str] = []
+    seen: list[list[int]] = []
+    inventory: list[InventoryItemInfo] = []
+    saved_reservations = widget.execute_reserved_item_ids
+    saved_reservation_contents = set(saved_reservations)
+    saved_keep = widget.execute_xunlai_first_keep_by_model
+    saved_keep_contents = dict(saved_keep)
+    saved_active = widget.execute_reservation_scope_active
+    owned = False
+
+    def collect() -> list[InventoryItemInfo]:
+        return inventory
+
+    def count(items: list[InventoryItemInfo]) -> dict[int, int]:
+        seen.append([item.item_id for item in items])
+        return p.get_inventory_model_counts(items)
+
+    def simulate(items: list[InventoryItemInfo], plan: PlanResult) -> dict[int, int]:
+        trace.append('model projection')
+        seen.append([item.item_id for item in items])
+        return p.build_simulated_model_counts(items, plan)
+
+    def project(items: list[InventoryItemInfo], plan: PlanResult) -> list[InventoryItemInfo]:
+        trace.append('item projection')
+        seen.append([item.item_id for item in items])
+        return p.get_items_after_planned_pre_buy_actions(items, plan, quantity_reader=lambda _item_id: 0)
+
+    def identify(_plan: PlanResult, _items: list[InventoryItemInfo], _claimed: set[int]) -> None:
+        trace.append('identify')
+
+    def destroy(
+        _plan: PlanResult,
+        _items: list[InventoryItemInfo],
+        _destroy: list[tuple[int, DestroyRule]],
+        _sell: list[tuple[int, SellRule]],
+        _claimed: set[int],
+    ) -> None:
+        trace.append('destroy')
+
+    def salvage(
+        _plan: PlanResult, _items: list[InventoryItemInfo], _sell: list[tuple[int, SellRule]], _claimed: set[int]
+    ) -> None:
+        trace.append('salvage')
+
+    def buy(
+        _plan: PlanResult,
+        _counts: dict[int, int],
+        *,
+        execution_context: object = None,
+        sim_inventory_items: list[InventoryItemInfo] | None = None,
+        storage_items: list[InventoryItemInfo] | None = None,
+        consumable_crafter_only: bool = False,
+        exclude_consumable_crafter: bool = False,
+        allowed_rule_kinds: set[str] | None = None,
+        bypass_xunlai_first: bool = False,
+    ) -> None:
+        trace.append('buy')
+
+    def warning(_plan: PlanResult, *, inventory_model_counts: dict[int, int]) -> None:
+        trace.append('bag-space warning')
+
+    def cleanup(
+        _plan: PlanResult,
+        _items: list[InventoryItemInfo],
+        _sell: list[tuple[int, SellRule]],
+        *,
+        storage_open: bool = False,
+        storage_context_available: bool | None = None,
+    ) -> None:
+        trace.append('cleanup')
+
+    def early(_plan: PlanResult) -> None:
+        trace.append('early-kit annotation')
+
+    try:
+        for name, value in (
+            ('auto_travel_enabled', False),
+            ('_has_enabled_rules', lambda: True),
+            ('_collect_inventory_items', collect),
+            ('_collect_enabled_sell_rules', lambda: list[tuple[int, SellRule]]()),
+            ('_collect_enabled_destroy_rules', lambda: list[tuple[int, DestroyRule]]()),
+            ('_can_use_local_storage_actions', lambda: False),
+            ('_has_enabled_rune_buy_rules', lambda: False),
+            ('_has_enabled_consumable_crafter_buy_rules', lambda: False),
+            ('_has_enabled_xunlai_first_merchant_stock_targets', lambda: False),
+            ('_get_inventory_model_counts', count),
+            ('_build_simulated_model_counts', simulate),
+            ('_get_items_after_planned_pre_buy_actions', project),
+        ):
+            patches.set(widget, name, value)
+        for name, adapter in (
+            ('_plan_identify_actions', identify),
+            ('_plan_destroy_actions', destroy),
+            ('_plan_salvage_actions', salvage),
+            ('_plan_buy_actions', buy),
+            ('_plan_consumable_crafter_bag_space_warning', warning),
+            ('_plan_cleanup_actions', cleanup),
+            ('_annotate_early_kit_preview', early),
+        ):
+            patches.set(widget, name, adapter)
+        result = _CP7WidgetAccess.build_plan(
+            widget, supported_context_override=(True, 'supported', {'merchant': (1.0, 2.0)})
+        )
+        _cp7_equal(
+            trace,
+            [
+                'identify',
+                'destroy',
+                'salvage',
+                'model projection',
+                'item projection',
+                'buy',
+                'bag-space warning',
+                'cleanup',
+                'early-kit annotation',
+            ],
+            'retained phase order',
+        )
+        _expect(type(result) is p.PlanResult and (not result.has_actions), 'CP7 planning grants no execution')
+        owned = _CP7WidgetAccess.begin_execute_reservation_scope(widget)
+        _expect(owned, 'CP7 owns reservation scope')
+        _expect(not _CP7WidgetAccess.begin_execute_reservation_scope(widget), 'CP7 nested scope unowned')
+        _CP7WidgetAccess.reserve_execute_item_ids(widget, [7, 7, 0, -1])
+        _cp7_equal(widget.execute_reserved_item_ids, {7}, 'reserved positive IDs')
+        _CP7WidgetAccess.end_execute_reservation_scope(widget, False)
+        _expect(
+            widget.execute_reservation_scope_active and widget.execute_reserved_item_ids == {7},
+            'CP7 nested end retains owner',
+        )
+        inventory.append(_cp7_item(7, 70, 7))
+        seen.clear()
+        result = _CP7WidgetAccess.build_plan(
+            widget, supported_context_override=(True, 'supported', {'merchant': (1.0, 2.0)})
+        )
+        _cp7_equal(
+            seen,
+            [list[int](), list[int](), list[int]()],
+            'active reservation filters before counting and both real projections',
+        )
+        _cp7_equal(result.inventory_model_counts, {}, 'reserved plan inventory counts')
+        _expect(widget.execute_reservation_scope_active, 'CP7 filtering occurred before owned cleanup')
+        _CP7WidgetAccess.end_execute_reservation_scope(widget, True)
+        owned = False
+        _expect(
+            not widget.execute_reservation_scope_active and (not widget.execute_reserved_item_ids), 'CP7 owned cleanup'
+        )
+    finally:
+        if owned:
+            _CP7WidgetAccess.end_execute_reservation_scope(widget, True)
+        patches.restore()
+        saved_reservations.clear()
+        saved_reservations.update(saved_reservation_contents)
+        saved_keep.clear()
+        saved_keep.update(saved_keep_contents)
+        widget.execute_reserved_item_ids = saved_reservations
+        widget.execute_xunlai_first_keep_by_model = saved_keep
+        widget.execute_reservation_scope_active = saved_active
+    _test_no_target_specific_salvage_preserves_narrow_block_and_no_reservation(module)
+    _test_specific_upgrade_salvage_target_reservation_still_blocks_destroy(module)
+
+    from Sources.icefox.MerchantRules.configuration import WeaponModVariantThresholdRule
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+    from Sources.icefox.MerchantRules.weapon_mod_normalization import ParsedUpgradeMatch
+
+    database_patches = _CP5PatchSet()
+    owner_patches = _CP5PatchSet()
+    original_profile = sys.getprofile()
+    constructor_calls: list[tuple[object, object]] = []
+    constructor_code = p.PlannedSpecificUpgradeSalvageOwner.__init__.__code__
+
+    def record_owner(frame: types.FrameType, event: str, _argument: object) -> None:
+        if event == 'return' and frame.f_code is constructor_code:
+            constructor_calls.append((frame.f_locals['self'], frame.f_locals['rule_snapshot']))
+
+    try:
+        database_patches.set(module, 'MOD_DB', module.MOD_DB)
+        _install_weapon_mod_catalog_fixture(module)
+        final_widget = _cp7_widget(module)
+        item = InventoryItemInfo(
+            item_id=40,
+            model_id=4040,
+            name='Dagger Handle of Defense',
+            quantity=1,
+            value=100,
+            item_type_id=int(module.ItemType.Daggers),
+            item_type_name='Daggers',
+            rarity='Gold',
+            identified=True,
+            salvageable=True,
+            is_customized=False,
+            is_inscribable=False,
+            is_material=False,
+            is_rare_material=False,
+            is_weapon_like=True,
+            is_armor_piece=False,
+            weapon_mod_identifiers=['of Defense'],
+            weapon_mod_matches=[
+                ParsedUpgradeMatch(
+                    identifier='of Defense',
+                    target_item_type='Daggers',
+                    component_kind='DaggerHandle',
+                    mod_type='Suffix',
+                    value=5,
+                    min_value=0,
+                    max_value=0,
+                    is_maxed=False,
+                )
+            ],
+        )
+        rule = p.SalvageRule(
+            enabled=True,
+            salvage_option=module.SALVAGE_OPTION_AUTO_UPGRADE,
+            target_weapon_mod_variant_thresholds=[
+                WeaponModVariantThresholdRule(
+                    identifier='of Defense',
+                    target_item_type='Daggers',
+                    component_kind='DaggerHandle',
+                    min_value=5,
+                )
+            ],
+        )
+        rule = module._normalize_salvage_rule(rule)
+        owner_patches.set(final_widget, 'salvage_settings', _salvage_settings(module, rules=[rule]))
+
+        def final_context(*, passive: bool = False) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
+            return True, 'Ready', {'merchant': (1.0, 1.0)}
+
+        owner_patches.set(final_widget, '_get_supported_context', final_context)
+
+        def final_kit(option: object, *, preferred_kit_id: int = 0, preferred_kit_model_id: int = 0) -> int:
+            return 777
+
+        def final_signature(items: list[InventoryItemInfo] | None = None) -> tuple[tuple[int, int], ...]:
+            return ()
+
+        owner_patches.set(final_widget, '_get_salvage_kit_id_for_option', final_kit)
+        owner_patches.set(final_widget, '_get_inventory_signature', final_signature)
+        owner_patches.set(
+            final_widget, '_exact_upgrade_salvage_bridge', _FakeExactUpgradeSalvageBridge(module, available=True)
+        )
+        owner_patches.set(final_widget, '_salvage_upgrade_support_cache', None)
+
+        def final_inventory() -> list[InventoryItemInfo]:
+            return [item]
+
+        owner_patches.set(final_widget, '_collect_inventory_items', final_inventory)
+        sys.setprofile(record_owner)
+        final_plan = _CP7WidgetAccess.build_plan(final_widget)
+        sys.setprofile(original_profile)
+        owner = final_plan.salvage_specific_upgrade_owners.get(item.item_id)
+        if owner is None:
+            raise AssertionError('CP7 actual selected Specific Upgrade owner missing')
+        _expect(type(owner) is p.PlannedSpecificUpgradeSalvageOwner, 'CP7 generated canonical owner class')
+        _expect(
+            any(created is owner and supplied is owner.rule_snapshot for created, supplied in constructor_calls),
+            'CP7 generated owner retains the exact selected constructor snapshot',
+        )
+        _cp7_equal((owner.model_id, owner.rule_index), (item.model_id, 0), 'generated owner selection')
+        _cp7_equal(owner.rule_snapshot, rule, 'selected rule snapshot values')
+    finally:
+        sys.setprofile(original_profile)
+        owner_patches.restore()
+        database_patches.restore()
+
+
+def _test_cp7_planning_retained_local_remote_results(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+
+    widget = _cp7_widget(module)
+    patches = _CP5PatchSet()
+    entries = [
+        p.ExecutionPlanEntry('sell', 'merchant', 'direct', 1, 'will execute'),
+        p.ExecutionPlanEntry('buy', 'merchant', 'conditional', 1, 'conditional'),
+        p.ExecutionPlanEntry('sell', 'merchant', 'skipped', 1, 'skipped'),
+    ]
+    try:
+        patches.set(widget, '_ensure_initialized', lambda: None)
+        patches.set(widget, '_get_preview_here_availability', lambda: {'merchant': True})
+        patches.set(widget, 'preview_plan', p.PlanResult(entries=entries, supported_map=True, has_actions=False))
+        _cp7_equal(_CP7WidgetAccess.get_preview_entry_counts(widget, entries), (1, 1, 1), 'retained entry counts')
+        _cp7_equal(
+            _CP7WidgetAccess.get_locally_actionable_preview_counts(widget, widget.preview_plan),
+            (2, 1),
+            'retained local counts',
+        )
+        for selected, supported, expected in (
+            (entries, True, ('Ready', '2 can run, 1 blocked, 1 need live checks.')),
+            (entries[1:], True, ('Conditional', '1 can run, 1 blocked, 1 need live checks.')),
+            ([], True, ('No Actions', 'No actionable merchant work found.')),
+            ([], False, ('Unsupported', 'Current map is not supported.')),
+        ):
+            widget.preview_plan = p.PlanResult(
+                entries=selected, supported_map=supported, supported_reason='Current map is not supported.'
+            )
+            result = widget.build_remote_preview_result()
+            _cp7_equal((result['status_label'], result['summary']), expected, 'remote literal result')
+        _expect(not widget.preview_plan.has_actions, 'CP7 independent has_actions remains unchanged')
+        published = p.PlanResult(entries=entries, supported_map=True, has_actions=False)
+        context: tuple[bool, str, dict[str, tuple[float, float] | None]] = (
+            True,
+            'publication',
+            {'merchant': (1.0, 2.0)},
+        )
+
+        def publish_builder(
+            *,
+            projected_preview: bool,
+            supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]],
+        ) -> PlanResult:
+            _expect(projected_preview and supported_context_override is context, 'CP7 publication forwards context')
+            return published
+
+        patches.set(widget, '_build_plan', publish_builder)
+        for name in ('preview_ready', '_service_role_preview_refresh_pending', 'status_message'):
+            patches.set(widget, name, getattr(widget, name))
+        patches.set(widget, '_set_preview_projection_state', lambda: None)
+        patches.set(widget, '_clear_preview_inventory_diff', lambda: None)
+        _CP7WidgetAccess.refresh_preview_from_service_context(widget, context)
+        _expect(
+            widget.preview_plan is published and (not published.has_actions),
+            'CP7 published canonical object identity and independent has_actions',
+        )
+    finally:
+        patches.restore()
+
+
+def _cp7_external_case(kind: str) -> dict[str, object]:
+    from hashlib import sha256
+    from uuid import uuid4
+
+    raw = os.environ.get('MERCHANT_RULES_CP7_' + kind.upper() + '_CONFIG', '')
+    _expect(bool(raw), 'CP7 ' + kind + ' requires an explicit evidence configuration')
+    config_path = Path(raw).resolve()
+    config_bytes = config_path.read_bytes()
+    config = json.loads(config_bytes)
+    root = Path(config['evidence_root']).resolve()
+    _expect(
+        root.name.startswith('cp7-implementation-') and config_path.is_relative_to(root),
+        'CP7 configuration containment',
+    )
+    driver = Path(config['driver']['path']).resolve()
+    _expect(driver.is_relative_to(root), 'CP7 driver containment')
+    _expect(sha256(driver.read_bytes()).hexdigest() == config['driver']['sha256'], 'CP7 driver pin')
+    output = root / ('cp7-' + kind + '-' + str(uuid4()))
+    _expect(not output.exists(), 'CP7 create-only child output')
+    output.mkdir()
+    command = [sys.executable, '-I', '-B', '-S', str(driver), '--config', str(config_path), '--output', str(output)]
+    completed = subprocess.run(command, cwd=output, capture_output=True, timeout=300, check=False)
+    for filename, content in (
+        ('stdout.txt', completed.stdout),
+        ('stderr.txt', completed.stderr),
+        (
+            'launch.json',
+            (
+                json.dumps(
+                    {
+                        'command': command,
+                        'returncode': completed.returncode,
+                        'configuration': str(config_path),
+                        'configuration_sha256': sha256(config_bytes).hexdigest(),
+                    },
+                    indent=2,
+                )
+                + '\n'
+            ).encode(),
+        ),
+    ):
+        with (output / filename).open('xb') as stream:
+            stream.write(content)
+    _expect(completed.returncode == 0, f'CP7 {kind} child failed; evidence {output}: {completed.stderr!r}')
+    report: dict[str, object] = json.loads((output / 'report.json').read_bytes())
+    _expect(report['passed'] is True, 'CP7 ' + kind + ' report')
+    _expect(config_path.read_bytes() == config_bytes, 'CP7 immutable configuration')
+    _expect(sha256(driver.read_bytes()).hexdigest() == config['driver']['sha256'], 'CP7 immutable driver')
+    print('CP7 ' + kind + ' evidence: ' + str(output / 'report.json'))
+    return report
+
+
+def _test_cp7_planning_cold_import_isolation() -> None:
+    report = _cp7_external_case('cold_import')
+    _expect(report['namespace_parents_verified'] is True, 'CP7 actual namespace parents')
+    _expect(report['acquisition_events'] == [], 'CP7 no planning-initiated acquisition')
+
+
+def _test_cp7_planning_completed_cp6_differential() -> None:
+    report = _cp7_external_case('differential')
+    _cp7_equal(
+        report['matched_groups'],
+        [
+            'records_and_bindings',
+            'model_and_item_projections',
+            'transfer_projection',
+            'legacy_reader_and_failures',
+            'assessment_passes_and_predicates',
+            'availability_and_acquisition',
+            'multi_stop_and_projected_mutation',
+            'retained_orchestration_and_results',
+            'fixture_and_source_binding',
+        ],
+        'independent group inventory',
+    )
+    _expect(report['successful_children'] == 2, 'CP7 two successful independent launches')
+    _expect(
+        report['source_bindings_verified'] is True and report['within_process_identities_verified'] is True,
+        'CP7 independent binding and identity assertions',
+    )
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -50968,6 +52992,60 @@ def main() -> int:
                 ),
                 ('cp6_service_defining_bindings', lambda: _test_cp6_service_defining_bindings(module)),
                 ('cp6_service_completed_cp5_differential', _test_cp6_service_completed_cp5_differential),
+            ]
+        )
+
+        tests.extend(
+            [
+                (
+                    "cp7_planning_record_signatures_and_defaults",
+                    lambda: _test_cp7_planning_record_signatures_and_defaults(module),
+                ),
+                (
+                    "cp7_planning_record_references_and_mutability",
+                    lambda: _test_cp7_planning_record_references_and_mutability(module),
+                ),
+                ("cp7_planning_canonical_bindings", lambda: _test_cp7_planning_canonical_bindings(module)),
+                (
+                    "cp7_planning_model_count_and_simulation_literals",
+                    lambda: _test_cp7_planning_model_count_and_simulation_literals(module),
+                ),
+                (
+                    "cp7_planning_pre_buy_projection_literals",
+                    lambda: _test_cp7_planning_pre_buy_projection_literals(module),
+                ),
+                (
+                    "cp7_planning_transfer_projection_literals",
+                    lambda: _test_cp7_planning_transfer_projection_literals(module),
+                ),
+                (
+                    "cp7_planning_legacy_reader_order_and_late_lookup",
+                    lambda: _test_cp7_planning_legacy_reader_order_and_late_lookup(module),
+                ),
+                ("cp7_planning_projection_failure_order", lambda: _test_cp7_planning_projection_failure_order(module)),
+                (
+                    "cp7_planning_assessment_passes_and_counts",
+                    lambda: _test_cp7_planning_assessment_passes_and_counts(module),
+                ),
+                ("cp7_planning_storage_predicates", lambda: _test_cp7_planning_storage_predicates(module)),
+                (
+                    "cp7_planning_availability_and_acquisition_order",
+                    lambda: _test_cp7_planning_availability_and_acquisition_order(module),
+                ),
+                (
+                    "cp7_planning_multi_stop_identity_and_projection",
+                    lambda: _test_cp7_planning_multi_stop_identity_and_projection(module),
+                ),
+                (
+                    "cp7_planning_retained_orchestration_and_authority",
+                    lambda: _test_cp7_planning_retained_orchestration_and_authority(module),
+                ),
+                (
+                    "cp7_planning_retained_local_remote_results",
+                    lambda: _test_cp7_planning_retained_local_remote_results(module),
+                ),
+                ("cp7_planning_cold_import_isolation", _test_cp7_planning_cold_import_isolation),
+                ("cp7_planning_completed_cp6_differential", _test_cp7_planning_completed_cp6_differential),
             ]
         )
 

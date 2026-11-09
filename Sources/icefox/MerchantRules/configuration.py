@@ -43,6 +43,18 @@ MERCHANT_TYPE_SCROLL_TRADER = "scroll_trader"
 MERCHANT_TYPE_CONSUMABLE_CRAFTER = "consumable_crafter"
 
 
+MATERIAL_BATCH_SIZE = 10
+
+
+MERCHANT_TYPE_INVENTORY = "inventory"
+
+
+MERCHANT_TYPE_STORAGE = "storage"
+
+
+MERCHANT_TYPE_TRAVEL = "travel"
+
+
 BUY_KIND_MERCHANT_STOCK = "merchant_stock_target"
 
 
