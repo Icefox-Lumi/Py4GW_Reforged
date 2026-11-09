@@ -9,7 +9,7 @@ Safety-sensitive operations fail closed when protections, required services, det
 salvage APIs, storage capacity, or preview consistency cannot be verified.
 """
 
-import math
+import math as math
 import os
 import re
 import time
@@ -150,19 +150,20 @@ from Sources.icefox.MerchantRules.salvage_options import resolve_salvage_operati
 from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset as _choose_keep_subset
 from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset_at_most as _choose_keep_subset_at_most
 # Compatibility helpers remain accessible through the widget module.
+from Sources.icefox.MerchantRules import service_observation as _service_observation
 from Sources.icefox.MerchantRules.service_observation import LiveServiceRoleScan
+from Sources.icefox.MerchantRules.service_observation import ServiceResolutionSession
+from Sources.icefox.MerchantRules.service_observation import SupportedContext
 from Sources.icefox.MerchantRules.service_observation import (
     agent_name_matches_service_role as _service_name_matches_role,
 )
 from Sources.icefox.MerchantRules.service_observation import canonical_service_role as _service_canonical_role
-from Sources.icefox.MerchantRules.service_observation import coerce_agent_xy as _coerce_agent_xy
 from Sources.icefox.MerchantRules.service_observation import extract_agent_role_suffix as _service_extract_role_suffix
 from Sources.icefox.MerchantRules.service_observation import get_agent_search_origin as _service_search_origin
 from Sources.icefox.MerchantRules.service_observation import (
     get_live_service_candidate_snapshot as _service_candidate_snapshot,
 )
 from Sources.icefox.MerchantRules.service_observation import normalize_service_role_text as _service_normalize_role_text
-from Sources.icefox.MerchantRules.service_observation import scan_live_service_roles as _service_role_scan
 from Sources.icefox.MerchantRules import weapon_mod_normalization as _weapon_mod_normalization
 from Sources.icefox.MerchantRules.weapon_mod_normalization import (
     WEAPON_MOD_TARGET_ITEM_TYPE_MODIFIER_ID as WEAPON_MOD_TARGET_ITEM_TYPE_MODIFIER_ID,
@@ -173,6 +174,9 @@ from Sources.icefox.MerchantRules.weapon_mod_normalization import (
 )
 
 # Retain historical private widget aliases without expanding the component's public API.
+_coerce_agent_xy = _service_observation.coerce_agent_xy
+_normalize_vendor_encoded_identity = _service_observation.normalize_vendor_encoded_identity
+_service_role_scan = _service_observation.scan_live_service_roles
 _build_parsed_weapon_mod_match = _weapon_mod_normalization.build_parsed_weapon_mod_match
 _get_weapon_mod_component_kind_for_target: Callable[[object, object], str] = getattr(
     _weapon_mod_normalization, "_get_weapon_mod_component_kind_for_target"
@@ -4382,20 +4386,6 @@ def _get_agent_search_origin(agent_api: object) -> tuple[tuple[float, float] | N
     return _service_search_origin(agent_api, player_api=Player, coerce_int=_safe_int)
 
 
-def _normalize_vendor_encoded_identity(raw_identity: object) -> tuple[int, ...] | None:
-    """Return exact encoded bytes without invoking any string decoder."""
-
-    if not isinstance(raw_identity, (bytes, bytearray, list, tuple)):
-        return None
-    try:
-        values = tuple(int(value) for value in raw_identity)
-    except (TypeError, ValueError):
-        return None
-    if any(value < 0 or value > 255 for value in values):
-        return None
-    return values
-
-
 def _named_agent_target_has_authoritative_identity(agent_kind: str, target_key: object) -> bool:
     target = _get_named_agent_target_definition(agent_kind, target_key)
     if target is None:
@@ -5357,6 +5347,86 @@ class MerchantRulesWidget:
     def rune_buy_professions(self, value: list[str]) -> None:
         self._catalog_session.rune_buy_professions = value
 
+    @property
+    def cached_context_map_id(self) -> int:
+        return self._service_resolution_session.cached_context_map_id
+
+    @cached_context_map_id.setter
+    def cached_context_map_id(self, value: int) -> None:
+        self._service_resolution_session.cached_context_map_id = value
+
+    @property
+    def cached_supported_context(self) -> SupportedContext | None:
+        return self._service_resolution_session.cached_supported_context
+
+    @cached_supported_context.setter
+    def cached_supported_context(self, value: SupportedContext | None) -> None:
+        self._service_resolution_session.cached_supported_context = value
+
+    @property
+    def _service_role_observed_coords(self) -> dict[str, tuple[float, float]]:
+        return self._service_resolution_session.observed_coords
+
+    @_service_role_observed_coords.setter
+    def _service_role_observed_coords(self, value: dict[str, tuple[float, float]]) -> None:
+        self._service_resolution_session.observed_coords = value
+
+    @property
+    def _service_role_candidate_fingerprint(self) -> tuple[int, ...] | None:
+        return self._service_resolution_session.candidate_fingerprint
+
+    @_service_role_candidate_fingerprint.setter
+    def _service_role_candidate_fingerprint(self, value: tuple[int, ...] | None) -> None:
+        self._service_resolution_session.candidate_fingerprint = value
+
+    @property
+    def _service_role_retry_fingerprint(self) -> tuple[int, ...] | None:
+        return self._service_resolution_session.retry_fingerprint
+
+    @_service_role_retry_fingerprint.setter
+    def _service_role_retry_fingerprint(self, value: tuple[int, ...] | None) -> None:
+        self._service_resolution_session.retry_fingerprint = value
+
+    @property
+    def _service_role_player_anchor(self) -> tuple[float, float] | None:
+        return self._service_resolution_session.player_anchor
+
+    @_service_role_player_anchor.setter
+    def _service_role_player_anchor(self, value: tuple[float, float] | None) -> None:
+        self._service_resolution_session.player_anchor = value
+
+    @property
+    def _service_role_pending_agent_ids(self) -> set[int]:
+        return self._service_resolution_session.pending_agent_ids
+
+    @_service_role_pending_agent_ids.setter
+    def _service_role_pending_agent_ids(self, value: set[int]) -> None:
+        self._service_resolution_session.pending_agent_ids = value
+
+    @property
+    def _service_role_name_retry_deadline_at(self) -> float:
+        return self._service_resolution_session.name_retry_deadline_at
+
+    @_service_role_name_retry_deadline_at.setter
+    def _service_role_name_retry_deadline_at(self, value: float) -> None:
+        self._service_resolution_session.name_retry_deadline_at = value
+
+    @property
+    def _service_role_next_poll_at(self) -> float:
+        return self._service_resolution_session.next_poll_at
+
+    @_service_role_next_poll_at.setter
+    def _service_role_next_poll_at(self, value: float) -> None:
+        self._service_resolution_session.next_poll_at = value
+
+    @property
+    def _service_role_lifecycle_active(self) -> bool:
+        return self._service_resolution_session.lifecycle_active
+
+    @_service_role_lifecycle_active.setter
+    def _service_role_lifecycle_active(self, value: bool) -> None:
+        self._service_resolution_session.lifecycle_active = value
+
     def __init__(self):
         self.initialized = False
         self._ranked_catalog_search = RankedCatalogSearch(
@@ -5617,16 +5687,59 @@ class MerchantRulesWidget:
         self.preview_inventory_diff_summary = ""
         self.preview_inventory_diff_rows: list[str] = []
         self.execute_drift_requires_confirmation = False
-        self.cached_context_map_id = -1
-        self.cached_supported_context: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None
-        self._service_role_observed_coords: dict[str, tuple[float, float]] = {}
-        self._service_role_candidate_fingerprint: tuple[int, ...] | None = None
-        self._service_role_retry_fingerprint: tuple[int, ...] | None = None
-        self._service_role_player_anchor: tuple[float, float] | None = None
-        self._service_role_pending_agent_ids: set[int] = set()
-        self._service_role_name_retry_deadline_at = 0.0
-        self._service_role_next_poll_at = 0.0
-        self._service_role_lifecycle_active = False
+        self._service_resolution_session = ServiceResolutionSession(
+            default_selectors=DEFAULT_NPC_SELECTORS,
+            supported_selectors=SUPPORTED_MAP_NPC_SELECTORS,
+            rune_selectors=SUPPORTED_MAP_RUNE_TRADER_SELECTORS,
+            scroll_selectors=SUPPORTED_MAP_SCROLL_TRADER_SELECTORS,
+            service_model_ids=SUPPORTED_MAP_SERVICE_MODEL_IDS,
+            map_service_selectors=MERCHANT_RULES_MAP_SERVICE_SELECTORS,
+            role_aliases=SERVICE_ROLE_ALIASES,
+            merchant_labels=MERCHANT_TYPE_LABELS,
+            merchant_type=MERCHANT_TYPE_MERCHANT,
+            materials_type=MERCHANT_TYPE_MATERIALS,
+            rune_type=MERCHANT_TYPE_RUNE_TRADER,
+            scroll_type=MERCHANT_TYPE_SCROLL_TRADER,
+            rare_materials_type=MERCHANT_TYPE_RARE_MATERIALS,
+            consumable_type=MERCHANT_TYPE_CONSUMABLE_CRAFTER,
+            embark_map_id=EMBARK_BEACH_MAP_ID,
+            search_max_dist=OUTPOST_SERVICE_SEARCH_MAX_DIST,
+            name_retry_seconds=SERVICE_ROLE_NAME_RETRY_SECONDS,
+            name_retry_poll_seconds=SERVICE_ROLE_NAME_RETRY_POLL_SECONDS,
+            event_poll_seconds=SERVICE_ROLE_EVENT_POLL_SECONDS,
+            meaningful_move_dist=SERVICE_ROLE_MEANINGFUL_MOVE_DIST,
+            xunlai_agent_name=XUNLAI_AGENT_NAME_QUERY,
+            xunlai_chest_name=XUNLAI_CHEST_NAME_QUERY,
+            xunlai_agent_model_ids=XUNLAI_AGENT_MODEL_IDS,
+            xunlai_chest_model_id=XUNLAI_CHEST_MODEL_ID,
+            module_name=MODULE_NAME,
+            get_map_id=lambda: Map.GetMapID(),
+            get_map_name=lambda map_id: Map.GetMapName(map_id),
+            is_map_ready=lambda: Map.IsMapReady(),
+            is_outpost=lambda: Map.IsOutpost(),
+            is_guild_hall=lambda: Map.IsGuildHall(),
+            monotonic=lambda: time.monotonic(),
+            candidate_snapshot=lambda: self._get_live_service_candidate_snapshot(),
+            player_origin=lambda agent: _get_agent_search_origin(agent),
+            coerce_int=lambda: _safe_int,
+            selector_authoritative=lambda kind, selector: _named_agent_target_has_authoritative_identity(
+                kind,
+                selector,
+            ),
+            resolve_agent_step=lambda step, recipe, index, kind, distance, log: resolve_agent_xy_from_step(
+                step,
+                recipe_name=recipe,
+                step_idx=index,
+                agent_kind=kind,
+                default_max_dist=distance,
+                log_failures=log,
+            ),
+            storage_is_open=lambda: self._service_storage_is_open(),
+            scroll_policy=lambda: self._has_enabled_scroll_trader_buy_rules(),
+            debug_log=lambda message: self._debug_log(message()),
+            log_failure=lambda recipe_name, message: _log_agent_selector_failure(recipe_name, message()),
+            format_coords=lambda: self._format_debug_coords,
+        )
         self._service_role_preview_refresh_pending = False
         self._catalog_session = CatalogSession(
             ranker=self._ranked_catalog_search,
@@ -12656,9 +12769,8 @@ class MerchantRulesWidget:
         self._cleanup_target_display_cache_key = None
         self._cleanup_target_display_cache = None
 
-    def _invalidate_supported_context_cache(self):
-        self.cached_context_map_id = -1
-        self.cached_supported_context = None
+    def _invalidate_supported_context_cache(self) -> None:
+        self._service_resolution_session.invalidate_context()
 
     def _register_catalog_entry(
         self,
@@ -16071,24 +16183,18 @@ class MerchantRulesWidget:
         role_scan: LiveServiceRoleScan | None = None,
         resolve_role_fallback: bool = True,
     ) -> tuple[float, float] | None:
-        selector_name = str(SUPPORTED_MAP_RUNE_TRADER_SELECTORS.get(int(map_id), "") or "").strip()
-        return self._resolve_service_coords(
-            map_id=map_id,
-            service_type=MERCHANT_TYPE_RUNE_TRADER,
-            selector_name=selector_name,
-            fallback_role=MERCHANT_TYPE_RUNE_TRADER,
+        return self._service_resolution_session.resolve_rune_trader_coords(
+            map_id,
             log_failures=log_failures,
             role_scan=role_scan,
             resolve_role_fallback=resolve_role_fallback,
         )
 
     def _get_scroll_trader_lookup(self) -> tuple[str, str]:
-        if Map.IsGuildHall():
-            return "scroll_trader", MERCHANT_TYPE_SCROLL_TRADER
-        return "rare_scroll_trader", "rare_scroll_trader"
+        return self._service_resolution_session.get_scroll_trader_lookup()
 
     def _get_scroll_trader_service_label(self) -> str:
-        return "Scroll Trader" if Map.IsGuildHall() else "Rare Scroll Trader"
+        return self._service_resolution_session.get_scroll_trader_service_label()
 
     def _resolve_scroll_trader_coords(
         self,
@@ -16099,15 +16205,9 @@ class MerchantRulesWidget:
         role_scan: LiveServiceRoleScan | None = None,
         resolve_role_fallback: bool = True,
     ) -> tuple[float, float] | None:
-        selector_key, fallback_role = self._get_scroll_trader_lookup()
-        selector_name = str(SUPPORTED_MAP_SCROLL_TRADER_SELECTORS.get(int(map_id), "") or "").strip()
-        if not selector_name and selector_data:
-            selector_name = str(selector_data.get(selector_key, "") or "").strip()
-        return self._resolve_service_coords(
-            map_id=map_id,
-            service_type=MERCHANT_TYPE_SCROLL_TRADER,
-            selector_name=selector_name,
-            fallback_role=fallback_role,
+        return self._service_resolution_session.resolve_scroll_trader_coords(
+            map_id,
+            selector_data,
             log_failures=log_failures,
             role_scan=role_scan,
             resolve_role_fallback=resolve_role_fallback,
@@ -16121,176 +16221,15 @@ class MerchantRulesWidget:
         selectors: tuple[MerchantServiceSelector, ...],
         log_failures: bool,
     ) -> tuple[float, float] | None:
-        safe_map_id = max(0, _safe_int(map_id, 0))
-        service_label = MERCHANT_TYPE_LABELS.get(service_type, service_type)
-        current_map_id = max(0, _safe_int(Map.GetMapID(), 0))
-        if safe_map_id <= 0 or current_map_id != safe_map_id:
-            if log_failures:
-                _log_agent_selector_failure(
-                    MODULE_NAME,
-                    f"Map-specific {service_label} selector rejected: current map {current_map_id} "
-                    f"does not match required map {safe_map_id}.",
-                )
-            return None
-
-        try:
-            from Py4GWCoreLib import Agent
-            from Py4GWCoreLib import AgentArray
-        except Exception as exc:
-            if log_failures:
-                _log_agent_selector_failure(
-                    MODULE_NAME,
-                    f"Map-specific {service_label} selector APIs are unavailable: {exc}",
-                )
-            return None
-
-        player_xy, player_xy_source = _get_agent_search_origin(Agent)
-        if player_xy is None:
-            if log_failures:
-                _log_agent_selector_failure(
-                    MODULE_NAME,
-                    f"Map-specific {service_label} selector rejected: {player_xy_source}.",
-                )
-            return None
-
-        try:
-            npc_agent_ids = tuple(
-                dict.fromkeys(
-                    safe_agent_id
-                    for agent_id in AgentArray.GetNPCMinipetArray()
-                    if (safe_agent_id := max(0, _safe_int(agent_id, 0))) > 0
-                )
-            )
-        except Exception as exc:
-            if log_failures:
-                _log_agent_selector_failure(
-                    MODULE_NAME,
-                    f"Map-specific {service_label} selector could not read the NPC array: {exc}",
-                )
-            return None
-
-        encoded_identity_by_agent: dict[int, tuple[int, ...] | None] = {}
-        model_id_by_agent: dict[int, int] = {}
-        xy_by_agent: dict[int, tuple[float, float] | None] = {}
-
-        def get_encoded_identity(agent_id: int) -> tuple[int, ...] | None:
-            if agent_id not in encoded_identity_by_agent:
-                try:
-                    raw_identity = Agent.GetEncNameByID(agent_id)
-                except Exception:
-                    raw_identity = None
-                encoded_identity_by_agent[agent_id] = _normalize_vendor_encoded_identity(raw_identity)
-            return encoded_identity_by_agent[agent_id]
-
-        def get_model_id(agent_id: int) -> int:
-            if agent_id not in model_id_by_agent:
-                try:
-                    model_id_by_agent[agent_id] = max(0, _safe_int(Agent.GetModelID(agent_id), 0))
-                except Exception:
-                    model_id_by_agent[agent_id] = 0
-            return model_id_by_agent[agent_id]
-
-        def get_agent_xy(agent_id: int) -> tuple[float, float] | None:
-            if agent_id not in xy_by_agent:
-                try:
-                    xy_by_agent[agent_id] = _coerce_agent_xy(Agent.GetXY(agent_id))
-                except Exception:
-                    xy_by_agent[agent_id] = None
-            return xy_by_agent[agent_id]
-
-        candidates: list[tuple[float, str, tuple[float, float]]] = []
-        failure_details: list[str] = []
-        collision_details: list[str] = []
-        for selector in selectors:
-            expected_identity = _normalize_vendor_encoded_identity(selector.encoded_identity)
-            expected_xy = _coerce_agent_xy(selector.expected_xy)
-            expected_model_id = max(0, _safe_int(selector.model_id, 0))
-            try:
-                coordinate_tolerance = float(selector.coordinate_tolerance)
-            except (TypeError, ValueError):
-                coordinate_tolerance = 0.0
-            if (
-                not expected_identity
-                or expected_xy is None
-                or expected_model_id <= 0
-                or not math.isfinite(coordinate_tolerance)
-                or coordinate_tolerance <= 0.0
-            ):
-                failure_details.append(f"{selector.label}: invalid selector definition")
-                continue
-
-            encoded_matches = [
-                agent_id
-                for agent_id in npc_agent_ids
-                if get_encoded_identity(agent_id) == expected_identity
-            ]
-            if not encoded_matches:
-                failure_details.append(f"{selector.label}: encoded identity mismatch")
-                continue
-
-            model_matches = [
-                agent_id
-                for agent_id in encoded_matches
-                if get_model_id(agent_id) == expected_model_id
-            ]
-            if not model_matches:
-                failure_details.append(f"{selector.label}: model mismatch")
-                continue
-
-            complete_matches: list[tuple[int, tuple[float, float]]] = []
-            for agent_id in model_matches:
-                agent_xy = get_agent_xy(agent_id)
-                if agent_xy is None or math.dist(agent_xy, expected_xy) > coordinate_tolerance:
-                    continue
-                complete_matches.append((agent_id, agent_xy))
-            if not complete_matches:
-                failure_details.append(f"{selector.label}: coordinate mismatch")
-                continue
-            if len(complete_matches) > 1:
-                collision_detail = (
-                    f"{selector.label}: unexpected multiple-match collision "
-                    f"({len(complete_matches)} NPCs)"
-                )
-                failure_details.append(collision_detail)
-                collision_details.append(collision_detail)
-                continue
-
-            _agent_id, agent_xy = complete_matches[0]
-            distance_from_player = math.dist(player_xy, agent_xy)
-            if distance_from_player > OUTPOST_SERVICE_SEARCH_MAX_DIST:
-                failure_details.append(f"{selector.label}: outside the service search range")
-                continue
-            candidates.append((distance_from_player, str(selector.label), agent_xy))
-
-        if candidates:
-            if collision_details:
-                self._debug_log(
-                    f"Map-specific {service_label} selector collision detail: "
-                    f"{'; '.join(collision_details)}"
-                )
-            candidates.sort(key=lambda candidate: (candidate[0], candidate[1].casefold(), candidate[2]))
-            return candidates[0][2]
-
-        if log_failures:
-            detail_text = "; ".join(failure_details) if failure_details else "no selector definitions"
-            _log_agent_selector_failure(
-                MODULE_NAME,
-                f"Map-specific {service_label} selectors did not resolve on map {safe_map_id}: "
-                f"{detail_text}.",
-            )
-        return None
+        return self._service_resolution_session.resolve_map_specific_service_coords(
+            map_id=map_id,
+            service_type=service_type,
+            selectors=selectors,
+            log_failures=log_failures,
+        )
 
     def _reset_service_resolution_lifecycle(self) -> None:
-        """Clear observations that are valid only for the current map instance."""
-
-        self._service_role_observed_coords = {}
-        self._service_role_candidate_fingerprint = None
-        self._service_role_retry_fingerprint = None
-        self._service_role_player_anchor = None
-        self._service_role_pending_agent_ids = set()
-        self._service_role_name_retry_deadline_at = 0.0
-        self._service_role_next_poll_at = 0.0
-        self._service_role_lifecycle_active = False
+        self._service_resolution_session.reset_observations()
         self._service_role_preview_refresh_pending = False
 
     def _get_live_service_candidate_snapshot(
@@ -16303,52 +16242,14 @@ class MerchantRulesWidget:
         )
 
     def _record_live_service_role_scan(self, scan: LiveServiceRoleScan) -> None:
-        """Retain safe role observations and maintain one bounded name-retry window."""
-
-        self._service_role_lifecycle_active = True
-        if scan.player_xy is None:
-            return
-
-        now = time.monotonic()
-        fingerprint_changed = scan.candidate_fingerprint != self._service_role_candidate_fingerprint
-        self._service_role_candidate_fingerprint = scan.candidate_fingerprint
-        self._service_role_player_anchor = scan.player_xy
-        self._service_role_observed_coords.update(scan.resolved_coords)
-        self._service_role_pending_agent_ids = set(scan.pending_agent_ids)
-
-        if scan.pending_agent_ids:
-            if fingerprint_changed or scan.candidate_fingerprint != self._service_role_retry_fingerprint:
-                self._service_role_retry_fingerprint = scan.candidate_fingerprint
-                self._service_role_name_retry_deadline_at = now + SERVICE_ROLE_NAME_RETRY_SECONDS
-            elif (
-                self._service_role_name_retry_deadline_at > 0.0
-                and now >= self._service_role_name_retry_deadline_at
-            ):
-                self._service_role_name_retry_deadline_at = 0.0
-        else:
-            self._service_role_retry_fingerprint = scan.candidate_fingerprint
-            self._service_role_name_retry_deadline_at = 0.0
-
-        retry_active = bool(
-            self._service_role_pending_agent_ids
-            and self._service_role_name_retry_deadline_at > now
-        )
-        self._service_role_next_poll_at = now + (
-            SERVICE_ROLE_NAME_RETRY_POLL_SECONDS
-            if retry_active
-            else SERVICE_ROLE_EVENT_POLL_SECONDS
-        )
+        self._service_resolution_session.record_scan(scan)
 
     def _scan_live_service_roles(
         self,
         *,
         record_lifecycle: bool = True,
     ) -> LiveServiceRoleScan:
-        snapshot = self._get_live_service_candidate_snapshot()
-        scan = _service_role_scan(snapshot, role_aliases=SERVICE_ROLE_ALIASES)
-        if record_lifecycle:
-            self._record_live_service_role_scan(scan)
-        return scan
+        return self._service_resolution_session.scan_live_roles(record_lifecycle=record_lifecycle)
 
     def _preview_uses_current_service_context(self) -> bool:
         return bool(
@@ -16378,33 +16279,10 @@ class MerchantRulesWidget:
         *,
         force_context_refresh: bool,
     ) -> None:
-        previous_observations = dict(self._service_role_observed_coords)
-        previous_pending_agent_ids = set(self._service_role_pending_agent_ids)
-        role_scan = self._scan_live_service_roles()
-        lifecycle_state_changed = bool(
-            previous_observations != self._service_role_observed_coords
-            or previous_pending_agent_ids != self._service_role_pending_agent_ids
+        refreshed_context = self._service_resolution_session.refresh_context_if_changed(
+            force_context_refresh=force_context_refresh,
         )
-        if not force_context_refresh and not lifecycle_state_changed:
-            return
-
-        old_context = (
-            self.cached_supported_context
-            if self.cached_context_map_id == max(0, _safe_int(Map.GetMapID(), 0))
-            else None
-        )
-        self._invalidate_supported_context_cache()
-        refreshed_context = self._get_supported_context(
-            passive=True,
-            log_context=False,
-            role_scan_override=role_scan,
-        )
-        context_changed = bool(
-            old_context is None
-            or old_context[0] != refreshed_context[0]
-            or old_context[2] != refreshed_context[2]
-        )
-        if not context_changed or not self._preview_uses_current_service_context():
+        if refreshed_context is None or not self._preview_uses_current_service_context():
             return
         if self._merchant_rules_has_pending_or_active_work():
             self._service_role_preview_refresh_pending = True
@@ -16414,10 +16292,7 @@ class MerchantRulesWidget:
     def _update_service_resolution_lifecycle(self) -> None:
         """Cooperatively refresh generic roles after decoding or streaming events."""
 
-        if (
-            self._service_role_preview_refresh_pending
-            and not self._preview_uses_current_service_context()
-        ):
+        if self._service_role_preview_refresh_pending and not self._preview_uses_current_service_context():
             self._service_role_preview_refresh_pending = False
         if (
             self._service_role_preview_refresh_pending
@@ -16428,49 +16303,13 @@ class MerchantRulesWidget:
         ):
             self._refresh_preview_from_service_context(self.cached_supported_context)
 
-        if not self._service_role_lifecycle_active:
+        refreshed_context = self._service_resolution_session.poll_context_change()
+        if refreshed_context is None or not self._preview_uses_current_service_context():
             return
-        if not Map.IsMapReady() or (not Map.IsOutpost() and not Map.IsGuildHall()):
+        if self._merchant_rules_has_pending_or_active_work():
+            self._service_role_preview_refresh_pending = True
             return
-
-        now = time.monotonic()
-        if now < self._service_role_next_poll_at:
-            return
-
-        player_xy, _player_xy_source, _candidate_ids, fingerprint = (
-            self._get_live_service_candidate_snapshot()
-        )
-        if player_xy is None:
-            self._service_role_next_poll_at = now + SERVICE_ROLE_EVENT_POLL_SECONDS
-            return
-
-        retry_active = bool(
-            self._service_role_pending_agent_ids
-            and self._service_role_name_retry_deadline_at > now
-        )
-        if (
-            self._service_role_name_retry_deadline_at > 0.0
-            and now >= self._service_role_name_retry_deadline_at
-        ):
-            self._service_role_name_retry_deadline_at = 0.0
-            retry_active = False
-
-        candidate_changed = fingerprint != self._service_role_candidate_fingerprint
-        moved_meaningfully = bool(
-            self._service_role_player_anchor is not None
-            and math.hypot(
-                player_xy[0] - self._service_role_player_anchor[0],
-                player_xy[1] - self._service_role_player_anchor[1],
-            )
-            >= SERVICE_ROLE_MEANINGFUL_MOVE_DIST
-        )
-        if retry_active or candidate_changed or moved_meaningfully:
-            self._refresh_supported_context_from_service_lifecycle(
-                force_context_refresh=bool(candidate_changed or moved_meaningfully),
-            )
-            return
-
-        self._service_role_next_poll_at = now + SERVICE_ROLE_EVENT_POLL_SECONDS
+        self._refresh_preview_from_service_context(refreshed_context)
 
     def _resolve_service_role_coords(
         self,
@@ -16479,38 +16318,11 @@ class MerchantRulesWidget:
         log_failures: bool,
         role_scan: LiveServiceRoleScan | None = None,
     ) -> tuple[float, float] | None:
-        safe_service_role = str(service_role or "").strip()
-        aliases = SERVICE_ROLE_ALIASES.get(safe_service_role)
-        if not aliases:
-            if log_failures and safe_service_role:
-                _log_agent_selector_failure(
-                    MODULE_NAME,
-                    f"Service-role fallback rejected unknown role {safe_service_role!r}.",
-                )
-            return None
-
-        live_scan = role_scan if role_scan is not None else self._scan_live_service_roles()
-        if live_scan.player_xy is None:
-            if log_failures:
-                _log_agent_selector_failure(
-                    MODULE_NAME,
-                    f"Could not resolve {aliases[0]} by localized role: {live_scan.player_xy_source}.",
-                )
-            return None
-
-        resolved = live_scan.resolved_coords.get(safe_service_role)
-        if resolved is None:
-            resolved = self._service_role_observed_coords.get(safe_service_role)
-        if resolved is not None:
-            return resolved
-
-        if log_failures:
-            _log_agent_selector_failure(
-                MODULE_NAME,
-                f"Could not resolve {aliases[0]} by exact localized service role "
-                f"within {OUTPOST_SERVICE_SEARCH_MAX_DIST:.0f}.",
-            )
-        return None
+        return self._service_resolution_session.resolve_service_role_coords(
+            service_role=service_role,
+            log_failures=log_failures,
+            role_scan=role_scan,
+        )
 
     def _resolve_service_coords(
         self,
@@ -16524,125 +16336,24 @@ class MerchantRulesWidget:
         role_scan: LiveServiceRoleScan | None = None,
         resolve_role_fallback: bool = True,
     ) -> tuple[float, float] | None:
-        safe_map_id = max(0, _safe_int(map_id, 0))
-        safe_service_type = str(service_type or "").strip()
-        map_specific_selectors = MERCHANT_RULES_MAP_SERVICE_SELECTORS.get(safe_map_id, {}).get(
-            safe_service_type,
-            (),
+        return self._service_resolution_session.resolve_service_coords(
+            map_id=map_id,
+            service_type=service_type,
+            selector_name=selector_name,
+            model_id=model_id,
+            fallback_role=fallback_role,
+            log_failures=log_failures,
+            role_scan=role_scan,
+            resolve_role_fallback=resolve_role_fallback,
         )
-        if map_specific_selectors:
-            return self._resolve_map_specific_service_coords(
-                map_id=safe_map_id,
-                service_type=safe_service_type,
-                selectors=map_specific_selectors,
-                log_failures=log_failures,
-            )
-
-        safe_selector_name = str(selector_name or "").strip()
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        safe_fallback_role = str(fallback_role or "").strip()
-        has_role_fallback = safe_fallback_role in SERVICE_ROLE_ALIASES
-        has_authoritative_selector = bool(
-            safe_selector_name and _named_agent_target_has_authoritative_identity("npc", safe_selector_name)
-        )
-        if has_authoritative_selector:
-            selector_coords = resolve_agent_xy_from_step(
-                {"npc": safe_selector_name},
-                recipe_name=MODULE_NAME,
-                step_idx=0,
-                agent_kind="npc",
-                default_max_dist=OUTPOST_SERVICE_SEARCH_MAX_DIST,
-                log_failures=bool(log_failures and safe_model_id <= 0 and not has_role_fallback),
-            )
-            if selector_coords is not None:
-                return selector_coords
-            if safe_model_id <= 0 and not has_role_fallback:
-                return None
-        if safe_model_id > 0:
-            model_coords = resolve_agent_xy_from_step(
-                {"model_id": safe_model_id},
-                recipe_name=MODULE_NAME,
-                step_idx=0,
-                agent_kind="npc",
-                default_max_dist=OUTPOST_SERVICE_SEARCH_MAX_DIST,
-                log_failures=bool(log_failures and not has_authoritative_selector and not has_role_fallback),
-            )
-            if model_coords is not None:
-                return model_coords
-            if has_authoritative_selector and log_failures and not has_role_fallback:
-                service_label = MERCHANT_TYPE_LABELS.get(safe_service_type, safe_service_type or "service")
-                _log_agent_selector_failure(
-                    MODULE_NAME,
-                    f"Could not resolve {service_label} using encoded selector {safe_selector_name!r} "
-                    f"or map-scoped model ID {safe_model_id}.",
-                )
-            if not has_role_fallback:
-                return None
-        if has_role_fallback and resolve_role_fallback:
-            return self._resolve_service_role_coords(
-                service_role=safe_fallback_role,
-                log_failures=log_failures,
-                role_scan=role_scan,
-            )
-        if not safe_selector_name:
-            return None
-        if log_failures:
-            _log_agent_selector_failure(
-                MODULE_NAME,
-                f"Service selector {safe_selector_name!r} has no encoded name or model ID; resolution was skipped.",
-            )
-        return None
 
     def _get_service_resolution_diagnostics(self) -> str:
-        """Read positional counts without requesting or decoding any NPC names."""
-
-        try:
-            from Py4GWCoreLib import Agent
-            from Py4GWCoreLib import AgentArray
-
-            player_xy, source = _get_agent_search_origin(Agent)
-            npc_ids = list(AgentArray.GetNPCMinipetArray() or [])
-            if player_xy is None:
-                return f"player=unavailable source={source} total_npcs={len(npc_ids)} in_range_npcs=unavailable"
-            in_range_ids = AgentArray.Filter.ByDistance(
-                npc_ids,
-                player_xy,
-                OUTPOST_SERVICE_SEARCH_MAX_DIST,
-            )
-            return (
-                f"player=({player_xy[0]:.1f}, {player_xy[1]:.1f}) source={source} "
-                f"total_npcs={len(npc_ids)} in_range_npcs={len(in_range_ids)}"
-            )
-        except Exception as exc:
-            return f"player/NPC diagnostics unavailable: {type(exc).__name__}"
+        return self._service_resolution_session.get_diagnostics()
 
     def _resolve_storage_access_coords(self) -> tuple[float, float] | None:
-        if not Map.IsMapReady():
-            return None
-        if not Map.IsOutpost() and not Map.IsGuildHall():
-            return None
+        return self._service_resolution_session.resolve_storage_access_coords()
 
-        lookup_steps: list[tuple[dict[str, object], str]] = [
-            ({"target": XUNLAI_AGENT_NAME_QUERY, "exact_name": True}, "npc"),
-            ({"target": XUNLAI_CHEST_NAME_QUERY, "exact_name": True}, "gadget"),
-        ]
-        lookup_steps.extend(({"model_id": model_id}, "npc") for model_id in XUNLAI_AGENT_MODEL_IDS)
-        lookup_steps.append(({"model_id": XUNLAI_CHEST_MODEL_ID}, "gadget"))
-
-        for step, agent_kind in lookup_steps:
-            coords = resolve_agent_xy_from_step(
-                step,
-                recipe_name=MODULE_NAME,
-                step_idx=0,
-                agent_kind=agent_kind,
-                default_max_dist=OUTPOST_SERVICE_SEARCH_MAX_DIST,
-                log_failures=False,
-            )
-            if coords is not None:
-                return coords
-        return None
-
-    def _has_local_storage_access(self) -> bool:
+    def _service_storage_is_open(self) -> bool:
         storage_api = getattr(GLOBAL_CACHE, "Inventory", None)
         if storage_api is not None:
             try:
@@ -16650,7 +16361,10 @@ class MerchantRulesWidget:
                     return True
             except Exception:
                 pass
-        return self._resolve_storage_access_coords() is not None
+        return False
+
+    def _has_local_storage_access(self) -> bool:
+        return self._service_resolution_session.has_local_storage_access()
 
     def _load_profile(self):
         """Load the account-scoped JsonFactory profile with fail-closed version safeguards."""
@@ -16850,150 +16564,11 @@ class MerchantRulesWidget:
         log_context: bool = True,
         role_scan_override: LiveServiceRoleScan | None = None,
     ) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
-        current_map_id = int(Map.GetMapID() or 0)
-        if self.cached_supported_context is not None and self.cached_context_map_id == current_map_id:
-            return self.cached_supported_context
-
-        coords: dict[str, tuple[float, float] | None] = {
-            MERCHANT_TYPE_MERCHANT: None,
-            MERCHANT_TYPE_MATERIALS: None,
-            MERCHANT_TYPE_RUNE_TRADER: None,
-            MERCHANT_TYPE_SCROLL_TRADER: None,
-            MERCHANT_TYPE_RARE_MATERIALS: None,
-            MERCHANT_TYPE_CONSUMABLE_CRAFTER: (3592.99, 78.78) if current_map_id == EMBARK_BEACH_MAP_ID else None,
-        }
-
-        if not Map.IsMapReady():
-            self.cached_context_map_id = current_map_id
-            self.cached_supported_context = (False, "Map is not ready.", coords)
-            return self.cached_supported_context
-        if not Map.IsOutpost() and not Map.IsGuildHall():
-            self.cached_context_map_id = current_map_id
-            self.cached_supported_context = (False, "Current map is not an outpost or Guild Hall.", coords)
-            return self.cached_supported_context
-
-        map_id = current_map_id
-        selector_data = SUPPORTED_MAP_NPC_SELECTORS.get(map_id) or {}
-        model_overrides = SUPPORTED_MAP_SERVICE_MODEL_IDS.get(map_id, {})
-
-        selector_keys = {
-            MERCHANT_TYPE_MERCHANT: "merchant",
-            MERCHANT_TYPE_MATERIALS: "materials",
-            MERCHANT_TYPE_RARE_MATERIALS: "rare_materials",
-        }
-
-        for merchant_type, selector_key in selector_keys.items():
-            map_selector_name = str(selector_data.get(selector_key) or "").strip()
-            selector_name = map_selector_name or DEFAULT_NPC_SELECTORS.get(selector_key)
-            model_id = 0 if map_selector_name else max(0, _safe_int(model_overrides.get(merchant_type, 0), 0))
-            coords[merchant_type] = self._resolve_service_coords(
-                map_id=map_id,
-                service_type=merchant_type,
-                selector_name=str(selector_name or ""),
-                model_id=model_id,
-                fallback_role=merchant_type,
-                log_failures=not passive,
-                resolve_role_fallback=False,
-            )
-
-        coords[MERCHANT_TYPE_RUNE_TRADER] = self._resolve_rune_trader_coords(
-            map_id,
-            log_failures=not passive,
-            resolve_role_fallback=False,
+        return self._service_resolution_session.resolve_context(
+            passive=passive,
+            log_context=log_context,
+            role_scan_override=role_scan_override,
         )
-        coords[MERCHANT_TYPE_SCROLL_TRADER] = self._resolve_scroll_trader_coords(
-            map_id,
-            selector_data,
-            log_failures=bool(not passive and self._has_enabled_scroll_trader_buy_rules()),
-            resolve_role_fallback=False,
-        )
-
-        fallback_roles = {
-            MERCHANT_TYPE_MERCHANT: MERCHANT_TYPE_MERCHANT,
-            MERCHANT_TYPE_MATERIALS: MERCHANT_TYPE_MATERIALS,
-            MERCHANT_TYPE_RARE_MATERIALS: MERCHANT_TYPE_RARE_MATERIALS,
-            MERCHANT_TYPE_RUNE_TRADER: MERCHANT_TYPE_RUNE_TRADER,
-            MERCHANT_TYPE_SCROLL_TRADER: self._get_scroll_trader_lookup()[1],
-        }
-        generic_fallback_roles = {
-            service_type: fallback_role
-            for service_type, fallback_role in fallback_roles.items()
-            if coords[service_type] is None
-            and not MERCHANT_RULES_MAP_SERVICE_SELECTORS.get(map_id, {}).get(service_type)
-        }
-        if generic_fallback_roles:
-            role_scan = (
-                role_scan_override
-                if role_scan_override is not None
-                else self._scan_live_service_roles()
-            )
-            for service_type, fallback_role in generic_fallback_roles.items():
-                coords[service_type] = self._resolve_service_role_coords(
-                    service_role=fallback_role,
-                    log_failures=bool(
-                        not passive
-                        and (
-                            service_type != MERCHANT_TYPE_SCROLL_TRADER
-                            or self._has_enabled_scroll_trader_buy_rules()
-                        )
-                    ),
-                    role_scan=role_scan,
-                )
-
-        resolved_services = [
-            MERCHANT_TYPE_LABELS.get(service_type, service_type)
-            for service_type, service_coords in coords.items()
-            if service_coords is not None
-        ]
-        unresolved_services = [
-            MERCHANT_TYPE_LABELS.get(service_type, service_type)
-            for service_type, service_coords in coords.items()
-            if service_coords is None
-        ]
-        resolved_count = len(resolved_services)
-        location_label = "Guild Hall" if Map.IsGuildHall() else "Outpost"
-        has_merchant_rules_map_selectors = bool(MERCHANT_RULES_MAP_SERVICE_SELECTORS.get(map_id))
-        selector_mode_label = (
-            "verified trader locations"
-            if has_merchant_rules_map_selectors
-            else "location-specific trader information"
-            if map_id in SUPPORTED_MAP_NPC_SELECTORS
-            else "default trader information"
-        )
-        base_message = (
-            f"{location_label} ready: {Map.GetMapName(map_id)} ({map_id}). "
-            f"Using {selector_mode_label}."
-        )
-        supported_map = resolved_count > 0
-        resolved_text = ", ".join(resolved_services) if resolved_services else "none"
-        unresolved_text = ", ".join(unresolved_services) if unresolved_services else "none"
-        reason = f"{base_message} Resolved services: {resolved_text}. Unresolved services: {unresolved_text}."
-
-        resolved_context = (supported_map, reason, coords)
-        self.cached_context_map_id = current_map_id
-        self.cached_supported_context = resolved_context
-        selector_mode = (
-            "merchant_rules_specific"
-            if has_merchant_rules_map_selectors
-            else "specific"
-            if map_id in SUPPORTED_MAP_NPC_SELECTORS
-            else "generic"
-        )
-        if log_context:
-            self._debug_log(
-                f"Context resolved: map={Map.GetMapName(map_id)} ({map_id}) selector_mode={selector_mode} "
-                f"supported={supported_map} {self._get_service_resolution_diagnostics()} "
-                f"resolved_services={resolved_text} unresolved_services={unresolved_text} "
-                f"merchant={self._format_debug_coords(coords[MERCHANT_TYPE_MERCHANT])} "
-                f"materials={self._format_debug_coords(coords[MERCHANT_TYPE_MATERIALS])} "
-                f"rune={self._format_debug_coords(coords[MERCHANT_TYPE_RUNE_TRADER])} "
-                f"scroll={self._format_debug_coords(coords[MERCHANT_TYPE_SCROLL_TRADER])} "
-                f"rare={self._format_debug_coords(coords[MERCHANT_TYPE_RARE_MATERIALS])} "
-                f"consumable={self._format_debug_coords(coords[MERCHANT_TYPE_CONSUMABLE_CRAFTER])}"
-            )
-            if not supported_map or resolved_count < len(coords):
-                self._debug_log(f"Context detail: {reason}")
-        return self.cached_supported_context
 
     def _get_projected_supported_context(self, target_outpost_id: int) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
         safe_outpost_id = max(0, _safe_int(target_outpost_id, 0))

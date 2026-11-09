@@ -42,9 +42,15 @@ from dataclasses import replace
 from itertools import permutations
 from itertools import product
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Protocol
+from typing import TypedDict
 from typing import cast
+from typing import runtime_checkable
+
+if TYPE_CHECKING:
+    from Sources.icefox.MerchantRules.service_observation import ServiceResolutionSession
 
 
 def _find_repo_root(start_path: Path) -> Path:
@@ -918,6 +924,25 @@ class _DynamicTestLiveConfigDoc:
             value,
             target_email,
         )
+
+
+@runtime_checkable
+class _ServiceResolutionSessionOwner(Protocol):
+    @property
+    def _service_resolution_session(self) -> object: ...
+
+
+class _ServiceResolutionSessionReader(_ServiceResolutionSessionOwner):
+    @staticmethod
+    def session(widget: object) -> ServiceResolutionSession:
+        if not isinstance(widget, _ServiceResolutionSessionOwner):
+            raise AssertionError("Service fixture widget has no session attribute")
+        from Sources.icefox.MerchantRules.service_observation import ServiceResolutionSession
+
+        session = widget._service_resolution_session
+        if not isinstance(session, ServiceResolutionSession):
+            raise AssertionError("Service fixture session is not the current canonical class")
+        return session
 
 
 def _make_widget(module, *, use_json_factory: bool = False):
@@ -23686,7 +23711,13 @@ def _test_service_resolution_requires_authoritative_selectors(module) -> None:
         })
         module._named_agent_target_has_authoritative_identity = lambda _kind, selector: bool(selector) and str(selector) != "DISPLAY_NAME_ONLY"
         widget = _make_widget(module)
-        widget._resolve_rune_trader_coords = lambda _map_id, **_kwargs: None
+
+        def _widget_session() -> ServiceResolutionSession:
+            if not isinstance(widget, _ServiceResolutionSessionOwner):
+                raise AssertionError("Service fixture widget has no session attribute")
+            return _ServiceResolutionSessionReader.session(widget)
+
+        _widget_session().resolve_rune_trader_coords = lambda map_id, **_kwargs: None
         resolve_calls: list[dict[str, object]] = []
         selector_coords = {
             "merchant_encoded": (10.0, 10.0),
@@ -23765,14 +23796,21 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
         )
         widget = _make_widget(module)
 
-        def _fake_role_resolve(*, service_role, log_failures, **_kwargs):
+        def _fake_role_resolve(
+            *, service_role: str, log_failures: bool, **_kwargs: object
+        ) -> tuple[float, float] | None:
             role_calls.append((str(service_role), bool(log_failures)))
             resolved = role_result["value"]
             if resolved is None and log_failures:
                 module._log_agent_selector_failure("fake role resolver", f"Could not resolve {service_role!r}.")
             return resolved
 
-        widget._resolve_service_role_coords = _fake_role_resolve
+        def _widget_session() -> ServiceResolutionSession:
+            if not isinstance(widget, _ServiceResolutionSessionOwner):
+                raise AssertionError("Service fixture widget has no session attribute")
+            return _ServiceResolutionSessionReader.session(widget)
+
+        _widget_session().resolve_service_role_coords = _fake_role_resolve
 
         resolution_results.update(
             {
@@ -23883,7 +23921,11 @@ def _test_service_resolution_model_fallback_precedence(module) -> None:
         calls.clear()
         failure_logs.clear()
         map_specific_calls: list[dict[str, object]] = []
-        widget._resolve_map_specific_service_coords = lambda **kwargs: map_specific_calls.append(dict(kwargs)) or None
+
+        def _fake_map_specific_resolve(**kwargs: object) -> None:
+            map_specific_calls.append(dict(kwargs))
+
+        _widget_session().resolve_map_specific_service_coords = _fake_map_specific_resolve
         resolved = widget._resolve_service_coords(
             map_id=module.EMBARK_BEACH_MAP_ID,
             service_type=module.MERCHANT_TYPE_MERCHANT,
@@ -23951,10 +23993,16 @@ def _test_vlox_service_model_fallback_wiring(module) -> None:
 
         module.resolve_agent_xy_from_step = _fake_resolve
         widget = _make_widget(module)
-        widget._resolve_service_role_coords = (
+
+        def _widget_session() -> ServiceResolutionSession:
+            if not isinstance(widget, _ServiceResolutionSessionOwner):
+                raise AssertionError("Service fixture widget has no session attribute")
+            return _ServiceResolutionSessionReader.session(widget)
+
+        _widget_session().resolve_service_role_coords = (
             lambda *, service_role, log_failures, **_kwargs: role_calls.append(str(service_role)) or None
         )
-        widget._get_service_resolution_diagnostics = lambda: "diagnostics"
+        _widget_session().get_diagnostics = lambda: "diagnostics"
         supported, _reason, coords = widget._get_supported_context()
 
         _expect(supported, "The Vlox Merchant model fallback should make the live service context supported.")
@@ -23977,10 +24025,10 @@ def _test_vlox_service_model_fallback_wiring(module) -> None:
         calls.clear()
         role_calls.clear()
         widget = _make_widget(module)
-        widget._resolve_service_role_coords = (
+        _widget_session().resolve_service_role_coords = (
             lambda *, service_role, log_failures, **_kwargs: role_calls.append(str(service_role)) or None
         )
-        widget._get_service_resolution_diagnostics = lambda: "diagnostics"
+        _widget_session().get_diagnostics = lambda: "diagnostics"
         _supported, _reason, explicit_coords = widget._get_supported_context()
 
         _expect(
@@ -24012,7 +24060,18 @@ def _test_vlox_service_model_fallback_wiring(module) -> None:
         module._named_agent_target_has_authoritative_identity = original_authoritative_check
 
 
-def _install_service_resolution_agent_fixture(module):
+class _ServiceResolutionAgentState(TypedDict):
+    player_agent_id: int
+    player_xy_fallback: tuple[float, float]
+    npc_ids: list[int]
+    positions: dict[int, tuple[float, float]]
+    names: dict[int, str]
+    encoded_names: dict[int, tuple[int, ...]]
+    model_ids: dict[int, int]
+    name_calls: int
+
+
+def _install_service_resolution_agent_fixture(module) -> tuple[_ServiceResolutionAgentState, Callable[[], None]]:
     core = sys.modules["Py4GWCoreLib"]
     had_agent = hasattr(core, "Agent")
     original_agent = getattr(core, "Agent", None)
@@ -24021,7 +24080,7 @@ def _install_service_resolution_agent_fixture(module):
     had_player_agent_id = hasattr(module.Player, "GetAgentID")
     original_player_agent_id = getattr(module.Player, "GetAgentID", None)
     original_player_xy = module.Player.GetXY
-    state = {
+    state: _ServiceResolutionAgentState = {
         "player_agent_id": 99,
         "player_xy_fallback": (90_000.0, 90_000.0),
         "npc_ids": [1, 2, 3, 4, 5],
@@ -24098,7 +24157,7 @@ def _install_service_resolution_agent_fixture(module):
     module.Player.GetAgentID = lambda: int(state["player_agent_id"])
     module.Player.GetXY = lambda: state["player_xy_fallback"]
 
-    def _restore():
+    def _restore() -> None:
         if had_agent:
             core.Agent = original_agent
         else:
@@ -24601,7 +24660,13 @@ def _test_authoritative_service_resolution_completes_one_preview(module) -> None
 
         module.resolve_agent_xy_from_step = _fake_resolve
         widget = _make_widget(module)
-        widget._get_service_resolution_diagnostics = lambda: "diagnostics"
+
+        def _widget_session() -> ServiceResolutionSession:
+            if not isinstance(widget, _ServiceResolutionSessionOwner):
+                raise AssertionError("Service fixture widget has no session attribute")
+            return _ServiceResolutionSessionReader.session(widget)
+
+        _widget_session().get_diagnostics = lambda: "diagnostics"
         build_calls: list[int] = []
 
         def _fake_build_plan(**_kwargs):
@@ -24811,7 +24876,7 @@ def _test_supported_context_passive_controls_selector_failure_logging(module) ->
             module._log_agent_selector_failure("merchant-rules-regression", "selector resolution failed")
         return None
 
-    def _failed_role_resolver(*, service_role, log_failures, **_kwargs):
+    def _failed_role_resolver(*, service_role: str, log_failures: bool, **_kwargs: object) -> None:
         role_log_flags.append(bool(log_failures))
         if log_failures:
             module._log_agent_selector_failure(
@@ -24840,7 +24905,13 @@ def _test_supported_context_passive_controls_selector_failure_logging(module) ->
         module.ConsoleLog = _capture_console_log
 
         widget = _make_widget(module)
-        widget._resolve_service_role_coords = _failed_role_resolver
+
+        def _widget_session() -> ServiceResolutionSession:
+            if not isinstance(widget, _ServiceResolutionSessionOwner):
+                raise AssertionError("Service fixture widget has no session attribute")
+            return _ServiceResolutionSessionReader.session(widget)
+
+        _widget_session().resolve_service_role_coords = _failed_role_resolver
         normal_context = widget._get_supported_context(passive=False)
         normal_log_flags = list(resolver_log_flags)
         normal_role_log_flags = list(role_log_flags)
@@ -33529,7 +33600,13 @@ def _test_supported_context_cache_partial_and_negative_entries_refresh_correctly
         module._named_agent_target_has_authoritative_identity = lambda _kind, selector: bool(selector)
 
         partial_widget = _make_widget(module)
-        partial_widget._resolve_rune_trader_coords = lambda _map_id, **_kwargs: None
+
+        def _partial_widget_session() -> ServiceResolutionSession:
+            if not isinstance(partial_widget, _ServiceResolutionSessionOwner):
+                raise AssertionError("Service fixture widget has no session attribute")
+            return _ServiceResolutionSessionReader.session(partial_widget)
+
+        _partial_widget_session().resolve_rune_trader_coords = lambda map_id, **_kwargs: None
         resolution_phase = {"value": 0}
         resolve_calls: list[tuple[int, str]] = []
 
@@ -33573,7 +33650,13 @@ def _test_supported_context_cache_partial_and_negative_entries_refresh_correctly
         )
 
         negative_widget = _make_widget(module)
-        negative_widget._resolve_rune_trader_coords = lambda _map_id, **_kwargs: None
+
+        def _negative_widget_session() -> ServiceResolutionSession:
+            if not isinstance(negative_widget, _ServiceResolutionSessionOwner):
+                raise AssertionError("Service fixture widget has no session attribute")
+            return _ServiceResolutionSessionReader.session(negative_widget)
+
+        _negative_widget_session().resolve_rune_trader_coords = lambda map_id, **_kwargs: None
         negative_calls: list[str] = []
 
         def _fake_negative_resolve(step, **_kwargs):
@@ -38020,7 +38103,7 @@ def _capture_service_observation_case(module: Any, case: str) -> dict[str, Any]:
         snapshot_trace = list(trace)
         widget._get_live_service_candidate_snapshot = lambda: snapshot
         recorded: list[Any] = []
-        widget._record_live_service_role_scan = recorded.append
+        _ServiceResolutionSessionReader.session(widget).record_scan = lambda scan: recorded.append(scan)
         if case == "scan_agent_missing":
             del core.Agent
         scan = widget._scan_live_service_roles(record_lifecycle=False)
@@ -38261,18 +38344,35 @@ def _test_service_observation_recording_and_busy_preview(module: Any) -> dict[st
         agent_state["positions"] = {99: (0.0, 0.0), 1: (100.0, 0.0)}
         agent_state["names"] = {1: ""}
         widget = _make_widget(module)
-        before = {
-            key: value for key, value in cast(dict[str, Any], vars(widget)).items() if key.startswith("_service_role_")
-        }
+        session = widget._service_resolution_session
+        observation_fields = (
+            "observed_coords",
+            "candidate_fingerprint",
+            "retry_fingerprint",
+            "player_anchor",
+            "pending_agent_ids",
+            "name_retry_deadline_at",
+            "next_poll_at",
+            "lifecycle_active",
+        )
+
+        def observation_state() -> dict[str, Any]:
+            _expect(
+                all(hasattr(session, name) for name in observation_fields),
+                "Service observation state inventory is incomplete",
+            )
+            values = {name: getattr(session, name) for name in observation_fields}
+            values["observed_coords"] = dict(values["observed_coords"])
+            values["pending_agent_ids"] = set(values["pending_agent_ids"])
+            return values
+
+        before = observation_state()
+        before_preview_pending = widget._service_role_preview_refresh_pending
         scan = widget._scan_live_service_roles(record_lifecycle=False)
+        _expect(before == observation_state(), "Observation without recording changed lifecycle state")
         _expect(
-            before
-            == {
-                key: value
-                for key, value in cast(dict[str, Any], vars(widget)).items()
-                if key.startswith("_service_role_")
-            },
-            "Observation without recording changed lifecycle state",
+            widget._service_role_preview_refresh_pending is before_preview_pending,
+            "Observation without recording changed widget preview-pending state",
         )
         _expect(scan.pending_agent_ids == frozenset({1}), "Unrecorded observation lost pending candidate")
         widget._scan_live_service_roles()
@@ -38304,7 +38404,7 @@ def _test_service_observation_recording_and_busy_preview(module: Any) -> dict[st
             builds.append(kwargs["supported_context_override"])
             return module.PlanResult(coords=kwargs["supported_context_override"][2])
 
-        widget._get_supported_context = context
+        _ServiceResolutionSessionReader.session(widget).resolve_context = context
         widget._build_plan = build
         agent_state["names"][1] = "Late [Merchant]"
         widget._refresh_supported_context_from_service_lifecycle(force_context_refresh=True)
@@ -38370,7 +38470,7 @@ sys.addaudithook(audit)
 sys.setprofile(profile)
 from Sources.icefox.MerchantRules import service_observation
 sys.setprofile(None)
-assert calls == ["<module>", "LiveServiceRoleScan"], calls
+assert calls == ["<module>", "LiveServiceRoleScan", "SelectorLike", "ServiceResolutionSession"], calls
 assert not events, events
 assert not any(name.startswith(("Py4GWCoreLib", "PyImGui", "PySystem", "Widgets", "MerchantRules")) for name in sys.modules)
 assert not any("MerchantRules." + part in name for name in sys.modules for part in ("profiles", "catalog", "catalog_search", "preview_text"))
@@ -47955,6 +48055,1313 @@ def _test_catalog_session_completed_cp4_differential() -> None:
     )
 
 
+_CP6_STATE_PAIRS: tuple[tuple[str, str], ...] = (
+    ("cached_context_map_id", "cached_context_map_id"),
+    ("cached_supported_context", "cached_supported_context"),
+    ("_service_role_observed_coords", "observed_coords"),
+    ("_service_role_candidate_fingerprint", "candidate_fingerprint"),
+    ("_service_role_retry_fingerprint", "retry_fingerprint"),
+    ("_service_role_player_anchor", "player_anchor"),
+    ("_service_role_pending_agent_ids", "pending_agent_ids"),
+    ("_service_role_name_retry_deadline_at", "name_retry_deadline_at"),
+    ("_service_role_next_poll_at", "next_poll_at"),
+    ("_service_role_lifecycle_active", "lifecycle_active"),
+)
+_CP6_VALUE_INPUTS: tuple[str, ...] = (
+    "default_selectors",
+    "supported_selectors",
+    "rune_selectors",
+    "scroll_selectors",
+    "service_model_ids",
+    "map_service_selectors",
+    "role_aliases",
+    "merchant_labels",
+    "merchant_type",
+    "materials_type",
+    "rune_type",
+    "scroll_type",
+    "rare_materials_type",
+    "consumable_type",
+    "embark_map_id",
+    "search_max_dist",
+    "name_retry_seconds",
+    "name_retry_poll_seconds",
+    "event_poll_seconds",
+    "meaningful_move_dist",
+    "xunlai_agent_name",
+    "xunlai_chest_name",
+    "xunlai_agent_model_ids",
+    "xunlai_chest_model_id",
+    "module_name",
+)
+_CP6_LATE_INPUTS: tuple[str, ...] = (
+    "get_map_id",
+    "get_map_name",
+    "is_map_ready",
+    "is_outpost",
+    "is_guild_hall",
+    "monotonic",
+    "candidate_snapshot",
+    "player_origin",
+    "coerce_int",
+    "selector_authoritative",
+    "resolve_agent_step",
+    "storage_is_open",
+    "scroll_policy",
+    "debug_log",
+    "log_failure",
+    "format_coords",
+)
+
+
+def _cp6_identity(actual: object, expected: object, context: str) -> None:
+    _expect(actual is expected, "CP6 " + context)
+
+
+def _cp6_equal(actual: object, expected: object, context: str) -> None:
+    _expect(actual == expected, f"CP6 {context}: expected {expected!r}; observed {actual!r}")
+
+
+def _cp6_exception(callback: Callable[[], object], sentinel: BaseException, context: str) -> None:
+    caught: BaseException | None = None
+    try:
+        callback()
+    except BaseException as exc:
+        caught = exc
+    _expect(caught is sentinel, f"CP6 {context}: exception identity changed: {caught!r}")
+
+
+def _cp6_scan(
+    module: Any,
+    *,
+    player: tuple[float, float] | None = (0.0, 0.0),
+    fingerprint: tuple[int, ...] = (1,),
+    resolved: dict[str, tuple[float, float]] | None = None,
+    pending: tuple[int, ...] = (),
+) -> Any:
+    return module.LiveServiceRoleScan(
+        player_xy=player,
+        player_xy_source="cp6 literal",
+        candidate_ids=fingerprint,
+        candidate_fingerprint=fingerprint,
+        resolved_coords={} if resolved is None else resolved,
+        pending_agent_ids=pending,
+    )
+
+
+def _cp6_generic_map(module: Any, patches: _CP5PatchSet, map_id: int = 700) -> None:
+    def map_name(_map_id: int) -> str:
+        return "CP6 Test Outpost"
+
+    patches.set(
+        module,
+        "Map",
+        types.SimpleNamespace(
+            GetMapID=lambda: map_id,
+            GetMapName=map_name,
+            IsMapReady=lambda: True,
+            IsOutpost=lambda: True,
+            IsGuildHall=lambda: False,
+        ),
+    )
+
+
+def _test_cp6_service_construction_and_independence(module: Any) -> None:
+    import inspect
+
+    first, second = _make_widget(module), _make_widget(module)
+    owner = module.ServiceResolutionSession
+    session = first._service_resolution_session
+    _expect(session is not second._service_resolution_session, "CP6 separate widget sessions")
+    _cp6_equal(
+        tuple(inspect.signature(owner).parameters),
+        _CP6_VALUE_INPUTS + _CP6_LATE_INPUTS,
+        "exact 25 plus 16 constructor inputs",
+    )
+    reached: list[str] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        reached.append("callback")
+        raise AssertionError("CP6 constructor invoked a dependency")
+
+    inputs = {name: getattr(session, "_" + name) for name in _CP6_VALUE_INPUTS}
+    inputs.update({name: forbidden for name in _CP6_LATE_INPUTS})
+    isolated = owner(**inputs)
+    _cp6_equal(reached, [], "reference-only constructor")
+    _cp6_equal(
+        [getattr(isolated, name) for _widget_name, name in _CP6_STATE_PAIRS],
+        [-1, None, dict[str, tuple[float, float]](), None, None, None, set[int](), 0.0, 0.0, False],
+        "literal state defaults",
+    )
+    for name in _CP6_VALUE_INPUTS:
+        _expect(getattr(isolated, "_" + name) is inputs[name], "CP6 constructor reference " + name)
+    for name in ("observed_coords", "pending_agent_ids"):
+        _expect(
+            getattr(session, name) is not getattr(second._service_resolution_session, name),
+            "CP6 independent mutable state " + name,
+        )
+        _expect(getattr(isolated, name) is not getattr(session, name), "CP6 direct construction state " + name)
+    for name in _CP6_VALUE_INPUTS[:8]:
+        _expect(
+            getattr(session, "_" + name) is getattr(second._service_resolution_session, "_" + name),
+            "CP6 canonical same-module table " + name,
+        )
+
+    module_name = "merchant_rules_cp6_second_module"
+    previous = sys.modules.get(module_name)
+    spec = importlib.util.spec_from_file_location(module_name, MERCHANT_RULES_PATH)
+    _expect(spec is not None and spec.loader is not None, "CP6 second module import spec")
+    if spec is None or spec.loader is None:
+        raise AssertionError("CP6 missing second module loader")
+    other = importlib.util.module_from_spec(spec)
+    try:
+        sys.modules[module_name] = other
+        spec.loader.exec_module(other)
+        other_widget = _make_widget(other)
+        _expect(other_widget._service_resolution_session is not session, "CP6 second module independent session")
+        _expect(
+            other_widget._service_resolution_session._role_aliases is other.SERVICE_ROLE_ALIASES,
+            "CP6 second module supplies its own actual binding",
+        )
+        _expect(
+            other.SERVICE_ROLE_ALIASES is not module.SERVICE_ROLE_ALIASES,
+            "CP6 independently allocated module vocabulary",
+        )
+        _expect(
+            other_widget._service_resolution_session._map_service_selectors
+            is other.MERCHANT_RULES_MAP_SERVICE_SELECTORS,
+            "CP6 second module selector binding",
+        )
+    finally:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+
+
+def _test_cp6_service_forwarding_and_reset(module: Any) -> None:
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    coords = {"merchant": (1.0, 2.0)}
+    cached = (True, "reference", coords)
+    values: tuple[object, ...] = (
+        700,
+        cached,
+        {"merchant": (3.0, 4.0)},
+        (1, 2),
+        (2,),
+        (4.0, 5.0),
+        {9},
+        108.0,
+        100.25,
+        True,
+    )
+    for (widget_name, session_name), value in zip(_CP6_STATE_PAIRS, values):
+        setattr(widget, widget_name, value)
+        _expect(
+            getattr(widget, widget_name) is value and getattr(session, session_name) is value,
+            "CP6 transparent reference " + widget_name,
+        )
+    old_observed, old_pending = session.observed_coords, session.pending_agent_ids
+    widget._service_role_preview_refresh_pending = True
+    session.reset_observations()
+    _cp6_equal(old_observed, {"merchant": (3.0, 4.0)}, "reset preserves replaced dictionary")
+    _cp6_equal(old_pending, {9}, "reset preserves replaced set")
+    _expect(
+        session.observed_coords is not old_observed and session.pending_agent_ids is not old_pending,
+        "CP6 reset replaces collections",
+    )
+    _cp6_equal(
+        [getattr(session, name) for _old, name in _CP6_STATE_PAIRS[2:]],
+        [dict[str, tuple[float, float]](), None, None, None, set[int](), 0.0, 0.0, False],
+        "eight-field reset",
+    )
+    _expect(
+        session.cached_supported_context is cached and session.cached_context_map_id == 700,
+        "CP6 observation reset preserves context",
+    )
+    _expect(widget._service_role_preview_refresh_pending is True, "CP6 session does not own preview flag")
+    _expect(widget._reset_service_resolution_lifecycle() is None, "CP6 widget reset return")
+    _cp6_identity(widget._service_role_preview_refresh_pending, False, "widget clears pending afterward")
+
+    table = session._rune_selectors
+    saved = dict(table)
+    patches = _CP5PatchSet()
+    seen: list[str] = []
+
+    def record_selector(*, selector_name: str, **_kwargs: object) -> None:
+        seen.append(selector_name)
+
+    try:
+        table[700] = "before"
+        patches.set(session, "resolve_service_coords", record_selector)
+        session.resolve_rune_trader_coords(700)
+        table[700] = "after"
+        session.invalidate_context()
+        session.resolve_rune_trader_coords(700)
+        _cp6_equal(seen, ["before", "after"], "current nested/table binding after invalidation")
+    finally:
+        patches.restore()
+        table.clear()
+        table.update(saved)
+    _expect(session._rune_selectors is table, "CP6 table restoration retained identity")
+
+    parent = module.MERCHANT_RULES_MAP_SERVICE_SELECTORS
+    saved_parent = dict(parent)
+    merchant_type = module.MERCHANT_TYPE_MERCHANT
+    first_selector = module.MerchantServiceSelector(
+        label="CP6 first",
+        encoded_identity=(1, 2),
+        model_id=101,
+        expected_xy=(10.0, 0.0),
+        coordinate_tolerance=1.0,
+    )
+    second_selector = module.MerchantServiceSelector(
+        label="CP6 second",
+        encoded_identity=(3, 4),
+        model_id=102,
+        expected_xy=(20.0, 0.0),
+        coordinate_tolerance=1.0,
+    )
+    nested = {merchant_type: (first_selector,)}
+    saved_nested = dict(nested)
+    agent_state, restore_agents = _install_service_resolution_agent_fixture(module)
+    nested_patches = _CP5PatchSet()
+    try:
+        parent[700] = nested
+        nested_widget = _make_widget(module)
+        nested_session = nested_widget._service_resolution_session
+        _cp6_identity(nested_session._map_service_selectors, parent, "supplied selector parent")
+        _cp6_identity(nested_session._map_service_selectors[700], nested, "supplied inner selector mapping")
+        _cp6_generic_map(module, nested_patches)
+        agent_state["npc_ids"] = [1, 2]
+        agent_state["positions"] = {99: (0.0, 0.0), 1: (10.0, 0.0), 2: (20.0, 0.0)}
+        agent_state["encoded_names"] = {1: (1, 2), 2: (3, 4)}
+        agent_state["model_ids"] = {1: 101, 2: 102}
+        before_context = nested_widget._get_supported_context(passive=True, log_context=False)
+        _cp6_equal(before_context[2][merchant_type], (10.0, 0.0), "real initial inner selector resolution")
+        nested[merchant_type] = (second_selector,)
+        _cp6_identity(nested_session._map_service_selectors, parent, "parent retained after inner mutation")
+        _cp6_identity(nested_session._map_service_selectors[700], nested, "inner mapping retained after mutation")
+        _cp6_identity(
+            nested_widget._get_supported_context(passive=True, log_context=False),
+            before_context,
+            "inner mutation does not invent cache invalidation",
+        )
+        nested_widget._invalidate_supported_context_cache()
+        after_context = nested_widget._get_supported_context(passive=True, log_context=False)
+        _cp6_equal(after_context[2][merchant_type], (20.0, 0.0), "real mutated inner selector resolution")
+        _expect(after_context is not before_context, "CP6 invalidation rebuilds the nested-selector context")
+    finally:
+        nested_patches.restore()
+        restore_agents()
+        nested.clear()
+        nested.update(saved_nested)
+        parent.clear()
+        parent.update(saved_parent)
+        _cp6_identity(module.MERCHANT_RULES_MAP_SERVICE_SELECTORS, parent, "selector parent restoration")
+        _cp6_equal(parent, saved_parent, "selector parent contents restored")
+        _expect(
+            all(parent[key] is value for key, value in saved_parent.items()),
+            "CP6 parent restoration retains every original nested object",
+        )
+        _cp6_equal(nested, saved_nested, "supplied inner contents restored")
+        _cp6_identity(nested[merchant_type], saved_nested[merchant_type], "inner selector tuple restored")
+    print(
+        "CP6 nested selector proof: real resolution (10, 0) -> (20, 0); parent/inner identities and contents restored"
+    )
+
+
+def _test_cp6_service_cache_hit_identity(module: Any) -> None:
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    coordinates = {"merchant": (11.0, 12.0)}
+    cached = (True, "cached", coordinates)
+    widget.cached_context_map_id = 700
+    widget.cached_supported_context = cached
+    calls: list[str] = []
+    patches = _CP5PatchSet()
+    sentinel = RuntimeError("CP6 readiness after changed map")
+
+    def ready() -> bool:
+        raise sentinel
+
+    try:
+        patches.set(
+            module,
+            "Map",
+            types.SimpleNamespace(
+                GetMapID=lambda: calls.append("map") or 700,
+                IsMapReady=ready,
+            ),
+        )
+        result = widget._get_supported_context()
+        _expect(result is cached and result[2] is coordinates, "CP6 exact cached tuple and dictionary")
+        _cp6_equal(calls, ["map"], "cache hit only reads current map")
+        patches.set(
+            module,
+            "Map",
+            types.SimpleNamespace(
+                GetMapID=lambda: calls.append("changed-map") or 701,
+                IsMapReady=ready,
+            ),
+        )
+        _cp6_exception(widget._get_supported_context, sentinel, "changed map must enter resolution")
+        _expect(session.cached_supported_context is cached, "CP6 readiness failure has not published replacement")
+    finally:
+        patches.restore()
+
+
+def _test_cp6_service_scan_partial_state(module: Any) -> None:
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    patches = _CP5PatchSet()
+    clock_error = RuntimeError("CP6 clock sentinel")
+    update_error = RuntimeError("CP6 partial update sentinel")
+    calls: list[str] = []
+
+    def clock() -> float:
+        calls.append("clock")
+        raise clock_error
+
+    class PartialUpdate(dict[str, tuple[float, float]]):
+        def update(self, *_args: object, **_kwargs: object) -> None:
+            self["merchant"] = (11.0, 12.0)
+            raise update_error
+
+    try:
+        patches.set(module, "time", types.SimpleNamespace(monotonic=clock))
+        session.record_scan(_cp6_scan(module, player=None, pending=(1,)))
+        _expect(session.lifecycle_active is True, "CP6 missing player activates lifecycle")
+        _cp6_equal(calls, [], "missing player does not read clock")
+        _cp6_equal(
+            [getattr(session, name) for _old, name in _CP6_STATE_PAIRS[2:-1]],
+            [dict[str, tuple[float, float]](), None, None, None, set[int](), 0.0, 0.0],
+            "missing-player untouched state",
+        )
+        _cp6_exception(lambda: session.record_scan(_cp6_scan(module)), clock_error, "valid-player clock propagation")
+        _cp6_equal(calls, ["clock"], "valid player reaches clock")
+        patches.set(module, "time", types.SimpleNamespace(monotonic=lambda: 100.0))
+        partial = PartialUpdate()
+        session.observed_coords = partial
+        old_pending = session.pending_agent_ids
+        scan = _cp6_scan(module, player=(3.0, 4.0), fingerprint=(7,), pending=(7,))
+        _cp6_exception(lambda: session.record_scan(scan), update_error, "dictionary partial update")
+        _expect(
+            session.candidate_fingerprint is scan.candidate_fingerprint and session.player_anchor is scan.player_xy,
+            "CP6 assignments preceding failed update remain visible",
+        )
+        _cp6_equal(partial, {"merchant": (11.0, 12.0)}, "partial update remains visible")
+        _expect(session.pending_agent_ids is old_pending, "CP6 later pending replacement unreached")
+        _cp6_equal(
+            (session.retry_fingerprint, session.name_retry_deadline_at, session.next_poll_at),
+            (None, 0.0, 0.0),
+            "later retry writes unreached",
+        )
+    finally:
+        patches.restore()
+    observation = _capture_service_observation_case(module, "player_interrupt")
+    _cp6_equal(observation["exception"], "KeyboardInterrupt", "existing uncaught BaseException route")
+
+
+def _test_cp6_service_retry_windows(module: Any) -> None:
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    patches = _CP5PatchSet()
+    now = [100.0]
+    actual: list[tuple[float, float, float]] = []
+    try:
+        patches.set(module, "time", types.SimpleNamespace(monotonic=lambda: now[0]))
+        for at, fingerprint in ((100.0, (1,)), (107.9, (1,)), (108.0, (1,)), (109.0, (1,)), (110.0, (2,))):
+            now[0] = at
+            session.record_scan(_cp6_scan(module, fingerprint=fingerprint, pending=fingerprint))
+            actual.append((at, session.name_retry_deadline_at, session.next_poll_at))
+        _cp6_equal(
+            actual,
+            [
+                (100.0, 108.0, 100.25),
+                (107.9, 108.0, 108.15),
+                (108.0, 0.0, 108.5),
+                (109.0, 0.0, 109.5),
+                (110.0, 118.0, 110.25),
+            ],
+            "retry window literals",
+        )
+        now[0] = 111.0
+        session.record_scan(_cp6_scan(module, fingerprint=(2,)))
+        _cp6_equal(
+            (session.name_retry_deadline_at, session.next_poll_at, session.pending_agent_ids),
+            (0.0, 111.5, set[int]()),
+            "settled retry",
+        )
+    finally:
+        patches.restore()
+    print("CP6 retry-window evidence: " + json.dumps(actual))
+
+
+def _test_cp6_service_poll_boundaries(module: Any) -> None:
+    state, restore = _install_service_resolution_agent_fixture(module)
+    patches = _CP5PatchSet()
+    now = [100.0]
+    trace: list[str] = []
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    real_snapshot = widget._get_live_service_candidate_snapshot
+
+    def snapshot() -> Any:
+        trace.append("snapshot")
+        return real_snapshot()
+
+    def clock() -> float:
+        trace.append("clock")
+        return now[0]
+
+    try:
+        _cp6_generic_map(module, patches)
+        patches.set(module, "time", types.SimpleNamespace(monotonic=clock))
+        patches.set(widget, "_get_live_service_candidate_snapshot", snapshot)
+        state["npc_ids"] = [1]
+        state["names"] = {}
+        state["positions"] = {99: (749.0, 0.0), 1: (10.0, 0.0)}
+        session.lifecycle_active = True
+        session.candidate_fingerprint = (1,)
+        session.player_anchor = (0.0, 0.0)
+        session.next_poll_at = 100.01
+        session.poll_context_change()
+        _cp6_equal(trace, ["clock"], "before deadline does not acquire candidates")
+        trace.clear()
+        session.next_poll_at = 100.0
+        session.poll_context_change()
+        _cp6_equal(trace, ["clock", "snapshot"], "equal deadline and 749 movement")
+        _cp6_equal(session.next_poll_at, 100.5, "settled event interval")
+        trace.clear()
+        state["positions"][99] = (750.0, 0.0)
+        session.next_poll_at = 100.0
+        clocks = iter((100.0, 100.125))
+        patches.set(module, "time", types.SimpleNamespace(monotonic=lambda: trace.append("clock") or next(clocks)))
+        session.poll_context_change()
+        _cp6_equal(trace, ["clock", "snapshot", "snapshot", "clock"], "750 movement and separate scan clock")
+        _cp6_equal(
+            (session.name_retry_deadline_at, session.next_poll_at),
+            (108.125, 100.375),
+            "recording clock owns retry timing",
+        )
+        trace.clear()
+        patches.set(module, "time", types.SimpleNamespace(monotonic=clock))
+        state["player_agent_id"] = 0
+        state["player_xy_fallback"] = (float("nan"), 0.0)
+        session.next_poll_at = 0.0
+        session.name_retry_deadline_at = 99.0
+        session.poll_context_change()
+        _cp6_equal(
+            (session.next_poll_at, session.name_retry_deadline_at),
+            (100.5, 99.0),
+            "missing player schedules before expiry",
+        )
+    finally:
+        patches.restore()
+        restore()
+
+
+def _test_cp6_service_refresh_change_detection(module: Any) -> None:
+    state, restore = _install_service_resolution_agent_fixture(module)
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    patches = _CP5PatchSet()
+    trace: list[str] = []
+    real_scan, real_invalidate, real_resolve = (
+        session.scan_live_roles,
+        session.invalidate_context,
+        session.resolve_context,
+    )
+    old_coords = {
+        "merchant": (10.0, 0.0),
+        "material_trader": None,
+        "rune_trader": None,
+        "scroll_trader": None,
+        "rare_material_trader": None,
+        "consumable_crafter": None,
+    }
+    post_scan = (True, "post-scan cache", old_coords)
+
+    def scan(**kwargs: Any) -> Any:
+        trace.append("scan")
+        result = real_scan(**kwargs)
+        session.cached_context_map_id = 700
+        session.cached_supported_context = post_scan
+        return result
+
+    def invalidate() -> None:
+        trace.append("invalidate")
+        real_invalidate()
+
+    def resolve(**kwargs: Any) -> Any:
+        trace.append("resolve")
+        return real_resolve(**kwargs)
+
+    try:
+        _cp6_generic_map(module, patches)
+        patches.set(module, "time", types.SimpleNamespace(monotonic=lambda: 100.0))
+        state["npc_ids"] = [1]
+        state["positions"] = {99: (0.0, 0.0), 1: (10.0, 0.0)}
+        state["names"] = {1: "A [Merchant]"}
+        session.cached_context_map_id = 700
+        session.cached_supported_context = (False, "pre-scan cache", dict[str, tuple[float, float] | None]())
+        patches.set(session, "scan_live_roles", scan)
+        patches.set(session, "invalidate_context", invalidate)
+        patches.set(session, "resolve_context", resolve)
+        _expect(
+            session.refresh_context_if_changed(force_context_refresh=True) is None,
+            "CP6 reason-only refreshed context is not an effective change",
+        )
+        _cp6_equal(trace, ["scan", "invalidate", "resolve"], "refresh sequence")
+        _expect(session.cached_supported_context is not post_scan, "CP6 forced resolution publishes new tuple")
+        _cp6_equal(session.cached_supported_context[2], old_coords, "post-scan context comparison")
+        state["positions"][1] = (20.0, 0.0)
+        trace.clear()
+        result = session.refresh_context_if_changed(force_context_refresh=True)
+        _expect(result is session.cached_supported_context, "CP6 changed context exact result")
+        _cp6_equal(result[2]["merchant"], (20.0, 0.0), "changed coordinate")
+        _expect(result[2] is session.cached_supported_context[2], "CP6 context coordinate identity")
+    finally:
+        patches.restore()
+        restore()
+
+
+def _test_cp6_service_passive_policy_and_precedence(module: Any) -> None:
+    state, restore = _install_service_resolution_agent_fixture(module)
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    patches = _CP5PatchSet()
+    policy: list[str] = []
+    route: list[object] = []
+
+    def ignore_failure(_recipe: str, _message: str) -> None:
+        pass
+
+    def authority(_kind: str, _name: str) -> bool:
+        route.append("authority")
+        return True
+
+    def unresolved(step: dict[str, object], **_kwargs: object) -> None:
+        route.append(step)
+
+    def resolved(step: dict[str, object], **_kwargs: object) -> tuple[float, float]:
+        route.append(step)
+        return (30.0, 40.0)
+
+    def scroll_policy() -> bool:
+        policy.append("scroll")
+        return True
+
+    try:
+        _cp6_generic_map(module, patches)
+        patches.set(module, "time", types.SimpleNamespace(monotonic=lambda: 100.0))
+        patches.set(widget, "_has_enabled_scroll_trader_buy_rules", scroll_policy)
+        patches.set(module, "_log_agent_selector_failure", ignore_failure)
+        state["npc_ids"] = [1]
+        state["positions"] = {99: (0.0, 0.0), 1: (10.0, 0.0)}
+        state["names"] = {1: "A [Merchant]"}
+        widget._get_supported_context(passive=True, log_context=False)
+        _cp6_equal(policy, [], "passive policy is never acquired")
+        widget._invalidate_supported_context_cache()
+        widget._get_supported_context(passive=False, log_context=False)
+        _cp6_equal(policy, ["scroll", "scroll"], "unresolved generic scroll has two separate policy reads")
+        patches.set(module, "_named_agent_target_has_authoritative_identity", authority)
+        patches.set(module, "resolve_agent_xy_from_step", unresolved)
+        result = session.resolve_service_coords(
+            map_id=857,
+            service_type=module.MERCHANT_TYPE_MERCHANT,
+            selector_name="named",
+            model_id=5,
+            fallback_role="merchant",
+            log_failures=False,
+        )
+        _expect(result is None, "CP6 map-specific current-map mismatch")
+        _cp6_equal(route, [], "map-specific failure prevents generic authority/resolution")
+        patches.set(module, "resolve_agent_xy_from_step", resolved)
+        _cp6_equal(
+            session.resolve_service_coords(
+                map_id=700,
+                service_type="merchant",
+                selector_name="named",
+                model_id=5,
+                fallback_role="merchant",
+                log_failures=False,
+            ),
+            (30.0, 40.0),
+            "named selector precedence",
+        )
+        _cp6_equal(route, ["authority", {"npc": "named"}], "named success short circuit")
+        route.clear()
+        patches.set(module, "resolve_agent_xy_from_step", unresolved)
+        _cp6_equal(
+            session.resolve_service_coords(
+                map_id=700,
+                service_type="merchant",
+                selector_name="named",
+                model_id=5,
+                fallback_role="merchant",
+                log_failures=False,
+            ),
+            (10.0, 0.0),
+            "real localized-role fallback",
+        )
+        _cp6_equal(route, ["authority", {"npc": "named"}, {"model_id": 5}], "named then model then role")
+    finally:
+        patches.restore()
+        restore()
+
+
+def _test_cp6_service_storage_probe_order(module: Any) -> None:
+    widget = _make_widget(module)
+    patches = _CP5PatchSet()
+    trace: list[object] = []
+    sentinel = RuntimeError("CP6 storage boundary")
+    interrupt = KeyboardInterrupt("CP6 storage interrupt")
+
+    def fail() -> bool:
+        raise sentinel
+
+    def interrupted() -> bool:
+        raise interrupt
+
+    def resolve(step: dict[str, object], **kwargs: object) -> None:
+        trace.append((step, kwargs["agent_kind"], kwargs["log_failures"]))
+
+    try:
+        patches.set(module.GLOBAL_CACHE, "Inventory", types.SimpleNamespace(IsStorageOpen=lambda: True))
+        patches.set(module, "Map", types.SimpleNamespace(IsMapReady=fail))
+        _expect(widget._has_local_storage_access() is True, "CP6 open storage precedes map acquisition")
+        _cp6_equal(trace, [], "open storage has no fallback")
+        patches.set(module.GLOBAL_CACHE, "Inventory", types.SimpleNamespace(IsStorageOpen=fail))
+        patches.set(
+            module,
+            "Map",
+            types.SimpleNamespace(
+                IsMapReady=lambda: trace.append("ready") or True,
+                IsOutpost=lambda: trace.append("outpost") or True,
+                IsGuildHall=lambda: trace.append("guild") or False,
+            ),
+        )
+        patches.set(module, "resolve_agent_xy_from_step", resolve)
+        _expect(widget._has_local_storage_access() is False, "CP6 closed/failing storage fallback")
+        expected: list[object] = [
+            "ready",
+            "outpost",
+            ({"target": "Xunlai Agent", "exact_name": True}, "npc", False),
+            ({"target": "Xunlai Chest", "exact_name": True}, "gadget", False),
+            ({"model_id": 220}, "npc", False),
+            ({"model_id": 221}, "npc", False),
+            ({"model_id": 3287}, "npc", False),
+            ({"model_id": 5001}, "gadget", False),
+        ]
+        _cp6_equal(trace, expected, "literal Xunlai fallback and lazy Guild Hall check")
+        for inventory in (None, types.SimpleNamespace(), types.SimpleNamespace(IsStorageOpen=lambda: False)):
+            patches.set(module.GLOBAL_CACHE, "Inventory", inventory)
+            trace.clear()
+            _expect(widget._has_local_storage_access() is False, "CP6 absent/closed storage")
+            _cp6_equal(trace, expected, "equivalent fallback order")
+        patches.set(module, "Map", types.SimpleNamespace(IsMapReady=fail))
+        _cp6_exception(widget._has_local_storage_access, sentinel, "map exception outside storage catch")
+        patches.set(module.GLOBAL_CACHE, "Inventory", types.SimpleNamespace(IsStorageOpen=interrupted))
+        _cp6_exception(widget._has_local_storage_access, interrupt, "storage BaseException is not caught")
+
+        class UnavailableInventory:
+            @property
+            def Inventory(self) -> object:
+                raise sentinel
+
+        patches.set(module, "GLOBAL_CACHE", UnavailableInventory())
+        _cp6_exception(widget._has_local_storage_access, sentinel, "Inventory acquisition outside catch")
+    finally:
+        patches.restore()
+
+
+def _test_cp6_service_logging_lookup_and_publication(module: Any) -> None:
+    state, restore = _install_service_resolution_agent_fixture(module)
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    patches = _CP5PatchSet()
+    logs: list[tuple[str, str]] = []
+    map_reads = [0]
+    sentinel = RuntimeError("CP6 debug after publication")
+
+    def logger_a(message: str) -> None:
+        logs.append(("A", message))
+
+    def logger_b(message: str) -> None:
+        logs.append(("B", message))
+
+    def map_name(_map_id: int) -> str:
+        map_reads[0] += 1
+        if map_reads[0] == 2:
+            patches.set(widget, "_debug_log", logger_b)
+        return "CP6 Test Outpost"
+
+    try:
+        _cp6_generic_map(module, patches)
+        patches.set(module.Map, "GetMapName", map_name)
+        patches.set(module, "time", types.SimpleNamespace(monotonic=lambda: 100.0))
+        patches.set(widget, "_debug_log", logger_a)
+        state["npc_ids"] = [1]
+        state["positions"] = {99: (0.0, 0.0), 1: (10.0, 0.0)}
+        state["names"] = {1: "A [Merchant]"}
+        result = widget._get_supported_context(passive=True)
+        _cp6_equal([label for label, _message in logs], ["A", "B"], "logger selected before lazy message")
+        _cp6_equal(map_reads[0], 2, "base and debug Map-name reads")
+        _expect(result is session.cached_supported_context, "CP6 logged context published")
+        _expect(
+            logs[0][1].startswith("Context resolved:") and logs[1][1].startswith("Context detail:"),
+            "CP6 partial resolution reaches later logger",
+        )
+
+        def fail_log(_message: str) -> None:
+            _expect(
+                session.cached_context_map_id == 700 and session.cached_supported_context is not None,
+                "CP6 publication precedes logging failure",
+            )
+            raise sentinel
+
+        patches.set(widget, "_debug_log", fail_log)
+        session.invalidate_context()
+        _cp6_exception(lambda: widget._get_supported_context(passive=True), sentinel, "debug exception identity")
+        _expect(session.cached_supported_context is not None, "CP6 cache remains after logger failure")
+        replacement = (True, "replacement from logger", {"merchant": (90.0, 91.0)})
+        readers: list[str] = []
+
+        def replace_cache(message: str) -> None:
+            readers.append(message)
+            session.cached_supported_context = replacement
+
+        patches.set(widget, "_debug_log", replace_cache)
+        session.invalidate_context()
+        _expect(widget._get_supported_context(passive=True) is replacement, "CP6 final current cached-field read")
+        _cp6_equal(len(readers), 2, "one message evaluation for each of two logger calls")
+
+        failure_events: list[tuple[str, str]] = []
+
+        def failure_a(_recipe: str, message: str) -> None:
+            failure_events.append(("A", message))
+
+        def failure_b(_recipe: str, message: str) -> None:
+            failure_events.append(("B", message))
+
+        class FormattingError(RuntimeError):
+            def __str__(self) -> str:
+                patches.set(module, "_log_agent_selector_failure", failure_b)
+                return "formatted sentinel"
+
+        formatting_error = FormattingError()
+
+        def failed_population() -> list[int]:
+            raise formatting_error
+
+        patches.set(module, "_log_agent_selector_failure", failure_a)
+        patches.set(sys.modules["Py4GWCoreLib"].AgentArray, "GetNPCMinipetArray", failed_population)
+        session.resolve_map_specific_service_coords(
+            map_id=700, service_type="merchant", selectors=(), log_failures=True
+        )
+        _cp6_equal(len(failure_events), 1, "single lazy failure message")
+        _cp6_equal(failure_events[0][0], "A", "failure logger lookup precedes exception formatting")
+        _expect(failure_events[0][1].endswith("formatted sentinel"), "CP6 exact formatted exception text")
+    finally:
+        patches.restore()
+        restore()
+
+
+def _test_cp6_service_pending_conditions(module: Any) -> None:
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    patches = _CP5PatchSet()
+    trace: list[str] = []
+    real_poll = session.poll_context_change
+    context = (True, "pending", {"merchant": (1.0, 2.0)})
+
+    def no_change(**_kwargs: object) -> None:
+        return None
+
+    def poll() -> Any:
+        trace.append("poll")
+        return real_poll()
+
+    try:
+        _cp6_generic_map(module, patches)
+        patches.set(session, "poll_context_change", poll)
+        widget.cached_context_map_id = 700
+        widget.cached_supported_context = context
+        for answers, expected_pending, expected_trace in (
+            ([False], False, ["eligible", "poll"]),
+            ([True, False], True, ["eligible", "eligible", "poll"]),
+        ):
+            iterator = iter(answers)
+            trace.clear()
+            widget._service_role_preview_refresh_pending = True
+            patches.set(
+                widget, "_preview_uses_current_service_context", lambda: trace.append("eligible") or next(iterator)
+            )
+            _expect(widget._update_service_resolution_lifecycle() is None, "CP6 update wrapper returns None")
+            _cp6_equal(trace, expected_trace, "independent pending eligibility conditions")
+            _expect(
+                widget._service_role_preview_refresh_pending is expected_pending,
+                "CP6 pending state after eligibility sequence",
+            )
+        trace.clear()
+        patches.set(widget, "_preview_uses_current_service_context", lambda: True)
+        patches.set(widget, "_merchant_rules_has_pending_or_active_work", lambda: trace.append("busy") or True)
+        widget._service_role_preview_refresh_pending = True
+        widget._update_service_resolution_lifecycle()
+        _cp6_equal(trace, ["busy", "poll"], "busy pending preview is deferred")
+        _expect(widget._service_role_preview_refresh_pending, "CP6 busy preview remains pending")
+        sentinel = RuntimeError("CP6 pending build failure")
+
+        def build(**_kwargs: object) -> None:
+            trace.append("build")
+            raise sentinel
+
+        patches.set(widget, "_merchant_rules_has_pending_or_active_work", lambda: False)
+        patches.set(widget, "_build_plan", build)
+        trace.clear()
+        _cp6_exception(widget._update_service_resolution_lifecycle, sentinel, "real pending refresh failure")
+        _cp6_equal(trace, ["build"], "pending build failure stops before polling")
+        _expect(widget._service_role_preview_refresh_pending, "CP6 pending flag not cleared after failed build")
+        patches.set(session, "refresh_context_if_changed", no_change)
+        _expect(
+            widget._refresh_supported_context_from_service_lifecycle(force_context_refresh=True) is None,
+            "CP6 refresh wrapper preserves None",
+        )
+    finally:
+        patches.restore()
+
+
+def _test_cp6_service_double_rebuild_and_feedback(module: Any) -> None:
+    state, restore = _install_service_resolution_agent_fixture(module)
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    patches = _CP5PatchSet()
+    trace: list[str] = []
+    effects: list[str] = []
+    contexts: list[object] = []
+    c1 = (
+        False,
+        "pending C1",
+        {
+            "merchant": None,
+            "material_trader": None,
+            "rune_trader": None,
+            "scroll_trader": None,
+            "rare_material_trader": None,
+            "consumable_crafter": None,
+        },
+    )
+    real_snapshot = widget._get_live_service_candidate_snapshot
+    clocks = iter((100.0, 100.125))
+
+    def snapshot() -> Any:
+        trace.append("snapshot")
+        return real_snapshot()
+
+    def clock() -> float:
+        trace.append("clock")
+        return next(clocks)
+
+    def build(**kwargs: Any) -> Any:
+        context = kwargs["supported_context_override"]
+        contexts.append(context)
+        _expect(kwargs["projected_preview"] is True, "CP6 real preview-refresh arguments")
+        trace.append("build:C1" if len(contexts) == 1 else "build:C2")
+        if len(contexts) == 1:
+            _expect(context is c1 and session.lifecycle_active is False, "CP6 first pending build before polling")
+            session.lifecycle_active = True
+            session.next_poll_at = 0.0
+            session.candidate_fingerprint = (1,)
+            session.player_anchor = (0.0, 0.0)
+            state["npc_ids"] = [2]
+            state["positions"] = {99: (0.0, 0.0), 2: (20.0, 0.0)}
+            state["names"] = {2: "Changed [Merchant]"}
+        else:
+            _expect(context is session.cached_supported_context, "CP6 second build uses published C2 by identity")
+            _cp6_equal(context[2]["merchant"], (20.0, 0.0), "first-build population feedback")
+        return types.SimpleNamespace(multi_stop_route=False)
+
+    try:
+        _cp6_generic_map(module, patches)
+        patches.set(module, "time", types.SimpleNamespace(monotonic=clock))
+        patches.set(widget, "_get_live_service_candidate_snapshot", snapshot)
+        patches.set(widget, "_build_plan", build)
+        patches.set(widget, "_merchant_rules_has_pending_or_active_work", lambda: False)
+        patches.set(widget, "_set_preview_projection_state", lambda: effects.append("projection"))
+        patches.set(widget, "_clear_preview_inventory_diff", lambda: effects.append("clear"))
+        widget.preview_plan = types.SimpleNamespace(multi_stop_route=False)
+        widget.preview_ready = True
+        widget.preview_requires_execute_travel = False
+        widget._service_role_preview_refresh_pending = True
+        widget.cached_context_map_id = 700
+        widget.cached_supported_context = c1
+        _expect(widget._update_service_resolution_lifecycle() is None, "CP6 double-rebuild wrapper result")
+        _cp6_equal(
+            trace,
+            ["build:C1", "clock", "snapshot", "snapshot", "clock", "build:C2"],
+            "same-call real polling and double rebuild",
+        )
+        _cp6_equal(effects, ["projection", "clear", "projection", "clear"], "both real preview refresh effects")
+        _expect(
+            contexts[0] is c1 and contexts[1] is session.cached_supported_context, "CP6 both build context identities"
+        )
+        _cp6_identity(widget._service_role_preview_refresh_pending, False, "final preview pending flag")
+        _expect(widget.preview_ready, "CP6 final preview flags")
+        _cp6_equal(
+            widget.status_message,
+            "Live merchant/trader services changed. Preview refreshed automatically.",
+            "retained preview status",
+        )
+    finally:
+        patches.restore()
+        restore()
+    print("CP6 double-rebuild evidence: " + json.dumps({"trace": trace, "effects": effects}))
+
+
+def _test_cp6_service_late_adapter_replacements(module: Any) -> None:
+    state, restore = _install_service_resolution_agent_fixture(module)
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    patches = _CP5PatchSet()
+    trace: list[str | tuple[str, object] | tuple[str, str, str]] = []
+    real_safe = module._safe_int
+
+    def authority(kind: str, name: str) -> bool:
+        trace.append(("authority", kind, name))
+        return True
+
+    def resolve(step: dict[str, object], **_kwargs: object) -> tuple[float, float]:
+        trace.append(("resolve", step))
+        return (8.0, 9.0)
+
+    def no_authority(_kind: str, _name: str) -> bool:
+        return False
+
+    def unresolved(_step: dict[str, object], **_kwargs: object) -> None:
+        return None
+
+    def format_coords(value: tuple[float, float] | None) -> str:
+        formatting.append(value)
+        return "late-format"
+
+    def coercer_a(value: object, default: int = 0) -> int:
+        trace.append(("A", value))
+        return real_safe(value, default)
+
+    def coercer_b(value: object, default: int = 0) -> int:
+        trace.append(("B", value))
+        return real_safe(value, default)
+
+    def map_id() -> int:
+        trace.append("map")
+        patches.set(module, "_safe_int", coercer_b)
+        return 700
+
+    try:
+        _cp6_generic_map(module, patches)
+        patches.set(module, "Player", types.SimpleNamespace(GetAgentID=lambda: 99, GetXY=lambda: (999.0, 999.0)))
+        state["npc_ids"] = [1]
+        state["positions"] = {99: (3.0, 4.0), 1: (10.0, 0.0)}
+        state["names"] = {1: "A [Merchant]"}
+        _cp6_equal(widget._get_live_service_candidate_snapshot()[0], (3.0, 4.0), "whole Player replacement")
+        patches.set(module, "_safe_int", coercer_a)
+        patches.set(module.Map, "GetMapID", map_id)
+        session.resolve_map_specific_service_coords(
+            map_id=700, service_type="merchant", selectors=(), log_failures=False
+        )
+        _cp6_equal(trace[:3], [("A", 700), "map", ("A", 700)], "coercer selected before Map argument")
+        _expect(
+            any(isinstance(row, tuple) and row[0] == "B" for row in trace[3:]),
+            "CP6 subsequent reads use replacement coercer",
+        )
+        trace.clear()
+        patches.set(module, "_named_agent_target_has_authoritative_identity", authority)
+        patches.set(module, "resolve_agent_xy_from_step", resolve)
+        _cp6_equal(
+            widget._resolve_service_coords(map_id=700, service_type="merchant", selector_name="late"),
+            (8.0, 9.0),
+            "late registry resolver",
+        )
+        _expect(
+            ("authority", "npc", "late") in trace and ("resolve", {"npc": "late"}) in trace,
+            "CP6 actual late registry adapter reachability",
+        )
+        patches.set(module.GLOBAL_CACHE, "Inventory", types.SimpleNamespace(IsStorageOpen=lambda: True))
+        _expect(widget._has_local_storage_access() is True, "CP6 replaced storage API")
+        patches.set(module, "_named_agent_target_has_authoritative_identity", no_authority)
+        patches.set(module, "resolve_agent_xy_from_step", unresolved)
+        _cp6_generic_map(module, patches)
+        patches.set(module, "time", types.SimpleNamespace(monotonic=lambda: 100.0))
+        formatting: list[object] = []
+        messages: list[str] = []
+        patches.set(widget, "_format_debug_coords", format_coords)
+        patches.set(widget, "_debug_log", messages.append)
+        session.invalidate_context()
+        widget._get_supported_context(passive=True)
+        _cp6_equal(len(formatting), 6, "six late formatter reads")
+        _expect("merchant=late-format" in messages[0], "CP6 late formatter reaches lazy logger message")
+    finally:
+        patches.restore()
+        restore()
+
+
+def _test_cp6_service_selector_and_normalizer_ownership(module: Any) -> None:
+    from Sources.icefox.MerchantRules.service_observation import SelectorLike
+
+    observer: Any = sys.modules["Sources.icefox.MerchantRules.service_observation"]
+    normalizer = module._normalize_vendor_encoded_identity
+    _expect(normalizer is observer.normalize_vendor_encoded_identity, "CP6 canonical normalizer alias")
+    _expect(
+        normalizer.__globals__ is vars(observer) and normalizer.__module__ == observer.__name__,
+        "CP6 honest normalizer defining owner",
+    )
+    for raw in (bytes((0, 255)), bytearray((0, 255)), [0, 255], (0, 255)):
+        _cp6_equal(normalizer(raw), (0, 255), "encoded identity literal")
+    for raw in (b"", bytearray(), list[int](), ()):
+        _cp6_equal(normalizer(raw), (), "empty accepted container")
+    for raw in (dict[str, object](), {1, 2}, "ab", None, [-1], [256], ["bad"]):
+        _expect(normalizer(raw) is None, "CP6 rejected encoded identity " + repr(raw))
+    sentinel = RuntimeError("CP6 integer conversion sentinel")
+
+    class OutsideConversionCatch:
+        def __int__(self) -> int:
+            raise sentinel
+
+    _cp6_exception(lambda: normalizer([OutsideConversionCatch()]), sentinel, "narrow conversion exception identity")
+    _expect(module.MerchantServiceSelector.__module__ == module.__name__, "CP6 selector record stays widget-owned")
+    _cp6_equal(
+        tuple(module.MerchantServiceSelector.__dataclass_fields__),
+        ("label", "encoded_identity", "model_id", "expected_xy", "coordinate_tolerance"),
+        "canonical selector fields",
+    )
+    annotations = {
+        "label": str,
+        "encoded_identity": tuple[int, ...],
+        "model_id": int,
+        "expected_xy": tuple[float, float],
+        "coordinate_tolerance": float,
+    }
+    _expect(observer.SelectorLike is SelectorLike, "CP6 canonical typed Protocol binding")
+    for name, expected in annotations.items():
+        descriptor: object = vars(SelectorLike)[name]
+        _expect(isinstance(descriptor, property) and descriptor.fset is None, "CP6 read-only selector member " + name)
+        if not isinstance(descriptor, property) or descriptor.fget is None:
+            raise AssertionError("CP6 missing selector property " + name)
+        _cp6_equal(descriptor.fget.__annotations__["return"], expected, "selector property annotation " + name)
+    _expect(module.LiveServiceRoleScan is observer.LiveServiceRoleScan, "CP6 concrete scan alias retained")
+    _expect(
+        observer.LiveServiceRoleScan.__annotations__["player_xy"] == tuple[float, float] | None,
+        "CP6 scan annotation remains concrete",
+    )
+
+
+def _test_cp6_service_defining_bindings(module: Any) -> None:
+    observer: Any = sys.modules["Sources.icefox.MerchantRules.service_observation"]
+    widget = _make_widget(module)
+    session = widget._service_resolution_session
+    _expect(module.ServiceResolutionSession is observer.ServiceResolutionSession, "CP6 session class alias")
+    _expect(type(session) is observer.ServiceResolutionSession, "CP6 actual session class")
+    source_path = REPO_ROOT / "Sources/icefox/MerchantRules/service_observation.py"
+    routes = {
+        "invalidate_context": "_invalidate_supported_context_cache",
+        "reset_observations": "_reset_service_resolution_lifecycle",
+        "resolve_rune_trader_coords": "_resolve_rune_trader_coords",
+        "get_scroll_trader_lookup": "_get_scroll_trader_lookup",
+        "get_scroll_trader_service_label": "_get_scroll_trader_service_label",
+        "resolve_scroll_trader_coords": "_resolve_scroll_trader_coords",
+        "resolve_map_specific_service_coords": "_resolve_map_specific_service_coords",
+        "record_scan": "_record_live_service_role_scan",
+        "scan_live_roles": "_scan_live_service_roles",
+        "resolve_service_role_coords": "_resolve_service_role_coords",
+        "resolve_service_coords": "_resolve_service_coords",
+        "get_diagnostics": "_get_service_resolution_diagnostics",
+        "resolve_storage_access_coords": "_resolve_storage_access_coords",
+        "has_local_storage_access": "_has_local_storage_access",
+        "resolve_context": "_get_supported_context",
+        "refresh_context_if_changed": "_refresh_supported_context_from_service_lifecycle",
+        "poll_context_change": "_update_service_resolution_lifecycle",
+    }
+    for session_name, widget_name in routes.items():
+        bound = getattr(session, session_name)
+        _expect(
+            bound.__func__ is getattr(observer.ServiceResolutionSession, session_name) and bound.__self__ is session,
+            "CP6 bound method identity " + session_name,
+        )
+        _expect(bound.__func__.__globals__ is vars(observer), "CP6 actual defining globals " + session_name)
+        _cp6_equal(
+            Path(bound.__func__.__code__.co_filename).resolve(),
+            source_path.resolve(),
+            "session source origin " + session_name,
+        )
+        delegate = getattr(widget, widget_name)
+        _expect(
+            delegate.__func__.__globals__ is vars(module) and delegate.__self__ is widget,
+            "CP6 widget delegate globals and owner " + widget_name,
+        )
+    for name in _CP6_LATE_INPUTS:
+        callback = getattr(session, "_" + name)
+        _expect(callback.__globals__ is vars(module), "CP6 late adapter defining globals " + name)
+    ranker, catalog = widget._ranked_catalog_search, widget._catalog_session
+    inventory: Any = sys.modules["Sources.icefox.MerchantRules.inventory_evidence"]
+    configuration: Any = sys.modules["Sources.icefox.MerchantRules.configuration"]
+    inventory_owner = widget._inventory_evidence
+    _expect(
+        module._inventory_evidence is inventory and type(inventory_owner) is inventory.InventoryEvidence,
+        "CP6 canonical inventory evidence module and instance owner",
+    )
+    _expect(module.ItemType is catalog._item_type_enum, "CP6 actual canonical ItemType remains bound")
+    _expect(module.BuyRule is configuration.BuyRule, "CP6 canonical configuration record")
+
+    patches = _CP5PatchSet()
+    reached: list[str] = []
+    marker = (True, "sentinel", {"merchant": (1.0, 2.0)})
+
+    def resolve_context(**_kwargs: object) -> tuple[bool, str, dict[str, tuple[float, float]]]:
+        reached.append("context")
+        return marker
+
+    def record_scan(_scan: object) -> None:
+        reached.append("record")
+
+    try:
+        patches.set(session, "resolve_context", resolve_context)
+        _expect(widget._get_supported_context() is marker, "CP6 actual delegate reaches session sentinel")
+        patches.set(session, "record_scan", record_scan)
+        widget._record_live_service_role_scan(_cp6_scan(module))
+        _cp6_equal(reached, ["context", "record"], "actual caller routes")
+    finally:
+        patches.restore()
+    _expect(
+        session.resolve_context.__func__ is observer.ServiceResolutionSession.resolve_context
+        and session.resolve_context.__self__ is session,
+        "CP6 exact bound owner restored",
+    )
+    _expect(
+        "resolve_context" not in vars(session) and "record_scan" not in vars(session),
+        "CP6 temporary instance overrides removed",
+    )
+    _expect(
+        widget._ranked_catalog_search is ranker
+        and widget._catalog_session is catalog
+        and widget._inventory_evidence is inventory_owner,
+        "CP6 Catalog, ranker and inventory lifetimes retained",
+    )
+
+
+def _test_cp6_service_completed_cp5_differential() -> None:
+    from hashlib import sha256
+    from uuid import uuid4
+
+    raw_config = os.environ.get("MERCHANT_RULES_CP6_DIFFERENTIAL_CONFIG", "")
+    _expect(bool(raw_config), "CP6 differential requires its pinned completed-CP5 configuration")
+    config_path = Path(raw_config).resolve()
+    config_bytes = config_path.read_bytes()
+    config = json.loads(config_bytes)
+    evidence_root = Path(config["evidence_root"]).resolve()
+    _expect(
+        evidence_root.name.startswith("cp6-implementation-") and config_path.is_relative_to(evidence_root),
+        "CP6 configuration and output containment",
+    )
+    driver = Path(config["driver"]["path"]).resolve()
+    _expect(driver.is_relative_to(evidence_root), "CP6 driver containment")
+    _expect(sha256(driver.read_bytes()).hexdigest() == config["driver"]["sha256"], "CP6 frozen driver identity")
+    pin_observations: list[tuple[Path, bytes]] = []
+    for side in ("baseline", "candidate"):
+        source_root = Path(config[side]["root"]).resolve()
+        pins_path = Path(config[side]["pins_path"]).resolve()
+        _expect(
+            source_root.is_relative_to(evidence_root) and pins_path.is_relative_to(source_root),
+            "CP6 source and pin containment " + side,
+        )
+        pins_bytes = pins_path.read_bytes()
+        _expect(sha256(pins_bytes).hexdigest() == config[side]["pins_sha256"], "CP6 source inventory pin " + side)
+        pin_observations.append((pins_path, pins_bytes))
+    _expect(config["baseline"]["root"] != config["candidate"]["root"], "CP6 independent source roots")
+    case_root = evidence_root / ("cp6-differential-case-" + str(uuid4()))
+    _expect(not case_root.exists(), "CP6 output must be newly owned")
+    case_root.mkdir()
+    command = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-S",
+        str(driver),
+        "--config",
+        str(config_path),
+        "--run-root",
+        str(case_root / "run"),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=case_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        check=False,
+    )
+    for name, value in (
+        (
+            "coordinator-launch.json",
+            json.dumps(
+                {
+                    "command": command,
+                    "returncode": completed.returncode,
+                    "configuration_path": str(config_path),
+                    "configuration_sha256": sha256(config_bytes).hexdigest(),
+                    "driver_sha256": config["driver"]["sha256"],
+                },
+                indent=2,
+            )
+            + "\n",
+        ),
+        ("coordinator-stdout.txt", completed.stdout),
+        ("coordinator-stderr.txt", completed.stderr),
+    ):
+        with (case_root / name).open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(value)
+    _expect(completed.returncode == 0, "CP6 differential failed: " + str(case_root) + "\n" + completed.stderr)
+    report_path = case_root / "run/report.json"
+    report = json.loads(report_path.read_bytes())
+    _expect(report["passed"] is True, "CP6 independently frozen comparison result")
+    _cp6_equal(
+        report["matched_scenarios"],
+        [
+            "construction_cache_and_reset",
+            "scan_partial_failures",
+            "retry_and_poll_boundaries",
+            "selector_policy_and_storage_order",
+            "logging_publication_and_late_lookup",
+            "pending_conditions_and_double_rebuild",
+            "normalizer_literals",
+            "fixture_characterization",
+        ],
+        "independent comparison scenario inventory",
+    )
+    _expect(
+        len(report["launches"]) == 2 and all(item["returncode"] == 0 for item in report["launches"]),
+        "CP6 actual fresh child launches",
+    )
+    _expect(
+        report["source_bindings_verified"] and report["within_process_identities_verified"],
+        "CP6 actual defining/source bindings and identities",
+    )
+    _expect(config_path.read_bytes() == config_bytes, "CP6 configuration remained frozen")
+    _expect(sha256(driver.read_bytes()).hexdigest() == config["driver"]["sha256"], "CP6 driver remained frozen")
+    for path, original in pin_observations:
+        _expect(path.read_bytes() == original, "CP6 source pin file remained frozen")
+    print(
+        "CP6 completed-CP5 differential evidence: "
+        + str(report_path)
+        + " SHA-256="
+        + sha256(report_path.read_bytes()).hexdigest()
+    )
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -49525,6 +50932,42 @@ def main() -> int:
                     lambda: _test_catalog_session_modelid_fallback_absent_rich(module),
                 ),
                 ("catalog_session_completed_cp4_differential", _test_catalog_session_completed_cp4_differential),
+            ]
+        )
+
+        tests.extend(
+            [
+                (
+                    'cp6_service_construction_and_independence',
+                    lambda: _test_cp6_service_construction_and_independence(module),
+                ),
+                ('cp6_service_forwarding_and_reset', lambda: _test_cp6_service_forwarding_and_reset(module)),
+                ('cp6_service_cache_hit_identity', lambda: _test_cp6_service_cache_hit_identity(module)),
+                ('cp6_service_scan_partial_state', lambda: _test_cp6_service_scan_partial_state(module)),
+                ('cp6_service_retry_windows', lambda: _test_cp6_service_retry_windows(module)),
+                ('cp6_service_poll_boundaries', lambda: _test_cp6_service_poll_boundaries(module)),
+                ('cp6_service_refresh_change_detection', lambda: _test_cp6_service_refresh_change_detection(module)),
+                (
+                    'cp6_service_passive_policy_and_precedence',
+                    lambda: _test_cp6_service_passive_policy_and_precedence(module),
+                ),
+                ('cp6_service_storage_probe_order', lambda: _test_cp6_service_storage_probe_order(module)),
+                (
+                    'cp6_service_logging_lookup_and_publication',
+                    lambda: _test_cp6_service_logging_lookup_and_publication(module),
+                ),
+                ('cp6_service_pending_conditions', lambda: _test_cp6_service_pending_conditions(module)),
+                (
+                    'cp6_service_double_rebuild_and_feedback',
+                    lambda: _test_cp6_service_double_rebuild_and_feedback(module),
+                ),
+                ('cp6_service_late_adapter_replacements', lambda: _test_cp6_service_late_adapter_replacements(module)),
+                (
+                    'cp6_service_selector_and_normalizer_ownership',
+                    lambda: _test_cp6_service_selector_and_normalizer_ownership(module),
+                ),
+                ('cp6_service_defining_bindings', lambda: _test_cp6_service_defining_bindings(module)),
+                ('cp6_service_completed_cp5_differential', _test_cp6_service_completed_cp5_differential),
             ]
         )
 
