@@ -51386,6 +51386,2072 @@ def _test_cp7_planning_completed_cp6_differential() -> None:
     )
 
 
+if TYPE_CHECKING:
+    from Sources.icefox.MerchantRules.configuration import DestroyRule
+    from Sources.icefox.MerchantRules.configuration import RuleNormalizer
+    from Sources.icefox.MerchantRules.configuration import SellRule
+    from Sources.icefox.MerchantRules.configuration import WeaponModThresholdRule
+    from Sources.icefox.MerchantRules.configuration import WeaponModVariantThresholdRule
+    from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+
+class _CP8Restoration:
+    """Retain original descriptors and containers, including nested original objects."""
+
+    def __init__(self) -> None:
+        self._actions: list[Callable[[], None]] = []
+
+    def binding(self, owner: object, name: str, replacement: object) -> None:
+        namespace: Mapping[str, object] = vars(owner)
+        present = name in namespace
+        original = namespace.get(name)
+
+        def restore() -> None:
+            if present:
+                setattr(owner, name, original)
+                _expect(vars(owner)[name] is original, 'CP8 descriptor restoration: ' + name)
+            elif name in vars(owner):
+                delattr(owner, name)
+
+        self._actions.append(restore)
+        setattr(owner, name, replacement)
+
+    def value(self, owner: object, name: str) -> None:
+        original: object = getattr(owner, name)
+
+        def restore() -> None:
+            setattr(owner, name, original)
+            _expect(getattr(owner, name) is original, 'CP8 original binding: ' + name)
+
+        self._actions.append(restore)
+
+    def sequence[T](self, original: list[T]) -> None:
+        members = original[:]
+
+        def restore() -> None:
+            original[:] = members
+
+        self._actions.append(restore)
+
+    def mapping[K, V](self, original: dict[K, V]) -> None:
+        members = dict(original)
+
+        def restore() -> None:
+            original.clear()
+            original.update(members)
+
+        self._actions.append(restore)
+
+    def members[T](self, original: set[T]) -> None:
+        members = set(original)
+
+        def restore() -> None:
+            original.clear()
+            original.update(members)
+
+        self._actions.append(restore)
+
+    def restore(self) -> None:
+        for action in reversed(self._actions):
+            action()
+        self._actions.clear()
+
+
+def _cp8_values(*values: object) -> object:
+    from copy import deepcopy
+
+    return deepcopy(values)
+
+
+def _cp8_unchanged(before: object, *values: object) -> None:
+    _requirement_contract_expect(_cp8_values(*values), before, 'CP8 complete input values')
+
+
+def _cp8_item(module: types.ModuleType, **changes: object) -> InventoryItemInfo:
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+
+    value: object = _requirement_contract_item(module, **changes)
+    if not isinstance(value, InventoryItemInfo):
+        raise AssertionError('CP8 item must be the side-local canonical inventory record')
+    return value
+
+
+def _cp8_rule(module: types.ModuleType, **changes: object) -> SellRule:
+    from Sources.icefox.MerchantRules.configuration import SellRule
+
+    value: object = _requirement_contract_rule(module, **changes)
+    if not isinstance(value, SellRule):
+        raise AssertionError('CP8 rule must be the side-local canonical configuration record')
+    return value
+
+
+@runtime_checkable
+class _CP8PolicyHolder(Protocol):
+    @property
+    def _protection_policy(self) -> object: ...
+
+
+class _CP8PolicyAccess(_CP8PolicyHolder):
+    @staticmethod
+    def get(widget: object) -> ProtectionPolicy:
+        from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+        if not isinstance(widget, _CP8PolicyHolder):
+            raise AssertionError('CP8 widget has no policy instance')
+        policy = widget._protection_policy
+        if not isinstance(policy, ProtectionPolicy):
+            raise AssertionError('CP8 policy must have canonical defining ownership')
+        return policy
+
+
+@runtime_checkable
+class _CP8Widget(Protocol):
+    protected_item_model_ids: list[int]
+    protected_item_targets: object
+    sell_rules: list[SellRule]
+    destroy_rules: list[DestroyRule]
+    destroy_include_protected_items: bool
+    preview_plan: PlanResult
+    preview_ready: bool
+    exact_catalog_by_item_key: dict[tuple[int, ...], dict[str, object]]
+    catalog_by_model_id: dict[int, dict[str, object]]
+    _equipment_typed_entries_by_model_id: dict[int, tuple[dict[str, object], ...]]
+    _equipment_model_search_entry_cache: dict[object, object]
+
+    def _get_equippable_hard_protection_reason(
+        self, item: InventoryItemInfo, rule: SellRule
+    ) -> tuple[str, str] | None: ...
+
+    def _get_equippable_explicit_deposit_reason(
+        self, item: InventoryItemInfo, rule: SellRule
+    ) -> tuple[str, str] | None: ...
+
+    def _get_protected_hit_reason(self, item: InventoryItemInfo, rule: SellRule) -> str: ...
+
+    def _get_hard_protection_hit(
+        self, item: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+    ) -> tuple[str, str] | None: ...
+
+    def _get_hard_protection_match(
+        self, item: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+    ) -> tuple[int, SellRule, str, str] | None: ...
+
+    def _get_exact_model_protection_hit(self, item: InventoryItemInfo) -> tuple[str, str] | None: ...
+
+    def _is_exact_protected_item_model_id(self, model_id: int, item_type_id: int | None = None) -> bool: ...
+
+    def _get_exact_protection_target_count(self) -> int: ...
+
+    def _get_protected_item_model_id_set(self) -> set[int]: ...
+
+    def _get_protected_item_typed_target_set(self) -> set[tuple[int, int]]: ...
+
+    def _get_equipment_typed_entries_for_model(self, model_id: object) -> list[dict[str, object]]: ...
+
+    def _should_fall_back_to_global_weapon_requirement(self, model_id: object) -> bool: ...
+
+    def _is_ambiguous_weapon_model(self, model_id: object) -> bool | None: ...
+
+    def _get_weapon_requirement_hit_reason(self, item: InventoryItemInfo, rule: SellRule) -> str: ...
+
+    def _get_perfect_only_unidentified_hold_reason(self, item: InventoryItemInfo, rule: SellRule) -> str: ...
+
+    def _rule_matches_selected_rarity(self, item: InventoryItemInfo, rule: object) -> bool: ...
+
+    def _get_weapon_item_type_label(self, item_type_id: int) -> str: ...
+
+    def _collect_enabled_sell_rules(self) -> list[tuple[int, SellRule]]: ...
+
+    def _collect_enabled_manual_salvage_protection_rules(self) -> list[tuple[int, SellRule]]: ...
+
+    def _collect_enabled_xunlai_sell_rules(
+        self, rules: list[tuple[int, SellRule]] | None = None
+    ) -> list[tuple[int, SellRule]]: ...
+
+    def _get_salvage_candidate_block_reason(
+        self, item: InventoryItemInfo, rules: list[tuple[int, SellRule]], *, mode: str = 'manual'
+    ) -> str: ...
+
+    def _build_plan(self, *, projected_preview: bool = False) -> PlanResult: ...
+
+    def _scan_preview(self) -> object: ...
+
+    def _plan_cleanup_actions(
+        self,
+        plan: PlanResult,
+        items: list[InventoryItemInfo],
+        rules: list[tuple[int, SellRule]],
+        *,
+        storage_open: bool,
+        storage_context_available: bool,
+    ) -> None: ...
+
+    def _plan_xunlai_sell_withdrawals(
+        self,
+        rules: list[tuple[int, SellRule]],
+        current_items: list[InventoryItemInfo],
+        regular_storage_items: list[InventoryItemInfo],
+        material_storage_items: list[InventoryItemInfo],
+        coords: dict[str, tuple[float, float] | None],
+        *,
+        protected_preview_entries: list[ExecutionPlanEntry] | None = None,
+    ) -> tuple[list[PlannedStorageTransfer], list[SellRule]]: ...
+
+
+def _cp8_widget(module: types.ModuleType) -> _CP8Widget:
+    value: object = _make_widget(module)
+    if not isinstance(value, _CP8Widget):
+        raise AssertionError('CP8 fixture widget is missing its preserved consumer surfaces')
+    return value
+
+
+class _CP8Checks(_CP8Widget):
+    @staticmethod
+    def hard(
+        widget: _CP8Widget, item: InventoryItemInfo, rule: SellRule, *, direct: bool = False
+    ) -> tuple[str, str] | None:
+        before = _cp8_values(item, rule)
+        if direct:
+            result = _CP8PolicyAccess.get(widget).get_equippable_hard_protection_reason(item, rule)
+        else:
+            result = widget._get_equippable_hard_protection_reason(item, rule)
+        _cp8_unchanged(before, item, rule)
+        return result
+
+    @staticmethod
+    def catalog(
+        module: types.ModuleType, widget: _CP8Widget, restore: _CP8Restoration, *, collision: bool = True
+    ) -> list[dict[str, object]]:
+        for name in (
+            'exact_catalog_by_item_key',
+            '_equipment_typed_entries_by_model_id',
+            '_equipment_model_search_entry_cache',
+            'catalog_by_model_id',
+        ):
+            restore.value(widget, name)
+        restore.mapping(widget.exact_catalog_by_item_key)
+        restore.mapping(widget._equipment_typed_entries_by_model_id)
+        restore.mapping(widget._equipment_model_search_entry_cache)
+        restore.mapping(widget.catalog_by_model_id)
+        for row in widget.catalog_by_model_id.values():
+            restore.mapping(row)
+        for row in widget.exact_catalog_by_item_key.values():
+            restore.mapping(row)
+        return _requirement_contract_catalog(module, widget, collision=collision)
+
+    @staticmethod
+    def configuration(module: types.ModuleType) -> dict[str, object]:
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        restore.value(widget, 'protected_item_model_ids')
+        restore.value(widget, 'protected_item_targets')
+        same_widget = widget
+        policy = _CP8PolicyAccess.get(widget) if isinstance(widget, _CP8PolicyHolder) else None
+        target = {'model_id': 970, 'item_type_id': 2}
+        targets = [target]
+        restore.mapping(target)
+        restore.sequence(targets)
+        broad: list[int] = []
+        restore.sequence(broad)
+        observed: dict[str, object] = {}
+        try:
+            widget.protected_item_model_ids = broad
+            widget.protected_item_targets = []
+            before = _cp8_values(broad, widget.protected_item_targets)
+            observed['empty_count'] = widget._get_exact_protection_target_count()
+            _cp8_unchanged(before, broad, widget.protected_item_targets)
+            _requirement_contract_expect(observed['empty_count'], 0, 'CP8 empty targets')
+            widget.protected_item_model_ids = [970]
+            before = _cp8_values(widget.protected_item_model_ids, widget.protected_item_targets)
+            observed['broad'] = widget._is_exact_protected_item_model_id(970, None)
+            _cp8_unchanged(before, widget.protected_item_model_ids, widget.protected_item_targets)
+            _requirement_contract_expect(observed['broad'], True, 'CP8 broad replacement')
+            widget.protected_item_model_ids = broad
+            widget.protected_item_targets = targets
+            before = _cp8_values(broad, targets)
+            observed['typed'] = (
+                widget._is_exact_protected_item_model_id(970, 2),
+                widget._is_exact_protected_item_model_id(970, 27),
+                widget._get_exact_protection_target_count(),
+            )
+            _cp8_unchanged(before, broad, targets)
+            _requirement_contract_expect(observed['typed'], (True, False, 1), 'CP8 typed replacement')
+            target['model_id'] = 971
+            before = _cp8_values(broad, targets)
+            observed['nested'] = (
+                widget._is_exact_protected_item_model_id(970, 2),
+                widget._is_exact_protected_item_model_id(971, 2),
+            )
+            _cp8_unchanged(before, broad, targets)
+            _requirement_contract_expect(observed['nested'], (False, True), 'CP8 nested liveness')
+            broad.append(970)
+            before = _cp8_values(broad, targets)
+            observed['final_count'] = widget._get_exact_protection_target_count()
+            _cp8_unchanged(before, broad, targets)
+            _requirement_contract_expect(observed['final_count'], 2, 'CP8 mixed target count')
+            _expect(
+                widget is same_widget and widget.protected_item_targets is targets and targets[0] is target,
+                'CP8 input identities',
+            )
+            if policy is not None:
+                _expect(_CP8PolicyAccess.get(widget) is policy, 'CP8 policy lifetime')
+        finally:
+            restore.restore()
+        return observed
+
+    @staticmethod
+    def exact(module: types.ModuleType) -> dict[str, object]:
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        restore.value(widget, 'protected_item_model_ids')
+        restore.value(widget, 'protected_item_targets')
+        item = _cp8_item(module)
+        sword = replace(item, item_type_id=27, item_type_name='Sword')
+        targets = [{'model_id': 970, 'item_type_id': 2}]
+        result: dict[str, object] = {}
+        try:
+            widget.protected_item_model_ids = [970]
+            widget.protected_item_targets = targets
+            before = _cp8_values(item, sword, widget.protected_item_model_ids, targets)
+            result['broad'] = [widget._get_exact_model_protection_hit(value) for value in (item, sword)]
+            result['count_both'] = widget._get_exact_protection_target_count()
+            _cp8_unchanged(before, item, sword, widget.protected_item_model_ids, targets)
+            _requirement_contract_expect(
+                result['broad'], [('merchant', 'Protected by Protected Items: exact model.')] * 2, 'CP8 broad priority'
+            )
+            _requirement_contract_expect(result['count_both'], 2, 'CP8 separate target sets')
+            widget.protected_item_model_ids = []
+            before = _cp8_values(item, sword, widget.protected_item_model_ids, targets)
+            result['typed'] = [widget._get_exact_model_protection_hit(value) for value in (item, sword)]
+            result['count_typed'] = widget._get_exact_protection_target_count()
+            _cp8_unchanged(before, item, sword, widget.protected_item_model_ids, targets)
+            _requirement_contract_expect(
+                result['typed'],
+                [('merchant', 'Protected by Protected Items: exact item type and model.'), None],
+                'CP8 typed collision',
+            )
+            _requirement_contract_expect(result['count_typed'], 1, 'CP8 typed count')
+            _expect(widget.protected_item_targets is targets, 'CP8 raw target binding retained')
+        finally:
+            restore.restore()
+        return result
+
+
+def _test_cp8_policy_configuration_liveness(module: types.ModuleType) -> None:
+    _CP8Checks.configuration(module)
+
+
+def _test_cp8_policy_exact_targets(module: types.ModuleType) -> None:
+    _CP8Checks.exact(module)
+    _CP8DecisionChecks.exact_order(module)
+
+
+class _CP8DecisionChecks(_CP8Checks):
+    @staticmethod
+    def exact_order(module: types.ModuleType) -> dict[str, object]:
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        restore.value(widget, 'protected_item_model_ids')
+        restore.value(widget, 'protected_item_targets')
+        events: list[str] = []
+        owner = type(widget)
+        original_get = owner.__getattribute__
+
+        def read(instance: _CP8Widget, name: str) -> object:
+            if instance is widget and name in ('protected_item_model_ids', 'protected_item_targets'):
+                events.append('read_model_ids' if name == 'protected_item_model_ids' else 'read_typed_targets')
+            return original_get(instance, name)
+
+        def destination(_item: InventoryItemInfo) -> str:
+            events.append('explicit_destination')
+            return 'merchant'
+
+        result: dict[str, object] = {}
+        item = _cp8_item(module)
+        try:
+            widget.protected_item_model_ids = [970]
+            targets = [{'model_id': 970, 'item_type_id': 2}]
+            widget.protected_item_targets = targets
+            original_broad = widget.protected_item_model_ids
+            before = _cp8_values(item, original_broad, targets)
+            restore.binding(owner, '__getattribute__', read)
+            restore.binding(widget, '_get_explicit_sell_destination', destination)
+            result['invalid'] = widget._is_exact_protected_item_model_id(0)
+            _requirement_contract_expect(
+                (result['invalid'], events), (False, list[object]()), 'CP8 invalid model has no reads'
+            )
+            result['broad'] = widget._get_exact_model_protection_hit(item)
+            result['broad_trace'] = events[:]
+            _requirement_contract_expect(
+                events, ['explicit_destination', 'read_model_ids'], 'CP8 routing precedes broad read'
+            )
+            _cp8_unchanged(before, item, original_broad, targets)
+            widget.protected_item_model_ids = []
+            before = _cp8_values(item, targets)
+            events.clear()
+            result['typed'] = widget._get_exact_model_protection_hit(item)
+            result['typed_trace'] = events[:]
+            _requirement_contract_expect(
+                events, ['explicit_destination', 'read_model_ids', 'read_typed_targets'], 'CP8 late typed read'
+            )
+            _cp8_unchanged(before, item, targets)
+            events.clear()
+            result['invalid_type'] = widget._get_exact_model_protection_hit(replace(item, item_type_id=-1))
+            result['invalid_type_trace'] = events[:]
+            _requirement_contract_expect(
+                (result['invalid_type'], events),
+                (None, ['explicit_destination', 'read_model_ids']),
+                'CP8 invalid type has no typed read',
+            )
+        finally:
+            restore.restore()
+        return result
+
+    @staticmethod
+    def precedence(module: types.ModuleType) -> dict[str, object]:
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        item = _cp8_item(
+            module,
+            identified=False,
+            is_customized=True,
+            damage_min=0,
+            damage_max=0,
+            weapon_mod_identifiers=['of Defense'],
+        )
+        rule = _cp8_rule(
+            module,
+            skip_customized=True,
+            skip_unidentified=True,
+            all_weapons_perfect_stats_only=True,
+            blacklist_model_ids=[970],
+            blacklist_item_type_ids=[2],
+            protected_weapon_mod_identifiers=['of Defense'],
+        )
+        values: list[tuple[str, str] | None] = []
+        labels: list[str] = []
+
+        def generic(_identifier: str) -> str:
+            labels.append('G')
+            return 'G'
+
+        try:
+            _CP8Checks.catalog(module, widget, restore)
+            restore.binding(widget, '_get_weapon_mod_generic_label', generic)
+            for expected, changed_item, changed_rule in (
+                ('Customized item.', item, rule),
+                (
+                    'Protected until identified: perfect-base stats unavailable.',
+                    replace(item, is_customized=False),
+                    rule,
+                ),
+                (
+                    'Unidentified item.',
+                    replace(item, is_customized=False),
+                    replace(rule, all_weapons_perfect_stats_only=False),
+                ),
+                (
+                    'Blacklisted model.',
+                    replace(item, is_customized=False, identified=True, damage_min=6, damage_max=28),
+                    rule,
+                ),
+                (
+                    'Blacklisted weapon type: Axe.',
+                    replace(item, is_customized=False, identified=True, damage_min=6, damage_max=28),
+                    replace(rule, blacklist_model_ids=[]),
+                ),
+                (
+                    'Protected by all-weapons requirement range: Typed Axe req 7 in 1-8.',
+                    replace(item, is_customized=False, identified=True, damage_min=6, damage_max=28),
+                    replace(
+                        rule, blacklist_model_ids=[], blacklist_item_type_ids=[], all_weapons_perfect_stats_only=False
+                    ),
+                ),
+                (
+                    'Contains protected weapon mod: G.',
+                    replace(item, is_customized=False, identified=True, damage_min=6, damage_max=28),
+                    replace(
+                        rule,
+                        blacklist_model_ids=[],
+                        blacklist_item_type_ids=[],
+                        all_weapons_min_requirement=0,
+                        all_weapons_max_requirement=0,
+                    ),
+                ),
+            ):
+                value = _CP8Checks.hard(widget, changed_item, changed_rule)
+                _requirement_contract_expect(value, ('merchant', expected), 'CP8 equipment precedence')
+                values.append(value)
+            _requirement_contract_expect(labels, ['G'], 'CP8 later upgrade label only after earlier misses')
+            rarity_miss = replace(rule, rarities=_rarity_flags('blue'))
+            hold = _CP8Checks.hard(widget, item, rarity_miss)
+            _requirement_contract_expect(
+                hold,
+                ('merchant', 'Protected until identified: perfect-base stats unavailable.'),
+                'CP8 perfect hold survives rarity miss',
+            )
+            no_hold = replace(
+                rarity_miss,
+                all_weapons_min_requirement=0,
+                all_weapons_max_requirement=0,
+                blacklist_model_ids=[],
+                blacklist_item_type_ids=[],
+                protected_weapon_mod_identifiers=[],
+            )
+            _requirement_contract_expect(
+                _CP8Checks.hard(widget, item, no_hold), None, 'CP8 ordinary skips require selected rarity'
+            )
+            green = replace(item, rarity='Green', is_weapon_like=False, is_armor_piece=True)
+            green_values = [
+                widget._rule_matches_selected_rarity(green, replace(rule, kind=kind, rarities=_rarity_flags('green')))
+                for kind in (module.SELL_KIND_ARMOR, module.DESTROY_KIND_ARMOR)
+            ]
+            _requirement_contract_expect(green_values, [False, False], 'CP8 green armor exclusion')
+            events: list[str] = []
+
+            def no_destination(_item: InventoryItemInfo, _rule: SellRule) -> str:
+                events.append('destination')
+                return ''
+
+            restore.binding(widget, '_get_equippable_rule_destination', no_destination)
+            _requirement_contract_expect(_CP8Checks.hard(widget, item, rule), None, 'CP8 routing miss')
+            _requirement_contract_expect((events, labels), (['destination'], ['G']), 'CP8 routing short circuit')
+            return {
+                'precedence': values,
+                'labels': labels,
+                'rarity_hold': hold,
+                'green': green_values,
+                'routing': events,
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def requirements(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules import item_values
+        from Sources.icefox.MerchantRules import requirement_protection
+        from Sources.icefox.MerchantRules.configuration import WeaponRequirementRule
+
+        _expect(
+            requirement_protection.normalize_weapon_requirement_level is item_values.normalize_weapon_requirement_level,
+            'CP8 canonical requirement scalar',
+        )
+        _expect(vars(requirement_protection)['_safe_int'] is item_values.safe_int, 'CP8 canonical safe integer')
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        item = _cp8_item(module)
+        rule = _cp8_rule(module)
+        result: dict[str, object] = {}
+        try:
+            _CP8Checks.catalog(module, widget, restore)
+            for left, right, expected in ((8, 1, (1, 8)), (99, 1, (1, 13)), (0, 8, (0, 8))):
+                normalized = requirement_protection.normalize_weapon_requirement_range(left, right)
+                _requirement_contract_expect(normalized, expected, 'CP8 range normalization')
+                result[f'range_{left}_{right}'] = normalized
+            cases = (
+                ('requirement', item, rule, 'Protected by all-weapons requirement range: Typed Axe req 7 in 1-8.'),
+                (
+                    'swapped',
+                    item,
+                    replace(rule, all_weapons_min_requirement=8, all_weapons_max_requirement=1),
+                    'Protected by all-weapons requirement range: Typed Axe req 7 in 1-8.',
+                ),
+                (
+                    'clamped',
+                    item,
+                    replace(rule, all_weapons_min_requirement=99, all_weapons_max_requirement=1),
+                    'Protected by all-weapons requirement range: Typed Axe req 7 in 1-13.',
+                ),
+                ('outside', replace(item, requirement=9), rule, ''),
+                ('inactive', item, replace(rule, all_weapons_min_requirement=0), ''),
+                (
+                    'axe',
+                    item,
+                    replace(rule, all_weapons_perfect_stats_only=True),
+                    'Protected by all-weapons perfect-base range: Axe 6-28, req 7 Axe Mastery.',
+                ),
+                ('axe_below', replace(item, damage_max=27), replace(rule, all_weapons_perfect_stats_only=True), ''),
+                (
+                    'staff',
+                    replace(item, item_type_id=int(module.ItemType.Staff), damage_min=11, damage_max=22, energy=10),
+                    replace(rule, all_weapons_perfect_stats_only=True),
+                    'Protected by all-weapons perfect-base range: Staff 11-22, Energy +10, req 7 Axe Mastery.',
+                ),
+                (
+                    'staff_below',
+                    replace(item, item_type_id=int(module.ItemType.Staff), damage_min=11, damage_max=22, energy=9),
+                    replace(rule, all_weapons_perfect_stats_only=True),
+                    '',
+                ),
+                (
+                    'shield',
+                    replace(item, item_type_id=int(module.ItemType.Shield), armor=16),
+                    replace(rule, all_weapons_perfect_stats_only=True),
+                    'Protected by all-weapons perfect-base range: Shield Armor 16, req 7 Axe Mastery.',
+                ),
+                (
+                    'shield_below',
+                    replace(item, item_type_id=int(module.ItemType.Shield), armor=15),
+                    replace(rule, all_weapons_perfect_stats_only=True),
+                    '',
+                ),
+                (
+                    'attribute_id',
+                    replace(item, requirement_attribute_id=2, requirement_attribute_name=''),
+                    replace(rule, all_weapons_perfect_stats_only=True),
+                    'Protected by all-weapons perfect-base range: Axe 6-28, req 7 Attribute 2.',
+                ),
+                (
+                    'none',
+                    replace(item, requirement_attribute_id=45, requirement_attribute_name='None'),
+                    replace(rule, all_weapons_perfect_stats_only=True),
+                    '',
+                ),
+                (
+                    'none_',
+                    replace(item, requirement_attribute_id=45, requirement_attribute_name='None_'),
+                    replace(rule, all_weapons_perfect_stats_only=True),
+                    '',
+                ),
+            )
+            for name, selected_item, selected_rule, expected in cases:
+                value = _CP8Checks.hard(widget, selected_item, selected_rule)
+                _requirement_contract_expect(value, ('merchant', expected) if expected else None, 'CP8 literal ' + name)
+                result[name] = value
+            model_rule = replace(
+                rule,
+                protected_weapon_requirement_rules=[
+                    WeaponRequirementRule(model_id=970, min_requirement=1, max_requirement=5)
+                ],
+            )
+            for name, collision in (('single', False), ('collision', True)):
+                _CP8Checks.catalog(module, widget, restore, collision=collision)
+                value = _CP8Checks.hard(widget, item, model_rule)
+                expected = (
+                    ('merchant', 'Protected by all-weapons requirement range: Typed Axe req 7 in 1-8.')
+                    if collision
+                    else None
+                )
+                _requirement_contract_expect(value, expected, 'CP8 model fallback ' + name)
+                result[name] = value
+            widget.exact_catalog_by_item_key = {}
+            widget._equipment_typed_entries_by_model_id = {}
+            value = _CP8Checks.hard(widget, item, model_rule)
+            _requirement_contract_expect(
+                value,
+                ('merchant', 'Protected by all-weapons requirement range: Flat Model req 7 in 1-8.'),
+                'CP8 absent concrete evidence',
+            )
+            result['absent'] = value
+            return result
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def upgrades(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import WeaponModThresholdRule
+        from Sources.icefox.MerchantRules.configuration import WeaponModVariantRule
+        from Sources.icefox.MerchantRules.configuration import WeaponModVariantThresholdRule
+        from Sources.icefox.MerchantRules.weapon_mod_normalization import ParsedUpgradeMatch
+
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        labels: list[str] = []
+
+        def generic(_identifier: str) -> str:
+            labels.append('G')
+            return 'G'
+
+        def threshold(_rule: WeaponModThresholdRule) -> str:
+            labels.append('T')
+            return 'T'
+
+        def variant(_rule: object) -> str:
+            labels.append('V')
+            return 'V'
+
+        def variant_threshold(_rule: WeaponModVariantThresholdRule) -> str:
+            labels.append('VT')
+            return 'VT'
+
+        def rune(_identifier: str) -> str:
+            labels.append('R')
+            return 'R'
+
+        match = ParsedUpgradeMatch(
+            identifier='of Defense', target_item_type='Daggers', component_kind='DaggerHandle', value=5
+        )
+        item = _cp8_item(module, weapon_mod_identifiers=['of Defense'], weapon_mod_matches=[match])
+        rule = _cp8_rule(
+            module,
+            all_weapons_min_requirement=0,
+            all_weapons_max_requirement=0,
+            protected_weapon_mod_identifiers=['of Defense'],
+            protected_weapon_mod_thresholds=[WeaponModThresholdRule(identifier='of Defense', min_value=5)],
+            protected_weapon_mod_variants=[
+                WeaponModVariantRule(identifier='of Defense', target_item_type='Daggers', component_kind='DaggerHandle')
+            ],
+            protected_weapon_mod_variant_thresholds=[
+                WeaponModVariantThresholdRule(
+                    identifier='of Defense', target_item_type='Daggers', component_kind='DaggerHandle', min_value=5
+                )
+            ],
+        )
+        result: dict[str, object] = {}
+        try:
+            for name, callback in (
+                ('_get_weapon_mod_generic_label', generic),
+                ('_format_weapon_mod_threshold_rule', threshold),
+                ('_format_weapon_mod_variant_rule', variant),
+                ('_format_weapon_mod_variant_threshold_rule', variant_threshold),
+                ('_get_rune_label', rune),
+            ):
+                restore.binding(widget, name, callback)
+            selected = rule
+            for key, expected in (
+                ('G', 'Contains protected weapon mod: G.'),
+                ('T', 'Contains protected weapon mod threshold: T.'),
+                ('V', 'Contains protected weapon mod variant: V.'),
+                ('VT', 'Contains protected weapon mod variant threshold: VT.'),
+            ):
+                labels.clear()
+                before = _cp8_values(item, selected)
+                value = widget._get_protected_hit_reason(item, selected)
+                _cp8_unchanged(before, item, selected)
+                _requirement_contract_expect((value, labels), (expected, [key]), 'CP8 upgrade precedence ' + key)
+                result[key] = {'reason': value, 'labels': labels[:]}
+                if key == 'G':
+                    selected = replace(selected, protected_weapon_mod_identifiers=[])
+                elif key == 'T':
+                    selected = replace(selected, protected_weapon_mod_thresholds=[])
+                elif key == 'V':
+                    selected = replace(selected, protected_weapon_mod_variants=[])
+            for name, changed in (
+                ('below', replace(match, value=4)),
+                ('component', replace(match, component_kind='SwordHilt')),
+            ):
+                changed_item = replace(item, weapon_mod_matches=[changed])
+                before = _cp8_values(changed_item, selected)
+                labels.clear()
+                value = widget._get_protected_hit_reason(changed_item, selected)
+                _cp8_unchanged(before, changed_item, selected)
+                _requirement_contract_expect((value, labels), ('', list[object]()), 'CP8 variant miss ' + name)
+                result[name] = value
+            armor = replace(item, rune_identifiers=['Rune'], is_weapon_like=False, is_armor_piece=True)
+            armor_rule = replace(rule, kind=module.SELL_KIND_ARMOR, protected_rune_identifiers=['Rune'])
+            before = _cp8_values(armor, armor_rule)
+            labels.clear()
+            value = widget._get_protected_hit_reason(armor, armor_rule)
+            _cp8_unchanged(before, armor, armor_rule)
+            _requirement_contract_expect(
+                (value, labels), ('Contains protected rune/insignia: R.', ['R']), 'CP8 rune literal'
+            )
+            result['rune'] = value
+            raw_rows = [{'identifier': 'of Defense', 'min_value': 5}, {'identifier': 'of Defense', 'min_value': 5}]
+            raw_rule = replace(
+                rule,
+                protected_weapon_mod_identifiers=[],
+                protected_weapon_mod_variants=[],
+                protected_weapon_mod_variant_thresholds=[],
+            )
+            restore.binding(raw_rule, 'protected_weapon_mod_thresholds', raw_rows)
+            before = _cp8_values(item, raw_rule, raw_rows)
+            labels.clear()
+            value = widget._get_protected_hit_reason(item, raw_rule)
+            _cp8_unchanged(before, item, raw_rule, raw_rows)
+            _requirement_contract_expect(
+                (value, labels),
+                ('Contains protected weapon mod threshold: T.', ['T']),
+                'CP8 raw duplicate normalization',
+            )
+            result['raw_duplicates'] = {'reason': value, 'labels': labels[:]}
+            low_item = replace(item, weapon_mod_matches=[replace(match, value=4)])
+            before = _cp8_values(low_item, raw_rule, raw_rows)
+            labels.clear()
+            value = widget._get_protected_hit_reason(low_item, raw_rule)
+            _cp8_unchanged(before, low_item, raw_rule, raw_rows)
+            _requirement_contract_expect((value, labels), ('', list[object]()), 'CP8 generic threshold one-below')
+            result['raw_threshold_below'] = value
+            return result
+        finally:
+            restore.restore()
+
+
+def _test_cp8_policy_equipment_precedence(module: types.ModuleType) -> None:
+    _CP8DecisionChecks.precedence(module)
+
+
+def _test_cp8_policy_requirement_literals(module: types.ModuleType) -> None:
+    _CP8DecisionChecks.requirements(module)
+
+
+def _test_cp8_policy_upgrade_precedence(module: types.ModuleType) -> None:
+    _CP8DecisionChecks.upgrades(module)
+
+
+def _test_cp8_policy_construction_lifetimes(module: types.ModuleType) -> None:
+    from typing import Never
+
+    from Sources.icefox.MerchantRules.configuration import RuleNormalizer
+    from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+    normalizer: object = module._rule_normalizer
+    if not isinstance(normalizer, RuleNormalizer):
+        raise AssertionError('CP8 canonical normalizer')
+    vocabulary: set[int] = module.WEAPON_ITEM_TYPE_IDS
+    events: list[tuple[object, ...]] = []
+
+    def forbidden(*arguments: object) -> Never:
+        events.append(arguments)
+        raise AssertionError('CP8 constructor invoked a dependency')
+
+    policy = ProtectionPolicy(
+        normalizer=normalizer,
+        normalize_protected_model_ids=forbidden,
+        normalize_mod_thresholds=forbidden,
+        normalize_variant_parts=forbidden,
+        weapon_item_type_ids=vocabulary,
+        weapon_rule_kind=module.SELL_KIND_WEAPONS,
+        armor_rule_kind=module.SELL_KIND_ARMOR,
+        destroy_armor_kind=module.DESTROY_KIND_ARMOR,
+        weapon_mod_standalone_kind=module.WEAPON_MOD_STANDALONE_KIND,
+        read_model_ids=forbidden,
+        read_typed_targets=forbidden,
+        equipment_rows=forbidden,
+        item_label=forbidden,
+        item_type_label=forbidden,
+        generic_mod_label=forbidden,
+        threshold_label=forbidden,
+        variant_label=forbidden,
+        variant_threshold_label=forbidden,
+        rune_label=forbidden,
+        rule_reference=forbidden,
+        equipment_destination=forbidden,
+        explicit_destination=forbidden,
+    )
+    expected: dict[str, object] = {
+        '_normalizer': normalizer,
+        '_normalize_protected_model_ids': forbidden,
+        '_normalize_mod_thresholds': forbidden,
+        '_normalize_variant_parts': forbidden,
+        '_weapon_item_type_ids': vocabulary,
+        '_weapon_rule_kind': module.SELL_KIND_WEAPONS,
+        '_armor_rule_kind': module.SELL_KIND_ARMOR,
+        '_destroy_armor_kind': module.DESTROY_KIND_ARMOR,
+        '_weapon_mod_standalone_kind': module.WEAPON_MOD_STANDALONE_KIND,
+        '_read_model_ids': forbidden,
+        '_read_typed_targets': forbidden,
+        '_equipment_rows': forbidden,
+        '_item_label': forbidden,
+        '_item_type_label': forbidden,
+        '_generic_mod_label': forbidden,
+        '_threshold_label': forbidden,
+        '_variant_label': forbidden,
+        '_variant_threshold_label': forbidden,
+        '_rune_label': forbidden,
+        '_rule_reference': forbidden,
+        '_equipment_destination': forbidden,
+        '_explicit_destination': forbidden,
+    }
+    _requirement_contract_expect(events, [], 'CP8 reference-only construction')
+    _requirement_contract_expect(set(vars(policy)), set(expected), 'CP8 exact 22 stores')
+    for name, value in expected.items():
+        _expect(vars(policy)[name] is value, 'CP8 stored dependency identity: ' + name)
+    first = _cp8_widget(module)
+    second = _cp8_widget(module)
+    first_policy, second_policy = _CP8PolicyAccess.get(first), _CP8PolicyAccess.get(second)
+    _expect(first_policy is not second_policy, 'CP8 per-widget policies')
+    for name in ('_normalizer', '_weapon_item_type_ids'):
+        _expect(
+            vars(first_policy)[name] is vars(second_policy)[name] is expected[name],
+            'CP8 shared module allocation ' + name,
+        )
+    for name in ('_read_model_ids', '_read_typed_targets'):
+        _expect(vars(first_policy)[name] is not vars(second_policy)[name], 'CP8 side-local widget reader ' + name)
+    saved_modules = dict(sys.modules)
+    try:
+        name = 'merchant_rules_cp8_independent_widget'
+        spec = importlib.util.spec_from_file_location(name, MERCHANT_RULES_PATH)
+        if spec is None or spec.loader is None:
+            raise AssertionError('CP8 independent widget spec')
+        other = importlib.util.module_from_spec(spec)
+        sys.modules[name] = other
+        spec.loader.exec_module(other)
+        _expect(other._rule_normalizer is not normalizer, 'CP8 per-module normalizer')
+        _expect(other.WEAPON_ITEM_TYPE_IDS is not vocabulary, 'CP8 per-module vocabulary')
+        _expect(other.ProtectionPolicy is ProtectionPolicy, 'CP8 canonical class across widget modules')
+    finally:
+        for name in tuple(sys.modules):
+            if name not in saved_modules:
+                del sys.modules[name]
+        sys.modules.update(saved_modules)
+    restore = _CP8Restoration()
+    restore.members(vocabulary)
+
+    def rows(_model_id: object) -> list[dict[str, object]]:
+        return [{'item_type_id': 970999, 'model_id': 970}]
+
+    try:
+        restore.binding(first, '_get_equipment_typed_entries_for_model', rows)
+        _requirement_contract_expect(first_policy.is_ambiguous_weapon_model(970), None, 'CP8 unknown concrete type')
+        vocabulary.add(970999)
+        _requirement_contract_expect(
+            first_policy.is_ambiguous_weapon_model(970), False, 'CP8 in-place vocabulary liveness'
+        )
+        _expect(vars(first_policy)['_weapon_item_type_ids'] is vocabulary, 'CP8 retained vocabulary identity')
+    finally:
+        restore.restore()
+
+
+class _CP8IdentityChecks(_CP8Checks):
+    @staticmethod
+    def rules(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import RuleNormalizer
+
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        item = _cp8_item(module)
+        first = _cp8_rule(
+            module,
+            enabled=False,
+            rule_id='',
+            all_weapons_min_requirement=0,
+            all_weapons_max_requirement=0,
+            blacklist_model_ids=[970],
+        )
+        second = replace(first, enabled=True, rule_id='second')
+        supplied = [(42, first), (7, second)]
+        first_nested = first.blacklist_model_ids
+        second_nested = second.blacklist_model_ids
+        events: list[str] = []
+
+        def normalize(_normalizer: RuleNormalizer, _rule: SellRule) -> SellRule | None:
+            events.append('normalize')
+            raise AssertionError('CP8 supplied rule list was recollected or normalized')
+
+        def reference(index: int, rule: SellRule) -> str:
+            _expect(index == 42 and rule is first, 'CP8 rule-reference identity')
+            return 'R42'
+
+        try:
+            restore.binding(RuleNormalizer, 'normalize_sell_rule', normalize)
+            restore.binding(widget, '_format_sell_rule_reference', reference)
+            before = _cp8_values(item, supplied, first, second)
+            match = widget._get_hard_protection_match(item, supplied)
+            _cp8_unchanged(before, item, supplied, first, second)
+            if match is None:
+                raise AssertionError('CP8 expected first rule match')
+            _expect(
+                match[1] is first and supplied[0][1] is first and supplied[1][1] is second,
+                'CP8 original supplied rules',
+            )
+            _expect(
+                first.blacklist_model_ids is first_nested and second.blacklist_model_ids is second_nested,
+                'CP8 nested rule identity',
+            )
+            _requirement_contract_expect(
+                (match[0], match[2], match[3]), (42, 'merchant', 'Blacklisted model.'), 'CP8 original supplied index'
+            )
+            before = _cp8_values(item, supplied, first, second)
+            combined = widget._get_hard_protection_hit(item, supplied)
+            _cp8_unchanged(before, item, supplied, first, second)
+            _requirement_contract_expect(
+                combined, ('merchant', 'Hard-protected by R42: Blacklisted model.'), 'CP8 original reference formatter'
+            )
+            _requirement_contract_expect(
+                (first.enabled, first.rule_id, events), (False, '', list[object]()), 'CP8 no collection authority'
+            )
+            return {
+                'match': (match[0], match[2], match[3]),
+                'combined': combined,
+                'rules': module.asdict(first),
+                'normalizer_calls': events,
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def deposits(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules import requirement_protection
+
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        rule = _cp8_rule(module, all_weapons_min_requirement=0, all_weapons_max_requirement=0, skip_customized=True)
+        custom = _cp8_item(module, is_customized=True)
+        unidentified = _cp8_item(module, identified=False)
+        result: dict[str, object] = {}
+        try:
+            for name, item, selected, general, explicit in (
+                ('customized', custom, rule, 'Customized item.', None),
+                (
+                    'unidentified',
+                    unidentified,
+                    replace(rule, skip_customized=False, skip_unidentified=True),
+                    'Unidentified item.',
+                    None,
+                ),
+                (
+                    'blacklisted',
+                    custom,
+                    replace(rule, blacklist_model_ids=[970]),
+                    'Customized item.',
+                    ('merchant', 'Blacklisted model.'),
+                ),
+                (
+                    'requirement',
+                    _cp8_item(module),
+                    _cp8_rule(module),
+                    'Protected by all-weapons requirement range: Typed Axe req 7 in 1-8.',
+                    ('merchant', 'Protected by all-weapons requirement range: Typed Axe req 7 in 1-8.'),
+                ),
+            ):
+                _CP8Checks.catalog(module, widget, restore)
+                before = _cp8_values(item, selected)
+                general_value = widget._get_equippable_hard_protection_reason(item, selected)
+                _cp8_unchanged(before, item, selected)
+                before = _cp8_values(item, selected)
+                explicit_value = widget._get_equippable_explicit_deposit_reason(item, selected)
+                _cp8_unchanged(before, item, selected)
+                _requirement_contract_expect(
+                    (general_value, explicit_value),
+                    (('merchant', general), explicit),
+                    'CP8 explicit deposit distinction ' + name,
+                )
+                result[name] = (general_value, explicit_value)
+            upgrade_item = _cp8_item(module, weapon_mod_identifiers=['CP8 upgrade'])
+            upgrade_rule = replace(rule, skip_customized=False, protected_weapon_mod_identifiers=['CP8 upgrade'])
+            before = _cp8_values(upgrade_item, upgrade_rule)
+            upgraded = widget._get_equippable_explicit_deposit_reason(upgrade_item, upgrade_rule)
+            _cp8_unchanged(before, upgrade_item, upgrade_rule)
+            _requirement_contract_expect(
+                upgraded,
+                ('merchant', 'Contains protected weapon mod: CP8 upgrade.'),
+                'CP8 upgrade remains deposit eligible',
+            )
+            result['upgrade'] = upgraded
+            hold_events: list[str] = []
+            original = requirement_protection.get_perfect_only_unidentified_hold_reason
+
+            def hold(
+                item: InventoryItemInfo,
+                rule: SellRule,
+                *,
+                weapon_rule_kind: str,
+                weapon_mod_standalone_kind: str,
+                should_fall_back_to_global: Callable[[Callable[[], object]], bool],
+                item_label: Callable[[InventoryItemInfo], str],
+                item_type_label: Callable[[Callable[[], int]], str],
+            ) -> str:
+                hold_events.append('hold')
+                return original(
+                    item,
+                    rule,
+                    weapon_rule_kind=weapon_rule_kind,
+                    weapon_mod_standalone_kind=weapon_mod_standalone_kind,
+                    should_fall_back_to_global=should_fall_back_to_global,
+                    item_label=item_label,
+                    item_type_label=item_type_label,
+                )
+
+            restore.binding(requirement_protection, 'get_perfect_only_unidentified_hold_reason', hold)
+            # CP7 retains a direct canonical function alias; probe that identical binding as well.
+            if not isinstance(widget, _CP8PolicyHolder):
+                restore.binding(module, '_requirement_get_perfect_only_unidentified_hold_reason', hold)
+            selected = replace(rule, skip_customized=False, skip_unidentified=True)
+            widget._get_equippable_hard_protection_reason(unidentified, selected)
+            _requirement_contract_expect(hold_events, ['hold'], 'CP8 general hold entry')
+            hold_events.clear()
+            widget._get_equippable_explicit_deposit_reason(unidentified, selected)
+            _requirement_contract_expect(hold_events, [], 'CP8 explicit deposit has no separate hold')
+            result['explicit_hold_events'] = hold_events[:]
+            return result
+        finally:
+            restore.restore()
+
+
+def _test_cp8_policy_rule_identity_inputs(module: types.ModuleType) -> None:
+    _CP8IdentityChecks.rules(module)
+
+
+def _test_cp8_policy_deposit_distinction(module: types.ModuleType) -> None:
+    _CP8IdentityChecks.deposits(module)
+
+
+class _CP8CatalogChecks(_CP8Checks):
+    @staticmethod
+    def effects(module: types.ModuleType, *, direct: bool = False) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import WeaponRequirementRule
+
+        result: dict[str, object] = {}
+        for kind in ('single', 'collision', 'malformed', 'label_failure', 'direct_label'):
+            widget = _cp8_widget(module)
+            restore = _CP8Restoration()
+            item = _cp8_item(module)
+            requirement = WeaponRequirementRule(
+                model_id=970, min_requirement=1, max_requirement=8 if kind == 'direct_label' else 5
+            )
+            rule = _cp8_rule(module, protected_weapon_requirement_rules=[requirement])
+            original_objects = (
+                widget.exact_catalog_by_item_key,
+                widget._equipment_typed_entries_by_model_id,
+                widget._equipment_model_search_entry_cache,
+                widget.catalog_by_model_id,
+            )
+            original_values = _cp8_values(*original_objects)
+            failure = RuntimeError('label sentinel after rebuild')
+
+            def fail_label(_item: InventoryItemInfo) -> str:
+                raise failure
+
+            try:
+                rows = _CP8Checks.catalog(module, widget, restore, collision=kind != 'single')
+                index = widget._equipment_typed_entries_by_model_id
+                cache = widget._equipment_model_search_entry_cache
+                exact = widget.exact_catalog_by_item_key
+                flat = widget.catalog_by_model_id
+                if kind == 'malformed':
+                    exact[(2,)] = {'item_type_id': 2, 'model_id': 971}
+                elif kind == 'direct_label':
+                    exact[(1,)] = {}
+                elif kind == 'label_failure':
+                    restore.binding(widget, '_get_requirement_rule_item_label', fail_label)
+                before = _cp8_values(item, rule, rows, exact, flat)
+                value: tuple[str, str] | None = None
+                exception: tuple[str, str] | None = None
+                try:
+                    value = _CP8Checks.hard(widget, item, rule, direct=direct)
+                except ValueError as error:
+                    _expect(kind == 'malformed', 'CP8 unexpected Catalog ValueError')
+                    _requirement_contract_expect(
+                        str(error), 'not enough values to unpack (expected 2, got 1)', 'CP8 malformed key literal'
+                    )
+                    exception = (type(error).__name__, str(error))
+                except RuntimeError as error:
+                    _expect(kind == 'label_failure' and error is failure, 'CP8 original label exception identity')
+                    exception = (type(error).__name__, str(error))
+                _cp8_unchanged(before, item, rule, rows, exact, flat)
+                _expect(
+                    widget.exact_catalog_by_item_key is exact and widget.catalog_by_model_id is flat,
+                    'CP8 Catalog input bindings',
+                )
+                _requirement_contract_expect(
+                    cache, {'sentinel': 'unchanged until rebuild'}, 'CP8 old search cache contents'
+                )
+                if kind == 'malformed':
+                    _expect(
+                        exception is not None and widget._equipment_typed_entries_by_model_id is index,
+                        'CP8 failed rebuild retains old index',
+                    )
+                    _expect(
+                        widget._equipment_model_search_entry_cache is not cache,
+                        'CP8 failed rebuild replaces search cache first',
+                    )
+                    _requirement_contract_expect(
+                        widget._equipment_model_search_entry_cache, {}, 'CP8 partial cache value'
+                    )
+                elif kind == 'direct_label':
+                    _requirement_contract_expect(
+                        value,
+                        ('merchant', 'Protected by requirement range: Typed Axe req 7 in 1-8.'),
+                        'CP8 direct typed label literal',
+                    )
+                    _expect(
+                        widget._equipment_typed_entries_by_model_id is index
+                        and widget._equipment_model_search_entry_cache is cache,
+                        'CP8 direct label does not scan malformed unrelated key',
+                    )
+                else:
+                    _expect(
+                        widget._equipment_typed_entries_by_model_id is not index
+                        and widget._equipment_model_search_entry_cache is not cache,
+                        'CP8 cold rebuild replacement',
+                    )
+                    expected_index = {970: tuple(rows)}
+                    _requirement_contract_expect(
+                        widget._equipment_typed_entries_by_model_id, expected_index, 'CP8 stored index tuple value'
+                    )
+                    indexed = widget._equipment_typed_entries_by_model_id[970]
+                    _expect(
+                        all(actual is original for actual, original in zip(indexed, rows)),
+                        'CP8 rebuilt index shares original row dictionaries',
+                    )
+                    _requirement_contract_expect(
+                        widget._equipment_model_search_entry_cache, {}, 'CP8 rebuilt search cache'
+                    )
+                    if kind == 'label_failure':
+                        _expect(exception is not None, 'CP8 label exception must occur after rebuild')
+                    else:
+                        expected = (
+                            None
+                            if kind == 'single'
+                            else ('merchant', 'Protected by all-weapons requirement range: Typed Axe req 7 in 1-8.')
+                        )
+                        _requirement_contract_expect(value, expected, 'CP8 cold requirement result')
+                        before = _cp8_values(item, rule, rows, exact, flat)
+                        first = widget._get_equipment_typed_entries_for_model(970)
+                        _cp8_unchanged(before, item, rule, rows, exact, flat)
+                        second = widget._get_equipment_typed_entries_for_model(970)
+                        _cp8_unchanged(before, item, rule, rows, exact, flat)
+                        _expect(
+                            first is not second and all(a is b is row for a, b, row in zip(first, second, rows)),
+                            'CP8 fresh returned lists share rows',
+                        )
+                        warm_index = widget._equipment_typed_entries_by_model_id
+                        warm_cache = widget._equipment_model_search_entry_cache
+                        warm = _CP8Checks.hard(widget, item, rule, direct=direct)
+                        _cp8_unchanged(before, item, rule, rows, exact, flat)
+                        _requirement_contract_expect(warm, value, 'CP8 warm result')
+                        _expect(
+                            widget._equipment_typed_entries_by_model_id is warm_index
+                            and widget._equipment_model_search_entry_cache is warm_cache,
+                            'CP8 warm cache identity',
+                        )
+                result[kind] = {
+                    'result': value,
+                    'exception': exception,
+                    'rows': _cp8_values(rows),
+                    'exact': _cp8_values(list(exact.items())),
+                    'flat': _cp8_values(flat),
+                    'index': _cp8_values(widget._equipment_typed_entries_by_model_id),
+                    'search': _cp8_values(widget._equipment_model_search_entry_cache),
+                    'old_index': _cp8_values(index),
+                    'old_search': _cp8_values(cache),
+                    'index_replaced': widget._equipment_typed_entries_by_model_id is not index,
+                    'search_replaced': widget._equipment_model_search_entry_cache is not cache,
+                }
+            finally:
+                restore.restore()
+                _cp8_unchanged(original_values, *original_objects)
+                _expect(
+                    widget.exact_catalog_by_item_key is original_objects[0]
+                    and widget._equipment_typed_entries_by_model_id is original_objects[1]
+                    and widget._equipment_model_search_entry_cache is original_objects[2]
+                    and widget.catalog_by_model_id is original_objects[3],
+                    'CP8 original Catalog bindings restored',
+                )
+        return result
+
+    @staticmethod
+    def lookup(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import WeaponRequirementRule
+
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        events: list[object] = []
+        result: dict[str, object] = {}
+        try:
+            _CP8Checks.catalog(module, widget, restore)
+            original_rows = widget._get_equipment_typed_entries_for_model
+
+            def rows(model_id: object) -> list[dict[str, object]]:
+                events.append(('rows', model_id))
+                return original_rows(model_id)
+
+            restore.binding(widget, '_get_equipment_typed_entries_for_model', rows)
+            item = _cp8_item(module, identified=False, requirement=9)
+            rule = _cp8_rule(
+                module,
+                all_weapons_perfect_stats_only=True,
+                protected_weapon_requirement_rules=[
+                    WeaponRequirementRule(model_id=970, min_requirement=1, max_requirement=5, perfect_stats_only=True),
+                    WeaponRequirementRule(model_id=970, min_requirement=6, max_requirement=8, perfect_stats_only=True),
+                ],
+            )
+            before = _cp8_values(item, rule)
+            held = widget._get_perfect_only_unidentified_hold_reason(item, rule)
+            _cp8_unchanged(before, item, rule)
+            _requirement_contract_expect((held, events), ('', [('rows', 970)] * 3), 'CP8 repeated hold fallback calls')
+            result['hold'] = {'reason': held, 'trace': events[:]}
+            events.clear()
+            before = _cp8_values(item, rule)
+            ordinary = widget._get_weapon_requirement_hit_reason(item, rule)
+            _cp8_unchanged(before, item, rule)
+            _requirement_contract_expect((ordinary, events), ('', [('rows', 970)]), 'CP8 ordinary fallback calls')
+            result['ordinary'] = {'reason': ordinary, 'trace': events[:]}
+            owner = type(widget)
+            original_get = owner.__getattribute__
+
+            def get(instance: _CP8Widget, name: str) -> object:
+                if instance is widget and name == '_get_weapon_item_type_label':
+                    events.append('resolve_type')
+                return original_get(instance, name)
+
+            def type_label(item_type_id: int) -> str:
+                events.append(('type_label', item_type_id))
+                return 'Late type'
+
+            def read_type() -> int:
+                events.append('read_type')
+                return 2
+
+            restore.binding(owner, '__getattribute__', get)
+            restore.binding(widget, '_get_weapon_item_type_label', type_label)
+            events.clear()
+            if isinstance(widget, _CP8PolicyHolder):
+                adapter: Callable[[Callable[[], int]], str] = vars(_CP8PolicyAccess.get(widget))['_item_type_label']
+                value = adapter(read_type)
+            else:
+                value = widget._get_weapon_item_type_label(read_type())
+            _requirement_contract_expect(
+                (value, events),
+                ('Late type', ['resolve_type', 'read_type', ('type_label', 2)]),
+                'CP8 type-label lookup precedes reader',
+            )
+            result['type_adapter'] = {'value': value, 'trace': events[:]}
+            events.clear()
+            value = _CP8Checks.hard(widget, _cp8_item(module), _cp8_rule(module, all_weapons_perfect_stats_only=True))
+            _requirement_contract_expect(
+                value,
+                ('merchant', 'Protected by all-weapons perfect-base range: Axe 6-28, req 7 Axe Mastery.'),
+                'CP8 known Axe literal',
+            )
+            _requirement_contract_expect(
+                events, ['resolve_type', ('type_label', 2)], 'CP8 eager default label evaluation'
+            )
+            result['known_type'] = {'value': value, 'trace': events[:]}
+
+            def late_label(_item: InventoryItemInfo) -> str:
+                return 'Late item'
+
+            def late_route(_item: InventoryItemInfo, _rule: SellRule) -> str:
+                return 'late-route'
+
+            restore.binding(widget, '_get_requirement_rule_item_label', late_label)
+            restore.binding(widget, '_get_equippable_rule_destination', late_route)
+            value = _CP8Checks.hard(widget, _cp8_item(module), _cp8_rule(module))
+            _requirement_contract_expect(
+                value,
+                ('late-route', 'Protected by all-weapons requirement range: Late item req 7 in 1-8.'),
+                'CP8 post-construction adapters',
+            )
+            result['late'] = value
+            old_db: object = module.MOD_DB
+            try:
+                _install_weapon_mod_catalog_fixture(module)
+                selected = _cp8_rule(
+                    module,
+                    all_weapons_min_requirement=0,
+                    all_weapons_max_requirement=0,
+                    protected_weapon_mod_thresholds=[
+                        module.WeaponModThresholdRule(identifier='of Defense', min_value=5)
+                    ],
+                )
+                matched = _cp8_item(
+                    module,
+                    weapon_mod_matches=[
+                        module.ParsedUpgradeMatch(
+                            identifier='of Defense', target_item_type='Daggers', component_kind='DaggerHandle', value=5
+                        )
+                    ],
+                )
+                before = _cp8_values(matched, selected)
+                label_value = widget._get_protected_hit_reason(matched, selected)
+                _cp8_unchanged(before, matched, selected)
+                result['current_database'] = label_value
+                _requirement_contract_expect(
+                    label_value,
+                    'Contains protected weapon mod threshold: of Defense (all supported weapons) +5.',
+                    'CP8 current modifier database label',
+                )
+            finally:
+                setattr(module, 'MOD_DB', old_db)
+                _expect(module.MOD_DB is old_db, 'CP8 exact MOD_DB restoration')
+            result['retained_host'] = _requirement_policy_access_observations(module)
+            return result
+        finally:
+            restore.restore()
+
+
+def _test_cp8_policy_lookup_order(module: types.ModuleType) -> None:
+    _CP8CatalogChecks.lookup(module)
+
+
+def _test_cp8_policy_catalog_effects(module: types.ModuleType) -> None:
+    _CP8CatalogChecks.effects(module, direct=True)
+
+
+class _CP8OwnerProbe:
+    """Record canonical policy entry while invoking the exact original descriptor."""
+
+    def __init__(self) -> None:
+        from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+        self.events: list[tuple[str, int]] = []
+        self._restoration = _CP8Restoration()
+        original_hit = ProtectionPolicy.get_hard_protection_hit
+        original_match = ProtectionPolicy.get_hard_protection_match
+        original_deposit = ProtectionPolicy.get_equippable_explicit_deposit_reason
+
+        def hit(
+            owner: ProtectionPolicy, item: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+        ) -> tuple[str, str] | None:
+            self.events.append(('hit', item.item_id))
+            return original_hit(owner, item, rules)
+
+        def match(
+            owner: ProtectionPolicy, item: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+        ) -> tuple[int, SellRule, str, str] | None:
+            self.events.append(('match', item.item_id))
+            return original_match(owner, item, rules)
+
+        def deposit(owner: ProtectionPolicy, item: InventoryItemInfo, rule: SellRule) -> tuple[str, str] | None:
+            self.events.append(('deposit', item.item_id))
+            return original_deposit(owner, item, rule)
+
+        self._restoration.binding(ProtectionPolicy, 'get_hard_protection_hit', hit)
+        self._restoration.binding(ProtectionPolicy, 'get_hard_protection_match', match)
+        self._restoration.binding(ProtectionPolicy, 'get_equippable_explicit_deposit_reason', deposit)
+
+    def restore(self) -> None:
+        self._restoration.restore()
+
+
+def _cp8_capture_plans(module: types.ModuleType, operation: Callable[[], None]) -> list[dict[str, object]]:
+    from dataclasses import asdict
+
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    method: object = getattr(module.MerchantRulesWidget, '_build_plan')
+    if not isinstance(method, types.FunctionType):
+        raise AssertionError('CP8 planner must be the real defining function')
+    plans: list[dict[str, object]] = []
+    previous = sys.getprofile()
+
+    def observe(frame: types.FrameType, event: str, value: object) -> None:
+        if event == 'return' and frame.f_code is method.__code__ and isinstance(value, PlanResult):
+            plans.append(asdict(value))
+
+    sys.setprofile(observe)
+    try:
+        operation()
+    finally:
+        sys.setprofile(previous)
+    return plans
+
+
+class _CP8ConsumerChecks(_CP8Checks):
+    @staticmethod
+    def plan_widget(module: types.ModuleType, items: list[InventoryItemInfo]) -> _CP8Widget:
+        raw_widget, _coords = _requirement_contract_plan_widget(module, items)
+        value: object = raw_widget
+        if not isinstance(value, _CP8Widget):
+            raise AssertionError('CP8 actual plan fixture widget')
+        return value
+
+    @staticmethod
+    def sell(module: types.ModuleType) -> dict[str, object]:
+        item = _cp8_item(module)
+        widget = _CP8ConsumerChecks.plan_widget(module, [item])
+        restore = _CP8Restoration()
+        restore.value(widget, 'sell_rules')
+        try:
+            widget.sell_rules = [_cp8_rule(module)]
+            plan = widget._build_plan()
+            _requirement_contract_expect(plan.merchant_sell_item_ids, [], 'CP8 protected sell route')
+            _expect(
+                any(
+                    entry.state == module.PLAN_STATE_SKIPPED and 'req 7 in 1-8' in entry.reason
+                    for entry in plan.entries
+                ),
+                'CP8 skipped protection entry',
+            )
+            categories = _cp8_capture_plans(
+                module, lambda: _test_manual_vendor_category_filters_preserve_all_sell_protections(module)
+            )
+            collision = _cp8_capture_plans(module, lambda: _test_typed_exact_downstream_protection_contract(module))
+            _expect(bool(categories) and bool(collision), 'CP8 retained consumer assertions reached real plans')
+            return {
+                'base': module.asdict(plan),
+                'category_filter_plans': categories,
+                'typed_collision_plans': collision,
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def salvage(module: types.ModuleType) -> dict[str, object]:
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        restore.value(widget, 'sell_rules')
+        item = _cp8_item(module, identified=False, salvageable=True)
+        rule = _cp8_rule(module, all_weapons_min_requirement=0, all_weapons_max_requirement=0, skip_unidentified=True)
+
+        def reference(_index: int, _rule: SellRule) -> str:
+            return 'R7'
+
+        try:
+            restore.binding(widget, '_format_sell_rule_reference', reference)
+            widget.sell_rules = [rule]
+            normal = widget._collect_enabled_sell_rules()
+            manual = widget._collect_enabled_manual_salvage_protection_rules()
+            _requirement_contract_expect(
+                (len(normal), len(manual)), (1, 0), 'CP8 actual protection collection distinction'
+            )
+            before = _cp8_values(item, normal, manual)
+            normal_reason = widget._get_salvage_candidate_block_reason(item, normal, mode='normal')
+            _cp8_unchanged(before, item, normal, manual)
+            manual_reason = widget._get_salvage_candidate_block_reason(item, manual, mode='manual')
+            _cp8_unchanged(before, item, normal, manual)
+            _requirement_contract_expect(
+                normal_reason, 'protected: Hard-protected by R7: Unidentified item.', 'CP8 normal salvage protection'
+            )
+            _requirement_contract_expect(
+                manual_reason,
+                'unidentified non-white: identify before salvaging',
+                'CP8 manual salvage actual empty list',
+            )
+            widget.sell_rules = [replace(rule, blacklist_model_ids=[970])]
+            normal = widget._collect_enabled_sell_rules()
+            manual = widget._collect_enabled_manual_salvage_protection_rules()
+            _requirement_contract_expect(
+                (len(normal), len(manual)), (1, 1), 'CP8 explicit model retained by both collections'
+            )
+            before = _cp8_values(item, normal, manual)
+            reasons = [widget._get_salvage_candidate_block_reason(item, supplied) for supplied in (normal, manual)]
+            _cp8_unchanged(before, item, normal, manual)
+            _requirement_contract_expect(
+                reasons,
+                ['protected: Hard-protected by R7: Unidentified item.'] * 2,
+                'CP8 general precedence survives manual collection',
+            )
+            return {
+                'normal': normal_reason,
+                'manual': manual_reason,
+                'blacklisted': reasons,
+                'collections': (len(normal), len(manual)),
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def destroy(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import DestroyRule
+
+        explicit = _cp8_capture_plans(module, lambda: _test_protected_items_destroy_default_and_override(module))
+        _requirement_contract_expect(len(explicit), 2, 'CP8 explicit stack default and inclusion plans')
+        widget = _CP8ConsumerChecks.plan_widget(module, [_cp8_item(module)])
+        restore = _CP8Restoration()
+        for name in ('sell_rules', 'destroy_rules', 'destroy_include_protected_items'):
+            restore.value(widget, name)
+        plans: list[object] = []
+        try:
+            widget.sell_rules = [_cp8_rule(module)]
+            widget.destroy_rules = [
+                DestroyRule(enabled=True, kind=module.DESTROY_KIND_WEAPONS, rarities=_rarity_flags('gold'))
+            ]
+            for include in (False, True):
+                widget.destroy_include_protected_items = include
+                plan = widget._build_plan()
+                _requirement_contract_expect(
+                    [(action.item_id, action.quantity_to_destroy) for action in plan.destroy_actions],
+                    [(970001, 1)] if include else [],
+                    'CP8 equipment destroy authority',
+                )
+                if include:
+                    _expect(
+                        any('Included protected item' in entry.reason for entry in plan.entries),
+                        'CP8 equipment inclusion reported',
+                    )
+                plans.append(module.asdict(plan))
+            return {'explicit_stack': explicit, 'equipment': plans}
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def cleanup(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.planning import PlanResult
+
+        original_fixture = _cp8_capture_plans(
+            module, lambda: _test_build_plan_deposits_protected_weapon_matches_conditionally(module)
+        )
+        _requirement_contract_expect(len(original_fixture), 1, 'CP8 original Chaos Axe cleanup fixture')
+        widget = _cp8_widget(module)
+        restore = _CP8Restoration()
+        restore.value(widget, 'sell_rules')
+        restore.value(widget, 'cleanup_blacklist_model_ids')
+        item = _cp8_item(module, item_id=301, model_id=111, name='Chaos Axe', requirement=8, is_customized=True)
+        first = _cp8_rule(
+            module,
+            rule_id='cp8-cleanup-first',
+            all_weapons_min_requirement=0,
+            all_weapons_max_requirement=0,
+            skip_customized=True,
+            blacklist_model_ids=[111],
+            deposit_protected_matches=True,
+        )
+        second = replace(first, rule_id='cp8-cleanup-second', name='Later')
+        supplied = [(0, first), (1, second)]
+        events: list[str] = []
+        original_match = widget._get_hard_protection_match
+        original_deposit = widget._get_equippable_explicit_deposit_reason
+
+        def match(
+            selected: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+        ) -> tuple[int, SellRule, str, str] | None:
+            events.append('get_hard_protection_match')
+            value = original_match(selected, rules)
+            if value is not None:
+                _expect(value[1] is first, 'CP8 first linked owner identity')
+            return value
+
+        def deposit(selected: InventoryItemInfo, rule: SellRule) -> tuple[str, str] | None:
+            events.append('get_equippable_explicit_deposit_reason')
+            _expect(rule is first, 'CP8 deposit keeps general winner')
+            value = original_deposit(selected, rule)
+            _requirement_contract_expect(value, ('merchant', 'Blacklisted model.'), 'CP8 narrower linked detail')
+            return value
+
+        try:
+            widget.sell_rules = [first, second]
+            restore.binding(widget, '_get_hard_protection_match', match)
+            restore.binding(widget, '_get_equippable_explicit_deposit_reason', deposit)
+            before = _cp8_values(item, supplied)
+            plan = PlanResult()
+            widget._plan_cleanup_actions(plan, [item], supplied, storage_open=False, storage_context_available=True)
+            _cp8_unchanged(before, item, supplied)
+            _requirement_contract_expect(
+                [(transfer.item_id, transfer.quantity) for transfer in plan.storage_transfers],
+                [(301, 1)],
+                'CP8 linked physical transfer',
+            )
+            _expect('Customized item.' in plan.storage_transfers[0].reason, 'CP8 displayed general detail retained')
+            _requirement_contract_expect(
+                events,
+                ['get_hard_protection_match', 'get_equippable_explicit_deposit_reason'],
+                'CP8 ordered linked owner calls',
+            )
+            observed_trace = events[:]
+            setattr(widget, 'cleanup_blacklist_model_ids', [111])
+            blocked = PlanResult()
+            widget._plan_cleanup_actions(blocked, [item], supplied, storage_open=False, storage_context_available=True)
+            _requirement_contract_expect(blocked.storage_transfers, [], 'CP8 deposit keep-out')
+            setattr(widget, 'cleanup_blacklist_model_ids', [])
+            first.deposit_protected_matches = False
+            stolen = PlanResult()
+            widget._plan_cleanup_actions(stolen, [item], supplied, storage_open=False, storage_context_available=True)
+            _requirement_contract_expect(stolen.storage_transfers, [], 'CP8 later linked rule cannot steal ownership')
+            return {
+                'requirement_fixture': original_fixture,
+                'customized': module.asdict(plan),
+                'keep_out': module.asdict(blocked),
+                'not_stolen': module.asdict(stolen),
+                'trace': observed_trace,
+            }
+        finally:
+            first.deposit_protected_matches = True
+            restore.restore()
+
+    @staticmethod
+    def xunlai(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import RuneSellTarget
+        from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+
+        observations: dict[str, object] = {}
+        for kind, item_id in (('model', 970101), ('rune', 970102), ('equipment', 970103)):
+            widget = _cp8_widget(module)
+            restore = _CP8Restoration()
+            for name in ('sell_rules', 'protected_item_model_ids', 'protected_item_targets'):
+                restore.value(widget, name)
+            item = _cp8_item(module, item_id=item_id)
+            action = _cp8_rule(
+                module,
+                rule_id='cp8-x-' + kind,
+                all_weapons_min_requirement=0,
+                all_weapons_max_requirement=0,
+                sell_from_xunlai=True,
+                include_material_storage=False,
+                keep_count=0,
+            )
+            if kind == 'model':
+                action = replace(
+                    action,
+                    kind=module.SELL_KIND_EXPLICIT_MODELS,
+                    whitelist_targets=[WhitelistTarget(model_id=970, keep_count=0)],
+                )
+            elif kind == 'rune':
+                action = replace(
+                    action,
+                    kind=module.SELL_KIND_RUNE_TRADER_TARGET,
+                    rune_sell_targets=[RuneSellTarget(identifier='Rune', keep_count=0)],
+                )
+                item = replace(
+                    item,
+                    item_type_id=8,
+                    item_type_name='Rune_Mod',
+                    standalone_kind=module.RUNE_STANDALONE_KIND,
+                    rune_identifiers=['Rune'],
+                    is_weapon_like=False,
+                    is_armor_piece=False,
+                    is_material=False,
+                )
+            extra = _cp8_rule(module, rule_id='cp8-x-extra', blacklist_model_ids=[970], sell_from_xunlai=False)
+            trace: list[object] = []
+            recollected: list[list[tuple[int, SellRule]]] = []
+            original_collect = widget._collect_enabled_sell_rules
+            original_hit = widget._get_hard_protection_hit
+
+            def collect() -> list[tuple[int, SellRule]]:
+                value = original_collect()
+                recollected.append(value)
+                trace.append(('collect', [(index, rule.rule_id) for index, rule in value]))
+                return value
+
+            def record_hit(selected: InventoryItemInfo, rules: list[tuple[int, SellRule]]) -> None:
+                _expect(len(recollected) == 1 and rules is recollected[0], 'CP8 identical recollected Xunlai list')
+                _expect(
+                    all(a is b for (_, a), (_, b) in zip(rules, recollected[0])),
+                    'CP8 identical recollected member rules',
+                )
+                trace.append(('hit', selected.item_id, [(index, rule.rule_id) for index, rule in rules]))
+
+            def hit(selected: InventoryItemInfo, rules: list[tuple[int, SellRule]]) -> tuple[str, str] | None:
+                record_hit(selected, rules)
+                return original_hit(selected, rules)
+
+            try:
+                widget.protected_item_model_ids = [970]
+                widget.protected_item_targets = []
+                widget.sell_rules = [action, extra]
+                all_rules = original_collect()
+                narrow = widget._collect_enabled_xunlai_sell_rules(all_rules)
+                expected_narrow = [(0, 'cp8-x-' + kind)]
+                expected_all = [*expected_narrow, (1, 'cp8-x-extra')]
+                _requirement_contract_expect(
+                    [(index, rule.rule_id) for index, rule in narrow],
+                    expected_narrow,
+                    'CP8 actual Xunlai action subset',
+                )
+                restore.binding(widget, '_collect_enabled_sell_rules', collect)
+                if isinstance(widget, _CP8PolicyHolder):
+                    policy = _CP8PolicyAccess.get(widget)
+                    policy_type = type(policy)
+                    original_policy_hit = policy_type.get_hard_protection_hit
+
+                    def policy_hit(
+                        owner: ProtectionPolicy, selected: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+                    ) -> tuple[str, str] | None:
+                        if owner is policy:
+                            record_hit(selected, rules)
+                        return original_policy_hit(owner, selected, rules)
+
+                    restore.binding(policy_type, 'get_hard_protection_hit', policy_hit)
+                else:
+                    restore.binding(widget, '_get_hard_protection_hit', hit)
+                previews: list[ExecutionPlanEntry] = []
+                before = _cp8_values(
+                    item, action, extra, narrow, widget.protected_item_model_ids, widget.protected_item_targets
+                )
+                transfers, adjusted = widget._plan_xunlai_sell_withdrawals(
+                    narrow,
+                    current_items=[],
+                    regular_storage_items=[item],
+                    material_storage_items=[],
+                    coords={'merchant': (1.0, 1.0), 'rune_trader': (3.0, 3.0)},
+                    protected_preview_entries=previews,
+                )
+                _cp8_unchanged(
+                    before, item, action, extra, narrow, widget.protected_item_model_ids, widget.protected_item_targets
+                )
+                _requirement_contract_expect(
+                    trace,
+                    [('collect', expected_all), ('hit', item_id, expected_all)],
+                    'CP8 actual recollection before protection',
+                )
+                _expect(
+                    recollected[0] is not narrow and len(recollected[0]) != len(narrow),
+                    'CP8 wider recollected membership',
+                )
+                _requirement_contract_expect(transfers, [], 'CP8 protected storage withdrawal')
+                _requirement_contract_expect(len(previews), 1, 'CP8 single protected storage preview')
+                _expect(
+                    'Protected by Protected Items: exact model.' in previews[0].reason, 'CP8 storage protection detail'
+                )
+                observations[kind] = {
+                    'transfers': [module.asdict(value) for value in transfers],
+                    'adjusted': [module.asdict(value) for value in adjusted],
+                    'previews': [module.asdict(value) for value in previews],
+                    'trace': trace,
+                    'action_subset': expected_narrow,
+                }
+            finally:
+                restore.restore()
+        return observations
+
+
+def _test_cp8_policy_sell_route(module: types.ModuleType) -> None:
+    probe = _CP8OwnerProbe()
+    try:
+        _CP8ConsumerChecks.sell(module)
+        for item_id in (970001, 92301, 92302):
+            _expect(('hit', item_id) in probe.events, 'CP8 sell reached canonical owner: ' + str(item_id))
+    finally:
+        probe.restore()
+
+
+def _test_cp8_policy_salvage_routes(module: types.ModuleType) -> None:
+    probe = _CP8OwnerProbe()
+    try:
+        _CP8ConsumerChecks.salvage(module)
+        _expect(probe.events.count(('hit', 970001)) == 4, 'CP8 both salvage lists reach real policy')
+    finally:
+        probe.restore()
+
+
+def _test_cp8_policy_destroy_routes(module: types.ModuleType) -> None:
+    probe = _CP8OwnerProbe()
+    try:
+        _CP8ConsumerChecks.destroy(module)
+        _expect(
+            ('hit', 503) in probe.events and ('hit', 970001) in probe.events, 'CP8 stack and equipment destroy owner'
+        )
+    finally:
+        probe.restore()
+
+
+def _test_cp8_policy_cleanup_route(module: types.ModuleType) -> None:
+    probe = _CP8OwnerProbe()
+    try:
+        _CP8ConsumerChecks.cleanup(module)
+        _expect(
+            ('match', 301) in probe.events and ('deposit', 301) in probe.events,
+            'CP8 both linked cleanup policy boundaries',
+        )
+        _expect(
+            probe.events.index(('match', 301)) < probe.events.index(('deposit', 301)),
+            'CP8 general owner precedes deposit owner',
+        )
+    finally:
+        probe.restore()
+
+
+def _test_cp8_policy_xunlai_routes(module: types.ModuleType) -> None:
+    probe = _CP8OwnerProbe()
+    try:
+        _CP8ConsumerChecks.xunlai(module)
+        _requirement_contract_expect(
+            [item_id for name, item_id in probe.events if name == 'hit'],
+            [970101, 970102, 970103],
+            'CP8 three real Xunlai policy paths',
+        )
+    finally:
+        probe.restore()
+
+
+class _CP8PublicationChecks(_CP8Checks):
+    @staticmethod
+    def publication(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.planning import PlanResult
+
+        widget = _CP8ConsumerChecks.plan_widget(module, [_cp8_item(module)])
+        restore = _CP8Restoration()
+        for name in ('sell_rules', 'preview_plan', 'preview_ready'):
+            restore.value(widget, name)
+        method: object = getattr(module.MerchantRulesWidget, '_build_plan')
+        if not isinstance(method, types.FunctionType):
+            raise AssertionError('CP8 publication requires real plan construction')
+        returned: list[PlanResult] = []
+
+        def observe(frame: types.FrameType, event: str, value: object) -> None:
+            if (
+                event == 'return'
+                and frame.f_code is method.__code__
+                and frame.f_locals.get('self') is widget
+                and isinstance(value, PlanResult)
+            ):
+                returned.append(value)
+
+        previous_profiler = sys.getprofile()
+        failure = RuntimeError('CP8 publication label sentinel')
+
+        def label_failure(_item: InventoryItemInfo) -> str:
+            raise failure
+
+        try:
+            widget.sell_rules = [_cp8_rule(module)]
+            widget.preview_plan = PlanResult()
+            widget.preview_ready = False
+            sys.setprofile(observe)
+            widget._scan_preview()
+            _expect(
+                len(returned) == 1 and widget.preview_plan is returned[0] and widget.preview_ready,
+                'CP8 publish the exact successful plan',
+            )
+            published = widget.preview_plan
+            before = _cp8_values(published)
+            restore.binding(widget, '_get_requirement_rule_item_label', label_failure)
+            try:
+                widget._scan_preview()
+            except RuntimeError as error:
+                _expect(error is failure, 'CP8 publication propagates original exception')
+            else:
+                raise AssertionError('CP8 publication must reach the late label failure')
+            _expect(widget.preview_plan is published, 'CP8 failed build preserves original published object')
+            _cp8_unchanged(before, published)
+            _requirement_contract_expect(len(returned), 1, 'CP8 failed build publishes no new plan')
+            return {
+                'successful_plan': module.asdict(published),
+                'ready_after_success': True,
+                'ready_after_failure': widget.preview_ready,
+                'failure': (type(failure).__name__, str(failure)),
+                'published_plan_after_failure': module.asdict(widget.preview_plan),
+            }
+        finally:
+            sys.setprofile(previous_profiler)
+            restore.restore()
+
+
+def _test_cp8_policy_authority_publication(module: types.ModuleType) -> None:
+    probe = _CP8OwnerProbe()
+    try:
+        _requirement_policy_authorization_observations(module)
+        _CP8PublicationChecks.publication(module)
+        _expect(('hit', 970001) in probe.events, 'CP8 authority and publication reached the real policy')
+    finally:
+        probe.restore()
+
+
+_CP8_DIFFERENTIAL_GROUPS: tuple[str, ...] = (
+    'literal_decisions',
+    'exact_targets',
+    'equipment_upgrade_order',
+    'configuration_liveness',
+    'rule_input_identity',
+    'deposit_distinction',
+    'callback_traces',
+    'catalog_partial_effects',
+    'phase_consumers',
+    'authority',
+    'publication',
+)
+
+
+def _cp8_differential_observations(module: types.ModuleType) -> dict[str, object]:
+    observations: dict[str, object] = {
+        'literal_decisions': {
+            'policy': _CP8DecisionChecks.requirements(module),
+            'retained': _requirement_policy_literal_observations(module),
+        },
+        'exact_targets': {'values': _CP8Checks.exact(module), 'order': _CP8DecisionChecks.exact_order(module)},
+        'equipment_upgrade_order': {
+            'equipment': _CP8DecisionChecks.precedence(module),
+            'upgrades': _CP8DecisionChecks.upgrades(module),
+        },
+        'configuration_liveness': _CP8Checks.configuration(module),
+        'rule_input_identity': _CP8IdentityChecks.rules(module),
+        'deposit_distinction': {
+            'literal': _CP8IdentityChecks.deposits(module),
+            'cleanup': _CP8ConsumerChecks.cleanup(module),
+        },
+        'callback_traces': _CP8CatalogChecks.lookup(module),
+        'catalog_partial_effects': {
+            'policy': _CP8CatalogChecks.effects(module),
+            'retained': _requirement_policy_catalog_observations(module),
+        },
+        'phase_consumers': {
+            'sell': _CP8ConsumerChecks.sell(module),
+            'salvage': _CP8ConsumerChecks.salvage(module),
+            'destroy': _CP8ConsumerChecks.destroy(module),
+            'xunlai': _CP8ConsumerChecks.xunlai(module),
+        },
+        'authority': _requirement_policy_authorization_observations(module),
+        'publication': _CP8PublicationChecks.publication(module),
+    }
+    _requirement_contract_expect(tuple(observations), _CP8_DIFFERENTIAL_GROUPS, 'CP8 exact eleven differential groups')
+    return observations
+
+
+@runtime_checkable
+class _CP8ExternalRecord(Protocol):
+    def __getitem__(self, key: str) -> object: ...
+
+
+def _cp8_external_case(
+    kind: str, scenario: Callable[[types.ModuleType], dict[str, object]] | None = None
+) -> dict[str, object]:
+    from hashlib import sha256
+    from uuid import uuid4
+
+    config_path = Path(os.environ.get('MERCHANT_RULES_CP8_' + kind.upper() + '_CONFIG', ''))
+    _expect(config_path.is_file(), 'CP8 ' + kind + ' needs its explicit pinned evidence configuration')
+    config_bytes = config_path.read_bytes()
+    config: dict[str, object] = json.loads(config_bytes)
+    root_value = config['evidence_root']
+    driver_value = config['driver']
+    if not isinstance(root_value, str) or not isinstance(driver_value, _CP8ExternalRecord):
+        raise AssertionError('CP8 configuration root/driver schema')
+    driver_path, driver_hash = driver_value['path'], driver_value['sha256']
+    if scenario is not None:
+        _requirement_contract_expect(config['scenario_entrypoint'], scenario.__name__, 'CP8 pinned scenario entrypoint')
+    if not isinstance(driver_path, str) or not isinstance(driver_hash, str):
+        raise AssertionError('CP8 driver identity schema')
+    root = Path(root_value)
+    driver = Path(driver_path)
+    _expect(
+        root.name.startswith('cp8-implementation-') and config_path.is_relative_to(root),
+        'CP8 configuration containment',
+    )
+    _expect(driver.is_relative_to(root), 'CP8 driver containment')
+    _requirement_contract_expect(sha256(driver.read_bytes()).hexdigest(), driver_hash, 'CP8 pinned driver')
+    output = root / ('cp8-' + kind + '-' + str(uuid4()))
+    _expect(not output.exists(), 'CP8 create-only external output')
+    output.mkdir()
+    command = [sys.executable, '-I', '-B', '-S', str(driver), '--config', str(config_path), '--output', str(output)]
+    completed = subprocess.run(command, cwd=output, capture_output=True, timeout=300, check=False)
+    for filename, content in (
+        ('stdout.txt', completed.stdout),
+        ('stderr.txt', completed.stderr),
+        (
+            'launch.json',
+            (
+                json.dumps(
+                    {
+                        'command': command,
+                        'exit': completed.returncode,
+                        'configuration': str(config_path),
+                        'configuration_sha256': sha256(config_bytes).hexdigest(),
+                    },
+                    indent=2,
+                )
+                + '\n'
+            ).encode('utf-8'),
+        ),
+    ):
+        with (output / filename).open('xb') as stream:
+            stream.write(content)
+    _expect(completed.returncode == 0, f'CP8 {kind} failed; evidence {output}: {completed.stderr!r}')
+    report: dict[str, object] = json.loads((output / 'report.json').read_bytes())
+    _expect(report.get('passed') is True, 'CP8 successful ' + kind + ' report')
+    _requirement_contract_expect(config_path.read_bytes(), config_bytes, 'CP8 unchanged external configuration')
+    _requirement_contract_expect(sha256(driver.read_bytes()).hexdigest(), driver_hash, 'CP8 unchanged external driver')
+    print('CP8 ' + kind + ' evidence: ' + str(output / 'report.json'))
+    return report
+
+
+def _test_cp8_policy_cold_import() -> None:
+    report = _cp8_external_case('cold_import')
+    _requirement_contract_expect(report['successful_children'], 2, 'CP8 two fresh cold children')
+    _expect(report['requirement_only_namespace_verified'] is True, 'CP8 actual namespace/package parents')
+    _requirement_contract_expect(report['requirement_only_acquisition_events'], [], 'CP8 isolated requirement import')
+    _requirement_contract_expect(
+        report['widget_acquisition_events'],
+        ['mod_database_initialized', 'requirement_first_acquisition'],
+        'CP8 first widget-driven acquisition order',
+    )
+    _expect(report['canonical_identities_and_lifetimes_verified'] is True, 'CP8 canonical exports and policy lifetimes')
+
+
+def _test_cp8_policy_completed_cp7_differential() -> None:
+    report = _cp8_external_case('differential', _cp8_differential_observations)
+    _requirement_contract_expect(
+        report['matched_groups'], list(_CP8_DIFFERENTIAL_GROUPS), 'CP8 eleven complete differential groups'
+    )
+    _requirement_contract_expect(report['successful_children'], 2, 'CP8 independent CP7 and CP8 children')
+    _expect(
+        report['source_bindings_verified'] is True and report['within_process_identities_verified'] is True,
+        'CP8 source-bound objects and callbacks',
+    )
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -53046,6 +55112,29 @@ def main() -> int:
                 ),
                 ("cp7_planning_cold_import_isolation", _test_cp7_planning_cold_import_isolation),
                 ("cp7_planning_completed_cp6_differential", _test_cp7_planning_completed_cp6_differential),
+            ]
+        )
+
+        tests.extend(
+            [
+                ("cp8_policy_construction_lifetimes", lambda: _test_cp8_policy_construction_lifetimes(module)),
+                ("cp8_policy_configuration_liveness", lambda: _test_cp8_policy_configuration_liveness(module)),
+                ("cp8_policy_exact_targets", lambda: _test_cp8_policy_exact_targets(module)),
+                ("cp8_policy_equipment_precedence", lambda: _test_cp8_policy_equipment_precedence(module)),
+                ("cp8_policy_requirement_literals", lambda: _test_cp8_policy_requirement_literals(module)),
+                ("cp8_policy_upgrade_precedence", lambda: _test_cp8_policy_upgrade_precedence(module)),
+                ("cp8_policy_rule_identity_inputs", lambda: _test_cp8_policy_rule_identity_inputs(module)),
+                ("cp8_policy_deposit_distinction", lambda: _test_cp8_policy_deposit_distinction(module)),
+                ("cp8_policy_lookup_order", lambda: _test_cp8_policy_lookup_order(module)),
+                ("cp8_policy_catalog_effects", lambda: _test_cp8_policy_catalog_effects(module)),
+                ("cp8_policy_sell_route", lambda: _test_cp8_policy_sell_route(module)),
+                ("cp8_policy_salvage_routes", lambda: _test_cp8_policy_salvage_routes(module)),
+                ("cp8_policy_destroy_routes", lambda: _test_cp8_policy_destroy_routes(module)),
+                ("cp8_policy_cleanup_route", lambda: _test_cp8_policy_cleanup_route(module)),
+                ("cp8_policy_xunlai_routes", lambda: _test_cp8_policy_xunlai_routes(module)),
+                ("cp8_policy_authority_publication", lambda: _test_cp8_policy_authority_publication(module)),
+                ("cp8_policy_cold_import", _test_cp8_policy_cold_import),
+                ("cp8_policy_completed_cp7_differential", _test_cp8_policy_completed_cp7_differential),
             ]
         )
 

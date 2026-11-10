@@ -2157,25 +2157,35 @@ WEAPON_ITEM_TYPE_NAMES: dict[int, str] = {
     for item_type, label in WEAPON_ITEM_TYPE_OPTIONS
 }
 # Keep policy table initialization after the modifier database initialization above.
-from Sources.icefox.MerchantRules.requirement_protection import ATTRIBUTE_NONE_REAL_VALUE as ATTRIBUTE_NONE_REAL_VALUE
+from Sources.icefox.MerchantRules import requirement_protection as _requirement_protection
+
+ATTRIBUTE_NONE_REAL_VALUE = _requirement_protection.ATTRIBUTE_NONE_REAL_VALUE
 from Sources.icefox.MerchantRules.requirement_protection import PERFECT_BASE_ARMOR_VALUES as PERFECT_BASE_ARMOR_VALUES
 from Sources.icefox.MerchantRules.requirement_protection import PERFECT_BASE_DAMAGE_RANGES as PERFECT_BASE_DAMAGE_RANGES
 from Sources.icefox.MerchantRules.requirement_protection import PERFECT_BASE_ENERGY_VALUES as PERFECT_BASE_ENERGY_VALUES
 from Sources.icefox.MerchantRules.requirement_protection import (
     PERFECT_BASE_ITEM_TYPE_LABELS as PERFECT_BASE_ITEM_TYPE_LABELS,
 )
+
+ProtectionPolicy = _requirement_protection.ProtectionPolicy
 from Sources.icefox.MerchantRules.requirement_protection import (
     get_perfect_only_unidentified_hold_reason as _requirement_get_perfect_only_unidentified_hold_reason,
 )
 from Sources.icefox.MerchantRules.requirement_protection import (
     get_weapon_requirement_hit_reason as _requirement_get_weapon_requirement_hit_reason,
 )
+
+_protection_has_explicit_equippable_hard_protection = _requirement_protection.has_explicit_equippable_hard_protection
 from Sources.icefox.MerchantRules.requirement_protection import (
     is_weapon_requirement_range_active as _is_weapon_requirement_range_active,
 )
+
+_protection_normalize_rarity_key = _requirement_protection.normalize_rarity_key
 from Sources.icefox.MerchantRules.requirement_protection import (
     normalize_weapon_requirement_range as _normalize_weapon_requirement_range,
 )
+
+_protection_weapon_mod_variant_matches_parsed_match = _requirement_protection.weapon_mod_variant_matches_parsed_match
 WEAPON_LIKE_ITEM_TYPES: frozenset[ItemType] = frozenset(item_type for item_type, _label in WEAPON_ITEM_TYPE_OPTIONS)
 ARMOR_PIECE_TYPES: frozenset[ItemType] = frozenset({
     ItemType.Headpiece,
@@ -3985,8 +3995,7 @@ _normalize_identify_rarity_flags = _configuration.normalize_identify_rarity_flag
 _normalize_salvage_category_flags = _configuration.normalize_salvage_category_flags
 
 
-def _normalize_rarity_key(raw_value: str) -> str:
-    return str(raw_value or "").strip().lower()
+_normalize_rarity_key = _protection_normalize_rarity_key
 
 
 _normalize_rule_name = _configuration.normalize_rule_name
@@ -4062,17 +4071,11 @@ _serialize_weapon_mod_variant_threshold_rules = _rule_normalizer.serialize_weapo
 
 
 def _weapon_mod_variant_matches_parsed_match(rule: object, match: object) -> bool:
-    identifier, target_item_type, component_kind = _weapon_mod_variant_rule_key(rule)
-    match_identifier, match_target_item_type, match_component_kind = _normalize_weapon_mod_variant_parts(
-        getattr(match, "identifier", ""),
-        getattr(match, "target_item_type", ""),
-        getattr(match, "component_kind", ""),
-    )
-    return (
-        bool(identifier)
-        and identifier == match_identifier
-        and target_item_type == match_target_item_type
-        and component_kind == match_component_kind
+    return _protection_weapon_mod_variant_matches_parsed_match(
+        rule,
+        match,
+        rule_key=_weapon_mod_variant_rule_key,
+        normalize_variant_parts=_normalize_weapon_mod_variant_parts,
     )
 
 
@@ -4935,30 +4938,11 @@ _serialize_destroy_rule = _rule_normalizer.serialize_destroy_rule
 def _has_explicit_equippable_hard_protection(rule: SellRule) -> bool:
     """Return whether an equipment sale rule contains an exclusion that must override selling."""
 
-    if rule.kind not in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-        return False
-    if rule.blacklist_model_ids:
-        return True
-    if rule.kind == SELL_KIND_WEAPONS:
-        return bool(
-            rule.blacklist_item_type_ids
-            or _is_weapon_requirement_range_active(
-                getattr(rule, "all_weapons_min_requirement", 0),
-                getattr(rule, "all_weapons_max_requirement", 0),
-            )
-            or any(
-                _is_weapon_requirement_range_active(
-                    getattr(requirement_rule, "min_requirement", 0),
-                    getattr(requirement_rule, "max_requirement", 0),
-                )
-                for requirement_rule in rule.protected_weapon_requirement_rules
-            )
-            or rule.protected_weapon_mod_identifiers
-            or rule.protected_weapon_mod_thresholds
-            or rule.protected_weapon_mod_variants
-            or rule.protected_weapon_mod_variant_thresholds
-        )
-    return bool(rule.protected_rune_identifiers)
+    return _protection_has_explicit_equippable_hard_protection(
+        rule,
+        weapon_rule_kind=SELL_KIND_WEAPONS,
+        armor_rule_kind=SELL_KIND_ARMOR,
+    )
 
 
 class MerchantRulesWidget:
@@ -5601,6 +5585,30 @@ class MerchantRulesWidget:
             is_armor_rune_catalog_name=lambda read: _is_armor_rune_catalog_name(read()),
             is_armor_salvage_catalog_name=lambda read: _is_armor_salvage_catalog_name(read()),
             get_search_result_limit=lambda: SEARCH_RESULT_LIMIT,
+        )
+        self._protection_policy = ProtectionPolicy(
+            normalizer=_rule_normalizer,
+            normalize_protected_model_ids=_normalize_protected_item_model_ids,
+            normalize_mod_thresholds=_normalize_weapon_mod_threshold_rules,
+            normalize_variant_parts=_normalize_weapon_mod_variant_parts,
+            weapon_item_type_ids=WEAPON_ITEM_TYPE_IDS,
+            weapon_rule_kind=SELL_KIND_WEAPONS,
+            armor_rule_kind=SELL_KIND_ARMOR,
+            destroy_armor_kind=DESTROY_KIND_ARMOR,
+            weapon_mod_standalone_kind=WEAPON_MOD_STANDALONE_KIND,
+            read_model_ids=lambda: self.protected_item_model_ids,
+            read_typed_targets=lambda: self.protected_item_targets,
+            equipment_rows=lambda model_id: self._get_equipment_typed_entries_for_model(model_id),
+            item_label=lambda item: self._get_requirement_rule_item_label(item),
+            item_type_label=lambda read_item_type_id: self._get_weapon_item_type_label(read_item_type_id()),
+            generic_mod_label=lambda identifier: self._get_weapon_mod_generic_label(identifier),
+            threshold_label=lambda rule: self._format_weapon_mod_threshold_rule(rule),
+            variant_label=lambda rule: self._format_weapon_mod_variant_rule(rule),
+            variant_threshold_label=lambda rule: self._format_weapon_mod_variant_threshold_rule(rule),
+            rune_label=lambda identifier: self._get_rune_label(identifier),
+            rule_reference=lambda index, rule: self._format_sell_rule_reference(index, rule),
+            equipment_destination=lambda item, rule: self._get_equippable_rule_destination(item, rule),
+            explicit_destination=lambda item: self._get_explicit_sell_destination(item),
         )
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
@@ -16833,12 +16841,7 @@ class MerchantRulesWidget:
         return transfers
 
     def _rule_matches_selected_rarity(self, item: InventoryItemInfo, rule: object) -> bool:
-        rarity_key = _normalize_rarity_key(item.rarity)
-        rule_kind = str(getattr(rule, "kind", ""))
-        rule_rarities = getattr(rule, "rarities", {})
-        if rule_kind in (SELL_KIND_ARMOR, DESTROY_KIND_ARMOR) and rarity_key == "green":
-            return False
-        return bool(rule_rarities.get(rarity_key, False))
+        return self._protection_policy.rule_matches_selected_rarity(item, rule)
 
     def _get_rule_custom_name(self, rule: object) -> str:
         return _normalize_rule_name(getattr(rule, "name", ""))
@@ -17048,97 +17051,20 @@ class MerchantRulesWidget:
         return ""
 
     def _get_protected_hit_reason(self, item: InventoryItemInfo, rule: SellRule) -> str:
-        if rule.kind == SELL_KIND_WEAPONS:
-            matched_identifiers = [
-                identifier
-                for identifier in item.weapon_mod_identifiers
-                if identifier in rule.protected_weapon_mod_identifiers
-            ]
-            if matched_identifiers:
-                labels = [self._get_weapon_mod_generic_label(identifier) for identifier in matched_identifiers]
-                return f"Contains protected weapon mod: {', '.join(labels)}."
-
-            matched_thresholds: list[WeaponModThresholdRule] = []
-            for threshold_rule in _normalize_weapon_mod_threshold_rules(getattr(rule, "protected_weapon_mod_thresholds", [])):
-                threshold_identifier = str(threshold_rule.identifier or "").strip()
-                if not threshold_identifier:
-                    continue
-                for match in getattr(item, "weapon_mod_matches", []) or []:
-                    if str(getattr(match, "identifier", "") or "").strip() != threshold_identifier:
-                        continue
-                    matched_value = getattr(match, "value", None)
-                    if matched_value is None:
-                        continue
-                    if _safe_int(matched_value, 0) >= int(threshold_rule.min_value):
-                        matched_thresholds.append(threshold_rule)
-                        break
-            if matched_thresholds:
-                labels = [self._format_weapon_mod_threshold_rule(threshold_rule) for threshold_rule in matched_thresholds]
-                return f"Contains protected weapon mod threshold: {', '.join(labels)}."
-
-            matched_variants: list[WeaponModVariantRule] = []
-            for variant_rule in _normalize_weapon_mod_variant_rules(getattr(rule, "protected_weapon_mod_variants", [])):
-                for match in getattr(item, "weapon_mod_matches", []) or []:
-                    if _weapon_mod_variant_matches_parsed_match(variant_rule, match):
-                        matched_variants.append(variant_rule)
-                        break
-            if matched_variants:
-                labels = [self._format_weapon_mod_variant_rule(variant_rule) for variant_rule in matched_variants]
-                return f"Contains protected weapon mod variant: {', '.join(labels)}."
-
-            matched_variant_thresholds: list[WeaponModVariantThresholdRule] = []
-            for threshold_rule in _normalize_weapon_mod_variant_threshold_rules(getattr(rule, "protected_weapon_mod_variant_thresholds", [])):
-                for match in getattr(item, "weapon_mod_matches", []) or []:
-                    if not _weapon_mod_variant_matches_parsed_match(threshold_rule, match):
-                        continue
-                    matched_value = getattr(match, "value", None)
-                    if matched_value is None:
-                        continue
-                    if _safe_int(matched_value, 0) >= int(threshold_rule.min_value):
-                        matched_variant_thresholds.append(threshold_rule)
-                        break
-            if matched_variant_thresholds:
-                labels = [
-                    self._format_weapon_mod_variant_threshold_rule(threshold_rule)
-                    for threshold_rule in matched_variant_thresholds
-                ]
-                return f"Contains protected weapon mod variant threshold: {', '.join(labels)}."
-
-        if rule.kind == SELL_KIND_ARMOR:
-            matched_identifiers = [
-                identifier
-                for identifier in item.rune_identifiers
-                if identifier in rule.protected_rune_identifiers
-            ]
-            if matched_identifiers:
-                labels = [self._get_rune_label(identifier) for identifier in matched_identifiers]
-                return f"Contains protected rune/insignia: {', '.join(labels)}."
-
-        return ""
+        return self._protection_policy.get_protected_hit_reason(item, rule)
 
     def _get_concrete_weapon_item_type_ids_for_model(self, model_id: object) -> set[int] | None:
         """Return typed concrete weapon identities, or ``None`` when the catalog cannot prove them."""
 
-        typed_entries = self._get_equipment_typed_entries_for_model(model_id)
-        if not typed_entries:
-            return None
-        concrete_item_type_ids = {
-            _safe_int(entry.get("item_type_id"), -1)
-            for entry in typed_entries
-            if _safe_int(entry.get("item_type_id"), -1) in WEAPON_ITEM_TYPE_IDS
-        }
-        return concrete_item_type_ids or None
+        return self._protection_policy.get_concrete_weapon_item_type_ids_for_model(model_id)
 
     def _is_ambiguous_weapon_model(self, model_id: object) -> bool | None:
-        concrete_item_type_ids = self._get_concrete_weapon_item_type_ids_for_model(model_id)
-        if concrete_item_type_ids is None:
-            return None
-        return len(concrete_item_type_ids) > 1
+        return self._protection_policy.is_ambiguous_weapon_model(model_id)
 
     def _should_fall_back_to_global_weapon_requirement(self, model_id: object) -> bool:
         """Keep global protection available for ambiguous or unverifiable model identities."""
 
-        return self._is_ambiguous_weapon_model(model_id) is not False
+        return self._protection_policy.should_fall_back_to_global_weapon_requirement(model_id)
 
     def _get_requirement_rule_item_label(self, item: InventoryItemInfo) -> str:
         typed_entry = self._get_exact_catalog_entry(
@@ -17216,89 +17142,29 @@ class MerchantRulesWidget:
         )
 
     def _get_equippable_hard_protection_reason(self, item: InventoryItemInfo, rule: SellRule) -> tuple[str, str] | None:
-        destination = self._get_equippable_rule_destination(item, rule)
-        if not destination:
-            return None
-
-        rarity_matches = self._rule_matches_selected_rarity(item, rule)
-        if rarity_matches and rule.skip_customized and item.is_customized:
-            return destination, "Customized item."
-        perfect_unidentified_reason = self._get_perfect_only_unidentified_hold_reason(item, rule)
-        if perfect_unidentified_reason:
-            return destination, perfect_unidentified_reason
-        if rarity_matches and rule.skip_unidentified and not item.identified:
-            return destination, "Unidentified item."
-        if item.model_id in rule.blacklist_model_ids:
-            return destination, "Blacklisted model."
-        if rule.kind == SELL_KIND_WEAPONS and item.item_type_id in rule.blacklist_item_type_ids:
-            return destination, f"Blacklisted weapon type: {self._get_weapon_item_type_label(item.item_type_id)}."
-
-        requirement_reason = self._get_weapon_requirement_hit_reason(item, rule)
-        if requirement_reason:
-            return destination, requirement_reason
-
-        protected_reason = self._get_protected_hit_reason(item, rule)
-        if protected_reason:
-            return destination, protected_reason
-        return None
+        return self._protection_policy.get_equippable_hard_protection_reason(item, rule)
 
     def _get_equippable_explicit_deposit_reason(self, item: InventoryItemInfo, rule: SellRule) -> tuple[str, str] | None:
-        destination = self._get_equippable_rule_destination(item, rule)
-        if not destination:
-            return None
-        if item.model_id in rule.blacklist_model_ids:
-            return destination, "Blacklisted model."
-        if rule.kind == SELL_KIND_WEAPONS and item.item_type_id in rule.blacklist_item_type_ids:
-            return destination, f"Blacklisted weapon type: {self._get_weapon_item_type_label(item.item_type_id)}."
-
-        requirement_reason = self._get_weapon_requirement_hit_reason(item, rule)
-        if requirement_reason:
-            return destination, requirement_reason
-
-        protected_reason = self._get_protected_hit_reason(item, rule)
-        if protected_reason:
-            return destination, protected_reason
-        return None
+        return self._protection_policy.get_equippable_explicit_deposit_reason(item, rule)
 
     def _get_hard_protection_match(
         self,
         item: InventoryItemInfo,
         enabled_sell_rules: list[tuple[int, SellRule]],
     ) -> tuple[int, SellRule, str, str] | None:
-        for rule_index, rule in enabled_sell_rules:
-            if rule.kind not in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-                continue
-            protection = self._get_equippable_hard_protection_reason(item, rule)
-            if protection is None:
-                continue
-            destination, detail = protection
-            return rule_index, rule, destination, detail
-        return None
+        return self._protection_policy.get_hard_protection_match(item, enabled_sell_rules)
 
     def _get_protected_item_model_id_set(self) -> set[int]:
-        return set(_normalize_protected_item_model_ids(self.protected_item_model_ids))
+        return self._protection_policy.get_protected_item_model_id_set()
 
     def _get_protected_item_typed_target_set(self) -> set[tuple[int, int]]:
-        return {
-            (int(target.item_type_id), int(target.model_id))
-            for target in _normalize_protected_item_targets(self.protected_item_targets)
-            if target.item_type_id is not None
-        }
+        return self._protection_policy.get_protected_item_typed_target_set()
 
     def _get_exact_protection_target_count(self) -> int:
-        return len(self._get_protected_item_model_id_set()) + len(self._get_protected_item_typed_target_set())
+        return self._protection_policy.get_exact_protection_target_count()
 
     def _is_exact_protected_item_model_id(self, model_id: int, item_type_id: int | None = None) -> bool:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        if safe_model_id <= 0:
-            return False
-        if safe_model_id in self._get_protected_item_model_id_set():
-            return True
-        safe_item_type_id = _safe_int(item_type_id, -1)
-        return (
-            _is_valid_exact_item_type_id(safe_item_type_id)
-            and (safe_item_type_id, safe_model_id) in self._get_protected_item_typed_target_set()
-        )
+        return self._protection_policy.is_exact_protected_item_model_id(model_id, item_type_id)
 
     def _format_model_label_with_exact_protection_status(
         self,
@@ -17330,31 +17196,14 @@ class MerchantRulesWidget:
         )
 
     def _get_exact_model_protection_hit(self, item: InventoryItemInfo) -> tuple[str, str] | None:
-        destination = self._get_explicit_sell_destination(item)
-        model_id = max(0, _safe_int(getattr(item, "model_id", 0), 0))
-        if model_id in self._get_protected_item_model_id_set():
-            return destination, "Protected by Protected Items: exact model."
-        item_type_id = _safe_int(getattr(item, "item_type_id", -1), -1)
-        if (
-            _is_valid_exact_item_type_id(item_type_id)
-            and (item_type_id, model_id) in self._get_protected_item_typed_target_set()
-        ):
-            return destination, "Protected by Protected Items: exact item type and model."
-        return None
+        return self._protection_policy.get_exact_model_protection_hit(item)
 
     def _get_hard_protection_hit(
         self,
         item: InventoryItemInfo,
         enabled_sell_rules: list[tuple[int, SellRule]],
     ) -> tuple[str, str] | None:
-        exact_model_protection = self._get_exact_model_protection_hit(item)
-        if exact_model_protection is not None:
-            return exact_model_protection
-        match = self._get_hard_protection_match(item, enabled_sell_rules)
-        if match is not None:
-            rule_index, rule, destination, detail = match
-            return destination, f"Hard-protected by {self._format_sell_rule_reference(rule_index, rule)}: {detail}"
-        return None
+        return self._protection_policy.get_hard_protection_hit(item, enabled_sell_rules)
 
     def _has_enabled_identify_settings(self) -> bool:
         settings = _normalize_identify_settings(self.identify_settings)
