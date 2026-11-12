@@ -339,7 +339,7 @@ MERCHANT_TYPE_MERCHANT = _configuration.MERCHANT_TYPE_MERCHANT
 MERCHANT_TYPE_MATERIALS = _configuration.MERCHANT_TYPE_MATERIALS
 MERCHANT_TYPE_RUNE_TRADER = _configuration.MERCHANT_TYPE_RUNE_TRADER
 MERCHANT_TYPE_SCROLL_TRADER = _configuration.MERCHANT_TYPE_SCROLL_TRADER
-MERCHANT_TYPE_RARE_MATERIALS = "rare_material_trader"
+MERCHANT_TYPE_RARE_MATERIALS = _planning.MERCHANT_TYPE_RARE_MATERIALS
 MERCHANT_TYPE_CONSUMABLE_CRAFTER = _configuration.MERCHANT_TYPE_CONSUMABLE_CRAFTER
 MERCHANT_TYPE_INVENTORY = _configuration.MERCHANT_TYPE_INVENTORY
 MERCHANT_TYPE_STORAGE = _configuration.MERCHANT_TYPE_STORAGE
@@ -1541,8 +1541,8 @@ XUNLAI_AGENT_NAME_QUERY = "Xunlai Agent"
 XUNLAI_CHEST_NAME_QUERY = "Xunlai Chest"
 XUNLAI_AGENT_MODEL_IDS: tuple[int, ...] = (220, 221, 3287)
 XUNLAI_CHEST_MODEL_ID = 5001
-RUNE_STANDALONE_KIND = "rune"
-WEAPON_MOD_STANDALONE_KIND = "weapon_mod"
+RUNE_STANDALONE_KIND = _planning.RUNE_STANDALONE_KIND
+WEAPON_MOD_STANDALONE_KIND = _planning.WEAPON_MOD_STANDALONE_KIND
 RARITY_OPTION_ORDER = _configuration.RARITY_OPTION_ORDER
 SUPPORTED_MAP_RUNE_TRADER_SELECTORS: dict[int, str] = {}
 SUPPORTED_MAP_SCROLL_TRADER_SELECTORS: dict[int, str] = {}
@@ -4423,12 +4423,10 @@ def resolve_agent_xy_from_step(
     return None
 
 
-def _is_common_crafting_material_model(model_id: object) -> bool:
-    return max(0, _safe_int(model_id, 0)) in COMMON_CRAFTING_MATERIAL_MODEL_IDS
+_is_common_crafting_material_model = _planning.is_common_crafting_material_model
 
 
-def _is_rare_crafting_material_model(model_id: object) -> bool:
-    return max(0, _safe_int(model_id, 0)) in RARE_CRAFTING_MATERIAL_MODEL_IDS
+_is_rare_crafting_material_model = _planning.is_rare_crafting_material_model
 
 
 _is_crafting_material_model = _configuration.is_crafting_material_model
@@ -4493,8 +4491,7 @@ def _normalize_item_type_filter_subcategory(category: object, raw_value: object)
     return _normalize_deposit_filter_subcategory(category, raw_value)
 
 
-def _get_material_batch_size_for_model(model_id: object) -> int:
-    return MATERIAL_BATCH_SIZE if _is_common_crafting_material_model(model_id) else 1
+_get_material_batch_size_for_model = _planning.material_batch_size
 
 
 def _should_defer_weapon_requirement_range_commit(min_value: object, max_value: object, *, input_active: bool) -> bool:
@@ -4688,18 +4685,7 @@ _normalize_after_purchase_action = _configuration.normalize_after_purchase_actio
 _normalize_rune_identifier = _configuration.normalize_rune_identifier
 
 
-def _normalize_rune_identifier_tuple(identifiers: object) -> tuple[str, ...]:
-    if not isinstance(identifiers, (list, tuple, set, frozenset)):
-        return ()
-    return tuple(
-        sorted(
-            {
-                safe_identifier
-                for identifier in identifiers
-                if (safe_identifier := _normalize_rune_identifier(identifier))
-            }
-        )
-    )
+_normalize_rune_identifier_tuple = _planning.normalize_rune_identifier_tuple
 
 
 _normalize_rune_trader_targets = _configuration.normalize_rune_trader_targets
@@ -5609,6 +5595,18 @@ class MerchantRulesWidget:
             rule_reference=lambda index, rule: self._format_sell_rule_reference(index, rule),
             equipment_destination=lambda item, rule: self._get_equippable_rule_destination(item, rule),
             explicit_destination=lambda item: self._get_explicit_sell_destination(item),
+        )
+        self._sale_planner = _planning.SalePlanner(
+            inventory_item_type=InventoryItemInfo,
+            choose_keep_subset=_choose_keep_subset,
+            sell_kind_labels=SELL_KIND_LABELS,
+            merchant_type_labels=MERCHANT_TYPE_LABELS,
+            model_label=lambda model_id: self._format_model_label(model_id),
+            rune_label=lambda identifier: self._get_rune_label(identifier),
+            item_label=lambda item: self._format_inventory_item_log_label(item),
+            rule_reference=lambda index, rule: self._format_sell_rule_reference(index, rule),
+            withdrawal_label=lambda item: self._get_xunlai_sell_withdraw_label(item),
+            diagnostic=lambda message: self._debug_log(message),
         )
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
@@ -13519,9 +13517,7 @@ class MerchantRulesWidget:
         return entry
 
     def _get_material_merchant_type_by_model(self, model_id: int) -> str:
-        if _is_rare_crafting_material_model(model_id):
-            return MERCHANT_TYPE_RARE_MATERIALS
-        return MERCHANT_TYPE_MATERIALS
+        return _planning.material_destination(model_id)
 
     def _get_sell_material_merchant_types(self, model_ids: list[int]) -> list[str]:
         merchant_types: list[str] = []
@@ -13536,14 +13532,10 @@ class MerchantRulesWidget:
         return [MERCHANT_TYPE_MATERIALS, MERCHANT_TYPE_RARE_MATERIALS]
 
     def _get_material_batch_size(self, model_id: int) -> int:
-        return _get_material_batch_size_for_model(model_id)
+        return _planning.material_batch_size(model_id)
 
     def _get_explicit_sell_destination(self, item: InventoryItemInfo) -> str:
-        if item.is_material:
-            return self._get_material_merchant_type_by_model(item.model_id)
-        if item.standalone_kind == RUNE_STANDALONE_KIND:
-            return MERCHANT_TYPE_RUNE_TRADER
-        return MERCHANT_TYPE_MERCHANT
+        return _planning.explicit_destination(item)
 
     def _get_merchant_essential(self, model_id: int) -> dict[str, object] | None:
         safe_model_id = max(0, _safe_int(model_id, 0))
@@ -17038,17 +17030,7 @@ class MerchantRulesWidget:
         return safe_current_raw, False
 
     def _get_equippable_rule_destination(self, item: InventoryItemInfo, rule: SellRule) -> str:
-        if rule.kind == SELL_KIND_WEAPONS:
-            if item.standalone_kind == WEAPON_MOD_STANDALONE_KIND:
-                return MERCHANT_TYPE_MERCHANT
-            if item.is_weapon_like:
-                return MERCHANT_TYPE_MERCHANT
-        elif rule.kind == SELL_KIND_ARMOR:
-            if rule.include_standalone_runes and item.standalone_kind == RUNE_STANDALONE_KIND:
-                return MERCHANT_TYPE_RUNE_TRADER
-            if item.is_armor_piece:
-                return MERCHANT_TYPE_MERCHANT
-        return ""
+        return _planning.equippable_destination(item, rule)
 
     def _get_protected_hit_reason(self, item: InventoryItemInfo, rule: SellRule) -> str:
         return self._protection_policy.get_protected_hit_reason(item, rule)
@@ -18239,137 +18221,15 @@ class MerchantRulesWidget:
     ) -> None:
         """Plan equipment sales while reserving protected, customized, and rune-trader items."""
 
-        candidate_label = SELL_KIND_LABELS[rule.kind]
-        rule_reference = self._format_sell_rule_reference(rule_index, rule)
-        reserved_rune_sell_identifiers = reserved_rune_sell_identifiers or set()
-        had_category_candidate = False
-        had_rarity_candidate = False
-        planned_sale_count = 0
-        category_candidates = 0
-        rarity_matches = 0
-        merchant_sales = 0
-        rune_trader_sales = 0
-        blocked_matches = 0
-
-        for item in items:
-            if item.item_id in claimed_item_ids:
-                continue
-
-            destination = self._get_equippable_rule_destination(item, rule)
-            if not destination:
-                continue
-            if (
-                rule.kind == SELL_KIND_ARMOR
-                and item.standalone_kind == RUNE_STANDALONE_KIND
-                and reserved_rune_sell_identifiers
-                and any(identifier in reserved_rune_sell_identifiers for identifier in item.rune_identifiers)
-            ):
-                continue
-
-            had_category_candidate = True
-            category_candidates += 1
-            if not self._rule_matches_selected_rarity(item, rule):
-                continue
-
-            had_rarity_candidate = True
-            rarity_matches += 1
-            if coords.get(destination) is None:
-                claimed_item_ids.add(item.item_id)
-                blocked_matches += 1
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "sell",
-                        destination,
-                        item.name,
-                        item.quantity,
-                        "skipped",
-                        (
-                            f"Blocked by {rule_reference}: "
-                            f"{MERCHANT_TYPE_LABELS[destination]} could not be found in the current map."
-                        ),
-                        model_id=item.model_id,
-                    )
-                )
-                continue
-
-            claimed_item_ids.add(item.item_id)
-            if destination == MERCHANT_TYPE_RUNE_TRADER:
-                plan.rune_trader_sales.append(
-                    PlannedTraderSale(
-                        item_id=item.item_id,
-                        model_id=item.model_id,
-                        label=self._format_inventory_item_log_label(item),
-                        expected_rune_identifiers=_normalize_rune_identifier_tuple(item.rune_identifiers),
-                    )
-                )
-            else:
-                plan.merchant_sell_item_ids.append(item.item_id)
-
-            reason_detail = (
-                " Standalone weapon upgrade component."
-                if rule.kind == SELL_KIND_WEAPONS and item.standalone_kind == WEAPON_MOD_STANDALONE_KIND
-                else (
-                    " Standalone rune / insignia item."
-                    if rule.kind == SELL_KIND_ARMOR and item.standalone_kind == RUNE_STANDALONE_KIND
-                    else ""
-                )
-            )
-            reason = f"Matched {rule_reference}.{reason_detail}"
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "sell",
-                    destination,
-                    item.name,
-                    item.quantity,
-                    "will execute",
-                    reason,
-                    model_id=item.model_id,
-                )
-            )
-            planned_sale_count += 1
-            if destination == MERCHANT_TYPE_RUNE_TRADER:
-                rune_trader_sales += 1
-            else:
-                merchant_sales += 1
-
-        if planned_sale_count > 0 or blocked_matches > 0:
-            self._debug_log(
-                f"{candidate_label}: category_candidates={category_candidates} rarity_matches={rarity_matches} "
-                f"merchant_sales={merchant_sales} rune_trader_sales={rune_trader_sales} "
-                f"blocked_matches={blocked_matches}"
-            )
-            return
-        if not had_category_candidate:
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "sell",
-                    MERCHANT_TYPE_MERCHANT,
-                    candidate_label,
-                    0,
-                    "skipped",
-                    (
-                        f"No matching inventory items are available to {rule_reference} "
-                        "after earlier actions and protections."
-                    ),
-                    status_hint=PREVIEW_STATUS_NO_MATCH,
-                )
-            )
-        elif not had_rarity_candidate:
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "sell",
-                    MERCHANT_TYPE_MERCHANT,
-                    candidate_label,
-                    0,
-                    "skipped",
-                    f"No matching items are available to {rule_reference} for its selected rarities.",
-                    status_hint=PREVIEW_STATUS_NO_MATCH,
-                )
-            )
-        self._debug_log(
-            f"{candidate_label}: category_candidates={category_candidates} rarity_matches={rarity_matches} "
-            f"merchant_sales={merchant_sales} rune_trader_sales={rune_trader_sales} "
-            f"blocked_matches={blocked_matches}"
+        self._sale_planner.plan_equippable_sales(
+            plan,
+            items,
+            rule,
+            rule_index,
+            claimed_item_ids,
+            coords,
+            reserved_rune_sell_identifiers,
+            policy=self._protection_policy,
         )
 
     def _plan_rune_sell_target_sales(
@@ -18381,121 +18241,13 @@ class MerchantRulesWidget:
         claimed_item_ids: set[int],
         coords: dict[str, tuple[float, float] | None],
     ) -> None:
-        rule_reference = self._format_sell_rule_reference(rule_index, rule)
-        rune_targets = _normalize_rune_sell_targets(getattr(rule, "rune_sell_targets", []))
-        if not rune_targets:
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "sell",
-                    MERCHANT_TYPE_RUNE_TRADER,
-                    SELL_KIND_LABELS[SELL_KIND_RUNE_TRADER_TARGET],
-                    0,
-                    PLAN_STATE_SKIPPED,
-                    f"{rule_reference} has no rune or insignia targets selected.",
-                )
-            )
-            return
-
-        rune_trader_coords = coords.get(MERCHANT_TYPE_RUNE_TRADER)
-        planned_sale_count = 0
-        blocked_matches = 0
-        kept_matches = 0
-
-        for rune_target in rune_targets:
-            target_identifier = _normalize_rune_identifier(rune_target.identifier)
-            if not target_identifier:
-                continue
-
-            target_label = self._get_rune_label(target_identifier)
-            matching_items = [
-                item
-                for item in items
-                if item.item_id not in claimed_item_ids
-                and item.standalone_kind == RUNE_STANDALONE_KIND
-                and target_identifier in item.rune_identifiers
-            ]
-            if not matching_items:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "sell",
-                        MERCHANT_TYPE_RUNE_TRADER,
-                        target_label,
-                        0,
-                        PLAN_STATE_SKIPPED,
-                        f"No matching standalone rune or insignia is available to {rule_reference}.",
-                        status_hint=PREVIEW_STATUS_NO_MATCH,
-                    )
-                )
-                continue
-
-            keep_count = max(0, int(rune_target.keep_count))
-            keep_ids = _choose_keep_subset(matching_items, keep_count)
-            for item in matching_items:
-                claimed_item_ids.add(item.item_id)
-                if item.item_id not in keep_ids:
-                    continue
-                kept_matches += 1
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "sell",
-                        MERCHANT_TYPE_RUNE_TRADER,
-                        item.name,
-                        item.quantity,
-                        PLAN_STATE_SKIPPED,
-                        f"Kept by {rule_reference}: reserved to satisfy keep count {keep_count}.",
-                        model_id=item.model_id,
-                    )
-                )
-
-            sell_items = [item for item in matching_items if item.item_id not in keep_ids]
-            if not sell_items:
-                continue
-
-            if rune_trader_coords is None:
-                blocked_matches += len(sell_items)
-                for item in sell_items:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "sell",
-                            MERCHANT_TYPE_RUNE_TRADER,
-                            item.name,
-                            item.quantity,
-                            PLAN_STATE_SKIPPED,
-                            (
-                                f"Blocked by {rule_reference}: "
-                                f"{MERCHANT_TYPE_LABELS[MERCHANT_TYPE_RUNE_TRADER]} could not be found in the current map."
-                            ),
-                            model_id=item.model_id,
-                        )
-                    )
-                continue
-
-            for item in sell_items:
-                plan.rune_trader_sales.append(
-                    PlannedTraderSale(
-                        item_id=item.item_id,
-                        model_id=item.model_id,
-                        label=target_label,
-                        expected_rune_identifiers=_normalize_rune_identifier_tuple(item.rune_identifiers),
-                    )
-                )
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "sell",
-                        MERCHANT_TYPE_RUNE_TRADER,
-                        item.name,
-                        item.quantity,
-                        PLAN_STATE_WILL_EXECUTE,
-                        f"Matched an exact rune or insignia target in {rule_reference}.",
-                        model_id=item.model_id,
-                    )
-                )
-                planned_sale_count += 1
-
-        self._debug_log(
-            f"{SELL_KIND_LABELS[SELL_KIND_RUNE_TRADER_TARGET]}: "
-            f"targets={len(rune_targets)} planned_sales={planned_sale_count} "
-            f"kept_matches={kept_matches} blocked_matches={blocked_matches}"
+        self._sale_planner.plan_rune_target_sales(
+            plan,
+            items,
+            rule,
+            rule_index,
+            claimed_item_ids,
+            coords,
         )
 
     def _get_inventory_model_counts(self, items: list[InventoryItemInfo]) -> dict[int, int]:
@@ -19969,69 +19721,11 @@ class MerchantRulesWidget:
         working_quantities: dict[int, int],
         keep_count: int,
     ) -> list[PlannedMaterialSale]:
-        keep_count = max(0, int(keep_count))
-        if not matching_items:
-            return []
-
-        rows: list[dict[str, object]] = []
-        reserved_total = 0
-        for item in matching_items:
-            quantity = max(0, int(working_quantities.get(item.item_id, 0)))
-            if quantity <= 0:
-                continue
-            batch_size = max(1, int(self._get_material_batch_size(item.model_id)))
-            reserved = quantity % batch_size
-            reserved_total += reserved
-            rows.append(
-                {
-                    "item": item,
-                    "quantity": quantity,
-                    "reserved": reserved,
-                    "batch_size": batch_size,
-                    "merchant_type": self._get_material_merchant_type_by_model(item.model_id),
-                }
-            )
-
-        extra_keep_needed = max(0, keep_count - reserved_total)
-        rows.sort(key=lambda entry: int(entry["quantity"]))
-        for row in rows:
-            if extra_keep_needed <= 0:
-                break
-            quantity = int(row["quantity"])
-            reserved = int(row["reserved"])
-            batch_size = max(1, int(row["batch_size"]))
-            while extra_keep_needed > 0 and (reserved + batch_size) <= quantity:
-                reserved += batch_size
-                extra_keep_needed -= batch_size
-            row["reserved"] = reserved
-
-        planned_sales: list[PlannedMaterialSale] = []
-        for row in rows:
-            item = row["item"]
-            if not isinstance(item, InventoryItemInfo):
-                continue
-            quantity = int(row["quantity"])
-            reserved = int(row["reserved"])
-            batch_size = max(1, int(row["batch_size"]))
-            merchant_type = str(row["merchant_type"])
-            quantity_to_sell = max(0, quantity - reserved)
-            batches_to_sell = quantity_to_sell // batch_size
-            if batches_to_sell <= 0:
-                continue
-            sell_quantity = batches_to_sell * batch_size
-            working_quantities[item.item_id] = max(0, quantity - sell_quantity)
-            planned_sales.append(
-                PlannedMaterialSale(
-                    merchant_type=merchant_type,
-                    item_id=item.item_id,
-                    model_id=item.model_id,
-                    label=self._format_inventory_item_log_label(item),
-                    batches_to_sell=batches_to_sell,
-                    quantity_to_sell=sell_quantity,
-                    batch_size=batch_size,
-                )
-            )
-        return planned_sales
+        return self._sale_planner.plan_material_sales(
+            matching_items,
+            working_quantities,
+            keep_count,
+        )
 
     def _collect_enabled_sell_rules(self) -> list[tuple[int, SellRule]]:
         enabled_sell_rules: list[tuple[int, SellRule]] = []
@@ -22029,480 +21723,21 @@ class MerchantRulesWidget:
             self._plan_destroy_actions(plan, items, enabled_destroy_rules, enabled_sell_rules, claimed_item_ids)
         if not cleanup_only and not consumable_crafter_only:
             self._plan_salvage_actions(plan, items, enabled_sell_rules, claimed_item_ids)
-        material_quantities = {
-            item.item_id: item.quantity
-            for item in items
-            if item.is_material
-        }
-
-        if not consumable_crafter_only and (supported_map or storage_context_ready):
-            for item in items:
-                if item.item_id in claimed_item_ids:
-                    continue
-                hard_protection = self._get_hard_protection_hit(item, enabled_sell_rules)
-                if hard_protection is None:
-                    continue
-                destination, detail = hard_protection
-                claimed_item_ids.add(item.item_id)
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "sell",
-                        destination,
-                        item.name,
-                        item.quantity,
-                        PLAN_STATE_SKIPPED,
-                        detail,
-                        model_id=item.model_id,
-                    )
-                )
-
-        reserved_rune_sell_identifiers = {
-            target.identifier
-            for _exact_rule_index, exact_rule in sell_action_rules
-            if exact_rule.kind == SELL_KIND_RUNE_TRADER_TARGET
-            for target in _normalize_rune_sell_targets(getattr(exact_rule, "rune_sell_targets", []))
-            if target.identifier
-        }
-        for rule_index, sell_rule in sell_action_rules:
-            merchant_coords = coords.get(sell_rule.merchant_type)
-            if not supported_map and not storage_context_ready:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        action_type="sell",
-                        merchant_type=sell_rule.merchant_type,
-                        label=SELL_KIND_LABELS[sell_rule.kind],
-                        quantity=0,
-                        state="skipped",
-                        reason=supported_reason,
-                    )
-                )
-                continue
-
-            rule_reference = self._format_sell_rule_reference(rule_index, sell_rule)
-            if sell_rule.kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-                self._plan_equippable_rule_sales(
-                    plan=plan,
-                    items=items,
-                    rule=sell_rule,
-                    rule_index=rule_index,
-                    claimed_item_ids=claimed_item_ids,
-                    coords=coords,
-                    reserved_rune_sell_identifiers=reserved_rune_sell_identifiers,
-                )
-                continue
-
-            if sell_rule.kind == SELL_KIND_RUNE_TRADER_TARGET:
-                self._plan_rune_sell_target_sales(
-                    plan=plan,
-                    items=items,
-                    rule=sell_rule,
-                    rule_index=rule_index,
-                    claimed_item_ids=claimed_item_ids,
-                    coords=coords,
-                )
-                continue
-
-            if sell_rule.kind == SELL_KIND_COMMON_MATERIALS:
-                material_targets = _normalize_whitelist_targets(getattr(sell_rule, "whitelist_targets", []))
-                if not material_targets:
-                    plan.entries.append(
-                        ExecutionPlanEntry("sell", sell_rule.merchant_type, SELL_KIND_LABELS[sell_rule.kind], 0, "skipped", "No material model whitelist configured.")
-                    )
-                    continue
-
-                for material_target in material_targets:
-                    material_model_id = max(0, int(material_target.model_id))
-                    target_keep_count = max(0, int(material_target.keep_count))
-                    if target_keep_count > 0:
-                        storage_keep_available = self._get_xunlai_storage_keep_available(
-                            sell_rule,
-                            material_model_id,
-                            storage_items,
-                            xunlai_sell_material_storage_items,
-                        )
-                        target_keep_count = max(0, target_keep_count - storage_keep_available)
-                    target_label = self._format_model_label(material_model_id)
-                    matching_items = [
-                        item
-                        for item in items
-                        if item.item_id not in claimed_item_ids
-                        and item.is_material
-                        and item.model_id == material_model_id
-                        and int(material_quantities.get(item.item_id, 0)) > 0
-                    ]
-                    if not matching_items:
-                        plan.entries.append(
-                            ExecutionPlanEntry("sell", sell_rule.merchant_type, target_label, 0, "skipped", "No matching material items found.")
-                        )
-                        continue
-
-                    working_quantities = {
-                        item.item_id: max(0, int(material_quantities.get(item.item_id, item.quantity)))
-                        for item in matching_items
-                    }
-                    material_sales = self._plan_material_sales(matching_items, working_quantities, target_keep_count)
-                    for item in matching_items:
-                        claimed_item_ids.add(item.item_id)
-
-                    sold_quantities_by_item_id = {
-                        sale.item_id: max(0, int(sale.quantity_to_sell))
-                        for sale in material_sales
-                    }
-                    for sale in material_sales:
-                        sale_reason = (
-                            f"{sale.batches_to_sell} full trader batch(es) of {sale.batch_size}."
-                            if int(sale.batch_size) > 1
-                            else f"{sale.quantity_to_sell} individual trade(s)."
-                        )
-                        if coords.get(sale.merchant_type) is None:
-                            plan.entries.append(
-                                ExecutionPlanEntry(
-                                    "sell",
-                                    sale.merchant_type,
-                                    sale.label,
-                                    sale.quantity_to_sell,
-                                    PLAN_STATE_SKIPPED,
-                                    (
-                                        f"Blocked by {rule_reference}: "
-                                        f"{MERCHANT_TYPE_LABELS[sale.merchant_type]} could not be found in the current map."
-                                    ),
-                                    model_id=sale.model_id,
-                                )
-                            )
-                        else:
-                            plan.material_sales.append(sale)
-                            plan.entries.append(
-                                ExecutionPlanEntry(
-                                    "sell",
-                                    sale.merchant_type,
-                                    sale.label,
-                                    sale.quantity_to_sell,
-                                    PLAN_STATE_WILL_EXECUTE,
-                                    sale_reason,
-                                    model_id=sale.model_id,
-                                )
-                            )
-                    fallback_merchant_coords = coords.get(MERCHANT_TYPE_MERCHANT)
-                    for item in matching_items:
-                        remaining_quantity = max(0, int(working_quantities.get(item.item_id, 0)))
-                        if remaining_quantity <= 0:
-                            continue
-                        sold_quantity = sold_quantities_by_item_id.get(item.item_id, 0)
-                        item_merchant_type = self._get_material_merchant_type_by_model(item.model_id)
-                        batch_size = max(1, int(self._get_material_batch_size(item.model_id)))
-                        if (
-                            target_keep_count <= 0
-                            and item_merchant_type == MERCHANT_TYPE_MATERIALS
-                            and remaining_quantity < batch_size
-                        ):
-                            merchant_reason = (
-                                "Merchant fallback after selling full trader batches; leftover common-material quantity is below the trader batch size."
-                                if sold_quantity > 0
-                                else "Merchant fallback because the common-material quantity is below the trader batch size."
-                            )
-                            if fallback_merchant_coords is None:
-                                plan.entries.append(
-                                    ExecutionPlanEntry(
-                                        "sell",
-                                        MERCHANT_TYPE_MERCHANT,
-                                        item.name,
-                                        remaining_quantity,
-                                        PLAN_STATE_SKIPPED,
-                                        (
-                                            f"Blocked by {rule_reference}: "
-                                            f"{MERCHANT_TYPE_LABELS[MERCHANT_TYPE_MERCHANT]} could not be found in the current map."
-                                        ),
-                                        model_id=item.model_id,
-                                    )
-                                )
-                            else:
-                                plan.merchant_sell_item_ids.append(item.item_id)
-                                plan.entries.append(
-                                    ExecutionPlanEntry(
-                                        "sell",
-                                        MERCHANT_TYPE_MERCHANT,
-                                        item.name,
-                                        remaining_quantity,
-                                        PLAN_STATE_WILL_EXECUTE,
-                                        merchant_reason,
-                                        model_id=item.model_id,
-                                    )
-                                )
-                            continue
-                        keep_reason = (
-                            (
-                                f"Kept by {rule_reference}: {remaining_quantity} unit(s) remain after selling full trader batches."
-                                if batch_size > 1
-                                else f"Kept by {rule_reference}: {remaining_quantity} unit(s) remain after selling individual trades."
-                            )
-                            if sold_quantity > 0
-                            else (
-                                f"Kept by {rule_reference}: no tradable full trader batches remained after keep count."
-                                if batch_size > 1
-                                else f"Kept by {rule_reference}: reserved to satisfy keep count {target_keep_count}."
-                            )
-                        )
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "sell",
-                                item_merchant_type,
-                                item.name,
-                                remaining_quantity,
-                                PLAN_STATE_SKIPPED,
-                                keep_reason,
-                                model_id=item.model_id,
-                            )
-                        )
-                continue
-
-            if sell_rule.kind == SELL_KIND_EXPLICIT_MODELS:
-                explicit_targets = _normalize_whitelist_targets(getattr(sell_rule, "whitelist_targets", []))
-                if not explicit_targets:
-                    plan.entries.append(
-                        ExecutionPlanEntry("sell", sell_rule.merchant_type, SELL_KIND_LABELS[sell_rule.kind], 0, "skipped", "No explicit model whitelist configured.")
-                    )
-                    continue
-
-                for explicit_target in explicit_targets:
-                    target_model_id = max(0, int(explicit_target.model_id))
-                    target_keep_count = max(0, int(explicit_target.keep_count))
-                    if target_keep_count > 0:
-                        storage_keep_available = self._get_xunlai_storage_keep_available(
-                            sell_rule,
-                            target_model_id,
-                            storage_items,
-                            xunlai_sell_material_storage_items,
-                        )
-                        target_keep_count = max(0, target_keep_count - storage_keep_available)
-                    target_label = self._format_model_label(target_model_id)
-                    matching_items = [
-                        item
-                        for item in items
-                        if item.item_id not in claimed_item_ids and item.model_id == target_model_id
-                    ]
-                    if not matching_items:
-                        plan.entries.append(
-                            ExecutionPlanEntry("sell", sell_rule.merchant_type, target_label, 0, "skipped", "No matching inventory items found.")
-                        )
-                        continue
-
-                    keep_ids = _choose_keep_subset(matching_items, target_keep_count)
-                    for item in matching_items:
-                        claimed_item_ids.add(item.item_id)
-                        if item.item_id not in keep_ids:
-                            continue
-                        item_destination = self._get_explicit_sell_destination(item)
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "sell",
-                                item_destination,
-                                item.name,
-                                item.quantity,
-                                PLAN_STATE_SKIPPED,
-                                f"Kept by {rule_reference}: reserved to satisfy keep count {target_keep_count}.",
-                                model_id=item.model_id,
-                            )
-                        )
-
-                    sell_items = [item for item in matching_items if item.item_id not in keep_ids]
-                    if not sell_items:
-                        continue
-
-                    sell_items_by_destination: dict[str, list[InventoryItemInfo]] = {}
-                    for item in sell_items:
-                        item_destination = self._get_explicit_sell_destination(item)
-                        sell_items_by_destination.setdefault(item_destination, []).append(item)
-
-                    for destination, destination_items in sell_items_by_destination.items():
-                        if destination == MERCHANT_TYPE_MERCHANT:
-                            merchant_coords = coords.get(MERCHANT_TYPE_MERCHANT)
-                            if merchant_coords is None:
-                                for item in destination_items:
-                                    plan.entries.append(
-                                        ExecutionPlanEntry(
-                                            "sell",
-                                            MERCHANT_TYPE_MERCHANT,
-                                            item.name,
-                                            item.quantity,
-                                            PLAN_STATE_SKIPPED,
-                                            (
-                                                f"Blocked by {rule_reference}: "
-                                                f"{MERCHANT_TYPE_LABELS[MERCHANT_TYPE_MERCHANT]} could not be "
-                                                "found in the current map."
-                                            ),
-                                            model_id=item.model_id,
-                                        )
-                                    )
-                                continue
-
-                            for item in destination_items:
-                                plan.merchant_sell_item_ids.append(item.item_id)
-                                plan.entries.append(
-                                    ExecutionPlanEntry(
-                                        "sell",
-                                        MERCHANT_TYPE_MERCHANT,
-                                        item.name,
-                                        item.quantity,
-                                        PLAN_STATE_WILL_EXECUTE,
-                                        f"Matched {rule_reference}.",
-                                        model_id=item.model_id,
-                                    )
-                                )
-                            continue
-
-                        if destination == MERCHANT_TYPE_RUNE_TRADER:
-                            rune_trader_coords = coords.get(MERCHANT_TYPE_RUNE_TRADER)
-                            if rune_trader_coords is None:
-                                for item in destination_items:
-                                    plan.entries.append(
-                                        ExecutionPlanEntry(
-                                            "sell",
-                                            MERCHANT_TYPE_RUNE_TRADER,
-                                            item.name,
-                                            item.quantity,
-                                            PLAN_STATE_SKIPPED,
-                                            (
-                                                f"Blocked by {rule_reference}: "
-                                                f"{MERCHANT_TYPE_LABELS[MERCHANT_TYPE_RUNE_TRADER]} could not be found in the current map."
-                                            ),
-                                            model_id=item.model_id,
-                                        )
-                                    )
-                                continue
-
-                            for item in destination_items:
-                                plan.rune_trader_sales.append(
-                                    PlannedTraderSale(
-                                        item_id=item.item_id,
-                                        model_id=item.model_id,
-                                        label=self._format_inventory_item_log_label(item),
-                                        expected_rune_identifiers=_normalize_rune_identifier_tuple(item.rune_identifiers),
-                                    )
-                                )
-                                plan.entries.append(
-                                    ExecutionPlanEntry(
-                                        "sell",
-                                        MERCHANT_TYPE_RUNE_TRADER,
-                                        item.name,
-                                        item.quantity,
-                                        PLAN_STATE_WILL_EXECUTE,
-                                        f"Matched {rule_reference}: standalone rune or insignia.",
-                                        model_id=item.model_id,
-                                    )
-                                )
-                            continue
-
-                        material_coords = coords.get(destination)
-                        working_quantities = {
-                            item.item_id: max(0, int(item.quantity))
-                            for item in destination_items
-                        }
-                        material_sales: list[PlannedMaterialSale] = []
-                        if material_coords is not None:
-                            material_sales = self._plan_material_sales(destination_items, working_quantities, 0)
-
-                        sold_quantities_by_item_id = {
-                            sale.item_id: max(0, int(sale.quantity_to_sell))
-                            for sale in material_sales
-                        }
-                        for sale in material_sales:
-                            plan.material_sales.append(sale)
-                            sale_reason = (
-                                f"{sale.batches_to_sell} full trader batch(es) of {sale.batch_size}."
-                                if int(sale.batch_size) > 1
-                                else f"{sale.quantity_to_sell} individual trade(s)."
-                            )
-                            plan.entries.append(
-                                ExecutionPlanEntry(
-                                    "sell",
-                                    sale.merchant_type,
-                                    sale.label,
-                                    sale.quantity_to_sell,
-                                    PLAN_STATE_WILL_EXECUTE,
-                                    sale_reason,
-                                    model_id=sale.model_id,
-                                )
-                            )
-
-                        for item in destination_items:
-                            remaining_quantity = max(0, int(working_quantities.get(item.item_id, 0)))
-                            if remaining_quantity <= 0:
-                                continue
-
-                            batch_size = max(1, int(self._get_material_batch_size(item.model_id)))
-                            sold_quantity = sold_quantities_by_item_id.get(item.item_id, 0)
-                            if destination == MERCHANT_TYPE_MATERIALS and remaining_quantity < batch_size:
-                                merchant_coords = coords.get(MERCHANT_TYPE_MERCHANT)
-                                merchant_reason = (
-                                    "Merchant fallback after selling full trader batches; leftover common-material quantity is below the trader batch size."
-                                    if sold_quantity > 0
-                                    else "Merchant fallback because the common-material quantity is below the trader batch size."
-                                )
-                                if merchant_coords is None:
-                                    plan.entries.append(
-                                        ExecutionPlanEntry(
-                                            "sell",
-                                            MERCHANT_TYPE_MERCHANT,
-                                            item.name,
-                                            remaining_quantity,
-                                            PLAN_STATE_SKIPPED,
-                                            (
-                                                f"Blocked by {rule_reference}: "
-                                                f"{MERCHANT_TYPE_LABELS[MERCHANT_TYPE_MERCHANT]} could not be "
-                                                "found in the current map."
-                                            ),
-                                            model_id=item.model_id,
-                                        )
-                                    )
-                                else:
-                                    plan.merchant_sell_item_ids.append(item.item_id)
-                                    plan.entries.append(
-                                        ExecutionPlanEntry(
-                                            "sell",
-                                            MERCHANT_TYPE_MERCHANT,
-                                            item.name,
-                                            remaining_quantity,
-                                            PLAN_STATE_WILL_EXECUTE,
-                                            merchant_reason,
-                                            model_id=item.model_id,
-                                        )
-                                    )
-                                continue
-
-                            if material_coords is None:
-                                plan.entries.append(
-                                    ExecutionPlanEntry(
-                                        "sell",
-                                        destination,
-                                        item.name,
-                                        remaining_quantity,
-                                        PLAN_STATE_SKIPPED,
-                                        (
-                                            f"Blocked by {rule_reference}: "
-                                            f"{MERCHANT_TYPE_LABELS[destination]} could not be found in the current map."
-                                        ),
-                                        model_id=item.model_id,
-                                    )
-                                )
-                                continue
-
-                            keep_reason = (
-                                f"Kept by {rule_reference}: {remaining_quantity} unit(s) remain after selling full trader batches."
-                                if batch_size > 1
-                                else f"Kept by {rule_reference}: {remaining_quantity} unit(s) remain after individual trades."
-                            )
-                            plan.entries.append(
-                                ExecutionPlanEntry(
-                                    "sell",
-                                    destination,
-                                    item.name,
-                                    remaining_quantity,
-                                    PLAN_STATE_SKIPPED,
-                                    keep_reason,
-                                    model_id=item.model_id,
-                                )
-                            )
-                continue
+        self._sale_planner.allocate_inventory_sales(
+            plan,
+            items,
+            enabled_sell_rules,
+            sell_action_rules,
+            claimed_item_ids,
+            coords,
+            storage_items,
+            xunlai_sell_material_storage_items,
+            policy=self._protection_policy,
+            consumable_crafter_only=consumable_crafter_only,
+            supported_map=supported_map,
+            storage_context_ready=storage_context_ready,
+            supported_reason=supported_reason,
+        )
 
         has_xunlai_sell_withdrawals = False
         if needs_xunlai_sell_storage_context:
@@ -25769,113 +25004,6 @@ class MerchantRulesWidget:
         total.completed += completed_quantity
         total.unavailable += max(0, safe_requested_quantity - completed_quantity)
 
-    def _sum_item_quantities(self, items: list[InventoryItemInfo]) -> int:
-        return sum(max(1, int(item.quantity)) for item in items if int(item.item_id) > 0)
-
-    def _get_xunlai_storage_keep_available(
-        self,
-        rule: SellRule,
-        model_id: int,
-        regular_storage_items: list[InventoryItemInfo],
-        material_storage_items: list[InventoryItemInfo],
-    ) -> int:
-        if not bool(getattr(rule, "sell_from_xunlai", False)):
-            return 0
-        safe_model_id = max(0, int(model_id))
-        if safe_model_id <= 0:
-            return 0
-        source_items = list(regular_storage_items)
-        if bool(getattr(rule, "include_material_storage", False)) and _sell_rule_can_include_material_storage(rule):
-            source_items = [*material_storage_items, *source_items]
-        return self._sum_item_quantities(
-            [item for item in source_items if int(item.model_id) == safe_model_id]
-        )
-
-    def _build_xunlai_storage_keep_reservations(
-        self,
-        source_items: list[tuple[InventoryItemInfo, str]],
-        keep_count: int,
-    ) -> tuple[dict[int, int], int]:
-        remaining_keep = max(0, int(keep_count))
-        if remaining_keep <= 0:
-            return {}, 0
-
-        reservations: dict[int, int] = {}
-        reserved_total = 0
-        reserve_order = sorted(
-            source_items,
-            key=lambda pair: (
-                0 if str(pair[1]) == "Material Storage" else 1,
-                int(pair[0].item_id),
-            ),
-        )
-        for item, _source_label in reserve_order:
-            if remaining_keep <= 0:
-                break
-            item_quantity = max(1, int(item.quantity))
-            reserve_quantity = min(item_quantity, remaining_keep)
-            if reserve_quantity <= 0:
-                continue
-            reservations[int(item.item_id)] = reserve_quantity
-            reserved_total += reserve_quantity
-            remaining_keep -= reserve_quantity
-        return reservations, reserved_total
-
-    def _clone_xunlai_sell_rule_for_pass(
-        self,
-        rule: SellRule,
-        *,
-        model_keep_overrides: dict[tuple[str, int], int],
-        rune_keep_overrides: dict[tuple[str, str], int],
-        include_equippable: bool,
-    ) -> SellRule | None:
-        safe_rule_id = _normalize_rule_id(getattr(rule, "rule_id", ""))
-        cloned_rule = replace(rule)
-        cloned_rule.sell_from_xunlai = False
-        cloned_rule.include_material_storage = False
-
-        if rule.kind in (SELL_KIND_COMMON_MATERIALS, SELL_KIND_EXPLICIT_MODELS):
-            next_targets: list[WhitelistTarget] = []
-            for target in _normalize_whitelist_targets(getattr(rule, "whitelist_targets", [])):
-                key = (safe_rule_id, int(target.model_id))
-                if key not in model_keep_overrides:
-                    continue
-                next_targets.append(
-                    WhitelistTarget(
-                        model_id=int(target.model_id),
-                        keep_count=max(0, int(model_keep_overrides[key])),
-                        deposit_to_storage=False,
-                    )
-                )
-            if not next_targets:
-                return None
-            cloned_rule.whitelist_targets = next_targets
-            cloned_rule.model_ids = _get_whitelist_target_model_ids(next_targets)
-            cloned_rule.keep_count = 0
-            return cloned_rule
-
-        if rule.kind == SELL_KIND_RUNE_TRADER_TARGET:
-            next_targets: list[RuneSellTarget] = []
-            for target in _normalize_rune_sell_targets(getattr(rule, "rune_sell_targets", [])):
-                key = (safe_rule_id, _normalize_rune_identifier(target.identifier))
-                if key not in rune_keep_overrides:
-                    continue
-                next_targets.append(
-                    RuneSellTarget(
-                        identifier=key[1],
-                        keep_count=max(0, int(rune_keep_overrides[key])),
-                    )
-                )
-            if not next_targets:
-                return None
-            cloned_rule.rune_sell_targets = next_targets
-            return cloned_rule
-
-        if rule.kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR) and include_equippable:
-            return cloned_rule
-
-        return None
-
     def _build_xunlai_sell_subplan(self, rules: list[SellRule]) -> PlanResult:
         original_buy_rules = self.buy_rules
         original_sell_rules = self.sell_rules
@@ -25943,103 +25071,6 @@ class MerchantRulesWidget:
             return self._format_model_label_short(int(item.model_id))
         return str(item.name or f"Item {int(item.item_id)}")
 
-    def _append_xunlai_protected_sell_withdraw_preview_entries(
-        self,
-        entries: list[ExecutionPlanEntry] | None,
-        source_items: list[tuple[InventoryItemInfo, str, str]],
-        *,
-        rule_reference: str,
-    ) -> None:
-        if entries is None:
-            return
-        for item, source_label, protection_reason in source_items:
-            entries.append(
-                ExecutionPlanEntry(
-                    "withdraw",
-                    MERCHANT_TYPE_STORAGE,
-                    self._get_xunlai_sell_withdraw_label(item),
-                    max(1, int(item.quantity)),
-                    PLAN_STATE_SKIPPED,
-                    (
-                        f"Will remain in {source_label} because {rule_reference} protects it from sale: "
-                        f"{protection_reason}"
-                    ),
-                    model_id=int(item.model_id),
-                    status_hint=PREVIEW_STATUS_PROTECTED,
-                )
-            )
-
-    def _append_xunlai_sell_withdrawals(
-        self,
-        transfers: list[PlannedStorageTransfer],
-        source_items: list[tuple[InventoryItemInfo, str]],
-        *,
-        quantity: int,
-        rule_reference: str,
-        key: str,
-        reserved_quantities: dict[int, int] | None = None,
-    ) -> None:
-        remaining = max(0, int(quantity))
-        if remaining <= 0:
-            return
-
-        reserved_quantities = reserved_quantities or {}
-        for item, source_label in source_items:
-            if remaining <= 0:
-                break
-            source_quantity = max(1, int(item.quantity))
-            reserved_quantity = max(0, int(reserved_quantities.get(int(item.item_id), 0)))
-            available_quantity = max(0, source_quantity - reserved_quantity)
-            move_quantity = min(remaining, available_quantity)
-            if move_quantity <= 0:
-                continue
-            transfers.append(
-                PlannedStorageTransfer(
-                    direction=STORAGE_TRANSFER_WITHDRAW,
-                    key=key,
-                    label=self._get_xunlai_sell_withdraw_label(item),
-                    item_id=int(item.item_id),
-                    quantity=move_quantity,
-                    model_id=int(item.model_id),
-                    reason=f"{rule_reference}: Sell from Xunlai too ({source_label}).",
-                )
-            )
-            remaining -= move_quantity
-
-    def _xunlai_model_target_has_sell_service(
-        self,
-        rule: SellRule,
-        model_id: int,
-        source_items: list[tuple[InventoryItemInfo, str]],
-        coords: dict[str, tuple[float, float] | None],
-        *,
-        withdraw_quantity: int,
-        keep_count: int,
-    ) -> bool:
-        if rule.kind == SELL_KIND_COMMON_MATERIALS:
-            destination = self._get_material_merchant_type_by_model(model_id)
-            if coords.get(destination) is not None:
-                return True
-            return bool(
-                destination == MERCHANT_TYPE_MATERIALS
-                and max(0, int(keep_count)) <= 0
-                and max(0, int(withdraw_quantity)) < max(1, int(self._get_material_batch_size(model_id)))
-                and coords.get(MERCHANT_TYPE_MERCHANT) is not None
-            )
-
-        for item, _source_label in source_items:
-            destination = self._get_explicit_sell_destination(item)
-            if coords.get(destination) is not None:
-                return True
-            if (
-                destination == MERCHANT_TYPE_MATERIALS
-                and max(0, int(keep_count)) <= 0
-                and max(0, int(withdraw_quantity)) < max(1, int(self._get_material_batch_size(item.model_id)))
-                and coords.get(MERCHANT_TYPE_MERCHANT) is not None
-            ):
-                return True
-        return False
-
     def _plan_xunlai_sell_withdrawals(
         self,
         enabled_xunlai_rules: list[tuple[int, SellRule]],
@@ -26057,214 +25088,16 @@ class MerchantRulesWidget:
         """
 
         all_enabled_sell_rules = self._collect_enabled_sell_rules()
-        transfers: list[PlannedStorageTransfer] = []
-        model_keep_overrides: dict[tuple[str, int], int] = {}
-        rune_keep_overrides: dict[tuple[str, str], int] = {}
-        equippable_rule_ids: set[str] = set()
-        claimed_storage_item_ids: set[int] = set()
-
-        for rule_index, rule in enabled_xunlai_rules:
-            safe_rule_id = _normalize_rule_id(getattr(rule, "rule_id", ""))
-            if not safe_rule_id:
-                continue
-            rule_reference = self._format_sell_rule_reference(rule_index, rule)
-
-            regular_sources = [
-                (item, "regular Xunlai item panes")
-                for item in regular_storage_items
-                if int(item.item_id) not in claimed_storage_item_ids
-            ]
-            material_sources = [
-                (item, "Material Storage")
-                for item in material_storage_items
-                if bool(getattr(rule, "include_material_storage", False))
-                and _sell_rule_can_include_material_storage(rule)
-                and int(item.item_id) not in claimed_storage_item_ids
-                and int(item.model_id) in ALL_CRAFTING_MATERIAL_MODEL_IDS
-            ]
-
-            if rule.kind in (SELL_KIND_COMMON_MATERIALS, SELL_KIND_EXPLICIT_MODELS):
-                for target in _normalize_whitelist_targets(getattr(rule, "whitelist_targets", [])):
-                    target_model_id = max(0, int(target.model_id))
-                    if target_model_id <= 0:
-                        continue
-                    if rule.kind == SELL_KIND_COMMON_MATERIALS and target_model_id not in ALL_CRAFTING_MATERIAL_MODEL_IDS:
-                        continue
-
-                    candidate_sources = [
-                        (item, source_label)
-                        for item, source_label in [*regular_sources, *material_sources]
-                        if int(item.model_id) == target_model_id
-                    ]
-                    matching_sources: list[tuple[InventoryItemInfo, str]] = []
-                    protected_sources: list[tuple[InventoryItemInfo, str, str]] = []
-                    for item, source_label in candidate_sources:
-                        hard_protection = self._get_hard_protection_hit(item, all_enabled_sell_rules)
-                        if hard_protection is not None:
-                            _destination, protection_reason = hard_protection
-                            protected_sources.append((item, source_label, protection_reason))
-                            claimed_storage_item_ids.add(int(item.item_id))
-                            continue
-                        matching_sources.append((item, source_label))
-                    self._append_xunlai_protected_sell_withdraw_preview_entries(
-                        protected_preview_entries,
-                        protected_sources,
-                        rule_reference=rule_reference,
-                    )
-                    if not matching_sources:
-                        continue
-
-                    current_matching_items = [
-                        item
-                        for item in current_items
-                        if int(item.model_id) == target_model_id
-                    ]
-                    current_quantity = self._sum_item_quantities(current_matching_items)
-                    storage_quantity = self._sum_item_quantities([item for item, _source_label in matching_sources])
-                    destination = (
-                        self._get_material_merchant_type_by_model(target_model_id)
-                        if rule.kind == SELL_KIND_COMMON_MATERIALS
-                        else self._get_explicit_sell_destination(matching_sources[0][0])
-                    )
-                    storage_keep_reservations, storage_reserved_keep = self._build_xunlai_storage_keep_reservations(
-                        matching_sources,
-                        max(0, int(target.keep_count)),
-                    )
-                    inventory_keep_count = max(0, int(target.keep_count) - storage_reserved_keep)
-                    withdraw_quantity = max(0, storage_quantity - storage_reserved_keep)
-                    for item, _source_label in matching_sources:
-                        claimed_storage_item_ids.add(int(item.item_id))
-                    if withdraw_quantity <= 0:
-                        continue
-                    if current_quantity + withdraw_quantity <= inventory_keep_count:
-                        continue
-                    if not self._xunlai_model_target_has_sell_service(
-                        rule,
-                        target_model_id,
-                        matching_sources,
-                        coords,
-                        withdraw_quantity=withdraw_quantity,
-                        keep_count=inventory_keep_count,
-                    ):
-                        continue
-
-                    model_keep_overrides[(safe_rule_id, target_model_id)] = inventory_keep_count
-                    self._append_xunlai_sell_withdrawals(
-                        transfers,
-                        matching_sources,
-                        quantity=withdraw_quantity,
-                        rule_reference=rule_reference,
-                        key=f"xunlai_sell:{safe_rule_id}:model:{target_model_id}",
-                        reserved_quantities=storage_keep_reservations,
-                    )
-                continue
-
-            if rule.kind == SELL_KIND_RUNE_TRADER_TARGET:
-                if coords.get(MERCHANT_TYPE_RUNE_TRADER) is None:
-                    continue
-                for target in _normalize_rune_sell_targets(getattr(rule, "rune_sell_targets", [])):
-                    target_identifier = _normalize_rune_identifier(target.identifier)
-                    if not target_identifier:
-                        continue
-                    candidate_sources = [
-                        (item, source_label)
-                        for item, source_label in regular_sources
-                        if item.standalone_kind == RUNE_STANDALONE_KIND
-                        and target_identifier in item.rune_identifiers
-                    ]
-                    matching_sources: list[tuple[InventoryItemInfo, str]] = []
-                    protected_sources: list[tuple[InventoryItemInfo, str, str]] = []
-                    for item, source_label in candidate_sources:
-                        hard_protection = self._get_hard_protection_hit(item, all_enabled_sell_rules)
-                        if hard_protection is not None:
-                            _destination, protection_reason = hard_protection
-                            protected_sources.append((item, source_label, protection_reason))
-                            claimed_storage_item_ids.add(int(item.item_id))
-                            continue
-                        matching_sources.append((item, source_label))
-                    self._append_xunlai_protected_sell_withdraw_preview_entries(
-                        protected_preview_entries,
-                        protected_sources,
-                        rule_reference=rule_reference,
-                    )
-                    if not matching_sources:
-                        continue
-
-                    current_matching_items = [
-                        item
-                        for item in current_items
-                        if item.standalone_kind == RUNE_STANDALONE_KIND
-                        and target_identifier in item.rune_identifiers
-                    ]
-                    current_quantity = self._sum_item_quantities(current_matching_items)
-                    storage_quantity = self._sum_item_quantities([item for item, _source_label in matching_sources])
-                    withdraw_quantity = max(
-                        0,
-                        min(
-                            storage_quantity,
-                            current_quantity + storage_quantity - max(0, int(target.keep_count)),
-                        ),
-                    )
-                    for item, _source_label in matching_sources:
-                        claimed_storage_item_ids.add(int(item.item_id))
-                    if withdraw_quantity <= 0:
-                        continue
-                    rune_keep_overrides[(safe_rule_id, target_identifier)] = current_quantity
-                    self._append_xunlai_sell_withdrawals(
-                        transfers,
-                        matching_sources,
-                        quantity=withdraw_quantity,
-                        rule_reference=rule_reference,
-                        key=f"xunlai_sell:{safe_rule_id}:rune:{target_identifier}",
-                    )
-                continue
-
-            if rule.kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-                matching_sources: list[tuple[InventoryItemInfo, str]] = []
-                for item, source_label in regular_sources:
-                    destination = self._get_equippable_rule_destination(item, rule)
-                    if not destination:
-                        continue
-                    if coords.get(destination) is None:
-                        claimed_storage_item_ids.add(int(item.item_id))
-                        continue
-                    if not self._rule_matches_selected_rarity(item, rule):
-                        continue
-                    hard_protection = self._get_hard_protection_hit(item, all_enabled_sell_rules)
-                    if hard_protection is not None:
-                        _destination, protection_reason = hard_protection
-                        self._append_xunlai_protected_sell_withdraw_preview_entries(
-                            protected_preview_entries,
-                            [(item, source_label, protection_reason)],
-                            rule_reference=rule_reference,
-                        )
-                        claimed_storage_item_ids.add(int(item.item_id))
-                        continue
-                    matching_sources.append((item, source_label))
-                    claimed_storage_item_ids.add(int(item.item_id))
-                if not matching_sources:
-                    continue
-                equippable_rule_ids.add(safe_rule_id)
-                self._append_xunlai_sell_withdrawals(
-                    transfers,
-                    matching_sources,
-                    quantity=self._sum_item_quantities([item for item, _source_label in matching_sources]),
-                    rule_reference=rule_reference,
-                    key=f"xunlai_sell:{safe_rule_id}:equippable",
-                )
-
-        adjusted_rules: list[SellRule] = []
-        for _rule_index, rule in enabled_xunlai_rules:
-            cloned_rule = self._clone_xunlai_sell_rule_for_pass(
-                rule,
-                model_keep_overrides=model_keep_overrides,
-                rune_keep_overrides=rune_keep_overrides,
-                include_equippable=_normalize_rule_id(getattr(rule, "rule_id", "")) in equippable_rule_ids,
-            )
-            if cloned_rule is not None:
-                adjusted_rules.append(cloned_rule)
-
-        return transfers, adjusted_rules
+        return self._sale_planner.plan_xunlai_withdrawals(
+            enabled_xunlai_rules,
+            current_items,
+            regular_storage_items,
+            material_storage_items,
+            coords,
+            all_enabled_sell_rules=all_enabled_sell_rules,
+            policy=self._protection_policy,
+            protected_preview_entries=protected_preview_entries,
+        )
 
     def _execute_sell_actions_for_plan(
         self,

@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import ast
 import enum
+import importlib.abc
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -46,10 +48,16 @@ from typing import TYPE_CHECKING
 from typing import Any
 from typing import Protocol
 from typing import TypedDict
+from typing import TypeGuard
 from typing import cast
 from typing import runtime_checkable
 
 if TYPE_CHECKING:
+    from Sources.icefox.MerchantRules.configuration import RuneSellTarget
+    from Sources.icefox.MerchantRules.planning import PlannedDestroyAction
+    from Sources.icefox.MerchantRules.planning import PlannedMaterialSale
+    from Sources.icefox.MerchantRules.planning import PlannedTraderSale
+    from Sources.icefox.MerchantRules.planning import SalePlanner
     from Sources.icefox.MerchantRules.service_observation import ServiceResolutionSession
 
 
@@ -53452,6 +53460,2297 @@ def _test_cp8_policy_completed_cp7_differential() -> None:
     )
 
 
+@runtime_checkable
+class _CP9Widget(_CP8Widget, Protocol):
+    def _plan_equippable_rule_sales(
+        self,
+        plan: PlanResult,
+        items: list[InventoryItemInfo],
+        rule: SellRule,
+        rule_index: int,
+        claimed_item_ids: set[int],
+        coords: dict[str, tuple[float, float] | None],
+        reserved_rune_sell_identifiers: set[str] | None = None,
+    ) -> None: ...
+
+    def _plan_rune_sell_target_sales(
+        self,
+        plan: PlanResult,
+        items: list[InventoryItemInfo],
+        rule: SellRule,
+        rule_index: int,
+        claimed_item_ids: set[int],
+        coords: dict[str, tuple[float, float] | None],
+    ) -> None: ...
+
+    def _plan_material_sales(
+        self,
+        matching_items: list[InventoryItemInfo],
+        working_quantities: dict[int, int],
+        keep_count: int,
+    ) -> list[PlannedMaterialSale]: ...
+
+    def _plan_destroy_actions(
+        self,
+        plan: PlanResult,
+        items: list[InventoryItemInfo],
+        destroy_rules: list[tuple[int, DestroyRule]],
+        sell_rules: list[tuple[int, SellRule]],
+        claimed_item_ids: set[int],
+    ) -> None: ...
+
+    def _build_plan(
+        self,
+        *,
+        projected_preview: bool = False,
+        supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None,
+        sell_action_rule_kinds: set[str] | None = None,
+    ) -> PlanResult: ...
+
+
+def _cp9_widget(module: types.ModuleType) -> _CP9Widget:
+    value: object = _make_widget(module)
+    if not isinstance(value, _CP9Widget):
+        raise AssertionError('CP9 preserved widget surfaces')
+    value.protected_item_model_ids = []
+    value.protected_item_targets = []
+    value.sell_rules = []
+    value.destroy_rules = []
+    return value
+
+
+def _cp9_rule(module: types.ModuleType, **changes: object) -> SellRule:
+    return replace(
+        _cp8_rule(module, rule_id='cp9-rule', all_weapons_min_requirement=0, all_weapons_max_requirement=0),
+        **changes,
+    )
+
+
+def _cp9_is_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
+    return isinstance(value, Mapping)
+
+
+def _cp9_is_sequence(value: object) -> TypeGuard[list[object] | tuple[object, ...]]:
+    return isinstance(value, (list, tuple))
+
+
+def _cp9_is_set(value: object) -> TypeGuard[set[object] | frozenset[object]]:
+    return isinstance(value, (set, frozenset))
+
+
+def _cp9_value(value: object) -> object:
+    from dataclasses import fields
+    from dataclasses import is_dataclass
+
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: _cp9_value(getattr(value, field.name)) for field in fields(value)}
+    if _cp9_is_mapping(value):
+        mapping: Mapping[object, object] = value
+        return [[_cp9_value(key), _cp9_value(member)] for key, member in mapping.items()]
+    if _cp9_is_sequence(value):
+        sequence: Sequence[object] = value
+        return [_cp9_value(member) for member in sequence]
+    if _cp9_is_set(value):
+        members: set[object] | frozenset[object] = value
+        return sorted((_cp9_value(member) for member in members), key=repr)
+    raise AssertionError('CP9 unsupported observation type: ' + type(value).__name__)
+
+
+def _cp9_same_exception(operation: Callable[[], object], expected: Exception) -> None:
+    try:
+        operation()
+    except Exception as actual:
+        _expect(actual is expected, 'CP9 identical raised exception')
+    else:
+        raise AssertionError('CP9 expected the injected exception')
+
+
+class _CP9Checks(_CP9Widget):
+    @staticmethod
+    def prepare_phase(
+        widget: _CP9Widget,
+        items: list[InventoryItemInfo],
+        restore: _CP8Restoration,
+        trace: list[str | tuple[str, int]],
+        claims: list[set[int]],
+    ) -> None:
+        def identify(_plan: PlanResult, _items: list[InventoryItemInfo], claimed: set[int]) -> None:
+            trace.append('identify')
+            claims.append(claimed)
+
+        actual_destroy = widget._plan_destroy_actions
+
+        def destroy(
+            plan: PlanResult,
+            selected: list[InventoryItemInfo],
+            destroy_rules: list[tuple[int, DestroyRule]],
+            sell_rules: list[tuple[int, SellRule]],
+            claimed: set[int],
+        ) -> None:
+            trace.append('destroy')
+            actual_destroy(plan, selected, destroy_rules, sell_rules, claimed)
+
+        def salvage(
+            _plan: PlanResult,
+            _items: list[InventoryItemInfo],
+            _rules: list[tuple[int, SellRule]],
+            _claimed: set[int],
+        ) -> None:
+            trace.append('salvage')
+
+        def buy(_plan: PlanResult, _counts: dict[int, int], **_kwargs: object) -> None:
+            trace.append('buy')
+
+        def cleanup(
+            _plan: PlanResult,
+            _items: list[InventoryItemInfo],
+            _rules: list[tuple[int, SellRule]],
+            **_kwargs: object,
+        ) -> None:
+            trace.append('cleanup')
+
+        def item_label(item: InventoryItemInfo) -> str:
+            trace.append(('item-label', item.item_id))
+            return item.name
+
+        def ignore(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        def early(_plan: PlanResult) -> None:
+            trace.append('early-kit')
+
+        def model_label(model_id: int) -> str:
+            return 'Model ' + str(model_id)
+
+        def diagnostic(_message: str) -> None:
+            return None
+
+        for name, replacement in (
+            ('auto_travel_enabled', False),
+            ('_has_enabled_rules', lambda: True),
+            ('_collect_inventory_items', lambda: items),
+            ('_can_use_local_storage_actions', lambda: False),
+            ('_has_enabled_rune_buy_rules', lambda: False),
+            ('_has_enabled_consumable_crafter_buy_rules', lambda: False),
+            ('_has_enabled_xunlai_first_merchant_stock_targets', lambda: False),
+            ('_plan_identify_actions', identify),
+            ('_plan_destroy_actions', destroy),
+            ('_plan_salvage_actions', salvage),
+            ('_plan_buy_actions', buy),
+            ('_plan_cleanup_actions', cleanup),
+            ('_plan_consumable_crafter_bag_space_warning', ignore),
+            ('_annotate_early_kit_preview', early),
+            ('_format_model_label', model_label),
+            ('_format_inventory_item_log_label', item_label),
+            ('_debug_log', diagnostic),
+        ):
+            restore.binding(widget, name, replacement)
+
+    @staticmethod
+    def build(widget: _CP9Widget, *, services: bool = True, empty_actions: bool = False) -> PlanResult:
+        coords: dict[str, tuple[float, float] | None] = {
+            'merchant': (1.0, 1.0),
+            'rune_trader': (2.0, 2.0),
+            'material_trader': (3.0, 3.0) if services else None,
+            'rare_material_trader': (4.0, 4.0) if services else None,
+        }
+        return widget._build_plan(
+            supported_context_override=(True, 'CP9 supplied services', coords),
+            sell_action_rule_kinds=set() if empty_actions else None,
+        )
+
+    @staticmethod
+    def material_failure(module: types.ModuleType) -> dict[str, object]:
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        failure = RuntimeError('CP9 material label failure')
+        item = _cp8_item(module, item_id=101, model_id=921, quantity=11, is_material=True, is_weapon_like=False)
+        quantities = {101: 11}
+
+        def label(_item: InventoryItemInfo) -> str:
+            raise failure
+
+        try:
+            restore.binding(widget, '_format_inventory_item_log_label', label)
+            _cp9_same_exception(lambda: widget._plan_material_sales([item], quantities, 0), failure)
+            _requirement_contract_expect(quantities, {101: 1}, 'CP9 quantity mutation precedes failed label')
+            direct = dict(quantities)
+            trace: list[str | tuple[str, int]] = []
+            claims: list[set[int]] = []
+            protected = _cp8_item(module, item_id=102, model_id=970)
+            widget.protected_item_model_ids = [970]
+            from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+            from Sources.icefox.MerchantRules.planning import PlanResult
+
+            widget.sell_rules = [
+                _cp9_rule(
+                    module,
+                    kind='sell_common_materials',
+                    merchant_type='material_trader',
+                    whitelist_targets=[WhitelistTarget(921, 0)],
+                )
+            ]
+            supplied_plan = PlanResult()
+            containers = (
+                supplied_plan.entries,
+                supplied_plan.material_sales,
+                supplied_plan.merchant_sell_item_ids,
+                supplied_plan.rune_trader_sales,
+            )
+            _cp9_prepare_phase(widget, [protected, item], restore, trace, claims)
+            restore.binding(widget, '_format_inventory_item_log_label', label)
+            capture = _CP9PlanCapture(supplied_plan)
+            restore.binding(module, 'PlanResult', capture)
+            _cp9_same_exception(lambda: _cp9_build(widget, services=False), failure)
+            capture.check()
+            _requirement_contract_expect(claims[0], {102}, 'CP9 material claims wait for allocator return')
+            _expect(len(supplied_plan.entries) == 1, 'CP9 earlier protection entry survives later failure')
+            _expect(
+                all(
+                    a is b
+                    for a, b in zip(
+                        containers,
+                        (
+                            supplied_plan.entries,
+                            supplied_plan.material_sales,
+                            supplied_plan.merchant_sell_item_ids,
+                            supplied_plan.rune_trader_sales,
+                        ),
+                        strict=True,
+                    )
+                ),
+                'CP9 borrowed plan containers retain identity',
+            )
+            return {
+                'direct_quantities': direct,
+                'partial_plan': _cp9_value(supplied_plan),
+                'claims': sorted(claims[0]),
+                'exception': [type(failure).__name__, list(failure.args)],
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def equipment_failure(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.planning import PlanResult
+
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        plan = PlanResult()
+        claims: set[int] = set()
+        armor = _cp8_item(module, item_id=111, is_weapon_like=False, is_armor_piece=True)
+        rune = replace(armor, item_id=112, standalone_kind='rune', is_armor_piece=False, rune_identifiers=['Rune'])
+        rule = _cp9_rule(module, kind='sell_armor', include_standalone_runes=True)
+        failure = RuntimeError('CP9 rune sale label failure')
+
+        def label(_item: InventoryItemInfo) -> str:
+            raise failure
+
+        try:
+            restore.binding(widget, '_format_inventory_item_log_label', label)
+            _cp9_same_exception(
+                lambda: widget._plan_equippable_rule_sales(
+                    plan,
+                    [armor, rune],
+                    rule,
+                    0,
+                    claims,
+                    {'merchant': (1.0, 1.0), 'rune_trader': (2.0, 2.0)},
+                ),
+                failure,
+            )
+            _requirement_contract_expect(claims, {111, 112}, 'CP9 equipment claim precedes labelled rune action')
+            _requirement_contract_expect(plan.merchant_sell_item_ids, [111], 'CP9 earlier merchant action retained')
+            _requirement_contract_expect(plan.rune_trader_sales, [], 'CP9 failed labelled action not appended')
+            _expect(len(plan.entries) == 1, 'CP9 earlier equipment entry retained')
+            return {'plan': _cp9_value(plan), 'claims': sorted(claims)}
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def policy_after_effect(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.planning import PlanResult
+
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        trace: list[str | tuple[str, int]] = []
+        claims: list[set[int]] = []
+        failure = RuntimeError('CP9 later policy failure')
+
+        class Entries(list["ExecutionPlanEntry"]):
+            def append(self, entry: ExecutionPlanEntry) -> None:
+                super().append(entry)
+                trace.append(('entry', entry.model_id))
+
+        plan = PlanResult(entries=Entries())
+        capture = _CP9PlanCapture(plan)
+        items = [
+            _cp8_item(module, item_id=124, model_id=970),
+            _cp8_item(module, item_id=125, model_id=971),
+            _cp8_item(module, item_id=126, model_id=972),
+        ]
+        widget.protected_item_model_ids = [970]
+        widget.sell_rules = [_cp9_rule(module)]
+        widget._collect_enabled_sell_rules()
+        before = _cp8_values(items, widget.sell_rules)
+        policy = _CP8PolicyAccess.get(widget)
+        original_hit = type(policy).get_hard_protection_hit
+
+        def hit(
+            owner: ProtectionPolicy, item: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+        ) -> tuple[str, str] | None:
+            if owner is policy:
+                trace.append(('policy', item.item_id))
+                if item.item_id == 125:
+                    _requirement_contract_expect(claims[0], {124}, 'CP9 claim exists before later policy failure')
+                    _expect(len(plan.entries) == 1, 'CP9 entry exists before later policy failure')
+                    raise failure
+            return original_hit(owner, item, rules)
+
+        def rule_reference(_index: int, _rule: SellRule) -> str:
+            trace.append('action-rule')
+            raise AssertionError('CP9 later action allocation reached after policy failure')
+
+        try:
+            _cp9_prepare_phase(widget, items, restore, trace, claims)
+            restore.binding(module, 'PlanResult', capture)
+            restore.binding(type(policy), 'get_hard_protection_hit', hit)
+            restore.binding(widget, '_format_sell_rule_reference', rule_reference)
+            _cp9_same_exception(lambda: _cp9_build(widget), failure)
+            capture.check()
+            _cp8_unchanged(before, items, widget.sell_rules)
+            _requirement_contract_expect(
+                trace,
+                ['identify', 'destroy', 'salvage', ('policy', 124), ('entry', 970), ('policy', 125)],
+                'CP9 earlier effect, later policy failure, no third item or later phase',
+            )
+            _requirement_contract_expect(claims[0], {124}, 'CP9 earlier borrowed claim survives policy failure')
+            _requirement_contract_expect(
+                [
+                    (
+                        row.action_type,
+                        row.merchant_type,
+                        row.label,
+                        row.quantity,
+                        row.state,
+                        row.reason,
+                        row.model_id,
+                        row.status_hint,
+                    )
+                    for row in plan.entries
+                ],
+                [
+                    (
+                        'sell',
+                        'merchant',
+                        'Runtime Axe',
+                        1,
+                        'skipped',
+                        'Protected by Protected Items: exact model.',
+                        970,
+                        '',
+                    )
+                ],
+                'CP9 earlier real protection entry survives policy failure',
+            )
+            expected_actions: tuple[list[int], list[PlannedMaterialSale], list[PlannedTraderSale]] = ([], [], [])
+            _requirement_contract_expect(
+                (plan.merchant_sell_item_ids, plan.material_sales, plan.rune_trader_sales),
+                expected_actions,
+                'CP9 action allocation never reached',
+            )
+            return {
+                'plan': _cp9_value(plan),
+                'claims': sorted(claims[0]),
+                'trace': trace,
+                'exception': [type(failure).__name__, list(failure.args)],
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def diagnostic_failure(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.planning import PlanResult
+
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        plan = PlanResult()
+        claims: set[int] = set()
+        item = _cp8_item(module, item_id=131)
+        failure = RuntimeError('CP9 diagnostic failure')
+
+        def diagnostic(_message: str) -> None:
+            raise failure
+
+        try:
+            restore.binding(widget, '_debug_log', diagnostic)
+            _cp9_same_exception(
+                lambda: widget._plan_equippable_rule_sales(
+                    plan,
+                    [item],
+                    _cp9_rule(module),
+                    0,
+                    claims,
+                    {'merchant': (1.0, 1.0)},
+                ),
+                failure,
+            )
+            _requirement_contract_expect(plan.merchant_sell_item_ids, [131], 'CP9 action before diagnostic')
+            _expect(len(plan.entries) == 1 and claims == {131}, 'CP9 entry and claim before diagnostic')
+            return {'plan': _cp9_value(plan), 'claims': sorted(claims)}
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def fresh_collection(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        rule = _cp9_rule(
+            module,
+            kind='sell_explicit_models',
+            sell_from_xunlai=True,
+            whitelist_targets=[WhitelistTarget(970, 0)],
+        )
+        extra = _cp9_rule(module, rule_id='cp9-extra', sell_from_xunlai=False)
+        widget.sell_rules = [rule, extra]
+        widget.protected_item_model_ids = [970]
+        original_collect = widget._collect_enabled_sell_rules
+        original_collect()
+        action_rules = [(0, rule)]
+        fresh: list[list[tuple[int, SellRule]]] = []
+        trace: list[object] = []
+        policy = _CP8PolicyAccess.get(widget)
+        original_hit = type(policy).get_hard_protection_hit
+
+        def collect() -> list[tuple[int, SellRule]]:
+            trace.append('collect')
+            current = original_collect()
+            _expect(current is not action_rules, 'CP9 fresh full collection differs from supplied action subset')
+            _expect(current[0][1] is rule and current[1][1] is extra, 'CP9 original normalized members')
+            fresh.append(current)
+            return current
+
+        def hit(
+            owner: ProtectionPolicy, item: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+        ) -> tuple[str, str] | None:
+            if owner is policy:
+                _expect(rules is fresh[-1], 'CP9 identical freshly collected list reaches policy')
+                trace.append(('hit', item.item_id))
+            return original_hit(owner, item, rules)
+
+        def argument[T](label: str, value: T) -> T:
+            trace.append(label)
+            return value
+
+        try:
+            restore.binding(widget, '_collect_enabled_sell_rules', collect)
+            restore.binding(type(policy), 'get_hard_protection_hit', hit)
+            result = widget._plan_xunlai_sell_withdrawals(
+                argument('actions', action_rules),
+                argument('inventory', []),
+                argument('regular', [_cp8_item(module, item_id=141)]),
+                argument('material', []),
+                argument('coords', {'merchant': (1.0, 1.0)}),
+                protected_preview_entries=argument('sink', []),
+            )
+            _requirement_contract_expect(
+                trace,
+                [
+                    'actions',
+                    'inventory',
+                    'regular',
+                    'material',
+                    'coords',
+                    'sink',
+                    'collect',
+                    ('hit', 141),
+                ],
+                'CP9 arguments precede first executable collection',
+            )
+            first_trace = trace[:]
+            trace.clear()
+            empty = widget._plan_xunlai_sell_withdrawals([], [], [], [], {}, protected_preview_entries=[])
+            _requirement_contract_expect(trace, ['collect'], 'CP9 empty action list still recollects')
+            _expect(len(fresh) == 2 and fresh[0] is not fresh[1], 'CP9 collection is per call')
+            _expect(fresh[0][0][1] is fresh[1][0][1] is rule, 'CP9 member identity survives recollection')
+            return {
+                'result': _cp9_value(result),
+                'empty': _cp9_value(empty),
+                'trace': first_trace,
+                'empty_trace': trace,
+                'collections': _cp9_value(fresh),
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def sink_failure(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        rule = _cp9_rule(
+            module,
+            kind='sell_explicit_models',
+            sell_from_xunlai=True,
+            whitelist_targets=[WhitelistTarget(970, 0)],
+        )
+        widget.sell_rules = [rule]
+        widget.protected_item_model_ids = [970]
+        items = [_cp8_item(module, item_id=151), _cp8_item(module, item_id=152)]
+        sink: list[ExecutionPlanEntry] = []
+        failure = RuntimeError('CP9 second protected label failure')
+        trace: list[int] = []
+
+        def label(item: InventoryItemInfo) -> str:
+            trace.append(item.item_id)
+            if item.item_id == 152:
+                raise failure
+            return 'First protected item'
+
+        try:
+            restore.binding(widget, '_get_xunlai_sell_withdraw_label', label)
+            widget._collect_enabled_sell_rules()
+            before = _cp8_values(items, widget.sell_rules)
+            _cp9_same_exception(
+                lambda: widget._plan_xunlai_sell_withdrawals(
+                    [(0, rule)],
+                    [],
+                    items,
+                    [],
+                    {'merchant': (1.0, 1.0)},
+                    protected_preview_entries=sink,
+                ),
+                failure,
+            )
+            _cp8_unchanged(before, items, widget.sell_rules)
+            _requirement_contract_expect(trace, [151, 152], 'CP9 protected labels stay incremental')
+            _expect(len(sink) == 1 and sink[0].label == 'First protected item', 'CP9 first caller sink append survives')
+            return {'sink': _cp9_value(sink), 'trace': trace}
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def xunlai_orders(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules import configuration as c
+        from Sources.icefox.MerchantRules import planning as p
+
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        first = _cp9_rule(
+            module,
+            kind=c.SELL_KIND_COMMON_MATERIALS,
+            merchant_type=c.MERCHANT_TYPE_MATERIALS,
+            rule_id='cp9-first',
+            sell_from_xunlai=True,
+            include_material_storage=True,
+            whitelist_targets=[c.WhitelistTarget(921, 12)],
+        )
+        second = replace(first, rule_id='cp9-second', whitelist_targets=[c.WhitelistTarget(921, 0)])
+        regular = [
+            _cp8_item(module, item_id=201, model_id=921, quantity=12, is_material=True, is_weapon_like=False),
+            _cp8_item(module, item_id=202, model_id=921, quantity=10, is_material=True, is_weapon_like=False),
+        ]
+        material = [replace(regular[0], item_id=301, quantity=15)]
+        widget.sell_rules = [first, second]
+        widget._collect_enabled_sell_rules()
+        before = _cp8_values(regular, material, widget.sell_rules)
+
+        def withdrawal_label(item: InventoryItemInfo) -> str:
+            return 'Stock ' + str(item.item_id)
+
+        try:
+            restore.binding(widget, '_get_xunlai_sell_withdraw_label', withdrawal_label)
+            result, trace = _cp9_calls(
+                lambda: widget._plan_xunlai_sell_withdrawals(
+                    [(0, first), (1, second)],
+                    [],
+                    regular,
+                    material,
+                    {'material_trader': (1.0, 1.0)},
+                ),
+                {
+                    '_get_material_merchant_type_by_model': 'destination',
+                    'material_destination': 'destination',
+                    '_build_xunlai_storage_keep_reservations': 'reservation',
+                    '_storage_keep_reservations': 'reservation',
+                    'get_hard_protection_hit': 'protection',
+                    '_sum_item_quantities': 'quantity',
+                },
+            )
+            _cp8_unchanged(before, regular, material, widget.sell_rules)
+            transfers, adjusted = result
+            _requirement_contract_expect(
+                [(row.item_id, row.quantity) for row in transfers],
+                [(201, 12), (202, 10), (301, 3)],
+                'CP9 material-first keep reservation and regular-first withdrawals',
+            )
+            _requirement_contract_expect(
+                trace,
+                [
+                    'protection',
+                    'destination',
+                    'protection',
+                    'destination',
+                    'protection',
+                    'destination',
+                    'quantity',
+                    'quantity',
+                    'destination',
+                    'reservation',
+                    'destination',
+                ],
+                'CP9 protection and quantities precede active destination evaluation and reservation',
+            )
+            _expect(len(adjusted) == 1 and adjusted[0] is not first, 'CP9 overlapping claims and cloned owner')
+            clone = adjusted[0]
+            _expect(
+                clone.rarities is first.rarities and clone.blacklist_model_ids is first.blacklist_model_ids,
+                'CP9 untouched nested containers remain shallow-shared',
+            )
+            _expect(
+                clone.whitelist_targets is not first.whitelist_targets
+                and not clone.sell_from_xunlai
+                and not clone.include_material_storage,
+                'CP9 selected clone fields replaced',
+            )
+            _requirement_contract_expect(clone.whitelist_targets[0].keep_count, 0, 'CP9 adjusted inventory keep')
+            repeated = widget._plan_xunlai_sell_withdrawals(
+                [(0, first), (1, second)],
+                [],
+                regular,
+                material,
+                {'material_trader': (1.0, 1.0)},
+            )
+            _requirement_contract_expect(
+                _cp9_value(repeated), _cp9_value(result), 'CP9 fresh allocation state per pass'
+            )
+            stored = {'result': _cp9_value(result), 'trace': trace}
+
+            # The final clone still normalizes rune targets; the missing-service loop must not.
+            rune = _cp9_rule(
+                module,
+                kind=c.SELL_KIND_RUNE_TRADER_TARGET,
+                rule_id='cp9-rune',
+                sell_from_xunlai=True,
+                rune_sell_targets=[c.RuneSellTarget('Rune', 0)],
+            )
+            widget.sell_rules = [rune]
+            widget._collect_enabled_sell_rules()
+            normalization_trace: list[str] = []
+
+            def normalize(raw: object) -> list[RuneSellTarget]:
+                normalization_trace.append('normalize')
+                return c.normalize_rune_sell_targets(raw)
+
+            owner = p if hasattr(p, 'SalePlanner') else module
+            name = 'normalize_rune_sell_targets' if owner is p else '_normalize_rune_sell_targets'
+            restore.binding(owner, name, normalize)
+            missing, calls = _cp9_calls(
+                lambda: widget._plan_xunlai_sell_withdrawals(
+                    [(0, rune)],
+                    [],
+                    [_cp8_item(module, item_id=311, standalone_kind='rune', rune_identifiers=['Rune'])],
+                    [],
+                    {},
+                ),
+                {'get_hard_protection_hit': 'protection'},
+            )
+            _requirement_contract_expect(normalization_trace, ['normalize'], 'CP9 clone-only rune normalization')
+            _requirement_contract_expect(calls, [], 'CP9 absent rune service skips protection')
+            expected_missing: tuple[list[PlannedStorageTransfer], list[SellRule]] = ([], [])
+            _requirement_contract_expect(missing, expected_missing, 'CP9 no rune withdrawal without service')
+            stored['missing_rune'] = {
+                'result': _cp9_value(missing),
+                'normalization': normalization_trace,
+                'trace': calls,
+            }
+
+            outcomes: list[object] = []
+            for available in (False, True):
+                weapon = _cp9_rule(
+                    module,
+                    rule_id='cp9-equipment',
+                    sell_from_xunlai=True,
+                    rarities={key: False for key in ('white', 'blue', 'purple', 'gold', 'green')},
+                )
+                explicit = _cp9_rule(
+                    module,
+                    kind=c.SELL_KIND_EXPLICIT_MODELS,
+                    rule_id='cp9-explicit',
+                    sell_from_xunlai=True,
+                    whitelist_targets=[c.WhitelistTarget(921, 0)],
+                )
+                widget.sell_rules = [weapon, explicit]
+                stock = _cp8_item(module, item_id=321, model_id=921, quantity=11, is_material=True)
+                selected = widget._plan_xunlai_sell_withdrawals(
+                    [(0, weapon), (1, explicit)],
+                    [],
+                    [stock],
+                    [],
+                    {'merchant': (1.0, 1.0) if available else None, 'material_trader': (2.0, 2.0)},
+                )
+                _requirement_contract_expect(
+                    [row.item_id for row in selected[0]],
+                    [321] if available else [],
+                    'CP9 equipment missing service claims before rarity; rarity miss permits later rule',
+                )
+                outcomes.append(_cp9_value(selected))
+            stored['equipment'] = outcomes
+
+            common = _cp9_rule(
+                module,
+                kind=c.SELL_KIND_COMMON_MATERIALS,
+                rule_id='cp9-collision-common',
+                sell_from_xunlai=True,
+                whitelist_targets=[c.WhitelistTarget(923, 0)],
+            )
+            explicit = _cp9_rule(
+                module,
+                kind=c.SELL_KIND_EXPLICIT_MODELS,
+                rule_id='cp9-collision-explicit',
+                sell_from_xunlai=True,
+                whitelist_targets=[c.WhitelistTarget(923, 0)],
+            )
+            widget.sell_rules = [common, explicit]
+            collision = _cp8_item(module, item_id=331, model_id=923)
+            blocked = widget._plan_xunlai_sell_withdrawals(
+                [(0, common), (1, explicit)],
+                [],
+                [collision],
+                [],
+                {'merchant': (1.0, 1.0)},
+            )
+            expected_blocked: tuple[list[PlannedStorageTransfer], list[SellRule]] = ([], [])
+            _requirement_contract_expect(
+                blocked, expected_blocked, 'CP9 model-target claim precedes missing-service exit'
+            )
+            stored['model_claim'] = _cp9_value(blocked)
+            return stored
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def inventory_order(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.configuration import RuneSellTarget
+        from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+        from Sources.icefox.MerchantRules.planning import PlanResult
+
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        calls: list[str] = []
+        from typing import overload
+
+        class Coords(dict[str, tuple[float, float] | None]):
+            @overload
+            def get(self, key: str, default: None = None) -> tuple[float, float] | None: ...
+
+            @overload
+            def get(self, key: str, default: tuple[float, float] | None) -> tuple[float, float] | None: ...
+
+            @overload
+            def get[T](self, key: str, default: T) -> tuple[float, float] | None | T: ...
+
+            def get(self, key: str, default: object = None) -> object:
+                calls.append(key)
+                return super().get(key, default)
+
+        try:
+            item = _cp8_item(module, item_id=401)
+            miss = _cp9_rule(module, rarities={key: False for key in ('white', 'blue', 'purple', 'gold', 'green')})
+            claims: set[int] = set()
+            plan = PlanResult()
+            _, order = _cp9_calls(
+                lambda: widget._plan_equippable_rule_sales(plan, [item], miss, 0, claims, Coords()),
+                {
+                    '_get_equippable_rule_destination': 'destination',
+                    'equippable_destination': 'destination',
+                    'rule_matches_selected_rarity': 'rarity',
+                },
+            )
+            _requirement_contract_expect(order, ['destination', 'rarity'], 'CP9 equipment destination before rarity')
+            expected_unclaimed: tuple[set[int], list[str]] = (set(), [])
+            _requirement_contract_expect(
+                (claims, calls), expected_unclaimed, 'CP9 rarity precedes service and allows fallthrough'
+            )
+            widget._plan_equippable_rule_sales(plan, [item], _cp9_rule(module), 1, claims, Coords())
+            _requirement_contract_expect(
+                (claims, calls), ({401}, ['merchant']), 'CP9 unavailable equipment service claims'
+            )
+            rune = replace(item, item_id=402, standalone_kind='rune', is_weapon_like=False, rune_identifiers=['Rune'])
+            calls.clear()
+            _, reserved_order = _cp9_calls(
+                lambda: widget._plan_equippable_rule_sales(
+                    plan,
+                    [rune],
+                    _cp9_rule(module, kind='sell_armor', include_standalone_runes=True),
+                    2,
+                    claims,
+                    Coords(),
+                    {'Rune'},
+                ),
+                {
+                    '_get_equippable_rule_destination': 'destination',
+                    'equippable_destination': 'destination',
+                    'rule_matches_selected_rarity': 'rarity',
+                },
+            )
+            _requirement_contract_expect(reserved_order, ['destination'], 'CP9 exact-rune reservation precedes rarity')
+            _expect(402 not in claims and not calls, 'CP9 exact-rune reservation precedes rarity/service')
+            label_trace: list[str] = []
+
+            def target_label(name: str) -> str:
+                label_trace.append(name)
+                return name
+
+            restore.binding(widget, '_get_rune_label', target_label)
+            rune_plan = PlanResult()
+            widget._plan_rune_sell_target_sales(
+                rune_plan,
+                [],
+                _cp9_rule(module, kind='sell_rune_trader_target', rune_sell_targets=[RuneSellTarget('Rune', 0)]),
+                0,
+                set(),
+                {},
+            )
+            _requirement_contract_expect(label_trace, ['Rune'], 'CP9 rune target label precedes no-match decision')
+
+            class Claims(set[int]):
+                def add(self, value: int) -> None:
+                    super().add(value)
+
+            rune_claims = Claims()
+            blocked_runes = PlanResult()
+            _, rune_order = _cp9_calls(
+                lambda: widget._plan_rune_sell_target_sales(
+                    blocked_runes,
+                    [rune, replace(rune, item_id=404)],
+                    _cp9_rule(module, kind='sell_rune_trader_target', rune_sell_targets=[RuneSellTarget('Rune', 1)]),
+                    0,
+                    rune_claims,
+                    {},
+                ),
+                {'target_label': 'label', 'choose_keep_subset': 'keep', 'add': 'claim'},
+            )
+            _requirement_contract_expect(
+                rune_order,
+                ['label', 'keep', 'claim', 'claim'],
+                'CP9 rune label, keep and claims precede blocked service entries',
+            )
+            _requirement_contract_expect(rune_claims, {402, 404}, 'CP9 rune keep and blocked-sale claims')
+            _expect(
+                len(blocked_runes.entries) == 2 and not blocked_runes.rune_trader_sales,
+                'CP9 kept then blocked rune entries without sale actions',
+            )
+
+            material_results: list[object] = []
+            for kind in ('sell_common_materials', 'sell_explicit_models'):
+                current = _cp9_widget(module)
+                trace: list[str | tuple[str, int]] = []
+                borrowed: list[set[int]] = []
+                current.sell_rules = [_cp9_rule(module, kind=kind, whitelist_targets=[WhitelistTarget(921, 0)])]
+                material = _cp8_item(
+                    module, item_id=403, model_id=921, quantity=11, is_material=True, is_weapon_like=False
+                )
+                _cp9_prepare_phase(current, [material], restore, trace, borrowed)
+                current_plan = _cp9_build(current, services=False)
+                labels = [event for event in trace if isinstance(event, tuple) and event[0] == 'item-label']
+                _requirement_contract_expect(
+                    labels,
+                    [('item-label', 403)] if kind == 'sell_common_materials' else [],
+                    'CP9 common allocation before service; explicit allocation after service',
+                )
+                material_results.append(
+                    {
+                        'kind': kind,
+                        'plan': _cp9_value(current_plan),
+                        'trace': trace,
+                        'claims': sorted(borrowed[0]),
+                    }
+                )
+            return {
+                'equipment': _cp9_value(plan),
+                'equipment_order': order,
+                'reserved_order': reserved_order,
+                'rune': _cp9_value(rune_plan),
+                'blocked_runes': _cp9_value(blocked_runes),
+                'rune_order': rune_order,
+                'materials': material_results,
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def lifetime(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules.planning import PlanResult
+
+        first, second = _cp9_widget(module), _cp9_widget(module)
+        restore = _CP8Restoration()
+        item = _cp8_item(module, item_id=501)
+        rule = _cp9_rule(module)
+        first.sell_rules = [rule]
+        second.sell_rules = [replace(rule)]
+        results: list[object] = []
+        try:
+            for widget in (first, second):
+                _cp9_prepare_phase(widget, [item], restore, [], [])
+            first._collect_enabled_sell_rules()
+            before = _cp8_values(item, first.sell_rules)
+            results.append(_cp9_value(_cp9_build(first)))
+            _cp8_unchanged(before, item, first.sell_rules)
+            first.protected_item_model_ids = [970]
+            protected = _cp9_build(first)
+            _requirement_contract_expect(
+                protected.merchant_sell_item_ids, [], 'CP9 replacement protection config visible'
+            )
+            results.append(_cp9_value(protected))
+            other = _cp9_build(second)
+            _requirement_contract_expect(other.merchant_sell_item_ids, [501], 'CP9 two-widget isolation')
+            first.protected_item_model_ids = []
+            first.sell_rules = []
+            empty = _cp9_build(first)
+            _requirement_contract_expect(empty.merchant_sell_item_ids, [], 'CP9 replacement rule list visible')
+            first.sell_rules = [rule]
+            again = _cp9_build(first)
+            _requirement_contract_expect(_cp9_value(again), results[0], 'CP9 no retained claims across calls')
+            first.sell_rules = [_cp8_rule(module)]
+
+            def late_route(_item: InventoryItemInfo, _rule: SellRule) -> str:
+                return 'late-route'
+
+            restore.binding(first, '_get_equippable_rule_destination', late_route)
+            late = _cp9_build(first)
+            _expect(
+                any(row.merchant_type == 'late-route' for row in late.entries),
+                'CP9 policy calls the replaced widget route after construction',
+            )
+            left, right = PlanResult(), PlanResult()
+            for name in ('entries', 'material_sales', 'merchant_sell_item_ids', 'rune_trader_sales'):
+                _expect(
+                    getattr(left, name) is not getattr(right, name),
+                    'CP9 independent plan defaults: ' + name,
+                )
+            first.protected_item_model_ids = [970]
+            first.sell_rules = []
+
+            def late_exact_route(_item: InventoryItemInfo) -> str:
+                return 'late-exact'
+
+            restore.binding(first, '_get_explicit_sell_destination', late_exact_route)
+            late_exact = _cp9_build(first, empty_actions=True)
+            _expect(late_exact.entries[0].merchant_type == 'late-exact', 'CP9 late explicit policy route')
+            return {
+                'sequence': results,
+                'other': _cp9_value(other),
+                'empty': _cp9_value(empty),
+                'late': _cp9_value(late),
+                'late_exact': _cp9_value(late_exact),
+            }
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def sale_delegates(module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules import planning as p
+
+        widget = _cp9_widget(module)
+        owner = _cp9_planner(widget)
+        rule = _cp9_rule(module, sell_from_xunlai=True)
+        widget.sell_rules = [rule]
+        plan = p.PlanResult()
+        items: list[InventoryItemInfo] = []
+        claims: set[int] = set()
+        coords: dict[str, tuple[float, float] | None] = {}
+        quantities: dict[int, int] = {}
+        materials: list[PlannedMaterialSale] = []
+        transfers: list[PlannedStorageTransfer] = []
+        adjusted: list[SellRule] = []
+        withdrawal_result = (transfers, adjusted)
+        calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        restore = _CP8Restoration()
+        result: object = None
+
+        def sentinel(*args: object, **kwargs: object) -> object:
+            calls.append((args, kwargs))
+            return result
+
+        try:
+            for name in (
+                'plan_equippable_sales',
+                'plan_rune_target_sales',
+                'plan_material_sales',
+                'plan_xunlai_withdrawals',
+            ):
+                restore.binding(p.SalePlanner, name, sentinel)
+            _expect(
+                widget._plan_equippable_rule_sales(plan, items, rule, 3, claims, coords) is None,
+                'CP9 equipment delegate returns None',
+            )
+            args, kwargs = calls.pop()
+            _expect(
+                args[0] is owner
+                and args[1] is plan
+                and args[2] is items
+                and args[3] is rule
+                and args[4] == 3
+                and args[5] is claims
+                and args[6] is coords
+                and args[7] is None,
+                'CP9 equipment exact forwarding',
+            )
+            _expect(
+                kwargs['policy'] is _CP8PolicyAccess.get(widget),
+                'CP9 current policy at operation boundary',
+            )
+            widget._plan_rune_sell_target_sales(plan, items, rule, 4, claims, coords)
+            args, kwargs = calls.pop()
+            _expect(
+                args[0] is owner
+                and args[1] is plan
+                and args[2] is items
+                and args[3] is rule
+                and args[4] == 4
+                and args[5] is claims
+                and args[6] is coords
+                and not kwargs,
+                'CP9 rune exact forwarding',
+            )
+            result = materials
+            _expect(
+                widget._plan_material_sales(items, quantities, 7) is materials,
+                'CP9 material result identity',
+            )
+            args, kwargs = calls.pop()
+            _expect(
+                args[0] is owner and args[1] is items and args[2] is quantities and args[3] == 7 and not kwargs,
+                'CP9 material borrowed map forwarding',
+            )
+            result = withdrawal_result
+            actions = [(0, rule)]
+            sink: list[ExecutionPlanEntry] = []
+            _expect(
+                widget._plan_xunlai_sell_withdrawals(
+                    actions,
+                    items,
+                    items,
+                    items,
+                    coords,
+                    protected_preview_entries=sink,
+                )
+                is withdrawal_result,
+                'CP9 Xunlai result identity',
+            )
+            args, kwargs = calls.pop()
+            _expect(
+                args[0] is owner
+                and args[1] is actions
+                and all(value is items for value in args[2:5])
+                and args[5] is coords
+                and kwargs['protected_preview_entries'] is sink,
+                'CP9 Xunlai exact evidence and sink forwarding',
+            )
+            forwarded = kwargs['all_enabled_sell_rules']
+            _expect(
+                isinstance(forwarded, list) and forwarded is not actions and forwarded[0][1] is rule,
+                'CP9 original member in fresh full collection',
+            )
+            _expect(kwargs['policy'] is _CP8PolicyAccess.get(widget), 'CP9 Xunlai current policy')
+            for legacy, canonical, arguments, expected in (
+                ('_get_equippable_rule_destination', 'equippable_destination', (_cp8_item(module), rule), 'route'),
+                ('_get_explicit_sell_destination', 'explicit_destination', (_cp8_item(module),), 'route'),
+                ('_get_material_merchant_type_by_model', 'material_destination', (921,), 'route'),
+                ('_get_material_batch_size', 'material_batch_size', (921,), 37),
+            ):
+                result = expected
+                restore.binding(p, canonical, sentinel)
+                callback: object = getattr(widget, legacy)
+                if not isinstance(callback, types.MethodType):
+                    raise AssertionError('CP9 retained bound route delegate')
+                _requirement_contract_expect(callback(*arguments), expected, 'CP9 route canonical delegation ' + legacy)
+                args, kwargs = calls.pop()
+                _expect(
+                    not kwargs and all(a is b for a, b in zip(args, arguments, strict=True)),
+                    'CP9 pure route evidence forwarding',
+                )
+        finally:
+            restore.restore()
+
+
+_cp9_prepare_phase = _CP9Checks.prepare_phase
+
+
+_cp9_build = _CP9Checks.build
+
+
+def _cp9_phase(module: types.ModuleType) -> dict[str, object]:
+    from Sources.icefox.MerchantRules.configuration import DestroyRule
+
+    results: dict[str, object] = {}
+    for override in (False, True):
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        trace: list[str | tuple[str, int]] = []
+        claims: list[set[int]] = []
+        protected = _cp8_item(module, item_id=91, model_id=970)
+        sale = _cp8_item(module, item_id=92, model_id=971)
+        widget.sell_rules = [_cp9_rule(module)]
+        widget.destroy_rules = [
+            DestroyRule(enabled=True, kind='destroy_explicit_models', model_ids=[970], keep_count=0)
+        ]
+        widget.protected_item_model_ids = [970]
+        widget.destroy_include_protected_items = override
+        policy = _CP8PolicyAccess.get(widget)
+        original_hit = type(policy).get_hard_protection_hit
+
+        def hit(
+            owner: ProtectionPolicy, item: InventoryItemInfo, rules: list[tuple[int, SellRule]]
+        ) -> tuple[str, str] | None:
+            if owner is policy and 'salvage' in trace:
+                trace.append(('sale-protection', item.item_id))
+            return original_hit(owner, item, rules)
+
+        try:
+            _cp9_prepare_phase(widget, [protected, sale], restore, trace, claims)
+            restore.binding(type(policy), 'get_hard_protection_hit', hit)
+            plan = _cp9_build(widget)
+            _requirement_contract_expect(plan.merchant_sell_item_ids, [92], 'CP9 actual nonempty sale phase')
+            _expect(91 in claims[0] and 92 in claims[0], 'CP9 shared earlier/sale claims')
+            destroy_entries = [row for row in plan.entries if row.action_type == 'destroy']
+            _expect(len(destroy_entries) == 1, 'CP9 one explicit destroy outcome')
+            entry = destroy_entries[0]
+            _requirement_contract_expect(
+                (entry.merchant_type, entry.label, entry.quantity, entry.model_id),
+                ('inventory', 'Runtime Axe', 1, 970),
+                'CP9 destroy entry identity and quantity',
+            )
+            if override:
+                _requirement_contract_expect(plan.destroy_item_ids, [91], 'CP9 deliberate destroy item')
+                _requirement_contract_expect(
+                    [
+                        (
+                            row.item_id,
+                            row.model_id,
+                            row.label,
+                            row.quantity_to_destroy,
+                            row.source_quantity,
+                            row.keep_quantity,
+                            row.requires_split,
+                        )
+                        for row in plan.destroy_actions
+                    ],
+                    [(91, 970, 'Runtime Axe', 1, 1, 0, False)],
+                    'CP9 explicit permitted destroy action',
+                )
+                _requirement_contract_expect(
+                    (entry.state, entry.status_hint),
+                    ('will execute', ''),
+                    'CP9 permitted destroy entry',
+                )
+                _expect(
+                    entry.reason.startswith('Matched by ')
+                    and entry.reason.endswith('Included protected item: Protected by Protected Items: exact model.'),
+                    'CP9 deliberate protection override remains visible',
+                )
+            else:
+                expected_destroy: tuple[list[int], list[PlannedDestroyAction]] = ([], [])
+                _requirement_contract_expect(
+                    (plan.destroy_item_ids, plan.destroy_actions),
+                    expected_destroy,
+                    'CP9 protected destruction blocked',
+                )
+                _requirement_contract_expect(
+                    (entry.state, entry.status_hint),
+                    ('skipped', 'protected'),
+                    'CP9 blocked destroy entry',
+                )
+                _expect(
+                    entry.reason.startswith('Blocked by ')
+                    and entry.reason.endswith('Protected by Protected Items: exact model.'),
+                    'CP9 blocked destruction records protection',
+                )
+            _expect(trace[:3] == ['identify', 'destroy', 'salvage'], 'CP9 earlier phase ordering')
+            hits = [entry for entry in trace if isinstance(entry, tuple) and entry[0] == 'sale-protection']
+            _requirement_contract_expect(
+                hits,
+                [('sale-protection', 92)],
+                'CP9 destructive claim precedes sale protection',
+            )
+            _expect(trace.index('buy') > trace.index(hits[-1]), 'CP9 later buy follows sale allocation')
+            _expect(trace.index('cleanup') > trace.index('buy'), 'CP9 later cleanup ordering')
+            _expect(plan.has_actions, 'CP9 coordinator publishes has_actions')
+            results[str(override)] = {'plan': _cp9_value(plan), 'trace': trace, 'claims': sorted(claims[0])}
+        finally:
+            restore.restore()
+    return results
+
+
+class _CP9PlanCapture:
+    def __init__(self, plan: PlanResult) -> None:
+        self.plan = plan
+        self.supplied: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None
+        self.containers = (
+            plan.entries,
+            plan.material_sales,
+            plan.merchant_sell_item_ids,
+            plan.rune_trader_sales,
+        )
+
+    def __call__(
+        self,
+        *,
+        supported_map: bool,
+        supported_reason: str,
+        coords: dict[str, tuple[float, float] | None],
+    ) -> PlanResult:
+        _expect(self.supplied is None, 'CP9 exactly one captured construction')
+        self.supplied = (supported_map, supported_reason, coords)
+        self.plan.supported_map = supported_map
+        self.plan.supported_reason = supported_reason
+        self.plan.coords = coords
+        return self.plan
+
+    def check(self) -> None:
+        supplied = self.supplied
+        if supplied is None:
+            raise AssertionError('CP9 capture constructor was not reached')
+        _requirement_contract_expect(
+            (self.plan.supported_map, self.plan.supported_reason),
+            (True, 'CP9 supplied services'),
+            'CP9 supplied construction state retained',
+        )
+        _expect(
+            self.plan.supported_map is supplied[0]
+            and self.plan.supported_reason is supplied[1]
+            and self.plan.coords is supplied[2],
+            'CP9 exact supplied constructor references',
+        )
+        _expect(
+            all(
+                a is b
+                for a, b in zip(
+                    self.containers,
+                    (
+                        self.plan.entries,
+                        self.plan.material_sales,
+                        self.plan.merchant_sell_item_ids,
+                        self.plan.rune_trader_sales,
+                    ),
+                    strict=True,
+                )
+            ),
+            'CP9 captured borrowed containers retain identity',
+        )
+
+
+_cp9_material_failure = _CP9Checks.material_failure
+
+
+_cp9_equipment_failure = _CP9Checks.equipment_failure
+
+
+def _cp9_hard_claim_failure(module: types.ModuleType) -> dict[str, object]:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    failure = RuntimeError('CP9 entry append failure')
+
+    class Entries(list["ExecutionPlanEntry"]):
+        def append(self, item: ExecutionPlanEntry) -> None:
+            raise failure
+
+    widget = _cp9_widget(module)
+    restore = _CP8Restoration()
+    plan = PlanResult(entries=Entries())
+    item = _cp8_item(module, item_id=121)
+    widget.protected_item_model_ids = [970]
+    widget.sell_rules = [_cp9_rule(module)]
+    trace: list[str | tuple[str, int]] = []
+    claims: list[set[int]] = []
+    try:
+        _cp9_prepare_phase(widget, [item], restore, trace, claims)
+        capture = _CP9PlanCapture(plan)
+        restore.binding(module, 'PlanResult', capture)
+        _cp9_same_exception(lambda: _cp9_build(widget, empty_actions=True), failure)
+        capture.check()
+        _expect(
+            plan.entries is capture.containers[0] and isinstance(plan.entries, Entries),
+            'CP9 custom entry container remains installed',
+        )
+        _requirement_contract_expect(claims[0], {121}, 'CP9 hard protection claims before failed append')
+        _requirement_contract_expect(plan.entries, [], 'CP9 failed append remains absent')
+        _expect('buy' not in trace, 'CP9 exception stops later phases')
+        append_failure = {'plan': _cp9_value(plan), 'claims': sorted(claims[0]), 'trace': trace}
+    finally:
+        restore.restore()
+    return {'append_failure': append_failure, 'policy_after_effect': _cp9_policy_after_effect(module)}
+
+
+_cp9_policy_after_effect = _CP9Checks.policy_after_effect
+
+
+_cp9_diagnostic_failure = _CP9Checks.diagnostic_failure
+
+
+_cp9_fresh_collection = _CP9Checks.fresh_collection
+
+
+_cp9_sink_failure = _CP9Checks.sink_failure
+
+
+def _cp9_calls[T](operation: Callable[[], T], names: Mapping[str, str]) -> tuple[T, list[str]]:
+    events: list[str] = []
+    previous = sys.getprofile()
+
+    def observe(frame: types.FrameType, event: str, _value: object) -> None:
+        if event == 'call' and frame.f_code.co_name in names:
+            events.append(names[frame.f_code.co_name])
+
+    sys.setprofile(observe)
+    try:
+        return operation(), events
+    finally:
+        sys.setprofile(previous)
+
+
+_cp9_xunlai_orders = _CP9Checks.xunlai_orders
+
+
+_cp9_inventory_order = _CP9Checks.inventory_order
+
+
+_cp9_lifetime = _CP9Checks.lifetime
+
+
+def _cp9_literals(module: types.ModuleType) -> dict[str, object]:
+    operations: tuple[tuple[str, Callable[[], None]], ...] = (
+        (
+            _test_exact_rune_sell_rule_plans_matching_standalone_runes.__name__,
+            lambda: _test_exact_rune_sell_rule_plans_matching_standalone_runes(module),
+        ),
+        (
+            _test_exact_rune_sell_rule_reserves_names_from_broad_armor_rule.__name__,
+            lambda: _test_exact_rune_sell_rule_reserves_names_from_broad_armor_rule(module),
+        ),
+        (
+            _test_keep_count_claims_items_before_later_sell_rules.__name__,
+            lambda: _test_keep_count_claims_items_before_later_sell_rules(module),
+        ),
+        (
+            _test_common_material_rule_claims_stack_before_later_explicit_sell.__name__,
+            lambda: _test_common_material_rule_claims_stack_before_later_explicit_sell(module),
+        ),
+        (
+            _test_sell_material_targets_keep_counts_apply_per_model.__name__,
+            lambda: _test_sell_material_targets_keep_counts_apply_per_model(module),
+        ),
+        (
+            _test_sell_material_keep_zero_routes_common_leftovers_to_merchant.__name__,
+            lambda: _test_sell_material_keep_zero_routes_common_leftovers_to_merchant(module),
+        ),
+        (
+            _test_typed_exact_downstream_protection_contract.__name__,
+            lambda: _test_typed_exact_downstream_protection_contract(module),
+        ),
+    )
+    observations: dict[str, object] = {}
+    for name, operation in operations:
+        plans = _cp8_capture_plans(module, operation)
+        _expect(bool(plans), 'CP9 literal scenario reaches actual plan construction: ' + name)
+        observations[name] = plans
+    return observations
+
+
+def _cp9_planner(widget: object) -> SalePlanner:
+    from Sources.icefox.MerchantRules.planning import SalePlanner
+
+    value: object = getattr(widget, '_sale_planner', None)
+    if not isinstance(value, SalePlanner):
+        raise AssertionError('CP9 canonical per-widget SalePlanner')
+    return value
+
+
+def _test_cp9_sale_construction_owners(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning as p
+    from Sources.icefox.MerchantRules.configuration import RuneSellTarget
+    from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+    from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset
+
+    for legacy, canonical in (
+        ('_is_common_crafting_material_model', 'is_common_crafting_material_model'),
+        ('_is_rare_crafting_material_model', 'is_rare_crafting_material_model'),
+        ('_get_material_batch_size_for_model', 'material_batch_size'),
+        ('_normalize_rune_identifier_tuple', 'normalize_rune_identifier_tuple'),
+    ):
+        function: object = getattr(p, canonical)
+        _expect(getattr(module, legacy) is function, 'CP9 canonical compatibility alias ' + legacy)
+        if not isinstance(function, types.FunctionType):
+            raise AssertionError('CP9 canonical primitive function')
+        _expect(function.__globals__ is p.__dict__, 'CP9 canonical defining globals')
+        if canonical in ('is_common_crafting_material_model', 'is_rare_crafting_material_model'):
+            _expect(getattr(p, legacy) is function, 'CP9 public/private planning predicate identity')
+    for name in ('MERCHANT_TYPE_RARE_MATERIALS', 'RUNE_STANDALONE_KIND', 'WEAPON_MOD_STANDALONE_KIND'):
+        _expect(getattr(module, name) is getattr(p, name), 'CP9 routing scalar alias ' + name)
+
+    fixture_namespace: Mapping[str, object] = _CP9Checks.__dict__
+    for legacy, public in (
+        ('_cp9_prepare_phase', 'prepare_phase'),
+        ('_cp9_build', 'build'),
+        ('_cp9_material_failure', 'material_failure'),
+        ('_cp9_equipment_failure', 'equipment_failure'),
+        ('_cp9_policy_after_effect', 'policy_after_effect'),
+        ('_cp9_diagnostic_failure', 'diagnostic_failure'),
+        ('_cp9_fresh_collection', 'fresh_collection'),
+        ('_cp9_sink_failure', 'sink_failure'),
+        ('_cp9_xunlai_orders', 'xunlai_orders'),
+        ('_cp9_inventory_order', 'inventory_order'),
+        ('_cp9_lifetime', 'lifetime'),
+        ('_test_cp9_sale_delegates', 'sale_delegates'),
+    ):
+        descriptor = fixture_namespace[public]
+        fixture_function: object = getattr(descriptor, '__func__', None)
+        if not isinstance(fixture_function, types.FunctionType):
+            raise AssertionError('CP9 concrete static fixture function')
+        _expect(isinstance(descriptor, staticmethod), 'CP9 fixture method has a static descriptor')
+        _expect(
+            globals()[legacy] is fixture_function and getattr(_CP9Checks, public) is fixture_function,
+            'CP9 fixture compatibility binding is the identical function',
+        )
+        _expect(fixture_function.__globals__ is globals(), 'CP9 fixture defining globals remain side-local')
+        _expect(
+            fixture_function.__name__ == public and fixture_function.__qualname__ == '_CP9Checks.' + public,
+            'CP9 intentional public static fixture metadata',
+        )
+
+    first, second = _cp9_widget(module), _cp9_widget(module)
+    owner, other = _cp9_planner(first), _cp9_planner(second)
+    _expect(owner is not other, 'CP9 per-widget planner identity')
+    fields: Mapping[str, object] = dict(vars(owner))
+    expected_fields = {
+        '_inventory_item_type',
+        '_choose_keep_subset',
+        '_sell_kind_labels',
+        '_merchant_type_labels',
+        '_model_label',
+        '_rune_label',
+        '_item_label',
+        '_rule_reference',
+        '_withdrawal_label',
+        '_diagnostic',
+    }
+    _requirement_contract_expect(set(fields), expected_fields, 'CP9 reference-only retained dependencies')
+    _expect(fields['_inventory_item_type'] is InventoryItemInfo, 'CP9 supplied canonical runtime class')
+    _expect(fields['_choose_keep_subset'] is choose_keep_subset, 'CP9 supplied canonical stack selector')
+    _expect(fields['_sell_kind_labels'] is module.SELL_KIND_LABELS, 'CP9 shared wording mapping reference')
+    _expect(
+        fields['_merchant_type_labels'] is module.MERCHANT_TYPE_LABELS,
+        'CP9 shared merchant wording reference',
+    )
+    _expect(
+        'InventoryItemInfo' not in vars(p) and 'ProtectionPolicy' not in vars(p),
+        'CP9 no runtime type imports into planning',
+    )
+
+    def wording(*_args: object) -> str:
+        raise AssertionError('CP9 constructor evaluated a wording provider')
+
+    def diagnostic(_message: str) -> None:
+        raise AssertionError('CP9 constructor evaluated diagnostics')
+
+    def choose(_items: list[InventoryItemInfo], _count: int) -> set[int]:
+        raise AssertionError('CP9 constructor evaluated stack selection')
+
+    class NarrowInventory(InventoryItemInfo):
+        pass
+
+    probe = p.SalePlanner(
+        inventory_item_type=NarrowInventory,
+        choose_keep_subset=choose,
+        sell_kind_labels=module.SELL_KIND_LABELS,
+        merchant_type_labels=module.MERCHANT_TYPE_LABELS,
+        model_label=wording,
+        rune_label=wording,
+        item_label=wording,
+        rule_reference=wording,
+        withdrawal_label=wording,
+        diagnostic=diagnostic,
+    )
+    item = _cp8_item(module, item_id=601, model_id=921, quantity=10, is_material=True)
+    quantities = {601: 10}
+    _requirement_contract_expect(
+        probe.plan_material_sales([item], quantities, 0), [], 'CP9 actual supplied-class isinstance gate'
+    )
+    _requirement_contract_expect(quantities, {601: 10}, 'CP9 mismatched runtime class is not allocated')
+    _expect(
+        p.PlanResult is module.PlanResult and p.PlannedMaterialSale is module.PlannedMaterialSale,
+        'CP9 record identities preserved',
+    )
+
+    first.sell_rules = [
+        _cp9_rule(module, rule_id='cp9-weapons'),
+        _cp9_rule(module, rule_id='cp9-armor', kind='sell_armor', include_standalone_runes=True),
+        _cp9_rule(
+            module,
+            rule_id='cp9-rune',
+            kind='sell_rune_trader_target',
+            rune_sell_targets=[RuneSellTarget('Rune', 0)],
+        ),
+        _cp9_rule(
+            module,
+            rule_id='cp9-material',
+            kind='sell_common_materials',
+            whitelist_targets=[WhitelistTarget(921, 0)],
+        ),
+    ]
+    items = [
+        _cp8_item(module, item_id=611),
+        _cp8_item(module, item_id=612, is_weapon_like=False, is_armor_piece=True),
+        _cp8_item(module, item_id=613, is_weapon_like=False, standalone_kind='rune', rune_identifiers=['Rune']),
+        _cp8_item(module, item_id=614, model_id=921, quantity=11, is_material=True, is_weapon_like=False),
+    ]
+    restore = _CP8Restoration()
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError('CP9 allocation bounced back to widget allocation helper')
+
+    try:
+        _cp9_prepare_phase(first, items, restore, [], [])
+        for name in ('_plan_equippable_rule_sales', '_plan_rune_sell_target_sales', '_plan_material_sales'):
+            restore.binding(first, name, forbidden)
+        plan, calls = _cp9_calls(
+            lambda: _cp9_build(first),
+            {
+                'allocate_inventory_sales': 'inventory',
+                'plan_equippable_sales': 'equipment',
+                'plan_rune_target_sales': 'rune',
+                'plan_material_sales': 'material',
+            },
+        )
+        _requirement_contract_expect(
+            calls,
+            ['inventory', 'equipment', 'equipment', 'rune', 'material'],
+            'CP9 actual canonical allocation owners',
+        )
+        _requirement_contract_expect(plan.merchant_sell_item_ids, [611, 612, 614], 'CP9 real sales from owner')
+        _requirement_contract_expect([sale.item_id for sale in plan.rune_trader_sales], [613], 'CP9 exact rune owner')
+        _expect(
+            all(vars(owner)[name] is value for name, value in fields.items()) and set(vars(owner)) == expected_fields,
+            'CP9 owner retains no call-local allocation state',
+        )
+    finally:
+        restore.restore()
+
+
+_test_cp9_sale_delegates = _CP9Checks.sale_delegates
+
+
+_CP9_CASES: tuple[tuple[str, Callable[[types.ModuleType], dict[str, object]]], ...] = (
+    ('cp9_sale_nonempty_phase', _cp9_phase),
+    ('cp9_sale_material_failure', _cp9_material_failure),
+    ('cp9_sale_equipment_failure', _cp9_equipment_failure),
+    ('cp9_sale_hard_claim_failure', _cp9_hard_claim_failure),
+    ('cp9_sale_diagnostic_failure', _cp9_diagnostic_failure),
+    ('cp9_sale_fresh_collection', _cp9_fresh_collection),
+    ('cp9_sale_sink_failure', _cp9_sink_failure),
+    ('cp9_sale_xunlai_order_sharing', _cp9_xunlai_orders),
+    ('cp9_sale_inventory_order', _cp9_inventory_order),
+    ('cp9_sale_lifetime_late_routes', _cp9_lifetime),
+    ('cp9_sale_literal_allocations', _cp9_literals),
+)
+
+
+def _cp9_observations(module: types.ModuleType) -> dict[str, object]:
+    return {name: operation(module) for name, operation in _CP9_CASES}
+
+
+_CP9_INPUTS: tuple[str, ...] = (
+    'Widgets/Guild Wars/Items & Loot/MerchantRules.py',
+    '.local-tests/merchant-rules/test_merchant_rules_regression.py',
+    'Sources/icefox/__init__.py',
+    'Sources/icefox/MerchantRules/__init__.py',
+    'Sources/icefox/MerchantRules/catalog.py',
+    'Sources/icefox/MerchantRules/catalog_search.py',
+    'Sources/icefox/MerchantRules/configuration.py',
+    'Sources/icefox/MerchantRules/inventory_evidence.py',
+    'Sources/icefox/MerchantRules/item_values.py',
+    'Sources/icefox/MerchantRules/planning.py',
+    'Sources/icefox/MerchantRules/preview_status.py',
+    'Sources/icefox/MerchantRules/preview_text.py',
+    'Sources/icefox/MerchantRules/profiles.py',
+    'Sources/icefox/MerchantRules/requirement_protection.py',
+    'Sources/icefox/MerchantRules/salvage_options.py',
+    'Sources/icefox/MerchantRules/service_observation.py',
+    'Sources/icefox/MerchantRules/stack_selection.py',
+    'Sources/icefox/MerchantRules/weapon_mod_normalization.py',
+    'Py4GWCoreLib/enums_src/Model_enums.py',
+    'Py4GWCoreLib/enums_src/Title_enums.py',
+    'Widgets/Data/merchant_rules_catalog.json',
+    'Widgets/Data/modelid_drop_data.json',
+    'Sources/frenkeyLib/ItemHandling/Items/items.json',
+    'Sources/marks_sources/mods_data/runes.json',
+    'Py4GWCoreLib/routines_src/behaviourtrees_src/items.py',
+    'Sources/frenkeyLib/ItemHandling/BTNodes.py',
+    'Widgets/System/Messaging.py',
+    'pyproject.toml',
+    'pyrightconfig.json',
+)
+
+
+def _cp9_guard(path: Path) -> Path:
+    import stat
+
+    absolute = path.absolute()
+    excluded = {
+        '.shatter-static-bf1x6b9l',
+        '_hr_typecheck_odz4_ms_',
+        '_sy_naming_validation_el_msghe',
+        '_sy_naming_validation_a_aoiqsp',
+    }
+    _expect(not any(part in excluded for part in absolute.parts), 'CP9 excluded path')
+    for component in (*reversed(absolute.parents), absolute):
+        metadata = component.lstat()
+        _expect(
+            not stat.S_ISLNK(metadata.st_mode)
+            and not (getattr(metadata, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT),
+            'CP9 reparse boundary: ' + str(component),
+        )
+    return absolute
+
+
+def _cp9_pins(root: Path) -> dict[str, str]:
+    from hashlib import sha256
+
+    _cp9_guard(root)
+    sources = _cp9_guard(root / 'Sources')
+    try:
+        (sources / '__init__.py').lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError('CP9 Sources/__init__.py must remain absent')
+    return {relative: sha256(_cp9_guard(root / relative).read_bytes()).hexdigest() for relative in _CP9_INPUTS}
+
+
+_CP9_ENV_KEYS: tuple[str, ...] = (
+    'PYTHONDONTWRITEBYTECODE',
+    'PYTHONPATH',
+    'PYTHONHOME',
+    'PYTHONNOUSERSITE',
+    'PYTHONUTF8',
+    'PYTHONIOENCODING',
+    'PYTHONPYCACHEPREFIX',
+    'PYTHONHASHSEED',
+    'PYTHONSAFEPATH',
+    'PYTHONWARNINGS',
+    'PYTHONOPTIMIZE',
+    'TEMP',
+    'TMP',
+    'TMPDIR',
+    'BLACK_CACHE_DIR',
+    'RUFF_CACHE_DIR',
+    'NODE_OPTIONS',
+    'NODE_PATH',
+    'VIRTUAL_ENV',
+    'MERCHANT_RULES_CATALOG_CONTRACTS',
+    'MERCHANT_RULES_CATALOG_ONLY',
+    'MERCHANT_RULES_SALVAGE_KIT_ONLY',
+    'MERCHANT_RULES_CP5_FIXTURE_ROOT',
+    'MERCHANT_RULES_CP4_DIFFERENTIAL_CONFIG',
+    'MERCHANT_RULES_CP5_DIFFERENTIAL_CONFIG',
+    'MERCHANT_RULES_CP6_DIFFERENTIAL_CONFIG',
+    'MERCHANT_RULES_CP7_COLD_IMPORT_CONFIG',
+    'MERCHANT_RULES_CP7_DIFFERENTIAL_CONFIG',
+    'MERCHANT_RULES_CP8_COLD_IMPORT_CONFIG',
+    'MERCHANT_RULES_CP8_DIFFERENTIAL_CONFIG',
+    'MERCHANT_RULES_CP9_ORACLE_ROOT',
+    'MERCHANT_RULES_CP9_OUTPUT_PARENT',
+)
+
+
+def _cp9_environment(environment: Mapping[str, str]) -> dict[str, object]:
+    return {
+        key: {'set': True, 'value': environment[key]} if key in environment else {'set': False} for key in _CP9_ENV_KEYS
+    }
+
+
+def _cp9_write_json(path: Path, value: object) -> None:
+    _cp9_guard(path.parent)
+    with path.open('x', encoding='utf-8', newline='\n') as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write('\n')
+
+
+def _cp9_write_bytes(path: Path, value: bytes) -> None:
+    _cp9_guard(path.parent)
+    with path.open('xb') as stream:
+        stream.write(value)
+
+
+def _cp9_attempt(label: str, operation: Callable[[], object], errors: list[str]) -> None:
+    try:
+        operation()
+    except Exception as error:
+        errors.append(label + ': ' + type(error).__name__ + ': ' + str(error))
+
+
+def _cp9_preserve_failure(primary: BaseException | None, errors: list[str]) -> None:
+    if errors:
+        message = 'CP9 evidence/final-state failures: ' + '; '.join(errors)
+        if primary is not None:
+            primary.add_note(message)
+        else:
+            raise AssertionError(message)
+
+
+def _cp9_final_state(root: Path) -> dict[str, object]:
+    from hashlib import sha256
+
+    pins: dict[str, str] = {}
+    errors: list[str] = []
+    namespace_absent = False
+    try:
+        _cp9_guard(root)
+    except Exception as error:
+        return {'pins': pins, 'namespace_absent': False, 'errors': [type(error).__name__ + ': ' + str(error)]}
+    for relative in _CP9_INPUTS:
+        try:
+            pins[relative] = sha256(_cp9_guard(root / relative).read_bytes()).hexdigest()
+        except Exception as error:
+            errors.append(relative + ': ' + type(error).__name__ + ': ' + str(error))
+    try:
+        source_parent = _cp9_guard(root / 'Sources')
+        try:
+            (source_parent / '__init__.py').lstat()
+        except FileNotFoundError:
+            namespace_absent = True
+        else:
+            errors.append('Sources/__init__.py unexpectedly exists')
+    except Exception as error:
+        errors.append('namespace parent: ' + type(error).__name__ + ': ' + str(error))
+    return {'pins': pins, 'namespace_absent': namespace_absent, 'errors': errors}
+
+
+def _cp9_capture_final(
+    roots: Mapping[str, Path],
+    before: Mapping[str, dict[str, str]],
+    final: dict[str, object],
+    errors: list[str],
+) -> None:
+    for name, root in roots.items():
+        try:
+            observed = _cp9_final_state(root)
+            final[name] = observed
+            if observed['errors'] or not observed['namespace_absent']:
+                errors.append(name + ': incomplete or invalid final capture')
+            if name in before and observed['pins'] != before[name]:
+                errors.append(name + ': source pins changed')
+            if name not in before:
+                errors.append(name + ': initial capture unavailable; final capture does not establish equality')
+        except Exception as error:
+            final[name] = {'capture_error': type(error).__name__ + ': ' + str(error)}
+            errors.append(name + ': final capture failed')
+
+
+def _cp9_stream_bytes(value: object) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode('utf-8')
+    return b''
+
+
+def _cp9_run_process(
+    command: list[str],
+    cwd: Path,
+    environment: dict[str, str],
+    location: Path,
+    launch: dict[str, object],
+    *,
+    timeout: float,
+    allowed_exits: tuple[int, ...] = (0,),
+) -> subprocess.CompletedProcess[bytes]:
+    from hashlib import sha256
+    from time import monotonic
+
+    started = monotonic()
+    stdout = b''
+    stderr = b''
+    stdout_available = False
+    stderr_available = False
+    primary: BaseException | None = None
+    completed: subprocess.CompletedProcess[bytes] | None = None
+    launch.update(
+        {
+            'command': command,
+            'cwd': str(cwd),
+            'environment': _cp9_environment(environment),
+            'status': 'not-started',
+            'exit': None,
+            'timeout_seconds': timeout,
+        }
+    )
+    errors: list[str] = []
+    try:
+        launch['executable_sha256'] = sha256(_cp9_guard(Path(command[0])).read_bytes()).hexdigest()
+        launch['status'] = 'launch-attempted'
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=environment,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        stdout, stderr = completed.stdout, completed.stderr
+        stdout_available = stderr_available = True
+        launch.update({'status': 'exited', 'exit': completed.returncode})
+        if completed.returncode not in allowed_exits:
+            primary = AssertionError('CP9 command exited with ' + str(completed.returncode) + ': ' + str(location))
+    except subprocess.TimeoutExpired as error:
+        primary = error
+        launch.update({'status': 'timed-out', 'exit': None})
+        stdout_available = error.output is not None
+        stderr_available = error.stderr is not None
+        stdout = _cp9_stream_bytes(error.output)
+        stderr = _cp9_stream_bytes(error.stderr)
+        raise
+    except BaseException as error:
+        primary = error
+        if launch['status'] == 'launch-attempted':
+            launch['status'] = 'launch-or-wait-exception'
+        raise
+    finally:
+        launch['elapsed_seconds'] = monotonic() - started
+        launch['exception'] = (
+            None
+            if primary is None
+            else {
+                'type': type(primary).__name__,
+                'message': str(primary),
+            }
+        )
+        launch['stream_bytes'] = {'stdout': len(stdout), 'stderr': len(stderr)}
+        launch['stream_capture'] = {
+            'complete': launch['status'] == 'exited',
+            'stdout_available': stdout_available,
+            'stderr_available': stderr_available,
+        }
+        _cp9_attempt('stdout write', lambda: _cp9_write_bytes(location / 'stdout.txt', stdout), errors)
+        _cp9_attempt('stderr write', lambda: _cp9_write_bytes(location / 'stderr.txt', stderr), errors)
+        launch['evidence_errors'] = list(errors)
+        _cp9_attempt('launch write', lambda: _cp9_write_json(location / 'launch.json', launch), errors)
+        _cp9_preserve_failure(primary, errors)
+    if primary is not None:
+        raise primary
+    return completed
+
+
+def _cp9_bindings(module: types.ModuleType) -> dict[str, str]:
+    from Sources.icefox.MerchantRules.configuration import SellRule
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+    from Sources.icefox.MerchantRules.planning import PlanResult
+    from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+    _expect(
+        module.SellRule is SellRule
+        and module.InventoryItemInfo is InventoryItemInfo
+        and module.PlanResult is PlanResult
+        and module.ProtectionPolicy is ProtectionPolicy,
+        'CP9 side-local canonical classes',
+    )
+    root = REPO_ROOT.resolve()
+    origins: dict[str, str] = {}
+    for name, loaded in tuple(sys.modules.items()):
+        if not (name.startswith('Sources.icefox') or name == module.__name__):
+            continue
+        filename: object = getattr(loaded, '__file__', None)
+        _expect(isinstance(filename, str), 'CP9 owning module has a source origin: ' + name)
+        if not isinstance(filename, str):
+            raise AssertionError(name)
+        origin = _cp9_guard(Path(filename))
+        _expect(origin.is_relative_to(root), 'CP9 foreign production origin: ' + str(origin))
+        origins[name] = str(origin.relative_to(root))
+        namespace: Mapping[str, object] = vars(loaded)
+        for value in namespace.values():
+            if isinstance(value, types.FunctionType) and value.__module__ == name:
+                _expect(Path(value.__code__.co_filename).resolve() == origin, 'CP9 defining code origin')
+                _expect(value.__globals__ is vars(loaded), 'CP9 defining globals remain side-local')
+    widget_type: object = module.MerchantRulesWidget
+    if not isinstance(widget_type, type):
+        raise AssertionError('CP9 widget owner is a class')
+    widget_namespace: Mapping[str, object] = vars(widget_type)
+    for value in widget_namespace.values():
+        if isinstance(value, types.FunctionType):
+            _expect(
+                Path(value.__code__.co_filename).resolve() == MERCHANT_RULES_PATH.resolve()
+                and value.__globals__ is vars(module),
+                'CP9 widget method closure is source-bound',
+            )
+    return origins
+
+
+def _cp9_cold_widget(scratch: Path) -> dict[str, object]:
+    from typing import get_type_hints
+
+    events: list[str] = []
+    _install_stub_modules(scratch)
+    database: object = getattr(sys.modules['Sources.marks_sources.mods_parser'], 'ModDatabase')
+    _expect(isinstance(database, type), 'CP9 stub database class')
+    original_load: object = getattr(database, 'load')
+    if not isinstance(original_load, types.FunctionType):
+        raise AssertionError('CP9 stub database loader')
+
+    def load(path: str) -> object:
+        result: object = original_load(path)
+        events.append('mod_database_initialized')
+        return result
+
+    setattr(database, 'load', staticmethod(load))
+
+    class Watch(importlib.abc.MetaPathFinder):
+        def find_spec(
+            self,
+            fullname: str,
+            path: Sequence[str] | None = None,
+            target: types.ModuleType | None = None,
+        ) -> importlib.machinery.ModuleSpec | None:
+            if fullname == 'Sources.icefox.MerchantRules.planning':
+                events.append('planning')
+                _expect(
+                    'Sources.icefox.MerchantRules.requirement_protection' not in sys.modules,
+                    'CP9 planning precedes protection acquisition',
+                )
+            if fullname == 'Sources.icefox.MerchantRules.requirement_protection':
+                partial = sys.modules.get('merchant_rules_regression_target')
+                _expect(
+                    partial is not None and 'MOD_DB' in vars(partial),
+                    'CP9 MOD_DB bound before first protection acquisition',
+                )
+                events.append('requirement_first_acquisition')
+            return None
+
+    annotations: Mapping[str, object] = get_type_hints(Watch.find_spec)
+    _expect(
+        annotations['return'] == importlib.machinery.ModuleSpec | None
+        and annotations['target'] == types.ModuleType | None
+        and annotations['path'] == Sequence[str] | None,
+        'CP9 watcher annotations resolve through the global importlib binding',
+    )
+    watcher = Watch()
+    sys.meta_path.insert(0, watcher)
+    try:
+        spec = importlib.util.spec_from_file_location('merchant_rules_regression_target', MERCHANT_RULES_PATH)
+        if spec is None or spec.loader is None:
+            raise AssertionError('CP9 widget import specification')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        setattr(module, 'PROFILE_BACKEND', sys.modules['Sources.icefox.MerchantRules.profiles'])
+    finally:
+        sys.meta_path.remove(watcher)
+    _requirement_contract_expect(
+        events,
+        ['planning', 'mod_database_initialized', 'requirement_first_acquisition'],
+        'CP9 real widget-driven acquisition order',
+    )
+    from Sources.icefox.MerchantRules import planning
+
+    candidate = hasattr(planning, 'SalePlanner')
+    if candidate:
+        _test_cp9_sale_construction_owners(module)
+    return {
+        'annotations_resolved': True,
+        'events': events,
+        'bindings': _cp9_bindings(module),
+        'candidate_constructor_checked': candidate,
+        'loader': 'widget stub packages; namespace proof is a separate child',
+    }
+
+
+def _cp9_is_path(value: object) -> TypeGuard[str | bytes | os.PathLike[str] | os.PathLike[bytes]]:
+    return isinstance(value, (str, bytes, os.PathLike))
+
+
+def _cp9_child(mode: str, scratch: Path) -> int:
+    import importlib
+
+    primary: BaseException | None = None
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    errors: list[str] = []
+    storage_ready = False
+    result: dict[str, object] = {}
+    try:
+        _cp9_guard(scratch)
+        _expect(
+            not scratch.is_relative_to(REPO_ROOT) and not REPO_ROOT.is_relative_to(scratch),
+            'CP9 source and writable storage roots are disjoint',
+        )
+        storage_ready = True
+        before['source'] = _cp9_pins(REPO_ROOT)
+        _expect(
+            not any(name == 'Sources' or name.startswith('Sources.') for name in sys.modules),
+            'CP9 fresh process starts without project packages',
+        )
+        sys.path.insert(0, str(REPO_ROOT))
+
+        def owned_write(raw: object) -> None:
+            if not _cp9_is_path(raw):
+                return
+            path = Path(os.path.abspath(os.fsdecode(raw)))
+            _expect(path.is_relative_to(scratch), 'CP9 write outside owned storage: ' + str(path))
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                _cp9_guard(path.parent)
+            else:
+                _cp9_guard(path)
+
+        def audit(event: str, arguments: tuple[object, ...]) -> None:
+            if event.startswith('socket.') or event in ('ctypes.dlopen', 'subprocess.Popen'):
+                raise RuntimeError('CP9 offline child forbids ' + event)
+            if event == 'open':
+                flags = arguments[2]
+                if isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC):
+                    owned_write(arguments[0])
+            elif event in ('os.mkdir', 'os.remove', 'os.rmdir', 'shutil.rmtree'):
+                owned_write(arguments[0])
+            elif event in ('os.rename', 'os.replace'):
+                owned_write(arguments[0])
+                owned_write(arguments[1])
+
+        sys.addaudithook(audit)
+        if mode == 'planning':
+            planning = importlib.import_module('Sources.icefox.MerchantRules.planning')
+            parent = sys.modules['Sources']
+            spec = parent.__spec__
+            if getattr(parent, '__file__', None) is not None or spec is None or spec.origin is not None:
+                raise AssertionError('CP9 actual namespace parent')
+            locations = spec.submodule_search_locations
+            if locations is None or list(locations) != [str(REPO_ROOT / 'Sources')]:
+                raise AssertionError('CP9 namespace uses exactly the selected root')
+            for name in (
+                'Py4GWCoreLib',
+                'Sources.icefox.MerchantRules.inventory_evidence',
+                'Sources.icefox.MerchantRules.requirement_protection',
+            ):
+                _expect(name not in sys.modules, 'CP9 isolated planning acquired forbidden dependency: ' + name)
+            filename = planning.__file__
+            if (
+                filename is None
+                or Path(filename).resolve() != (REPO_ROOT / 'Sources/icefox/MerchantRules/planning.py').resolve()
+            ):
+                raise AssertionError('CP9 canonical planning origin')
+            candidate_routes = hasattr(planning, 'SalePlanner')
+            if candidate_routes:
+                _requirement_contract_expect(planning.material_batch_size(921), 10, 'CP9 cold pure batch primitive')
+                _requirement_contract_expect(
+                    planning.material_destination(923),
+                    'rare_material_trader',
+                    'CP9 cold pure destination primitive',
+                )
+            result = {
+                'namespace': True,
+                'eager_inventory': False,
+                'eager_protection': False,
+                'sale_routes': candidate_routes,
+            }
+        elif mode == 'widget':
+            result = _cp9_cold_widget(scratch)
+        elif mode == 'observations':
+            module: types.ModuleType = _load_merchant_rules_module(scratch)
+            origins = _cp9_bindings(module)
+            result = {
+                'values': _cp9_observations(module),
+                'bindings': origins,
+                'within_process_identity_assertions': True,
+            }
+            _cp9_bindings(module)
+        else:
+            raise AssertionError('CP9 unknown child mode: ' + mode)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        _cp9_capture_final({'source': REPO_ROOT}, before, final, errors)
+        record = {
+            'mode': mode,
+            'status': 'failed' if primary is not None or errors else 'completed',
+            'exception': None if primary is None else {'type': type(primary).__name__, 'message': str(primary)},
+            'source_root': str(REPO_ROOT),
+            'widget_path': str(MERCHANT_RULES_PATH),
+            'script_dir': str(SCRIPT_DIR),
+            'storage_root': str(scratch),
+            'flags': {
+                'isolated': sys.flags.isolated,
+                'no_site': sys.flags.no_site,
+                'dont_write_bytecode': sys.flags.dont_write_bytecode,
+                'optimize': sys.flags.optimize,
+                'utf8_mode': sys.flags.utf8_mode,
+            },
+            'environment': _cp9_environment(os.environ),
+            'before': before,
+            'final': final,
+            'evidence_errors': errors,
+        }
+        if storage_ready:
+            _cp9_attempt('child final write', lambda: _cp9_write_json(scratch / 'child-final.json', record), errors)
+        else:
+            _cp9_attempt('child final stream', lambda: print('CP9_FINAL=' + json.dumps(record, sort_keys=True)), errors)
+        _cp9_preserve_failure(primary, errors)
+    print('CP9_JSON=' + json.dumps(result, sort_keys=True))
+    return 0
+
+
+def _cp9_external(kind: str) -> dict[str, object]:
+    from uuid import uuid4
+
+    _expect(kind in ('cold', 'differential'), 'CP9 known external run kind')
+    parent = _cp9_guard(Path(os.environ['MERCHANT_RULES_CP9_OUTPUT_PARENT']))
+    oracle = Path(os.environ['MERCHANT_RULES_CP9_ORACLE_ROOT'])
+    candidate = REPO_ROOT
+    _expect(
+        not parent.is_relative_to(oracle) and not parent.is_relative_to(candidate),
+        'CP9 output parent outside source roots',
+    )
+    output = parent / ('cp9-' + kind + '-' + str(uuid4()))
+    output.mkdir()
+    roots = {'oracle': oracle, 'candidate': candidate}
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    reports: dict[str, object] = {}
+    errors: list[str] = []
+    primary: BaseException | None = None
+    comparison = 'not-started' if kind == 'differential' else 'not-applicable'
+    modes = ('planning', 'widget') if kind == 'cold' else ('observations',)
+    jobs: dict[str, dict[str, object]] = {
+        side + '-' + mode: {'status': 'not-started', 'exit': None} for side in roots for mode in modes
+    }
+    try:
+        _cp9_guard(oracle)
+        _cp9_guard(candidate)
+        _expect(
+            oracle != candidate and not oracle.is_relative_to(candidate) and not candidate.is_relative_to(oracle),
+            'CP9 independent source roots',
+        )
+        for name, root in roots.items():
+            before[name] = _cp9_pins(root)
+        fixed = {
+            'Widgets/Guild Wars/Items & Loot/MerchantRules.py': 'b2f1298ac427e71148da726b2c819ba5da81123bfe77f7e5e53e5cdc0375d6a2',
+            'Sources/icefox/MerchantRules/planning.py': 'eb24b25326ed8adc513437f24ef49fd4e04a34a6edfe7ca33195254a4b7535e8',
+            'Sources/icefox/MerchantRules/requirement_protection.py': 'e5a39aae5b9433738fe16bbfa80fe55e36548adc45dd246c369a67ca0fb966b6',
+        }
+        for relative, digest in fixed.items():
+            _requirement_contract_expect(before['oracle'][relative], digest, 'CP9 completed-CP8 oracle ' + relative)
+        for relative in _CP9_INPUTS:
+            if relative not in (
+                'Widgets/Guild Wars/Items & Loot/MerchantRules.py',
+                'Sources/icefox/MerchantRules/planning.py',
+            ):
+                _requirement_contract_expect(
+                    before['oracle'][relative],
+                    before['candidate'][relative],
+                    'CP9 identical non-production-delta input: ' + relative,
+                )
+        for side, root in roots.items():
+            for mode in modes:
+                key = side + '-' + mode
+                location = output / key
+                location.mkdir()
+                scratch = location / 'storage'
+                scratch.mkdir()
+                child = root / '.local-tests/merchant-rules/test_merchant_rules_regression.py'
+                command = [sys.executable, '-I', '-B', '-S', str(child), '--cp9-child', mode, str(scratch)]
+                environment = os.environ.copy()
+                environment['PYTHONDONTWRITEBYTECODE'] = '1'
+                for name in ('TEMP', 'TMP', 'TMPDIR'):
+                    environment[name] = str(scratch)
+                launch = jobs[key]
+                launch.update(
+                    {
+                        'source_pins': before[side],
+                        'source_root': str(root),
+                        'storage_root': str(scratch),
+                        'mode': mode,
+                    }
+                )
+                completed = _cp9_run_process(command, scratch, environment, location, launch, timeout=300)
+                records = [
+                    line.removeprefix('CP9_JSON=')
+                    for line in completed.stdout.decode('utf-8').splitlines()
+                    if line.startswith('CP9_JSON=')
+                ]
+                _expect(len(records) == 1, 'CP9 exactly one complete child observation')
+                report: object = json.loads(records[0])
+                reports[key] = report
+        if kind == 'differential':
+            comparison = 'comparing'
+            _requirement_contract_expect(
+                reports['oracle-observations'],
+                reports['candidate-observations'],
+                'CP9 complete cross-process values, ordered traces and binding shapes',
+            )
+            comparison = 'passed'
+    except BaseException as error:
+        primary = error
+        if comparison == 'comparing':
+            comparison = 'failed'
+        raise
+    finally:
+        _cp9_capture_final(roots, before, final, errors)
+        record = {
+            'kind': kind,
+            'status': 'failed' if primary is not None or errors else 'completed',
+            'exception': None if primary is None else {'type': type(primary).__name__, 'message': str(primary)},
+            'comparison': comparison,
+            'jobs': jobs,
+            'reports': reports,
+            'environment': _cp9_environment(os.environ),
+            'before': before,
+            'final': final,
+            'evidence_errors': errors,
+        }
+        _cp9_attempt('external report write', lambda: _cp9_write_json(output / 'report.json', record), errors)
+        _cp9_preserve_failure(primary, errors)
+    print('CP9 ' + kind + ' evidence: ' + str(output / 'report.json'))
+    return reports
+
+
+def _test_cp9_sale_cold_import() -> None:
+    reports = _cp9_external('cold')
+    _requirement_contract_expect(
+        set(reports),
+        {'oracle-planning', 'oracle-widget', 'candidate-planning', 'candidate-widget'},
+        'CP9 four fresh import/construction children',
+    )
+    current_widget = reports['candidate-widget']
+    current_planning = reports['candidate-planning']
+    if not isinstance(current_widget, _CP8ExternalRecord) or not isinstance(current_planning, _CP8ExternalRecord):
+        raise AssertionError('CP9 cold child record schema')
+    _requirement_contract_expect(
+        current_widget['candidate_constructor_checked'],
+        True,
+        'CP9 candidate constructor and supplied class proof reached',
+    )
+    _requirement_contract_expect(
+        current_planning['sale_routes'],
+        True,
+        'CP9 pure routes called without constructing a planner',
+    )
+
+
+def _test_cp9_sale_completed_cp8_differential() -> None:
+    reports = _cp9_external('differential')
+    _requirement_contract_expect(
+        set(reports),
+        {'oracle-observations', 'candidate-observations'},
+        'CP9 independently loaded completed-CP8 and candidate observations',
+    )
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -55138,6 +57437,16 @@ def main() -> int:
             ]
         )
 
+        tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP9_CASES)
+        tests.extend(
+            [
+                ("cp9_sale_construction_owners", lambda: _test_cp9_sale_construction_owners(module)),
+                ("cp9_sale_delegates", lambda: _test_cp9_sale_delegates(module)),
+                ("cp9_sale_cold_import", _test_cp9_sale_cold_import),
+                ("cp9_sale_completed_cp8_differential", _test_cp9_sale_completed_cp8_differential),
+            ]
+        )
+
         catalog_contract_tests = [
             (
                 "catalog_loader_indexes_typed_common_salvage_separately",
@@ -55195,4 +57504,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        if len(sys.argv) != 4 or sys.argv[1] != "--cp9-child":
+            raise SystemExit("Expected --cp9-child MODE OWNED_STORAGE, or no arguments.")
+        raise SystemExit(_cp9_child(sys.argv[2], Path(sys.argv[3])))
     raise SystemExit(main())
