@@ -39,8 +39,10 @@ from collections.abc import Callable, Generator
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import replace
+from functools import partial
 from itertools import permutations
 from itertools import product
 from pathlib import Path
@@ -35741,9 +35743,11 @@ def _test_jsonfactory_legacy_suffix_profile_isolation(module) -> None:
         )
 
 
-def _test_jsonfactory_unreadable_profile_console_deduplication(module) -> None:
+def _test_jsonfactory_unreadable_profile_console_deduplication(module: types.ModuleType) -> None:
     _reset_jsonfactory_persistence_fixture(module)
     widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    session = _cp10_session(widget)
+    loader_restore = _CP8Restoration()
     shared_scope = module.PROFILE_SCOPE_SHARED
     account_scope = module.PROFILE_SCOPE_ACCOUNT
     shared_doc = _saved_profiles_doc(module, shared_scope)
@@ -35786,7 +35790,7 @@ def _test_jsonfactory_unreadable_profile_console_deduplication(module) -> None:
         ]
 
     try:
-        module.ConsoleLog = _capture_console_log
+        setattr(module, "ConsoleLog", _capture_console_log)
         _expect(
             widget._refresh_profile_entries(shared_scope, reload_document=True),
             "The initial unreadable-profile scan should complete.",
@@ -35833,14 +35837,16 @@ def _test_jsonfactory_unreadable_profile_console_deduplication(module) -> None:
             "A changed unreadable profile must remain raw and unmodified.",
         )
 
-        original_loader = widget._load_profile_summary_from_key
+        original_loader = session.load_profile_summary_from_key
 
-        def _raise_changed_failure(scope: str, profile_key: str, raw_payload: object):
+        def _raise_changed_failure(
+            scope: str, profile_key: str, raw_payload: object, *, filename: str = ""
+        ) -> ProfileSummary:
             if scope == shared_scope and profile_key == "legacy_suffix":
                 raise ValueError("Synthetic changed profile failure.")
-            return original_loader(scope, profile_key, raw_payload)
+            return original_loader(scope, profile_key, raw_payload, filename=filename)
 
-        widget._load_profile_summary_from_key = _raise_changed_failure
+        loader_restore.binding(session, "load_profile_summary_from_key", _raise_changed_failure)
         widget._refresh_profile_entries(shared_scope, reload_document=True)
         changed_error_logs = _failure_logs()
         _expect(
@@ -35856,7 +35862,7 @@ def _test_jsonfactory_unreadable_profile_console_deduplication(module) -> None:
             len(_failure_logs()) == 4,
             "A newly unreadable shared key should log while the unchanged key stays quiet.",
         )
-        widget._load_profile_summary_from_key = original_loader
+        loader_restore.restore()
 
         account_unreadable = _build_unreadable_profile("Account Unreadable", 5)
         account_doc.set_json("legacy_suffix", account_unreadable)
@@ -35910,7 +35916,8 @@ def _test_jsonfactory_unreadable_profile_console_deduplication(module) -> None:
             "A reappearing unreadable shared key should log again after deletion.",
         )
     finally:
-        module.ConsoleLog = original_console_log
+        loader_restore.restore()
+        setattr(module, "ConsoleLog", original_console_log)
 
 
 def _test_jsonfactory_shared_profile_stale_write_protection(module) -> None:
@@ -36752,7 +36759,7 @@ def _test_jsonfactory_cross_scope_copy_and_manual_file_identity(module) -> None:
     _expect(manual_path.is_file() and duplicate_manual_path.is_file(), "Duplicate-file handling must leave both physical source files intact.")
 
 
-def _test_jsonfactory_profile_migration_is_resumable_and_payload_preserving(module) -> None:
+def _test_jsonfactory_profile_migration_is_resumable_and_payload_preserving(module: types.ModuleType) -> None:
     _reset_jsonfactory_persistence_fixture(module)
     widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
     shared_scope = module.PROFILE_SCOPE_SHARED
@@ -36856,12 +36863,24 @@ def _test_jsonfactory_profile_migration_is_resumable_and_payload_preserving(modu
     class SimulatedMigrationInterruption(BaseException):
         pass
 
-    original_persist_profile_wrapper = interrupted_widget._persist_profile_wrapper
+    interrupted_session = _cp10_session(interrupted_widget)
+    interruption_restore = _CP8Restoration()
+    original_persist_profile_wrapper = interrupted_session.persist_profile_wrapper
 
-    def _interrupt_migration(*_args, **_kwargs):
+    def _interrupt_migration(
+        scope: str,
+        profile_key: str,
+        wrapper: dict[str, object],
+        *,
+        filename: str,
+        preserve_wrapper: bool = False,
+        refresh_after: bool = True,
+        require_existing: bool = False,
+        expected_existing_fingerprint: str = "",
+    ) -> ProfileSummary:
         raise SimulatedMigrationInterruption()
 
-    interrupted_widget._persist_profile_wrapper = _interrupt_migration
+    interruption_restore.binding(interrupted_session, "persist_profile_wrapper", _interrupt_migration)
     try:
         _expect_raises(
             SimulatedMigrationInterruption,
@@ -36869,7 +36888,11 @@ def _test_jsonfactory_profile_migration_is_resumable_and_payload_preserving(modu
             "A simulated interruption should escape before a migration entry is marked complete.",
         )
     finally:
-        interrupted_widget._persist_profile_wrapper = original_persist_profile_wrapper
+        interruption_restore.restore()
+        _expect(
+            interrupted_session.persist_profile_wrapper == original_persist_profile_wrapper,
+            "CP10 interruption descriptor restored",
+        )
     interrupted_state = module.JsonFactory(module.PROFILE_MIGRATION_STATE_DOC_NAME, "global").get_json("", {})
     interrupted_record = interrupted_state.get("entries", {}).get(interrupted_key, {})
     _expect(interrupted_record.get("status") == "pending", "An interrupted migration should retain its durable pending old-key mapping.")
@@ -36886,20 +36909,41 @@ def _test_jsonfactory_profile_migration_is_resumable_and_payload_preserving(modu
         _legacy_wrapper("Retryable Migration", 505, _minimal_profile_payload(module, favorite_outpost_ids=[2])),
     )
     _expect(retry_doc.save(), "The retryable migration fixture should persist its legacy source document.")
-    retry_original_persist = retry_widget._persist_profile_wrapper
+    retry_session = _cp10_session(retry_widget)
+    retry_restore = _CP8Restoration()
+    retry_original_persist = retry_session.persist_profile_wrapper
     retry_failures = {"remaining": 1}
 
-    def _fail_migration_once(*args, **kwargs):
+    def _fail_migration_once(
+        scope: str,
+        profile_key: str,
+        wrapper: dict[str, object],
+        *,
+        filename: str,
+        preserve_wrapper: bool = False,
+        refresh_after: bool = True,
+        require_existing: bool = False,
+        expected_existing_fingerprint: str = "",
+    ) -> ProfileSummary:
         if retry_failures["remaining"]:
             retry_failures["remaining"] -= 1
             raise OSError("simulated profile-file write failure")
-        return retry_original_persist(*args, **kwargs)
+        return retry_original_persist(
+            scope,
+            profile_key,
+            wrapper,
+            filename=filename,
+            preserve_wrapper=preserve_wrapper,
+            refresh_after=refresh_after,
+            require_existing=require_existing,
+            expected_existing_fingerprint=expected_existing_fingerprint,
+        )
 
-    retry_widget._persist_profile_wrapper = _fail_migration_once
+    retry_restore.binding(retry_session, "persist_profile_wrapper", _fail_migration_once)
     try:
         _expect(retry_widget._refresh_profile_entries(shared_scope, reload_document=True), "A retryable migration write failure should be isolated without aborting refresh.")
     finally:
-        retry_widget._persist_profile_wrapper = retry_original_persist
+        retry_restore.restore()
     retry_state = module.JsonFactory(module.PROFILE_MIGRATION_STATE_DOC_NAME, "global").get_json("", {})
     retry_record = retry_state.get("entries", {}).get(retry_key, {})
     _expect(retry_record.get("status") == "pending", "An ordinary migration persistence failure should remain pending rather than becoming permanently invalid.")
@@ -36910,22 +36954,23 @@ def _test_jsonfactory_profile_migration_is_resumable_and_payload_preserving(modu
 
 def _test_jsonfactory_profile_path_and_filename_jail(module) -> None:
     widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
-    production_source = Path(module.__file__).read_text(encoding="utf-8")
-    for forbidden_pattern in (
-        r"(?<![A-Za-z0-9_])open\s*\(",
-        r"json\.load\s*\(",
-        r"json\.dump\s*\(",
-        r"os\.remove\s*\(",
-        r"os\.unlink\s*\(",
-        r"os\.rename\s*\(",
-        r"os\.replace\s*\(",
-        r"\.read_text\s*\(",
-        r"\.write_text\s*\(",
-    ):
-        _expect(
-            re.search(forbidden_pattern, production_source) is None,
-            f"Merchant Rules profile storage must not use {forbidden_pattern} in production.",
-        )
+    for production_path in (Path(module.__file__), REPO_ROOT / "Sources/icefox/MerchantRules/profiles.py"):
+        production_source = production_path.read_text(encoding="utf-8")
+        for forbidden_pattern in (
+            r"(?<![A-Za-z0-9_])open\s*\(",
+            r"json\.load\s*\(",
+            r"json\.dump\s*\(",
+            r"os\.remove\s*\(",
+            r"os\.unlink\s*\(",
+            r"os\.rename\s*\(",
+            r"os\.replace\s*\(",
+            r"\.read_text\s*\(",
+            r"\.write_text\s*\(",
+        ):
+            _expect(
+                re.search(forbidden_pattern, production_source) is None,
+                f"Merchant Rules profile storage must not use {forbidden_pattern} in production.",
+            )
     _expect(widget._profile_directory_from_bound_doc(module.PROFILE_SCOPE_SHARED).endswith(os.path.join("Widgets", "MerchantRules", "Profiles")), "Shared profile discovery should be grounded by the bound SharedProfiles JsonFactory path.")
     _expect(widget._profile_directory_from_bound_doc(module.PROFILE_SCOPE_ACCOUNT).endswith(os.path.join("Widgets", "MerchantRules", "Profiles")), "Account profile discovery should be grounded by the bound Profiles JsonFactory path.")
     for unsafe_filename in (
@@ -52990,8 +53035,9 @@ class _CP8ConsumerChecks(_CP8Checks):
         second = replace(first, rule_id='cp8-cleanup-second', name='Later')
         supplied = [(0, first), (1, second)]
         events: list[str] = []
-        original_match = widget._get_hard_protection_match
-        original_deposit = widget._get_equippable_explicit_deposit_reason
+        policy = _CP8PolicyAccess.get(widget)
+        original_match = policy.get_hard_protection_match
+        original_deposit = policy.get_equippable_explicit_deposit_reason
 
         def match(
             selected: InventoryItemInfo, rules: list[tuple[int, SellRule]]
@@ -53011,8 +53057,8 @@ class _CP8ConsumerChecks(_CP8Checks):
 
         try:
             widget.sell_rules = [first, second]
-            restore.binding(widget, '_get_hard_protection_match', match)
-            restore.binding(widget, '_get_equippable_explicit_deposit_reason', deposit)
+            restore.binding(policy, 'get_hard_protection_match', match)
+            restore.binding(policy, 'get_equippable_explicit_deposit_reason', deposit)
             before = _cp8_values(item, supplied)
             plan = PlanResult()
             widget._plan_cleanup_actions(plan, [item], supplied, storage_open=False, storage_context_available=True)
@@ -55167,6 +55213,7 @@ _CP9_ENV_KEYS: tuple[str, ...] = (
     'MERCHANT_RULES_CP8_DIFFERENTIAL_CONFIG',
     'MERCHANT_RULES_CP9_ORACLE_ROOT',
     'MERCHANT_RULES_CP9_OUTPUT_PARENT',
+    'MERCHANT_RULES_CP9_CANDIDATE_ROOT',
 )
 
 
@@ -55611,7 +55658,8 @@ def _cp9_external(kind: str) -> dict[str, object]:
     _expect(kind in ('cold', 'differential'), 'CP9 known external run kind')
     parent = _cp9_guard(Path(os.environ['MERCHANT_RULES_CP9_OUTPUT_PARENT']))
     oracle = Path(os.environ['MERCHANT_RULES_CP9_ORACLE_ROOT'])
-    candidate = REPO_ROOT
+    historical_candidate = os.environ.get('MERCHANT_RULES_CP9_CANDIDATE_ROOT')
+    candidate = Path(historical_candidate) if historical_candidate else REPO_ROOT
     _expect(
         not parent.is_relative_to(oracle) and not parent.is_relative_to(candidate),
         'CP9 output parent outside source roots',
@@ -55638,6 +55686,17 @@ def _cp9_external(kind: str) -> dict[str, object]:
         )
         for name, root in roots.items():
             before[name] = _cp9_pins(root)
+        if historical_candidate:
+            completed_cp9 = {
+                'Widgets/Guild Wars/Items & Loot/MerchantRules.py': '3bd11c62d4c537306bf3dee87280d9fba1cd23d501bbbe91d4f152011bc33f4e',
+                'Sources/icefox/MerchantRules/planning.py': 'e1fd4c759ae1c5e72a21c999d34fb662e5c2ad277637196ebbb909bacfc483b8',
+                'Sources/icefox/MerchantRules/profiles.py': 'be87885eaa8b704796a4468da7e5537860b2d357443bad56d9dc57d680a42bd7',
+                '.local-tests/merchant-rules/test_merchant_rules_regression.py': 'cce7acae0cb63f56284f82c718c30e25be0690f3105efe48c38de2b4e57d525d',
+            }
+            for relative, digest in completed_cp9.items():
+                _requirement_contract_expect(
+                    before['candidate'][relative], digest, 'CP9 retained original candidate ' + relative
+                )
         fixed = {
             'Widgets/Guild Wars/Items & Loot/MerchantRules.py': 'b2f1298ac427e71148da726b2c819ba5da81123bfe77f7e5e53e5cdc0375d6a2',
             'Sources/icefox/MerchantRules/planning.py': 'eb24b25326ed8adc513437f24ef49fd4e04a34a6edfe7ca33195254a4b7535e8',
@@ -55749,6 +55808,2599 @@ def _test_cp9_sale_completed_cp8_differential() -> None:
         {'oracle-observations', 'candidate-observations'},
         'CP9 independently loaded completed-CP8 and candidate observations',
     )
+
+
+# CP10 regression fixtures and independently loaded comparisons.
+
+if TYPE_CHECKING:
+    from Py4GWCoreLib.py4gwcorelib_src.JsonFactory import JsonFactory
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import CleanupProtectionSource
+    from Sources.icefox.MerchantRules.configuration import CleanupTarget
+    from Sources.icefox.MerchantRules.planning import BuyPlanner
+    from Sources.icefox.MerchantRules.planning import CleanupPlanner
+    from Sources.icefox.MerchantRules.planning import PlannedConsumableCraft
+    from Sources.icefox.MerchantRules.planning import PurchaseTargetCleanup
+    from Sources.icefox.MerchantRules.profiles import LoadedProfileProvenance
+    from Sources.icefox.MerchantRules.profiles import ProfileSummary
+    from Sources.icefox.MerchantRules.profiles import SavedProfileSession
+
+
+def _cp10_equal(actual: object, expected: object, context: str) -> None:
+    _requirement_contract_expect(_cp9_value(actual), _cp9_value(expected), "CP10 " + context)
+
+
+def _cp10_is_dict(value: object) -> TypeGuard[dict[str, object]]:
+    return _cp9_is_mapping(value) and isinstance(value, dict) and all(isinstance(key, str) for key in value)
+
+
+def _cp10_payload(value: object) -> dict[str, object]:
+    if not _cp10_is_dict(value):
+        raise AssertionError("CP10 expected a string-keyed payload")
+    return dict(value)
+
+
+def _cp10_session(widget: object) -> SavedProfileSession:
+    from Sources.icefox.MerchantRules.profiles import SavedProfileSession
+
+    value: object = getattr(widget, "_saved_profile_session")
+    if not isinstance(value, SavedProfileSession):
+        raise AssertionError("CP10 canonical session owner")
+    return value
+
+
+@dataclass(frozen=True)
+class _CP10Recipe:
+    model_id: int = 900001
+    vendor_key: str = "fixture"
+    vendor_name: str = "Fixture Crafter"
+    coords: tuple[float, float] = (1.0, 2.0)
+    title_id: int = 17
+    required_rank: int = 3
+    skill_points: int = 1
+    gold_cost: int = 10
+    ingredients: tuple[tuple[int, int], ...] = ((921, 2),)
+
+
+class _CP10Catalog:
+    def __init__(self) -> None:
+        self.catalog_merchant_essentials: list[dict[str, object]] = [{"model_id": 555, "name": "Kit"}]
+        self.rows: dict[int, dict[str, object]] = {
+            555: {"model_id": 555, "name": "Kit"},
+            921: {"model_id": 921, "name": "Bone", "material_type": "common"},
+        }
+
+    def get_model_entry(self, model_id: int) -> dict[str, object] | None:
+        return self.rows.get(model_id)
+
+
+class _CP10BuyFixture:
+    def __init__(self, module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules.configuration import RuleNormalizer
+        from Sources.icefox.MerchantRules.planning import BuyPlanner
+
+        normalizer: object = getattr(module, "_rule_normalizer")
+        if not isinstance(normalizer, RuleNormalizer):
+            raise AssertionError("CP10 real canonical RuleNormalizer")
+        self.normalizer = normalizer
+        self.trace: list[str] = []
+        self.rules: list[BuyRule] = []
+        self.recipes: dict[int, tuple[_CP10Recipe, ...]] = {900001: (_CP10Recipe(),)}
+        self.catalog = _CP10Catalog()
+        scrolls: object = getattr(module, "SCROLL_TRADER_STOCK_MODEL_IDS")
+        if not _cp9_is_set(scrolls) or not all(isinstance(member, int) for member in scrolls):
+            raise AssertionError("CP10 literal scroll-stock model set")
+        self.scrolls = {member for member in scrolls if isinstance(member, int)}
+        self.owner: BuyPlanner[_CP10Recipe] = BuyPlanner(
+            rules=self.read_rules,
+            normalize_rule=self.normalize,
+            scroll_stock=lambda value: isinstance(value, int) and value in self.scrolls,
+            merchant_type=self.normalizer.get_buy_rule_merchant_type,
+            recipes=self.read_recipes,
+            catalog=lambda: self.catalog,
+            dye_model=lambda: 146,
+            title_rank=self.title,
+            skill_points=lambda: self.observe("skill", (3, 3)),
+            carried_gold=lambda: self.observe("carried", 20),
+            stored_gold=lambda: self.observe("stored", 10),
+            material_storage=lambda model: self.observe(f"material:{model}", (6, 0, 250)),
+            free_slots=lambda: self.observe("slots", 10),
+            model_label=lambda model: f"Model {model}",
+            model_label_short=lambda model: f"Model {model}",
+            rune_label=lambda identifier: f"Rune {identifier}",
+            rule_reference=lambda index, rule: f"Rule {index}",
+            scroll_service_label=lambda: "Scroll Trader",
+            buy_kind_labels=lambda: {},
+            merchant_type_labels=lambda: {},
+        )
+        _cp10_equal(self.trace, [], "reference-only purchase construction")
+
+    def observe[T](self, event: str, value: T) -> T:
+        self.trace.append(event)
+        return value
+
+    def read_rules(self) -> list[BuyRule]:
+        return self.observe("rules", self.rules)
+
+    def read_recipes(self) -> Mapping[int, tuple[_CP10Recipe, ...]]:
+        return self.observe("recipes", self.recipes)
+
+    def normalize(self, rule: BuyRule) -> BuyRule | None:
+        self.trace.append("normalize:" + rule.name)
+        return self.normalizer.normalize_buy_rule(rule, has_crafter_recipe=lambda model: model in self.recipes)
+
+    def title(self, title_id: int) -> tuple[int, str, int]:
+        return self.observe(f"title:{title_id}", (3, "Fixture", 3))
+
+
+class _CP10CleanupFixture:
+    def __init__(self, module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules.configuration import RuleNormalizer
+        from Sources.icefox.MerchantRules.planning import CleanupPlanner
+
+        normalizer: object = getattr(module, "_rule_normalizer")
+        if not isinstance(normalizer, RuleNormalizer):
+            raise AssertionError("CP10 cleanup normalizer")
+        self.normalizer = normalizer
+        self.trace: list[str] = []
+        self.targets: list[CleanupTarget] = []
+        self.sources: list[CleanupProtectionSource] = []
+        self.keep_out: list[int] = []
+        self.rules: list[SellRule] = []
+        self.floors: dict[int, int] = {}
+        choose: object = getattr(module, "_choose_keep_subset_at_most")
+        if not isinstance(choose, types.FunctionType):
+            raise AssertionError("CP10 canonical stack selector function")
+
+        def choose_keep(items: list[InventoryItemInfo], count: int) -> tuple[set[int], int]:
+            value: object = choose(items, count)
+            if not _cp9_is_sequence(value) or not isinstance(value, tuple) or len(value) != 2:
+                raise AssertionError("CP10 stack-selection result")
+            ids: object = value[0]
+            kept: object = value[1]
+            if not _cp9_is_set(ids) or not isinstance(kept, int):
+                raise AssertionError("CP10 stack-selection types")
+            if not all(isinstance(member, int) for member in ids):
+                raise AssertionError("CP10 stack-selection IDs")
+            return {member for member in ids if isinstance(member, int)}, kept
+
+        self.owner: CleanupPlanner = CleanupPlanner(
+            targets=lambda: self.observe("targets", self.targets),
+            sources=lambda: self.observe("sources", self.sources),
+            keep_out=lambda: self.observe("keep_out", self.keep_out),
+            rules=lambda: self.observe("rules", self.rules),
+            normalize_rule=self.normalize,
+            collect_enabled_rules=self.collect,
+            policy=self.no_policy,
+            storage_available=lambda: self.observe("storage", True),
+            keep_floors=lambda: self.observe("floors", self.floors),
+            choose_keep=choose_keep,
+            target_label=lambda target: f"Model {target.model_id}",
+            rule_reference=lambda index, rule: f"Rule {index}",
+        )
+        _cp10_equal(self.trace, [], "reference-only cleanup construction")
+
+    def observe[T](self, event: str, value: T) -> T:
+        self.trace.append(event)
+        return value
+
+    def normalize(self, rule: SellRule) -> SellRule | None:
+        self.trace.append("normalize")
+        return self.normalizer.normalize_sell_rule(rule)
+
+    def collect(self) -> list[tuple[int, SellRule]]:
+        self.trace.append("collect")
+        return list(enumerate(self.rules))
+
+    def no_policy(self) -> ProtectionPolicy:
+        raise AssertionError("CP10 direct-target or empty-input path must not acquire blanket protection")
+
+
+def _cp10_plan() -> PlanResult:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    return PlanResult(
+        supported_map=True,
+        storage_exact=True,
+        coords={
+            key: (1.0, 2.0)
+            for key in (
+                "merchant",
+                "material_trader",
+                "rare_material_trader",
+                "rune_trader",
+                "scroll_trader",
+                "consumable_crafter",
+                "storage",
+            )
+        },
+    )
+
+
+class _CP10FailList[T](list[T]):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    def append(self, value: T) -> None:
+        raise self.error
+
+
+class _CP10NativeControl:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.constructed: list[tuple[str, str]] = []
+        self.operations: list[tuple[str, str]] = []
+        self.fail_name = ""
+        self.fail_operation = ""
+        self.error: Exception | None = None
+        self.save_false = False
+        self.reload_false = False
+        self.verify_replacement: object = None
+
+    def operation(self, name: str, operation: str) -> None:
+        self.operations.append((name, operation))
+        if name == self.fail_name and operation == self.fail_operation and self.error is not None:
+            raise self.error
+
+
+_cp10_storage_root: Path | None = None
+
+
+@contextmanager
+def _cp10_real_factory() -> Iterator[tuple[type[JsonFactory], _CP10NativeControl]]:
+    from hashlib import sha256
+    from uuid import uuid4
+
+    source = _cp9_guard(REPO_ROOT / "Py4GWCoreLib/py4gwcorelib_src/JsonFactory.py")
+    _expect(
+        sha256(source.read_bytes()).hexdigest() == "993c20c987b1e64257db35ab10bb4ab1da74b837d4ab2292172f997ce5f7f3e1",
+        "CP10 pinned real Python JsonFactory",
+    )
+    storage = SCRIPT_DIR if _cp10_storage_root is None else _cp10_storage_root
+    root = _cp9_guard(storage) / ("jd-" + uuid4().hex[:8])
+    root.mkdir(exist_ok=False)
+    _cp9_guard(root)
+    control = _CP10NativeControl(root)
+
+    class NativeDocument:
+        def __init__(self, name: str, scope: str) -> None:
+            self.name = name
+            self.scope = scope
+            self.file = root / scope / name
+            self.value: object = None
+            control.constructed.append((name, scope))
+            if self.file.is_file():
+                self.value = json.loads(self.file.read_text(encoding="utf-8"))
+
+        def path(self) -> str:
+            return str(self.file)
+
+        def is_bound(self) -> bool:
+            return True
+
+        def get_json(self, path: str) -> object:
+            value = self.value
+            for key in path.strip("/").split("/") if path.strip("/") else ():
+                if not _cp10_is_dict(value):
+                    return None
+                value = value.get(key)
+            return value
+
+        def has(self, path: str) -> bool:
+            return self.get_json(path) is not None
+
+        def get(self, path: str, default: object = None) -> object:
+            value = self.get_json(path)
+            return default if value is None else value
+
+        def set(self, path: str, value: object) -> None:
+            self.set_json(path, value)
+
+        def set_json(self, path: str, value: object) -> None:
+            keys = path.strip("/").split("/") if path.strip("/") else []
+            if not keys:
+                self.value = value
+            else:
+                if not _cp10_is_dict(self.value):
+                    self.value = {}
+                current = self.value
+                if not _cp10_is_dict(current):
+                    raise AssertionError("CP10 native fixture root")
+                for key in keys[:-1]:
+                    child = current.get(key)
+                    if not _cp10_is_dict(child):
+                        replacement: dict[str, object] = {}
+                        child = replacement
+                        current[key] = child
+                    current = child
+                current[keys[-1]] = value
+            control.operation(self.name, "set")
+
+        def save(self) -> bool:
+            control.operation(self.name, "save")
+            if self.name == control.fail_name and control.save_false:
+                return False
+            self.file.parent.mkdir(parents=True, exist_ok=True)
+            self.file.write_text(json.dumps(self.value, ensure_ascii=True), encoding="utf-8")
+            return True
+
+        def reload(self) -> bool:
+            control.operation(self.name, "reload")
+            if self.name == control.fail_name and control.reload_false:
+                return False
+            self.value = json.loads(self.file.read_text(encoding="utf-8")) if self.file.is_file() else None
+            if self.name == control.fail_name and control.verify_replacement is not None:
+                from copy import deepcopy
+
+                self.value = deepcopy(control.verify_replacement)
+            return True
+
+    name = "Py4GWCoreLib.py4gwcorelib_src.JsonFactory"
+    prior = {key: sys.modules.get(key) for key in ("PyJson", name)}
+    try:
+        native = types.ModuleType("PyJson")
+        setattr(native, "JsonFile", NativeDocument)
+        sys.modules["PyJson"] = native
+        spec = importlib.util.spec_from_file_location(name, source)
+        if spec is None or spec.loader is None:
+            raise AssertionError("CP10 real wrapper import spec")
+        loaded = importlib.util.module_from_spec(spec)
+        sys.modules[name] = loaded
+        spec.loader.exec_module(loaded)
+        from Py4GWCoreLib.py4gwcorelib_src.JsonFactory import JsonFactory
+
+        _expect(JsonFactory.__init__.__globals__ is vars(loaded), "CP10 real wrapper defining globals")
+        yield JsonFactory, control
+    finally:
+        for key, original in prior.items():
+            if original is None:
+                sys.modules.pop(key, None)
+            else:
+                sys.modules[key] = original
+
+
+def _cp10_new_session(
+    factory_type: Callable[[], type[JsonFactory]],
+    *,
+    current_payload: Callable[[], dict[str, object]] | None = None,
+    clear: Callable[[], None] | None = None,
+    publish: Callable[[LoadedProfileProvenance], None] | None = None,
+    warning: Callable[[Callable[[], str]], None] | None = None,
+) -> SavedProfileSession:
+    from Sources.icefox.MerchantRules.profiles import ProfileStore
+    from Sources.icefox.MerchantRules.profiles import SavedProfileSession
+
+    def quiet(message: Callable[[], str]) -> None:
+        message()
+
+    return SavedProfileSession(
+        store=ProfileStore(_cp10_payload, 40),
+        factory_type=factory_type,
+        current_payload=current_payload if current_payload is not None else lambda: {"buy_rules": []},
+        default_payload=lambda: {"buy_rules": []},
+        clear_generic_confirmation=clear if clear is not None else lambda: None,
+        publish_migrated_provenance=publish if publish is not None else lambda provenance: None,
+        warning=warning if warning is not None else quiet,
+    )
+
+
+def _test_cp10_purchase_family(module: types.ModuleType, family: str) -> None:
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MaterialTarget
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+    from Sources.icefox.MerchantRules.configuration import RuneTraderTarget
+    from Sources.icefox.MerchantRules.planning import PlannedConsumableCraft
+    from Sources.icefox.MerchantRules.planning import PlannedMaterialBuy
+    from Sources.icefox.MerchantRules.planning import PlannedMerchantBuy
+    from Sources.icefox.MerchantRules.planning import PlannedScrollTraderBuy
+    from Sources.icefox.MerchantRules.planning import PlannedTraderBuy
+    from Sources.icefox.MerchantRules.planning import PurchaseTargetCleanup
+
+    fixture = _CP10BuyFixture(module)
+    plan = _cp10_plan()
+    counts: dict[int, int] = {}
+    target = 921 if family == "material" else min(fixture.scrolls) if family == "scroll" else 555
+    kinds = {
+        "material": "buy_material_target",
+        "merchant": "merchant_stock_target",
+        "scroll": "buy_scroll_trader_target",
+        "rune": "buy_rune_trader_target",
+        "craft": "consumable_crafter_target",
+    }
+    rule = BuyRule(enabled=True, kind=kinds[family], name=family)
+    if family == "material":
+        rule.material_targets = [MaterialTarget(921, 12)]
+    elif family == "rune":
+        rule.rune_targets = [RuneTraderTarget("FixtureRune", 3, 2)]
+    else:
+        rule.merchant_stock_targets = [
+            MerchantStockTarget(
+                900001 if family == "craft" else target, 3 if family == "craft" else 5, 2 if family == "scroll" else 0
+            )
+        ]
+        if family != "craft":
+            counts[target] = 1
+    rule.merchant_type = fixture.normalizer.get_buy_rule_merchant_type(rule)
+    fixture.rules = [rule]
+    original = _cp8_values(rule)
+    lists = (rule.material_targets, rule.merchant_stock_targets, rule.rune_targets)
+    owner_references = dict(vars(fixture.owner))
+    fixture.owner.plan_buy_actions(plan, counts)
+    _cp8_unchanged(original, rule)
+    _expect(fixture.rules[0] is rule, "CP10 normalization retains original record")
+    _expect(
+        all(a is not b for a, b in zip(lists, (rule.material_targets, rule.merchant_stock_targets, rule.rune_targets))),
+        "CP10 normalization replaces nested target lists",
+    )
+    _expect(vars(fixture.owner) == owner_references, "CP10 purchase call retains no allocation state")
+    cleanup = PurchaseTargetCleanup(
+        kinds[family],
+        0,
+        "FixtureRune" if family == "rune" else str(900001 if family == "craft" else target),
+        12 if family == "material" else 3 if family in {"rune", "craft"} else 5,
+        2 if family in {"rune", "scroll"} else 0,
+        "keep",
+        family in {"material", "merchant", "craft"},
+        family == "craft",
+    )
+    if family == "material":
+        _cp10_equal(
+            plan.material_buys,
+            [PlannedMaterialBuy("material_trader", 921, 20, "Model 921", 10, cleanup)],
+            "material lots and cleanup",
+        )
+        _cp10_equal(counts, {921: 20}, "material count")
+    elif family == "merchant":
+        _cp10_equal(plan.merchant_stock_buys, [PlannedMerchantBuy(555, 4, "Model 555", cleanup)], "merchant target")
+        _cp10_equal(counts, {555: 5}, "merchant count")
+    elif family == "scroll":
+        _cp10_equal(
+            plan.scroll_trader_buys, [PlannedScrollTraderBuy(target, 2, f"Model {target}", cleanup)], "scroll cap"
+        )
+        _cp10_equal(counts, {target: 3}, "scroll count")
+    elif family == "rune":
+        _cp10_equal(
+            plan.rune_trader_buys, [PlannedTraderBuy("FixtureRune", 2, "Rune FixtureRune", cleanup)], "rune cap"
+        )
+        _cp10_equal(counts, {}, "rune does not invent model counts")
+    else:
+        _cp10_equal(
+            plan.consumable_crafter_buys,
+            [PlannedConsumableCraft(900001, 3, "Model 900001", "fixture", "Fixture Crafter", (1.0, 2.0), cleanup)],
+            "craft intent and shared resource spend",
+        )
+        _cp10_equal(counts, {921: 0, 900001: 3}, "craft ingredient/output counts")
+    _expect(len(plan.entries) == 1 and not plan.has_actions, "CP10 owner does not aggregate execution authority")
+
+
+def _test_cp10_purchase_order(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+
+    fixture = _CP10BuyFixture(module)
+    saved = BuyRule(enabled=True, name="saved", merchant_stock_targets=[MerchantStockTarget(555, 5)])
+    skipped = BuyRule(enabled=False, name="skipped", merchant_stock_targets=[MerchantStockTarget(777, 1)])
+    fixture.rules = [saved, skipped]
+    prior_skipped = skipped.merchant_stock_targets
+
+    class TracedItems(list[InventoryItemInfo]):
+        def __init__(self, label: str) -> None:
+            super().__init__([_cp8_item(module, item_id=701, model_id=555, quantity=3)])
+            self.label = label
+
+        def __iter__(self) -> Iterator[InventoryItemInfo]:
+            fixture.trace.append(self.label)
+            return super().__iter__()
+
+    class Request:
+        @property
+        def merchant_stock_targets(self) -> tuple[MerchantStockTarget, ...]:
+            fixture.trace.append("request")
+            return (MerchantStockTarget(555, 10),)
+
+    inventory, storage = TracedItems("inventory"), TracedItems("storage")
+    before = _cp8_values(inventory, storage)
+    fixture.trace.clear()
+    plan = _cp10_plan()
+    fixture.owner.plan_buy_actions(
+        plan, {555: 3}, execution_context=Request(), sim_inventory_items=inventory, storage_items=storage
+    )
+    _cp10_equal(
+        fixture.trace,
+        [
+            "inventory",
+            "storage",
+            "rules",
+            "request",
+            "normalize:saved",
+            "normalize:skipped",
+            "normalize:Request-scoped Merchant Stock",
+        ],
+        "purchase acquisition order",
+    )
+    _cp10_equal([buy.quantity for buy in plan.merchant_stock_buys], [2, 5], "saved then request reservations")
+    request = plan.merchant_stock_buys[1].cleanup
+    _expect(
+        request.rule_index == -1 and request.after_purchase == "keep" and not request.xunlai_involved,
+        "CP10 overlay has no saved-rule persistence authority",
+    )
+    _expect(skipped.merchant_stock_targets is not prior_skipped, "CP10 skipped original normalized")
+    _cp8_unchanged(before, inventory, storage)
+
+
+def _test_cp10_unreliable_storage(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+
+    fixture = _CP10BuyFixture(module)
+    fixture.rules = [
+        BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 5, check_xunlai_first=True)])
+    ]
+    plan = _cp10_plan()
+    plan.xunlai_first_storage_scan_reliable = False
+    counts: dict[int, int] = {}
+    fixture.owner.plan_buy_actions(
+        plan, counts, storage_items=[_cp8_item(module, item_id=702, model_id=555, quantity=9)]
+    )
+    _cp10_equal(counts, {}, "unreliable scan count")
+    _cp10_equal(
+        (plan.merchant_stock_buys, plan.storage_transfers),
+        (list[object](), list[object]()),
+        "unreliable scan no speculative allocation",
+    )
+    _cp10_equal(
+        [(entry.quantity, entry.state, entry.reason, entry.status_hint) for entry in plan.entries],
+        [(0, "skipped", "Xunlai Storage could not be checked reliably.", "blocked")],
+        "unreliable scan literal",
+    )
+
+
+def _test_cp10_cleanup_publication(module: types.ModuleType, failure: str) -> None:
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import CleanupTarget
+    from Sources.icefox.MerchantRules.planning import ExecutionPlanEntry
+    from Sources.icefox.MerchantRules.planning import PlannedStorageTransfer
+
+    fixture = _CP10CleanupFixture(module)
+    fixture.targets = [CleanupTarget(555, 2, "exact")]
+    items = [_cp8_item(module, item_id=701, model_id=555, quantity=7, name="Fixture")]
+    before = _cp8_values(items, fixture.targets)
+    plan, expected = _cp10_plan(), _cp10_plan()
+    marker = RuntimeError("CP10 cleanup " + failure)
+    made: list[PlannedStorageTransfer] = []
+    restore = _CP8Restoration()
+
+    def transfer(
+        direction: str,
+        key: str,
+        label: str,
+        item_id: int,
+        quantity: int,
+        model_id: int = 0,
+        reason: str = "",
+        xunlai_first_merchant_stock: bool = False,
+    ) -> PlannedStorageTransfer:
+        value = PlannedStorageTransfer(
+            direction, key, label, item_id, quantity, model_id, reason, xunlai_first_merchant_stock
+        )
+        made.append(value)
+        return value
+
+    def entry(*args: object, **kwargs: object) -> ExecutionPlanEntry:
+        raise marker
+
+    try:
+        restore.binding(planning, "PlannedStorageTransfer", transfer)
+        if failure == "cleanup":
+            plan.cleanup_transfers = _CP10FailList(marker)
+        elif failure == "storage":
+            plan.storage_transfers = _CP10FailList(marker)
+        elif failure == "construct_entry":
+            restore.binding(planning, "ExecutionPlanEntry", entry)
+        elif failure == "entries":
+            plan.entries = _CP10FailList(marker)
+
+        def operation() -> None:
+            fixture.owner.plan_cleanup_actions(plan, items, [], storage_open=True)
+
+        if failure == "success":
+            operation()
+        else:
+            _cp9_same_exception(operation, marker)
+        _expect(len(made) == 2 and made[0] is not made[1], "CP10 temporary versus final allocation identity")
+        final = PlannedStorageTransfer(
+            "deposit", "model:555", "Fixture", 701, 5, 555, "Deposit target keeps 2 on character."
+        )
+        if failure != "cleanup":
+            expected.cleanup_transfers.append(final)
+        if failure not in {"cleanup", "storage"}:
+            expected.storage_transfers.append(final)
+            _expect(plan.cleanup_transfers[0] is plan.storage_transfers[0], "CP10 same final object in dual lists")
+        if failure == "success":
+            expected.entries.append(
+                ExecutionPlanEntry(
+                    "deposit", "storage", "Fixture", 5, "will execute", "Deposit target keeps 2 on character.", 555
+                )
+            )
+        _cp10_equal(plan, expected, "complete cleanup partial publication: " + failure)
+        _cp8_unchanged(before, items, fixture.targets)
+    finally:
+        restore.restore()
+
+
+def _test_cp10_cleanup_acquisition(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import CleanupProtectionSource
+
+    fixture = _CP10CleanupFixture(module)
+    fixture.sources = [CleanupProtectionSource("linked")]
+    fixture.rules = [_cp8_rule(module, rule_id="linked", kind="sell_weapons")]
+    fixture.owner.plan_cleanup_actions(_cp10_plan(), [], [])
+    _cp10_equal(
+        fixture.trace,
+        ["storage", "keep_out", "targets", "floors", "sources", "rules", "normalize", "rules", "normalize"],
+        "separate index/rule normalization",
+    )
+    fixture.trace.clear()
+    fixture.owner.get_effective_cleanup_targets()
+    _cp10_equal(fixture.trace, ["targets", "collect"], "optional target collection")
+    fixture.trace.clear()
+    fixture.owner.get_effective_cleanup_protection_sources()
+    _cp10_equal(fixture.trace, ["sources", "collect"], "optional protection collection")
+    fixture.trace.clear()
+    fixture.owner.plan_cleanup_actions(_cp10_plan(), [], [], storage_context_available=False)
+    _cp10_equal(fixture.trace, [], "explicit false storage short circuit")
+
+
+def _test_cp10_recipe_and_resource_reads(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+
+    class RebindingFixture(_CP10BuyFixture):
+        def title(self, title_id: int) -> tuple[int, str, int]:
+            result = super().title(title_id)
+            if title_id == 17:
+                self.recipes = {900001: (replace(_CP10Recipe(), title_id=18),)}
+            return result
+
+    fixture = RebindingFixture(module)
+    fixture.rules = [
+        BuyRule(
+            enabled=True,
+            kind="consumable_crafter_target",
+            name=name,
+            merchant_stock_targets=[MerchantStockTarget(900001, 3)],
+        )
+        for name in ("first", "second")
+    ]
+    plan = _cp10_plan()
+    counts: dict[int, int] = {}
+    fixture.owner.plan_buy_actions(plan, counts)
+    _cp10_equal([buy.quantity for buy in plan.consumable_crafter_buys], [3], "shared craft budget")
+    _cp10_equal(
+        fixture.trace,
+        [
+            "rules",
+            "normalize:first",
+            "recipes",
+            "recipes",
+            "title:17",
+            "title:17",
+            "skill",
+            "carried",
+            "stored",
+            "material:921",
+            "normalize:second",
+            "recipes",
+            "recipes",
+            "title:18",
+            "title:18",
+        ],
+        "late recipes and conditional resource order",
+    )
+    fixture.trace.clear()
+    fixture.owner.plan_consumable_crafter_bag_space_warning(plan, inventory_model_counts={})
+    _cp10_equal(fixture.trace, ["recipes", "title:18", "slots"], "separate later crafting-space observation")
+    fixture.trace.clear()
+    fixture.owner.plan_consumable_crafter_bag_space_warning(_cp10_plan(), inventory_model_counts={})
+    _cp10_equal(fixture.trace, [], "empty craft warning skips reads")
+
+
+_CP10_STATE: tuple[tuple[str, str], ...] = (
+    ("profile_entries", "profile_entries"),
+    ("profile_known_filenames", "profile_known_filenames"),
+    ("profile_selection_cleared_due_to_disappearance", "profile_selection_cleared_due_to_disappearance"),
+    ("profile_scan_conflicts", "profile_scan_conflicts"),
+    ("_profile_migration_in_progress", "migration_in_progress"),
+    ("profile_selected_identities", "profile_selected_identities"),
+    ("profile_name_inputs", "profile_name_inputs"),
+    ("profile_name_input_dirty", "profile_name_input_dirty"),
+    ("saved_profile_warnings", "saved_profile_warnings"),
+    ("saved_profile_notices", "saved_profile_notices"),
+    ("saved_profile_scan_warnings", "saved_profile_scan_warnings"),
+    ("saved_profile_failure_signatures", "saved_profile_failure_signatures"),
+    ("profile_entries_loaded", "profile_entries_loaded"),
+    ("profile_document_reload_failed", "profile_document_reload_failed"),
+    ("active_profiles_scope", "active_profiles_scope"),
+    ("profile_scroll_to_identity", "profile_scroll_to_identity"),
+    ("pending_profile_confirmation_identity", "pending_profile_confirmation_identity"),
+    ("pending_profile_confirmation_fingerprint", "pending_profile_confirmation_fingerprint"),
+    ("pending_profile_confirmation_action", "pending_profile_confirmation_action"),
+)
+
+
+def _test_cp10_real_jsonfactory_wrapper(_module: types.ModuleType) -> None:
+    with _cp10_real_factory() as (factory, control):
+        first = factory("Fixture.json")
+        second = factory("Fixture.json", "account")
+        shared = factory("Fixture.json", "global")
+        _expect(first is second and shared is not first, "CP10 actual singleton key")
+        _cp10_equal(
+            control.constructed,
+            [("Fixture.json", "account"), ("Fixture.json", "global")],
+            "CP10 guarded initialization",
+        )
+        value: dict[str, object] = {"nested": {"value": 1}}
+        first.set_json("", value)
+        _expect(second.get_json("", None) is value, "CP10 wrapper shared document identity")
+        first.set("nested/value", 2)
+        _expect(second.get("nested/value", 0) == 2, "CP10 wrapper scalar nested access")
+        _expect(first.save(), "CP10 controlled save")
+        first.set_json("", {"different": True})
+        _expect(second.reload(), "CP10 controlled reload")
+        _cp10_equal(first.get_json("", None), {"nested": {"value": 2}}, "wrapper reload document state")
+        _expect(shared.get_json("", None) is None, "CP10 separate global fixture state")
+
+
+def _test_cp10_profile_persistence(_module: types.ModuleType, failure: str) -> None:
+    from copy import deepcopy
+
+    with _cp10_real_factory() as (factory, control):
+        session = _cp10_new_session(lambda: factory)
+        key = "profile_" + "a" * 32
+        wrapper = session.build_shared_profile_wrapper(
+            "Failure", profile_id=key, payload={"buy_rules": []}, saved_at_unix_ms=1000, saved_at_label="fixture"
+        )
+        # Match the unchanged ProfileStore normalizer's insertion order before
+        # capturing the input; failure assertions still compare the whole input.
+        wrapper["profile_id"] = wrapper.pop("profile_id")
+        original = deepcopy(wrapper)
+        name = "Widgets/MerchantRules/Profiles/Failure.json"
+        control.fail_name = name
+        marker = RuntimeError("CP10 persistence " + failure)
+        control.fail_operation = (
+            failure if failure in {"set", "save", "reload"} else "reload" if failure == "reload_override" else ""
+        )
+        control.error = marker
+        control.save_false = failure in {"save_false", "reload_override"}
+        control.reload_false = failure == "reload_false"
+        control.verify_replacement = {"schema": "invalid"} if failure == "verify" else None
+        try:
+            session.persist_profile_wrapper("account", key, wrapper, filename="Failure.json", refresh_after=False)
+        except Exception as caught:
+            if failure in {"set", "save", "reload", "reload_override"}:
+                _expect(caught is marker, "CP10 same persistence/failure-reload exception")
+            else:
+                _expect(isinstance(caught, (OSError, ValueError, RuntimeError)), "CP10 translated persistence failure")
+        else:
+            raise AssertionError("CP10 injected persistence failure was not reached")
+        _cp10_equal(
+            [operation for document, operation in control.operations if document == name],
+            ["set"] if failure == "set" else ["set", "save"] if failure == "save" else ["set", "save", "reload"],
+            "exact persistence operation prefix",
+        )
+        _cp10_equal(session.profile_entries["account"], [], "no late entry publication")
+        _cp10_equal(session.profile_known_filenames["account"], set[str](), "no late filename publication")
+        _cp10_equal(wrapper, original, "input wrapper preserved")
+        file = control.root / "account" / name
+        _expect(
+            file.exists() == (failure in {"reload", "reload_false", "verify"}),
+            "CP10 durable fixture effect survives failure",
+        )
+        if file.exists():
+            _cp10_equal(
+                json.loads(file.read_text(encoding="utf-8")), original, "complete saved bytes survive later failure"
+            )
+        if failure == "set":
+            _cp10_equal(factory(name).get_json("", None), original, "document mutation precedes set exception")
+
+
+def _test_cp10_profile_factory_lookup(_module: types.ModuleType) -> None:
+    with _cp10_real_factory() as (first, _first_control):
+        with _cp10_real_factory() as (second, _second_control):
+            trace: list[str] = []
+            selected = [first]
+
+            def lookup() -> type[JsonFactory]:
+                trace.append("first" if selected[0] is first else "second")
+                return selected[0]
+
+            session = _cp10_new_session(lookup)
+            original_name = session.profile_document_name
+            original_scope = session.profile_json_scope
+            restore = _CP8Restoration()
+
+            def name(filename: str) -> str:
+                trace.append("name")
+                selected[0] = second
+                return original_name(filename)
+
+            def scope(value: str) -> str:
+                trace.append("scope")
+                return original_scope(value)
+
+            try:
+                restore.binding(session, "profile_document_name", name)
+                restore.binding(session, "profile_json_scope", scope)
+                a = session.profile_file_doc("account", "First.json")
+                b = session.profile_file_doc("account", "Second.json")
+                _expect(type(a) is first and type(b) is second, "CP10 concrete factory before argument evaluation")
+                _cp10_equal(trace, ["first", "name", "scope", "second", "name", "scope"], "constructor lookup order")
+                marker = RuntimeError("CP10 filename failure")
+
+                def fail_name(_filename: str) -> str:
+                    trace.append("failed-name")
+                    raise marker
+
+                restore.binding(session, "profile_document_name", fail_name)
+                trace.clear()
+                _cp9_same_exception(lambda: session.profile_file_doc("account", "Failure.json"), marker)
+                _cp10_equal(trace, ["second", "failed-name"], "failed early argument skips later argument")
+            finally:
+                restore.restore()
+
+
+def _test_cp10_profile_capture_timing(_module: types.ModuleType) -> None:
+    with _cp10_real_factory() as (factory, control):
+        current: dict[str, object] = {"buy_rules": [], "marker": "early"}
+        captures: list[object] = []
+
+        def capture() -> dict[str, object]:
+            captures.append(_cp9_value(current))
+            return dict(current)
+
+        session = _cp10_new_session(lambda: factory, current_payload=capture)
+        session.profile_name_inputs["account"] = "Before"
+        original_refresh = session.refresh_profile_entries
+        restore = _CP8Restoration()
+
+        def refresh(scope: str, *, reload_document: bool = False, report_reload_failure: bool = True) -> bool:
+            session.profile_name_inputs[scope] = "After"
+            current["marker"] = "late"
+            return original_refresh(scope, reload_document=reload_document, report_reload_failure=report_reload_failure)
+
+        try:
+            restore.binding(session, "refresh_profile_entries", refresh)
+            session.save_current_as_new_profile("account")
+            selected = session.get_selected_profile("account")
+            _expect(selected is not None, "CP10 save reached selected publication")
+            if selected is None:
+                raise AssertionError("missing saved profile")
+            _expect(
+                selected.display_name == "Before" and selected.filename == "Before.json",
+                "CP10 requested name captured before refresh",
+            )
+            _cp10_equal(selected.payload, {"buy_rules": [], "marker": "late"}, "settings captured after refresh")
+            _expect(len(captures) == 1, "CP10 one settings capture")
+            file = control.root / "account" / "Widgets/MerchantRules/Profiles/Before.json"
+            remote = _cp10_payload(json.loads(file.read_text(encoding="utf-8")))
+            remote["payload"] = {"buy_rules": [], "marker": "remote"}
+            file.write_text(json.dumps(remote), encoding="utf-8")
+            remote_bytes = file.read_bytes()
+            captures.clear()
+            session.save_current_over_selected_profile("account", selected.fingerprint)
+            _expect(bool(session.saved_profile_warnings["account"]), "CP10 stale replacement feedback")
+            _cp10_equal(captures, [], "stale validation precedes settings capture")
+            _expect(file.read_bytes() == remote_bytes, "CP10 stale file untouched")
+        finally:
+            restore.restore()
+
+
+def _test_cp10_profile_state_and_aliases(module: types.ModuleType) -> None:
+    from copy import deepcopy
+
+    from Sources.icefox.MerchantRules.profiles import ProfileIdentity
+    from Sources.icefox.MerchantRules.profiles import ProfileSummary
+
+    calls: list[str] = []
+
+    def never_factory() -> type[JsonFactory]:
+        calls.append("factory")
+        raise AssertionError("CP10 constructor performed a read")
+
+    session = _cp10_new_session(never_factory)
+    other = _cp10_new_session(never_factory)
+    _cp10_equal(calls, [], "reference-only session construction")
+    identity = ProfileIdentity("account", "profile_" + "a" * 32)
+    for scope in ("account", "shared"):
+        session.profile_entries[scope] = [ProfileSummary(ProfileIdentity(scope, identity.key), "Seed")]
+        session.profile_known_filenames[scope].add("Seed.json")
+        session.profile_scan_conflicts[scope]["Seed.json"] = "conflict"
+        session.saved_profile_failure_signatures[scope]["Seed.json"] = ("old", "failure")
+        session.profile_selected_identities[scope] = ProfileIdentity(scope, identity.key)
+        session.profile_name_inputs[scope] = "Seed"
+        session.profile_name_input_dirty[scope] = True
+        session.profile_entries_loaded[scope] = True
+        session.profile_selection_cleared_due_to_disappearance[scope] = True
+        session.saved_profile_warnings[scope] = "warning"
+        session.saved_profile_notices[scope] = "notice"
+        session.saved_profile_scan_warnings[scope] = "scan"
+        session.profile_document_reload_failed[scope] = True
+    session.migration_in_progress.add("account")
+    session.profile_scroll_to_identity = identity
+    session.pending_profile_confirmation_identity = identity
+    session.pending_profile_confirmation_fingerprint = "fingerprint"
+    session.pending_profile_confirmation_action = "replace"
+    before = {name: deepcopy(getattr(session, name)) for _, name in _CP10_STATE}
+    expected = deepcopy(before)
+    reset_values: tuple[tuple[str, object], ...] = (
+        ("profile_entries", list[ProfileSummary]()),
+        ("profile_entries_loaded", False),
+        ("profile_selection_cleared_due_to_disappearance", False),
+        ("profile_known_filenames", set[str]()),
+        ("profile_scan_conflicts", dict[str, str]()),
+        ("saved_profile_failure_signatures", dict[str, tuple[str, str]]()),
+        ("profile_selected_identities", None),
+        ("profile_name_inputs", ""),
+        ("profile_name_input_dirty", False),
+    )
+    for name, value in reset_values:
+        mapping: object = expected[name]
+        if not _cp10_is_dict(mapping):
+            raise AssertionError("CP10 expected scoped state mapping")
+        mapping["account"] = value
+    old_entries = session.profile_entries["account"]
+    cleared = (
+        session.profile_known_filenames["account"],
+        session.profile_scan_conflicts["account"],
+        session.saved_profile_failure_signatures["account"],
+    )
+    session.reset_account()
+    _cp10_equal({name: getattr(session, name) for _, name in _CP10_STATE}, expected, "complete exact Account reset")
+    _expect(session.profile_entries["account"] is not old_entries, "CP10 entries replace")
+    _expect(
+        all(
+            a is b
+            for a, b in zip(
+                cleared,
+                (
+                    session.profile_known_filenames["account"],
+                    session.profile_scan_conflicts["account"],
+                    session.saved_profile_failure_signatures["account"],
+                ),
+            )
+        ),
+        "CP10 three in-place clears",
+    )
+    _expect(not other.profile_entries["shared"] and not other.migration_in_progress, "CP10 per-session isolation")
+    widget: object = _make_widget(module)
+    owned = _cp10_session(widget)
+    for widget_name, owner_name in _CP10_STATE:
+        _expect(widget_name not in vars(widget), "CP10 no duplicate widget state: " + widget_name)
+        original: object = getattr(owned, owner_name)
+        replacement = deepcopy(getattr(session, owner_name))
+        try:
+            setattr(widget, widget_name, replacement)
+            _expect(getattr(owned, owner_name) is replacement, "CP10 setter reference identity")
+            setattr(owned, owner_name, original)
+            _expect(getattr(widget, widget_name) is original, "CP10 getter reference identity")
+        finally:
+            setattr(owned, owner_name, original)
+
+
+def _test_cp10_profile_scan(module: types.ModuleType, failure: str) -> None:
+    from Sources.icefox.MerchantRules.profiles import ProfileIdentity
+    from Sources.icefox.MerchantRules.profiles import ProfileSummary
+
+    with _cp10_real_factory() as (factory, _control):
+        marker = RuntimeError("CP10 scan " + failure)
+        messages: list[str] = []
+
+        def warning(message: Callable[[], str]) -> None:
+            messages.append(message())
+            if failure == "logging":
+                raise marker
+
+        def clear() -> None:
+            if failure == "publication":
+                raise marker
+
+        session = _cp10_new_session(lambda: factory, warning=warning, clear=clear)
+        key = "profile_" + "b" * 32
+        wrapper = session.build_shared_profile_wrapper(
+            "Seed", profile_id=key, payload={"buy_rules": [], "marker": "new"}
+        )
+        session.persist_profile_wrapper("account", key, wrapper, filename="Seed.json", refresh_after=False)
+        old = ProfileSummary(ProfileIdentity("account", key), "Old", filename="Seed.json", fingerprint="old")
+        session.profile_entries["account"] = [old]
+        session.profile_selected_identities["account"] = old.identity
+        session.profile_name_inputs["account"] = "Old input"
+        session.profile_known_filenames["account"] = {"before.json"}
+        session.saved_profile_scan_warnings["account"] = "previous"
+        session.pending_profile_confirmation_identity = old.identity
+        session.pending_profile_confirmation_fingerprint = "old"
+        session.pending_profile_confirmation_action = "replace"
+        before_entries = session.profile_entries["account"]
+        restore = _CP8Restoration()
+
+        def enumerate_failure(_scope: str) -> list[str]:
+            raise marker
+
+        def summary_failure(scope: str, profile_key: str, raw_payload: object, *, filename: str = "") -> ProfileSummary:
+            raise ValueError("CP10 damaged summary")
+
+        try:
+            if failure == "scan":
+                restore.binding(session, "enumerate_profile_filenames", enumerate_failure)
+                _expect(not session.refresh_profile_entries("account"), "CP10 scan failure translation")
+                _expect(
+                    session.profile_entries_loaded["account"] and session.profile_document_reload_failed["account"],
+                    "CP10 scan failure preceding publication",
+                )
+                _expect(session.profile_entries["account"] is before_entries, "CP10 old entries survive enumeration")
+                _cp10_equal(
+                    session.profile_known_filenames["account"], {"before.json"}, "scan does not publish filenames"
+                )
+                _expect(len(messages) == 1, "CP10 scan warning reached")
+            else:
+                if failure == "logging":
+                    restore.binding(session, "load_profile_summary_from_key", summary_failure)
+                _cp9_same_exception(lambda: session.refresh_profile_entries("account", reload_document=True), marker)
+                _cp10_equal(
+                    session.profile_known_filenames["account"],
+                    {"Seed.json"},
+                    "filename publication precedes later failure",
+                )
+                if failure == "logging":
+                    _expect(
+                        session.profile_entries["account"] is before_entries
+                        and not session.profile_entries_loaded["account"],
+                        "CP10 logging stops before final list publication",
+                    )
+                else:
+                    _expect(
+                        session.profile_entries["account"] is not before_entries
+                        and session.profile_entries_loaded["account"],
+                        "CP10 list publication precedes confirmation callback",
+                    )
+                    _cp10_equal(
+                        (
+                            session.pending_profile_confirmation_identity,
+                            session.pending_profile_confirmation_fingerprint,
+                            session.pending_profile_confirmation_action,
+                        ),
+                        (None, "", ""),
+                        "confirmation partial effect",
+                    )
+                    _expect(
+                        session.profile_name_inputs["account"] == "Old input",
+                        "CP10 later selection publication not reached",
+                    )
+        finally:
+            restore.restore()
+
+
+def _test_cp10_profile_failure_dedup(_module: types.ModuleType) -> None:
+    from copy import deepcopy
+
+    with _cp10_real_factory() as (factory, _control):
+        messages: list[str] = []
+        session = _cp10_new_session(lambda: factory, warning=lambda message: messages.append(message()))
+        keys = {
+            name: "profile_" + character * 32
+            for name, character in (("Before.json", "a"), ("After.json", "b"), ("Fault.json", "c"))
+        }
+        for scope in ("shared", "account"):
+            for filename in ("Before.json", "After.json", "Fault.json"):
+                wrapper = session.build_shared_profile_wrapper(
+                    filename.removesuffix(".json"),
+                    profile_id=keys[filename],
+                    payload={"buy_rules": [], "marker": "initial"},
+                    saved_at_unix_ms=1000,
+                    saved_at_label="fixture",
+                )
+                session.persist_profile_wrapper(scope, keys[filename], wrapper, filename=filename, refresh_after=False)
+        original_loader = session.load_profile_summary_from_key
+        restore = _CP8Restoration()
+        failing_scopes = {"shared", "account"}
+        error_text = ["Synthetic initial profile failure."]
+        calls: list[tuple[str, str, str]] = []
+
+        def loader(scope: str, profile_key: str, raw_payload: object, *, filename: str = "") -> ProfileSummary:
+            calls.append((scope, profile_key, filename))
+            if filename == "Fault.json" and scope in failing_scopes:
+                raise ValueError(error_text[0])
+            return original_loader(scope, profile_key, raw_payload, filename=filename)
+
+        document = factory("Widgets/MerchantRules/Profiles/Fault.json", "global")
+        before = deepcopy(document.get_json("", None))
+        try:
+            restore.binding(session, "load_profile_summary_from_key", loader)
+            _expect(
+                session.refresh_profile_entries("shared", reload_document=True), "CP10 summary failure permits scan"
+            )
+            _expect(len(messages) == 1 and "Fault.json" in messages[0], "CP10 first filename-keyed warning")
+            _cp10_equal(
+                {entry.key for entry in session.profile_entries["shared"]},
+                {keys["Before.json"], keys["After.json"]},
+                "CP10 valid neighbors remain readable",
+            )
+            _expect(
+                ("shared", keys["Fault.json"], "Fault.json") in calls,
+                "CP10 injected owner loader reached with actual filename",
+            )
+            _expect("Fault.json" in session.saved_profile_failure_signatures["shared"], "CP10 keyed failure published")
+            _cp10_equal(document.get_json("", None), before, "CP10 failed summary preserves raw document")
+            session.refresh_profile_entries("shared", reload_document=True)
+            _expect(len(messages) == 1, "CP10 unchanged summary failure is deduplicated")
+            changed = _cp10_payload(deepcopy(before))
+            changed["payload"] = {"buy_rules": [], "marker": "changed"}
+            document.set_json("", changed)
+            _expect(document.save(), "CP10 changed raw fixture saved")
+            session.refresh_profile_entries("shared", reload_document=True)
+            _expect(
+                len(messages) == 2 and messages[1] == messages[0],
+                "CP10 changed raw content logs once with unchanged failure text",
+            )
+            _cp10_equal(document.get_json("", None), changed, "CP10 changed raw document survives failure")
+            error_text[0] = "Synthetic changed profile failure."
+            session.refresh_profile_entries("shared", reload_document=True)
+            _expect(
+                len(messages) == 3 and messages[2] != messages[1] and error_text[0] in messages[2],
+                "CP10 changed owner-loader exception logs independently of unchanged raw content",
+            )
+            session.refresh_profile_entries("account", reload_document=True)
+            _expect(len(messages) == 4, "CP10 same filename in Account has independent failure state")
+            session.refresh_profile_entries("account", reload_document=True)
+            _expect(len(messages) == 4, "CP10 unchanged Account failure is deduplicated")
+            failing_scopes.remove("shared")
+            session.refresh_profile_entries("shared", reload_document=True)
+            _expect(
+                len(messages) == 4 and not session.saved_profile_failure_signatures["shared"],
+                "CP10 successful owner-loader return clears only repaired scope failure",
+            )
+            _cp10_equal(
+                {entry.key for entry in session.profile_entries["shared"]},
+                set(keys.values()),
+                "CP10 repaired summary rejoins valid neighbors",
+            )
+            _expect(
+                "Fault.json" in session.saved_profile_failure_signatures["account"],
+                "CP10 Shared recovery does not clear Account failure",
+            )
+            _cp10_equal(document.get_json("", None), changed, "CP10 reading recovery performs no rewrite")
+        finally:
+            restore.restore()
+        _expect(session.load_profile_summary_from_key == original_loader, "CP10 summary-loader descriptor restored")
+
+
+class _CP10OwnedWork(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+    def __next__(self) -> object: ...
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class _CP10Widget(Protocol):
+    buy_rules: list[BuyRule]
+    catalog_merchant_essentials: list[dict[str, object]]
+    cleanup_targets: list[CleanupTarget]
+    cleanup_protection_sources: list[CleanupProtectionSource]
+    cleanup_blacklist_model_ids: list[int]
+    profile_name_inputs: dict[str, str]
+    saved_profile_warnings: dict[str, str]
+    merchant_rules_profile_generation: int
+    preview_plan: PlanResult
+    preview_ready: bool
+    execute_reservation_scope_active: bool
+    execute_reserved_item_ids: set[int]
+    execute_xunlai_first_keep_by_model: dict[int, int]
+    loaded_profile_provenance: LoadedProfileProvenance | None
+
+    def _clear_pending_destructive_button(self) -> None: ...
+    def _clear_profile_confirmation_state(self) -> None: ...
+    def _has_cleanup_sources(self) -> bool: ...
+    def _begin_execute_reservation_scope(self) -> bool: ...
+    def _end_execute_reservation_scope(self, owned_scope: bool) -> None: ...
+    def _get_configured_xunlai_first_keep_by_model(self) -> dict[int, int]: ...
+    def _get_xunlai_first_cleanup_keep_by_model(self) -> dict[int, int]: ...
+    def _save_current_as_new_profile(self, scope: str) -> None: ...
+    def _get_selected_profile(self, scope: str) -> ProfileSummary | None: ...
+    def _set_selected_profile_key(self, scope: str, profile_key: str) -> None: ...
+    def _load_selected_profile(self, scope: str, expected_fingerprint: str = "") -> bool | None: ...
+    def _build_shareable_profile_payload(self) -> dict[str, object]: ...
+    def _apply_after_purchase_cleanup(self, cleanup: PurchaseTargetCleanup, *, label: str = "") -> bool: ...
+    def _build_plan(
+        self, *, supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None
+    ) -> PlanResult: ...
+    def _queue_merchant_rules_owned_work(self, generator: Generator[object, None, object]) -> _CP10OwnedWork | None: ...
+
+
+def _cp10_widget(module: types.ModuleType, *, real_factory: bool = False) -> _CP10Widget:
+    value: object = _prime_initialized_widget(module, _make_widget(module, use_json_factory=real_factory))
+    if not isinstance(value, _CP10Widget):
+        raise AssertionError("CP10 existing widget compatibility surfaces")
+    return value
+
+
+class _CP10Checks(_CP10Widget):
+    @staticmethod
+    def confirmation_bridge(module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules.profiles import ProfileIdentity
+
+        widget = _cp10_widget(module)
+        session = _cp10_session(widget)
+        original = widget._clear_pending_destructive_button
+        calls: list[str] = []
+        restore = _CP8Restoration()
+
+        def generic() -> None:
+            calls.append("generic")
+            original()
+
+        try:
+            restore.binding(widget, "_clear_pending_destructive_button", generic)
+            for trigger in (widget._clear_profile_confirmation_state, widget._clear_pending_destructive_button):
+                session.pending_profile_confirmation_identity = ProfileIdentity("account", "fixture")
+                session.pending_profile_confirmation_fingerprint = "before"
+                session.pending_profile_confirmation_action = "replace"
+                calls.clear()
+                trigger()
+                _cp10_equal(calls, ["generic"], "bidirectional confirmation clearing without recursion")
+                _cp10_equal(
+                    (
+                        session.pending_profile_confirmation_identity,
+                        session.pending_profile_confirmation_fingerprint,
+                        session.pending_profile_confirmation_action,
+                    ),
+                    (None, "", ""),
+                    "all confirmation fields cleared",
+                )
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def reservation_start_failure(module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules.configuration import BuyRule
+        from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+
+        widget = _cp10_widget(module)
+        widget.buy_rules = [
+            BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 5, check_xunlai_first=True)])
+        ]
+        old_ids, old_floors = {91}, {555: 6}
+        widget.execute_reservation_scope_active = False
+        widget.execute_reserved_item_ids = old_ids
+        widget.execute_xunlai_first_keep_by_model = old_floors
+        marker = RuntimeError("CP10 floor failure")
+        restore = _CP8Restoration()
+
+        def normalize(_rule: BuyRule) -> BuyRule | None:
+            raise marker
+
+        try:
+            restore.binding(module, "_normalize_buy_rule", normalize)
+            _cp9_same_exception(widget._begin_execute_reservation_scope, marker)
+            _expect(widget.execute_reservation_scope_active, "CP10 startup preceding flag survives failure")
+            _expect(
+                widget.execute_reserved_item_ids is not old_ids and not widget.execute_reserved_item_ids,
+                "CP10 startup replaces IDs before floor evaluation",
+            )
+            _cp10_equal(old_ids, {91}, "old IDs unmodified")
+            _expect(
+                widget.execute_xunlai_first_keep_by_model is old_floors, "CP10 failed RHS retains old floor reference"
+            )
+            frozen = widget._get_xunlai_first_cleanup_keep_by_model()
+            _cp10_equal(frozen, {555: 6}, "CP10 frozen floor selected without failing fresh normalization")
+            _expect(frozen is not old_floors, "CP10 frozen getter copy")
+            widget._end_execute_reservation_scope(True)
+            _expect(not old_floors and not widget.execute_reservation_scope_active, "CP10 shutdown in-place clear")
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def cleanup_merge_and_short_circuit(module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules.configuration import CleanupTarget
+        from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+
+        fixture = _CP10CleanupFixture(module)
+        fixture.targets = [CleanupTarget(921, 4, "common_material")]
+        fixture.rules = [
+            _cp8_rule(module, kind="sell_common_materials", whitelist_targets=[WhitelistTarget(921, 1, True)]),
+            _cp8_rule(module, kind="sell_explicit_models", whitelist_targets=[WhitelistTarget(921, 2, True)]),
+        ]
+        merged = fixture.owner.get_effective_cleanup_targets(list(enumerate(fixture.rules)))
+        _cp10_equal(
+            merged,
+            [CleanupTarget(921, 4, "common_material"), CleanupTarget(921, 0, "exact")],
+            "explicit precedence with independent exact scope",
+        )
+        fixture.keep_out = [921]
+        items = [
+            _cp8_item(module, item_id=701, model_id=921, quantity=9, is_material=True),
+            _cp8_item(module, item_id=702, model_id=921, quantity=3, is_material=False),
+        ]
+        plan = _cp10_plan()
+        fixture.owner.plan_cleanup_actions(plan, items, list(enumerate(fixture.rules)))
+        _cp10_equal(plan.storage_transfers, [], "model-wide keep-out")
+        _cp10_equal(
+            [entry.reason for entry in plan.entries],
+            ["Skipped by deposit keep-out.", "Skipped by deposit keep-out."],
+            "keep-out applies across target scopes",
+        )
+        widget = _cp10_widget(module)
+        restore = _CP8Restoration()
+
+        def forbidden_sources(_rules: list[tuple[int, SellRule]] | None = None) -> list[CleanupProtectionSource]:
+            raise AssertionError("CP10 short-circuited source lookup executed")
+
+        try:
+            restore.binding(widget, "_get_effective_cleanup_targets", lambda: [CleanupTarget(555, 0, "exact")])
+            restore.binding(widget, "_get_effective_cleanup_protection_sources", forbidden_sources)
+            _expect(widget._has_cleanup_sources(), "CP10 useful wrapper short-circuit preserved")
+        finally:
+            restore.restore()
+
+    @staticmethod
+    def combined_observation(module: types.ModuleType) -> dict[str, object]:
+        from copy import deepcopy
+        from uuid import UUID
+
+        from Sources.icefox.MerchantRules import profiles
+        from Sources.icefox.MerchantRules.configuration import BuyRule
+        from Sources.icefox.MerchantRules.configuration import CleanupTarget
+        from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+
+        restore = _CP8Restoration()
+        owned: _CP10OwnedWork | None = None
+        scope_owned = False
+        previous_profile = sys.getprofile()
+        with _cp10_real_factory() as (factory, control):
+            cleanup_widget: _CP10Widget | None = None
+            try:
+                ids = iter(UUID(hex=character * 32) for character in "abcdef")
+                restore.binding(profiles, "uuid4", lambda: next(ids))
+                restore.binding(profiles.time, "time", lambda: 1000.0)
+                restore.binding(module, "JsonFactory", factory)
+                widget = _cp10_widget(module, real_factory=True)
+                cleanup_widget = widget
+                widget.catalog_merchant_essentials = [
+                    {"model_id": 555, "name": "Identification Kit", "item_type": "kit"}
+                ]
+                cache: object = getattr(module, "GLOBAL_CACHE")
+                inventory_api = types.SimpleNamespace(IsStorageOpen=lambda: True)
+                restore.binding(cache, "Inventory", inventory_api)
+                items = [
+                    _cp8_item(module, item_id=701, model_id=555, quantity=1),
+                    _cp8_item(module, item_id=702, model_id=777, quantity=7),
+                ]
+                input_snapshot = _cp8_values(items)
+                phase_trace: list[str] = []
+                deposit_inputs: list[object] = []
+                restore.binding(cache, "Coroutines", [])
+                restore.binding(widget, "_collect_inventory_items", lambda: items)
+
+                def collect_storage() -> tuple[list[InventoryItemInfo], bool]:
+                    return [], True
+
+                restore.binding(widget, "_collect_storage_items_with_reliability", collect_storage)
+                restore.binding(widget, "_can_use_local_storage_actions", lambda: True)
+                widget.buy_rules = [
+                    BuyRule(
+                        enabled=True,
+                        name="A kit",
+                        merchant_stock_targets=[
+                            MerchantStockTarget(555, 5, after_purchase="reset_quantity", check_xunlai_first=True)
+                        ],
+                    )
+                ]
+                widget.cleanup_targets = [CleanupTarget(555, 0, "exact"), CleanupTarget(777, 2, "exact")]
+                widget.cleanup_protection_sources = []
+                widget.cleanup_blacklist_model_ids = []
+                widget.profile_name_inputs["account"] = "Profile A"
+                widget._save_current_as_new_profile("account")
+                profile_a = widget._get_selected_profile("account")
+                if profile_a is None:
+                    raise AssertionError("CP10 saved Profile A")
+                widget.buy_rules[0].merchant_stock_targets[0].target_count = 9
+                widget.profile_name_inputs["account"] = "Profile B"
+                widget._save_current_as_new_profile("account")
+                profile_b = widget._get_selected_profile("account")
+                if profile_b is None:
+                    raise AssertionError("CP10 saved Profile B")
+                widget._set_selected_profile_key("account", profile_a.key)
+                generation = widget.merchant_rules_profile_generation
+                _expect(
+                    widget._load_selected_profile("account", profile_a.fingerprint) is not False,
+                    "CP10 actual A application",
+                )
+                _expect(
+                    widget.merchant_rules_profile_generation == generation + 1 and not widget.preview_ready,
+                    "CP10 actual A runtime reset",
+                )
+                _expect(int(widget.buy_rules[0].merchant_stock_targets[0].target_count) == 5, "CP10 A is live")
+                scope_owned = widget._begin_execute_reservation_scope()
+                _expect(scope_owned, "CP10 reservation scope starts")
+                frozen_floor = widget.execute_xunlai_first_keep_by_model
+                _cp10_equal(frozen_floor, {555: 5}, "CP10 configured floor frozen at execution startup")
+
+                def trace(frame: types.FrameType, event: str, _argument: object) -> None:
+                    if event == "call" and frame.f_locals.get("self") is widget:
+                        name = frame.f_code.co_name
+                        if name in {
+                            "_plan_buy_actions",
+                            "_plan_consumable_crafter_bag_space_warning",
+                            "_plan_cleanup_actions",
+                        }:
+                            phase_trace.append(name)
+                            if name == "_plan_cleanup_actions":
+                                deposit_inputs.append(_cp9_value(frame.f_locals["items"]))
+
+                sys.setprofile(trace)
+                try:
+                    plan = widget._build_plan(
+                        supported_context_override=(True, "Fixture", {"merchant": (1.0, 2.0), "storage": (1.0, 2.0)})
+                    )
+                finally:
+                    sys.setprofile(previous_profile)
+                _cp10_equal(
+                    phase_trace,
+                    ["_plan_buy_actions", "_plan_consumable_crafter_bag_space_warning", "_plan_cleanup_actions"],
+                    "actual cross-owner phase sequence",
+                )
+                _expect(deposit_inputs == [_cp9_value(items)], "CP10 cleanup receives pre-buy projected inventory")
+                _cp8_unchanged(input_snapshot, items)
+                _cp10_equal(
+                    [(buy.model_id, buy.quantity) for buy in plan.merchant_stock_buys], [(555, 4)], "CP10 A purchase"
+                )
+                _cp10_equal([(t.item_id, t.quantity) for t in plan.cleanup_transfers], [(702, 5)], "CP10 A deposit")
+                _expect(plan.cleanup_transfers[0] is plan.storage_transfers[0], "CP10 integrated dual-list identity")
+                cleanup = plan.merchant_stock_buys[0].cleanup
+                _expect(
+                    cleanup.completes_target and not cleanup.xunlai_involved,
+                    "CP10 actual generated cleanup eligibility",
+                )
+                widget.preview_plan = plan
+                widget.preview_ready = True
+
+                def verified_purchase() -> Generator[object, None, object]:
+                    yield "verified"
+                    _expect(
+                        widget._apply_after_purchase_cleanup(cleanup, label="Kit"),
+                        "CP10 actual verified-target consumer",
+                    )
+                    return None
+
+                owned = widget._queue_merchant_rules_owned_work(verified_purchase())
+                if owned is None:
+                    raise AssertionError("CP10 actual owned work admitted")
+                _expect(next(owned) == "verified", "CP10 pause admitted work")
+                plan_snapshot, rules_snapshot = deepcopy(plan), deepcopy(widget.buy_rules)
+                widget.profile_name_inputs["account"] = "During"
+                widget._save_current_as_new_profile("account")
+                _cp10_equal(widget.buy_rules, rules_snapshot, "CP10 saved session does not apply live configuration")
+                _cp10_equal(widget.preview_plan, plan_snapshot, "CP10 saved session does not reset preview")
+                widget._set_selected_profile_key("account", profile_b.key)
+                _expect(
+                    widget._load_selected_profile("account", profile_b.fingerprint) is False,
+                    "CP10 B application blocked while busy",
+                )
+                _expect(
+                    int(widget.buy_rules[0].merchant_stock_targets[0].target_count) == 5,
+                    "CP10 A remains authoritative while busy",
+                )
+                list(owned)
+                owned = None
+                _expect(
+                    int(widget.buy_rules[0].merchant_stock_targets[0].target_count) == 0, "CP10 verified target reset"
+                )
+                _cp10_equal(
+                    widget._get_configured_xunlai_first_keep_by_model(), {}, "CP10 fresh floors see zeroed target"
+                )
+                _cp10_equal(
+                    widget._get_xunlai_first_cleanup_keep_by_model(), {555: 5}, "CP10 execution floor remains frozen"
+                )
+                _expect(
+                    widget.execute_xunlai_first_keep_by_model is frozen_floor,
+                    "CP10 original reservation reference retained",
+                )
+                items = [replace(items[0], quantity=5), items[1]]
+                post_reset = widget._build_plan(
+                    supported_context_override=(True, "Fixture", {"merchant": (1.0, 2.0), "storage": (1.0, 2.0)})
+                )
+                _expect(
+                    all(t.model_id != 555 for t in post_reset.cleanup_transfers),
+                    "CP10 frozen floor protects acquired stock",
+                )
+                reset_payload = widget._build_shareable_profile_payload()
+                _cp10_equal(
+                    factory(profiles.LIVE_CONFIG_DOC_NAME).get_json("", None),
+                    reset_payload,
+                    "CP10 normal save updates wrapper document state without force-save claim",
+                )
+                _expect(not widget.preview_ready, "CP10 target cleanup invalidates preview")
+                widget._end_execute_reservation_scope(scope_owned)
+                scope_owned = False
+                _expect(not frozen_floor, "CP10 reservation shutdown clears prior reference")
+                generation = widget.merchant_rules_profile_generation
+                _expect(
+                    widget._load_selected_profile("account", profile_b.fingerprint) is not False,
+                    "CP10 B applies once idle",
+                )
+                _expect(
+                    widget.buy_rules[0].merchant_stock_targets[0].target_count == 9
+                    and widget.merchant_rules_profile_generation == generation + 1
+                    and not widget.preview_ready,
+                    "CP10 idle B application uses actual reset route",
+                )
+                _expect(
+                    not widget.saved_profile_warnings["account"], "CP10 B completed without hidden persistence warning"
+                )
+                return {
+                    "plan": _cp9_value(plan),
+                    "post_reset_plan": _cp9_value(post_reset),
+                    "phases": phase_trace,
+                    "deposit_inputs": deposit_inputs,
+                    "reset_payload": _cp9_value(reset_payload),
+                    "final_payload": _cp9_value(widget._build_shareable_profile_payload()),
+                    "provenance": _cp9_value(widget.loaded_profile_provenance),
+                    "document_operations": _cp9_value(control.operations),
+                }
+            finally:
+                sys.setprofile(previous_profile)
+                try:
+                    if owned is not None:
+                        owned.close()
+                finally:
+                    try:
+                        if scope_owned and cleanup_widget is not None:
+                            cleanup_widget._end_execute_reservation_scope(True)
+                    finally:
+                        restore.restore()
+
+
+_test_cp10_confirmation_bridge = _CP10Checks.confirmation_bridge
+
+
+_test_cp10_reservation_start_failure = _CP10Checks.reservation_start_failure
+
+
+def _test_cp10_purchase_partial(module: types.ModuleType, failure: str) -> None:
+    import inspect
+    from copy import deepcopy
+
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MaterialTarget
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+    from Sources.icefox.MerchantRules.configuration import RuneTraderTarget
+    from Sources.icefox.MerchantRules.planning import PlannedConsumableCraft
+    from Sources.icefox.MerchantRules.planning import PlannedTraderBuy
+    from Sources.icefox.MerchantRules.planning import PurchaseTargetCleanup
+
+    fixture = _CP10BuyFixture(module)
+    plan = _cp10_plan()
+    counts: dict[int, int] = {}
+    marker = RuntimeError("CP10 purchase partial " + failure)
+    resources: list[object] = []
+    restore = _CP8Restoration()
+    storage: list[InventoryItemInfo] = []
+
+    class CraftFailure(list[PlannedConsumableCraft]):
+        def append(self, value: PlannedConsumableCraft) -> None:
+            frame = inspect.currentframe()
+            try:
+                if frame is None or frame.f_back is None:
+                    raise AssertionError("CP10 capture caller frame")
+                local: Mapping[str, object] = frame.f_back.f_locals
+                resources.append(
+                    deepcopy(
+                        (
+                            local["consumable_reserved_model_counts"],
+                            local["consumable_skill_points_remaining"],
+                            local["consumable_gold_remaining"],
+                        )
+                    )
+                )
+            finally:
+                del frame
+            raise marker
+
+    if failure == "material":
+        fixture.rules = [BuyRule(enabled=True, kind="buy_material_target", material_targets=[MaterialTarget(921, 12)])]
+        plan.material_buys = _CP10FailList(marker)
+    elif failure == "xunlai":
+        fixture.rules = [
+            BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 5, check_xunlai_first=True)])
+        ]
+        storage = [_cp8_item(module, item_id=702, model_id=555, quantity=3)]
+        plan.entries = _CP10FailList(marker)
+    elif failure == "craft":
+        fixture.rules = [
+            BuyRule(
+                enabled=True, kind="consumable_crafter_target", merchant_stock_targets=[MerchantStockTarget(900001, 3)]
+            )
+        ]
+        plan.consumable_crafter_buys = CraftFailure()
+    else:
+        fixture.rules = [
+            BuyRule(enabled=True, kind="buy_rune_trader_target", rune_targets=[RuneTraderTarget("FixtureRune", 3, 2)])
+        ]
+
+        def adjust(
+            stock_key: str, delta: int, *, model_counts: dict[int, int], identifier_counts: dict[str, int]
+        ) -> None:
+            raise marker
+
+        restore.binding(fixture.owner, "adjust_stock_count_for_key", adjust)
+    before = _cp8_values(storage)
+    owner_refs = dict(vars(fixture.owner))
+    try:
+        _cp9_same_exception(lambda: fixture.owner.plan_buy_actions(plan, counts, storage_items=storage), marker)
+        _cp10_equal(
+            counts,
+            {921: 20} if failure == "material" else {921: 0, 900001: 3} if failure == "craft" else {},
+            "partial count publication",
+        )
+        if failure == "rune":
+            _cp10_equal(
+                plan.rune_trader_buys,
+                [
+                    PlannedTraderBuy(
+                        "FixtureRune",
+                        2,
+                        "Rune FixtureRune",
+                        PurchaseTargetCleanup("buy_rune_trader_target", 0, "FixtureRune", 3, 2, "keep", False, False),
+                    )
+                ],
+                "rune append precedes adjustment",
+            )
+        elif failure == "xunlai":
+            _cp10_equal(
+                [
+                    (t.direction, t.item_id, t.quantity, t.key, t.xunlai_first_merchant_stock)
+                    for t in plan.storage_transfers
+                ],
+                [("withdraw", 702, 3, "model:555", True)],
+                "withdrawal precedes entry/count publication",
+            )
+        elif failure == "craft":
+            _cp10_equal(resources, [({921: 0}, 0, 0)], "all shared craft resources spent before failing append")
+            _cp10_equal(plan.consumable_crafter_buys, [], "failed craft append")
+        else:
+            _cp10_equal(plan.material_buys, [], "failed material append")
+        _cp10_equal(plan.entries, [], "later preview append not reached")
+        _expect(vars(fixture.owner) == owner_refs, "CP10 no retained failed allocation state")
+        _cp8_unchanged(before, storage)
+    finally:
+        restore.restore()
+
+
+_test_cp10_cleanup_merge_and_short_circuit = _CP10Checks.cleanup_merge_and_short_circuit
+
+
+def _test_cp10_provenance_publication_failure(_module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.profiles import LOADED_PROFILE_STATE_DOC_NAME
+    from Sources.icefox.MerchantRules.profiles import LoadedProfileProvenance
+    from Sources.icefox.MerchantRules.profiles import ProfileIdentity
+    from Sources.icefox.MerchantRules.profiles import ProfileStore
+
+    with _cp10_real_factory() as (factory, control):
+        marker = RuntimeError("CP10 synchronous provenance callback")
+        published: list[LoadedProfileProvenance] = []
+
+        def publish(value: LoadedProfileProvenance) -> None:
+            published.append(value)
+            raise marker
+
+        session = _cp10_new_session(lambda: factory, publish=publish)
+        store = ProfileStore(_cp10_payload, 40)
+        original = LoadedProfileProvenance(ProfileIdentity("account", "legacy"), "Legacy", "a" * 32, 1000)
+        document = factory(LOADED_PROFILE_STATE_DOC_NAME)
+        document.set_json("", store.provenance_to_json(original))
+        _expect(document.save(), "CP10 initial provenance fixture")
+        control.operations.clear()
+        key = "profile_" + "c" * 32
+        warning = session.remap_migrated_account_provenance("legacy", key)
+        _expect(str(marker) in warning, "CP10 provenance callback translated in original boundary")
+        _cp10_equal(
+            published,
+            [replace(original, source_identity=ProfileIdentity("account", key))],
+            "synchronous verified provenance published before failure",
+        )
+        _cp10_equal(
+            document.get_json("", None), store.provenance_to_json(published[0]), "remapped document survives callback"
+        )
+        _cp10_equal(
+            [op for name, op in control.operations if name == LOADED_PROFILE_STATE_DOC_NAME],
+            ["set", "save", "reload", "reload"],
+            "failure reload preserves original ordering",
+        )
+
+
+_cp10_combined_observation = _CP10Checks.combined_observation
+
+
+def _test_cp10_combined_route(module: types.ModuleType) -> None:
+    _cp10_combined_observation(module)
+
+
+def _test_cp10_ownership(module: types.ModuleType) -> None:
+    from typing import get_args
+    from typing import get_type_hints
+
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules import profiles
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+    from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+    widget: object = _make_widget(module)
+    other: object = _make_widget(module)
+    for field, owner, source in (
+        ("_buy_planner", planning.BuyPlanner, planning),
+        ("_cleanup_planner", planning.CleanupPlanner, planning),
+        ("_saved_profile_session", profiles.SavedProfileSession, profiles),
+    ):
+        value: object = getattr(widget, field)
+        _expect(type(value) is owner and value is not getattr(other, field), "CP10 canonical per-widget owner")
+        source_file = source.__file__
+        if source_file is None:
+            raise AssertionError("CP10 owner module has no source origin")
+        for member in vars(owner).values():
+            function = member.__func__ if isinstance(member, staticmethod) else member
+            if isinstance(function, types.FunctionType):
+                _expect(
+                    function.__globals__ is vars(source)
+                    and Path(function.__code__.co_filename).resolve() == Path(source_file).resolve(),
+                    "CP10 owner algorithms execute from owning module",
+                )
+    _expect(getattr(module, "StockLocationCounts") is planning.StockLocationCounts, "CP10 direct canonical stock alias")
+    first, second = planning.StockLocationCounts("model:555", "Kit"), planning.StockLocationCounts("model:555", "Kit")
+    first.inventory_count = 3
+    _expect(second.inventory_count == 0 and not second.exact, "CP10 stock record independent mutable instance")
+    for name in ("cleanup_target_key", "make_model_stock_key", "make_identifier_stock_key", "parse_stock_key"):
+        _expect(
+            getattr(module, "_" + name) is getattr(planning, name) is getattr(planning, "_" + name),
+            "CP10 direct function alias identity",
+        )
+    annotations = get_type_hints(
+        planning.CleanupPlanner.plan_cleanup_actions,
+        localns={"InventoryItemInfo": InventoryItemInfo, "ProtectionPolicy": ProtectionPolicy},
+    )
+    _expect(
+        annotations["items"] == list[InventoryItemInfo] and annotations["return"] is type(None),
+        "CP10 canonical annotation types",
+    )
+    with _cp10_real_factory() as (factory, _control):
+        hints = get_type_hints(profiles.SavedProfileSession.__init__, localns={"JsonFactory": factory})
+        _expect(get_args(get_args(hints["factory_type"])[1]) == (factory,), "CP10 concrete class provider annotation")
+    _expect("JsonFactory" not in vars(profiles), "CP10 type-only concrete factory acquisition")
+
+
+def _test_cp10_migration_interruption(module: types.ModuleType) -> None:
+    shared_scope = module.PROFILE_SCOPE_SHARED
+
+    def _legacy_wrapper(name: str, timestamp: int, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "schema": module.PROFILE_BACKEND.SHARED_PROFILE_SCHEMA,
+            "schema_version": module.PROFILE_BACKEND.SHARED_PROFILE_SCHEMA_VERSION,
+            "name": name,
+            "saved_at_unix_ms": timestamp,
+            "saved_at": "legacy timestamp",
+            "payload": json.loads(json.dumps(payload)),
+        }
+
+    _reset_jsonfactory_persistence_fixture(module)
+    interrupted_widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    interrupted_doc = _saved_profiles_doc(module, shared_scope)
+    interrupted_key = "profile_" + "1" * 32
+    interrupted_raw = _legacy_wrapper("Interrupted", 404, _minimal_profile_payload(module, favorite_outpost_ids=[1]))
+    interrupted_doc.set_json(interrupted_key, interrupted_raw)
+    _expect(interrupted_doc.save(), "The interruption fixture should persist its legacy source document.")
+
+    class SimulatedMigrationInterruption(BaseException):
+        pass
+
+    interrupted_session = _cp10_session(interrupted_widget)
+    interruption_restore = _CP8Restoration()
+    original_persist_profile_wrapper = interrupted_session.persist_profile_wrapper
+    interruption = SimulatedMigrationInterruption()
+
+    def _interrupt_migration(
+        scope: str,
+        profile_key: str,
+        wrapper: dict[str, object],
+        *,
+        filename: str,
+        preserve_wrapper: bool = False,
+        refresh_after: bool = True,
+        require_existing: bool = False,
+        expected_existing_fingerprint: str = "",
+    ) -> ProfileSummary:
+        raise interruption
+
+    interruption_restore.binding(interrupted_session, "persist_profile_wrapper", _interrupt_migration)
+    try:
+        try:
+            interrupted_widget._refresh_profile_entries(shared_scope, reload_document=True)
+        except SimulatedMigrationInterruption as caught:
+            _expect(caught is interruption, "CP10 interruption exception identity")
+        else:
+            raise AssertionError("CP10 migration interruption was not reached")
+        _expect(not interrupted_session.migration_in_progress, "CP10 migration finally removes guard")
+    finally:
+        interruption_restore.restore()
+        _expect(
+            interrupted_session.persist_profile_wrapper == original_persist_profile_wrapper,
+            "CP10 interruption descriptor restored",
+        )
+    interrupted_state = module.JsonFactory(module.PROFILE_MIGRATION_STATE_DOC_NAME, "global").get_json("", {})
+    interrupted_record = interrupted_state.get("entries", {}).get(interrupted_key, {})
+    _expect(
+        interrupted_record.get("status") == "pending",
+        "An interrupted migration should retain its durable pending old-key mapping.",
+    )
+    _expect(
+        interrupted_widget._refresh_profile_entries(shared_scope, reload_document=True),
+        "A later refresh should resume an interrupted migration from its pending mapping.",
+    )
+    resumed_entry = interrupted_widget._get_profile_by_identity(module.ProfileIdentity(shared_scope, interrupted_key))
+    _expect(
+        resumed_entry is not None
+        and _standalone_profile_path(interrupted_widget, shared_scope, resumed_entry.filename).is_file(),
+        "The resumed migration should create the pending standalone target without allocating a second identity.",
+    )
+
+
+def _test_cp10_migration_retry(module: types.ModuleType) -> None:
+    shared_scope = module.PROFILE_SCOPE_SHARED
+
+    def _legacy_wrapper(name: str, timestamp: int, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "schema": module.PROFILE_BACKEND.SHARED_PROFILE_SCHEMA,
+            "schema_version": module.PROFILE_BACKEND.SHARED_PROFILE_SCHEMA_VERSION,
+            "name": name,
+            "saved_at_unix_ms": timestamp,
+            "saved_at": "legacy timestamp",
+            "payload": json.loads(json.dumps(payload)),
+        }
+
+    _reset_jsonfactory_persistence_fixture(module)
+    retry_widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    retry_doc = _saved_profiles_doc(module, shared_scope)
+    retry_key = "profile_" + "2" * 32
+    retry_doc.set_json(
+        retry_key,
+        _legacy_wrapper("Retryable Migration", 505, _minimal_profile_payload(module, favorite_outpost_ids=[2])),
+    )
+    _expect(retry_doc.save(), "The retryable migration fixture should persist its legacy source document.")
+    retry_session = _cp10_session(retry_widget)
+    retry_restore = _CP8Restoration()
+    retry_original_persist = retry_session.persist_profile_wrapper
+    retry_failures = {"remaining": 1}
+
+    def _fail_migration_once(
+        scope: str,
+        profile_key: str,
+        wrapper: dict[str, object],
+        *,
+        filename: str,
+        preserve_wrapper: bool = False,
+        refresh_after: bool = True,
+        require_existing: bool = False,
+        expected_existing_fingerprint: str = "",
+    ) -> ProfileSummary:
+        if retry_failures["remaining"]:
+            retry_failures["remaining"] -= 1
+            raise OSError("simulated profile-file write failure")
+        return retry_original_persist(
+            scope,
+            profile_key,
+            wrapper,
+            filename=filename,
+            preserve_wrapper=preserve_wrapper,
+            refresh_after=refresh_after,
+            require_existing=require_existing,
+            expected_existing_fingerprint=expected_existing_fingerprint,
+        )
+
+    retry_restore.binding(retry_session, "persist_profile_wrapper", _fail_migration_once)
+    try:
+        _expect(
+            retry_widget._refresh_profile_entries(shared_scope, reload_document=True),
+            "A retryable migration write failure should be isolated without aborting refresh.",
+        )
+    finally:
+        retry_restore.restore()
+    retry_state = module.JsonFactory(module.PROFILE_MIGRATION_STATE_DOC_NAME, "global").get_json("", {})
+    retry_record = retry_state.get("entries", {}).get(retry_key, {})
+    _expect(
+        retry_record.get("status") == "pending",
+        "An ordinary migration persistence failure should remain pending rather than becoming permanently invalid.",
+    )
+    _expect(
+        retry_widget._refresh_profile_entries(shared_scope, reload_document=True),
+        "A later refresh should retry an ordinary migration persistence failure.",
+    )
+    retry_entry = retry_widget._get_profile_by_identity(module.ProfileIdentity(shared_scope, retry_key))
+    _expect(
+        retry_entry is not None and retry_failures["remaining"] == 0,
+        "The retry should reuse the pending opaque identity and materialize the standalone target.",
+    )
+
+
+_CP10_INPUTS: tuple[str, ...] = _CP9_INPUTS + ("Py4GWCoreLib/py4gwcorelib_src/JsonFactory.py",)
+_CP10_ENV_KEYS: tuple[str, ...] = _CP9_ENV_KEYS + (
+    "MERCHANT_RULES_CP10_ORACLE_ROOT",
+    "MERCHANT_RULES_CP10_OUTPUT_PARENT",
+    "MERCHANT_RULES_CP10_CASES",
+)
+
+
+def _cp10_observations(module: types.ModuleType) -> dict[str, object]:
+    return {"combined": _cp10_combined_observation(module), "sale": _cp9_observations(module)}
+
+
+def _cp10_guard(path: Path) -> Path:
+    import stat
+
+    absolute = path.absolute()
+    excluded = {
+        '.shatter-static-bf1x6b9l',
+        '_hr_typecheck_odz4_ms_',
+        '_sy_naming_validation_el_msghe',
+        '_sy_naming_validation_a_aoiqsp',
+    }
+    _expect(not any(part in excluded for part in absolute.parts), 'CP10 excluded path')
+    for component in (*reversed(absolute.parents), absolute):
+        metadata = component.lstat()
+        _expect(
+            not stat.S_ISLNK(metadata.st_mode)
+            and not (getattr(metadata, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT),
+            'CP10 reparse boundary: ' + str(component),
+        )
+    return absolute
+
+
+def _cp10_pins(root: Path) -> dict[str, str]:
+    from hashlib import sha256
+
+    _cp10_guard(root)
+    sources = _cp10_guard(root / 'Sources')
+    try:
+        (sources / '__init__.py').lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError('CP10 Sources/__init__.py must remain absent')
+    return {relative: sha256(_cp10_guard(root / relative).read_bytes()).hexdigest() for relative in _CP10_INPUTS}
+
+
+def _cp10_environment(environment: Mapping[str, str]) -> dict[str, object]:
+    return {
+        key: {'set': True, 'value': environment[key]} if key in environment else {'set': False}
+        for key in _CP10_ENV_KEYS
+    }
+
+
+def _cp10_write_json(path: Path, value: object) -> None:
+    _cp10_guard(path.parent)
+    with path.open('x', encoding='utf-8', newline='\n') as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write('\n')
+
+
+def _cp10_write_bytes(path: Path, value: bytes) -> None:
+    _cp10_guard(path.parent)
+    with path.open('xb') as stream:
+        stream.write(value)
+
+
+def _cp10_attempt(label: str, operation: Callable[[], object], errors: list[str]) -> None:
+    try:
+        operation()
+    except Exception as error:
+        errors.append(label + ': ' + type(error).__name__ + ': ' + str(error))
+
+
+def _cp10_preserve_failure(primary: BaseException | None, errors: list[str]) -> None:
+    if errors:
+        message = 'CP10 evidence/final-state failures: ' + '; '.join(errors)
+        if primary is not None:
+            primary.add_note(message)
+        else:
+            raise AssertionError(message)
+
+
+def _cp10_final_state(root: Path) -> dict[str, object]:
+    from hashlib import sha256
+
+    pins: dict[str, str] = {}
+    errors: list[str] = []
+    namespace_absent = False
+    try:
+        _cp10_guard(root)
+    except Exception as error:
+        return {'pins': pins, 'namespace_absent': False, 'errors': [type(error).__name__ + ': ' + str(error)]}
+    for relative in _CP10_INPUTS:
+        try:
+            pins[relative] = sha256(_cp10_guard(root / relative).read_bytes()).hexdigest()
+        except Exception as error:
+            errors.append(relative + ': ' + type(error).__name__ + ': ' + str(error))
+    try:
+        source_parent = _cp10_guard(root / 'Sources')
+        try:
+            (source_parent / '__init__.py').lstat()
+        except FileNotFoundError:
+            namespace_absent = True
+        else:
+            errors.append('Sources/__init__.py unexpectedly exists')
+    except Exception as error:
+        errors.append('namespace parent: ' + type(error).__name__ + ': ' + str(error))
+    return {'pins': pins, 'namespace_absent': namespace_absent, 'errors': errors}
+
+
+def _cp10_capture_final(
+    roots: Mapping[str, Path],
+    before: Mapping[str, dict[str, str]],
+    final: dict[str, object],
+    errors: list[str],
+) -> None:
+    for name, root in roots.items():
+        try:
+            observed = _cp10_final_state(root)
+            final[name] = observed
+            if observed['errors'] or not observed['namespace_absent']:
+                errors.append(name + ': incomplete or invalid final capture')
+            if name in before and observed['pins'] != before[name]:
+                errors.append(name + ': source pins changed')
+            if name not in before:
+                errors.append(name + ': initial capture unavailable; final capture does not establish equality')
+        except Exception as error:
+            final[name] = {'capture_error': type(error).__name__ + ': ' + str(error)}
+            errors.append(name + ': final capture failed')
+
+
+def _cp10_stream_bytes(value: object) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode('utf-8')
+    return b''
+
+
+def _cp10_run_process(
+    command: list[str],
+    cwd: Path,
+    environment: dict[str, str],
+    location: Path,
+    launch: dict[str, object],
+    *,
+    timeout: float,
+    allowed_exits: tuple[int, ...] = (0,),
+) -> subprocess.CompletedProcess[bytes]:
+    from hashlib import sha256
+    from time import monotonic
+
+    started = monotonic()
+    stdout = b''
+    stderr = b''
+    stdout_available = False
+    stderr_available = False
+    primary: BaseException | None = None
+    completed: subprocess.CompletedProcess[bytes] | None = None
+    launch.update(
+        {
+            'command': command,
+            'cwd': str(cwd),
+            'environment': _cp10_environment(environment),
+            'status': 'not-started',
+            'exit': None,
+            'timeout_seconds': timeout,
+        }
+    )
+    errors: list[str] = []
+    try:
+        launch['executable_sha256'] = sha256(_cp10_guard(Path(command[0])).read_bytes()).hexdigest()
+        launch['status'] = 'launch-attempted'
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=environment,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        stdout, stderr = completed.stdout, completed.stderr
+        stdout_available = stderr_available = True
+        launch.update({'status': 'exited', 'exit': completed.returncode})
+        if completed.returncode not in allowed_exits:
+            primary = AssertionError('CP10 command exited with ' + str(completed.returncode) + ': ' + str(location))
+    except subprocess.TimeoutExpired as error:
+        primary = error
+        launch.update({'status': 'timed-out', 'exit': None})
+        stdout_available = error.output is not None
+        stderr_available = error.stderr is not None
+        stdout = _cp10_stream_bytes(error.output)
+        stderr = _cp10_stream_bytes(error.stderr)
+        raise
+    except BaseException as error:
+        primary = error
+        if launch['status'] == 'launch-attempted':
+            launch['status'] = 'launch-or-wait-exception'
+        raise
+    finally:
+        launch['elapsed_seconds'] = monotonic() - started
+        launch['exception'] = (
+            None
+            if primary is None
+            else {
+                'type': type(primary).__name__,
+                'message': str(primary),
+            }
+        )
+        launch['stream_bytes'] = {'stdout': len(stdout), 'stderr': len(stderr)}
+        launch['stream_capture'] = {
+            'complete': launch['status'] == 'exited',
+            'stdout_available': stdout_available,
+            'stderr_available': stderr_available,
+        }
+        _cp10_attempt('stdout write', lambda: _cp10_write_bytes(location / 'stdout.txt', stdout), errors)
+        _cp10_attempt('stderr write', lambda: _cp10_write_bytes(location / 'stderr.txt', stderr), errors)
+        launch['evidence_errors'] = list(errors)
+        _cp10_attempt('launch write', lambda: _cp10_write_json(location / 'launch.json', launch), errors)
+        _cp10_preserve_failure(primary, errors)
+    if primary is not None:
+        raise primary
+    return completed
+
+
+def _cp10_bindings(module: types.ModuleType) -> dict[str, str]:
+    from Sources.icefox.MerchantRules.configuration import SellRule
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+    from Sources.icefox.MerchantRules.planning import PlanResult
+    from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+    _expect(
+        module.SellRule is SellRule
+        and module.InventoryItemInfo is InventoryItemInfo
+        and module.PlanResult is PlanResult
+        and module.ProtectionPolicy is ProtectionPolicy,
+        'CP10 side-local canonical classes',
+    )
+    root = REPO_ROOT.resolve()
+    origins: dict[str, str] = {}
+    for name, loaded in tuple(sys.modules.items()):
+        if not (name.startswith('Sources.icefox') or name == module.__name__):
+            continue
+        filename: object = getattr(loaded, '__file__', None)
+        _expect(isinstance(filename, str), 'CP10 owning module has a source origin: ' + name)
+        if not isinstance(filename, str):
+            raise AssertionError(name)
+        origin = _cp10_guard(Path(filename))
+        _expect(origin.is_relative_to(root), 'CP10 foreign production origin: ' + str(origin))
+        origins[name] = str(origin.relative_to(root))
+        namespace: Mapping[str, object] = vars(loaded)
+        for value in namespace.values():
+            if isinstance(value, types.FunctionType) and value.__module__ == name:
+                _expect(Path(value.__code__.co_filename).resolve() == origin, 'CP10 defining code origin')
+                _expect(value.__globals__ is vars(loaded), 'CP10 defining globals remain side-local')
+    widget_type: object = module.MerchantRulesWidget
+    if not isinstance(widget_type, type):
+        raise AssertionError('CP10 widget owner is a class')
+    widget_namespace: Mapping[str, object] = vars(widget_type)
+    for value in widget_namespace.values():
+        if isinstance(value, types.FunctionType):
+            _expect(
+                Path(value.__code__.co_filename).resolve() == MERCHANT_RULES_PATH.resolve()
+                and value.__globals__ is vars(module),
+                'CP10 widget method closure is source-bound',
+            )
+    return origins
+
+
+def _cp10_cold_widget(scratch: Path) -> dict[str, object]:
+    from typing import get_type_hints
+
+    events: list[str] = []
+    _install_stub_modules(scratch)
+    database: object = getattr(sys.modules['Sources.marks_sources.mods_parser'], 'ModDatabase')
+    _expect(isinstance(database, type), 'CP10 stub database class')
+    original_load: object = getattr(database, 'load')
+    if not isinstance(original_load, types.FunctionType):
+        raise AssertionError('CP10 stub database loader')
+
+    def load(path: str) -> object:
+        result: object = original_load(path)
+        events.append('mod_database_initialized')
+        return result
+
+    setattr(database, 'load', staticmethod(load))
+
+    class Watch(importlib.abc.MetaPathFinder):
+        def find_spec(
+            self,
+            fullname: str,
+            path: Sequence[str] | None = None,
+            target: types.ModuleType | None = None,
+        ) -> importlib.machinery.ModuleSpec | None:
+            if fullname == 'Sources.icefox.MerchantRules.planning':
+                events.append('planning')
+                _expect(
+                    'Sources.icefox.MerchantRules.requirement_protection' not in sys.modules,
+                    'CP10 planning precedes protection acquisition',
+                )
+            if fullname == 'Sources.icefox.MerchantRules.requirement_protection':
+                partial = sys.modules.get('merchant_rules_regression_target')
+                _expect(
+                    partial is not None and 'MOD_DB' in vars(partial),
+                    'CP10 MOD_DB bound before first protection acquisition',
+                )
+                events.append('requirement_first_acquisition')
+            return None
+
+    annotations: Mapping[str, object] = get_type_hints(Watch.find_spec)
+    _expect(
+        annotations['return'] == importlib.machinery.ModuleSpec | None
+        and annotations['target'] == types.ModuleType | None
+        and annotations['path'] == Sequence[str] | None,
+        'CP10 watcher annotations resolve through the global importlib binding',
+    )
+    watcher = Watch()
+    sys.meta_path.insert(0, watcher)
+    try:
+        spec = importlib.util.spec_from_file_location('merchant_rules_regression_target', MERCHANT_RULES_PATH)
+        if spec is None or spec.loader is None:
+            raise AssertionError('CP10 widget import specification')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        setattr(module, 'PROFILE_BACKEND', sys.modules['Sources.icefox.MerchantRules.profiles'])
+    finally:
+        sys.meta_path.remove(watcher)
+    _requirement_contract_expect(
+        events,
+        ['planning', 'mod_database_initialized', 'requirement_first_acquisition'],
+        'CP10 real widget-driven acquisition order',
+    )
+    from Sources.icefox.MerchantRules import planning
+
+    candidate = hasattr(planning, 'BuyPlanner')
+    if candidate:
+        _test_cp10_ownership(module)
+    return {
+        'annotations_resolved': True,
+        'events': events,
+        'bindings': _cp10_bindings(module),
+        'candidate_constructor_checked': candidate,
+        'loader': 'widget stub packages; namespace proof is a separate child',
+    }
+
+
+def _cp10_is_path(value: object) -> TypeGuard[str | bytes | os.PathLike[str] | os.PathLike[bytes]]:
+    return isinstance(value, (str, bytes, os.PathLike))
+
+
+def _cp10_child(mode: str, scratch: Path) -> int:
+    import importlib
+
+    global _cp10_storage_root
+
+    primary: BaseException | None = None
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    errors: list[str] = []
+    storage_ready = False
+    result: dict[str, object] = {}
+    try:
+        _cp10_guard(scratch)
+        _expect(
+            not scratch.is_relative_to(REPO_ROOT) and not REPO_ROOT.is_relative_to(scratch),
+            'CP10 source and writable storage roots are disjoint',
+        )
+        _cp10_storage_root = scratch
+        storage_ready = True
+        before['source'] = _cp10_pins(REPO_ROOT)
+        _expect(
+            not any(name == 'Sources' or name.startswith('Sources.') for name in sys.modules),
+            'CP10 fresh process starts without project packages',
+        )
+        sys.path.insert(0, str(REPO_ROOT))
+
+        def owned_write(raw: object) -> None:
+            if not _cp10_is_path(raw):
+                return
+            path = Path(os.path.abspath(os.fsdecode(raw)))
+            _expect(path.is_relative_to(scratch), 'CP10 write outside owned storage: ' + str(path))
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                _cp10_guard(path.parent)
+            else:
+                _cp10_guard(path)
+
+        def audit(event: str, arguments: tuple[object, ...]) -> None:
+            if event.startswith('socket.') or event in ('ctypes.dlopen', 'subprocess.Popen'):
+                raise RuntimeError('CP10 offline child forbids ' + event)
+            if event == 'open':
+                flags = arguments[2]
+                if isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC):
+                    owned_write(arguments[0])
+            elif event in ('os.mkdir', 'os.remove', 'os.rmdir', 'shutil.rmtree'):
+                owned_write(arguments[0])
+            elif event in ('os.rename', 'os.replace'):
+                owned_write(arguments[0])
+                owned_write(arguments[1])
+
+        sys.addaudithook(audit)
+        if mode in ('planning', 'profiles'):
+            planning = importlib.import_module('Sources.icefox.MerchantRules.' + mode)
+            parent = sys.modules['Sources']
+            spec = parent.__spec__
+            if getattr(parent, '__file__', None) is not None or spec is None or spec.origin is not None:
+                raise AssertionError('CP10 actual namespace parent')
+            locations = spec.submodule_search_locations
+            if locations is None or list(locations) != [str(REPO_ROOT / 'Sources')]:
+                raise AssertionError('CP10 namespace uses exactly the selected root')
+            for name in (
+                'Py4GWCoreLib',
+                'PyJson',
+                'Sources.icefox.MerchantRules.inventory_evidence',
+                'Sources.icefox.MerchantRules.requirement_protection',
+            ):
+                _expect(name not in sys.modules, 'CP10 isolated planning acquired forbidden dependency: ' + name)
+            filename = planning.__file__
+            if (
+                filename is None
+                or Path(filename).resolve() != (REPO_ROOT / f'Sources/icefox/MerchantRules/{mode}.py').resolve()
+            ):
+                raise AssertionError('CP10 canonical planning origin')
+            candidate_routes = hasattr(planning, 'BuyPlanner' if mode == 'planning' else 'SavedProfileSession')
+            if candidate_routes and mode == 'planning':
+                _requirement_contract_expect(planning.material_batch_size(921), 10, 'CP10 cold pure batch primitive')
+                _requirement_contract_expect(
+                    planning.material_destination(923),
+                    'rare_material_trader',
+                    'CP10 cold pure destination primitive',
+                )
+            result = {
+                'namespace': True,
+                'eager_inventory': False,
+                'eager_protection': False,
+                'new_owner': candidate_routes,
+            }
+        elif mode == 'widget':
+            result = _cp10_cold_widget(scratch)
+        elif mode == 'observations':
+            module: types.ModuleType = _load_merchant_rules_module(scratch)
+            origins = _cp10_bindings(module)
+            result = {
+                'values': _cp10_observations(module),
+                'bindings': origins,
+                'within_process_identity_assertions': True,
+            }
+            _cp10_bindings(module)
+        else:
+            raise AssertionError('CP10 unknown child mode: ' + mode)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        _cp10_capture_final({'source': REPO_ROOT}, before, final, errors)
+        record = {
+            'mode': mode,
+            'status': 'failed' if primary is not None or errors else 'completed',
+            'exception': None if primary is None else {'type': type(primary).__name__, 'message': str(primary)},
+            'source_root': str(REPO_ROOT),
+            'widget_path': str(MERCHANT_RULES_PATH),
+            'script_dir': str(SCRIPT_DIR),
+            'storage_root': str(scratch),
+            'flags': {
+                'isolated': sys.flags.isolated,
+                'no_site': sys.flags.no_site,
+                'dont_write_bytecode': sys.flags.dont_write_bytecode,
+                'optimize': sys.flags.optimize,
+                'utf8_mode': sys.flags.utf8_mode,
+            },
+            'environment': _cp10_environment(os.environ),
+            'before': before,
+            'final': final,
+            'evidence_errors': errors,
+        }
+        if storage_ready:
+            _cp10_attempt('child final write', lambda: _cp10_write_json(scratch / 'child-final.json', record), errors)
+        else:
+            _cp10_attempt(
+                'child final stream', lambda: print('CP10_FINAL=' + json.dumps(record, sort_keys=True)), errors
+            )
+        _cp10_preserve_failure(primary, errors)
+    print('CP10_JSON=' + json.dumps(result, sort_keys=True))
+    return 0
+
+
+def _cp10_external(kind: str) -> dict[str, object]:
+    from uuid import uuid4
+
+    _expect(kind in ('cold', 'differential'), 'CP10 known external run kind')
+    parent = _cp10_guard(Path(os.environ['MERCHANT_RULES_CP10_OUTPUT_PARENT']))
+    oracle = Path(os.environ['MERCHANT_RULES_CP10_ORACLE_ROOT'])
+    candidate = REPO_ROOT
+    _expect(
+        not parent.is_relative_to(oracle) and not parent.is_relative_to(candidate),
+        'CP10 output parent outside source roots',
+    )
+    output = parent / ('cp10-' + kind + '-' + uuid4().hex[:8])
+    output.mkdir()
+    roots = {'oracle': oracle, 'candidate': candidate}
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    reports: dict[str, object] = {}
+    errors: list[str] = []
+    primary: BaseException | None = None
+    comparison = 'not-started' if kind == 'differential' else 'not-applicable'
+    modes = ('planning', 'profiles', 'widget') if kind == 'cold' else ('observations',)
+    jobs: dict[str, dict[str, object]] = {
+        side + '-' + mode: {'status': 'not-started', 'exit': None} for side in roots for mode in modes
+    }
+    try:
+        _cp10_guard(oracle)
+        _cp10_guard(candidate)
+        _expect(
+            oracle != candidate and not oracle.is_relative_to(candidate) and not candidate.is_relative_to(oracle),
+            'CP10 independent source roots',
+        )
+        for name, root in roots.items():
+            before[name] = _cp10_pins(root)
+        fixed = {
+            'Widgets/Guild Wars/Items & Loot/MerchantRules.py': '3bd11c62d4c537306bf3dee87280d9fba1cd23d501bbbe91d4f152011bc33f4e',
+            'Sources/icefox/MerchantRules/planning.py': 'e1fd4c759ae1c5e72a21c999d34fb662e5c2ad277637196ebbb909bacfc483b8',
+            'Sources/icefox/MerchantRules/profiles.py': 'be87885eaa8b704796a4468da7e5537860b2d357443bad56d9dc57d680a42bd7',
+            'Py4GWCoreLib/py4gwcorelib_src/JsonFactory.py': '993c20c987b1e64257db35ab10bb4ab1da74b837d4ab2292172f997ce5f7f3e1',
+        }
+        for relative, digest in fixed.items():
+            _requirement_contract_expect(before['oracle'][relative], digest, 'CP10 completed-CP9 oracle ' + relative)
+        for relative in _CP10_INPUTS:
+            if relative not in (
+                'Widgets/Guild Wars/Items & Loot/MerchantRules.py',
+                'Sources/icefox/MerchantRules/planning.py',
+                'Sources/icefox/MerchantRules/profiles.py',
+            ):
+                _requirement_contract_expect(
+                    before['oracle'][relative],
+                    before['candidate'][relative],
+                    'CP10 identical non-production-delta input: ' + relative,
+                )
+        for side, root in roots.items():
+            for mode in modes:
+                key = side + '-' + mode
+                location = output / key
+                location.mkdir()
+                scratch = location / 'storage'
+                scratch.mkdir()
+                child = root / '.local-tests/merchant-rules/test_merchant_rules_regression.py'
+                command = [sys.executable, '-I', '-B', '-S', str(child), '--cp10-child', mode, str(scratch)]
+                environment = os.environ.copy()
+                environment['PYTHONDONTWRITEBYTECODE'] = '1'
+                for name in ('TEMP', 'TMP', 'TMPDIR'):
+                    environment[name] = str(scratch)
+                launch = jobs[key]
+                launch.update(
+                    {
+                        'source_pins': before[side],
+                        'source_root': str(root),
+                        'storage_root': str(scratch),
+                        'mode': mode,
+                    }
+                )
+                completed = _cp10_run_process(command, scratch, environment, location, launch, timeout=300)
+                records = [
+                    line.removeprefix('CP10_JSON=')
+                    for line in completed.stdout.decode('utf-8').splitlines()
+                    if line.startswith('CP10_JSON=')
+                ]
+                _expect(len(records) == 1, 'CP10 exactly one complete child observation')
+                report: object = json.loads(records[0])
+                reports[key] = report
+        if kind == 'differential':
+            comparison = 'comparing'
+            _requirement_contract_expect(
+                reports['oracle-observations'],
+                reports['candidate-observations'],
+                'CP10 complete cross-process values, ordered traces and binding shapes',
+            )
+            comparison = 'passed'
+    except BaseException as error:
+        primary = error
+        if comparison == 'comparing':
+            comparison = 'failed'
+        raise
+    finally:
+        _cp10_capture_final(roots, before, final, errors)
+        record = {
+            'kind': kind,
+            'status': 'failed' if primary is not None or errors else 'completed',
+            'exception': None if primary is None else {'type': type(primary).__name__, 'message': str(primary)},
+            'comparison': comparison,
+            'jobs': jobs,
+            'reports': reports,
+            'environment': _cp10_environment(os.environ),
+            'before': before,
+            'final': final,
+            'evidence_errors': errors,
+        }
+        _cp10_attempt('external report write', lambda: _cp10_write_json(output / 'report.json', record), errors)
+        _cp10_preserve_failure(primary, errors)
+    print('CP10 ' + kind + ' evidence: ' + str(output / 'report.json'))
+    return reports
+
+
+def _test_cp10_cold_import() -> None:
+    reports = _cp10_external("cold")
+    _cp10_equal(
+        set(reports),
+        {side + "-" + mode for side in ("oracle", "candidate") for mode in ("planning", "profiles", "widget")},
+        "six cold children",
+    )
+    for side in ("oracle", "candidate"):
+        for mode in ("planning", "profiles"):
+            value = reports[side + "-" + mode]
+            if not _cp10_is_dict(value):
+                raise AssertionError("CP10 cold report object")
+            _expect(value["new_owner"] is (side == "candidate"), "CP10 old/new owner acquisition")
+        widget = reports[side + "-widget"]
+        if not _cp10_is_dict(widget):
+            raise AssertionError("CP10 cold widget report")
+        _expect(widget["candidate_constructor_checked"] is (side == "candidate"), "CP10 cold constructor reachability")
+
+
+def _test_cp10_completed_cp9_differential() -> None:
+    reports = _cp10_external("differential")
+    _cp10_equal(
+        set(reports), {"oracle-observations", "candidate-observations"}, "two independently source-bound comparisons"
+    )
+
+
+_CP10_CASES: tuple[tuple[str, Callable[[types.ModuleType], None]], ...] = (
+    ("cp10_real_jsonfactory_wrapper", _test_cp10_real_jsonfactory_wrapper),
+    *(
+        (f"cp10_profile_persistence_{mode}", partial(_test_cp10_profile_persistence, failure=mode))
+        for mode in ("set", "save", "save_false", "reload", "reload_false", "reload_override", "verify")
+    ),
+    *(
+        (f"cp10_purchase_{family}", partial(_test_cp10_purchase_family, family=family))
+        for family in ("material", "merchant", "scroll", "rune", "craft")
+    ),
+    ("cp10_purchase_order", _test_cp10_purchase_order),
+    ("cp10_unreliable_storage", _test_cp10_unreliable_storage),
+    *(
+        (f"cp10_cleanup_publication_{mode}", partial(_test_cp10_cleanup_publication, failure=mode))
+        for mode in ("success", "cleanup", "storage", "construct_entry", "entries")
+    ),
+    ("cp10_cleanup_acquisition", _test_cp10_cleanup_acquisition),
+    ("cp10_profile_state_and_aliases", _test_cp10_profile_state_and_aliases),
+    ("cp10_confirmation_bridge", _test_cp10_confirmation_bridge),
+    ("cp10_profile_factory_lookup", _test_cp10_profile_factory_lookup),
+    ("cp10_profile_capture_timing", _test_cp10_profile_capture_timing),
+    ("cp10_profile_failure_dedup", _test_cp10_profile_failure_dedup),
+    *(
+        (f"cp10_purchase_partial_{mode}", partial(_test_cp10_purchase_partial, failure=mode))
+        for mode in ("material", "xunlai", "craft", "rune")
+    ),
+    ("cp10_reservation_start_failure", _test_cp10_reservation_start_failure),
+    *(
+        (f"cp10_profile_scan_{mode}", partial(_test_cp10_profile_scan, failure=mode))
+        for mode in ("scan", "logging", "publication")
+    ),
+    ("cp10_provenance_publication_failure", _test_cp10_provenance_publication_failure),
+    ("cp10_recipe_and_resource_reads", _test_cp10_recipe_and_resource_reads),
+    ("cp10_combined_route", _test_cp10_combined_route),
+    ("cp10_ownership", _test_cp10_ownership),
+    ("cp10_cleanup_merge_and_short_circuit", _test_cp10_cleanup_merge_and_short_circuit),
+    ("cp10_migration_interruption", _test_cp10_migration_interruption),
+    ("cp10_migration_retry", _test_cp10_migration_retry),
+    ("cp10_cold_import", lambda _module: _test_cp10_cold_import()),
+    ("cp10_completed_cp9_differential", lambda _module: _test_cp10_completed_cp9_differential()),
+)
 
 
 def main() -> int:
@@ -57447,6 +60099,8 @@ def main() -> int:
             ]
         )
 
+        tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP10_CASES)
+
         catalog_contract_tests = [
             (
                 "catalog_loader_indexes_typed_common_salvage_separately",
@@ -57477,6 +60131,21 @@ def main() -> int:
         if os.environ.get("MERCHANT_RULES_CATALOG_ONLY") == "1":
             tests = catalog_contract_tests
 
+        requested = os.environ.get("MERCHANT_RULES_CP10_CASES", "")
+        if requested:
+            _expect(
+                not any(
+                    os.environ.get(name) == "1"
+                    for name in ("MERCHANT_RULES_CATALOG_ONLY", "MERCHANT_RULES_SALVAGE_KIT_ONLY")
+                ),
+                "CP10 selection cannot be combined with historical ONLY flags",
+            )
+            names = requested.split(",")
+            _expect(len(names) == len(set(names)) and all(names), "CP10 unique nonempty selection")
+            registered = {name for name, _ in tests}
+            _expect(set(names) <= registered, "CP10 selection names must all be registered")
+            tests = [test for test in tests if test[0] in names]
+
         failures: list[tuple[str, str]] = []
         for name, test_fn in tests:
             try:
@@ -57505,7 +60174,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        if len(sys.argv) != 4 or sys.argv[1] != "--cp9-child":
-            raise SystemExit("Expected --cp9-child MODE OWNED_STORAGE, or no arguments.")
-        raise SystemExit(_cp9_child(sys.argv[2], Path(sys.argv[3])))
+        if len(sys.argv) != 4 or sys.argv[1] not in {"--cp9-child", "--cp10-child"}:
+            raise SystemExit("Expected --cp9-child or --cp10-child MODE OWNED_STORAGE, or no arguments.")
+        child = _cp10_child if sys.argv[1] == "--cp10-child" else _cp9_child
+        raise SystemExit(child(sys.argv[2], Path(sys.argv[3])))
     raise SystemExit(main())

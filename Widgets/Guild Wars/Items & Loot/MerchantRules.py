@@ -14,7 +14,6 @@ import os
 import re
 import time
 import traceback
-import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from collections.abc import Generator
@@ -60,7 +59,8 @@ from Sources.icefox.MerchantRules import configuration as _configuration
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
 from Sources.icefox.MerchantRules import planning as _planning
-from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME
+from Sources.icefox.MerchantRules import profiles as _profiles
+from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME as ACCOUNT_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_SCHEMA
@@ -73,10 +73,10 @@ from Sources.icefox.MerchantRules.profiles import LOADED_PROFILE_STATE_SCHEMA_VE
 from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPES
 from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPE_ACCOUNT
 from Sources.icefox.MerchantRules.profiles import PROFILE_SCOPE_SHARED
-from Sources.icefox.MerchantRules.profiles import PROFILE_DOCUMENT_DIR
-from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_SCHEMA
-from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_SCHEMA_VERSION
-from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_STATE_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import PROFILE_DOCUMENT_DIR as PROFILE_DOCUMENT_DIR
+from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_SCHEMA as PROFILE_MIGRATION_SCHEMA
+from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_SCHEMA_VERSION as PROFILE_MIGRATION_SCHEMA_VERSION
+from Sources.icefox.MerchantRules.profiles import PROFILE_MIGRATION_STATE_DOC_NAME as PROFILE_MIGRATION_STATE_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import ProfileIdentity
 from Sources.icefox.MerchantRules.profiles import ProfileStore
 from Sources.icefox.MerchantRules.profiles import ProfileSummary
@@ -84,10 +84,12 @@ from Sources.icefox.MerchantRules.profiles import LoadedProfileProvenance
 from Sources.icefox.MerchantRules.profiles import character_profile_association_from_json
 from Sources.icefox.MerchantRules.profiles import character_profile_association_to_json
 from Sources.icefox.MerchantRules.profiles import normalize_character_profile_state_root
-from Sources.icefox.MerchantRules.profiles import SHARED_PROFILES_DOC_NAME
-from Sources.icefox.MerchantRules.profiles import is_valid_profile_id
-from Sources.icefox.MerchantRules.profiles import new_profile_id
-from Sources.icefox.MerchantRules.profiles import _normalize_shared_profile_display_name
+from Sources.icefox.MerchantRules.profiles import SHARED_PROFILES_DOC_NAME as SHARED_PROFILES_DOC_NAME
+from Sources.icefox.MerchantRules.profiles import is_valid_profile_id as is_valid_profile_id
+from Sources.icefox.MerchantRules.profiles import new_profile_id as new_profile_id
+from Sources.icefox.MerchantRules.profiles import (
+    _normalize_shared_profile_display_name as _normalize_shared_profile_display_name,
+)
 
 from Sources.icefox.MerchantRules.catalog import CatalogLoadResult
 from Sources.icefox.MerchantRules.catalog import CatalogLoader
@@ -250,18 +252,9 @@ MODS_DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Sources", "m
 RUNES_CATALOG_PATH = os.path.join(MODS_DATA_DIR, "runes.json")
 SEARCH_RESULT_LIMIT = 12
 RANKED_SEARCH_CACHE_CAPACITY = 16
-PROFILE_FILENAME_MAX_STEM_LENGTH = 180
-PROFILE_FILENAME_INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-PROFILE_FILENAME_RESERVED_NAMES = frozenset(
-    {
-        "CON",
-        "PRN",
-        "AUX",
-        "NUL",
-        *(f"COM{index}" for index in range(1, 10)),
-        *(f"LPT{index}" for index in range(1, 10)),
-    }
-)
+PROFILE_FILENAME_MAX_STEM_LENGTH = _profiles.PROFILE_FILENAME_MAX_STEM_LENGTH
+PROFILE_FILENAME_INVALID_CHARS = _profiles.PROFILE_FILENAME_INVALID_CHARS
+PROFILE_FILENAME_RESERVED_NAMES = _profiles.PROFILE_FILENAME_RESERVED_NAMES
 TRAVEL_TIMEOUT_MS = 20000
 MERCHANT_RULES_MAP_READY_UPTIME_MS = 1500
 MERCHANT_RULES_PLAYER_READY_UPTIME_MS = 500
@@ -1573,8 +1566,8 @@ STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN = _planning.STORAGE_PLAN_STATE_NEEDS_EXACT_S
 STORAGE_PLAN_STATE_EXACT_READY = _planning.STORAGE_PLAN_STATE_EXACT_READY
 STORAGE_TRANSFER_WITHDRAW = _planning.STORAGE_TRANSFER_WITHDRAW
 STORAGE_TRANSFER_DEPOSIT = _planning.STORAGE_TRANSFER_DEPOSIT
-STOCK_KEY_MODEL_PREFIX = "model:"
-STOCK_KEY_IDENTIFIER_PREFIX = "identifier:"
+STOCK_KEY_MODEL_PREFIX = _planning.STOCK_KEY_MODEL_PREFIX
+STOCK_KEY_IDENTIFIER_PREFIX = _planning.STOCK_KEY_IDENTIFIER_PREFIX
 MERCHANT_RULES_OPCODE_RELOAD_PROFILE = 1
 MERCHANT_RULES_OPCODE_PREVIEW = 2
 MERCHANT_RULES_OPCODE_EXECUTE = 3
@@ -3840,14 +3833,7 @@ MERCHANT_RULES_MAP_SERVICE_SELECTORS: dict[
 }
 
 
-@dataclass
-class StockLocationCounts:
-    key: str
-    label: str
-    inventory_count: int = 0
-    storage_count: int = 0
-    combined_count: int = 0
-    exact: bool = False
+StockLocationCounts = _planning.StockLocationCounts
 
 
 PlannedStorageTransfer = _planning.PlannedStorageTransfer
@@ -4438,9 +4424,7 @@ _infer_cleanup_target_scope_from_model_id = _configuration.infer_cleanup_target_
 _normalize_cleanup_target_scope = _configuration.normalize_cleanup_target_scope
 
 
-def _cleanup_target_key(target: object) -> tuple[int, str]:
-    model_id = max(0, _safe_int(getattr(target, "model_id", 0), 0))
-    return model_id, _normalize_cleanup_target_scope(getattr(target, "scope", ""), model_id)
+_cleanup_target_key = _planning.cleanup_target_key
 
 
 def _cleanup_target_key_from_values(model_id: object, scope: object = "") -> tuple[int, str]:
@@ -4789,23 +4773,13 @@ def _normalize_buy_rules(rules: list[BuyRule]) -> list[BuyRule]:
     )
 
 
-def _make_model_stock_key(model_id: object) -> str:
-    safe_model_id = max(0, _safe_int(model_id, 0))
-    return f"{STOCK_KEY_MODEL_PREFIX}{safe_model_id}" if safe_model_id > 0 else ""
+_make_model_stock_key = _planning.make_model_stock_key
 
 
-def _make_identifier_stock_key(identifier: object) -> str:
-    safe_identifier = _normalize_rune_identifier(identifier)
-    return f"{STOCK_KEY_IDENTIFIER_PREFIX}{safe_identifier}" if safe_identifier else ""
+_make_identifier_stock_key = _planning.make_identifier_stock_key
 
 
-def _parse_stock_key(key: object) -> tuple[str, str]:
-    safe_key = str(key or "").strip()
-    if safe_key.startswith(STOCK_KEY_MODEL_PREFIX):
-        return STOCK_KEY_MODEL_PREFIX, safe_key[len(STOCK_KEY_MODEL_PREFIX):]
-    if safe_key.startswith(STOCK_KEY_IDENTIFIER_PREFIX):
-        return STOCK_KEY_IDENTIFIER_PREFIX, safe_key[len(STOCK_KEY_IDENTIFIER_PREFIX):]
-    return "", safe_key
+_parse_stock_key = _planning.parse_stock_key
 
 
 _sell_rule_can_include_material_storage = _configuration.sell_rule_can_include_material_storage
@@ -5286,64 +5260,15 @@ class MerchantRulesWidget:
         self.profile_warning = ""
         self.profile_notice = ""
         self.profile_write_blocked = False
-        self.profile_entries: dict[str, list[ProfileSummary]] = {
-            scope: []
-            for scope in PROFILE_SCOPES
-        }
-        self.profile_known_filenames: dict[str, set[str]] = {
-            scope: set()
-            for scope in PROFILE_SCOPES
-        }
-        self.profile_selection_cleared_due_to_disappearance: dict[str, bool] = {
-            scope: False
-            for scope in PROFILE_SCOPES
-        }
-        self.profile_scan_conflicts: dict[str, dict[str, str]] = {
-            scope: {}
-            for scope in PROFILE_SCOPES
-        }
-        self._profile_migration_in_progress: set[str] = set()
-        self.profile_selected_identities: dict[str, ProfileIdentity | None] = {
-            scope: None
-            for scope in PROFILE_SCOPES
-        }
-        self.profile_name_inputs: dict[str, str] = {
-            scope: ""
-            for scope in PROFILE_SCOPES
-        }
-        self.profile_name_input_dirty: dict[str, bool] = {
-            scope: False
-            for scope in PROFILE_SCOPES
-        }
-        self.saved_profile_warnings: dict[str, str] = {
-            scope: ""
-            for scope in PROFILE_SCOPES
-        }
-        self.saved_profile_notices: dict[str, str] = {
-            scope: ""
-            for scope in PROFILE_SCOPES
-        }
-        self.saved_profile_scan_warnings: dict[str, str] = {
-            scope: ""
-            for scope in PROFILE_SCOPES
-        }
-        self.saved_profile_failure_signatures: dict[str, dict[str, tuple[str, str]]] = {
-            scope: {}
-            for scope in PROFILE_SCOPES
-        }
-        self.profile_entries_loaded: dict[str, bool] = {
-            scope: False
-            for scope in PROFILE_SCOPES
-        }
-        self.profile_document_reload_failed: dict[str, bool] = {
-            scope: False
-            for scope in PROFILE_SCOPES
-        }
-        self.active_profiles_scope = PROFILE_SCOPE_ACCOUNT
-        self.profile_scroll_to_identity: ProfileIdentity | None = None
-        self.pending_profile_confirmation_identity: ProfileIdentity | None = None
-        self.pending_profile_confirmation_fingerprint = ""
-        self.pending_profile_confirmation_action = ""
+        self._saved_profile_session = _profiles.SavedProfileSession(
+            store=self._profile_store,
+            factory_type=lambda: JsonFactory,
+            current_payload=lambda: self._build_shareable_profile_payload(),
+            default_payload=lambda: self._build_default_profile_payload(include_rule_templates=False),
+            clear_generic_confirmation=lambda: self._clear_pending_destructive_button(),
+            publish_migrated_provenance=lambda provenance: self._publish_migrated_saved_profile_provenance(provenance),
+            warning=lambda message: self._emit_saved_profile_warning(message),
+        )
         self.pending_destructive_button_key = ""
         self.pending_destructive_button_expires_at_ms = 0
         self.rule_name_edit_key = ""
@@ -5608,6 +5533,42 @@ class MerchantRulesWidget:
             withdrawal_label=lambda item: self._get_xunlai_sell_withdraw_label(item),
             diagnostic=lambda message: self._debug_log(message),
         )
+        self._buy_planner = _planning.BuyPlanner(
+            rules=lambda: self.buy_rules,
+            normalize_rule=lambda rule: _normalize_buy_rule(rule),
+            scroll_stock=lambda value: _is_scroll_trader_stock_model(value),
+            merchant_type=lambda rule: _get_buy_rule_merchant_type(rule),
+            recipes=lambda: CONSUMABLE_CRAFTER_RECIPES_BY_MODEL,
+            catalog=lambda: self._catalog_session,
+            dye_model=lambda: int(ModelID.Vial_Of_Dye.value),
+            title_rank=lambda title_id: self._get_title_rank_info(title_id),
+            skill_points=lambda: Player.GetSkillPointData(),
+            carried_gold=lambda: GLOBAL_CACHE.Inventory.GetGoldOnCharacter(),
+            stored_gold=lambda: GLOBAL_CACHE.Inventory.GetGoldInStorage(),
+            material_storage=lambda model_id: self._get_material_storage_quantity_and_slot(model_id),
+            free_slots=lambda: self._get_inventory_free_slot_count(),
+            model_label=lambda model_id: self._format_model_label(model_id),
+            model_label_short=lambda model_id: self._format_model_label_short(model_id),
+            rune_label=lambda identifier: self._get_rune_label(identifier),
+            rule_reference=lambda index, rule: self._format_buy_rule_reference(index, rule),
+            scroll_service_label=lambda: self._get_scroll_trader_service_label(),
+            buy_kind_labels=lambda: BUY_KIND_LABELS,
+            merchant_type_labels=lambda: MERCHANT_TYPE_LABELS,
+        )
+        self._cleanup_planner = _planning.CleanupPlanner(
+            targets=lambda: self.cleanup_targets,
+            sources=lambda: self.cleanup_protection_sources,
+            keep_out=lambda: self.cleanup_blacklist_model_ids,
+            rules=lambda: self.sell_rules,
+            normalize_rule=lambda rule: _normalize_sell_rule(rule),
+            collect_enabled_rules=lambda: self._collect_enabled_sell_rules(),
+            policy=lambda: self._protection_policy,
+            storage_available=lambda: self._can_use_local_storage_actions(),
+            keep_floors=lambda: self._get_xunlai_first_cleanup_keep_by_model(),
+            choose_keep=lambda items, count: _choose_keep_subset_at_most(items, count),
+            target_label=lambda target: self._format_cleanup_target_label_short(target),
+            rule_reference=lambda index, rule: self._format_sell_rule_reference(index, rule),
+        )
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
         )
@@ -5695,6 +5656,167 @@ class MerchantRulesWidget:
         self.multibox_running_accounts: dict[str, int] = {}
         self.multibox_request_counter = 0
 
+    def _emit_saved_profile_warning(self, message: Callable[[], str]) -> None:
+        ConsoleLog(MODULE_NAME, message(), Console.MessageType.Warning)
+
+    def _publish_migrated_saved_profile_provenance(self, verified: LoadedProfileProvenance) -> None:
+        self.loaded_profile_provenance = verified
+        self.active_profile_display_name = (
+            f"[{self._profile_scope_badge(verified.source_identity.scope)}] " f"{verified.display_name_snapshot}"
+        )
+
+    @property
+    def profile_entries(self) -> dict[str, list[ProfileSummary]]:
+        return self._saved_profile_session.profile_entries
+
+    @profile_entries.setter
+    def profile_entries(self, value: dict[str, list[ProfileSummary]]) -> None:
+        self._saved_profile_session.profile_entries = value
+
+    @property
+    def profile_known_filenames(self) -> dict[str, set[str]]:
+        return self._saved_profile_session.profile_known_filenames
+
+    @profile_known_filenames.setter
+    def profile_known_filenames(self, value: dict[str, set[str]]) -> None:
+        self._saved_profile_session.profile_known_filenames = value
+
+    @property
+    def profile_selection_cleared_due_to_disappearance(self) -> dict[str, bool]:
+        return self._saved_profile_session.profile_selection_cleared_due_to_disappearance
+
+    @profile_selection_cleared_due_to_disappearance.setter
+    def profile_selection_cleared_due_to_disappearance(self, value: dict[str, bool]) -> None:
+        self._saved_profile_session.profile_selection_cleared_due_to_disappearance = value
+
+    @property
+    def profile_scan_conflicts(self) -> dict[str, dict[str, str]]:
+        return self._saved_profile_session.profile_scan_conflicts
+
+    @profile_scan_conflicts.setter
+    def profile_scan_conflicts(self, value: dict[str, dict[str, str]]) -> None:
+        self._saved_profile_session.profile_scan_conflicts = value
+
+    @property
+    def _profile_migration_in_progress(self) -> set[str]:
+        return self._saved_profile_session.migration_in_progress
+
+    @_profile_migration_in_progress.setter
+    def _profile_migration_in_progress(self, value: set[str]) -> None:
+        self._saved_profile_session.migration_in_progress = value
+
+    @property
+    def profile_selected_identities(self) -> dict[str, ProfileIdentity | None]:
+        return self._saved_profile_session.profile_selected_identities
+
+    @profile_selected_identities.setter
+    def profile_selected_identities(self, value: dict[str, ProfileIdentity | None]) -> None:
+        self._saved_profile_session.profile_selected_identities = value
+
+    @property
+    def profile_name_inputs(self) -> dict[str, str]:
+        return self._saved_profile_session.profile_name_inputs
+
+    @profile_name_inputs.setter
+    def profile_name_inputs(self, value: dict[str, str]) -> None:
+        self._saved_profile_session.profile_name_inputs = value
+
+    @property
+    def profile_name_input_dirty(self) -> dict[str, bool]:
+        return self._saved_profile_session.profile_name_input_dirty
+
+    @profile_name_input_dirty.setter
+    def profile_name_input_dirty(self, value: dict[str, bool]) -> None:
+        self._saved_profile_session.profile_name_input_dirty = value
+
+    @property
+    def saved_profile_warnings(self) -> dict[str, str]:
+        return self._saved_profile_session.saved_profile_warnings
+
+    @saved_profile_warnings.setter
+    def saved_profile_warnings(self, value: dict[str, str]) -> None:
+        self._saved_profile_session.saved_profile_warnings = value
+
+    @property
+    def saved_profile_notices(self) -> dict[str, str]:
+        return self._saved_profile_session.saved_profile_notices
+
+    @saved_profile_notices.setter
+    def saved_profile_notices(self, value: dict[str, str]) -> None:
+        self._saved_profile_session.saved_profile_notices = value
+
+    @property
+    def saved_profile_scan_warnings(self) -> dict[str, str]:
+        return self._saved_profile_session.saved_profile_scan_warnings
+
+    @saved_profile_scan_warnings.setter
+    def saved_profile_scan_warnings(self, value: dict[str, str]) -> None:
+        self._saved_profile_session.saved_profile_scan_warnings = value
+
+    @property
+    def saved_profile_failure_signatures(self) -> dict[str, dict[str, tuple[str, str]]]:
+        return self._saved_profile_session.saved_profile_failure_signatures
+
+    @saved_profile_failure_signatures.setter
+    def saved_profile_failure_signatures(self, value: dict[str, dict[str, tuple[str, str]]]) -> None:
+        self._saved_profile_session.saved_profile_failure_signatures = value
+
+    @property
+    def profile_entries_loaded(self) -> dict[str, bool]:
+        return self._saved_profile_session.profile_entries_loaded
+
+    @profile_entries_loaded.setter
+    def profile_entries_loaded(self, value: dict[str, bool]) -> None:
+        self._saved_profile_session.profile_entries_loaded = value
+
+    @property
+    def profile_document_reload_failed(self) -> dict[str, bool]:
+        return self._saved_profile_session.profile_document_reload_failed
+
+    @profile_document_reload_failed.setter
+    def profile_document_reload_failed(self, value: dict[str, bool]) -> None:
+        self._saved_profile_session.profile_document_reload_failed = value
+
+    @property
+    def active_profiles_scope(self) -> str:
+        return self._saved_profile_session.active_profiles_scope
+
+    @active_profiles_scope.setter
+    def active_profiles_scope(self, value: str) -> None:
+        self._saved_profile_session.active_profiles_scope = value
+
+    @property
+    def profile_scroll_to_identity(self) -> ProfileIdentity | None:
+        return self._saved_profile_session.profile_scroll_to_identity
+
+    @profile_scroll_to_identity.setter
+    def profile_scroll_to_identity(self, value: ProfileIdentity | None) -> None:
+        self._saved_profile_session.profile_scroll_to_identity = value
+
+    @property
+    def pending_profile_confirmation_identity(self) -> ProfileIdentity | None:
+        return self._saved_profile_session.pending_profile_confirmation_identity
+
+    @pending_profile_confirmation_identity.setter
+    def pending_profile_confirmation_identity(self, value: ProfileIdentity | None) -> None:
+        self._saved_profile_session.pending_profile_confirmation_identity = value
+
+    @property
+    def pending_profile_confirmation_fingerprint(self) -> str:
+        return self._saved_profile_session.pending_profile_confirmation_fingerprint
+
+    @pending_profile_confirmation_fingerprint.setter
+    def pending_profile_confirmation_fingerprint(self, value: str) -> None:
+        self._saved_profile_session.pending_profile_confirmation_fingerprint = value
+
+    @property
+    def pending_profile_confirmation_action(self) -> str:
+        return self._saved_profile_session.pending_profile_confirmation_action
+
+    @pending_profile_confirmation_action.setter
+    def pending_profile_confirmation_action(self, value: str) -> None:
+        self._saved_profile_session.pending_profile_confirmation_action = value
+
     def _get_account_key(self) -> str:
         """Return a stable account key without replacing a reliable key during map loads."""
 
@@ -5716,150 +5838,25 @@ class MerchantRulesWidget:
         """The current account's live working config (account-scoped, self-persisting)."""
         return JsonFactory(LIVE_CONFIG_DOC_NAME)
 
-    def _profile_doc(self, scope: str) -> JsonFactory:
-        """Return a legacy bundled profile document for migration input only."""
-        if scope == PROFILE_SCOPE_SHARED:
-            return JsonFactory(SHARED_PROFILES_DOC_NAME, "global")
-        if scope == PROFILE_SCOPE_ACCOUNT:
-            return JsonFactory(ACCOUNT_PROFILES_DOC_NAME)
-        raise ValueError(f"Unsupported Merchant Rules profile scope: {scope!r}")
-
-    def _profile_migration_doc(self, scope: str) -> JsonFactory:
-        """Return the additive migration journal for one profile scope."""
-
-        if scope == PROFILE_SCOPE_SHARED:
-            return JsonFactory(PROFILE_MIGRATION_STATE_DOC_NAME, "global")
-        if scope == PROFILE_SCOPE_ACCOUNT:
-            return JsonFactory(PROFILE_MIGRATION_STATE_DOC_NAME)
-        raise ValueError(f"Unsupported Merchant Rules profile scope: {scope!r}")
-
-    @staticmethod
-    def _profile_json_scope(scope: str) -> str:
-        if scope == PROFILE_SCOPE_SHARED:
-            return "global"
-        if scope == PROFILE_SCOPE_ACCOUNT:
-            return "account"
-        raise ValueError(f"Unsupported Merchant Rules profile scope: {scope!r}")
-
     @staticmethod
     def _validate_profile_filename(filename: str) -> str:
-        safe_filename = str(filename or "")
-        if (
-            not safe_filename
-            or safe_filename in {".", ".."}
-            or "/" in safe_filename
-            or "\\" in safe_filename
-            or os.path.basename(safe_filename) != safe_filename
-            or not safe_filename.casefold().endswith(".json")
-        ):
-            raise ValueError("The profile filename is not safe.")
-        stem = safe_filename[:-5]
-        if (
-            not stem
-            or len(stem) > PROFILE_FILENAME_MAX_STEM_LENGTH
-            or PROFILE_FILENAME_INVALID_CHARS.search(safe_filename)
-        ):
-            raise ValueError("The profile filename is not safe.")
-        if stem[-1:] in {".", " "}:
-            raise ValueError("The profile filename is not safe.")
-        if stem.upper().split(".", 1)[0] in PROFILE_FILENAME_RESERVED_NAMES:
-            raise ValueError("The profile filename is reserved by Windows.")
-        return safe_filename
+        return _profiles.SavedProfileSession.validate_profile_filename(filename)
 
     @staticmethod
     def _sanitize_profile_filename_stem(display_name: str) -> str:
-        stem = unicodedata.normalize("NFC", str(display_name or "").strip())
-        stem = PROFILE_FILENAME_INVALID_CHARS.sub("-", stem)
-        stem = " ".join(stem.split()).rstrip(" .")
-        if not stem:
-            stem = "Profile"
-        if stem.upper().split(".", 1)[0] in PROFILE_FILENAME_RESERVED_NAMES:
-            stem = f"_{stem}"
-        stem = stem[:PROFILE_FILENAME_MAX_STEM_LENGTH].rstrip(" .")
-        return stem or "Profile"
-
-    def _profile_document_name(self, filename: str) -> str:
-        safe_filename = self._validate_profile_filename(filename)
-        return f"{PROFILE_DOCUMENT_DIR}/{safe_filename}"
-
-    def _profile_file_doc(self, scope: str, filename: str) -> JsonFactory:
-        return JsonFactory(
-            self._profile_document_name(filename),
-            self._profile_json_scope(scope),
-        )
+        return _profiles.SavedProfileSession.sanitize_profile_filename_stem(display_name)
 
     def _profile_directory_from_bound_doc(self, scope: str) -> str:
-        doc_path = str(self._profile_doc(scope).path() or "").strip()
-        if not doc_path:
-            return ""
-        document_directory = os.path.dirname(os.path.abspath(doc_path))
-        return os.path.abspath(os.path.join(document_directory, "Profiles"))
+        return self._saved_profile_session.profile_directory_from_bound_doc(scope)
 
     def _ensure_profiles_dir(self, scope: str, *, create: bool = True) -> str:
-        folder_path = self._profile_directory_from_bound_doc(scope)
-        if not folder_path:
-            return ""
-        if os.path.islink(folder_path):
-            raise OSError("The Merchant Rules profiles directory must not be a symbolic link.")
-        if create:
-            os.makedirs(folder_path, exist_ok=True)
-        if os.path.islink(folder_path) or not os.path.isdir(folder_path):
-            raise OSError("The Merchant Rules profiles directory is not a regular directory.")
-        return folder_path
+        return self._saved_profile_session.ensure_profiles_dir(scope, create=create)
 
     def _profile_file_path(self, scope: str, filename: str) -> str:
-        safe_filename = self._validate_profile_filename(filename)
-        folder_path = self._ensure_profiles_dir(scope, create=True)
-        if not folder_path:
-            raise RuntimeError(
-                f"{self._profile_scope_label(scope)} are not ready for this account yet."
-            )
-        candidate_path = os.path.abspath(os.path.join(folder_path, safe_filename))
-        try:
-            common_path = os.path.commonpath((os.path.normcase(folder_path), os.path.normcase(candidate_path)))
-        except ValueError as exc:
-            raise ValueError("The profile filename is outside the Merchant Rules profiles folder.") from exc
-        if (
-            common_path != os.path.normcase(folder_path)
-            or os.path.normcase(os.path.dirname(candidate_path)) != os.path.normcase(folder_path)
-        ):
-            raise ValueError("The profile filename is outside the Merchant Rules profiles folder.")
-        return candidate_path
-
-    def _is_profile_file_present(self, scope: str, filename: str) -> bool:
-        try:
-            file_path = self._profile_file_path(scope, filename)
-        except Exception:
-            return False
-        return bool(os.path.isfile(file_path) and not os.path.islink(file_path))
-
-    def _enumerate_profile_filenames(self, scope: str) -> list[str]:
-        folder_path = self._ensure_profiles_dir(scope, create=True)
-        if not folder_path:
-            return []
-        filenames: list[str] = []
-        with os.scandir(folder_path) as entries:
-            for entry in entries:
-                filename = str(entry.name)
-                if not filename.casefold().endswith(".json"):
-                    continue
-                if not entry.is_file(follow_symlinks=False):
-                    continue
-                filenames.append(filename)
-        return sorted(filenames, key=lambda value: (value.casefold(), value))
+        return self._saved_profile_session.profile_file_path(scope, filename)
 
     def _allocate_profile_filename(self, scope: str, display_name: str) -> str:
-        base_stem = self._sanitize_profile_filename_stem(display_name)
-        existing_names = {
-            filename.casefold()
-            for filename in self._enumerate_profile_filenames(scope)
-        }
-        for suffix in range(1, 10000):
-            stem = base_stem if suffix == 1 else f"{base_stem} ({suffix})"
-            candidate = f"{stem}.json"
-            if candidate.casefold() not in existing_names:
-                return candidate
-        raise RuntimeError("Merchant Rules could not allocate a unique profile filename.")
+        return self._saved_profile_session.allocate_profile_filename(scope, display_name)
 
     def _backup_doc(self) -> JsonFactory:
         """Account-scoped last-known-good live profile used by the Restore Backup action."""
@@ -10616,14 +10613,10 @@ class MerchantRulesWidget:
         self._refresh_rule_ui_caches()
 
     def _profile_scope_label(self, scope: str) -> str:
-        if scope == PROFILE_SCOPE_SHARED:
-            return "Shared Profiles — All Accounts"
-        if scope == PROFILE_SCOPE_ACCOUNT:
-            return "Account Profiles — This Account Only"
-        return "Profiles"
+        return self._saved_profile_session.profile_scope_label(scope)
 
     def _profile_scope_badge(self, scope: str) -> str:
-        return "SHARED" if scope == PROFILE_SCOPE_SHARED else "ACCOUNT"
+        return self._saved_profile_session.profile_scope_badge(scope)
 
     def _get_profiles_dir(self, scope: str) -> str:
         try:
@@ -10768,31 +10761,12 @@ class MerchantRulesWidget:
         saved_at_unix_ms: int | None = None,
         saved_at_label: str | None = None,
     ) -> dict[str, object]:
-        source_payload = (
-            self._build_shareable_profile_payload()
-            if payload is None
-            else payload
-        )
-        return self._profile_store.build_shared_profile_wrapper(
+        return self._saved_profile_session.build_shared_profile_wrapper(
             display_name,
-            source_payload,
             profile_id=profile_id,
+            payload=payload,
             saved_at_unix_ms=saved_at_unix_ms,
             saved_at_label=saved_at_label,
-            payload_is_normalized=payload is None,
-        )
-
-    def _normalize_shared_profile_wrapper(
-        self,
-        raw_payload: object,
-        *,
-        fallback_name: str = "",
-        require_profile_id: bool = False,
-    ) -> dict[str, object]:
-        return self._profile_store.normalize_shared_profile_wrapper(
-            raw_payload,
-            fallback_name=fallback_name,
-            require_profile_id=require_profile_id,
         )
 
     def _load_profile_summary_from_key(
@@ -10803,89 +10777,30 @@ class MerchantRulesWidget:
         *,
         filename: str = "",
     ) -> ProfileSummary:
-        return self._profile_store.load_profile_summary_from_key(
-            scope,
-            profile_key,
-            raw_payload,
-            filename=filename,
+        return self._saved_profile_session.load_profile_summary_from_key(
+            scope, profile_key, raw_payload, filename=filename
         )
-
-    def _get_saved_profile_read_error_text(self, exc: Exception) -> str:
-        message = str(exc or "").strip()
-        recognized_messages = (
-            "This profile was created by a newer Merchant Rules version.",
-            "This saved profile uses an unsupported format.",
-            "This saved profile is incomplete or damaged",
-        )
-        if any(message.startswith(prefix) for prefix in recognized_messages):
-            return message
-        return "A saved profile could not be read."
 
     def _format_exception_chain_for_log(self, exc: Exception) -> str:
-        details: list[str] = []
-        current: BaseException | None = exc
-        while current is not None and len(details) < 4:
-            details.append(f"{type(current).__name__}: {current}")
-            current = current.__cause__
-        return " <- ".join(details)
-
-    def _get_saved_profile_raw_fingerprint(self, raw_payload: object) -> str:
-        if isinstance(raw_payload, dict):
-            try:
-                return self._saved_profile_wrapper_fingerprint(raw_payload)
-            except Exception:
-                pass
-        try:
-            raw_text = f"{type(raw_payload).__name__}:{raw_payload!r}"
-        except Exception:
-            raw_text = type(raw_payload).__name__
-        return md5(raw_text.encode("utf-8", errors="backslashreplace")).hexdigest()
+        return self._saved_profile_session.format_exception_chain_for_log(exc)
 
     def _get_profile_by_identity(
         self,
         identity: ProfileIdentity | None,
     ) -> ProfileSummary | None:
-        if identity is None or identity.scope not in PROFILE_SCOPES:
-            return None
-        for entry in self.profile_entries[identity.scope]:
-            if entry.identity == identity:
-                return entry
-        return None
+        return self._saved_profile_session.get_profile_by_identity(identity)
 
     def _get_selected_profile(self, scope: str) -> ProfileSummary | None:
-        return self._get_profile_by_identity(self.profile_selected_identities.get(scope))
+        return self._saved_profile_session.get_selected_profile(scope)
 
-    def _clear_profile_confirmation_state(self):
-        self.pending_profile_confirmation_identity = None
-        self.pending_profile_confirmation_fingerprint = ""
-        self.pending_profile_confirmation_action = ""
-        self._clear_pending_destructive_button()
+    def _clear_profile_confirmation_state(self) -> None:
+        return self._saved_profile_session.clear_profile_confirmation_state()
 
-    def _set_selected_profile_key(self, scope: str, profile_key: str):
-        safe_key = str(profile_key or "")
-        next_identity = ProfileIdentity(scope=scope, key=safe_key) if safe_key else None
-        selection_changed = self.profile_selected_identities.get(scope) != next_identity
-        if selection_changed:
-            self._clear_profile_confirmation_state()
-        self.profile_selected_identities[scope] = next_identity
-        if safe_key:
-            self.profile_selection_cleared_due_to_disappearance[scope] = False
-        selected_profile = self._get_selected_profile(scope)
-        if selected_profile is not None and (
-            selection_changed or not self.profile_name_input_dirty[scope]
-        ):
-            self.profile_name_inputs[scope] = str(selected_profile.display_name)
-            self.profile_name_input_dirty[scope] = False
-        elif not safe_key and selection_changed:
-            self.profile_name_inputs[scope] = ""
-            self.profile_name_input_dirty[scope] = False
+    def _set_selected_profile_key(self, scope: str, profile_key: str) -> None:
+        return self._saved_profile_session.set_selected_profile_key(scope, profile_key)
 
-    def _set_active_profiles_scope(self, scope: str):
-        next_scope = scope if scope in PROFILE_SCOPES else PROFILE_SCOPE_ACCOUNT
-        if next_scope == self.active_profiles_scope:
-            return
-        self.active_profiles_scope = next_scope
-        self._clear_profile_confirmation_state()
+    def _set_active_profiles_scope(self, scope: str) -> None:
+        return self._saved_profile_session.set_active_profiles_scope(scope)
 
     def _initialize_profiles_scope_from_loaded_provenance(self):
         """Choose the entry scope once from readable account provenance, defaulting safely."""
@@ -10904,336 +10819,16 @@ class MerchantRulesWidget:
         profile_key: str,
         *,
         activate_scope: bool = False,
-    ):
-        self._set_selected_profile_key(scope, profile_key)
-        identity = self.profile_selected_identities.get(scope)
-        self.profile_scroll_to_identity = identity
-        if activate_scope:
-            self._set_active_profiles_scope(scope)
-
-    def _find_profile_by_name(
-        self,
-        scope: str,
-        display_name: str,
-        *,
-        exclude_key: str = "",
-    ) -> ProfileSummary | None:
-        normalized_name = _normalize_shared_profile_display_name(display_name).casefold()
-        if not normalized_name:
-            return None
-        for entry in self.profile_entries[scope]:
-            if exclude_key and entry.key == exclude_key:
-                continue
-            if str(entry.display_name).casefold() == normalized_name:
-                return entry
-        return None
-
-    def _ensure_profile_name_available(
-        self,
-        scope: str,
-        display_name: str,
-        *,
-        exclude_key: str = "",
-    ) -> str:
-        normalized_name = _normalize_shared_profile_display_name(display_name)
-        if not normalized_name:
-            raise ValueError("Enter a profile name before saving.")
-
-        existing_by_name = self._find_profile_by_name(
-            scope,
-            normalized_name,
-            exclude_key=exclude_key,
+    ) -> None:
+        return self._saved_profile_session.select_profile_after_action(
+            scope, profile_key, activate_scope=activate_scope
         )
-        if existing_by_name is not None:
-            raise ValueError(
-                f"A {self._profile_scope_badge(scope).lower()} profile named "
-                f"'{existing_by_name.display_name}' already exists."
-            )
-        return normalized_name
 
     def _new_profile_key(self, doc: JsonFactory) -> str:
         """Compatibility alias for the standalone opaque profile ID allocator."""
 
         del doc
         return new_profile_id()
-
-    def _load_profile_migration_state(
-        self,
-        scope: str,
-    ) -> tuple[JsonFactory, dict[str, object]]:
-        doc = self._profile_migration_doc(scope)
-        raw_state = doc.get_json("", None)
-        if raw_state in (None, {}):
-            return doc, {
-                "schema": PROFILE_MIGRATION_SCHEMA,
-                "schema_version": PROFILE_MIGRATION_SCHEMA_VERSION,
-                "complete": False,
-                "entries": {},
-            }
-        if not isinstance(raw_state, dict):
-            raise ValueError("Merchant Rules profile migration state is malformed.")
-        schema = str(raw_state.get("schema", "") or "").strip()
-        if schema != PROFILE_MIGRATION_SCHEMA:
-            raise ValueError("Merchant Rules profile migration state is unsupported.")
-        schema_version = _safe_int(raw_state.get("schema_version", 0), 0)
-        if schema_version > PROFILE_MIGRATION_SCHEMA_VERSION:
-            raise ValueError("Merchant Rules profile migration state is newer than this version.")
-        entries = raw_state.get("entries", {})
-        if not isinstance(entries, dict):
-            raise ValueError("Merchant Rules profile migration state is malformed.")
-        return doc, {
-            "schema": PROFILE_MIGRATION_SCHEMA,
-            "schema_version": PROFILE_MIGRATION_SCHEMA_VERSION,
-            "complete": bool(raw_state.get("complete", False)),
-            "entries": dict(entries),
-        }
-
-    @staticmethod
-    def _migration_state_error_text(entry: object) -> str:
-        if not isinstance(entry, dict):
-            return "A legacy profile could not be migrated."
-        error = str(entry.get("error", "") or "").strip()
-        return error or "A legacy profile could not be migrated."
-
-    def _save_profile_migration_state(
-        self,
-        doc: JsonFactory,
-        state: dict[str, object],
-    ) -> None:
-        doc.set_json("", state)
-        if not doc.save():
-            doc.reload()
-            raise OSError("Merchant Rules could not save profile migration progress.")
-        if not doc.reload():
-            raise OSError("Merchant Rules could not verify profile migration progress.")
-        if doc.get_json("", None) != state:
-            raise RuntimeError("Merchant Rules profile migration progress failed verification.")
-
-    def _remap_migrated_account_provenance(
-        self,
-        legacy_key: str,
-        profile_id: str,
-    ) -> str:
-        """Update one valid legacy Account provenance key without touching unrelated state."""
-
-        doc = self._loaded_profile_state_doc()
-        raw_state = doc.get_json("", None)
-        if raw_state in (None, {}):
-            return ""
-        if not isinstance(raw_state, dict):
-            return ""
-        try:
-            provenance = self._normalize_loaded_profile_provenance(raw_state)
-        except Exception:
-            return ""
-        if provenance.source_identity != ProfileIdentity(PROFILE_SCOPE_ACCOUNT, legacy_key):
-            return ""
-
-        remapped_state = dict(raw_state)
-        remapped_state["source_key"] = profile_id
-        try:
-            doc.set_json("", remapped_state)
-            if not doc.save():
-                doc.reload()
-                return "Merchant Rules could not update the last-loaded Account profile record during migration."
-            if not doc.reload():
-                return "Merchant Rules could not verify the last-loaded Account profile record during migration."
-            verified = self._normalize_loaded_profile_provenance(doc.get_json("", None))
-            if verified.source_identity != ProfileIdentity(PROFILE_SCOPE_ACCOUNT, profile_id):
-                return "Merchant Rules could not verify the migrated Account profile provenance."
-            self.loaded_profile_provenance = verified
-            self.active_profile_display_name = (
-                f"[{self._profile_scope_badge(verified.source_identity.scope)}] "
-                f"{verified.display_name_snapshot}"
-            )
-            return ""
-        except Exception as exc:
-            try:
-                doc.reload()
-            except Exception:
-                pass
-            return f"Merchant Rules could not update the last-loaded Account profile record during migration: {exc}"
-
-    def _migrate_legacy_profiles(self, scope: str) -> list[str]:
-        """Copy legacy bundled entries to standalone files without changing the source document."""
-
-        if scope in self._profile_migration_in_progress:
-            return []
-        if not self._ensure_profiles_dir(scope, create=True):
-            return []
-
-        migration_doc, state = self._load_profile_migration_state(scope)
-        raw_entries = state.get("entries", {})
-        if not isinstance(raw_entries, dict):
-            raise ValueError("Merchant Rules profile migration state is malformed.")
-        if bool(state.get("complete", False)) and not any(
-            isinstance(entry, dict)
-            and str(entry.get("status", "") or "") == "pending"
-            for entry in raw_entries.values()
-        ):
-            return [
-                self._migration_state_error_text(entry)
-                for entry in raw_entries.values()
-                if isinstance(entry, dict) and str(entry.get("status", "") or "") in {"invalid", "conflict"}
-            ]
-        state["complete"] = False
-
-        legacy_root = self._profile_doc(scope).get_json("", None)
-        if legacy_root in (None, {}):
-            return []
-        if not isinstance(legacy_root, dict):
-            state["complete"] = True
-            state["entries"] = raw_entries
-            self._save_profile_migration_state(migration_doc, state)
-            return ["The old Merchant Rules profile collection is not a JSON object."]
-
-        warnings: list[str] = []
-        self._profile_migration_in_progress.add(scope)
-        try:
-            for raw_key, raw_entry in legacy_root.items():
-                legacy_key = str(raw_key or "").strip()
-                if not legacy_key:
-                    warnings.append("A legacy Merchant Rules profile had no saved key and was skipped.")
-                    continue
-                source_fingerprint = self._get_saved_profile_raw_fingerprint(raw_entry)
-                existing_record = raw_entries.get(legacy_key)
-                if isinstance(existing_record, dict):
-                    existing_status = str(existing_record.get("status", "") or "")
-                    if existing_status == "migrated":
-                        continue
-                    if (
-                        existing_status in {"invalid", "conflict"}
-                        and str(existing_record.get("source_fingerprint", "") or "") == source_fingerprint
-                    ):
-                        warnings.append(self._migration_state_error_text(existing_record))
-                        continue
-
-                try:
-                    previous_profile_id = (
-                        str(existing_record.get("profile_id", "") or "")
-                        if isinstance(existing_record, dict)
-                        else ""
-                    )
-                    if is_valid_profile_id(previous_profile_id):
-                        profile_id = previous_profile_id
-                    elif scope == PROFILE_SCOPE_SHARED and is_valid_profile_id(legacy_key):
-                        profile_id = legacy_key
-                    else:
-                        profile_id = new_profile_id()
-
-                    migrated_wrapper = self._profile_store.build_migrated_profile_wrapper(
-                        raw_entry,
-                        profile_id=profile_id,
-                        fallback_name=legacy_key,
-                    )
-
-                    previous_filename = (
-                        str(existing_record.get("filename", "") or "")
-                        if isinstance(existing_record, dict)
-                        else ""
-                    )
-                    if previous_filename:
-                        filename = self._validate_profile_filename(previous_filename)
-                    else:
-                        filename = self._allocate_profile_filename(
-                            scope,
-                            str(migrated_wrapper.get("name", legacy_key) or legacy_key),
-                        )
-
-                    pending_record = {
-                        "profile_id": profile_id,
-                        "filename": filename,
-                        "source_fingerprint": source_fingerprint,
-                        "status": "pending",
-                    }
-                    raw_entries[legacy_key] = pending_record
-                    state["entries"] = raw_entries
-                    # Account mappings are durable before the first target write; this is also
-                    # what makes a crash between allocation and creation resumable.
-                    self._save_profile_migration_state(migration_doc, state)
-
-                    expected = self._load_profile_summary_from_key(
-                        scope,
-                        profile_id,
-                        migrated_wrapper,
-                        filename=filename,
-                    )
-                    target_exists = self._is_profile_file_present(scope, filename)
-                    if target_exists:
-                        target_doc = self._profile_file_doc(scope, filename)
-                        if not target_doc.reload() or not self._is_profile_file_present(scope, filename):
-                            raise RuntimeError("The migrated profile file disappeared during verification.")
-                        observed = self._load_profile_summary_from_key(
-                            scope,
-                            profile_id,
-                            target_doc.get_json("", None),
-                            filename=filename,
-                        )
-                        if observed.fingerprint != expected.fingerprint:
-                            raise RuntimeError(
-                                f"The target file {filename!r} already contains different profile data."
-                            )
-                    else:
-                        self._persist_profile_wrapper(
-                            scope,
-                            profile_id,
-                            migrated_wrapper,
-                            filename=filename,
-                            preserve_wrapper=True,
-                            refresh_after=False,
-                        )
-
-                    if scope == PROFILE_SCOPE_ACCOUNT:
-                        provenance_warning = self._remap_migrated_account_provenance(
-                            legacy_key,
-                            profile_id,
-                        )
-                        if provenance_warning:
-                            warnings.append(provenance_warning)
-                            pending_record["status"] = "pending"
-                            pending_record["error"] = provenance_warning
-                            state["complete"] = False
-                            state["entries"] = raw_entries
-                            self._save_profile_migration_state(migration_doc, state)
-                            continue
-
-                    pending_record["status"] = "migrated"
-                    pending_record.pop("error", None)
-                    state["entries"] = raw_entries
-                    self._save_profile_migration_state(migration_doc, state)
-                except Exception as exc:
-                    error_text = f"Legacy profile {legacy_key!r} was not migrated: {exc}"
-                    record = raw_entries.get(legacy_key)
-                    if not isinstance(record, dict):
-                        record = {
-                            "source_fingerprint": source_fingerprint,
-                        }
-                        raw_entries[legacy_key] = record
-                    if "different profile data" in str(exc):
-                        record["status"] = "conflict"
-                    elif isinstance(exc, ValueError):
-                        record["status"] = "invalid"
-                    else:
-                        record["status"] = "pending"
-                    record["source_fingerprint"] = source_fingerprint
-                    record["error"] = error_text
-                    state["entries"] = raw_entries
-                    try:
-                        self._save_profile_migration_state(migration_doc, state)
-                    except Exception as state_exc:
-                        warnings.append(f"{error_text} Migration progress could not be saved: {state_exc}")
-                    warnings.append(error_text)
-
-            state["complete"] = all(
-                isinstance(entry, dict)
-                and str(entry.get("status", "") or "") in {"migrated", "invalid", "conflict"}
-                for entry in raw_entries.values()
-            )
-            state["entries"] = raw_entries
-            self._save_profile_migration_state(migration_doc, state)
-        finally:
-            self._profile_migration_in_progress.discard(scope)
-        return warnings
 
     def _refresh_profile_entries(
         self,
@@ -11242,164 +10837,9 @@ class MerchantRulesWidget:
         reload_document: bool = False,
         report_reload_failure: bool = True,
     ) -> bool:
-        """Refresh standalone profile files while retaining exact identity selection."""
-
-        if scope not in PROFILE_SCOPES:
-            return False
-        previous_identity = self.profile_selected_identities.get(scope)
-        previous_selected = self._get_profile_by_identity(previous_identity)
-        previous_fingerprint = previous_selected.fingerprint if previous_selected is not None else ""
-
-        if scope == PROFILE_SCOPE_ACCOUNT and not self._profile_directory_from_bound_doc(scope):
-            self.profile_entries[scope] = []
-            self.profile_entries_loaded[scope] = False
-            self.profile_known_filenames[scope].clear()
-            self.profile_scan_conflicts[scope].clear()
-            self.saved_profile_failure_signatures[scope].clear()
-            self.profile_selected_identities[scope] = None
-            self.profile_name_inputs[scope] = ""
-            self.profile_name_input_dirty[scope] = False
-            self._clear_profile_confirmation_state()
-            return False
-
-        try:
-            migration_warnings = self._migrate_legacy_profiles(scope)
-            filenames = self._enumerate_profile_filenames(scope)
-        except Exception as exc:
-            self.profile_document_reload_failed[scope] = True
-            self.profile_entries_loaded[scope] = True
-            if report_reload_failure:
-                self.saved_profile_scan_warnings[scope] = (
-                    f"Could not refresh {self._profile_scope_label(scope)}. "
-                    "Showing the last profile list Merchant Rules could read."
-                )
-            ConsoleLog(
-                MODULE_NAME,
-                f"Could not enumerate {scope} Merchant Rules profile files: {self._format_exception_chain_for_log(exc)}",
-                Console.MessageType.Warning,
-            )
-            return False
-
-        entries: list[ProfileSummary] = []
-        load_failures: list[str] = []
-        previous_failure_signatures = self.saved_profile_failure_signatures[scope]
-        current_failure_signatures: dict[str, tuple[str, str]] = {}
-        previous_known_filenames = set(self.profile_known_filenames[scope])
-        self.profile_known_filenames[scope] = set(filenames)
-
-        for filename in filenames:
-            raw_payload: object = None
-            try:
-                profile_doc = self._profile_file_doc(scope, filename)
-                if reload_document or filename not in previous_known_filenames:
-                    if not profile_doc.reload():
-                        raise OSError("Merchant Rules could not reload this profile file.")
-                if not self._is_profile_file_present(scope, filename):
-                    raise FileNotFoundError("The profile file disappeared during refresh.")
-                raw_payload = profile_doc.get_json("", None)
-                if not isinstance(raw_payload, dict):
-                    raise ValueError("This saved profile is incomplete or damaged.")
-                normalized_wrapper = self._normalize_shared_profile_wrapper(
-                    raw_payload,
-                    require_profile_id=True,
-                )
-                profile_id = str(normalized_wrapper.get("profile_id", "") or "").strip()
-                summary = self._load_profile_summary_from_key(
-                    scope,
-                    profile_id,
-                    raw_payload,
-                    filename=filename,
-                )
-                entries.append(summary)
-            except Exception as exc:
-                failure_text = self._format_exception_chain_for_log(exc)
-                failure_signature = (
-                    self._get_saved_profile_raw_fingerprint(raw_payload),
-                    failure_text,
-                )
-                current_failure_signatures[filename] = failure_signature
-                load_failures.append(self._get_saved_profile_read_error_text(exc))
-                if previous_failure_signatures.get(filename) != failure_signature:
-                    ConsoleLog(
-                        MODULE_NAME,
-                        (
-                            f"Could not read [{self._profile_scope_badge(scope)}] saved profile "
-                            f"file {filename!r}: {failure_text}"
-                        ),
-                        Console.MessageType.Warning,
-                    )
-
-        duplicate_warnings: dict[str, str] = {}
-        unique_entries: list[ProfileSummary] = []
-        entries_by_identity: dict[str, ProfileSummary | None] = {}
-        for entry in entries:
-            profile_id = entry.key
-            previous_entry = entries_by_identity.get(profile_id)
-            if previous_entry is None and profile_id not in entries_by_identity:
-                entries_by_identity[profile_id] = entry
-                unique_entries.append(entry)
-                continue
-            if previous_entry is None:
-                continue
-            if previous_entry.serialized_payload == entry.serialized_payload:
-                duplicate_warnings[entry.filename] = (
-                    f"Profile ID {profile_id} appears in {previous_entry.filename!r} and "
-                    f"{entry.filename!r}; only {previous_entry.filename!r} is shown."
-                )
-                continue
-            unique_entries = [candidate for candidate in unique_entries if candidate.key != profile_id]
-            entries_by_identity[profile_id] = None
-            duplicate_warnings[previous_entry.filename] = (
-                f"Profile ID {profile_id} has conflicting contents in {previous_entry.filename!r} "
-                f"and {entry.filename!r}; neither file is available until the conflict is resolved."
-            )
-            duplicate_warnings[entry.filename] = duplicate_warnings[previous_entry.filename]
-
-        unique_entries.sort(
-            key=lambda entry: (
-                str(entry.display_name).casefold(),
-                str(entry.filename).casefold(),
-            )
+        return self._saved_profile_session.refresh_profile_entries(
+            scope, reload_document=reload_document, report_reload_failure=report_reload_failure
         )
-        self.profile_entries[scope] = unique_entries
-        self.profile_entries_loaded[scope] = True
-        self.saved_profile_failure_signatures[scope] = current_failure_signatures
-        self.profile_scan_conflicts[scope] = duplicate_warnings
-        self.profile_document_reload_failed[scope] = False
-
-        all_warnings = [*migration_warnings, *load_failures, *duplicate_warnings.values()]
-        if all_warnings:
-            preview = " | ".join(all_warnings[:3])
-            if len(all_warnings) > 3:
-                preview = f"{preview} | ...and {len(all_warnings) - 3} more."
-            self.saved_profile_scan_warnings[scope] = (
-                f"Some {self._profile_scope_badge(scope).title()} profile files need attention: {preview}"
-            )
-        else:
-            self.saved_profile_scan_warnings[scope] = ""
-
-        matching_entry = next(
-            (
-                entry
-                for entry in unique_entries
-                if entry.identity == previous_identity
-            ),
-            None,
-        )
-        if matching_entry is not None:
-            if previous_fingerprint and matching_entry.fingerprint != previous_fingerprint:
-                self._clear_profile_confirmation_state()
-            self._set_selected_profile_key(scope, matching_entry.key)
-            self.profile_selection_cleared_due_to_disappearance[scope] = False
-        elif previous_identity is not None:
-            self._clear_profile_confirmation_state()
-            self._set_selected_profile_key(scope, "")
-            self.profile_selection_cleared_due_to_disappearance[scope] = True
-        elif unique_entries and not self.profile_selection_cleared_due_to_disappearance[scope]:
-            self._set_selected_profile_key(scope, unique_entries[0].key)
-        else:
-            self._set_selected_profile_key(scope, "")
-        return True
 
     def _set_saved_profile_feedback(
         self,
@@ -11407,105 +10847,8 @@ class MerchantRulesWidget:
         *,
         warning: str = "",
         notice: str = "",
-    ):
-        self.saved_profile_warnings[scope] = str(warning or "").strip()
-        self.saved_profile_notices[scope] = str(notice or "").strip()
-
-    def _persist_profile_wrapper(
-        self,
-        scope: str,
-        profile_key: str,
-        wrapper: dict[str, object],
-        *,
-        filename: str,
-        preserve_wrapper: bool = False,
-        refresh_after: bool = True,
-        require_existing: bool = False,
-        expected_existing_fingerprint: str = "",
-    ) -> ProfileSummary:
-        """Save one standalone file through JsonFactory and verify its exact identity."""
-
-        safe_filename = self._validate_profile_filename(filename)
-        safe_profile_id = str(profile_key or "").strip()
-        if not is_valid_profile_id(safe_profile_id):
-            raise ValueError("The saved profile identity is invalid.")
-        if not preserve_wrapper:
-            expected_wrapper = self._normalize_shared_profile_wrapper(
-                wrapper,
-                require_profile_id=True,
-            )
-            if str(expected_wrapper.get("profile_id", "") or "").strip() != safe_profile_id:
-                raise ValueError("The saved profile identity does not match its destination.")
-            wrapper_to_write = expected_wrapper
-        else:
-            wrapper_to_write = wrapper
-            expected_wrapper = self._normalize_shared_profile_wrapper(
-                wrapper_to_write,
-                require_profile_id=True,
-            )
-            if str(expected_wrapper.get("profile_id", "") or "").strip() != safe_profile_id:
-                raise ValueError("The saved profile identity does not match its destination.")
-
-        profile_path = self._profile_file_path(scope, safe_filename)
-        path_exists = os.path.lexists(profile_path)
-        if path_exists and not self._is_profile_file_present(scope, safe_filename):
-            raise OSError("The selected profile path is not a regular profile file.")
-        if require_existing and not path_exists:
-            raise FileNotFoundError("The selected profile file disappeared; no file was recreated.")
-        if not require_existing and path_exists:
-            raise FileExistsError(
-                f"The profile filename {safe_filename!r} is already in use; no file was overwritten."
-            )
-        doc = self._profile_file_doc(scope, safe_filename)
-        if require_existing:
-            if not doc.reload() or not self._is_profile_file_present(scope, safe_filename):
-                raise FileNotFoundError("The selected profile file disappeared; no file was recreated.")
-            existing = self._load_profile_summary_from_key(
-                scope,
-                safe_profile_id,
-                doc.get_json("", None),
-                filename=safe_filename,
-            )
-            if expected_existing_fingerprint and existing.fingerprint != expected_existing_fingerprint:
-                raise RuntimeError(
-                    "The selected profile changed elsewhere. Review it and confirm the action again."
-                )
-        doc.set_json("", wrapper_to_write)
-        if not doc.save():
-            doc.reload()
-            raise OSError(f"Merchant Rules could not save {self._profile_scope_label(scope)}.")
-        if not doc.reload():
-            raise OSError(
-                f"The change was saved, but Merchant Rules could not verify "
-                f"{self._profile_scope_label(scope)}."
-            )
-        if not self._is_profile_file_present(scope, safe_filename):
-            raise OSError("The profile file could not be found after saving.")
-        verified = self._load_profile_summary_from_key(
-            scope,
-            safe_profile_id,
-            doc.get_json("", None),
-            filename=safe_filename,
-        )
-        expected = self._load_profile_summary_from_key(
-            scope,
-            safe_profile_id,
-            expected_wrapper,
-            filename=safe_filename,
-        )
-        if (
-            verified.fingerprint != expected.fingerprint
-            or verified.serialized_payload != expected.serialized_payload
-            or verified.display_name != expected.display_name
-        ):
-            raise RuntimeError(
-                f"Merchant Rules could not verify the saved {self._profile_scope_badge(scope).title()} profile."
-            )
-        self.profile_document_reload_failed[scope] = False
-        self.profile_known_filenames[scope].add(safe_filename)
-        if refresh_after:
-            self._refresh_profile_entries(scope)
-        return verified
+    ) -> None:
+        return self._saved_profile_session.set_saved_profile_feedback(scope, warning=warning, notice=notice)
 
     def _resolve_profile_for_action(
         self,
@@ -11514,237 +10857,33 @@ class MerchantRulesWidget:
         expected_fingerprint: str = "",
         reload_shared: bool = True,
     ) -> ProfileSummary:
-        """Re-resolve an exact key and reject stale confirmed shared actions."""
-
-        if identity.scope not in PROFILE_SCOPES:
-            raise RuntimeError("The selected profile scope is invalid.")
-        refresh_succeeded = self._refresh_profile_entries(
-            identity.scope,
-            reload_document=(reload_shared or identity.scope == PROFILE_SCOPE_ACCOUNT),
+        return self._saved_profile_session.resolve_profile_for_action(
+            identity, expected_fingerprint=expected_fingerprint, reload_shared=reload_shared
         )
-        if not refresh_succeeded:
-            raise OSError(
-                f"{self._profile_scope_label(identity.scope)} could not be refreshed, so no changes were made."
-            )
 
-        current = self._get_profile_by_identity(identity)
-        if current is None:
-            raise RuntimeError("The selected profile changed or disappeared; review the refreshed list.")
-        if not current.filename or not self._is_profile_file_present(identity.scope, current.filename):
-            self._clear_profile_confirmation_state()
-            raise RuntimeError("The selected profile file disappeared; review the refreshed list.")
-        if expected_fingerprint and current.fingerprint != expected_fingerprint:
-            self._clear_profile_confirmation_state()
-            raise RuntimeError(
-                "The selected profile changed elsewhere. Review it and confirm the action again."
-            )
-        if identity.scope == PROFILE_SCOPE_SHARED and not expected_fingerprint:
-            raise RuntimeError("Select the Shared profile again, then confirm the action.")
-        return current
-
-    def _prepare_scope_for_new_profile(self, scope: str):
-        refreshed = self._refresh_profile_entries(
-            scope,
-            reload_document=True,
-        )
-        if not refreshed:
-            raise OSError(f"{self._profile_scope_label(scope)} could not be refreshed, so no changes were made.")
-
-    def _save_current_as_new_profile(self, scope: str):
+    def _save_current_as_new_profile(self, scope: str) -> None:
         self._ensure_initialized()
-        requested_profile_name = self.profile_name_inputs[scope]
-        try:
-            self._prepare_scope_for_new_profile(scope)
-            profile_name = self._ensure_profile_name_available(
-                scope,
-                requested_profile_name,
-            )
-            profile_id = new_profile_id()
-            filename = self._allocate_profile_filename(scope, profile_name)
-            wrapper = self._build_shared_profile_wrapper(
-                profile_name,
-                profile_id=profile_id,
-            )
-            self._persist_profile_wrapper(
-                scope,
-                profile_id,
-                wrapper,
-                filename=filename,
-            )
-            self._select_profile_after_action(scope, profile_id)
-            self._clear_profile_confirmation_state()
-            self._set_saved_profile_feedback(
-                scope,
-                notice=(
-                    f"Saved {self._profile_scope_badge(scope).title()} profile "
-                    f"'{profile_name}'."
-                ),
-            )
-        except Exception as exc:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=(
-                    f"Failed to save {self._profile_scope_badge(scope).title()} profile: {exc}"
-                ),
-            )
+        return self._saved_profile_session.save_current_as_new_profile(scope)
 
-    def _create_blank_saved_profile(
-        self,
-        scope: str,
-        display_name: str,
-        *,
-        refresh_scope: bool = True,
-    ) -> ProfileSummary:
-        if scope not in PROFILE_SCOPES:
-            raise ValueError("The saved profile scope is invalid.")
-        if refresh_scope:
-            self._prepare_scope_for_new_profile(scope)
-        profile_name = self._ensure_profile_name_available(scope, display_name)
-        profile_id = new_profile_id()
-        filename = self._allocate_profile_filename(scope, profile_name)
-        wrapper = self._build_shared_profile_wrapper(
-            profile_name,
-            profile_id=profile_id,
-            payload=self._build_default_profile_payload(
-                include_rule_templates=False,
-            ),
-        )
-        profile = self._persist_profile_wrapper(
-            scope,
-            profile_id,
-            wrapper,
-            filename=filename,
-        )
-        self._select_profile_after_action(scope, profile_id)
-        self._clear_profile_confirmation_state()
-        return profile
-
-    def _create_blank_profile(self, scope: str):
+    def _create_blank_profile(self, scope: str) -> None:
         self._ensure_initialized()
-        requested_profile_name = self.profile_name_inputs[scope]
-        try:
-            profile = self._create_blank_saved_profile(scope, requested_profile_name)
-            self._set_saved_profile_feedback(
-                scope,
-                notice=(
-                    f"Created blank {self._profile_scope_badge(scope).title()} profile "
-                    f"'{profile.display_name}'."
-                ),
-            )
-        except Exception as exc:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=(
-                    f"Failed to create blank {self._profile_scope_badge(scope).title()} profile: {exc}"
-                ),
-            )
+        return self._saved_profile_session.create_blank_profile(scope)
 
     def _rename_selected_profile(
         self,
         scope: str,
         expected_fingerprint: str = "",
-    ):
+    ) -> None:
         self._ensure_initialized()
-        selected_profile = self._get_selected_profile(scope)
-        if selected_profile is None:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to rename.",
-            )
-            return
-
-        requested_profile_name = self.profile_name_inputs[scope]
-        try:
-            current = self._resolve_profile_for_action(
-                selected_profile.identity,
-                expected_fingerprint=expected_fingerprint,
-                reload_shared=True,
-            )
-            new_name = self._ensure_profile_name_available(
-                scope,
-                requested_profile_name,
-                exclude_key=current.key,
-            )
-            wrapper = self._profile_store.rename_profile_wrapper(
-                current.raw_wrapper,
-                profile_id=current.key,
-                display_name=new_name,
-                fallback_payload=current.payload,
-            )
-            self._persist_profile_wrapper(
-                scope,
-                current.key,
-                wrapper,
-                filename=current.filename,
-                preserve_wrapper=True,
-                require_existing=True,
-                expected_existing_fingerprint=current.fingerprint,
-            )
-            self._select_profile_after_action(scope, current.key)
-            self.profile_name_inputs[scope] = new_name
-            self.profile_name_input_dirty[scope] = False
-            self._clear_profile_confirmation_state()
-            self._set_saved_profile_feedback(
-                scope,
-                notice=(
-                    f"Renamed {self._profile_scope_badge(scope).title()} profile "
-                    f"'{current.display_name}' to '{new_name}'."
-                ),
-            )
-        except Exception as exc:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=(
-                    f"Failed to rename {self._profile_scope_badge(scope).title()} profile: {exc}"
-                ),
-            )
+        return self._saved_profile_session.rename_selected_profile(scope, expected_fingerprint)
 
     def _save_current_over_selected_profile(
         self,
         scope: str,
         expected_fingerprint: str = "",
-    ):
+    ) -> None:
         self._ensure_initialized()
-        selected_profile = self._get_selected_profile(scope)
-        if selected_profile is None:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to replace.",
-            )
-            return
-
-        try:
-            current = self._resolve_profile_for_action(
-                selected_profile.identity,
-                expected_fingerprint=expected_fingerprint,
-                reload_shared=True,
-            )
-            wrapper = self._build_shared_profile_wrapper(
-                current.display_name,
-                profile_id=current.key,
-            )
-            self._persist_profile_wrapper(
-                scope,
-                current.key,
-                wrapper,
-                filename=current.filename,
-                require_existing=True,
-                expected_existing_fingerprint=current.fingerprint,
-            )
-            self._select_profile_after_action(scope, current.key)
-            self._clear_profile_confirmation_state()
-            self._set_saved_profile_feedback(
-                scope,
-                notice=(
-                    f"Replaced {self._profile_scope_badge(scope).title()} profile "
-                    f"'{current.display_name}' with the current settings."
-                ),
-            )
-        except Exception as exc:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=(f"Failed to replace {self._profile_scope_badge(scope).title()} profile: {exc}"),
-            )
+        return self._saved_profile_session.save_current_over_selected_profile(scope, expected_fingerprint)
 
     def _load_selected_profile(
         self,
@@ -11860,73 +10999,9 @@ class MerchantRulesWidget:
         self,
         source_scope: str,
         expected_fingerprint: str = "",
-    ):
+    ) -> None:
         self._ensure_initialized()
-        source = self._get_selected_profile(source_scope)
-        destination_scope = PROFILE_SCOPE_ACCOUNT if source_scope == PROFILE_SCOPE_SHARED else PROFILE_SCOPE_SHARED
-        if source is None:
-            self._set_saved_profile_feedback(
-                source_scope,
-                warning=f"Select a {self._profile_scope_badge(source_scope).title()} profile to copy.",
-            )
-            return
-
-        try:
-            current = self._resolve_profile_for_action(
-                source.identity,
-                expected_fingerprint=expected_fingerprint,
-                reload_shared=True,
-            )
-            self._prepare_scope_for_new_profile(destination_scope)
-            destination_name = self._ensure_profile_name_available(
-                destination_scope,
-                current.display_name,
-            )
-            destination_key = new_profile_id()
-            destination_filename = self._allocate_profile_filename(
-                destination_scope,
-                destination_name,
-            )
-            destination_wrapper = self._build_shared_profile_wrapper(
-                destination_name,
-                profile_id=destination_key,
-                payload=current.payload,
-                saved_at_unix_ms=current.saved_at_unix_ms,
-                saved_at_label=current.saved_at_label,
-            )
-            copied = self._persist_profile_wrapper(
-                destination_scope,
-                destination_key,
-                destination_wrapper,
-                filename=destination_filename,
-            )
-            self._select_profile_after_action(
-                destination_scope,
-                copied.key,
-                activate_scope=True,
-            )
-            self._clear_profile_confirmation_state()
-            self._set_saved_profile_feedback(
-                destination_scope,
-                notice=(
-                    f"Copied '{current.display_name}' to "
-                    f"{self._profile_scope_badge(destination_scope).title()} profiles."
-                ),
-            )
-            self._set_saved_profile_feedback(
-                source_scope,
-                notice=(
-                    f"The original {self._profile_scope_badge(source_scope).title()} profile "
-                    f"'{current.display_name}' was not changed."
-                ),
-            )
-        except Exception as exc:
-            self._set_saved_profile_feedback(
-                source_scope,
-                warning=(
-                    f"Failed to copy {self._profile_scope_badge(source_scope).title()} profile: {exc}"
-                ),
-            )
+        return self._saved_profile_session.copy_selected_profile_to_other_scope(source_scope, expected_fingerprint)
 
     def _open_profiles_folder(self, scope: str) -> bool:
         folder_path = ""
@@ -12292,15 +11367,7 @@ class MerchantRulesWidget:
                 self._debug_log("Deferred account profile application until Merchant Rules work is idle.")
                 return
             self.account_key = current_account
-            self.profile_entries[PROFILE_SCOPE_ACCOUNT] = []
-            self.profile_entries_loaded[PROFILE_SCOPE_ACCOUNT] = False
-            self.profile_selection_cleared_due_to_disappearance[PROFILE_SCOPE_ACCOUNT] = False
-            self.profile_known_filenames[PROFILE_SCOPE_ACCOUNT].clear()
-            self.profile_scan_conflicts[PROFILE_SCOPE_ACCOUNT].clear()
-            self.saved_profile_failure_signatures[PROFILE_SCOPE_ACCOUNT].clear()
-            self.profile_selected_identities[PROFILE_SCOPE_ACCOUNT] = None
-            self.profile_name_inputs[PROFILE_SCOPE_ACCOUNT] = ""
-            self.profile_name_input_dirty[PROFILE_SCOPE_ACCOUNT] = False
+            self._saved_profile_session.reset_account()
 
         for scope in PROFILE_SCOPES:
             if not self.profile_entries_loaded[scope]:
@@ -13508,13 +12575,7 @@ class MerchantRulesWidget:
         return entries
 
     def _get_material_catalog_entry(self, model_id: int) -> dict[str, object] | None:
-        entry = self._get_model_entry(model_id)
-        if entry is None:
-            return None
-        material_type = str(entry.get("material_type", "")).strip().lower()
-        if material_type not in {"common", "rare"}:
-            return None
-        return entry
+        return self._buy_planner.get_material_catalog_entry(model_id)
 
     def _get_material_merchant_type_by_model(self, model_id: int) -> str:
         return _planning.material_destination(model_id)
@@ -13538,46 +12599,13 @@ class MerchantRulesWidget:
         return _planning.explicit_destination(item)
 
     def _get_merchant_essential(self, model_id: int) -> dict[str, object] | None:
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        for entry in self.catalog_merchant_essentials:
-            if int(entry.get("model_id", 0)) == safe_model_id:
-                return entry
-        return None
+        return self._buy_planner.get_merchant_essential(model_id)
 
     def _merchant_stock_target_supports_xunlai_first(self, model_id: int) -> bool:
-        """Return whether v1 can identify this ordinary Merchant Stock target by model alone."""
-
-        safe_model_id = max(0, _safe_int(model_id, 0))
-        if safe_model_id <= 0 or _is_scroll_trader_stock_model(safe_model_id):
-            return False
-        if safe_model_id == int(ModelID.Vial_Of_Dye.value):
-            return False
-        if safe_model_id in ALL_CRAFTING_MATERIAL_MODEL_IDS or safe_model_id in CONSUMABLE_CRAFTER_RECIPES_BY_MODEL:
-            return False
-        entry = self._get_merchant_essential(safe_model_id)
-        if entry is None:
-            return False
-        return str(entry.get("item_type", "") or "").strip().casefold() != "dye"
+        return self._buy_planner.merchant_stock_target_supports_xunlai_first(model_id)
 
     def _get_configured_xunlai_first_keep_by_model(self) -> dict[int, int]:
-        """Build the active cleanup floor for supported opted-in Merchant Stock targets."""
-
-        keep_by_model: dict[int, int] = {}
-        for buy_rule in self.buy_rules:
-            normalized_rule = _normalize_buy_rule(buy_rule)
-            if normalized_rule is None or not normalized_rule.enabled or normalized_rule.kind != BUY_KIND_MERCHANT_STOCK:
-                continue
-            for target in _normalize_merchant_stock_targets(normalized_rule.merchant_stock_targets):
-                model_id = max(0, int(target.model_id))
-                target_count = max(0, int(target.target_count))
-                if (
-                    not bool(target.check_xunlai_first)
-                    or target_count <= 0
-                    or not self._merchant_stock_target_supports_xunlai_first(model_id)
-                ):
-                    continue
-                keep_by_model[model_id] = max(target_count, keep_by_model.get(model_id, 0))
-        return keep_by_model
+        return self._buy_planner.get_configured_xunlai_first_keep_by_model()
 
     def _get_xunlai_first_cleanup_keep_by_model(self) -> dict[int, int]:
         if bool(getattr(self, "execute_reservation_scope_active", False)):
@@ -14747,28 +13775,10 @@ class MerchantRulesWidget:
         return self._set_cleanup_protection_sources(existing_sources)
 
     def _get_sell_rule_by_id(self, sell_rule_id: object) -> SellRule | None:
-        safe_rule_id = _normalize_rule_id(sell_rule_id)
-        if not safe_rule_id:
-            return None
-        for sell_rule in self.sell_rules:
-            normalized_rule = _normalize_sell_rule(sell_rule)
-            if normalized_rule is None:
-                continue
-            if str(normalized_rule.rule_id or "").strip() == safe_rule_id:
-                return normalized_rule
-        return None
+        return self._cleanup_planner.get_sell_rule_by_id(sell_rule_id)
 
     def _get_sell_rule_index_by_id(self, sell_rule_id: object) -> int:
-        safe_rule_id = _normalize_rule_id(sell_rule_id)
-        if not safe_rule_id:
-            return -1
-        for index, sell_rule in enumerate(self.sell_rules):
-            normalized_rule = _normalize_sell_rule(sell_rule)
-            if normalized_rule is None:
-                continue
-            if str(normalized_rule.rule_id or "").strip() == safe_rule_id:
-                return index
-        return -1
+        return self._cleanup_planner.get_sell_rule_index_by_id(sell_rule_id)
 
     def _get_cleanup_linkable_sell_rules(self) -> list[SellRule]:
         linkable_rules: list[SellRule] = []
@@ -16707,18 +15717,6 @@ class MerchantRulesWidget:
     def _collect_material_storage_items(self) -> list[InventoryItemInfo]:
         return self._inventory_evidence.collect_material_storage_items()
 
-    def _get_standalone_rune_identifier_counts(self, items: list[InventoryItemInfo]) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for item in items:
-            if item.standalone_kind != RUNE_STANDALONE_KIND:
-                continue
-            for identifier in item.rune_identifiers:
-                safe_identifier = _normalize_rune_identifier(identifier)
-                if not safe_identifier:
-                    continue
-                counts[safe_identifier] = counts.get(safe_identifier, 0) + max(0, int(item.quantity))
-        return counts
-
     def _get_standalone_rune_identifiers_for_item_id(self, item_id: int) -> tuple[str, ...]:
         item_info = self._build_inventory_item_info(int(item_id))
         if item_info is None or item_info.standalone_kind != RUNE_STANDALONE_KIND:
@@ -16784,53 +15782,6 @@ class MerchantRulesWidget:
             waited_ms += max(1, int(step_ms))
             yield from Routines.Yield.wait(step_ms)
         return self._get_inventory_standalone_rune_identifier_count(safe_identifier)
-
-    def _get_storage_transfer_items_for_stock_key(
-        self,
-        storage_items: list[InventoryItemInfo],
-        stock_key: str,
-        *,
-        quantity: int,
-        label: str,
-        direction: str = STORAGE_TRANSFER_WITHDRAW,
-    ) -> list[PlannedStorageTransfer]:
-        normalized_quantity = max(0, int(quantity))
-        if normalized_quantity <= 0:
-            return []
-
-        stock_prefix, stock_value = _parse_stock_key(stock_key)
-        matching_items: list[InventoryItemInfo] = []
-        if stock_prefix == STOCK_KEY_IDENTIFIER_PREFIX:
-            safe_identifier = _normalize_rune_identifier(stock_value)
-            matching_items = [
-                item
-                for item in storage_items
-                if item.standalone_kind == RUNE_STANDALONE_KIND and safe_identifier in item.rune_identifiers
-            ]
-        elif stock_prefix == STOCK_KEY_MODEL_PREFIX:
-            safe_model_id = max(0, _safe_int(stock_value, 0))
-            matching_items = [item for item in storage_items if int(item.model_id) == safe_model_id]
-
-        transfers: list[PlannedStorageTransfer] = []
-        remaining = normalized_quantity
-        for item in matching_items:
-            if remaining <= 0:
-                break
-            move_quantity = min(remaining, max(0, int(item.quantity)))
-            if move_quantity <= 0:
-                continue
-            transfers.append(
-                PlannedStorageTransfer(
-                    direction=direction,
-                    key=stock_key,
-                    label=label,
-                    item_id=int(item.item_id),
-                    quantity=move_quantity,
-                    model_id=int(item.model_id),
-                )
-            )
-            remaining -= move_quantity
-        return transfers
 
     def _rule_matches_selected_rarity(self, item: InventoryItemInfo, rule: object) -> bool:
         return self._protection_policy.rule_matches_selected_rarity(item, rule)
@@ -18168,47 +17119,6 @@ class MerchantRulesWidget:
             )
         )
 
-    def _append_cleanup_transfer_entry(
-        self,
-        plan: PlanResult,
-        *,
-        item_id: int,
-        quantity: int,
-        label: str,
-        reason: str,
-        model_id: int = 0,
-        key: str = "",
-        storage_open: bool = False,
-    ) -> None:
-        safe_item_id = int(item_id)
-        safe_quantity = max(0, int(quantity))
-        safe_model_id = max(0, int(model_id))
-        if safe_item_id <= 0 or safe_quantity <= 0:
-            return
-        default_key = f"item:{safe_item_id}"
-        transfer = PlannedStorageTransfer(
-            direction=STORAGE_TRANSFER_DEPOSIT,
-            key=str(key or default_key),
-            label=str(label or f"Item {safe_item_id}"),
-            item_id=safe_item_id,
-            quantity=safe_quantity,
-            model_id=safe_model_id,
-            reason=str(reason or ""),
-        )
-        plan.cleanup_transfers.append(transfer)
-        plan.storage_transfers.append(transfer)
-        plan.entries.append(
-            ExecutionPlanEntry(
-                action_type="deposit",
-                merchant_type=MERCHANT_TYPE_STORAGE,
-                label=str(label or f"Item {safe_item_id}"),
-                quantity=safe_quantity,
-                state=PLAN_STATE_WILL_EXECUTE if bool(storage_open) else PLAN_STATE_CONDITIONAL,
-                reason=str(reason or ""),
-                model_id=safe_model_id,
-            )
-        )
-
     def _plan_equippable_rule_sales(
         self,
         plan: PlanResult,
@@ -18252,13 +17162,6 @@ class MerchantRulesWidget:
 
     def _get_inventory_model_counts(self, items: list[InventoryItemInfo]) -> dict[int, int]:
         return _planning.get_inventory_model_counts(items)
-
-    def _apply_max_per_run(self, needed: int, max_per_run: int) -> int:
-        capped_needed = max(0, int(needed))
-        cap = max(0, int(max_per_run))
-        if cap > 0:
-            capped_needed = min(capped_needed, cap)
-        return capped_needed
 
     @staticmethod
     def _get_live_target_purchase_ceiling(
@@ -18745,49 +17648,6 @@ class MerchantRulesWidget:
             result.acquired = True
         return result
 
-    def _make_purchase_target_cleanup(
-        self,
-        *,
-        rule_kind: str,
-        rule_index: int,
-        target_key: object,
-        target_count: int,
-        max_per_run: int,
-        after_purchase: object,
-        completes_target: bool,
-        xunlai_involved: bool = False,
-    ) -> PurchaseTargetCleanup:
-        return PurchaseTargetCleanup(
-            rule_kind=str(rule_kind or ""),
-            rule_index=int(rule_index),
-            target_key=str(target_key or "").strip(),
-            target_count=max(0, int(target_count)),
-            max_per_run=max(0, int(max_per_run)),
-            after_purchase=_normalize_after_purchase_action(after_purchase),
-            completes_target=bool(completes_target),
-            xunlai_involved=bool(xunlai_involved),
-        )
-
-    def _get_purchase_cleanup_preview_suffix(
-        self,
-        after_purchase: object,
-        *,
-        completes_target: bool,
-        xunlai_involved: bool = False,
-    ) -> str:
-        action = _normalize_after_purchase_action(after_purchase)
-        if action == AFTER_PURCHASE_KEEP:
-            return ""
-        if not bool(completes_target):
-            return "The configured after-purchase change will wait until a verified purchase completes the target."
-        if bool(xunlai_involved):
-            return "The configured after-purchase change will not run because this target uses Xunlai Storage."
-        if action == AFTER_PURCHASE_RESET_QUANTITY:
-            return "After a verified purchase completes the target, reset its quantity to 0."
-        if action == AFTER_PURCHASE_REMOVE_ENTRY:
-            return "After a verified purchase completes the target, remove this target."
-        return ""
-
     def _apply_after_purchase_cleanup(self, cleanup: PurchaseTargetCleanup, *, label: str = "") -> bool:
         if not self._merchant_rules_is_generation_current():
             self._debug_log(
@@ -18892,14 +17752,7 @@ class MerchantRulesWidget:
         return current_rank, tier_name, current_points
 
     def _get_consumable_crafter_recipe_for_model(self, model_id: int) -> ConsumableCrafterRecipe | None:
-        recipes = CONSUMABLE_CRAFTER_RECIPES_BY_MODEL.get(max(0, int(model_id)), ())
-        if not recipes:
-            return None
-        for recipe in recipes:
-            current_rank, _tier_name, _points = self._get_title_rank_info(recipe.title_id)
-            if current_rank >= int(recipe.required_rank):
-                return recipe
-        return recipes[0]
+        return self._buy_planner.get_consumable_crafter_recipe_for_model(model_id)
 
     def _get_consumable_material_available_count(
         self,
@@ -18962,82 +17815,6 @@ class MerchantRulesWidget:
             blockers.append(f"Need {gold_cost} gold; found {gold_available}.")
         return (min(caps) if caps else 0), blockers
 
-    def _get_consumable_craft_cap_from_reserved_resources(
-        self,
-        recipe: ConsumableCrafterRecipe,
-        *,
-        available_model_counts: dict[int, int],
-        skill_points_remaining: int,
-        gold_remaining: int,
-        requested_quantity: int = 1,
-    ) -> tuple[int, list[str]]:
-        blockers: list[str] = []
-        caps: list[int] = []
-        safe_requested_quantity = max(1, int(requested_quantity))
-
-        skill_points_per_craft = max(0, int(recipe.skill_points))
-        safe_skill_points_remaining = max(0, int(skill_points_remaining))
-        if skill_points_per_craft > 0:
-            caps.append(safe_skill_points_remaining // skill_points_per_craft)
-            if safe_skill_points_remaining < skill_points_per_craft:
-                needed_skill_points = skill_points_per_craft * safe_requested_quantity
-                blockers.append(f"Need {needed_skill_points} skill point(s); found {safe_skill_points_remaining}.")
-
-        gold_cost = max(0, int(recipe.gold_cost))
-        safe_gold_remaining = max(0, int(gold_remaining))
-        if gold_cost > 0:
-            caps.append(safe_gold_remaining // gold_cost)
-            if safe_gold_remaining < gold_cost:
-                needed_gold = gold_cost * safe_requested_quantity
-                blockers.append(f"Need {needed_gold} gold; found {safe_gold_remaining}.")
-
-        for ingredient_model_id, quantity_per_craft in recipe.ingredients:
-            safe_quantity = max(0, int(quantity_per_craft))
-            if safe_quantity <= 0:
-                continue
-            available = max(0, int(available_model_counts.get(int(ingredient_model_id), 0)))
-            caps.append(available // safe_quantity)
-            if available < safe_quantity:
-                needed_quantity = safe_quantity * safe_requested_quantity
-                blockers.append(
-                    f"Need {needed_quantity} {self._format_model_label_short(int(ingredient_model_id))}; found {available}."
-                )
-
-        return (min(caps) if caps else 0), blockers
-
-    def _estimate_consumable_crafter_free_slots_needed(
-        self,
-        planned_crafts: list[PlannedConsumableCraft],
-        inventory_model_counts: dict[int, int],
-    ) -> int:
-        if not planned_crafts:
-            return 0
-        safe_inventory_counts = {
-            max(0, int(model_id)): max(0, int(quantity))
-            for model_id, quantity in dict(inventory_model_counts or {}).items()
-            if max(0, int(model_id)) > 0 and max(0, int(quantity)) > 0
-        }
-        output_models: set[int] = set()
-        missing_material_models: set[int] = set()
-        for craft in planned_crafts:
-            craft_quantity = max(0, int(craft.quantity))
-            if craft_quantity <= 0:
-                continue
-            craft_model_id = max(0, int(craft.model_id))
-            if craft_model_id > 0 and safe_inventory_counts.get(craft_model_id, 0) <= 0:
-                output_models.add(craft_model_id)
-            recipe = self._get_consumable_crafter_recipe_for_model(craft_model_id)
-            if recipe is None:
-                continue
-            for ingredient_model_id, ingredient_quantity in recipe.ingredients:
-                safe_ingredient_model_id = max(0, int(ingredient_model_id))
-                if safe_ingredient_model_id <= 0:
-                    continue
-                total_required = max(0, int(ingredient_quantity)) * craft_quantity
-                if total_required > max(0, int(safe_inventory_counts.get(safe_ingredient_model_id, 0))):
-                    missing_material_models.add(safe_ingredient_model_id)
-        return len(output_models | missing_material_models)
-
     def _get_inventory_free_slot_count(self) -> int:
         try:
             return max(0, int(GLOBAL_CACHE.Inventory.GetFreeSlotCount()))
@@ -19054,40 +17831,9 @@ class MerchantRulesWidget:
         *,
         inventory_model_counts: dict[int, int],
     ) -> None:
-        if not plan.consumable_crafter_buys:
-            return
-        estimated_needed = self._estimate_consumable_crafter_free_slots_needed(
-            plan.consumable_crafter_buys,
-            inventory_model_counts,
+        return self._buy_planner.plan_consumable_crafter_bag_space_warning(
+            plan, inventory_model_counts=inventory_model_counts
         )
-        if estimated_needed <= 0:
-            return
-        free_slots = self._get_inventory_free_slot_count()
-        if free_slots < 0:
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "buy",
-                    MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                    "Inventory space",
-                    0,
-                    PLAN_STATE_SKIPPED,
-                    f"Could not verify free inventory slots. Consumable crafting may need up to {estimated_needed} free slot(s).",
-                    status_hint=PREVIEW_STATUS_WARNING,
-                )
-            )
-            return
-        if free_slots < estimated_needed:
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "buy",
-                    MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                    "Inventory space",
-                    0,
-                    PLAN_STATE_SKIPPED,
-                    f"Low inventory space: consumable crafting may need up to {estimated_needed} free slot(s); found {free_slots}.",
-                    status_hint=PREVIEW_STATUS_WARNING,
-                )
-            )
 
     def _has_enabled_rune_buy_rules(self) -> bool:
         for raw_rule in self.buy_rules:
@@ -19165,117 +17911,20 @@ class MerchantRulesWidget:
     ) -> list[InventoryItemInfo]:
         return _planning.apply_planned_transfer_quantities(items, transfers)
 
-    def _build_cleanup_target_transfers(
-        self,
-        matching_items: list[InventoryItemInfo],
-        keep_on_character: int,
-    ) -> list[PlannedStorageTransfer]:
-        normalized_items = [item for item in matching_items if int(item.item_id) > 0 and max(1, int(item.quantity)) > 0]
-        safe_keep_count = max(0, int(keep_on_character))
-        if not normalized_items:
-            return []
-
-        keep_ids, kept_quantity = _choose_keep_subset_at_most(normalized_items, safe_keep_count)
-        remaining_keep_quantity = max(0, safe_keep_count - kept_quantity)
-        transfers: list[PlannedStorageTransfer] = []
-        for item in normalized_items:
-            item_quantity = max(1, int(item.quantity))
-            if int(item.item_id) in keep_ids:
-                continue
-
-            keep_from_item = 0
-            if remaining_keep_quantity > 0:
-                keep_from_item = min(item_quantity, remaining_keep_quantity)
-                remaining_keep_quantity -= keep_from_item
-
-            transfer_quantity = max(0, item_quantity - keep_from_item)
-            if transfer_quantity <= 0:
-                continue
-            transfers.append(
-                PlannedStorageTransfer(
-                    direction=STORAGE_TRANSFER_DEPOSIT,
-                    key=_make_model_stock_key(item.model_id),
-                    label=item.name,
-                    item_id=item.item_id,
-                    quantity=transfer_quantity,
-                    model_id=item.model_id,
-                )
-            )
-        return transfers
-
     def _get_effective_cleanup_targets(
         self,
         enabled_sell_rules: list[tuple[int, SellRule]] | None = None,
     ) -> list[CleanupTarget]:
-        targets_by_key: dict[tuple[int, str], CleanupTarget] = {
-            _cleanup_target_key(target): CleanupTarget(
-                model_id=int(target.model_id),
-                keep_on_character=max(0, int(target.keep_on_character)),
-                scope=_normalize_cleanup_target_scope(getattr(target, "scope", ""), target.model_id),
-            )
-            for target in _normalize_cleanup_targets(self.cleanup_targets)
-        }
-        if enabled_sell_rules is None:
-            enabled_sell_rules = self._collect_enabled_sell_rules()
-        for _rule_index, sell_rule in enabled_sell_rules:
-            if sell_rule.kind not in (SELL_KIND_COMMON_MATERIALS, SELL_KIND_EXPLICIT_MODELS):
-                continue
-            for whitelist_target in _normalize_whitelist_targets(getattr(sell_rule, "whitelist_targets", [])):
-                if not bool(getattr(whitelist_target, "deposit_to_storage", False)):
-                    continue
-                safe_model_id = max(0, int(whitelist_target.model_id))
-                target_scope = (
-                    _infer_cleanup_target_scope_from_model_id(safe_model_id)
-                    if sell_rule.kind == SELL_KIND_COMMON_MATERIALS
-                    else CLEANUP_TARGET_SCOPE_EXACT
-                )
-                target_key = (safe_model_id, target_scope)
-                if safe_model_id <= 0 or target_key in targets_by_key:
-                    continue
-                # Sell-rule keep counts already decide what remains after sales; cleanup deposits that remainder.
-                targets_by_key[target_key] = CleanupTarget(
-                    model_id=safe_model_id,
-                    keep_on_character=0,
-                    scope=target_scope,
-                )
-        return _normalize_cleanup_targets([asdict(target) for target in targets_by_key.values()])
+        return self._cleanup_planner.get_effective_cleanup_targets(enabled_sell_rules)
 
     def _get_effective_cleanup_protection_sources(
         self,
         enabled_sell_rules: list[tuple[int, SellRule]] | None = None,
     ) -> list[CleanupProtectionSource]:
-        sources_by_rule_id: dict[str, CleanupProtectionSource] = {
-            str(source.sell_rule_id): CleanupProtectionSource(sell_rule_id=str(source.sell_rule_id))
-            for source in _normalize_cleanup_protection_sources(self.cleanup_protection_sources)
-        }
-        if enabled_sell_rules is None:
-            enabled_sell_rules = self._collect_enabled_sell_rules()
-        for _rule_index, sell_rule in enabled_sell_rules:
-            if sell_rule.kind not in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-                continue
-            if not bool(getattr(sell_rule, "deposit_protected_matches", False)):
-                continue
-            safe_rule_id = _normalize_rule_id(getattr(sell_rule, "rule_id", ""))
-            if not safe_rule_id or safe_rule_id in sources_by_rule_id:
-                continue
-            sources_by_rule_id[safe_rule_id] = CleanupProtectionSource(sell_rule_id=safe_rule_id)
-        return _normalize_cleanup_protection_sources([asdict(source) for source in sources_by_rule_id.values()])
-
-    def _get_cleanup_blacklist_model_id_set(self) -> set[int]:
-        return set(_normalize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids))
+        return self._cleanup_planner.get_effective_cleanup_protection_sources(enabled_sell_rules)
 
     def _cleanup_target_matches_item(self, cleanup_target: CleanupTarget, item: InventoryItemInfo) -> bool:
-        target_model_id = max(0, int(cleanup_target.model_id))
-        if target_model_id <= 0 or int(item.model_id) != target_model_id or int(item.item_id) <= 0:
-            return False
-        target_scope = _normalize_cleanup_target_scope(getattr(cleanup_target, "scope", ""), target_model_id)
-        if target_scope == CLEANUP_TARGET_SCOPE_COMMON_MATERIAL:
-            return bool(item.is_material and not item.is_rare_material)
-        if target_scope == CLEANUP_TARGET_SCOPE_RARE_MATERIAL:
-            return bool(item.is_rare_material)
-        if target_model_id in ALL_CRAFTING_MATERIAL_MODEL_IDS and bool(item.is_material or item.is_rare_material):
-            return False
-        return True
+        return self._cleanup_planner.cleanup_target_matches_item(cleanup_target, item)
 
     def _plan_cleanup_actions(
         self,
@@ -19286,314 +17935,12 @@ class MerchantRulesWidget:
         storage_open: bool = False,
         storage_context_available: bool | None = None,
     ) -> None:
-        """Plan bounded deposits for explicit cleanup targets and enabled protection sources.
-
-        Storage availability and target scope determine whether entries are direct or
-        conditional; protected keep-out models are never converted into transfer actions.
-        """
-
-        if storage_context_available is None:
-            storage_context_available = self._can_use_local_storage_actions()
-        if not storage_context_available:
-            return
-
-        cleanup_items = list(items)
-        cleanup_blacklist_model_ids = self._get_cleanup_blacklist_model_id_set()
-        cleanup_targets = self._get_effective_cleanup_targets(enabled_sell_rules)
-        xunlai_first_keep_by_model = self._get_xunlai_first_cleanup_keep_by_model()
-        for cleanup_target in cleanup_targets:
-            target_model_id = max(0, int(cleanup_target.model_id))
-            configured_keep_on_character = max(0, int(cleanup_target.keep_on_character))
-            xunlai_first_keep = max(0, int(xunlai_first_keep_by_model.get(target_model_id, 0)))
-            keep_on_character = max(configured_keep_on_character, xunlai_first_keep)
-            xunlai_first_keep_controls = xunlai_first_keep > configured_keep_on_character
-            target_label = self._format_cleanup_target_label_short(cleanup_target)
-            matching_items = [
-                item
-                for item in cleanup_items
-                if self._cleanup_target_matches_item(cleanup_target, item)
-            ]
-            if not matching_items:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "deposit",
-                        MERCHANT_TYPE_STORAGE,
-                        target_label,
-                        0,
-                        PLAN_STATE_SKIPPED,
-                        "No matching inventory items found for this deposit target.",
-                        status_hint=PREVIEW_STATUS_NO_MATCH,
-                    )
-                )
-                continue
-
-            total_quantity = sum(max(1, int(item.quantity)) for item in matching_items)
-            if target_model_id in cleanup_blacklist_model_ids:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "deposit",
-                        MERCHANT_TYPE_STORAGE,
-                        target_label,
-                        total_quantity,
-                        PLAN_STATE_SKIPPED,
-                        "Skipped by deposit keep-out.",
-                        model_id=target_model_id,
-                        status_hint=PREVIEW_STATUS_PROTECTED,
-                    )
-                )
-                blacklisted_item_ids = {int(item.item_id) for item in matching_items}
-                cleanup_items = [
-                    item
-                    for item in cleanup_items
-                    if int(item.item_id) not in blacklisted_item_ids
-                ]
-                continue
-
-            if total_quantity <= keep_on_character:
-                keep_reason = (
-                    f"Keeping {keep_on_character} on character for Check Xunlai first."
-                    if xunlai_first_keep_controls
-                    else (
-                        f"All {total_quantity} matching items remain in inventory because "
-                        f"the keep amount is {keep_on_character}."
-                    )
-                )
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "deposit",
-                        MERCHANT_TYPE_STORAGE,
-                        target_label,
-                        total_quantity,
-                        PLAN_STATE_SKIPPED,
-                        keep_reason,
-                    )
-                )
-                continue
-
-            planned_transfers = self._build_cleanup_target_transfers(matching_items, keep_on_character)
-            if not planned_transfers:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "deposit",
-                        MERCHANT_TYPE_STORAGE,
-                        target_label,
-                        total_quantity,
-                        PLAN_STATE_SKIPPED,
-                        "Deposit reserve left nothing eligible to move.",
-                    )
-                )
-                continue
-
-            for transfer in planned_transfers:
-                self._append_cleanup_transfer_entry(
-                    plan,
-                    item_id=transfer.item_id,
-                    quantity=transfer.quantity,
-                    label=transfer.label,
-                    model_id=transfer.model_id,
-                    key=transfer.key,
-                    reason=(
-                        f"Keeping {keep_on_character} on character for Check Xunlai first."
-                        if xunlai_first_keep_controls
-                        else f"Deposit target keeps {keep_on_character} on character."
-                    ),
-                    storage_open=storage_open,
-                )
-            cleanup_items = self._apply_planned_transfer_quantities(cleanup_items, planned_transfers)
-
-        cleanup_sources = self._get_effective_cleanup_protection_sources(enabled_sell_rules)
-        for cleanup_source in cleanup_sources:
-            sell_rule_id = _normalize_rule_id(cleanup_source.sell_rule_id)
-            if not sell_rule_id:
-                continue
-
-            sell_rule_index = self._get_sell_rule_index_by_id(sell_rule_id)
-            sell_rule = self._get_sell_rule_by_id(sell_rule_id)
-            if sell_rule is None or sell_rule_index < 0:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "deposit",
-                        MERCHANT_TYPE_STORAGE,
-                        "Linked protection rule",
-                        0,
-                        PLAN_STATE_SKIPPED,
-                        "Linked sell rule no longer exists.",
-                        status_hint=PREVIEW_STATUS_BLOCKED,
-                    )
-                )
-                continue
-
-            rule_reference = self._format_sell_rule_reference(sell_rule_index, sell_rule)
-            if sell_rule.kind not in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "deposit",
-                        MERCHANT_TYPE_STORAGE,
-                        rule_reference,
-                        0,
-                        PLAN_STATE_SKIPPED,
-                        "Linked deposit sources only support weapon or armor sell protections.",
-                        status_hint=PREVIEW_STATUS_BLOCKED,
-                    )
-                )
-                continue
-
-            if not sell_rule.enabled:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "deposit",
-                        MERCHANT_TYPE_STORAGE,
-                        rule_reference,
-                        0,
-                        PLAN_STATE_SKIPPED,
-                        "Linked sell rule is disabled.",
-                    )
-                )
-                continue
-
-            planned_transfers: list[PlannedStorageTransfer] = []
-            blacklisted_matches_found = False
-            for item in cleanup_items:
-                protection_match = self._get_hard_protection_match(item, enabled_sell_rules)
-                if protection_match is None:
-                    continue
-                _, matched_rule, _, detail = protection_match
-                if str(getattr(matched_rule, "rule_id", "") or "").strip() != sell_rule_id:
-                    continue
-                explicit_deposit = self._get_equippable_explicit_deposit_reason(item, sell_rule)
-                if explicit_deposit is None:
-                    continue
-                if int(item.model_id) in cleanup_blacklist_model_ids:
-                    blacklisted_matches_found = True
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "deposit",
-                            MERCHANT_TYPE_STORAGE,
-                            item.name,
-                            item.quantity,
-                            PLAN_STATE_SKIPPED,
-                            f"Skipped by deposit keep-out. Protected by {rule_reference}: {detail}",
-                            model_id=item.model_id,
-                            status_hint=PREVIEW_STATUS_PROTECTED,
-                        )
-                    )
-                    continue
-                planned_transfers.append(
-                    PlannedStorageTransfer(
-                        direction=STORAGE_TRANSFER_DEPOSIT,
-                        key=_make_model_stock_key(item.model_id),
-                        label=item.name,
-                        item_id=item.item_id,
-                        quantity=item.quantity,
-                        model_id=item.model_id,
-                    )
-                )
-                self._append_cleanup_transfer_entry(
-                    plan,
-                    item_id=item.item_id,
-                    quantity=item.quantity,
-                    label=item.name,
-                    model_id=item.model_id,
-                    key=_make_model_stock_key(item.model_id),
-                    reason=f"Protected by {rule_reference}: {detail}",
-                    storage_open=storage_open,
-                )
-
-            if not planned_transfers:
-                if blacklisted_matches_found:
-                    continue
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "deposit",
-                        MERCHANT_TYPE_STORAGE,
-                        rule_reference,
-                        0,
-                        PLAN_STATE_SKIPPED,
-                        "No protected inventory items matched this linked deposit source.",
-                        status_hint=PREVIEW_STATUS_NO_MATCH,
-                    )
-                )
-                continue
-
-            cleanup_items = self._apply_planned_transfer_quantities(cleanup_items, planned_transfers)
-
-    def _get_stock_count_for_key(
-        self,
-        stock_key: str,
-        model_counts: dict[int, int],
-        identifier_counts: dict[str, int],
-    ) -> int:
-        stock_prefix, stock_value = _parse_stock_key(stock_key)
-        if stock_prefix == STOCK_KEY_MODEL_PREFIX:
-            return max(0, int(model_counts.get(max(0, _safe_int(stock_value, 0)), 0)))
-        if stock_prefix == STOCK_KEY_IDENTIFIER_PREFIX:
-            return max(0, int(identifier_counts.get(_normalize_rune_identifier(stock_value), 0)))
-        return 0
-
-    def _adjust_stock_count_for_key(
-        self,
-        stock_key: str,
-        delta: int,
-        *,
-        model_counts: dict[int, int],
-        identifier_counts: dict[str, int],
-    ) -> None:
-        safe_delta = int(delta)
-        if safe_delta == 0:
-            return
-
-        stock_prefix, stock_value = _parse_stock_key(stock_key)
-        if stock_prefix == STOCK_KEY_MODEL_PREFIX:
-            model_id = max(0, _safe_int(stock_value, 0))
-            if model_id <= 0:
-                return
-            next_count = max(0, int(model_counts.get(model_id, 0)) + safe_delta)
-            if next_count > 0:
-                model_counts[model_id] = next_count
-            else:
-                model_counts.pop(model_id, None)
-            return
-
-        if stock_prefix == STOCK_KEY_IDENTIFIER_PREFIX:
-            identifier = _normalize_rune_identifier(stock_value)
-            if not identifier:
-                return
-            next_count = max(0, int(identifier_counts.get(identifier, 0)) + safe_delta)
-            if next_count > 0:
-                identifier_counts[identifier] = next_count
-            else:
-                identifier_counts.pop(identifier, None)
-
-    def _build_stock_location_counts(
-        self,
-        stock_key: str,
-        label: str,
-        *,
-        inventory_model_counts: dict[int, int],
-        inventory_identifier_counts: dict[str, int],
-        storage_model_counts: dict[int, int] | None = None,
-        storage_identifier_counts: dict[str, int] | None = None,
-        storage_exact: bool = False,
-    ) -> StockLocationCounts:
-        inventory_count = self._get_stock_count_for_key(
-            stock_key,
-            inventory_model_counts,
-            inventory_identifier_counts,
-        )
-        storage_count = 0
-        if storage_exact:
-            storage_count = self._get_stock_count_for_key(
-                stock_key,
-                storage_model_counts or {},
-                storage_identifier_counts or {},
-            )
-        return StockLocationCounts(
-            key=stock_key,
-            label=str(label or stock_key),
-            inventory_count=inventory_count,
-            storage_count=storage_count,
-            combined_count=inventory_count + storage_count,
-            exact=bool(storage_exact),
+        return self._cleanup_planner.plan_cleanup_actions(
+            plan,
+            items,
+            enabled_sell_rules,
+            storage_open=storage_open,
+            storage_context_available=storage_context_available,
         )
 
     def _has_cleanup_sources(self) -> bool:
@@ -20351,1195 +18698,17 @@ class MerchantRulesWidget:
         allowed_rule_kinds: set[str] | None = None,
         bypass_xunlai_first: bool = False,
     ) -> None:
-        """Plan purchases against simulated inventory, storage, currency, and target reservations.
-
-        The simulation applies earlier planned moves and shared resource consumption so later
-        targets cannot spend the same stock, materials, skill points, or gold twice.
-        """
-
-        supported_map = bool(plan.supported_map)
-        supported_reason = str(plan.supported_reason or "")
-        coords = dict(plan.coords)
-        sim_inventory_items = list(sim_inventory_items or [])
-        storage_items = list(storage_items or [])
-        sim_storage_items = [replace(item, quantity=max(0, int(item.quantity))) for item in storage_items]
-        inventory_identifier_counts = self._get_standalone_rune_identifier_counts(sim_inventory_items)
-        storage_model_counts = self._get_inventory_model_counts(sim_storage_items) if plan.storage_exact else {}
-        storage_identifier_counts = self._get_standalone_rune_identifier_counts(sim_storage_items) if plan.storage_exact else {}
-        consumable_reserved_model_counts: dict[int, int] | None = None
-        consumable_skill_points_remaining: int | None = None
-        consumable_gold_remaining: int | None = None
-        consumable_material_storage_counts: dict[int, int] = {}
-
-        def _get_consumable_reserved_model_count(model_id: int) -> int:
-            nonlocal consumable_reserved_model_counts
-            safe_model_id = max(0, int(model_id))
-            if consumable_reserved_model_counts is None:
-                consumable_reserved_model_counts = {}
-            if safe_model_id not in consumable_reserved_model_counts:
-                available = max(0, int(sim_model_counts.get(safe_model_id, 0)))
-                if plan.storage_exact:
-                    available += max(0, int(storage_model_counts.get(safe_model_id, 0)))
-                    if safe_model_id in ALL_CRAFTING_MATERIAL_MODEL_IDS:
-                        if safe_model_id not in consumable_material_storage_counts:
-                            material_quantity, _slot, _bag_size = self._get_material_storage_quantity_and_slot(safe_model_id)
-                            consumable_material_storage_counts[safe_model_id] = max(0, int(material_quantity))
-                        available += max(0, int(consumable_material_storage_counts.get(safe_model_id, 0)))
-                consumable_reserved_model_counts[safe_model_id] = available
-            return max(0, int(consumable_reserved_model_counts.get(safe_model_id, 0)))
-
-        def _ensure_consumable_reserved_resources(recipe: ConsumableCrafterRecipe) -> tuple[dict[int, int], int, int]:
-            nonlocal consumable_skill_points_remaining, consumable_gold_remaining
-            if consumable_skill_points_remaining is None:
-                current_skill_points, _total_skill_points = Player.GetSkillPointData()
-                consumable_skill_points_remaining = max(0, int(current_skill_points))
-            if consumable_gold_remaining is None:
-                consumable_gold_remaining = max(0, int(GLOBAL_CACHE.Inventory.GetGoldOnCharacter()))
-                if plan.storage_exact:
-                    consumable_gold_remaining += max(0, int(GLOBAL_CACHE.Inventory.GetGoldInStorage()))
-            for ingredient_model_id, _quantity_per_craft in recipe.ingredients:
-                _get_consumable_reserved_model_count(int(ingredient_model_id))
-            return (
-                consumable_reserved_model_counts or {},
-                max(0, int(consumable_skill_points_remaining)),
-                max(0, int(consumable_gold_remaining)),
-            )
-
-        def _consume_reserved_consumable_resources(recipe: ConsumableCrafterRecipe, quantity: int) -> None:
-            nonlocal consumable_skill_points_remaining, consumable_gold_remaining
-            safe_quantity = max(0, int(quantity))
-            if safe_quantity <= 0:
-                return
-            if consumable_skill_points_remaining is not None:
-                consumable_skill_points_remaining = max(
-                    0,
-                    int(consumable_skill_points_remaining) - (max(0, int(recipe.skill_points)) * safe_quantity),
-                )
-            if consumable_gold_remaining is not None:
-                consumable_gold_remaining = max(
-                    0,
-                    int(consumable_gold_remaining) - (max(0, int(recipe.gold_cost)) * safe_quantity),
-                )
-            if consumable_reserved_model_counts is not None:
-                for ingredient_model_id, ingredient_quantity in recipe.ingredients:
-                    consumable_reserved_model_counts[int(ingredient_model_id)] = max(
-                        0,
-                        int(consumable_reserved_model_counts.get(int(ingredient_model_id), 0))
-                        - (max(0, int(ingredient_quantity)) * safe_quantity),
-                    )
-
-        buy_rule_sources: list[tuple[int, BuyRule]] = list(enumerate(self.buy_rules))
-        request_stock_targets = execution_context.merchant_stock_targets if execution_context is not None else ()
-        if request_stock_targets:
-            buy_rule_sources.append(
-                (
-                    -1,
-                    BuyRule(
-                        enabled=True,
-                        kind=BUY_KIND_MERCHANT_STOCK,
-                        merchant_type=MERCHANT_TYPE_MERCHANT,
-                        merchant_stock_targets=[
-                            MerchantStockTarget(
-                                model_id=max(0, int(target.model_id)),
-                                target_count=max(0, int(target.target_count)),
-                                max_per_run=0,
-                                after_purchase=AFTER_PURCHASE_KEEP,
-                                check_xunlai_first=False,
-                            )
-                            for target in request_stock_targets
-                        ],
-                        name="Request-scoped Merchant Stock",
-                    ),
-                )
-            )
-
-        for buy_rule_index, buy_rule in buy_rule_sources:
-            normalized_buy_rule = _normalize_buy_rule(buy_rule)
-            if normalized_buy_rule is None:
-                continue
-            buy_rule = normalized_buy_rule
-            if not buy_rule.enabled:
-                continue
-            if allowed_rule_kinds is not None and buy_rule.kind not in allowed_rule_kinds:
-                continue
-            if consumable_crafter_only and buy_rule.kind != BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
-                continue
-            if exclude_consumable_crafter and buy_rule.kind == BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
-                continue
-            buy_rule_reference = (
-                "Request-scoped Merchant Stock"
-                if buy_rule_index < 0
-                else self._format_buy_rule_reference(buy_rule_index, buy_rule)
-            )
-
-            if buy_rule.kind == BUY_KIND_MATERIAL_TARGET:
-                if not buy_rule.material_targets:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            MERCHANT_TYPE_MATERIALS,
-                            BUY_KIND_LABELS[buy_rule.kind],
-                            0,
-                            PLAN_STATE_SKIPPED,
-                            f"{buy_rule_reference} has no crafting materials selected.",
-                        )
-                    )
-                    continue
-
-                for material_target in buy_rule.material_targets:
-                    material_model_id = max(0, int(material_target.model_id))
-                    material_label = self._format_model_label(material_model_id)
-                    if material_model_id <= 0:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_MATERIALS,
-                                BUY_KIND_LABELS[buy_rule.kind],
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                f"Choose a crafting material for {buy_rule_reference}.",
-                            )
-                        )
-                        continue
-
-                    material_entry = self._get_material_catalog_entry(material_model_id)
-                    if material_entry is None:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_MATERIALS,
-                                material_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                f"{buy_rule_reference} cannot buy this item as a crafting material.",
-                                status_hint=PREVIEW_STATUS_BLOCKED,
-                            )
-                        )
-                        continue
-
-                    merchant_type = self._get_material_merchant_type_by_model(material_model_id)
-                    merchant_coords = coords.get(merchant_type)
-                    if not supported_map:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                action_type="buy",
-                                merchant_type=merchant_type,
-                                label=material_label,
-                                quantity=0,
-                                state=PLAN_STATE_SKIPPED,
-                                reason=supported_reason,
-                            )
-                        )
-                        continue
-
-                    if merchant_coords is None:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                action_type="buy",
-                                merchant_type=merchant_type,
-                                label=material_label,
-                                quantity=0,
-                                state=PLAN_STATE_SKIPPED,
-                                reason=f"{MERCHANT_TYPE_LABELS[merchant_type]} could not be found in the current map.",
-                            )
-                        )
-                        continue
-
-                    current_count = sim_model_counts.get(material_model_id, 0)
-                    missing = max(0, int(material_target.target_count) - current_count)
-                    if missing <= 0:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                merchant_type,
-                                material_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    f"Target already met: inventory has {current_count}; "
-                                    f"target is {material_target.target_count}."
-                                ),
-                                status_hint=PREVIEW_STATUS_ALREADY_DONE,
-                            )
-                        )
-                        continue
-
-                    batch_size = self._get_material_batch_size(material_model_id)
-                    if batch_size > 1:
-                        needed = ((missing + batch_size - 1) // batch_size) * batch_size
-                        if material_target.max_per_run > 0:
-                            capped_needed = (int(material_target.max_per_run) // batch_size) * batch_size
-                            if capped_needed <= 0:
-                                plan.entries.append(
-                                    ExecutionPlanEntry(
-                                        "buy",
-                                        merchant_type,
-                                        material_label,
-                                        0,
-                                        PLAN_STATE_SKIPPED,
-                                        (
-                                            f"Cannot buy this material because the trader sells lots of {batch_size}, "
-                                            f"but Max Per Run is {material_target.max_per_run}."
-                                        ),
-                                        status_hint=PREVIEW_STATUS_BLOCKED,
-                                    )
-                                )
-                                continue
-                            needed = min(needed, capped_needed)
-                    else:
-                        needed = self._apply_max_per_run(missing, material_target.max_per_run)
-
-                    if needed <= 0:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                merchant_type,
-                                material_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    f"Target already met: inventory has {current_count}; "
-                                    f"target is {material_target.target_count}."
-                                ),
-                                status_hint=PREVIEW_STATUS_ALREADY_DONE,
-                            )
-                        )
-                        continue
-
-                    sim_model_counts[material_model_id] = current_count + needed
-                    plan.material_buys.append(
-                        PlannedMaterialBuy(
-                            merchant_type=merchant_type,
-                            model_id=material_model_id,
-                            quantity=needed,
-                            label=material_label,
-                            batch_size=batch_size,
-                            cleanup=self._make_purchase_target_cleanup(
-                                rule_kind=buy_rule.kind,
-                                rule_index=buy_rule_index,
-                                target_key=material_model_id,
-                                target_count=material_target.target_count,
-                                max_per_run=material_target.max_per_run,
-                                after_purchase=material_target.after_purchase,
-                                completes_target=current_count + needed >= int(material_target.target_count),
-                            ),
-                        )
-                    )
-                    reason = (
-                        f"Inventory has {current_count}; target is {material_target.target_count}. "
-                        f"Buy {needed}. Live check: verify carried gold before each purchase."
-                    )
-                    if batch_size > 1:
-                        reason = (
-                            f"Inventory has {current_count}; target is {material_target.target_count}. "
-                            f"Buy {needed} as {needed // batch_size} trader lots of {batch_size}; "
-                            f"the shortage is {missing}. Live check: verify carried gold before each purchase."
-                        )
-                    cleanup_suffix = self._get_purchase_cleanup_preview_suffix(
-                        material_target.after_purchase,
-                        completes_target=current_count + needed >= int(material_target.target_count),
-                    )
-                    if cleanup_suffix:
-                        reason = f"{reason} {cleanup_suffix}"
-                    plan.entries.append(
-                        ExecutionPlanEntry("buy", merchant_type, material_label, needed, PLAN_STATE_WILL_EXECUTE, reason)
-                    )
-                continue
-
-            if buy_rule.kind == BUY_KIND_MERCHANT_STOCK:
-                merchant_stock_targets = _normalize_merchant_stock_targets(buy_rule.merchant_stock_targets)
-                if not merchant_stock_targets:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            MERCHANT_TYPE_MERCHANT,
-                            BUY_KIND_LABELS[buy_rule.kind],
-                            0,
-                            PLAN_STATE_SKIPPED,
-                            f"{buy_rule_reference} has no merchant stock items selected.",
-                        )
-                    )
-                    continue
-                merchant_type = _get_buy_rule_merchant_type(buy_rule)
-                merchant_coords = coords.get(merchant_type)
-                for merchant_stock_target in merchant_stock_targets:
-                    merchant_stock_model_id = max(0, int(merchant_stock_target.model_id))
-                    model_label = self._format_model_label(merchant_stock_model_id)
-                    target_merchant_type = MERCHANT_TYPE_SCROLL_TRADER if _is_scroll_trader_stock_model(merchant_stock_model_id) else merchant_type
-                    target_merchant_coords = coords.get(target_merchant_type)
-                    use_xunlai_first = bool(
-                        not bypass_xunlai_first
-                        and merchant_stock_target.check_xunlai_first
-                        and self._merchant_stock_target_supports_xunlai_first(merchant_stock_model_id)
-                    )
-                    if merchant_stock_model_id <= 0:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                target_merchant_type,
-                                BUY_KIND_LABELS[buy_rule.kind],
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                f"Choose an item for {buy_rule_reference}.",
-                            )
-                        )
-                        continue
-                    if not supported_map:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                action_type="buy",
-                                merchant_type=target_merchant_type,
-                                label=model_label,
-                                quantity=0,
-                                state=PLAN_STATE_SKIPPED,
-                                reason=supported_reason,
-                            )
-                        )
-                        continue
-
-                    if target_merchant_coords is None and not use_xunlai_first:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                action_type="buy",
-                                merchant_type=target_merchant_type,
-                                label=model_label,
-                                quantity=0,
-                                state=PLAN_STATE_SKIPPED,
-                                reason=(
-                                    f"{self._get_scroll_trader_service_label()} could not be found in the current map."
-                                    if target_merchant_type == MERCHANT_TYPE_SCROLL_TRADER
-                                    else f"{MERCHANT_TYPE_LABELS[target_merchant_type]} could not be found in the current map."
-                                ),
-                            )
-                        )
-                        continue
-
-                    current_count = sim_model_counts.get(merchant_stock_model_id, 0)
-                    full_shortage = max(0, int(merchant_stock_target.target_count) - current_count)
-                    if full_shortage <= 0:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                target_merchant_type,
-                                model_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    f"Target already met: inventory has {current_count}; "
-                                    f"target is {merchant_stock_target.target_count}."
-                                ),
-                                status_hint=PREVIEW_STATUS_ALREADY_DONE,
-                            )
-                        )
-                        continue
-
-                    planned_xunlai_withdraw_quantity = 0
-                    if use_xunlai_first:
-                        plan.xunlai_first_merchant_stock_targets[merchant_stock_model_id] = model_label
-                        if not plan.storage_exact:
-                            reason = (
-                                f"Inventory has {current_count}; target is {merchant_stock_target.target_count}. "
-                                "Xunlai Storage must be checked before Merchant Rules can determine whether to withdraw or buy."
-                            )
-                            if target_merchant_coords is None:
-                                reason = f"{reason} {MERCHANT_TYPE_LABELS[target_merchant_type]} could not be found in the current map."
-                            plan.entries.append(
-                                ExecutionPlanEntry(
-                                    "withdraw",
-                                    MERCHANT_TYPE_STORAGE,
-                                    model_label,
-                                    full_shortage,
-                                    PLAN_STATE_CONDITIONAL,
-                                    reason,
-                                    model_id=merchant_stock_model_id,
-                                )
-                            )
-                            continue
-                        if not plan.xunlai_first_storage_scan_reliable:
-                            plan.entries.append(
-                                ExecutionPlanEntry(
-                                    "withdraw",
-                                    MERCHANT_TYPE_STORAGE,
-                                    model_label,
-                                    0,
-                                    PLAN_STATE_SKIPPED,
-                                    "Xunlai Storage could not be checked reliably.",
-                                    model_id=merchant_stock_model_id,
-                                    status_hint=PREVIEW_STATUS_BLOCKED,
-                                )
-                            )
-                            continue
-
-                        stock_key = _make_model_stock_key(merchant_stock_model_id)
-                        withdraw_quantity = min(
-                            full_shortage,
-                            max(0, int(storage_model_counts.get(merchant_stock_model_id, 0))),
-                        )
-                        if withdraw_quantity > 0:
-                            raw_transfers = self._get_storage_transfer_items_for_stock_key(
-                                sim_storage_items,
-                                stock_key,
-                                quantity=withdraw_quantity,
-                                label=model_label,
-                                direction=STORAGE_TRANSFER_WITHDRAW,
-                            )
-                            transfers = [
-                                replace(
-                                    transfer,
-                                    reason="Check Xunlai first",
-                                    xunlai_first_merchant_stock=True,
-                                )
-                                for transfer in raw_transfers
-                            ]
-                            planned_xunlai_withdraw_quantity = sum(
-                                max(0, int(transfer.quantity)) for transfer in transfers
-                            )
-                            if planned_xunlai_withdraw_quantity > 0:
-                                plan.storage_transfers.extend(transfers)
-                                plan.entries.append(
-                                    ExecutionPlanEntry(
-                                        "withdraw",
-                                        MERCHANT_TYPE_STORAGE,
-                                        model_label,
-                                        planned_xunlai_withdraw_quantity,
-                                        PLAN_STATE_WILL_EXECUTE,
-                                        "Withdraw matching items from Xunlai before buying the remaining shortage.",
-                                        model_id=merchant_stock_model_id,
-                                    )
-                                )
-                                self._adjust_stock_count_for_key(
-                                    stock_key,
-                                    -planned_xunlai_withdraw_quantity,
-                                    model_counts=storage_model_counts,
-                                    identifier_counts=storage_identifier_counts,
-                                )
-                                self._adjust_stock_count_for_key(
-                                    stock_key,
-                                    planned_xunlai_withdraw_quantity,
-                                    model_counts=sim_model_counts,
-                                    identifier_counts=inventory_identifier_counts,
-                                )
-                                sim_storage_items = self._apply_planned_transfer_quantities(
-                                    sim_storage_items,
-                                    transfers,
-                                )
-                                current_count += planned_xunlai_withdraw_quantity
-
-                    remaining_shortage = max(0, int(merchant_stock_target.target_count) - current_count)
-                    needed = self._apply_max_per_run(
-                        remaining_shortage,
-                        int(merchant_stock_target.max_per_run),
-                    )
-                    if needed <= 0:
-                        continue
-                    if target_merchant_coords is None:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                action_type="buy",
-                                merchant_type=target_merchant_type,
-                                label=model_label,
-                                quantity=0,
-                                state=PLAN_STATE_SKIPPED,
-                                reason=(
-                                    f"{self._get_scroll_trader_service_label()} could not be found in the current map."
-                                    if target_merchant_type == MERCHANT_TYPE_SCROLL_TRADER
-                                    else f"{MERCHANT_TYPE_LABELS[target_merchant_type]} could not be found in the current map."
-                                ),
-                                model_id=merchant_stock_model_id,
-                            )
-                        )
-                        continue
-                    sim_model_counts[merchant_stock_model_id] = current_count + needed
-                    if target_merchant_type == MERCHANT_TYPE_SCROLL_TRADER:
-                        plan.scroll_trader_buys.append(
-                            PlannedScrollTraderBuy(
-                                model_id=merchant_stock_model_id,
-                                quantity=needed,
-                                label=model_label,
-                                cleanup=self._make_purchase_target_cleanup(
-                                    rule_kind=buy_rule.kind,
-                                    rule_index=buy_rule_index,
-                                    target_key=merchant_stock_model_id,
-                                    target_count=merchant_stock_target.target_count,
-                                    max_per_run=merchant_stock_target.max_per_run,
-                                    after_purchase=merchant_stock_target.after_purchase,
-                                    completes_target=current_count + needed >= int(merchant_stock_target.target_count),
-                                    xunlai_involved=planned_xunlai_withdraw_quantity > 0,
-                                ),
-                            )
-                        )
-                        entry_reason = (
-                            f"Inventory has {current_count}; target is {merchant_stock_target.target_count}. "
-                            "Live check: buy only if an available Scroll Trader offers this item and returns "
-                            "a valid quote."
-                        )
-                    else:
-                        plan.merchant_stock_buys.append(
-                            PlannedMerchantBuy(
-                                model_id=merchant_stock_model_id,
-                                quantity=needed,
-                                label=model_label,
-                                cleanup=self._make_purchase_target_cleanup(
-                                    rule_kind=buy_rule.kind,
-                                    rule_index=buy_rule_index,
-                                    target_key=merchant_stock_model_id,
-                                    target_count=merchant_stock_target.target_count,
-                                    max_per_run=merchant_stock_target.max_per_run,
-                                    after_purchase=merchant_stock_target.after_purchase,
-                                    completes_target=current_count + needed >= int(merchant_stock_target.target_count),
-                                    xunlai_involved=planned_xunlai_withdraw_quantity > 0,
-                                ),
-                                check_xunlai_first=use_xunlai_first,
-                            )
-                        )
-                        entry_reason = (
-                            f"Inventory has {current_count}; target is {merchant_stock_target.target_count}. "
-                            "Live check: buy only if the Merchant offers this item with a usable price."
-                        )
-                    cleanup_suffix = self._get_purchase_cleanup_preview_suffix(
-                        merchant_stock_target.after_purchase,
-                        completes_target=current_count + needed >= int(merchant_stock_target.target_count),
-                        xunlai_involved=planned_xunlai_withdraw_quantity > 0,
-                    )
-                    if cleanup_suffix:
-                        entry_reason = f"{entry_reason} {cleanup_suffix}"
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            target_merchant_type,
-                            model_label,
-                            needed,
-                            PLAN_STATE_CONDITIONAL,
-                            entry_reason,
-                        )
-                    )
-                continue
-
-            if buy_rule.kind == BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
-                crafter_targets = [
-                    target
-                    for target in _normalize_merchant_stock_targets(buy_rule.merchant_stock_targets)
-                    if int(target.model_id) in CONSUMABLE_CRAFTER_RECIPES_BY_MODEL
-                ]
-                if not crafter_targets:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                            BUY_KIND_LABELS[buy_rule.kind],
-                            0,
-                            PLAN_STATE_SKIPPED,
-                            f"{buy_rule_reference} has no Consumable Crafter items selected.",
-                        )
-                    )
-                    continue
-
-                crafter_coords = coords.get(MERCHANT_TYPE_CONSUMABLE_CRAFTER)
-                for crafter_target in crafter_targets:
-                    crafter_model_id = max(0, int(crafter_target.model_id))
-                    recipe = self._get_consumable_crafter_recipe_for_model(crafter_model_id)
-                    crafter_label = self._format_model_label(crafter_model_id)
-                    if recipe is None:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                                crafter_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                f"{buy_rule_reference} has no supported Consumable Crafter recipe for this item.",
-                                status_hint=PREVIEW_STATUS_BLOCKED,
-                            )
-                        )
-                        continue
-                    if not supported_map:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                                crafter_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                supported_reason,
-                            )
-                        )
-                        continue
-                    if crafter_coords is None:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                                crafter_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    "Cannot craft this item because its Consumable Crafter is available only "
-                                    "at Embark Beach."
-                                ),
-                                status_hint=PREVIEW_STATUS_BLOCKED,
-                            )
-                        )
-                        continue
-
-                    current_rank, tier_name, _title_points = self._get_title_rank_info(recipe.title_id)
-                    if current_rank < int(recipe.required_rank):
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                                crafter_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    f"Cannot craft this item because {recipe.vendor_name} requires rank "
-                                    f"{recipe.required_rank}; current rank is {current_rank} ({tier_name})."
-                                ),
-                                status_hint=PREVIEW_STATUS_BLOCKED,
-                            )
-                        )
-                        continue
-
-                    craft_requested_amount = (
-                        _normalize_consumable_crafter_count_mode(buy_rule.consumable_crafter_count_mode)
-                        == CONSUMABLE_CRAFTER_COUNT_MODE_CRAFT_AMOUNT
-                    )
-                    current_count = max(0, int(sim_model_counts.get(crafter_model_id, 0)))
-                    if plan.storage_exact:
-                        current_count += max(0, int(storage_model_counts.get(crafter_model_id, 0)))
-                    if craft_requested_amount:
-                        needed = self._apply_max_per_run(int(crafter_target.target_count), int(crafter_target.max_per_run))
-                    else:
-                        missing = max(0, int(crafter_target.target_count) - current_count)
-                        needed = self._apply_max_per_run(missing, int(crafter_target.max_per_run))
-                    if needed <= 0:
-                        reason = (
-                            "Craft amount is 0, so no crafting is planned."
-                            if craft_requested_amount
-                            else (
-                                f"Target already met: expected total is {current_count}; "
-                                f"target is {crafter_target.target_count}."
-                            )
-                        )
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                                crafter_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                reason,
-                                status_hint=(
-                                    PREVIEW_STATUS_SKIPPED
-                                    if craft_requested_amount
-                                    else PREVIEW_STATUS_ALREADY_DONE
-                                ),
-                            )
-                        )
-                        continue
-
-                    if not plan.storage_exact:
-                        sim_model_counts[crafter_model_id] = current_count + needed
-                        plan.consumable_crafter_buys.append(
-                            PlannedConsumableCraft(
-                                model_id=crafter_model_id,
-                                quantity=needed,
-                                label=crafter_label,
-                                vendor_key=recipe.vendor_key,
-                                vendor_name=recipe.vendor_name,
-                                coords=recipe.coords,
-                                cleanup=self._make_purchase_target_cleanup(
-                                    rule_kind=buy_rule.kind,
-                                    rule_index=buy_rule_index,
-                                    target_key=crafter_model_id,
-                                    target_count=crafter_target.target_count,
-                                    max_per_run=crafter_target.max_per_run,
-                                    after_purchase=crafter_target.after_purchase,
-                                    completes_target=False,
-                                    xunlai_involved=True,
-                                ),
-                            )
-                        )
-                        conditional_reason = (
-                            f"Xunlai Storage has not been scanned. Up to {needed} may be crafted after "
-                            "stored consumables, Material Storage, gold, and current resources are checked."
-                        )
-                        cleanup_suffix = self._get_purchase_cleanup_preview_suffix(
-                            crafter_target.after_purchase,
-                            completes_target=False,
-                            xunlai_involved=True,
-                        )
-                        if cleanup_suffix:
-                            conditional_reason = f"{conditional_reason} {cleanup_suffix}"
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                                crafter_label,
-                                needed,
-                                PLAN_STATE_CONDITIONAL,
-                                conditional_reason,
-                            )
-                        )
-                        continue
-
-                    available_resource_counts, skill_points_remaining, gold_remaining = _ensure_consumable_reserved_resources(recipe)
-                    craft_cap, blockers = self._get_consumable_craft_cap_from_reserved_resources(
-                        recipe,
-                        available_model_counts=available_resource_counts,
-                        skill_points_remaining=skill_points_remaining,
-                        gold_remaining=gold_remaining,
-                        requested_quantity=needed,
-                    )
-                    craft_quantity = min(needed, max(0, int(craft_cap)))
-                    if craft_quantity <= 0:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                                crafter_label,
-                                needed,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    f"Cannot craft any of the {needed} requested: "
-                                    f"{' '.join(blockers) or 'skill points, gold, or materials are missing.'}"
-                                ),
-                                status_hint=PREVIEW_STATUS_BLOCKED,
-                            )
-                        )
-                        continue
-
-                    craft_uses_xunlai_items = any(
-                        max(0, int(ingredient_quantity)) * craft_quantity
-                        > max(0, int(sim_model_counts.get(int(ingredient_model_id), 0)))
-                        for ingredient_model_id, ingredient_quantity in recipe.ingredients
-                    )
-                    _consume_reserved_consumable_resources(recipe, craft_quantity)
-                    for ingredient_model_id, ingredient_quantity in recipe.ingredients:
-                        sim_model_counts[int(ingredient_model_id)] = max(
-                            0,
-                            int(sim_model_counts.get(int(ingredient_model_id), 0)) - (int(ingredient_quantity) * craft_quantity),
-                        )
-                    sim_model_counts[crafter_model_id] = current_count + craft_quantity
-                    plan.consumable_crafter_buys.append(
-                        PlannedConsumableCraft(
-                            model_id=crafter_model_id,
-                            quantity=craft_quantity,
-                            label=crafter_label,
-                            vendor_key=recipe.vendor_key,
-                            vendor_name=recipe.vendor_name,
-                            coords=recipe.coords,
-                            cleanup=self._make_purchase_target_cleanup(
-                                rule_kind=buy_rule.kind,
-                                rule_index=buy_rule_index,
-                                target_key=crafter_model_id,
-                                target_count=crafter_target.target_count,
-                                max_per_run=crafter_target.max_per_run,
-                                after_purchase=crafter_target.after_purchase,
-                                completes_target=(
-                                    craft_quantity >= int(crafter_target.target_count)
-                                    if craft_requested_amount
-                                    else current_count + craft_quantity >= int(crafter_target.target_count)
-                                ),
-                                xunlai_involved=craft_uses_xunlai_items,
-                            ),
-                        )
-                    )
-                    reason = (
-                        f"Craft {craft_quantity} with {recipe.vendor_name}; current rank {current_rank} "
-                        f"meets required rank {recipe.required_rank} ({tier_name})."
-                    )
-                    if craft_requested_amount:
-                        reason = f"{reason} Craft-amount mode ignores existing finished consumables."
-                    if craft_quantity < needed:
-                        reason = f"{reason} Planned {craft_quantity} of {needed}; resources limit the remainder."
-                        remaining_needed = max(0, int(needed) - int(craft_quantity))
-                        if remaining_needed > 0:
-                            post_resource_counts, post_skill_points, post_gold = _ensure_consumable_reserved_resources(recipe)
-                            _remaining_cap, remaining_blockers = self._get_consumable_craft_cap_from_reserved_resources(
-                                recipe,
-                                available_model_counts=post_resource_counts,
-                                skill_points_remaining=post_skill_points,
-                                gold_remaining=post_gold,
-                                requested_quantity=remaining_needed,
-                            )
-                            if remaining_blockers:
-                                reason = f"{reason} Remaining request: {' '.join(remaining_blockers)}"
-                    cleanup_suffix = self._get_purchase_cleanup_preview_suffix(
-                        crafter_target.after_purchase,
-                        completes_target=(
-                            craft_quantity >= int(crafter_target.target_count)
-                            if craft_requested_amount
-                            else current_count + craft_quantity >= int(crafter_target.target_count)
-                        ),
-                        xunlai_involved=craft_uses_xunlai_items,
-                    )
-                    if cleanup_suffix:
-                        reason = f"{reason} {cleanup_suffix}"
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-                            crafter_label,
-                            craft_quantity,
-                            PLAN_STATE_CONDITIONAL,
-                            reason,
-                        )
-                    )
-                continue
-
-            if buy_rule.kind == BUY_KIND_SCROLL_TRADER_TARGET:
-                scroll_targets = [
-                    target
-                    for target in _normalize_merchant_stock_targets(buy_rule.merchant_stock_targets)
-                    if _is_scroll_trader_stock_model(target.model_id)
-                ]
-                if not scroll_targets:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            MERCHANT_TYPE_SCROLL_TRADER,
-                            BUY_KIND_LABELS[buy_rule.kind],
-                            0,
-                            PLAN_STATE_SKIPPED,
-                            f"{buy_rule_reference} has no supported Scroll Trader items selected.",
-                        )
-                    )
-                    continue
-
-                scroll_trader_coords = coords.get(MERCHANT_TYPE_SCROLL_TRADER)
-                for scroll_target in scroll_targets:
-                    scroll_model_id = max(0, int(scroll_target.model_id))
-                    scroll_label = self._format_model_label(scroll_model_id)
-                    if scroll_model_id <= 0 or not _is_scroll_trader_stock_model(scroll_model_id):
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_SCROLL_TRADER,
-                                BUY_KIND_LABELS[buy_rule.kind],
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                f"This item is not supported Scroll Trader stock for {buy_rule_reference}.",
-                                status_hint=PREVIEW_STATUS_BLOCKED,
-                            )
-                        )
-                        continue
-
-                    if not supported_map:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                action_type="buy",
-                                merchant_type=MERCHANT_TYPE_SCROLL_TRADER,
-                                label=scroll_label,
-                                quantity=0,
-                                state=PLAN_STATE_SKIPPED,
-                                reason=supported_reason,
-                            )
-                        )
-                        continue
-
-                    if scroll_trader_coords is None:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                action_type="buy",
-                                merchant_type=MERCHANT_TYPE_SCROLL_TRADER,
-                                label=scroll_label,
-                                quantity=0,
-                                state=PLAN_STATE_SKIPPED,
-                                reason=f"{self._get_scroll_trader_service_label()} could not be found in the current map.",
-                            )
-                        )
-                        continue
-
-                    current_count = sim_model_counts.get(scroll_model_id, 0)
-                    needed = self._apply_max_per_run(
-                        int(scroll_target.target_count) - current_count,
-                        int(scroll_target.max_per_run),
-                    )
-                    if needed <= 0:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_SCROLL_TRADER,
-                                scroll_label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    f"Target already met: inventory has {current_count}; "
-                                    f"target is {scroll_target.target_count}."
-                                ),
-                                status_hint=PREVIEW_STATUS_ALREADY_DONE,
-                            )
-                        )
-                        continue
-
-                    sim_model_counts[scroll_model_id] = current_count + needed
-                    plan.scroll_trader_buys.append(
-                        PlannedScrollTraderBuy(
-                            model_id=scroll_model_id,
-                            quantity=needed,
-                            label=scroll_label,
-                            cleanup=self._make_purchase_target_cleanup(
-                                rule_kind=buy_rule.kind,
-                                rule_index=buy_rule_index,
-                                target_key=scroll_model_id,
-                                target_count=scroll_target.target_count,
-                                max_per_run=scroll_target.max_per_run,
-                                after_purchase=scroll_target.after_purchase,
-                                completes_target=current_count + needed >= int(scroll_target.target_count),
-                            ),
-                        )
-                    )
-                    scroll_reason = (
-                        f"Inventory has {current_count}; target is {scroll_target.target_count}. "
-                        "Live check: buy only if the available Scroll Trader offers this item and returns "
-                        "a valid quote."
-                    )
-                    cleanup_suffix = self._get_purchase_cleanup_preview_suffix(
-                        scroll_target.after_purchase,
-                        completes_target=current_count + needed >= int(scroll_target.target_count),
-                    )
-                    if cleanup_suffix:
-                        scroll_reason = f"{scroll_reason} {cleanup_suffix}"
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            MERCHANT_TYPE_SCROLL_TRADER,
-                            scroll_label,
-                            needed,
-                            PLAN_STATE_CONDITIONAL,
-                            scroll_reason,
-                        )
-                    )
-                continue
-
-            if buy_rule.kind == BUY_KIND_RUNE_TRADER_TARGET:
-                rune_targets = _normalize_rune_trader_targets(buy_rule.rune_targets)
-                if not rune_targets:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            MERCHANT_TYPE_RUNE_TRADER,
-                            BUY_KIND_LABELS[buy_rule.kind],
-                            0,
-                            PLAN_STATE_SKIPPED,
-                            f"{buy_rule_reference} has no rune or insignia targets selected.",
-                        )
-                    )
-                    continue
-
-                rune_trader_coords = coords.get(MERCHANT_TYPE_RUNE_TRADER)
-                for rune_target in rune_targets:
-                    identifier = _normalize_rune_identifier(rune_target.identifier)
-                    label = self._get_rune_label(identifier)
-                    if not identifier:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_RUNE_TRADER,
-                                BUY_KIND_LABELS[buy_rule.kind],
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                f"Choose a rune or insignia for {buy_rule_reference}.",
-                            )
-                        )
-                        continue
-
-                    if not supported_map:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                action_type="buy",
-                                merchant_type=MERCHANT_TYPE_RUNE_TRADER,
-                                label=label,
-                                quantity=0,
-                                state=PLAN_STATE_SKIPPED,
-                                reason=supported_reason,
-                            )
-                        )
-                        continue
-
-                    stock_key = _make_identifier_stock_key(identifier)
-                    stock_counts = self._build_stock_location_counts(
-                        stock_key,
-                        label,
-                        inventory_model_counts=sim_model_counts,
-                        inventory_identifier_counts=inventory_identifier_counts,
-                        storage_model_counts=storage_model_counts,
-                        storage_identifier_counts=storage_identifier_counts,
-                        storage_exact=plan.storage_exact,
-                    )
-                    missing = max(0, int(rune_target.target_count) - int(stock_counts.inventory_count))
-                    needed = self._apply_max_per_run(missing, int(rune_target.max_per_run))
-                    if needed <= 0:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_RUNE_TRADER,
-                                label,
-                                0,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    f"Target already met: inventory has {stock_counts.inventory_count}; "
-                                    f"target is {rune_target.target_count}."
-                                ),
-                                status_hint=PREVIEW_STATUS_ALREADY_DONE,
-                            )
-                        )
-                        continue
-
-                    if not plan.storage_exact:
-                        reason_parts = [
-                            (
-                                f"Inventory has {stock_counts.inventory_count}; target is {rune_target.target_count}. "
-                                f"Xunlai Storage has not been scanned, so up to {needed} may need to be "
-                                "withdrawn or bought."
-                            ),
-                        ]
-                        if rune_trader_coords is None:
-                            reason_parts.append("Rune Trader could not be found in the current map.")
-                        cleanup_suffix = self._get_purchase_cleanup_preview_suffix(
-                            rune_target.after_purchase,
-                            completes_target=False,
-                            xunlai_involved=True,
-                        )
-                        if cleanup_suffix:
-                            reason_parts.append(cleanup_suffix)
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_RUNE_TRADER,
-                                label,
-                                needed,
-                                PLAN_STATE_CONDITIONAL,
-                                " ".join(reason_parts),
-                            )
-                        )
-                        continue
-
-                    rune_xunlai_involved = False
-                    planned_rune_withdraw_quantity = 0
-                    withdraw_quantity = min(
-                        needed,
-                        max(0, int(stock_counts.storage_count)),
-                    )
-                    if withdraw_quantity > 0:
-                        transfers = self._get_storage_transfer_items_for_stock_key(
-                            sim_storage_items,
-                            stock_key,
-                            quantity=withdraw_quantity,
-                            label=label,
-                            direction=STORAGE_TRANSFER_WITHDRAW,
-                        )
-                        planned_withdraw_quantity = sum(max(0, int(transfer.quantity)) for transfer in transfers)
-                        if planned_withdraw_quantity > 0:
-                            rune_xunlai_involved = True
-                            planned_rune_withdraw_quantity += planned_withdraw_quantity
-                            plan.storage_transfers.extend(transfers)
-                            remaining_after_withdraw = max(0, needed - planned_withdraw_quantity)
-                            withdraw_reason = (
-                                "Move this quantity from Xunlai Storage to inventory; this satisfies the target, "
-                                "so no purchase is needed."
-                                if remaining_after_withdraw <= 0
-                                else (
-                                    "Move this quantity from Xunlai Storage to inventory first; "
-                                    f"buy the remaining {remaining_after_withdraw} only if the Rune Trader "
-                                    "confirms availability."
-                                )
-                            )
-                            plan.entries.append(
-                                ExecutionPlanEntry(
-                                    "withdraw",
-                                    MERCHANT_TYPE_STORAGE,
-                                    label,
-                                    planned_withdraw_quantity,
-                                    PLAN_STATE_WILL_EXECUTE,
-                                    withdraw_reason,
-                                )
-                            )
-                            self._adjust_stock_count_for_key(
-                                stock_key,
-                                -planned_withdraw_quantity,
-                                model_counts=storage_model_counts,
-                                identifier_counts=storage_identifier_counts,
-                            )
-                            self._adjust_stock_count_for_key(
-                                stock_key,
-                                planned_withdraw_quantity,
-                                model_counts=sim_model_counts,
-                                identifier_counts=inventory_identifier_counts,
-                            )
-                            sim_storage_items = self._apply_planned_transfer_quantities(sim_storage_items, transfers)
-                            needed -= planned_withdraw_quantity
-
-                    if needed <= 0:
-                        continue
-
-                    if rune_trader_coords is None:
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "buy",
-                                MERCHANT_TYPE_RUNE_TRADER,
-                                label,
-                                needed,
-                                PLAN_STATE_SKIPPED,
-                                (
-                                    f"Stored copies will be withdrawn, but the remaining {needed} cannot be bought "
-                                    "because no Rune Trader is available here."
-                                ),
-                                status_hint=PREVIEW_STATUS_BLOCKED,
-                            )
-                        )
-                        continue
-
-                    plan.rune_trader_buys.append(
-                        PlannedTraderBuy(
-                            identifier=identifier,
-                            quantity=needed,
-                            label=label,
-                            cleanup=self._make_purchase_target_cleanup(
-                                rule_kind=buy_rule.kind,
-                                rule_index=buy_rule_index,
-                                target_key=identifier,
-                                target_count=rune_target.target_count,
-                                max_per_run=rune_target.max_per_run,
-                                after_purchase=rune_target.after_purchase,
-                                completes_target=(
-                                    stock_counts.inventory_count + planned_rune_withdraw_quantity + needed
-                                    >= int(rune_target.target_count)
-                                ),
-                                xunlai_involved=rune_xunlai_involved,
-                            ),
-                        )
-                    )
-                    self._adjust_stock_count_for_key(
-                        stock_key,
-                        needed,
-                        model_counts=sim_model_counts,
-                        identifier_counts=inventory_identifier_counts,
-                    )
-                    buy_reason = (
-                        f"After planned withdrawals, inventory still needs {needed}. Live check: buy only if "
-                        "the Rune Trader still offers this item and returns a valid quote."
-                    )
-                    cleanup_suffix = self._get_purchase_cleanup_preview_suffix(
-                        rune_target.after_purchase,
-                        completes_target=(
-                            stock_counts.inventory_count + planned_rune_withdraw_quantity + needed
-                            >= int(rune_target.target_count)
-                        ),
-                        xunlai_involved=rune_xunlai_involved,
-                    )
-                    if cleanup_suffix:
-                        buy_reason = f"{buy_reason} {cleanup_suffix}"
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "buy",
-                            MERCHANT_TYPE_RUNE_TRADER,
-                            label,
-                            needed,
-                            PLAN_STATE_CONDITIONAL,
-                            buy_reason,
-                        )
-                    )
+        return self._buy_planner.plan_buy_actions(
+            plan,
+            sim_model_counts,
+            execution_context=execution_context,
+            sim_inventory_items=sim_inventory_items,
+            storage_items=storage_items,
+            consumable_crafter_only=consumable_crafter_only,
+            exclude_consumable_crafter=exclude_consumable_crafter,
+            allowed_rule_kinds=allowed_rule_kinds,
+            bypass_xunlai_first=bypass_xunlai_first,
+        )
 
     def _build_plan(
         self,
