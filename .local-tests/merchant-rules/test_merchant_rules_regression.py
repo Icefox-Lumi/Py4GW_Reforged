@@ -10616,7 +10616,7 @@ def _make_specific_suffix_salvage_rule(module, salvage_option: str):
     )
 
 
-def _make_specific_suffix_item(module, *, item_id: int = 40):
+def _make_specific_suffix_item(module: types.ModuleType, *, item_id: int = 40) -> InventoryItemInfo:
     return _make_item(
         module,
         item_id=item_id,
@@ -13826,8 +13826,12 @@ def _test_auto_specific_upgrade_salvage_protection_blocks_before_inference(modul
         module.MOD_DB = original_db
 
 
-def _test_auto_specific_upgrade_salvage_customized_sell_protection_blocks_before_inference(module) -> None:
+def _test_auto_specific_upgrade_salvage_customized_sell_protection_blocks_before_inference(
+    module: types.ModuleType,
+) -> None:
+
     original_db = _install_weapon_mod_catalog_fixture(module)
+    inference_restore = _CP8Restoration()
     try:
         widget = _make_widget(module)
         fake_bridge = _FakeExactUpgradeSalvageBridge(module, available=True)
@@ -13835,19 +13839,34 @@ def _test_auto_specific_upgrade_salvage_customized_sell_protection_blocks_before
         rule = _make_specific_suffix_salvage_rule(module, module.SALVAGE_OPTION_AUTO_UPGRADE)
         widget.salvage_settings = _salvage_settings(module, rules=[rule])
         item = replace(_make_specific_suffix_item(module), is_customized=True)
-        cast(Any, widget)._inventory_evidence.build_inventory_item_info = (
-            lambda item_id, *, include_runtime_name=True: (item if int(item_id) == int(item.item_id) else None)
+        widget._inventory_evidence.build_inventory_item_info = lambda item_id, *, include_runtime_name=True: (
+            item if int(item_id) == int(item.item_id) else None
         )
         widget._get_salvage_kit_id_for_option = lambda _option: 777
 
         inference_calls = {"count": 0}
-        original_resolution = widget._get_auto_salvage_upgrade_slot_resolution
+        resolution_owner = getattr(widget, "_salvage_planner", widget)
+        resolution_name = (
+            "get_auto_salvage_upgrade_slot_resolution"
+            if resolution_owner is not widget
+            else "_get_auto_salvage_upgrade_slot_resolution"
+        )
+        original_resolution: object = getattr(resolution_owner, resolution_name)
+        if not isinstance(original_resolution, types.MethodType):
+            raise AssertionError("CP11 actual bound resolution method")
+        from Sources.icefox.MerchantRules import planning
 
-        def counting_resolution(*args, **kwargs):
+        expected_globals: Mapping[str, object] = vars(planning) if resolution_owner is not widget else vars(module)
+        _expect(
+            original_resolution.__func__.__globals__ is expected_globals,
+            "CP11 zero-inference probe patches actual owning algorithm.",
+        )
+
+        def counting_resolution(selected_rule: SalvageRule, selected_item: InventoryItemInfo) -> object:
             inference_calls["count"] += 1
-            return original_resolution(*args, **kwargs)
+            return original_resolution(selected_rule, selected_item)
 
-        widget._get_auto_salvage_upgrade_slot_resolution = counting_resolution
+        inference_restore.binding(resolution_owner, resolution_name, counting_resolution)
         protected_rule = module._normalize_sell_rule(
             module.SellRule(
                 enabled=True,
@@ -13878,8 +13897,15 @@ def _test_auto_specific_upgrade_salvage_customized_sell_protection_blocks_before
         _expect(inference_calls["count"] == 0, "Customized protection should block before auto slot inference.")
         _expect(fake_bridge.availability_checks == 0, "Customized protection should block before backend availability checks.")
         _expect(fake_bridge.calls == [], "Customized specific-upgrade targets should not execute the salvage bridge.")
+        positive: object = widget._get_auto_salvage_upgrade_slot_resolution(rule, replace(item, is_customized=False))
+        selected_option: object = getattr(positive, "selected_option")
+        _expect(
+            selected_option == "suffix" and inference_calls["count"] == 1,
+            "CP11 positive control proves the exact zero-inference probe is reachable.",
+        )
     finally:
-        module.MOD_DB = original_db
+        inference_restore.restore()
+        setattr(module, "MOD_DB", original_db)
 
 
 def _test_specific_upgrade_salvage_bridge_success_returns_processed(module) -> None:
@@ -41728,6 +41754,10 @@ def _salvage_options_plan_observations(module: Any) -> dict[str, Any]:
 
 
 def _salvage_options_compare_integrations(module: Any, observer: Callable[[Any], dict[str, Any]]) -> None:
+    from Sources.icefox.MerchantRules import planning
+
+    planning_globals: Mapping[str, object] = planning.__dict__
+
     actual = observer(module)
     original = _salvage_options_original_api()
     saved = {name: getattr(module, name) for name in _SALVAGE_OPTIONS_FUNCTIONS}
@@ -41738,7 +41768,30 @@ def _salvage_options_compare_integrations(module: Any, observer: Callable[[Any],
     _expect(
         "_normalize_salvage_rule_mode" in saved_configuration, "CP3 Stage 10 fixture reaches configuration globals."
     )
+    planning_names = (
+        (
+            "_normalize_salvage_rule_mode",
+            "_resolve_salvage_operation",
+            "_is_auto_exact_upgrade_salvage_option",
+            "_get_salvage_option_label",
+        )
+        if hasattr(planning, "SalvagePlanner")
+        else ()
+    )
+    saved_planning = {name: getattr(planning, name) for name in planning_names}
     try:
+        for name in planning_names:
+            setattr(planning, name, getattr(original, name))
+        if planning_names:
+            method: object = vars(planning.SalvagePlanner)["get_salvage_candidate_block_reason"]
+            if not isinstance(method, types.FunctionType):
+                raise AssertionError("CP11 canonical salvage function object")
+            _expect(method.__globals__ is planning_globals, "CP11 replacement targets actual salvage owner globals.")
+            for name in planning_names:
+                _expect(
+                    method.__globals__[name] is getattr(original, name),
+                    "CP11 original option function reaches defining owner globals: " + name,
+                )
         for name in _SALVAGE_OPTIONS_FUNCTIONS:
             setattr(module, name, getattr(original, name))
         for name in saved_configuration:
@@ -41750,6 +41803,8 @@ def _salvage_options_compare_integrations(module: Any, observer: Callable[[Any],
         )
         expected = observer(module)
     finally:
+        for name, value in saved_planning.items():
+            setattr(planning, name, value)
         for name, value in saved.items():
             setattr(module, name, value)
         for name, value in saved_configuration.items():
@@ -54625,6 +54680,540 @@ class _CP9Checks(_CP9Widget):
         finally:
             restore.restore()
 
+    @staticmethod
+    def cp11_combined_observation(module: types.ModuleType) -> dict[str, object]:
+        from Sources.icefox.MerchantRules import planning
+        from Sources.icefox.MerchantRules.configuration import BuyRule
+        from Sources.icefox.MerchantRules.configuration import CleanupTarget
+        from Sources.icefox.MerchantRules.configuration import DestroyRule
+        from Sources.icefox.MerchantRules.configuration import IdentifySettings
+        from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+        from Sources.icefox.MerchantRules.configuration import SalvageRule
+        from Sources.icefox.MerchantRules.configuration import SalvageSettings
+        from Sources.icefox.MerchantRules.configuration import SellRule
+        from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+
+        planning_globals: Mapping[str, object] = planning.__dict__
+
+        widget = _cp9_widget(module)
+        restore = _CP8Restoration()
+        previous = sys.getprofile()
+        items = [
+            _cp8_item(module, item_id=11, model_id=501, name="Identify", quantity=1, rarity="Blue", identified=False),
+            _cp8_item(module, item_id=12, model_id=502, name="Destroy", quantity=5, rarity="White", identified=True),
+            _cp8_item(
+                module,
+                item_id=13,
+                model_id=503,
+                name="Salvage",
+                quantity=1,
+                rarity="White",
+                identified=True,
+                salvageable=True,
+                is_stackable=False,
+            ),
+            _cp8_item(module, item_id=14, model_id=504, name="Sell", quantity=1, rarity="White", identified=True),
+            _cp8_item(module, item_id=15, model_id=777, name="Deposit", quantity=7, rarity="White", identified=True),
+        ]
+        before = _cp8_values(items)
+        phases: list[str] = []
+        projection_counts: list[object] = []
+        projection_items: list[object] = []
+        buy_inputs: list[object] = []
+        cleanup_inputs: list[object] = []
+        owner_hits: set[str] = set()
+        widget_class = type(widget)
+        phase_codes: dict[types.CodeType, str] = {}
+        for name, label in (
+            ("_plan_identify_actions", "identify"),
+            ("_plan_destroy_actions", "destroy"),
+            ("_plan_salvage_actions", "salvage"),
+            ("_build_simulated_model_counts", "model projection"),
+            ("_get_items_after_planned_pre_buy_actions", "item projection"),
+            ("_plan_buy_actions", "buy"),
+            ("_plan_consumable_crafter_bag_space_warning", "bag-space warning"),
+            ("_plan_cleanup_actions", "cleanup"),
+            ("_annotate_early_kit_preview", "early-kit annotation"),
+        ):
+            method: object = getattr(widget_class, name)
+            if not isinstance(method, types.FunctionType):
+                raise AssertionError("CP11 retained phase code " + name)
+            phase_codes[method.__code__] = label
+        buy_function: object = vars(planning.BuyPlanner)["plan_buy_actions"]
+        if not isinstance(buy_function, types.FunctionType):
+            raise AssertionError("CP11 actual canonical buy function")
+        _expect(buy_function.__globals__ is planning_globals, "CP11 canonical buy defining globals")
+        sale_code = planning.SalePlanner.allocate_inventory_sales.__code__
+        owner_codes = {
+            planning.SalePlanner.allocate_inventory_sales.__code__: "sale",
+            buy_function.__code__: "buy",
+            planning.CleanupPlanner.plan_cleanup_actions.__code__: "cleanup",
+        }
+        for owner_name, name, label in (
+            ("IdentifyPlanner", "plan_identify_actions", "identify"),
+            ("DestroyPlanner", "plan_destroy_actions", "destroy"),
+            ("SalvagePlanner", "plan_salvage_actions", "salvage"),
+        ):
+            cls: object = getattr(planning, owner_name, None)
+            if isinstance(cls, type):
+                method: object = getattr(cls, name)
+                if not isinstance(method, types.FunctionType) or method.__globals__ is not planning_globals:
+                    raise AssertionError("CP11 combined requires actual canonical owner")
+                owner_codes[method.__code__] = label
+
+        def trace(frame: types.FrameType, event: str, result: object) -> None:
+            code = frame.f_code
+            if event == "call" and code in owner_codes:
+                owner_hits.add(owner_codes[code])
+            if event == "call" and code is sale_code:
+                phases.append("sale")
+            if frame.f_locals.get("self") is widget and code in phase_codes:
+                label = phase_codes[code]
+                if event == "call":
+                    phases.append(label)
+                    if label == "buy":
+                        buy_inputs.append(
+                            [
+                                _cp11_plain(frame.f_locals["sim_model_counts"]),
+                                _cp11_plain(frame.f_locals["sim_inventory_items"]),
+                            ]
+                        )
+                    elif label == "cleanup":
+                        cleanup_inputs.append(_cp11_plain(frame.f_locals["items"]))
+                elif event == "return" and label == "model projection":
+                    projection_counts.append(_cp11_plain(result))
+                elif event == "return" and label == "item projection":
+                    projection_items.append(_cp11_plain(result))
+
+        def salvage_kit(_option: str) -> int:
+            return 902
+
+        def empty_slot(_items: list[InventoryItemInfo] | None = None) -> tuple[int, int]:
+            return (1, 1)
+
+        def storage_items() -> tuple[list[InventoryItemInfo], bool]:
+            return ([], True)
+
+        def model_label(model: int) -> str:
+            return f"Model {model}"
+
+        try:
+            bindings: tuple[tuple[str, object], ...] = (
+                ("auto_travel_enabled", False),
+                ("identify_settings", IdentifySettings(rarities={"blue": True}, before_execute=True)),
+                ("salvage_settings", SalvageSettings(rules=[SalvageRule(model_ids=[503])])),
+                ("destroy_rules", [DestroyRule(enabled=True, whitelist_targets=[WhitelistTarget(502, 2)])]),
+                (
+                    "sell_rules",
+                    [
+                        SellRule(
+                            enabled=True,
+                            kind="sell_explicit_models",
+                            rule_id="cp11-sell",
+                            whitelist_targets=[WhitelistTarget(504, 0)],
+                        )
+                    ],
+                ),
+                ("buy_rules", [BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 5)])]),
+                ("cleanup_targets", [CleanupTarget(777, 2, "exact")]),
+                ("cleanup_protection_sources", []),
+                ("cleanup_blacklist_model_ids", []),
+                ("catalog_merchant_essentials", [{"model_id": 555, "name": "Identification Kit", "item_type": "kit"}]),
+                ("_collect_inventory_items", lambda: items),
+                ("_get_id_kit_id", lambda: 901),
+                ("_get_salvage_kit_id_for_option", salvage_kit),
+                ("_find_inventory_empty_slot", empty_slot),
+                ("_can_use_local_storage_actions", lambda: True),
+                ("_collect_storage_items_with_reliability", storage_items),
+                ("_format_model_label", model_label),
+            )
+            for name, value in bindings:
+                restore.binding(widget, name, value)
+            cache: object = getattr(module, "GLOBAL_CACHE")
+            restore.binding(cache, "Inventory", types.SimpleNamespace(IsStorageOpen=lambda: True))
+            sys.setprofile(trace)
+            plan = widget._build_plan(
+                supported_context_override=(True, "Fixture", {"merchant": (1.0, 2.0), "storage": (1.0, 2.0)})
+            )
+            sys.setprofile(previous)
+            _cp11_equal(
+                phases,
+                [
+                    "identify",
+                    "destroy",
+                    "salvage",
+                    "sale",
+                    "model projection",
+                    "item projection",
+                    "buy",
+                    "bag-space warning",
+                    "cleanup",
+                    "early-kit annotation",
+                ],
+                "actual integrated phase order",
+            )
+            expected_counts = {501: 1, 502: 2, 777: 7}
+            expected_items = [replace(items[1], quantity=2), items[4]]
+            _cp11_equal(projection_counts, [expected_counts], "model projection retains identified quantity")
+            _cp11_equal(projection_items, [expected_items], "item projection removes identify claim")
+            _cp11_equal(
+                buy_inputs, [[expected_counts, expected_items]], "actual BuyPlanner gets both distinct projections"
+            )
+            _cp11_equal(cleanup_inputs, [expected_items], "actual CleanupPlanner gets pre-buy inventory")
+            _cp11_equal(
+                (
+                    plan.identify_claimed_item_ids,
+                    plan.identify_item_ids,
+                    plan.salvage_item_ids,
+                    plan.destroy_item_ids,
+                    plan.merchant_sell_item_ids,
+                ),
+                ([11], [11], [13], [12], [14]),
+                "complete ordered action IDs",
+            )
+            _cp11_equal(
+                plan.destroy_actions,
+                [
+                    {
+                        "item_id": 12,
+                        "model_id": 502,
+                        "label": "Destroy",
+                        "quantity_to_destroy": 3,
+                        "source_quantity": 5,
+                        "keep_quantity": 2,
+                        "requires_split": True,
+                    }
+                ],
+                "actual partial destroy",
+            )
+            _cp11_equal(
+                [(buy.model_id, buy.quantity) for buy in plan.merchant_stock_buys],
+                [(555, 5)],
+                "actual purchase after selections",
+            )
+            _cp11_equal(
+                [
+                    (transfer.direction, transfer.item_id, transfer.model_id, transfer.quantity)
+                    for transfer in plan.cleanup_transfers
+                ],
+                [("deposit", 15, 777, 5)],
+                "actual cleanup after selections",
+            )
+            _expect(
+                len(plan.storage_transfers) == 1 and plan.storage_transfers[0] is plan.cleanup_transfers[0],
+                "CP11 integrated cleanup shares canonical transfer object",
+            )
+            _expect(plan.has_actions, "CP11 plan assessment sees all owner publications")
+            required = {"sale", "buy", "cleanup"}
+            if hasattr(planning, "IdentifyPlanner"):
+                required |= {"identify", "destroy", "salvage"}
+            _cp11_equal(owner_hits, required, "all integrated owners execute actual bodies")
+            _cp8_unchanged(before, items)
+            return {
+                "plan": _cp11_plain(plan),
+                "phases": phases,
+                "model_projection": projection_counts,
+                "item_projection": projection_items,
+                "buy_inputs": buy_inputs,
+                "cleanup_inputs": cleanup_inputs,
+            }
+        finally:
+            sys.setprofile(previous)
+            restore.restore()
+            _expect(sys.getprofile() is previous, "CP11 combined profiler restored")
+
+    @staticmethod
+    def cp11_destroy_uses_replaced_salvage_planner(module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules import planning
+        from Sources.icefox.MerchantRules.configuration import DestroyRule
+        from Sources.icefox.MerchantRules.configuration import SalvageRule
+        from Sources.icefox.MerchantRules.configuration import SalvageSettings
+        from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+
+        planning_globals: Mapping[str, object] = planning.__dict__
+
+        widget = _cp9_widget(module)
+        donor = _cp9_widget(module)
+        consumer: object = getattr(widget, "_destroy_planner")
+        old_salvage: object = getattr(widget, "_salvage_planner")
+        replacement: object = getattr(donor, "_salvage_planner")
+        _expect(type(consumer) is planning.DestroyPlanner, "CP11 replacement retains canonical destroy consumer")
+        _expect(
+            type(old_salvage) is planning.SalvagePlanner
+            and type(replacement) is planning.SalvagePlanner
+            and replacement is not old_salvage,
+            "CP11 replacement uses distinguishable canonical salvage instances",
+        )
+        _expect(
+            getattr(donor, "_destroy_planner") is not consumer,
+            "CP11 donor construction did not replace consuming destroy instance",
+        )
+        widget_type = type(widget)
+        delegate: object = vars(widget_type)["_plan_destroy_actions"]
+        if not isinstance(delegate, types.FunctionType) or delegate.__globals__ is not vars(module):
+            raise AssertionError("CP11 retained destroy delegate must execute real widget source")
+
+        item = _cp8_item(
+            module,
+            item_id=11,
+            model_id=501,
+            name="Replacement target",
+            quantity=1,
+            rarity="White",
+            identified=True,
+            salvageable=True,
+        )
+        items = [item]
+        destroy_rule = DestroyRule(
+            enabled=True,
+            kind="destroy_explicit_models",
+            whitelist_targets=[WhitelistTarget(501, 0)],
+            name="CP11 Destroy",
+        )
+        enabled_destroy_rules = [(0, destroy_rule)]
+        enabled_sell_rules: list[tuple[int, SellRule]] = []
+        old_settings = SalvageSettings(rules=[])
+        replacement_rule = SalvageRule(
+            enabled=True, model_ids=[501], salvage_option="materials", name="CP11 Replacement"
+        )
+        replacement_settings = SalvageSettings(rules=[replacement_rule])
+        normalized_replacement = {
+            "enabled": True,
+            "model_ids": [501],
+            "target_common_material_model_ids": [],
+            "rarities": {"white": False, "blue": False, "purple": False, "gold": False, "green": False},
+            "categories": {"weapons": False, "armor": False, "materials": False, "other": False},
+            "target_weapon_mod_identifiers": [],
+            "target_weapon_mod_thresholds": [],
+            "target_weapon_mod_variants": [],
+            "target_weapon_mod_variant_thresholds": [],
+            "salvage_option": "materials",
+            "name": "CP11 Replacement",
+            "target_armor_upgrade_identifiers": [],
+        }
+        selection = "selected model Model 501"
+        reservation = selection + "; Salvage materials via CP11 Replacement (#1)"
+        unreserved_plan = _cp11_empty_plan()
+        unreserved_plan["destroy_actions"] = [
+            {
+                "item_id": 11,
+                "model_id": 501,
+                "label": "Replacement target",
+                "quantity_to_destroy": 1,
+                "source_quantity": 1,
+                "keep_quantity": 0,
+                "requires_split": False,
+            }
+        ]
+        unreserved_plan["destroy_item_ids"] = [11]
+        unreserved_plan["entries"] = [
+            _cp11_entry("destroy", "Replacement target", 1, "will execute", "Matched by CP11 Destroy (#1).", 501),
+        ]
+        reserved_plan = _cp11_empty_plan()
+        reserved_plan["entries"] = [
+            _cp11_entry(
+                "destroy",
+                "Replacement target",
+                1,
+                "skipped",
+                "Blocked by CP11 Destroy (#1): selected for MR Salvage "
+                "(selected model Model 501; Salvage materials via CP11 Replacement (#1)); "
+                "salvage wins over destroy.",
+                501,
+                "skipped",
+            ),
+        ]
+
+        events: list[object] = []
+        active_owner: object = old_salvage
+        active_label = "old"
+        active_plan: planning.PlanResult | None = None
+        active_claims: set[int] | None = None
+        code_labels: dict[types.CodeType, str] = {delegate.__code__: "delegate"}
+        for owner_type, name, label in (
+            (planning.DestroyPlanner, "plan_destroy_actions", "destroy-actions"),
+            (planning.DestroyPlanner, "plan_destroy_rule", "destroy-rule"),
+            (planning.SalvagePlanner, "get_salvage_destroy_claim_reason", "salvage-claim"),
+            (planning.SalvagePlanner, "get_matching_salvage_rule", "salvage-match"),
+        ):
+            function: object = getattr(owner_type, name)
+            if not isinstance(function, types.FunctionType) or function.__globals__ is not planning_globals:
+                raise AssertionError("CP11 replacement observation requires canonical source: " + name)
+            _expect(
+                Path(function.__code__.co_filename).resolve() == Path(str(planning.__file__)).resolve(),
+                "CP11 observed replacement algorithm source path",
+            )
+            code_labels[function.__code__] = label
+
+        def observe(frame: types.FrameType, event: str, result: object) -> None:
+            label = code_labels.get(frame.f_code)
+            if label is None or event not in {"call", "return"}:
+                return
+            actual_self: object = frame.f_locals.get("self")
+            if label in {"delegate", "destroy-actions", "destroy-rule"}:
+                _expect(
+                    actual_self is (widget if label == "delegate" else consumer),
+                    "CP11 same preconstructed destroy consumer executes both calls",
+                )
+                _expect(
+                    frame.f_locals["plan"] is active_plan
+                    and frame.f_locals["claimed_item_ids"] is active_claims
+                    and frame.f_locals["items"] is items,
+                    "CP11 destroy route borrows exact plan, claims and inventory objects",
+                )
+                if label == "destroy-rule":
+                    _expect(frame.f_locals["rule"] is destroy_rule, "CP11 destroy rule remains borrowed")
+                events.append([event, label])
+            else:
+                _expect(actual_self is active_owner, "CP11 current salvage owner, never stale or rebuilt consumer")
+                _expect(frame.f_locals["item"] is item, "CP11 selection receives borrowed original item")
+                if label == "salvage-claim":
+                    _expect(
+                        frame.f_locals["enabled_sell_rules"] is enabled_sell_rules,
+                        "CP11 replacement selection receives original protection-rule list",
+                    )
+                events.append([event, label, active_label] + ([_cp11_plain(result)] if event == "return" else []))
+
+        def model_label(model: int) -> str:
+            return f"Model {model}"
+
+        def empty_slot(observed: list[InventoryItemInfo] | None = None) -> tuple[int, int] | None:
+            _expect(observed is items, "CP11 unchanged destroy empty-slot observation arguments")
+            events.append(["empty-slot"])
+            return None
+
+        restore = _CP8Restoration()
+        previous_profile = sys.getprofile()
+        bindings = [
+            (widget, "salvage_settings"),
+            (donor, "salvage_settings"),
+            (widget, "_format_model_label"),
+            (donor, "_format_model_label"),
+            (widget, "_find_inventory_empty_slot"),
+            (widget, "_salvage_planner"),
+        ]
+        original_bindings: list[tuple[object, str, bool, object]] = [
+            (owner, name, name in vars(owner), vars(owner).get(name)) for owner, name in bindings
+        ]
+        original_settings: tuple[object, object] = (
+            getattr(widget, "salvage_settings"),
+            getattr(donor, "salvage_settings"),
+        )
+        original_settings_snapshot = _cp8_values(*original_settings)
+        original_descriptors: dict[str, object] = {
+            name: vars(widget_type)[name]
+            for name in ("_plan_destroy_actions", "_format_model_label", "_find_inventory_empty_slot")
+        }
+        try:
+            restore.binding(widget, "salvage_settings", old_settings)
+            restore.binding(donor, "salvage_settings", replacement_settings)
+            # These are wording/acquisition seams only; every selector and allocation body is canonical.
+            restore.binding(widget, "_format_model_label", model_label)
+            restore.binding(donor, "_format_model_label", model_label)
+            restore.binding(widget, "_find_inventory_empty_slot", empty_slot)
+            for after_replacement in (False, True):
+                if after_replacement:
+                    restore.binding(widget, "_salvage_planner", replacement)
+                    active_owner, active_label = replacement, "replacement"
+                _expect(
+                    getattr(widget, "_destroy_planner") is consumer
+                    and getattr(widget, "_salvage_planner") is active_owner,
+                    "CP11 replacement updates actual late-reader binding and retains consumer",
+                )
+                active_plan = planning.PlanResult()
+                active_claims = set[int]()
+                entries, actions, ids = active_plan.entries, active_plan.destroy_actions, active_plan.destroy_item_ids
+                _cp11_equal(active_plan, _cp11_empty_plan(), "CP11 replacement independent complete pre-call plan")
+                _cp11_equal(active_claims, set[int](), "CP11 replacement independent complete pre-call claims")
+                before = _cp8_values(
+                    items,
+                    enabled_destroy_rules,
+                    enabled_sell_rules,
+                    old_settings,
+                    replacement_settings,
+                    replacement_rule,
+                )
+                events.clear()
+                sys.setprofile(observe)
+                try:
+                    widget._plan_destroy_actions(
+                        active_plan, items, enabled_destroy_rules, enabled_sell_rules, active_claims
+                    )
+                finally:
+                    sys.setprofile(previous_profile)
+                _cp11_equal(
+                    active_plan,
+                    reserved_plan if after_replacement else unreserved_plan,
+                    "CP11 immediate complete destroy outcome after current salvage replacement",
+                )
+                _cp11_equal(active_claims, {11}, "CP11 destroy claims persist in both precedence outcomes")
+                _cp8_unchanged(
+                    before,
+                    items,
+                    enabled_destroy_rules,
+                    enabled_sell_rules,
+                    old_settings,
+                    replacement_settings,
+                    replacement_rule,
+                )
+                _expect(
+                    active_plan.entries is entries
+                    and active_plan.destroy_actions is actions
+                    and active_plan.destroy_item_ids is ids,
+                    "CP11 same publication containers retained",
+                )
+                _expect(getattr(widget, "_destroy_planner") is consumer, "CP11 consuming planner was never rebuilt")
+                expected_match: object = [0, normalized_replacement, selection] if after_replacement else None
+                expected_events: list[object] = [
+                    ["call", "delegate"],
+                    ["call", "destroy-actions"],
+                    ["call", "destroy-rule"],
+                    ["call", "salvage-claim", active_label],
+                    ["call", "salvage-match", active_label],
+                    ["return", "salvage-match", active_label, expected_match],
+                    ["call", "salvage-match", active_label],
+                    ["return", "salvage-match", active_label, expected_match],
+                ]
+                if after_replacement:
+                    expected_events.extend(
+                        [
+                            ["call", "salvage-match", "replacement"],
+                            ["return", "salvage-match", "replacement", [0, normalized_replacement, selection]],
+                        ]
+                    )
+                expected_events.extend(
+                    [
+                        ["return", "salvage-claim", active_label, reservation if after_replacement else ""],
+                        ["empty-slot"],
+                        ["return", "destroy-rule"],
+                        ["return", "destroy-actions"],
+                        ["return", "delegate"],
+                    ]
+                )
+                _cp11_equal(events, expected_events, "CP11 complete ordered canonical replacement trace")
+                if not after_replacement:
+                    _expect(
+                        type(active_plan.destroy_actions[0]) is planning.PlannedDestroyAction,
+                        "CP11 unreserved outcome uses canonical action factory",
+                    )
+        finally:
+            sys.setprofile(previous_profile)
+            restore.restore()
+            _expect(sys.getprofile() is previous_profile, "CP11 replacement restores exact profiler")
+            for owner, name, present, original in original_bindings:
+                _expect((name in vars(owner)) is present, "CP11 exact instance binding presence restored: " + name)
+                if present:
+                    _expect(vars(owner)[name] is original, "CP11 exact original instance object restored: " + name)
+            for name, descriptor in original_descriptors.items():
+                _expect(vars(widget_type)[name] is descriptor, "CP11 original class descriptor unchanged: " + name)
+            _expect(
+                getattr(widget, "_salvage_planner") is old_salvage
+                and getattr(widget, "_destroy_planner") is consumer
+                and getattr(donor, "_salvage_planner") is replacement,
+                "CP11 restores original owner graph without replacing either canonical consumer",
+            )
+            _cp8_unchanged(original_settings_snapshot, *original_settings)
+
 
 _cp9_prepare_phase = _CP9Checks.prepare_phase
 
@@ -57734,6 +58323,10 @@ _CP10_ENV_KEYS: tuple[str, ...] = _CP9_ENV_KEYS + (
     "MERCHANT_RULES_CP10_ORACLE_ROOT",
     "MERCHANT_RULES_CP10_OUTPUT_PARENT",
     "MERCHANT_RULES_CP10_CASES",
+    "MERCHANT_RULES_CP10_CANDIDATE_ROOT",
+    "MERCHANT_RULES_CP11_ORACLE_ROOT",
+    "MERCHANT_RULES_CP11_OUTPUT_PARENT",
+    "MERCHANT_RULES_CP11_CASES",
 )
 
 
@@ -58224,7 +58817,8 @@ def _cp10_external(kind: str) -> dict[str, object]:
     _expect(kind in ('cold', 'differential'), 'CP10 known external run kind')
     parent = _cp10_guard(Path(os.environ['MERCHANT_RULES_CP10_OUTPUT_PARENT']))
     oracle = Path(os.environ['MERCHANT_RULES_CP10_ORACLE_ROOT'])
-    candidate = REPO_ROOT
+    candidate_override = os.environ.get('MERCHANT_RULES_CP10_CANDIDATE_ROOT', '')
+    candidate = Path(candidate_override) if candidate_override else REPO_ROOT
     _expect(
         not parent.is_relative_to(oracle) and not parent.is_relative_to(candidate),
         'CP10 output parent outside source roots',
@@ -58251,6 +58845,17 @@ def _cp10_external(kind: str) -> dict[str, object]:
         )
         for name, root in roots.items():
             before[name] = _cp10_pins(root)
+        if candidate_override:
+            retained = {
+                'Widgets/Guild Wars/Items & Loot/MerchantRules.py': '6ab728421ffee1e3527dc57d404db5d620268880fb687deed868620bc67b7ee7',
+                'Sources/icefox/MerchantRules/planning.py': 'd98c83ef7a3a79ee3d6a4620dcc69dc87209d13524d789e53e91f7f1eaddee37',
+                'Sources/icefox/MerchantRules/profiles.py': '15916f9703ad3eda3149e1796cfeb8401dabb86768c14a5cb185579019f68f8d',
+                '.local-tests/merchant-rules/test_merchant_rules_regression.py': 'baa0426b08c5d318566a99b0dc22c23d7cc26c4e0ebd2f414b2d31f3a0c92ffe',
+            }
+            for relative, digest in retained.items():
+                _requirement_contract_expect(
+                    before['candidate'][relative], digest, 'CP10 retained original candidate ' + relative
+                )
         fixed = {
             'Widgets/Guild Wars/Items & Loot/MerchantRules.py': '3bd11c62d4c537306bf3dee87280d9fba1cd23d501bbbe91d4f152011bc33f4e',
             'Sources/icefox/MerchantRules/planning.py': 'e1fd4c759ae1c5e72a21c999d34fb662e5c2ad277637196ebbb909bacfc483b8',
@@ -58400,6 +59005,2672 @@ _CP10_CASES: tuple[tuple[str, Callable[[types.ModuleType], None]], ...] = (
     ("cp10_migration_retry", _test_cp10_migration_retry),
     ("cp10_cold_import", lambda _module: _test_cp10_cold_import()),
     ("cp10_completed_cp9_differential", lambda _module: _test_cp10_completed_cp9_differential()),
+)
+
+
+# CP11-HARNESS-ADDITIONS-1
+
+# CP11 local-selection proof. All imports below occur after runtime stubs are installed.
+if TYPE_CHECKING:
+    from Sources.marks_sources.mods_parser import ModDatabase
+
+    from Sources.icefox.MerchantRules.configuration import IdentifySettings
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+    from Sources.icefox.MerchantRules.configuration import SalvageSettings
+    from Sources.icefox.MerchantRules.inventory_evidence import ArmorUpgradeIdentity
+    from Sources.icefox.MerchantRules.planning import DestroyPlanner
+    from Sources.icefox.MerchantRules.planning import IdentifyPlanner
+    from Sources.icefox.MerchantRules.planning import SalvagePlanner
+
+
+@dataclass
+class _CP11Candidate:
+    item: InventoryItemInfo
+    rule_index: int
+    rule: SalvageRule
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class _CP11Match:
+    label: str = ""
+    required_option: str = ""
+    identifier: str = ""
+    source_kind: str = "weapon"
+
+
+@dataclass(frozen=True)
+class _CP11Resolution:
+    selected_option: str = ""
+    matched_labels: tuple[str, ...] = ()
+    block_reason: str = ""
+
+
+def _cp11_plain(value: object) -> object:
+    from dataclasses import fields
+    from dataclasses import is_dataclass
+
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: _cp11_plain(getattr(value, field.name)) for field in fields(value)}
+    if _cp9_is_mapping(value):
+        return {key: _cp11_plain(member) for key, member in value.items()}
+    if _cp9_is_sequence(value):
+        return [_cp11_plain(member) for member in value]
+    if _cp9_is_set(value):
+        return sorted((_cp11_plain(member) for member in value), key=repr)
+    raise AssertionError("CP11 unsupported complete value: " + type(value).__name__)
+
+
+def _cp11_equal(actual: object, expected: object, context: str) -> None:
+    _requirement_contract_expect(_cp11_plain(actual), _cp11_plain(expected), "CP11 " + context)
+
+
+def _cp11_empty_plan() -> dict[str, object]:
+    # Independent complete literal schema; do not derive this expectation from PlanResult.
+    return {
+        "entries": [],
+        "supported_map": False,
+        "supported_reason": "",
+        "coords": {},
+        "travel_to_outpost_id": 0,
+        "travel_to_outpost_name": "",
+        "multi_stop_route": False,
+        "multi_stop_consumable_outpost_id": 0,
+        "multi_stop_consumable_outpost_name": "",
+        "multi_stop_destination_outpost_id": 0,
+        "multi_stop_destination_outpost_name": "",
+        "merchant_stock_buys": [],
+        "material_buys": [],
+        "rune_trader_buys": [],
+        "scroll_trader_buys": [],
+        "consumable_crafter_buys": [],
+        "material_sales": [],
+        "storage_transfers": [],
+        "cleanup_transfers": [],
+        "identify_claimed_item_ids": [],
+        "identify_item_ids": [],
+        "salvage_item_ids": [],
+        "salvage_specific_upgrade_owners": {},
+        "destroy_actions": [],
+        "destroy_item_ids": [],
+        "merchant_sell_item_ids": [],
+        "rune_trader_sales": [],
+        "storage_plan_state": "not_needed",
+        "storage_exact": False,
+        "inventory_snapshot_captured": False,
+        "inventory_model_counts": {},
+        "inventory_item_count": 0,
+        "xunlai_first_merchant_stock_targets": {},
+        "xunlai_first_storage_scan_reliable": True,
+        "has_actions": False,
+    }
+
+
+def _cp11_entry(
+    action: str, label: str, quantity: int, state: str, reason: str, model: int = 0, hint: str = ""
+) -> dict[str, object]:
+    return {
+        "action_type": action,
+        "merchant_type": "inventory",
+        "label": label,
+        "quantity": quantity,
+        "state": state,
+        "reason": reason,
+        "model_id": model,
+        "status_hint": hint,
+    }
+
+
+class _CP11FailList[T](list[T]):
+    def __init__(self, failure: Exception) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def append(self, value: T) -> None:
+        raise self.failure
+
+
+class _CP11FailSet(set[int]):
+    def __init__(self, failure: Exception) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def add(self, value: int) -> None:
+        raise self.failure
+
+
+class _CP11FailDict[K, V](dict[K, V]):
+    def __init__(self, failure: Exception) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def __setitem__(self, key: K, value: V) -> None:
+        raise self.failure
+
+
+class _CP11LocalFixture:
+    """Construct all three actual owners without constructing a widget."""
+
+    def __init__(self, module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules import configuration as c
+        from Sources.icefox.MerchantRules.item_values import dedupe_identifiers
+        from Sources.icefox.MerchantRules.planning import DestroyPlanner
+        from Sources.icefox.MerchantRules.planning import ExecutionPlanEntry
+        from Sources.icefox.MerchantRules.planning import IdentifyPlanner
+        from Sources.icefox.MerchantRules.planning import PlannedDestroyAction
+        from Sources.icefox.MerchantRules.planning import PlannedSpecificUpgradeSalvageOwner
+        from Sources.icefox.MerchantRules.planning import SalvagePlanner
+        from Sources.icefox.MerchantRules.planning import SelectorNormalizers
+        from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset
+        from Sources.icefox.MerchantRules.stack_selection import choose_keep_subset_at_most
+
+        value: object = getattr(module, "_rule_normalizer")
+        if not isinstance(value, c.RuleNormalizer):
+            raise AssertionError("CP11 side-local canonical normalizer")
+        self.normalizer = value
+        self.trace: list[str] = []
+        self.constructing = True
+        self.identify_settings = c.IdentifySettings(rarities={"blue": True}, before_execute=True)
+        self.salvage_settings = c.SalvageSettings(rules=[])
+        self.destroy_rules: list[DestroyRule] = []
+        self.include_protected = False
+        self.empty_slot: object | None = None
+        self.id_kit = 901
+        self.salvage_kit = 902
+        self.weapon_support = (True, "")
+        self.armor_support = (True, "")
+        self.common_outputs: dict[tuple[int, int], tuple[int, ...]] = {}
+        self.protection: tuple[str, str] | None = None
+        self.normalize_identify: Callable[[object], IdentifySettings] = c.normalize_identify_settings
+        self.normalize_salvage_settings: Callable[[object], SalvageSettings] = value.normalize_salvage_settings
+        self.normalize_salvage_rule: Callable[[object], SalvageRule | None] = value.normalize_salvage_rule
+        self.normalize_destroy_rule: Callable[[DestroyRule], DestroyRule] = value.normalize_destroy_rule
+        self.identify_reader: Callable[[], IdentifySettings] = lambda: self.identify_settings
+        self.salvage_reader: Callable[[], SalvageSettings] = lambda: self.salvage_settings
+        self.salvage_reference: Callable[[int, SalvageRule], str] = lambda index, _rule: f"Salvage {index}"
+        self.normalizers = SelectorNormalizers(
+            get_identify_settings=lambda: self.construction_read(lambda: self.normalize_identify),
+            get_salvage_settings=lambda: self.construction_read(lambda: self.normalize_salvage_settings),
+            get_salvage_rule=lambda: self.construction_read(lambda: self.normalize_salvage_rule),
+            get_destroy_rule=lambda: self.construction_read(lambda: self.normalize_destroy_rule),
+            get_coerce_list=lambda: self.construction_read(lambda: c.coerce_list),
+            get_dedupe_identifiers=lambda: self.construction_read(lambda: dedupe_identifiers),
+            get_dedupe_model_ids=lambda: self.construction_read(lambda: c.dedupe_model_ids),
+            get_thresholds=lambda: self.construction_read(lambda: c.normalize_weapon_mod_threshold_rules),
+            get_variants=lambda: self.construction_read(lambda: self.normalizer.normalize_weapon_mod_variant_rules),
+            get_variant_thresholds=lambda: self.construction_read(
+                lambda: self.normalizer.normalize_weapon_mod_variant_threshold_rules
+            ),
+            get_common_materials=lambda: self.construction_read(lambda: c.normalize_common_material_model_ids),
+            get_rarity_flags=lambda: self.construction_read(lambda: c.normalize_salvage_rarity_flags),
+            get_category_flags=lambda: self.construction_read(lambda: c.normalize_salvage_category_flags),
+            get_whitelist_targets=lambda: self.construction_read(lambda: c.normalize_whitelist_targets),
+            get_rarity_key=lambda: self.construction_read(lambda: lambda raw: str(raw or "").strip().lower()),
+        )
+        self.identify: IdentifyPlanner = IdentifyPlanner(
+            normalizers=self.normalizers,
+            read_settings=lambda: self.construction_read(lambda: self.identify_reader()),
+            get_id_kit=lambda: self.construction_read(lambda: self.read_id_kit),
+            read_rarity_order=lambda: self.construction_read(lambda: (("blue", "Blue"),)),
+            get_entry_factory=lambda: self.construction_read(lambda: ExecutionPlanEntry),
+        )
+        self.salvage: SalvagePlanner[_CP11Candidate, _CP11Match, _CP11Resolution] = SalvagePlanner(
+            normalizers=self.normalizers,
+            read_settings=lambda: self.construction_read(lambda: self.salvage_reader()),
+            read_mod_db=self.unexpected_database,
+            read_weapon_mod_names=lambda: self.construction_read(lambda: {}),
+            read_common_outputs=lambda: self.construction_read(lambda: self.common_outputs),
+            get_mod_type=lambda: self.construction_read(lambda: lambda _value: ""),
+            get_armor_identity=lambda: self.construction_read(lambda: self.armor_identity),
+            get_armor_signature=lambda: self.construction_read(lambda: self.armor_signature),
+            read_rune_mod_type=lambda: self.construction_read(lambda: 8),
+            read_alt_minor_vigor=lambda: self.construction_read(lambda: (9224, 0, 0x00C2)),
+            read_category_order=lambda: self.construction_read(
+                lambda: (("weapons", "Weapons"), ("armor", "Armor"), ("materials", "Materials"), ("other", "Other"))
+            ),
+            read_backend_unavailable_reason=lambda: self.construction_read(
+                lambda: "upgrade salvage backend unavailable"
+            ),
+            get_hard_protection=lambda: self.construction_read(lambda: self.hard_protection),
+            get_kit=lambda: self.construction_read(lambda: self.read_salvage_kit),
+            get_armor_support=lambda: self.construction_read(lambda: self.read_armor_support),
+            get_weapon_support=lambda: self.construction_read(lambda: self.read_weapon_support),
+            get_model_label=lambda: self.construction_read(lambda: lambda model: f"Model {model}"),
+            get_model_name=lambda: self.construction_read(lambda: lambda model: f"Model {model}"),
+            get_generic_mod_label=lambda: self.construction_read(lambda: lambda identifier: identifier),
+            get_threshold_label=lambda: self.construction_read(lambda: lambda rule: rule.identifier),
+            get_variant_label=lambda: self.construction_read(lambda: lambda rule: str(getattr(rule, "identifier", ""))),
+            get_variant_threshold_label=lambda: self.construction_read(lambda: lambda rule: rule.identifier),
+            get_compact_labels=lambda: self.construction_read(lambda: self.compact_labels),
+            get_rule_reference=lambda: self.construction_read(lambda: self.salvage_reference),
+            get_item_label=lambda: self.construction_read(lambda: lambda item: item.name),
+            get_diagnostic=lambda: self.construction_read(lambda: self.diagnostic),
+            get_variant_match=lambda: self.construction_read(lambda: lambda _rule, _match: False),
+            get_candidate_factory=lambda: self.construction_read(lambda: _CP11Candidate),
+            get_match_factory=lambda: self.construction_read(lambda: _CP11Match),
+            get_slot_factory=lambda: self.construction_read(lambda: _CP11Resolution),
+            get_entry_factory=lambda: self.construction_read(lambda: ExecutionPlanEntry),
+            get_owner_factory=lambda: self.construction_read(lambda: PlannedSpecificUpgradeSalvageOwner),
+        )
+        self.destroy: DestroyPlanner = DestroyPlanner(
+            normalizers=self.normalizers,
+            read_rules=lambda: self.construction_read(lambda: self.destroy_rules),
+            read_include_protected=lambda: self.construction_read(lambda: self.include_protected),
+            read_kind_labels=lambda: self.construction_read(
+                lambda: {
+                    "destroy_explicit_models": "Explicit",
+                    "destroy_materials": "Materials",
+                    "destroy_weapons": "Weapons",
+                    "destroy_armor": "Armor",
+                }
+            ),
+            read_salvage=lambda: self.construction_read(lambda: self.salvage),
+            get_empty_slot=lambda: self.construction_read(lambda: self.read_empty_slot),
+            get_hard_protection=lambda: self.construction_read(lambda: self.hard_protection),
+            get_rarity_match=lambda: self.construction_read(lambda: lambda _item, _rule: True),
+            get_model_label=lambda: self.construction_read(lambda: lambda model: f"Model {model}"),
+            get_rule_reference=lambda: self.construction_read(lambda: lambda index, _rule: f"Destroy {index}"),
+            get_diagnostic=lambda: self.construction_read(lambda: self.diagnostic),
+            get_choose_keep=lambda: self.construction_read(lambda: choose_keep_subset),
+            get_choose_keep_at_most=lambda: self.construction_read(lambda: choose_keep_subset_at_most),
+            get_action_factory=lambda: self.construction_read(lambda: PlannedDestroyAction),
+            get_entry_factory=lambda: self.construction_read(lambda: ExecutionPlanEntry),
+        )
+        self.constructing = False
+        _cp11_equal(self.trace, [], "reference-only direct construction")
+
+    def construction_read[T](self, read: Callable[[], T]) -> T:
+        if self.constructing:
+            raise AssertionError("CP11 constructor evaluated a late input/provider")
+        return read()
+
+    def unexpected_database(self) -> ModDatabase:
+        raise AssertionError("CP11 materials fixture must not read modifier database")
+
+    def armor_identity(self, identifier: object, *, mod_db: ModDatabase) -> tuple[ArmorUpgradeIdentity | None, str]:
+        raise AssertionError("CP11 materials fixture must not read armor identity")
+
+    def armor_signature(
+        self,
+        raw_modifiers: tuple[tuple[int, int, int], ...],
+        identity: ArmorUpgradeIdentity,
+        *,
+        require_generic_carrier: bool = False,
+    ) -> bool:
+        raise AssertionError("CP11 materials fixture must not read armor signature")
+
+    def compact_labels(self, labels: list[str], limit: int = 2) -> str:
+        return ", ".join(labels[:limit])
+
+    def hard_protection(
+        self, item: InventoryItemInfo, enabled_sell_rules: list[tuple[int, SellRule]]
+    ) -> tuple[str, str] | None:
+        self.trace.append(f"protection:{item.item_id}")
+        return self.protection
+
+    def read_id_kit(self) -> int:
+        self.trace.append("id-kit")
+        return self.id_kit
+
+    def read_salvage_kit(self, option: object, *, preferred_kit_id: int = 0, preferred_kit_model_id: int = 0) -> int:
+        self.trace.append(f"kit:{option}:{preferred_kit_id}:{preferred_kit_model_id}")
+        return self.salvage_kit
+
+    def read_armor_support(self) -> tuple[bool, str]:
+        self.trace.append("armor-support")
+        return self.armor_support
+
+    def read_weapon_support(self) -> tuple[bool, str]:
+        self.trace.append("weapon-support")
+        return self.weapon_support
+
+    def read_empty_slot(self, inventory_items: list[InventoryItemInfo] | None = None) -> object | None:
+        self.trace.append("empty-slot")
+        return self.empty_slot
+
+    def diagnostic(self, message: str) -> None:
+        self.trace.append("diagnostic:" + message)
+
+
+# CP11-HARNESS-ADDITIONS-2
+
+
+def _test_cp11_identify_reads(module: types.ModuleType, case: str) -> None:
+    from Sources.icefox.MerchantRules.configuration import IdentifySettings
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    f = _CP11LocalFixture(module)
+    item = _cp8_item(module, item_id=11, model_id=501, name="Blue item", quantity=2, rarity="Blue", identified=False)
+    before = _cp8_values(item)
+    plan = PlanResult()
+    claims: set[int] = set[int]()
+    failure = RuntimeError("CP11 second identify reason")
+    reads = 0
+
+    def read() -> IdentifySettings:
+        nonlocal reads
+        reads += 1
+        f.trace.append(f"settings:{reads}")
+        if reads == 3:
+            if case == "failure":
+                raise failure
+            if case == "changed":
+                return IdentifySettings(rarities={}, before_execute=True)
+        return f.identify_settings
+
+    f.identify_reader = read
+    if case == "no-kit":
+        f.id_kit = 0
+    if case == "empty":
+        items: list[InventoryItemInfo] = []
+    else:
+        items = [item]
+    expected = _cp11_empty_plan()
+    if case == "failure":
+        try:
+            f.identify.plan_identify_actions(plan, items, claims)
+        except RuntimeError as caught:
+            _expect(caught is failure, "CP11 identify exception identity")
+        else:
+            raise AssertionError("CP11 identify expected same failure")
+        expected["identify_claimed_item_ids"] = [11]
+    else:
+        f.identify.plan_identify_actions(plan, items, claims)
+        if case == "empty":
+            expected["entries"] = [
+                _cp11_entry(
+                    "identify",
+                    "Identify selected rarities",
+                    0,
+                    "skipped",
+                    "No unidentified items found for the selected exact rarities.",
+                    hint="no_match",
+                )
+            ]
+        else:
+            expected["identify_claimed_item_ids"] = [11]
+            if case == "no-kit":
+                expected["entries"] = [
+                    _cp11_entry("identify", "Blue item", 2, "skipped", "No ID kit found.", 501, "blocked")
+                ]
+            else:
+                expected["identify_item_ids"] = [11]
+                expected["entries"] = [
+                    _cp11_entry(
+                        "identify",
+                        "Blue item",
+                        2,
+                        "will execute",
+                        "" if case == "changed" else "selected exact rarity Blue",
+                        501,
+                    )
+                ]
+    _cp11_equal(plan, expected, "complete identify " + case)
+    _cp11_equal(claims, set[int]() if case == "empty" else {11}, "identify claims " + case)
+    _cp11_equal(
+        f.trace,
+        ["settings:1"] if case == "empty" else ["settings:1", "settings:2", "id-kit", "settings:3"],
+        "ordered identify reads " + case,
+    )
+    _cp8_unchanged(before, item)
+
+
+def _test_cp11_identify_prefix(module: types.ModuleType, boundary: str) -> None:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    f = _CP11LocalFixture(module)
+    item = _cp8_item(module, item_id=11, model_id=501, name="Blue item", quantity=2, rarity="Blue", identified=False)
+    failure = RuntimeError("CP11 identify prefix:" + boundary)
+    plan = PlanResult()
+    claims: set[int] = _CP11FailSet(failure) if boundary == "claim" else set[int]()
+    if boundary == "claimed-id":
+        plan.identify_claimed_item_ids = _CP11FailList(failure)
+    elif boundary == "action-id":
+        plan.identify_item_ids = _CP11FailList(failure)
+    elif boundary == "entry":
+        plan.entries = _CP11FailList(failure)
+    before = _cp8_values(item)
+    _cp11_equal(plan, _cp11_empty_plan(), "independent complete identify pre-call plan")
+    _cp11_equal(claims, set[int](), "independent pre-call claims")
+    try:
+        f.identify.plan_identify_actions(plan, [item], claims)
+    except RuntimeError as caught:
+        _expect(caught is failure, "CP11 exact identify boundary exception")
+    else:
+        raise AssertionError("CP11 missing identify boundary failure")
+    expected = _cp11_empty_plan()
+    if boundary in {"action-id", "entry"}:
+        expected["identify_claimed_item_ids"] = [11]
+    if boundary == "entry":
+        expected["identify_item_ids"] = [11]
+    _cp11_equal(plan, expected, "immediate complete identify mutation prefix:" + boundary)
+    _cp11_equal(claims, set[int]() if boundary == "claim" else {11}, "immediate identify claim prefix")
+    _cp8_unchanged(before, item)
+
+
+# CP11-HARNESS-ADDITIONS-3
+
+
+def _test_cp11_destroy_cross_target(module: types.ModuleType, source: str) -> None:
+    from Sources.icefox.MerchantRules.configuration import DestroyRule
+    from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+    from Sources.icefox.MerchantRules.planning import PlannedDestroyAction
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    f = _CP11LocalFixture(module)
+    first = _cp8_item(module, item_id=11, model_id=501, name="Stack", quantity=5)
+    second = _cp8_item(module, item_id=12, model_id=502, name="Whole", quantity=1)
+    targets = [WhitelistTarget(501, 2)]
+    items = [first]
+    if source == "later-target":
+        targets.append(WhitelistTarget(502, 0))
+        items.append(second)
+    rule = DestroyRule(enabled=True, kind="destroy_explicit_models", whitelist_targets=targets)
+    plan = PlanResult()
+    existing: PlannedDestroyAction | None = None
+    if source == "existing":
+        existing = PlannedDestroyAction(99, 599, "Existing", 1, 1)
+        plan.destroy_actions.append(existing)
+    claims: set[int] = set[int]()
+    before = _cp8_values(items, rule)
+    f.destroy.plan_destroy_rule(plan, items, rule, 0, claims, [])
+    _cp8_unchanged(before, items, rule)
+    expected = _cp11_empty_plan()
+    actions: list[dict[str, object]] = []
+    if existing is not None:
+        actions.append(
+            {
+                "item_id": 99,
+                "model_id": 599,
+                "label": "Existing",
+                "quantity_to_destroy": 1,
+                "source_quantity": 1,
+                "keep_quantity": 0,
+                "requires_split": False,
+            }
+        )
+        _expect(plan.destroy_actions[0] is existing, "CP11 existing action identity")
+    entries: list[dict[str, object]] = []
+    if source == "blocked":
+        entries.append(
+            _cp11_entry(
+                "destroy",
+                "Model 501",
+                0,
+                "skipped",
+                "Blocked by Destroy 0: Keep count requires splitting a stack to preserve 2 unit(s), "
+                "but no empty inventory slot was available and no earlier destroy action would free one.",
+                hint="unsafe",
+            )
+        )
+    else:
+        actions.append(
+            {
+                "item_id": 11,
+                "model_id": 501,
+                "label": "Stack",
+                "quantity_to_destroy": 3,
+                "source_quantity": 5,
+                "keep_quantity": 2,
+                "requires_split": True,
+            }
+        )
+        entries.extend(
+            [
+                _cp11_entry(
+                    "destroy", "Stack", 3, "will execute", "Matched by Destroy 0. Split stack to keep 2 unit(s).", 501
+                ),
+                _cp11_entry(
+                    "destroy",
+                    "Stack",
+                    2,
+                    "skipped",
+                    "Kept by Destroy 0: reserved 2 unit(s) to satisfy keep count 2.",
+                    501,
+                ),
+            ]
+        )
+        if source == "later-target":
+            actions.append(
+                {
+                    "item_id": 12,
+                    "model_id": 502,
+                    "label": "Whole",
+                    "quantity_to_destroy": 1,
+                    "source_quantity": 1,
+                    "keep_quantity": 0,
+                    "requires_split": False,
+                }
+            )
+            entries.append(_cp11_entry("destroy", "Whole", 1, "will execute", "Matched by Destroy 0.", 502))
+    expected["destroy_actions"] = actions
+    expected["destroy_item_ids"] = [] if source == "blocked" else [11, 12] if source == "later-target" else [11]
+    expected["entries"] = entries
+    _cp11_equal(plan, expected, "complete cross-target split:" + source)
+    _cp11_equal(claims, {11, 12} if source == "later-target" else {11}, "cross-target claims")
+    expected_trace = ["protection:11", "protection:11"]
+    if source == "later-target":
+        expected_trace.extend(["protection:12", "protection:12"])
+    expected_trace.append("empty-slot")
+    expected_trace.append(
+        "diagnostic:Explicit: matched=2 protected=0 salvage_reserved=0 kept_quantity=2 "
+        "planned_destroys=2 planned_destroy_quantity=4 include_protected=False"
+        if source == "later-target"
+        else (
+            "diagnostic:Explicit: matched=1 protected=0 salvage_reserved=0 kept_quantity=0 "
+            "planned_destroys=0 planned_destroy_quantity=0 include_protected=False"
+            if source == "blocked"
+            else "diagnostic:Explicit: matched=1 protected=0 salvage_reserved=0 kept_quantity=2 "
+            "planned_destroys=1 planned_destroy_quantity=3 include_protected=False"
+        )
+    )
+    _cp11_equal(f.trace, expected_trace, "complete cross-target acquisition/publication trace")
+
+
+def _test_cp11_destroy_prefix(module: types.ModuleType, boundary: str) -> None:
+    from Sources.icefox.MerchantRules.configuration import DestroyRule
+    from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    f = _CP11LocalFixture(module)
+    item = _cp8_item(module, item_id=11, model_id=501, name="Whole", quantity=1)
+    rule = DestroyRule(enabled=True, kind="destroy_explicit_models", whitelist_targets=[WhitelistTarget(501, 0)])
+    failure = RuntimeError("CP11 destroy prefix:" + boundary)
+    plan = PlanResult()
+    claims: set[int] = _CP11FailSet(failure) if boundary == "claim" else set[int]()
+    if boundary == "action":
+        plan.destroy_actions = _CP11FailList(failure)
+    elif boundary == "id":
+        plan.destroy_item_ids = _CP11FailList(failure)
+    elif boundary == "entry":
+        plan.entries = _CP11FailList(failure)
+    before = _cp8_values(item, rule)
+    _cp11_equal(plan, _cp11_empty_plan(), "independent complete pre-call plan")
+    _cp11_equal(claims, set[int](), "independent complete pre-call claims")
+    try:
+        f.destroy.plan_destroy_rule(plan, [item], rule, 0, claims, [])
+    except RuntimeError as caught:
+        _expect(caught is failure, "CP11 same destroy publication exception")
+    else:
+        raise AssertionError("CP11 missing destroy publication failure")
+    expected = _cp11_empty_plan()
+    if boundary not in {"action", "claim"}:
+        expected["destroy_actions"] = [
+            {
+                "item_id": 11,
+                "model_id": 501,
+                "label": "Whole",
+                "quantity_to_destroy": 1,
+                "source_quantity": 1,
+                "keep_quantity": 0,
+                "requires_split": False,
+            }
+        ]
+    if boundary == "entry":
+        expected["destroy_item_ids"] = [11]
+    _cp11_equal(plan, expected, "immediate complete destroy prefix:" + boundary)
+    _cp11_equal(claims, set[int]() if boundary == "claim" else {11}, "destroy claims precede publication")
+    _cp8_unchanged(before, item, rule)
+
+
+def _test_cp11_destroy_observation_failure(module: types.ModuleType, category: bool) -> None:
+    from Sources.icefox.MerchantRules.configuration import DestroyRule
+    from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    f = _CP11LocalFixture(module)
+    item = _cp8_item(module, item_id=11, model_id=501, name="Item", quantity=1, is_weapon_like=True)
+    rule = (
+        DestroyRule(enabled=True, kind="destroy_weapons")
+        if category
+        else DestroyRule(enabled=True, whitelist_targets=[WhitelistTarget(999, 0), WhitelistTarget(501, 0)])
+    )
+    failure = RuntimeError("CP11 category protection" if category else "CP11 post-staging slot")
+    plan = PlanResult()
+    claims: set[int] = set[int]()
+    restore = _CP8Restoration()
+    before = _cp8_values(item, rule)
+    _cp11_equal(plan, _cp11_empty_plan(), "independent full pre-call plan")
+    _cp11_equal(claims, set[int](), "independent pre-call claims")
+
+    def protection(selected: InventoryItemInfo, rules: list[tuple[int, SellRule]]) -> tuple[str, str] | None:
+        f.trace.append(f"failed-protection:{selected.item_id}")
+        raise failure
+
+    def empty_slot(inventory_items: list[InventoryItemInfo] | None = None) -> object | None:
+        f.trace.append("failed-empty-slot")
+        raise failure
+
+    try:
+        restore.binding(f, "hard_protection" if category else "read_empty_slot", protection if category else empty_slot)
+        try:
+            f.destroy.plan_destroy_rule(plan, [item], rule, 0, claims, [])
+        except RuntimeError as caught:
+            _expect(caught is failure, "CP11 same injected observation exception")
+        else:
+            raise AssertionError("CP11 expected observation failure")
+        expected = _cp11_empty_plan()
+        if not category:
+            expected["entries"] = [
+                _cp11_entry("destroy", "Model 999", 0, "skipped", "No matching inventory items found.", hint="no_match")
+            ]
+        _cp11_equal(plan, expected, "immediate complete observation failure prefix")
+        _cp11_equal(
+            claims, {11} if category else set[int](), "category claims before protection; target claims after staging"
+        )
+        _cp11_equal(
+            f.trace,
+            ["failed-protection:11"] if category else ["protection:11", "protection:11", "failed-empty-slot"],
+            "exact observation failure order",
+        )
+        _cp8_unchanged(before, item, rule)
+    finally:
+        restore.restore()
+
+
+# CP11-HARNESS-ADDITIONS-4
+
+
+def _test_cp11_salvage_materials(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+    from Sources.icefox.MerchantRules.configuration import SalvageSettings
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    f = _CP11LocalFixture(module)
+    rule = SalvageRule(enabled=True, model_ids=[501], salvage_option="materials")
+    f.salvage_settings = SalvageSettings(rules=[rule])
+    item = _cp8_item(
+        module,
+        item_id=11,
+        model_id=501,
+        name="Material target",
+        quantity=1,
+        rarity="White",
+        identified=True,
+        salvageable=True,
+        is_stackable=False,
+    )
+    before = _cp8_values(item, rule, f.salvage_settings)
+    candidates, blocked = f.salvage.collect_salvage_candidates([item], [], require_salvage_kit=False)
+    _expect(len(candidates) == 1 and type(candidates[0]) is _CP11Candidate, "CP11 exact generic candidate result")
+    _expect(
+        candidates[0].item is item and candidates[0].rule is not rule, "CP11 borrowed item and normalized rule copy"
+    )
+    _cp11_equal(blocked, {}, "materials selected")
+    _cp11_equal(f.trace, ["kit:materials:0:0", "protection:11"], "kit lookup occurs despite optional kit")
+    _cp8_unchanged(before, item, rule, f.salvage_settings)
+    plan = PlanResult()
+    claims = {11}
+    f.salvage.plan_salvage_actions(plan, [item], [], claims)
+    expected = _cp11_empty_plan()
+    expected["salvage_item_ids"] = [11]
+    expected["entries"] = [
+        _cp11_entry(
+            "salvage",
+            "Material target",
+            1,
+            "will execute",
+            "selected model Model 501; Salvage materials via Salvage 0.",
+            501,
+        )
+    ]
+    _cp11_equal(plan, expected, "salvage publication does not prefilter borrowed claims")
+    _cp11_equal(claims, {11}, "existing claim remains")
+    _cp11_equal(
+        f.trace,
+        ["kit:materials:0:0", "protection:11", "kit:materials:0:0", "protection:11"],
+        "complete collection then publication observation trace",
+    )
+    _cp8_unchanged(before, item, rule, f.salvage_settings)
+
+
+def _test_cp11_salvage_prefix(module: types.ModuleType, boundary: str) -> None:
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+    from Sources.icefox.MerchantRules.configuration import SalvageSettings
+    from Sources.icefox.MerchantRules.planning import PlannedSpecificUpgradeSalvageOwner
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    f = _CP11LocalFixture(module)
+    rule = SalvageRule(
+        enabled=True, model_ids=[501], salvage_option="auto_upgrade", target_weapon_mod_identifiers=["of Defense"]
+    )
+    f.salvage_settings = SalvageSettings(rules=[rule])
+    item = _cp8_item(
+        module, item_id=11, model_id=501, name="Owned", quantity=1, rarity="Gold", identified=True, salvageable=True
+    )
+    candidate = _CP11Candidate(item, 0, rule, "chosen")
+    failure = RuntimeError("CP11 salvage prefix:" + boundary)
+    plan = PlanResult()
+    claims: set[int] = _CP11FailSet(failure) if boundary == "claim" else set[int]()
+    if boundary == "owner":
+        plan.salvage_specific_upgrade_owners = _CP11FailDict(failure)
+    elif boundary == "id":
+        plan.salvage_item_ids = _CP11FailList(failure)
+    elif boundary == "entry":
+        plan.entries = _CP11FailList(failure)
+    restore = _CP8Restoration()
+
+    def selected(
+        items: list[InventoryItemInfo],
+        rules: list[tuple[int, SellRule]],
+        *,
+        require_salvage_kit: bool = False,
+        mode: str = "manual",
+        preferred_salvage_kit_id: int = 0,
+        preferred_salvage_kit_model_id: int = 0,
+        include_not_selected_blocks: bool = False,
+        manual_salvage_rule: SalvageRule | None = None,
+        planned_specific_upgrade_owners: dict[int, PlannedSpecificUpgradeSalvageOwner] | None = None,
+    ) -> tuple[list[_CP11Candidate], dict[str, int]]:
+        return [candidate], {}
+
+    def resolution(selected_rule: SalvageRule, selected_item: InventoryItemInfo) -> _CP11Resolution:
+        f.trace.append("slot")
+        if boundary == "slot":
+            raise failure
+        return _CP11Resolution(selected_option="suffix", matched_labels=("of Defense",))
+
+    def format_reference(index: int, selected_rule: SalvageRule) -> str:
+        f.trace.append("format")
+        if boundary == "format":
+            raise failure
+        return f"Salvage {index}"
+
+    f.salvage_reference = format_reference
+
+    before = _cp8_values(item, rule)
+    _cp11_equal(plan, _cp11_empty_plan(), "independent complete salvage pre-call plan")
+    _cp11_equal(claims, set[int](), "independent complete salvage pre-call claims")
+    try:
+        # Isolate publication only; candidate/slot algorithms have independent actual-owner cases.
+        restore.binding(f.salvage, "collect_salvage_candidates", selected)
+        restore.binding(f.salvage, "get_auto_salvage_upgrade_slot_resolution", resolution)
+        try:
+            f.salvage.plan_salvage_actions(plan, [item], [], claims)
+        except RuntimeError as caught:
+            _expect(caught is failure, "CP11 exact salvage prefix exception")
+        else:
+            raise AssertionError("CP11 missing salvage prefix failure")
+        expected = _cp11_empty_plan()
+        if boundary != "owner":
+            owner = plan.salvage_specific_upgrade_owners[11]
+            _expect(
+                type(owner) is PlannedSpecificUpgradeSalvageOwner and owner.rule_snapshot is not rule,
+                "CP11 canonical shallow owner with normalized copy",
+            )
+            expected["salvage_specific_upgrade_owners"] = {
+                11: {"model_id": 501, "rule_index": 0, "rule_snapshot": _cp11_normalized_owned_rule()}
+            }
+        if boundary in {"claim", "entry"}:
+            expected["salvage_item_ids"] = [11]
+        _cp11_equal(plan, expected, "immediate complete salvage prefix:" + boundary)
+        _cp11_equal(claims, {11} if boundary == "entry" else set[int](), "salvage claim prefix")
+        _cp11_equal(
+            f.trace,
+            [] if boundary == "owner" else ["format"] if boundary == "format" else ["format", "slot"],
+            "callback timing after owner before IDs",
+        )
+        _cp8_unchanged(before, item, rule)
+    finally:
+        restore.restore()
+
+
+# CP11-HARNESS-ADDITIONS-5
+
+
+def _cp11_normalized_owned_rule() -> dict[str, object]:
+    return {
+        "enabled": True,
+        "model_ids": [501],
+        "target_common_material_model_ids": [],
+        "rarities": {"white": False, "blue": False, "purple": False, "gold": False, "green": False},
+        "categories": {"weapons": False, "armor": False, "materials": False, "other": False},
+        "target_weapon_mod_identifiers": ["of Defense"],
+        "target_weapon_mod_thresholds": [],
+        "target_weapon_mod_variants": [],
+        "target_weapon_mod_variant_thresholds": [],
+        "salvage_option": "auto_upgrade",
+        "name": "",
+        "target_armor_upgrade_identifiers": [],
+    }
+
+
+def _test_cp11_disabled_destroy_normalization(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import DestroyRule
+    from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+
+    f = _CP11LocalFixture(module)
+    models = [501, 501, 0]
+    targets = [WhitelistTarget(502, 3)]
+    rarities = {"gold": False}
+    rule = DestroyRule(
+        enabled=False,
+        kind="unknown",
+        model_ids=models,
+        keep_count=2,
+        whitelist_targets=targets,
+        rarities=rarities,
+        name="  disabled  ",
+    )
+    f.destroy_rules = [rule]
+    before_containers = _cp8_values(models, targets, rarities)
+    _cp11_equal(
+        rule,
+        {
+            "enabled": False,
+            "kind": "unknown",
+            "model_ids": [501, 501, 0],
+            "keep_count": 2,
+            "whitelist_targets": [{"model_id": 502, "keep_count": 3, "deposit_to_storage": False}],
+            "rarities": {"gold": False},
+            "name": "  disabled  ",
+        },
+        "disabled pre-call rule",
+    )
+    result = f.destroy.collect_enabled_destroy_rules()
+    _cp11_equal(result, [], "disabled remains disabled")
+    _cp11_equal(
+        rule,
+        {
+            "enabled": False,
+            "kind": "destroy_explicit_models",
+            "model_ids": [502, 501],
+            "keep_count": 0,
+            "whitelist_targets": [
+                {"model_id": 502, "keep_count": 3, "deposit_to_storage": False},
+                {"model_id": 501, "keep_count": 2, "deposit_to_storage": False},
+            ],
+            "rarities": {"white": True, "blue": True, "purple": True, "gold": False, "green": False},
+            "name": "disabled",
+        },
+        "disabled original still normalized",
+    )
+    _expect(f.destroy_rules[0] is rule, "CP11 original disabled record retained")
+    _expect(
+        rule.model_ids is not models and rule.whitelist_targets is not targets and rule.rarities is not rarities,
+        "CP11 original nested containers replaced",
+    )
+    _cp8_unchanged(before_containers, models, targets, rarities)
+    _cp11_equal(f.trace, [], "disabled collection observes no inventory")
+
+
+def _test_cp11_late_normalizer_binding(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import IdentifySettings
+
+    f = _CP11LocalFixture(module)
+    trace: list[str] = []
+    original = f.normalize_identify
+
+    def first(raw: object) -> IdentifySettings:
+        trace.append("first")
+        return original(raw)
+
+    def second(raw: object) -> IdentifySettings:
+        trace.append("second")
+        return IdentifySettings(rarities={}, before_execute=False)
+
+    def read() -> IdentifySettings:
+        trace.append("settings")
+        f.normalize_identify = second
+        return f.identify_settings
+
+    f.normalize_identify = first
+    f.identify_reader = read
+    _expect(f.identify.should_identify_before_execute(), "CP11 callable acquired before settings argument")
+    _expect(not f.identify.should_identify_before_execute(), "CP11 next call acquires replacement")
+    _cp11_equal(trace, ["settings", "first", "settings", "second"], "alias evaluation order and late replacement")
+
+
+def _test_cp11_salvage_rejection_reads(module: types.ModuleType, case: str) -> None:
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+    from Sources.icefox.MerchantRules.configuration import SalvageSettings
+
+    f = _CP11LocalFixture(module)
+    rule = SalvageRule(model_ids=[501], salvage_option="materials")
+    f.salvage_settings = SalvageSettings(rules=[rule])
+    item = _cp8_item(
+        module, item_id=11, model_id=501, name="Item", rarity="White", quantity=1, identified=True, salvageable=True
+    )
+    if case == "disabled":
+        rule.enabled = False
+    elif case == "unselected":
+        item = replace(item, model_id=999)
+    elif case == "protected":
+        f.protection = ("fixture", "Fixture protection")
+    elif case == "unsalvageable":
+        item = replace(item, salvageable=False)
+    elif case == "customized":
+        item = replace(item, is_customized=True)
+    elif case == "unidentified":
+        item = replace(item, identified=False, rarity="Gold")
+    elif case == "no-kit":
+        f.salvage_kit = 0
+    before = _cp8_values(item, rule, f.salvage_settings)
+    selected, blocked = f.salvage.collect_salvage_candidates(
+        [item],
+        [],
+        require_salvage_kit=True,
+        preferred_salvage_kit_id=77,
+        preferred_salvage_kit_model_id=88,
+        include_not_selected_blocks=True,
+    )
+    _cp11_equal(selected, [], "rejected candidate " + case)
+    buckets = {
+        "disabled": {"not selected": 1},
+        "unselected": {"not selected": 1},
+        "protected": {"protected": 1},
+        "unsalvageable": {"unsalvageable": 1},
+        "customized": {"customized": 1},
+        "unidentified": {"unidentified non-white": 1},
+        "no-kit": {"no normal salvage kit": 1},
+    }
+    _cp11_equal(blocked, buckets[case], "complete blocked bucket " + case)
+    traces = {
+        "disabled": [],
+        "unselected": [],
+        "protected": [
+            "kit:materials:77:88",
+            "protection:11",
+            "diagnostic:MR Salvage skipped Item (11): protected: Fixture protection",
+        ],
+        "unsalvageable": ["kit:materials:77:88", "protection:11"],
+        "customized": [
+            "kit:materials:77:88",
+            "protection:11",
+            "diagnostic:MR Salvage skipped Item (11): customized: customized items are never salvaged",
+        ],
+        "unidentified": [
+            "kit:materials:77:88",
+            "protection:11",
+            "diagnostic:MR Salvage skipped Item (11): unidentified non-white: identify before salvaging",
+        ],
+        "no-kit": [
+            "kit:materials:77:88",
+            "protection:11",
+            "diagnostic:MR Salvage skipped Item (11): no normal salvage kit",
+        ],
+    }
+    _cp11_equal(f.trace, traces[case], "complete skipped/ordered reads " + case)
+    _cp8_unchanged(before, item, rule, f.salvage_settings)
+
+
+def _test_cp11_ownership(module: types.ModuleType) -> None:
+    from typing import get_type_hints
+
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+
+    planning_globals: Mapping[str, object] = planning.__dict__
+
+    cls: object = getattr(module, "MerchantRulesWidget")
+    if not isinstance(cls, type):
+        raise AssertionError("CP11 widget constructor class")
+    raw: object = cls()
+    other: object = cls()
+    for field, owner in (
+        ("_identify_planner", planning.IdentifyPlanner),
+        ("_salvage_planner", planning.SalvagePlanner),
+        ("_destroy_planner", planning.DestroyPlanner),
+    ):
+        value: object = getattr(raw, field)
+        _expect(type(value) is owner and value is not getattr(other, field), "CP11 canonical per-widget owner")
+        for member in vars(owner).values():
+            function = member.__func__ if isinstance(member, staticmethod) else member
+            if isinstance(function, types.FunctionType):
+                _expect(function.__globals__ is planning_globals, "CP11 defining globals belong to planning")
+                _expect(
+                    Path(function.__code__.co_filename).resolve() == Path(str(planning.__file__)).resolve(),
+                    "CP11 real owner source, no copied widget code object",
+                )
+    _cp11_equal(
+        tuple(
+            getattr(raw, name)
+            for name in (
+                "_character_profile_ready",
+                "merchant_rules_lifecycle_generation",
+                "map_ready_snapshot",
+                "_merchant_rules_lifecycle_map_ready_snapshot",
+            )
+        ),
+        (False, 0, False, False),
+        "raw constructor does not borrow fixture bootstrap authority",
+    )
+    prepared: object = _make_widget(module)
+    _expect(getattr(prepared, "merchant_rules_lifecycle_generation") >= 1, "CP11 fixture explicitly primes lifecycle")
+    candidate_type: object = getattr(module, "SalvageCandidate")
+    match_type: object = getattr(module, "SalvageUpgradeTargetMatch")
+    resolution_type: object = getattr(module, "SalvageUpgradeSlotResolution")
+    if (
+        not isinstance(candidate_type, type)
+        or not isinstance(match_type, type)
+        or not isinstance(resolution_type, type)
+    ):
+        raise AssertionError("CP11 retained concrete records")
+    item = _cp8_item(module, item_id=11, model_id=501)
+    rule = SalvageRule(model_ids=[501])
+    candidate: object = candidate_type(item, 0, rule, "chosen")
+    _expect(
+        getattr(candidate, "item") is item and getattr(candidate, "rule") is rule,
+        "CP11 retained candidate borrowed references",
+    )
+    hints = get_type_hints(candidate_type)
+    _expect(
+        hints["item"] is InventoryItemInfo and hints["rule"] is SalvageRule,
+        "CP11 retained candidate canonical annotations",
+    )
+    first: object = match_type(label="Same", required_option="suffix", identifier="A", source_kind="weapon")
+    second: object = match_type(label="Same", required_option="suffix", identifier="B", source_kind="armor")
+    _expect(first == second, "CP11 identifier/source_kind remain excluded from match equality")
+    owner = planning.PlannedSpecificUpgradeSalvageOwner(501, 0, rule)
+    rule.model_ids.append(502)
+    _expect(
+        owner.rule_snapshot is rule and owner.rule_snapshot.model_ids == [501, 502],
+        "CP11 frozen owner remains shallow with mutable nested snapshot",
+    )
+    _test_cp7_planning_record_signatures_and_defaults(module)
+    _test_cp7_planning_record_references_and_mutability(module)
+    _test_cp7_planning_canonical_bindings(module)
+
+
+# CP11-HARNESS-ADDITIONS-6
+
+
+def _test_cp11_widget_late_aliases(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+    from Sources.icefox.MerchantRules.configuration import SalvageSettings
+
+    planning_globals: Mapping[str, object] = planning.__dict__
+
+    widget: object = _make_widget(module)
+    owner: object = getattr(widget, "_salvage_planner")
+    method: object = getattr(owner, "collect_enabled_salvage_rules")
+    if not isinstance(method, types.MethodType) or method.__func__.__globals__ is not planning_globals:
+        raise AssertionError("CP11 actual bound owner method")
+    saved_alias: object = getattr(module, "_normalize_salvage_rule")
+    saved_normalizer: object = getattr(module, "_rule_normalizer")
+    if not isinstance(saved_alias, types.MethodType) or saved_alias.__self__ is not saved_normalizer:
+        raise AssertionError("CP11 already-bound canonical normalizer alias")
+    rule = SalvageRule(model_ids=[501])
+    saved_settings: object = getattr(module, "_normalize_salvage_settings")
+    if not isinstance(saved_settings, types.MethodType):
+        raise AssertionError("CP11 canonical saved settings normalizer")
+    trace: list[str] = []
+    restore = _CP8Restoration()
+
+    def replacement(raw: object) -> SalvageRule | None:
+        trace.append("replacement")
+        return None
+
+    def later_rule(raw: object) -> SalvageRule | None:
+        trace.append("later-rule")
+        return None
+
+    def normalize_then_replace(raw: object) -> SalvageSettings:
+        trace.append("settings-normalization")
+        setattr(module, "_normalize_salvage_rule", later_rule)
+        result: object = saved_settings(raw)
+        if not isinstance(result, SalvageSettings):
+            raise AssertionError("CP11 canonical settings result")
+        return result
+
+    try:
+        restore.binding(widget, "salvage_settings", SalvageSettings(rules=[rule]))
+        restore.binding(module, "_rule_normalizer", object())
+        before: object = method()
+        _expect(
+            _cp9_is_sequence(before) and isinstance(before, list) and len(before) == 1,
+            "CP11 replacing normalizer instance leaves already-bound alias semantics intact",
+        )
+        restore.binding(module, "_normalize_salvage_rule", replacement)
+        after: object = method()
+        _cp11_equal(after, [], "CP11 replacement module alias observed after construction")
+        _cp11_equal(trace, ["replacement"], "CP11 exact late rule-alias call count")
+        trace.clear()
+        restore.binding(module, "_normalize_salvage_rule", saved_alias)
+        restore.binding(module, "_normalize_salvage_settings", normalize_then_replace)
+        after_normalization: object = method()
+        _cp11_equal(after_normalization, [], "earlier normalization changes later rule alias in same collection")
+        _cp11_equal(
+            trace, ["settings-normalization", "later-rule"], "complete same-call normalization replacement trace"
+        )
+    finally:
+        restore.restore()
+    _expect(
+        getattr(module, "_rule_normalizer") is saved_normalizer
+        and getattr(module, "_normalize_salvage_rule") is saved_alias
+        and getattr(module, "_normalize_salvage_settings") is saved_settings,
+        "CP11 exact module objects restored",
+    )
+
+
+def _test_cp11_selector_helpers(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+
+    planning_globals: Mapping[str, object] = planning.__dict__
+
+    f = _CP11LocalFixture(module)
+    cases = (
+        (SalvageRule(), (0, False, False, False, False)),
+        (
+            SalvageRule(
+                target_armor_upgrade_identifiers=["Rune", "Rune"], target_weapon_mod_identifiers=["of Defense"]
+            ),
+            (2, True, True, True, True),
+        ),
+        (SalvageRule(target_common_material_model_ids=[925]), (0, False, False, False, True)),
+        (
+            SalvageRule(target_common_material_model_ids=[925], salvage_option="auto_upgrade"),
+            (0, False, False, False, False),
+        ),
+    )
+    functions = (
+        planning.get_salvage_rule_upgrade_target_count,
+        planning.salvage_rule_has_armor_upgrade_targets,
+        planning.salvage_rule_has_weapon_upgrade_targets,
+        planning.salvage_rule_has_upgrade_targets,
+        planning.salvage_rule_has_selectors,
+    )
+    for function in functions:
+        _expect(function.__globals__ is planning_globals, "CP11 canonical pure helper body")
+    for rule, expected in cases:
+        before = _cp8_values(rule)
+        actual = tuple(function(rule, normalizers=f.normalizers) for function in functions)
+        _cp11_equal(actual, expected, "independent complete helper matrix")
+        _cp8_unchanged(before, rule)
+
+
+def _test_cp11_records_and_late_factories(module: types.ModuleType) -> None:
+    from dataclasses import FrozenInstanceError
+
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+    from Sources.icefox.MerchantRules.configuration import SalvageSettings
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+
+    planning_globals: Mapping[str, object] = planning.__dict__
+
+    candidate_class: object = getattr(module, "SalvageCandidate")
+    match_class: object = getattr(module, "SalvageUpgradeTargetMatch")
+    slot_class: object = getattr(module, "SalvageUpgradeSlotResolution")
+    if not isinstance(candidate_class, type) or not isinstance(match_class, type) or not isinstance(slot_class, type):
+        raise AssertionError("CP11 narrowed concrete factory classes")
+    item = _cp8_item(module, item_id=11, model_id=501)
+    rule = SalvageRule()
+    candidate: object = candidate_class(item, 0, rule)
+    _cp11_equal(
+        candidate,
+        {"item": _cp11_plain(item), "rule_index": 0, "rule": _cp11_plain(rule), "reason": ""},
+        "complete candidate defaults",
+    )
+    setattr(candidate, "reason", "changed")
+    setattr(candidate, "rule_index", 3)
+    replacement_item = replace(item, item_id=12)
+    setattr(candidate, "item", replacement_item)
+    _expect(
+        getattr(candidate, "item") is replacement_item and getattr(candidate, "rule") is rule,
+        "CP11 candidate mutability and borrowed objects",
+    )
+    _cp11_equal(
+        (getattr(candidate, "rule_index"), getattr(candidate, "reason")), (3, "changed"), "mutable candidate fields"
+    )
+    first: object = match_class()
+    _cp11_equal(
+        first,
+        {"label": "", "required_option": "", "identifier": "", "source_kind": "weapon"},
+        "complete target-match defaults",
+    )
+    slot: object = slot_class()
+    _cp11_equal(
+        slot, {"selected_option": "", "matched_labels": (), "block_reason": ""}, "complete slot-resolution defaults"
+    )
+    labels = ("first", "second")
+    supplied: object = slot_class(matched_labels=labels)
+    _expect(getattr(supplied, "matched_labels") is labels, "CP11 exact supplied label tuple retained")
+    for record, field, value in ((first, "label", "x"), (slot, "selected_option", "suffix")):
+        try:
+            setattr(record, field, value)
+        except FrozenInstanceError:
+            pass
+        else:
+            raise AssertionError("CP11 frozen result record changed")
+    _cp11_equal(
+        first,
+        {"label": "", "required_option": "", "identifier": "", "source_kind": "weapon"},
+        "frozen match unchanged immediately",
+    )
+    _cp11_equal(
+        slot, {"selected_option": "", "matched_labels": (), "block_reason": ""}, "frozen slot unchanged immediately"
+    )
+
+    restore = _CP8Restoration()
+    restore.binding(module, "MOD_DB", getattr(module, "MOD_DB"))
+    try:
+        _install_weapon_mod_catalog_fixture(module)
+        widget: object = _make_widget(module)
+        owner: object = getattr(widget, "_salvage_planner")
+        selected_rule: object = _make_specific_suffix_salvage_rule(module, "auto_upgrade")
+        selected_item: object = _make_specific_suffix_item(module)
+        if not isinstance(selected_rule, SalvageRule) or type(selected_item) is not InventoryItemInfo:
+            raise AssertionError("CP11 side-local canonical specific fixture")
+        restore.binding(widget, "salvage_settings", SalvageSettings(rules=[selected_rule]))
+
+        def salvage_kit(_option: str) -> int:
+            return 777
+
+        restore.binding(widget, "_get_salvage_kit_id_for_option", salvage_kit)
+        methods: dict[str, types.MethodType] = {}
+        for name in (
+            "collect_salvage_candidates",
+            "get_salvage_rule_upgrade_target_matches",
+            "get_auto_salvage_upgrade_slot_resolution",
+        ):
+            method: object = getattr(owner, name)
+            if not isinstance(method, types.MethodType) or method.__func__.__globals__ is not planning_globals:
+                raise AssertionError("CP11 actual producer body: " + name)
+            methods[name] = method
+        before = _cp8_values(selected_rule, selected_item)
+        original_candidates: object = methods["collect_salvage_candidates"]([selected_item], [])
+        original_matches: object = methods["get_salvage_rule_upgrade_target_matches"](selected_rule, selected_item)
+        original_slot: object = methods["get_auto_salvage_upgrade_slot_resolution"](selected_rule, selected_item)
+        if not _cp9_is_sequence(original_candidates) or len(original_candidates) != 2:
+            raise AssertionError("CP11 original candidate pair")
+        original_values = original_candidates[0]
+        if not _cp9_is_sequence(original_values) or len(original_values) != 1:
+            raise AssertionError("CP11 original candidate values")
+        _expect(type(original_values[0]) is candidate_class, "CP11 original canonical candidate producer")
+        if not _cp9_is_sequence(original_matches):
+            raise AssertionError("CP11 original match values")
+        _expect(
+            bool(original_matches)
+            and all(type(match) is match_class for match in original_matches)
+            and type(original_slot) is slot_class,
+            "CP11 original canonical match/slot producers",
+        )
+        restore.binding(module, "SalvageCandidate", _CP11Candidate)
+        restore.binding(module, "SalvageUpgradeTargetMatch", _CP11Match)
+        restore.binding(module, "SalvageUpgradeSlotResolution", _CP11Resolution)
+        candidates: object = methods["collect_salvage_candidates"]([selected_item], [])
+        matches: object = methods["get_salvage_rule_upgrade_target_matches"](selected_rule, selected_item)
+        resolved: object = methods["get_auto_salvage_upgrade_slot_resolution"](selected_rule, selected_item)
+        if not _cp9_is_sequence(candidates) or len(candidates) != 2 or not _cp9_is_sequence(candidates[0]):
+            raise AssertionError("CP11 candidate collection shape")
+        candidate_values = candidates[0]
+        _expect(
+            len(candidate_values) == 1 and type(candidate_values[0]) is _CP11Candidate,
+            "CP11 candidate factory replaced after owner construction",
+        )
+        if not _cp9_is_sequence(matches):
+            raise AssertionError("CP11 match sequence")
+        _expect(
+            bool(matches) and all(type(match) is _CP11Match for match in matches),
+            "CP11 match factory replaced after owner construction",
+        )
+        _expect(
+            type(resolved) is _CP11Resolution and getattr(resolved, "selected_option") == "suffix",
+            "CP11 slot factory replaced after owner construction",
+        )
+        _cp11_equal(candidates, original_candidates, "late factory retains complete candidate values")
+        _cp11_equal(matches, original_matches, "late factory retains complete match values")
+        _cp11_equal(resolved, original_slot, "late factory retains complete slot values")
+        _cp8_unchanged(before, selected_rule, selected_item)
+    finally:
+        restore.restore()
+    _expect(
+        getattr(module, "SalvageCandidate") is candidate_class
+        and getattr(module, "SalvageUpgradeTargetMatch") is match_class
+        and getattr(module, "SalvageUpgradeSlotResolution") is slot_class,
+        "CP11 exact producer classes restored",
+    )
+
+
+# CP11-HARNESS-ADDITIONS-7
+
+_CP11_MOVED_METHODS: dict[str, tuple[str, ...]] = {
+    "IdentifyPlanner": (
+        "has_enabled_identify_settings",
+        "should_identify_before_execute",
+        "get_identify_selection_reason",
+        "collect_identify_candidates",
+        "plan_identify_actions",
+    ),
+    "SalvagePlanner": (
+        "has_enabled_salvage_settings",
+        "get_salvage_category_key_for_item",
+        "get_salvage_category_label",
+        "get_weapon_mod_required_salvage_option",
+        "build_salvage_upgrade_target_match",
+        "get_salvage_rule_armor_upgrade_target_matches",
+        "get_salvage_rule_upgrade_target_matches",
+        "get_salvage_rule_upgrade_target_reason",
+        "get_auto_salvage_upgrade_slot_resolution",
+        "get_salvage_upgrade_target_option_block_reason",
+        "get_common_material_target_match",
+        "get_salvage_rule_filter_reason",
+        "collect_enabled_salvage_rules",
+        "get_matching_salvage_rule",
+        "get_planned_specific_upgrade_salvage_rule",
+        "get_salvage_selection_reason",
+        "get_specific_upgrade_salvage_reservation_reason",
+        "get_salvage_candidate_block_reason",
+        "get_salvage_destroy_claim_reason",
+        "get_salvage_block_bucket",
+        "collect_salvage_candidates",
+        "plan_salvage_actions",
+        "salvage_candidate_allows_stack_drain",
+    ),
+    "DestroyPlanner": (
+        "collect_enabled_destroy_rules",
+        "plan_stackable_destroy_actions",
+        "get_destroy_split_block_reason",
+        "plan_destroy_rule",
+        "plan_destroy_actions",
+    ),
+}
+
+
+class _CP11RuleClock:
+    def __init__(self, events: list[object]) -> None:
+        self.events = events
+        self.index = 0
+
+    def time_ns(self) -> int:
+        value = 1_720_000_000_000_000_000 + self.index
+        self.index += 1
+        self.events.append(["rule-id-clock", value])
+        return value
+
+
+def _cp11_source_events(module: types.ModuleType, operation: Callable[[], None]) -> list[object]:
+    from Sources.icefox.MerchantRules import configuration
+    from Sources.icefox.MerchantRules import planning
+
+    codes: dict[types.CodeType, str] = {}
+    widget_class: object = getattr(module, "MerchantRulesWidget")
+    if not isinstance(widget_class, type):
+        raise AssertionError("CP11 source observation requires actual widget class")
+    for owner_name, names in _CP11_MOVED_METHODS.items():
+        owner: object = getattr(planning, owner_name, None)
+        candidate = isinstance(owner, type)
+        source = planning if candidate else module
+        selected_class = owner if isinstance(owner, type) else widget_class
+        for name in names:
+            method: object = getattr(selected_class, name if candidate else "_" + name)
+            if not isinstance(method, types.FunctionType):
+                raise AssertionError("CP11 source body missing: " + name)
+            _expect(method.__globals__ is vars(source), "CP11 observed body actual owning globals")
+            _expect(
+                Path(method.__code__.co_filename).resolve() == Path(str(source.__file__)).resolve(),
+                "CP11 observed body actual source path",
+            )
+            codes[method.__code__] = name
+    events: list[object] = []
+    calls = 0
+    previous = sys.getprofile()
+    restore = _CP8Restoration()
+    clock = _CP11RuleClock(events)
+    selected_locals = (
+        "item",
+        "items",
+        "rule",
+        "rule_index",
+        "candidate",
+        "plan",
+        "claimed_item_ids",
+        "enabled_sell_rules",
+        "enabled_destroy_rules",
+        "require_salvage_kit",
+        "salvage_kit_id",
+        "mode",
+        "preferred_salvage_kit_id",
+        "preferred_salvage_kit_model_id",
+        "include_not_selected_blocks",
+        "manual_salvage_rule",
+        "planned_specific_upgrade_owners",
+        "salvage_rule",
+        "keep_count",
+        "keep_quantity",
+        "owner",
+        "identifier",
+        "label",
+        "required_option",
+        "source_kind",
+        "selected_option",
+    )
+
+    def trace(frame: types.FrameType, event: str, result: object) -> None:
+        nonlocal calls
+        name = codes.get(frame.f_code)
+        if name is None or event not in {"call", "return"}:
+            return
+        if event == "call":
+            calls += 1
+        values = {key: _cp11_plain(frame.f_locals[key]) for key in selected_locals if key in frame.f_locals}
+        events.append([event, name, values, _cp11_plain(result) if event == "return" else None])
+
+    try:
+        restore.binding(configuration, "time", clock)
+        sys.setprofile(trace)
+        operation()
+    finally:
+        sys.setprofile(previous)
+        restore.restore()
+    _expect(sys.getprofile() is previous, "CP11 exact profiler object restoration")
+    _expect(calls > 0, "CP11 source observer actually reached selected algorithms")
+    return events
+
+
+_CP11_COMMON_SCENARIOS: dict[str, tuple[Callable[[types.ModuleType], None], ...]] = {
+    "identify": (_test_identify_no_kit_still_claims_selected_items,),
+    "salvage": (
+        _test_salvage_candidate_evaluation_precedence,
+        _test_standard_rune_generic_carrier_identity_and_planning,
+        _test_common_material_targeting_known_possible_any_and_empty,
+        _test_common_material_targeting_unknown_and_later_rule_fallthrough,
+        _test_common_material_targeting_typed_collision_and_existing_filters,
+        _test_common_material_targeting_revalidates_item_type_drift,
+        _test_salvage_specific_upgrade_above_materials_wins,
+        _test_salvage_materials_above_specific_upgrade_wins,
+        _test_blocked_first_salvage_rule_does_not_fall_through,
+        _test_auto_specific_upgrade_salvage_infers_suffix_option,
+        _test_auto_specific_upgrade_salvage_infers_inscription_option,
+        _test_auto_specific_upgrade_salvage_infers_prefix_option,
+        _test_auto_specific_upgrade_salvage_unknown_slot_skips,
+        _test_auto_specific_upgrade_salvage_multiple_slots_skip,
+        _test_no_target_specific_salvage_preserves_narrow_block_and_no_reservation,
+        _test_auto_specific_upgrade_salvage_customized_sell_protection_blocks_before_inference,
+    ),
+    "destroy": (
+        _test_specific_upgrade_salvage_target_reservation_still_blocks_destroy,
+        _test_destroy_material_keep_count_blocks_without_split_slot,
+        _test_protected_salvage_destroy_overlap_blocks_both,
+        _test_protected_items_destroy_default_and_override,
+    ),
+    "consumers": (
+        _test_manual_salvage_request_ignores_plain_sell_priority,
+        _test_final_live_specific_owner_blocks_target_loss_and_replan,
+        _test_final_live_specific_owner_unchanged_executes,
+        _test_final_live_specific_owner_rejects_rule_identity_drift,
+        _test_final_live_specific_owner_preserves_live_identity_and_protection_checks,
+        _test_stackable_salvage_rule_drains_same_stack,
+        _test_specific_upgrade_salvage_does_not_drain_stack,
+    ),
+}
+
+
+def _cp11_common_group(module: types.ModuleType, group: str) -> dict[str, object]:
+    observations: dict[str, object] = {}
+    for scenario in _CP11_COMMON_SCENARIOS[group]:
+        observations[scenario.__name__] = _cp11_source_events(module, lambda scenario=scenario: scenario(module))
+    return observations
+
+
+def _test_cp11_common_group(module: types.ModuleType, group: str) -> None:
+    _cp11_common_group(module, group)
+
+
+def _cp11_differential_observations(module: types.ModuleType) -> dict[str, object]:
+    observations: dict[str, object] = {
+        group: _cp11_common_group(module, group) for group in ("identify", "salvage", "destroy", "consumers")
+    }
+    observations["combined"] = _cp11_combined_observation(module)
+    return observations
+
+
+# CP11-HARNESS-ADDITIONS-8
+
+
+_cp11_combined_observation = _CP9Checks.cp11_combined_observation
+
+
+def _test_cp11_combined(module: types.ModuleType) -> None:
+    _cp11_combined_observation(module)
+
+
+# CP11-HARNESS-ADDITIONS-10
+# Candidate-only replacement proof; the completed-CP10 oracle never constructs these owners.
+
+
+_test_cp11_destroy_uses_replaced_salvage_planner = _CP9Checks.cp11_destroy_uses_replaced_salvage_planner
+
+
+# CP11-HARNESS-ADDITIONS-11
+
+
+def _test_cp11_current_policy_replacement(module: types.ModuleType, route: str) -> None:
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import DestroyRule
+    from Sources.icefox.MerchantRules.configuration import ExactProtectionTarget
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+    from Sources.icefox.MerchantRules.configuration import SalvageSettings
+    from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+    from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+    planning_globals: Mapping[str, object] = planning.__dict__
+
+    if route not in {"salvage", "destroy"}:
+        raise AssertionError("CP11 policy replacement route")
+    widget: object = _make_widget(module)
+    donor: object = _make_widget(module)
+    original_policy: object = getattr(widget, "_protection_policy")
+    replacement_policy: object = getattr(donor, "_protection_policy")
+    if not isinstance(original_policy, ProtectionPolicy) or not isinstance(replacement_policy, ProtectionPolicy):
+        raise AssertionError("CP11 replacement must use canonical ProtectionPolicy instances")
+    _expect(
+        type(original_policy) is type(replacement_policy) is ProtectionPolicy
+        and original_policy is not replacement_policy,
+        "CP11 two distinct canonical policy instances",
+    )
+    salvage_consumer: object = getattr(widget, "_salvage_planner")
+    destroy_consumer: object = getattr(widget, "_destroy_planner")
+    _expect(
+        type(salvage_consumer) is planning.SalvagePlanner and type(destroy_consumer) is planning.DestroyPlanner,
+        "CP11 both actual consumers exist before policy replacement",
+    )
+    consumer = salvage_consumer if route == "salvage" else destroy_consumer
+    delegate_name = "_get_salvage_candidate_block_reason" if route == "salvage" else "_plan_destroy_rule"
+    owner_name = "get_salvage_candidate_block_reason" if route == "salvage" else "plan_destroy_rule"
+    delegate: object = getattr(widget, delegate_name)
+    owner_method: object = getattr(consumer, owner_name)
+    hard_delegate: object = getattr(widget, "_get_hard_protection_hit")
+    nested_salvage: object = getattr(salvage_consumer, "get_salvage_candidate_block_reason")
+    if not all(
+        isinstance(method, types.MethodType) for method in (delegate, owner_method, hard_delegate, nested_salvage)
+    ):
+        raise AssertionError("CP11 preserved bound policy routes")
+    # Individual narrowing keeps the call and defining-source checks precise.
+    if not isinstance(delegate, types.MethodType) or not isinstance(owner_method, types.MethodType):
+        raise AssertionError("CP11 delegate and consumer method types")
+    if not isinstance(hard_delegate, types.MethodType) or not isinstance(nested_salvage, types.MethodType):
+        raise AssertionError("CP11 hard-protection and nested salvage method types")
+    _expect(
+        delegate.__self__ is widget and delegate.__func__.__globals__ is vars(module),
+        "CP11 retained delegate belongs to consuming widget",
+    )
+    _expect(
+        owner_method.__self__ is consumer and owner_method.__func__.__globals__ is planning_globals,
+        "CP11 actual canonical consumer method",
+    )
+    salvage_function: object = vars(planning.SalvagePlanner)["get_salvage_candidate_block_reason"]
+    if not isinstance(salvage_function, types.FunctionType):
+        raise AssertionError("CP11 actual canonical salvage function")
+    expected_owner_function = salvage_function if route == "salvage" else planning.DestroyPlanner.plan_destroy_rule
+    _expect(
+        owner_method.__func__ is expected_owner_function and nested_salvage.__func__ is salvage_function,
+        "CP11 canonical selection/allocation functions are not substituted",
+    )
+    _expect(
+        hard_delegate.__self__ is widget and hard_delegate.__func__.__globals__ is vars(module),
+        "CP11 real widget policy late-reader delegate",
+    )
+    policy_function = ProtectionPolicy.get_hard_protection_hit
+    _expect(
+        policy_function.__globals__ is vars(sys.modules[ProtectionPolicy.__module__]),
+        "CP11 real canonical policy decisions",
+    )
+
+    original_models: list[int] = []
+    replacement_models = [501]
+    original_targets: list[ExactProtectionTarget] = []
+    replacement_targets: list[ExactProtectionTarget] = []
+    selected_rule = SalvageRule(enabled=True, model_ids=[501], salvage_option="materials")
+    settings = SalvageSettings(rules=[selected_rule] if route == "salvage" else [])
+    destroy_rule = DestroyRule(enabled=True, whitelist_targets=[WhitelistTarget(501, 0)], name="Policy probe")
+    item = _cp8_item(
+        module,
+        item_id=11,
+        model_id=501,
+        name="Policy target",
+        quantity=1,
+        rarity="White",
+        identified=True,
+        salvageable=True,
+    )
+    sell_rules: list[tuple[int, SellRule]] = []
+    trace: list[object] = []
+    expected_policy = original_policy
+    expected_policy_label = "original"
+    previous_profiler = sys.getprofile()
+    restore = _CP8Restoration()
+    original_state = (
+        getattr(widget, "protected_item_model_ids"),
+        getattr(widget, "protected_item_targets"),
+        getattr(widget, "salvage_settings"),
+        getattr(donor, "protected_item_model_ids"),
+        getattr(donor, "protected_item_targets"),
+    )
+    original_state_snapshot = _cp8_values(*original_state)
+    hard_descriptor: object = vars(type(widget))["_get_hard_protection_hit"]
+    delegate_descriptor: object = vars(type(widget))[delegate_name]
+
+    codes: dict[types.CodeType, tuple[str, object]] = {
+        delegate.__func__.__code__: ("delegate:" + route, widget),
+        owner_method.__func__.__code__: ("consumer:" + route, consumer),
+        hard_delegate.__func__.__code__: ("policy-delegate", widget),
+        nested_salvage.__func__.__code__: ("consumer:salvage", salvage_consumer),
+    }
+
+    def observe(frame: types.FrameType, event: str, result: object) -> None:
+        if event not in {"call", "return"}:
+            return
+        if frame.f_code is policy_function.__code__:
+            _expect(
+                frame.f_locals.get("self") is expected_policy,
+                "CP11 policy result must come from the current replacement instance",
+            )
+            _expect(
+                frame.f_locals.get("item") is item and frame.f_locals.get("enabled_sell_rules") is sell_rules,
+                "CP11 policy receives original borrowed item and rule-list objects",
+            )
+            trace.append(
+                ["policy", expected_policy_label]
+                if event == "call"
+                else ["policy:return", expected_policy_label, _cp11_plain(result)]
+            )
+            return
+        entry = codes.get(frame.f_code)
+        if entry is None:
+            return
+        label, instance = entry
+        _expect(
+            frame.f_locals.get("self") is instance,
+            "CP11 already-constructed consumer/delegate instance remains unchanged",
+        )
+        trace.append([label] if event == "call" else [label + ":return", _cp11_plain(result)])
+
+    def empty_slot(inventory_items: list[InventoryItemInfo] | None = None) -> object | None:
+        _expect(
+            inventory_items is not None and len(inventory_items) == 1 and inventory_items[0] is item,
+            "CP11 destroy slot observation borrows the actual item",
+        )
+        trace.append(["empty-slot"])
+        return None
+
+    inputs = (
+        item,
+        sell_rules,
+        selected_rule,
+        settings,
+        destroy_rule,
+        original_models,
+        replacement_models,
+        original_targets,
+        replacement_targets,
+    )
+    replaced_bindings: list[tuple[object, str, bool, object]] = []
+    try:
+        restore.sequence(original_models)
+        restore.sequence(replacement_models)
+        restore.sequence(original_targets)
+        restore.sequence(replacement_targets)
+        restore.sequence(sell_rules)
+        restore.sequence(settings.rules)
+        restore.sequence(selected_rule.model_ids)
+        restore.sequence(destroy_rule.whitelist_targets)
+        restore.mapping(selected_rule.rarities)
+        restore.mapping(selected_rule.categories)
+        restore.mapping(destroy_rule.rarities)
+        for target, name, value in (
+            (widget, "protected_item_model_ids", original_models),
+            (widget, "protected_item_targets", original_targets),
+            (widget, "salvage_settings", settings),
+            (widget, "destroy_include_protected_items", False),
+            (widget, "_find_inventory_empty_slot", empty_slot),
+            (donor, "protected_item_model_ids", replacement_models),
+            (donor, "protected_item_targets", replacement_targets),
+        ):
+            namespace: Mapping[str, object] = vars(target)
+            replaced_bindings.append((target, name, name in namespace, namespace.get(name)))
+            restore.binding(target, name, value)
+        for replacement in (False, True):
+            if replacement:
+                # This is the production delegate's actual late-read binding.
+                restore.binding(widget, "_protection_policy", replacement_policy)
+                expected_policy = replacement_policy
+                expected_policy_label = "replacement"
+            _expect(
+                getattr(widget, "_salvage_planner") is salvage_consumer
+                and getattr(widget, "_destroy_planner") is destroy_consumer
+                and getattr(widget, "_protection_policy") is expected_policy
+                and getattr(donor, "_protection_policy") is replacement_policy,
+                "CP11 only the policy binding changes, not either consuming planner",
+            )
+            trace.clear()
+            before = _cp8_values(*inputs)
+            plan = planning.PlanResult()
+            claims: set[int] = set[int]()
+            _cp11_equal(plan, _cp11_empty_plan(), "independent complete pre-call policy plan")
+            _cp11_equal(claims, set[int](), "independent complete pre-call policy claims")
+            sys.setprofile(observe)
+            try:
+                if route == "salvage":
+                    result: object = delegate(item, sell_rules, mode="manual")
+                else:
+                    result = delegate(plan, [item], destroy_rule, 0, claims, sell_rules)
+            finally:
+                sys.setprofile(previous_profiler)
+            _cp8_unchanged(before, *inputs)
+            _expect(sys.getprofile() is previous_profiler, "CP11 immediate profiler restoration")
+            policy_result = ("merchant", "Protected by Protected Items: exact model.") if replacement else None
+            policy_trace: list[object] = [
+                ["policy-delegate"],
+                ["policy", expected_policy_label],
+                ["policy:return", expected_policy_label, policy_result],
+                ["policy-delegate:return", policy_result],
+            ]
+            if route == "salvage":
+                reason = "protected: Protected by Protected Items: exact model." if replacement else ""
+                _cp11_equal(result, reason, "literal current-policy salvage decision")
+                _cp11_equal(plan, _cp11_empty_plan(), "salvage selection does not publish a plan")
+                _cp11_equal(claims, set[int](), "salvage selection does not claim")
+                expected_trace = [
+                    ["delegate:salvage"],
+                    ["consumer:salvage"],
+                    *policy_trace,
+                    ["consumer:salvage:return", reason],
+                    ["delegate:salvage:return", reason],
+                ]
+            else:
+                _cp11_equal(result, None, "literal destroy publication return")
+                expected_plan = _cp11_empty_plan()
+                if replacement:
+                    expected_plan["entries"] = [
+                        _cp11_entry(
+                            "destroy",
+                            "Policy target",
+                            1,
+                            "skipped",
+                            "Blocked by Policy probe (#1): Protected by Protected Items: exact model.",
+                            501,
+                            "protected",
+                        )
+                    ]
+                else:
+                    expected_plan["destroy_actions"] = [
+                        {
+                            "item_id": 11,
+                            "model_id": 501,
+                            "label": "Policy target",
+                            "quantity_to_destroy": 1,
+                            "source_quantity": 1,
+                            "keep_quantity": 0,
+                            "requires_split": False,
+                        }
+                    ]
+                    expected_plan["destroy_item_ids"] = [11]
+                    expected_plan["entries"] = [
+                        _cp11_entry("destroy", "Policy target", 1, "will execute", "Matched by Policy probe (#1).", 501)
+                    ]
+                _cp11_equal(plan, expected_plan, "complete literal current-policy destroy allocation")
+                _cp11_equal(claims, {11}, "protected and unprotected destroy matches retain their claims")
+                nested_reason = (
+                    "protected: Protected by Protected Items: exact model."
+                    if replacement
+                    else "not selected by salvage settings"
+                )
+                expected_trace = [
+                    ["delegate:destroy"],
+                    ["consumer:destroy"],
+                    *policy_trace,
+                    ["consumer:salvage"],
+                    *policy_trace,
+                    ["consumer:salvage:return", nested_reason],
+                    ["empty-slot"],
+                    ["consumer:destroy:return", None],
+                    ["delegate:destroy:return", None],
+                ]
+            _cp11_equal(trace, expected_trace, "complete ordered current-policy route " + route)
+        control_before = _cp8_values(*inputs)
+        _cp11_equal(
+            original_policy.get_hard_protection_hit(item, sell_rules),
+            None,
+            "original policy still has its original valid unprotected state",
+        )
+        _cp8_unchanged(control_before, *inputs)
+        control_before = _cp8_values(*inputs)
+        _cp11_equal(
+            replacement_policy.get_hard_protection_hit(item, sell_rules),
+            ("merchant", "Protected by Protected Items: exact model."),
+            "replacement policy retains its distinct valid protected state",
+        )
+        _cp8_unchanged(control_before, *inputs)
+    finally:
+        sys.setprofile(previous_profiler)
+        restore.restore()
+        _expect(
+            getattr(widget, "_protection_policy") is original_policy
+            and getattr(donor, "_protection_policy") is replacement_policy
+            and getattr(widget, "_salvage_planner") is salvage_consumer
+            and getattr(widget, "_destroy_planner") is destroy_consumer,
+            "CP11 exact original policy/consumer objects restored",
+        )
+        for target, name, was_present, original_value in replaced_bindings:
+            namespace: Mapping[str, object] = vars(target)
+            _expect(
+                (name in namespace) is was_present and (not was_present or namespace[name] is original_value),
+                "CP11 exact restored instance binding presence/object: " + name,
+            )
+        _expect(
+            vars(type(widget))["_get_hard_protection_hit"] is hard_descriptor
+            and vars(type(widget))[delegate_name] is delegate_descriptor,
+            "CP11 original policy and consumer descriptors remain exact",
+        )
+        restored_state = (
+            getattr(widget, "protected_item_model_ids"),
+            getattr(widget, "protected_item_targets"),
+            getattr(widget, "salvage_settings"),
+            getattr(donor, "protected_item_model_ids"),
+            getattr(donor, "protected_item_targets"),
+        )
+        _expect(
+            all(actual is original for actual, original in zip(restored_state, original_state, strict=True)),
+            "CP11 original state objects restored, including instance binding presence",
+        )
+        _cp8_unchanged(original_state_snapshot, *restored_state)
+        _expect(sys.getprofile() is previous_profiler, "CP11 final exact profiler object restored")
+
+
+# CP11-HARNESS-ADDITIONS-12
+# r02: current MOD_DB binding is observed by an already-constructed selector.
+
+
+def _test_cp11_mod_db_replacement(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import catalog
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import SalvageRule
+
+    catalog_globals: Mapping[str, object] = catalog.__dict__
+    planning_globals: Mapping[str, object] = planning.__dict__
+
+    database_type: object = getattr(module, "ModDatabase")
+    side_database_type: object = getattr(sys.modules["Sources.marks_sources.mods_parser"], "ModDatabase")
+    if (
+        not isinstance(database_type, type)
+        or not isinstance(side_database_type, type)
+        or database_type is not side_database_type
+    ):
+        raise AssertionError("CP11 side-local canonical stub database class")
+    old_database: object = database_type()
+    new_database: object = database_type()
+    _expect(
+        type(old_database) is database_type
+        and type(new_database) is database_type
+        and old_database is not new_database,
+        "CP11 distinct real fixture database instances",
+    )
+
+    identifier = "CP11 Shared Upgrade"
+    label = "CP11 target"
+    rule = SalvageRule(enabled=True, salvage_option="auto_upgrade", target_weapon_mod_identifiers=[identifier])
+    item = _cp8_item(
+        module,
+        item_id=511,
+        model_id=5511,
+        name="CP11 database item",
+        weapon_mod_identifiers=[identifier],
+        weapon_mod_matches=[],
+        identified=True,
+        salvageable=True,
+        is_weapon_like=True,
+    )
+    old_mod = _fake_weapon_mod(identifier, "Prefix", {item.item_type_id: "AxeHaft"})
+    new_mod = _fake_weapon_mod(identifier, "Suffix", {item.item_type_id: "AxeGrip"})
+    old_mods: dict[str, object] = {identifier: old_mod}
+    new_mods: dict[str, object] = {identifier: new_mod}
+    old_runes: dict[str, object] = {}
+    new_runes: dict[str, object] = {}
+    setattr(old_database, "weapon_mods", old_mods)
+    setattr(old_database, "runes", old_runes)
+    setattr(new_database, "weapon_mods", new_mods)
+    setattr(new_database, "runes", new_runes)
+
+    original_database: object = getattr(module, "MOD_DB")
+    restore = _CP8Restoration()
+    previous_profile = sys.getprofile()
+    observations: list[object] = []
+    phase = ""
+    owner: object | None = None
+    widget: object | None = None
+    original_names: object | None = None
+    names_snapshot: object | None = None
+    original_names_descriptor: object | None = None
+    names_were_local = False
+    for database in (old_database, new_database):
+        restore.value(database, "weapon_mods")
+        restore.value(database, "runes")
+    for mapping in (old_mods, new_mods, old_runes, new_runes):
+        restore.mapping(mapping)
+    for mod in (old_mod, new_mod):
+        for field in ("identifier", "name", "mod_type", "item_mods", "modifiers"):
+            restore.value(mod, field)
+        mod_type: object = getattr(mod, "mod_type")
+        restore.value(mod_type, "name")
+        item_mods: object = getattr(mod, "item_mods")
+        modifiers: object = getattr(mod, "modifiers")
+        if not _cp9_is_mapping(item_mods) or not isinstance(item_mods, dict):
+            raise AssertionError("CP11 fixture item-mod mapping")
+        if not _cp9_is_sequence(modifiers) or not isinstance(modifiers, list):
+            raise AssertionError("CP11 fixture modifier list")
+        restore.mapping(item_mods)
+        restore.sequence(modifiers)
+    try:
+        restore.binding(module, "MOD_DB", old_database)
+        widget = _make_widget(module)
+        owner = getattr(widget, "_salvage_planner")
+        _expect(type(owner) is planning.SalvagePlanner, "CP11 actual canonical consuming planner")
+        original_names = getattr(widget, "weapon_mod_generic_names")
+        if not _cp9_is_mapping(original_names) or not isinstance(original_names, dict):
+            raise AssertionError("CP11 canonical generic-label mapping")
+        names_snapshot = _cp8_values(original_names)
+        original_names_descriptor = getattr(type(widget), "weapon_mod_generic_names")
+        names_were_local = "weapon_mod_generic_names" in vars(widget)
+        restore.value(widget, "weapon_mod_generic_names")
+        restore.mapping(original_names)
+        labels = {identifier: label}
+        setattr(widget, "weapon_mod_generic_names", labels)
+
+        direct: object = getattr(owner, "get_auto_salvage_upgrade_slot_resolution")
+        required: object = getattr(owner, "get_weapon_mod_required_salvage_option")
+        delegate: object = getattr(widget, "_get_auto_salvage_upgrade_slot_resolution")
+        if (
+            not isinstance(direct, types.MethodType)
+            or not isinstance(required, types.MethodType)
+            or not isinstance(delegate, types.MethodType)
+        ):
+            raise AssertionError("CP11 actual selector and retained delegate bindings")
+        _expect(
+            direct.__self__ is owner
+            and required.__self__ is owner
+            and direct.__func__.__globals__ is planning_globals
+            and required.__func__.__globals__ is planning_globals
+            and delegate.__self__ is widget
+            and delegate.__func__.__globals__ is vars(module),
+            "CP11 side-local algorithm bodies and original consuming instances",
+        )
+        _expect(
+            Path(required.__func__.__code__.co_filename).resolve() == Path(str(planning.__file__)).resolve(),
+            "CP11 MOD_DB consultation occurs in the moved canonical owner",
+        )
+        _expect(
+            getattr(module, "_get_weapon_mod_type_name") is catalog.get_weapon_mod_type_name
+            and catalog.get_weapon_mod_type_name.__globals__ is catalog_globals,
+            "CP11 real canonical catalog type helper remains bound",
+        )
+        catalog_code = catalog.get_weapon_mod_type_name.__code__
+        selector_code = required.__func__.__code__
+        delegate_code = delegate.__func__.__code__
+        resolution_type: object = getattr(module, "SalvageUpgradeSlotResolution")
+        if not isinstance(resolution_type, type):
+            raise AssertionError("CP11 canonical concrete resolution class")
+
+        def observe(frame: types.FrameType, event: str, result: object) -> None:
+            if frame.f_code is delegate_code and event == "call":
+                _expect(frame.f_locals.get("self") is widget, "CP11 retained delegate uses original widget")
+                observations.append(["delegate", phase])
+            if frame.f_code is catalog_code:
+                if event == "call":
+                    observed_mod: object = frame.f_locals["weapon_mod"]
+                    if observed_mod is old_mod:
+                        mod_label = "old"
+                    elif observed_mod is new_mod:
+                        mod_label = "replacement"
+                    else:
+                        raise AssertionError("CP11 catalog helper received an unexpected database record")
+                    observations.append(["type-helper", mod_label])
+                elif event == "return":
+                    observations.append(["type-name", result])
+                return
+            if frame.f_code is not selector_code:
+                return
+            _expect(frame.f_locals.get("self") is owner, "CP11 database reader uses same consuming planner")
+            if event == "call":
+                observations.append(["selector", phase])
+            elif event == "c_call" and isinstance(result, types.BuiltinMethodType) and result.__name__ == "get":
+                mapping: object = result.__self__
+                if mapping is old_mods:
+                    database_label = "old"
+                elif mapping is new_mods:
+                    database_label = "replacement"
+                else:
+                    raise AssertionError("CP11 unexpected dictionary at actual MOD_DB selector lookup")
+                observations.append(["database", database_label, frame.f_locals["safe_identifier"]])
+            elif event == "return":
+                observations.append(["inferred", result])
+
+        inputs = (rule, item, old_mods, new_mods, old_runes, new_runes, labels)
+        sys.setprofile(observe)
+        for current_phase, operation, expected_option in (
+            ("before-direct", direct, "prefix"),
+            ("before-delegate", delegate, "prefix"),
+            ("after-direct", direct, "suffix"),
+            ("after-delegate", delegate, "suffix"),
+        ):
+            if current_phase == "after-direct":
+                _expect(getattr(module, "MOD_DB") is old_database, "CP11 baseline binding survives both before calls")
+                setattr(module, "MOD_DB", new_database)
+            expected_database = old_database if current_phase.startswith("before") else new_database
+            _expect(
+                getattr(module, "MOD_DB") is expected_database
+                and getattr(widget, "_salvage_planner") is owner
+                and direct.__self__ is owner
+                and required.__self__ is owner,
+                "CP11 replacement changes binding without rebuilding consuming planner",
+            )
+            before = _cp8_values(*inputs)
+            phase = current_phase
+            result: object = operation(rule, item)
+            _cp8_unchanged(before, *inputs)
+            _expect(
+                getattr(module, "MOD_DB") is expected_database and getattr(widget, "_salvage_planner") is owner,
+                "CP11 immediate unchanged binding and consumer after actual selector",
+            )
+            _expect(type(result) is resolution_type, "CP11 canonical exact result class")
+            _cp11_equal(
+                result,
+                {"selected_option": expected_option, "matched_labels": [label], "block_reason": ""},
+                "complete real selector result " + current_phase,
+            )
+            _expect(
+                getattr(old_database, "weapon_mods") is old_mods
+                and getattr(new_database, "weapon_mods") is new_mods
+                and getattr(old_database, "runes") is old_runes
+                and getattr(new_database, "runes") is new_runes,
+                "CP11 database records retain their exact distinct mappings",
+            )
+        sys.setprofile(previous_profile)
+        _cp11_equal(
+            observations,
+            [
+                ["selector", "before-direct"],
+                ["database", "old", identifier],
+                ["type-helper", "old"],
+                ["type-name", "Prefix"],
+                ["inferred", "prefix"],
+                ["delegate", "before-delegate"],
+                ["selector", "before-delegate"],
+                ["database", "old", identifier],
+                ["type-helper", "old"],
+                ["type-name", "Prefix"],
+                ["inferred", "prefix"],
+                ["selector", "after-direct"],
+                ["database", "replacement", identifier],
+                ["type-helper", "replacement"],
+                ["type-name", "Suffix"],
+                ["inferred", "suffix"],
+                ["delegate", "after-delegate"],
+                ["selector", "after-delegate"],
+                ["database", "replacement", identifier],
+                ["type-helper", "replacement"],
+                ["type-name", "Suffix"],
+                ["inferred", "suffix"],
+            ],
+            "complete ordered actual moved-selector/delegate database observations",
+        )
+    finally:
+        sys.setprofile(previous_profile)
+        restore.restore()
+        _expect(
+            getattr(module, "MOD_DB") is original_database and sys.getprofile() is previous_profile,
+            "CP11 exact original database binding and profiler object restored",
+        )
+        if widget is not None and original_names is not None and names_snapshot is not None:
+            _expect(
+                getattr(widget, "weapon_mod_generic_names") is original_names
+                and getattr(type(widget), "weapon_mod_generic_names") is original_names_descriptor
+                and ("weapon_mod_generic_names" in vars(widget)) == names_were_local,
+                "CP11 exact original label object, descriptor and binding presence restored",
+            )
+            _cp8_unchanged(names_snapshot, original_names)
+
+
+# CP11-HARNESS-ADDITIONS-9
+
+_CP11_CASES: list[tuple[str, Callable[[types.ModuleType], None]]] = [
+    ("cp11_selector_helpers", _test_cp11_selector_helpers),
+    ("cp11_identify_normal", lambda module: _test_cp11_identify_reads(module, "normal")),
+    ("cp11_identify_no_kit", lambda module: _test_cp11_identify_reads(module, "no-kit")),
+    ("cp11_identify_empty", lambda module: _test_cp11_identify_reads(module, "empty")),
+    ("cp11_identify_changed", lambda module: _test_cp11_identify_reads(module, "changed")),
+    ("cp11_identify_failure", lambda module: _test_cp11_identify_reads(module, "failure")),
+    ("cp11_identify_prefix_claim", lambda module: _test_cp11_identify_prefix(module, "claim")),
+    ("cp11_identify_prefix_claimed_id", lambda module: _test_cp11_identify_prefix(module, "claimed-id")),
+    ("cp11_identify_prefix_action_id", lambda module: _test_cp11_identify_prefix(module, "action-id")),
+    ("cp11_identify_prefix_entry", lambda module: _test_cp11_identify_prefix(module, "entry")),
+    ("cp11_destroy_split_later_target", lambda module: _test_cp11_destroy_cross_target(module, "later-target")),
+    ("cp11_destroy_split_existing", lambda module: _test_cp11_destroy_cross_target(module, "existing")),
+    ("cp11_destroy_split_blocked", lambda module: _test_cp11_destroy_cross_target(module, "blocked")),
+    ("cp11_destroy_prefix_claim", lambda module: _test_cp11_destroy_prefix(module, "claim")),
+    ("cp11_destroy_staging_failure", lambda module: _test_cp11_destroy_observation_failure(module, False)),
+    ("cp11_destroy_category_claim_order", lambda module: _test_cp11_destroy_observation_failure(module, True)),
+    ("cp11_destroy_prefix_action", lambda module: _test_cp11_destroy_prefix(module, "action")),
+    ("cp11_destroy_prefix_id", lambda module: _test_cp11_destroy_prefix(module, "id")),
+    ("cp11_destroy_prefix_entry", lambda module: _test_cp11_destroy_prefix(module, "entry")),
+    ("cp11_disabled_destroy_normalization", _test_cp11_disabled_destroy_normalization),
+    ("cp11_salvage_materials", _test_cp11_salvage_materials),
+    ("cp11_salvage_prefix_format", lambda module: _test_cp11_salvage_prefix(module, "format")),
+    ("cp11_salvage_prefix_slot", lambda module: _test_cp11_salvage_prefix(module, "slot")),
+    ("cp11_salvage_prefix_owner", lambda module: _test_cp11_salvage_prefix(module, "owner")),
+    ("cp11_salvage_prefix_id", lambda module: _test_cp11_salvage_prefix(module, "id")),
+    ("cp11_salvage_prefix_claim", lambda module: _test_cp11_salvage_prefix(module, "claim")),
+    ("cp11_salvage_prefix_entry", lambda module: _test_cp11_salvage_prefix(module, "entry")),
+    ("cp11_salvage_rejection_disabled", lambda module: _test_cp11_salvage_rejection_reads(module, "disabled")),
+    ("cp11_salvage_rejection_unselected", lambda module: _test_cp11_salvage_rejection_reads(module, "unselected")),
+    ("cp11_salvage_rejection_protected", lambda module: _test_cp11_salvage_rejection_reads(module, "protected")),
+    (
+        "cp11_salvage_rejection_unsalvageable",
+        lambda module: _test_cp11_salvage_rejection_reads(module, "unsalvageable"),
+    ),
+    ("cp11_salvage_rejection_customized", lambda module: _test_cp11_salvage_rejection_reads(module, "customized")),
+    ("cp11_salvage_rejection_unidentified", lambda module: _test_cp11_salvage_rejection_reads(module, "unidentified")),
+    ("cp11_salvage_rejection_no_kit", lambda module: _test_cp11_salvage_rejection_reads(module, "no-kit")),
+    ("cp11_late_normalizer_binding", _test_cp11_late_normalizer_binding),
+    ("cp11_widget_late_aliases", _test_cp11_widget_late_aliases),
+    ("cp11_ownership", _test_cp11_ownership),
+    ("cp11_records_and_late_factories", _test_cp11_records_and_late_factories),
+    ("cp11_actual_identify_routes", lambda module: _test_cp11_common_group(module, "identify")),
+    ("cp11_actual_salvage_routes", lambda module: _test_cp11_common_group(module, "salvage")),
+    ("cp11_actual_destroy_routes", lambda module: _test_cp11_common_group(module, "destroy")),
+    ("cp11_actual_consumers_routes", lambda module: _test_cp11_common_group(module, "consumers")),
+    ("cp11_combined_actual_route", _test_cp11_combined),
+    ("cp11_destroy_uses_replaced_salvage_planner", _test_cp11_destroy_uses_replaced_salvage_planner),
+    (
+        "cp11_current_policy_replacement_salvage",
+        lambda module: _test_cp11_current_policy_replacement(module, "salvage"),
+    ),
+    (
+        "cp11_current_policy_replacement_destroy",
+        lambda module: _test_cp11_current_policy_replacement(module, "destroy"),
+    ),
+    ("cp11_mod_db_replacement", _test_cp11_mod_db_replacement),
+]
+
+_CP11_STAGE_CASES: dict[str, tuple[str, ...]] = {
+    "selection": (
+        "cp11_selector_helpers",
+        "cp11_salvage_materials",
+        "cp11_salvage_prefix_format",
+        "cp11_salvage_prefix_slot",
+        "cp11_salvage_prefix_owner",
+        "cp11_salvage_prefix_id",
+        "cp11_salvage_prefix_claim",
+        "cp11_salvage_prefix_entry",
+        "cp11_salvage_rejection_disabled",
+        "cp11_salvage_rejection_unselected",
+        "cp11_salvage_rejection_protected",
+        "cp11_salvage_rejection_unsalvageable",
+        "cp11_salvage_rejection_customized",
+        "cp11_salvage_rejection_unidentified",
+        "cp11_salvage_rejection_no_kit",
+        "cp11_late_normalizer_binding",
+        "cp11_actual_salvage_routes",
+    ),
+    "identify_destroy": (
+        "cp11_identify_normal",
+        "cp11_identify_no_kit",
+        "cp11_identify_empty",
+        "cp11_identify_changed",
+        "cp11_identify_failure",
+        "cp11_identify_prefix_claim",
+        "cp11_identify_prefix_claimed_id",
+        "cp11_identify_prefix_action_id",
+        "cp11_identify_prefix_entry",
+        "cp11_destroy_split_later_target",
+        "cp11_destroy_split_existing",
+        "cp11_destroy_split_blocked",
+        "cp11_destroy_prefix_claim",
+        "cp11_destroy_staging_failure",
+        "cp11_destroy_category_claim_order",
+        "cp11_destroy_prefix_action",
+        "cp11_destroy_prefix_id",
+        "cp11_destroy_prefix_entry",
+        "cp11_disabled_destroy_normalization",
+        "cp11_actual_identify_routes",
+        "cp11_actual_destroy_routes",
+    ),
+    "integration": (
+        "cp11_widget_late_aliases",
+        "cp11_ownership",
+        "cp11_records_and_late_factories",
+        "cp11_actual_consumers_routes",
+        "cp11_combined_actual_route",
+        "cp11_destroy_uses_replaced_salvage_planner",
+        "cp11_current_policy_replacement_salvage",
+        "cp11_current_policy_replacement_destroy",
+        "cp11_mod_db_replacement",
+    ),
+}
+
+
+_CP11_INPUTS: tuple[str, ...] = _CP10_INPUTS
+
+
+def _cp11_bindings(module: types.ModuleType) -> dict[str, str]:
+    from Sources.icefox.MerchantRules.configuration import SellRule
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+    from Sources.icefox.MerchantRules.planning import PlanResult
+    from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
+
+    _expect(
+        module.SellRule is SellRule
+        and module.InventoryItemInfo is InventoryItemInfo
+        and module.PlanResult is PlanResult
+        and module.ProtectionPolicy is ProtectionPolicy,
+        'CP11 side-local canonical classes',
+    )
+    root = REPO_ROOT.resolve()
+    origins: dict[str, str] = {}
+    for name, loaded in tuple(sys.modules.items()):
+        if not (name.startswith('Sources.icefox') or name == module.__name__):
+            continue
+        filename: object = getattr(loaded, '__file__', None)
+        _expect(isinstance(filename, str), 'CP11 owning module has a source origin: ' + name)
+        if not isinstance(filename, str):
+            raise AssertionError(name)
+        origin = _cp10_guard(Path(filename))
+        _expect(origin.is_relative_to(root), 'CP11 foreign production origin: ' + str(origin))
+        origins[name] = str(origin.relative_to(root))
+        namespace: Mapping[str, object] = vars(loaded)
+        for value in namespace.values():
+            if isinstance(value, types.FunctionType) and value.__module__ == name:
+                _expect(Path(value.__code__.co_filename).resolve() == origin, 'CP11 defining code origin')
+                _expect(value.__globals__ is vars(loaded), 'CP11 defining globals remain side-local')
+    widget_type: object = module.MerchantRulesWidget
+    if not isinstance(widget_type, type):
+        raise AssertionError('CP11 widget owner is a class')
+    widget_namespace: Mapping[str, object] = vars(widget_type)
+    for value in widget_namespace.values():
+        if isinstance(value, types.FunctionType):
+            _expect(
+                Path(value.__code__.co_filename).resolve() == MERCHANT_RULES_PATH.resolve()
+                and value.__globals__ is vars(module),
+                'CP11 widget method closure is source-bound',
+            )
+    planning_module = sys.modules['Sources.icefox.MerchantRules.planning']
+    planning_namespace: Mapping[str, object] = vars(planning_module)
+    owner_names = ('IdentifyPlanner', 'SalvagePlanner', 'DestroyPlanner')
+    present = [name in planning_namespace for name in owner_names]
+    _expect(all(present) or not any(present), 'CP11 complete owner set or genuine CP10 absence')
+    if all(present):
+        origin = (REPO_ROOT / 'Sources/icefox/MerchantRules/planning.py').resolve()
+        for name in owner_names:
+            owner = planning_namespace[name]
+            if not isinstance(owner, type):
+                raise AssertionError('CP11 canonical planner class: ' + name)
+            owner_namespace: Mapping[str, object] = vars(owner)
+            for value in owner_namespace.values():
+                if isinstance(value, types.FunctionType):
+                    _expect(value.__globals__ is vars(planning_module), 'CP11 planner defining globals')
+                    _expect(Path(value.__code__.co_filename).resolve() == origin, 'CP11 planner defining source')
+    return origins
+
+
+def _cp11_cold_widget(scratch: Path) -> dict[str, object]:
+    from typing import get_type_hints
+
+    events: list[str] = []
+    _install_stub_modules(scratch)
+    database: object = getattr(sys.modules['Sources.marks_sources.mods_parser'], 'ModDatabase')
+    _expect(isinstance(database, type), 'CP11 stub database class')
+    original_load: object = getattr(database, 'load')
+    if not isinstance(original_load, types.FunctionType):
+        raise AssertionError('CP11 stub database loader')
+
+    def load(path: str) -> object:
+        result: object = original_load(path)
+        events.append('mod_database_initialized')
+        return result
+
+    setattr(database, 'load', staticmethod(load))
+
+    class Watch(importlib.abc.MetaPathFinder):
+        def find_spec(
+            self,
+            fullname: str,
+            path: Sequence[str] | None = None,
+            target: types.ModuleType | None = None,
+        ) -> importlib.machinery.ModuleSpec | None:
+            if fullname == 'Sources.icefox.MerchantRules.planning':
+                events.append('planning')
+                _expect(
+                    'Sources.icefox.MerchantRules.requirement_protection' not in sys.modules,
+                    'CP11 planning precedes protection acquisition',
+                )
+            if fullname == 'Sources.icefox.MerchantRules.requirement_protection':
+                partial = sys.modules.get('merchant_rules_regression_target')
+                _expect(
+                    partial is not None and 'MOD_DB' in vars(partial),
+                    'CP11 MOD_DB bound before first protection acquisition',
+                )
+                events.append('requirement_first_acquisition')
+            return None
+
+    annotations: Mapping[str, object] = get_type_hints(Watch.find_spec)
+    _expect(
+        annotations['return'] == importlib.machinery.ModuleSpec | None
+        and annotations['target'] == types.ModuleType | None
+        and annotations['path'] == Sequence[str] | None,
+        'CP11 watcher annotations resolve through the global importlib binding',
+    )
+    watcher = Watch()
+    sys.meta_path.insert(0, watcher)
+    try:
+        spec = importlib.util.spec_from_file_location('merchant_rules_regression_target', MERCHANT_RULES_PATH)
+        if spec is None or spec.loader is None:
+            raise AssertionError('CP11 widget import specification')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        setattr(module, 'PROFILE_BACKEND', sys.modules['Sources.icefox.MerchantRules.profiles'])
+    finally:
+        sys.meta_path.remove(watcher)
+    _requirement_contract_expect(
+        events,
+        ['planning', 'mod_database_initialized', 'requirement_first_acquisition'],
+        'CP11 real widget-driven acquisition order',
+    )
+    from Sources.icefox.MerchantRules import planning
+
+    candidate = all(hasattr(planning, name) for name in ('IdentifyPlanner', 'SalvagePlanner', 'DestroyPlanner'))
+    if candidate:
+        _test_cp11_ownership(module)
+    return {
+        'annotations_resolved': True,
+        'events': events,
+        'bindings': _cp11_bindings(module),
+        'candidate_constructor_checked': candidate,
+        'loader': 'widget stub packages; namespace proof is a separate child',
+    }
+
+
+def _cp11_child(mode: str, scratch: Path) -> int:
+    import importlib
+
+    global _cp10_storage_root
+
+    primary: BaseException | None = None
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    errors: list[str] = []
+    storage_ready = False
+    result: dict[str, object] = {}
+    try:
+        _cp10_guard(scratch)
+        _expect(
+            not scratch.is_relative_to(REPO_ROOT) and not REPO_ROOT.is_relative_to(scratch),
+            'CP11 source and writable storage roots are disjoint',
+        )
+        _cp10_storage_root = scratch
+        storage_ready = True
+        before['source'] = _cp10_pins(REPO_ROOT)
+        _expect(
+            not any(name == 'Sources' or name.startswith('Sources.') for name in sys.modules),
+            'CP11 fresh process starts without project packages',
+        )
+        sys.path.insert(0, str(REPO_ROOT))
+
+        def owned_write(raw: object) -> None:
+            if not _cp10_is_path(raw):
+                return
+            path = Path(os.path.abspath(os.fsdecode(raw)))
+            _expect(path.is_relative_to(scratch), 'CP11 write outside owned storage: ' + str(path))
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                _cp10_guard(path.parent)
+            else:
+                _cp10_guard(path)
+
+        def audit(event: str, arguments: tuple[object, ...]) -> None:
+            if event.startswith('socket.') or event in ('ctypes.dlopen', 'subprocess.Popen'):
+                raise RuntimeError('CP11 offline child forbids ' + event)
+            if event == 'open':
+                flags = arguments[2]
+                if isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC):
+                    owned_write(arguments[0])
+            elif event in ('os.mkdir', 'os.remove', 'os.rmdir', 'shutil.rmtree'):
+                owned_write(arguments[0])
+            elif event in ('os.rename', 'os.replace'):
+                owned_write(arguments[0])
+                owned_write(arguments[1])
+
+        sys.addaudithook(audit)
+        if mode == 'planning':
+            planning = importlib.import_module('Sources.icefox.MerchantRules.' + mode)
+            parent = sys.modules['Sources']
+            spec = parent.__spec__
+            if getattr(parent, '__file__', None) is not None or spec is None or spec.origin is not None:
+                raise AssertionError('CP11 actual namespace parent')
+            locations = spec.submodule_search_locations
+            if locations is None or list(locations) != [str(REPO_ROOT / 'Sources')]:
+                raise AssertionError('CP11 namespace uses exactly the selected root')
+            for name in (
+                'Py4GWCoreLib',
+                'PyJson',
+                'Sources.icefox.MerchantRules.inventory_evidence',
+                'Sources.icefox.MerchantRules.requirement_protection',
+            ):
+                _expect(name not in sys.modules, 'CP11 isolated planning acquired forbidden dependency: ' + name)
+            filename = planning.__file__
+            if (
+                filename is None
+                or Path(filename).resolve() != (REPO_ROOT / f'Sources/icefox/MerchantRules/{mode}.py').resolve()
+            ):
+                raise AssertionError('CP11 canonical planning origin')
+            candidate_routes = all(
+                hasattr(planning, name) for name in ('IdentifyPlanner', 'SalvagePlanner', 'DestroyPlanner')
+            )
+            if candidate_routes and mode == 'planning':
+                _requirement_contract_expect(planning.material_batch_size(921), 10, 'CP11 cold pure batch primitive')
+                _requirement_contract_expect(
+                    planning.material_destination(923),
+                    'rare_material_trader',
+                    'CP11 cold pure destination primitive',
+                )
+            result = {
+                'namespace': True,
+                'eager_inventory': False,
+                'eager_protection': False,
+                'new_owner': candidate_routes,
+            }
+        elif mode == 'widget':
+            result = _cp11_cold_widget(scratch)
+        elif mode == 'observations':
+            module: types.ModuleType = _load_merchant_rules_module(scratch)
+            origins = _cp11_bindings(module)
+            result = {
+                'values': _cp11_differential_observations(module),
+                'bindings': origins,
+                'within_process_identity_assertions': True,
+            }
+            _cp11_bindings(module)
+        else:
+            raise AssertionError('CP11 unknown child mode: ' + mode)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        _cp10_capture_final({'source': REPO_ROOT}, before, final, errors)
+        record = {
+            'mode': mode,
+            'status': 'failed' if primary is not None or errors else 'completed',
+            'exception': None if primary is None else {'type': type(primary).__name__, 'message': str(primary)},
+            'source_root': str(REPO_ROOT),
+            'widget_path': str(MERCHANT_RULES_PATH),
+            'script_dir': str(SCRIPT_DIR),
+            'storage_root': str(scratch),
+            'flags': {
+                'isolated': sys.flags.isolated,
+                'no_site': sys.flags.no_site,
+                'dont_write_bytecode': sys.flags.dont_write_bytecode,
+                'optimize': sys.flags.optimize,
+                'utf8_mode': sys.flags.utf8_mode,
+            },
+            'environment': _cp10_environment(os.environ),
+            'before': before,
+            'final': final,
+            'evidence_errors': errors,
+        }
+        if storage_ready:
+            _cp10_attempt('child final write', lambda: _cp10_write_json(scratch / 'child-final.json', record), errors)
+        else:
+            _cp10_attempt(
+                'child final stream', lambda: print('CP11_FINAL=' + json.dumps(record, sort_keys=True)), errors
+            )
+        _cp10_preserve_failure(primary, errors)
+    print('CP11_JSON=' + json.dumps(result, sort_keys=True))
+    return 0
+
+
+def _cp11_external(kind: str) -> dict[str, object]:
+    from uuid import uuid4
+
+    _expect(kind in ('cold', 'differential'), 'CP11 known external run kind')
+    parent = _cp10_guard(Path(os.environ['MERCHANT_RULES_CP11_OUTPUT_PARENT']))
+    oracle = Path(os.environ['MERCHANT_RULES_CP11_ORACLE_ROOT'])
+    candidate = REPO_ROOT
+    _expect(
+        not parent.is_relative_to(oracle) and not parent.is_relative_to(candidate),
+        'CP11 output parent outside source roots',
+    )
+    output = parent / ('cp11-' + kind + '-' + uuid4().hex[:8])
+    output.mkdir()
+    roots = {'oracle': oracle, 'candidate': candidate}
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    reports: dict[str, object] = {}
+    errors: list[str] = []
+    primary: BaseException | None = None
+    comparison = 'not-started' if kind == 'differential' else 'not-applicable'
+    modes = ('planning', 'widget') if kind == 'cold' else ('observations',)
+    jobs: dict[str, dict[str, object]] = {
+        side + '-' + mode: {'status': 'not-started', 'exit': None} for side in roots for mode in modes
+    }
+    try:
+        _cp10_guard(oracle)
+        _cp10_guard(candidate)
+        _expect(
+            oracle != candidate and not oracle.is_relative_to(candidate) and not candidate.is_relative_to(oracle),
+            'CP11 independent source roots',
+        )
+        for name, root in roots.items():
+            before[name] = _cp10_pins(root)
+        fixed = {
+            'Widgets/Guild Wars/Items & Loot/MerchantRules.py': '6ab728421ffee1e3527dc57d404db5d620268880fb687deed868620bc67b7ee7',
+            'Sources/icefox/MerchantRules/planning.py': 'd98c83ef7a3a79ee3d6a4620dcc69dc87209d13524d789e53e91f7f1eaddee37',
+            'Sources/icefox/MerchantRules/profiles.py': '15916f9703ad3eda3149e1796cfeb8401dabb86768c14a5cb185579019f68f8d',
+            'Py4GWCoreLib/py4gwcorelib_src/JsonFactory.py': '993c20c987b1e64257db35ab10bb4ab1da74b837d4ab2292172f997ce5f7f3e1',
+        }
+        for relative, digest in fixed.items():
+            _requirement_contract_expect(before['oracle'][relative], digest, 'CP11 completed-CP10 oracle ' + relative)
+        for relative in _CP11_INPUTS:
+            if relative not in (
+                'Widgets/Guild Wars/Items & Loot/MerchantRules.py',
+                'Sources/icefox/MerchantRules/planning.py',
+            ):
+                _requirement_contract_expect(
+                    before['oracle'][relative],
+                    before['candidate'][relative],
+                    'CP11 identical non-production-delta input: ' + relative,
+                )
+        for side, root in roots.items():
+            for mode in modes:
+                key = side + '-' + mode
+                location = output / key
+                location.mkdir()
+                scratch = location / 'storage'
+                scratch.mkdir()
+                child = root / '.local-tests/merchant-rules/test_merchant_rules_regression.py'
+                command = [sys.executable, '-I', '-B', '-S', str(child), '--cp11-child', mode, str(scratch)]
+                environment = os.environ.copy()
+                environment['PYTHONDONTWRITEBYTECODE'] = '1'
+                for name in ('TEMP', 'TMP', 'TMPDIR'):
+                    environment[name] = str(scratch)
+                launch = jobs[key]
+                launch.update(
+                    {
+                        'source_pins': before[side],
+                        'source_root': str(root),
+                        'storage_root': str(scratch),
+                        'mode': mode,
+                    }
+                )
+                completed = _cp10_run_process(command, scratch, environment, location, launch, timeout=300)
+                records = [
+                    line.removeprefix('CP11_JSON=')
+                    for line in completed.stdout.decode('utf-8').splitlines()
+                    if line.startswith('CP11_JSON=')
+                ]
+                _expect(len(records) == 1, 'CP11 exactly one complete child observation')
+                report: object = json.loads(records[0])
+                reports[key] = report
+        if kind == 'differential':
+            comparison = 'comparing'
+            _requirement_contract_expect(
+                reports['oracle-observations'],
+                reports['candidate-observations'],
+                'CP11 complete cross-process values, ordered traces and binding shapes',
+            )
+            comparison = 'passed'
+    except BaseException as error:
+        primary = error
+        if comparison == 'comparing':
+            comparison = 'failed'
+        raise
+    finally:
+        _cp10_capture_final(roots, before, final, errors)
+        record = {
+            'kind': kind,
+            'status': 'failed' if primary is not None or errors else 'completed',
+            'exception': None if primary is None else {'type': type(primary).__name__, 'message': str(primary)},
+            'comparison': comparison,
+            'jobs': jobs,
+            'reports': reports,
+            'environment': _cp10_environment(os.environ),
+            'before': before,
+            'final': final,
+            'evidence_errors': errors,
+        }
+        _cp10_attempt('external report write', lambda: _cp10_write_json(output / 'report.json', record), errors)
+        _cp10_preserve_failure(primary, errors)
+    print('CP11 ' + kind + ' evidence: ' + str(output / 'report.json'))
+    return reports
+
+
+def _test_cp11_cold_import() -> None:
+    reports = _cp11_external("cold")
+    _cp10_equal(
+        set(reports),
+        {side + "-" + mode for side in ("oracle", "candidate") for mode in ("planning", "widget")},
+        "four cold children",
+    )
+    for side in ("oracle", "candidate"):
+        for mode in ("planning",):
+            value = reports[side + "-" + mode]
+            if not _cp10_is_dict(value):
+                raise AssertionError("CP11 cold report object")
+            _expect(value["new_owner"] is (side == "candidate"), "CP11 old/new owner acquisition")
+        widget = reports[side + "-widget"]
+        if not _cp10_is_dict(widget):
+            raise AssertionError("CP11 cold widget report")
+        _expect(widget["candidate_constructor_checked"] is (side == "candidate"), "CP11 cold constructor reachability")
+
+
+def _test_cp11_completed_cp10_differential() -> None:
+    reports = _cp11_external("differential")
+    _cp10_equal(
+        set(reports), {"oracle-observations", "candidate-observations"}, "two independently source-bound comparisons"
+    )
+
+
+_CP11_CASES.extend(
+    (
+        ("cp11_cold_import", lambda _module: _test_cp11_cold_import()),
+        ("cp11_completed_cp10_differential", lambda _module: _test_cp11_completed_cp10_differential()),
+    )
 )
 
 
@@ -60100,6 +63371,7 @@ def main() -> int:
         )
 
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP10_CASES)
+        tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP11_CASES)
 
         catalog_contract_tests = [
             (
@@ -60131,6 +63403,10 @@ def main() -> int:
         if os.environ.get("MERCHANT_RULES_CATALOG_ONLY") == "1":
             tests = catalog_contract_tests
 
+        _expect(
+            not (os.environ.get("MERCHANT_RULES_CP10_CASES", "") and os.environ.get("MERCHANT_RULES_CP11_CASES", "")),
+            "CP10 and CP11 selections are mutually exclusive",
+        )
         requested = os.environ.get("MERCHANT_RULES_CP10_CASES", "")
         if requested:
             _expect(
@@ -60145,6 +63421,21 @@ def main() -> int:
             registered = {name for name, _ in tests}
             _expect(set(names) <= registered, "CP10 selection names must all be registered")
             tests = [test for test in tests if test[0] in names]
+
+        requested_cp11 = os.environ.get("MERCHANT_RULES_CP11_CASES", "")
+        if requested_cp11:
+            _expect(
+                not any(
+                    os.environ.get(name) == "1"
+                    for name in ("MERCHANT_RULES_CATALOG_ONLY", "MERCHANT_RULES_SALVAGE_KIT_ONLY")
+                ),
+                "CP11 selection cannot be combined with historical ONLY flags",
+            )
+            names_cp11 = requested_cp11.split(",")
+            _expect(len(names_cp11) == len(set(names_cp11)) and all(names_cp11), "CP11 unique nonempty selection")
+            registered_cp11 = {name for name, _ in tests}
+            _expect(set(names_cp11) <= registered_cp11, "CP11 selection names must all be registered")
+            tests = [test for test in tests if test[0] in names_cp11]
 
         failures: list[tuple[str, str]] = []
         for name, test_fn in tests:
@@ -60174,8 +63465,12 @@ def main() -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        if len(sys.argv) != 4 or sys.argv[1] not in {"--cp9-child", "--cp10-child"}:
-            raise SystemExit("Expected --cp9-child or --cp10-child MODE OWNED_STORAGE, or no arguments.")
-        child = _cp10_child if sys.argv[1] == "--cp10-child" else _cp9_child
+        if len(sys.argv) != 4 or sys.argv[1] not in {"--cp9-child", "--cp10-child", "--cp11-child"}:
+            raise SystemExit("Expected --cp9-child, --cp10-child or --cp11-child MODE OWNED_STORAGE, or no arguments.")
+        child = (
+            _cp11_child
+            if sys.argv[1] == "--cp11-child"
+            else _cp10_child if sys.argv[1] == "--cp10-child" else _cp9_child
+        )
         raise SystemExit(child(sys.argv[2], Path(sys.argv[3])))
     raise SystemExit(main())

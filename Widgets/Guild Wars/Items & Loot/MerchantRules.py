@@ -4801,71 +4801,23 @@ _normalize_common_material_model_ids = _configuration.normalize_common_material_
 
 
 def _get_salvage_rule_upgrade_target_count(rule: object) -> int:
-    target_armor_identifiers = _dedupe_identifiers(
-        _coerce_list(getattr(rule, "target_armor_upgrade_identifiers", []))
-    )
-    target_identifiers = _dedupe_identifiers(_coerce_list(getattr(rule, "target_weapon_mod_identifiers", [])))
-    target_thresholds = _normalize_weapon_mod_threshold_rules(
-        _coerce_list(getattr(rule, "target_weapon_mod_thresholds", []))
-    )
-    target_variants = _normalize_weapon_mod_variant_rules(
-        _coerce_list(getattr(rule, "target_weapon_mod_variants", []))
-    )
-    target_variant_thresholds = _normalize_weapon_mod_variant_threshold_rules(
-        _coerce_list(getattr(rule, "target_weapon_mod_variant_thresholds", []))
-    )
-    return (
-        len(target_armor_identifiers)
-        + len(target_identifiers)
-        + len(target_thresholds)
-        + len(target_variants)
-        + len(target_variant_thresholds)
-    )
+    return _planning.get_salvage_rule_upgrade_target_count(rule, normalizers=_selector_normalizers)
 
 
 def _salvage_rule_has_armor_upgrade_targets(rule: object) -> bool:
-    return bool(
-        _dedupe_identifiers(
-            _coerce_list(getattr(rule, "target_armor_upgrade_identifiers", []))
-        )
-    )
+    return _planning.salvage_rule_has_armor_upgrade_targets(rule, normalizers=_selector_normalizers)
 
 
 def _salvage_rule_has_weapon_upgrade_targets(rule: object) -> bool:
-    return bool(
-        _dedupe_identifiers(
-            _coerce_list(getattr(rule, "target_weapon_mod_identifiers", []))
-        )
-        or _normalize_weapon_mod_threshold_rules(
-            _coerce_list(getattr(rule, "target_weapon_mod_thresholds", []))
-        )
-        or _normalize_weapon_mod_variant_rules(
-            _coerce_list(getattr(rule, "target_weapon_mod_variants", []))
-        )
-        or _normalize_weapon_mod_variant_threshold_rules(
-            _coerce_list(getattr(rule, "target_weapon_mod_variant_thresholds", []))
-        )
-    )
+    return _planning.salvage_rule_has_weapon_upgrade_targets(rule, normalizers=_selector_normalizers)
 
 
 def _salvage_rule_has_upgrade_targets(rule: object) -> bool:
-    return _get_salvage_rule_upgrade_target_count(rule) > 0
+    return _planning.salvage_rule_has_upgrade_targets(rule, normalizers=_selector_normalizers)
 
 
 def _salvage_rule_has_selectors(rule: SalvageRule) -> bool:
-    return bool(
-        _dedupe_model_ids(getattr(rule, "model_ids", []))
-        or (
-            _resolve_salvage_operation(getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT))
-            == SALVAGE_OPTION_MATERIALS
-            and _normalize_common_material_model_ids(
-                getattr(rule, "target_common_material_model_ids", [])
-            )
-        )
-        or any(bool(value) for value in _normalize_salvage_rarity_flags(getattr(rule, "rarities", {})).values())
-        or any(bool(value) for value in _normalize_salvage_category_flags(getattr(rule, "categories", {})).values())
-        or _salvage_rule_has_upgrade_targets(rule)
-    )
+    return _planning.salvage_rule_has_selectors(rule, normalizers=_selector_normalizers)
 
 
 _normalize_salvage_rule = _rule_normalizer.normalize_salvage_rule
@@ -4893,6 +4845,25 @@ _serialize_sell_rule = _rule_normalizer.serialize_sell_rule
 
 
 _serialize_destroy_rule = _rule_normalizer.serialize_destroy_rule
+
+
+_selector_normalizers = _planning.SelectorNormalizers(
+    get_identify_settings=lambda: _normalize_identify_settings,
+    get_salvage_settings=lambda: _normalize_salvage_settings,
+    get_salvage_rule=lambda: _normalize_salvage_rule,
+    get_destroy_rule=lambda: _normalize_destroy_rule,
+    get_coerce_list=lambda: _coerce_list,
+    get_dedupe_identifiers=lambda: _dedupe_identifiers,
+    get_dedupe_model_ids=lambda: _dedupe_model_ids,
+    get_thresholds=lambda: _normalize_weapon_mod_threshold_rules,
+    get_variants=lambda: _normalize_weapon_mod_variant_rules,
+    get_variant_thresholds=lambda: _normalize_weapon_mod_variant_threshold_rules,
+    get_common_materials=lambda: _normalize_common_material_model_ids,
+    get_rarity_flags=lambda: _normalize_salvage_rarity_flags,
+    get_category_flags=lambda: _normalize_salvage_category_flags,
+    get_whitelist_targets=lambda: _normalize_whitelist_targets,
+    get_rarity_key=lambda: _normalize_rarity_key,
+)
 
 
 def _has_explicit_equippable_hard_protection(rule: SellRule) -> bool:
@@ -5234,7 +5205,7 @@ class MerchantRulesWidget:
             normalize_payload=self._profile_payload_normalizer,
             profile_version=PROFILE_VERSION,
         )
-        self.account_key = ""
+        self.account_key: str = ""
         self.config_path = ""
         self.active_profile_display_name = ""
         self.loaded_profile_provenance: LoadedProfileProvenance | None = None
@@ -5568,6 +5539,65 @@ class MerchantRulesWidget:
             choose_keep=lambda items, count: _choose_keep_subset_at_most(items, count),
             target_label=lambda target: self._format_cleanup_target_label_short(target),
             rule_reference=lambda index, rule: self._format_sell_rule_reference(index, rule),
+        )
+
+        self._identify_planner = _planning.IdentifyPlanner(
+            normalizers=_selector_normalizers,
+            read_settings=lambda: self.identify_settings,
+            get_id_kit=lambda: self._get_id_kit_id,
+            read_rarity_order=lambda: RARITY_OPTION_ORDER,
+            get_entry_factory=lambda: ExecutionPlanEntry,
+        )
+        self._salvage_planner = _planning.SalvagePlanner(
+            normalizers=_selector_normalizers,
+            read_settings=lambda: self.salvage_settings,
+            read_mod_db=lambda: MOD_DB,
+            read_weapon_mod_names=lambda: self.weapon_mod_names,
+            read_common_outputs=lambda: self.common_salvage_model_ids_by_item_key,
+            get_mod_type=lambda: _get_weapon_mod_type_name,
+            get_armor_identity=lambda: _get_armor_upgrade_catalog_identity,
+            get_armor_signature=lambda: _armor_upgrade_signature_is_exactly_present,
+            read_rune_mod_type=lambda: ItemType.Rune_Mod,
+            read_alt_minor_vigor=lambda: ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE,
+            read_category_order=lambda: SALVAGE_CATEGORY_ORDER,
+            read_backend_unavailable_reason=lambda: SALVAGE_UPGRADE_BACKEND_UNAVAILABLE_REASON,
+            get_hard_protection=lambda: self._get_hard_protection_hit,
+            get_kit=lambda: self._get_salvage_kit_id_for_option,
+            get_armor_support=lambda: self._get_armor_salvage_upgrade_support_status,
+            get_weapon_support=lambda: self._get_salvage_upgrade_support_status,
+            get_model_label=lambda: self._format_model_label,
+            get_model_name=lambda: self._get_model_name,
+            get_generic_mod_label=lambda: self._get_weapon_mod_generic_label,
+            get_threshold_label=lambda: self._format_weapon_mod_threshold_rule,
+            get_variant_label=lambda: self._format_weapon_mod_variant_rule,
+            get_variant_threshold_label=lambda: self._format_weapon_mod_variant_threshold_rule,
+            get_compact_labels=lambda: self._format_compact_list,
+            get_rule_reference=lambda: self._format_salvage_rule_reference,
+            get_item_label=lambda: self._format_inventory_item_log_label,
+            get_diagnostic=lambda: self._debug_log,
+            get_variant_match=lambda: _weapon_mod_variant_matches_parsed_match,
+            get_candidate_factory=lambda: SalvageCandidate,
+            get_match_factory=lambda: SalvageUpgradeTargetMatch,
+            get_slot_factory=lambda: SalvageUpgradeSlotResolution,
+            get_entry_factory=lambda: ExecutionPlanEntry,
+            get_owner_factory=lambda: PlannedSpecificUpgradeSalvageOwner,
+        )
+        self._destroy_planner = _planning.DestroyPlanner(
+            normalizers=_selector_normalizers,
+            read_rules=lambda: self.destroy_rules,
+            read_include_protected=lambda: self.destroy_include_protected_items,
+            read_kind_labels=lambda: DESTROY_KIND_LABELS,
+            read_salvage=lambda: self._salvage_planner,
+            get_empty_slot=lambda: self._find_inventory_empty_slot,
+            get_hard_protection=lambda: self._get_hard_protection_hit,
+            get_rarity_match=lambda: self._rule_matches_selected_rarity,
+            get_model_label=lambda: self._format_model_label,
+            get_rule_reference=lambda: self._format_destroy_rule_reference,
+            get_diagnostic=lambda: self._debug_log,
+            get_choose_keep=lambda: _choose_keep_subset,
+            get_choose_keep_at_most=lambda: _choose_keep_subset_at_most,
+            get_action_factory=lambda: PlannedDestroyAction,
+            get_entry_factory=lambda: ExecutionPlanEntry,
         )
         self._cleanup_deposit_filter_targets_cache_key: tuple[int, str, str] | None = (
             None
@@ -16139,12 +16169,10 @@ class MerchantRulesWidget:
         return self._protection_policy.get_hard_protection_hit(item, enabled_sell_rules)
 
     def _has_enabled_identify_settings(self) -> bool:
-        settings = _normalize_identify_settings(self.identify_settings)
-        return any(bool(value) for value in settings.rarities.values())
+        return self._identify_planner.has_enabled_identify_settings()
 
     def _should_identify_before_execute(self) -> bool:
-        settings = _normalize_identify_settings(self.identify_settings)
-        return bool(settings.before_execute and any(bool(value) for value in settings.rarities.values()))
+        return self._identify_planner.should_identify_before_execute()
 
     def _get_id_kit_id(self) -> int:
         inventory_api = getattr(GLOBAL_CACHE, "Inventory", None)
@@ -16159,27 +16187,10 @@ class MerchantRulesWidget:
             return 0
 
     def _get_identify_selection_reason(self, item: InventoryItemInfo) -> str:
-        if bool(item.identified):
-            return ""
-        settings = _normalize_identify_settings(self.identify_settings)
-        rarity_key = _normalize_rarity_key(str(item.rarity or ""))
-        if not bool(settings.rarities.get(rarity_key, False)):
-            return ""
-        rarity_label = next(
-            (label for key, label in RARITY_OPTION_ORDER if key == rarity_key),
-            str(item.rarity or rarity_key).strip() or rarity_key,
-        )
-        return f"selected exact rarity {rarity_label}"
+        return self._identify_planner.get_identify_selection_reason(item)
 
     def _collect_identify_candidates(self, items: list[InventoryItemInfo]) -> list[InventoryItemInfo]:
-        candidates: list[InventoryItemInfo] = []
-        for item in items:
-            if int(item.item_id) <= 0:
-                continue
-            if not self._get_identify_selection_reason(item):
-                continue
-            candidates.append(item)
-        return candidates
+        return self._identify_planner.collect_identify_candidates(items)
 
     def _plan_identify_actions(
         self,
@@ -16188,542 +16199,54 @@ class MerchantRulesWidget:
         claimed_item_ids: set[int],
     ) -> None:
         """Claim and preview identification targets before destructive or sale planning."""
-
-        if not self._should_identify_before_execute():
-            return
-
-        candidates = self._collect_identify_candidates(items)
-        if not candidates:
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "identify",
-                    MERCHANT_TYPE_INVENTORY,
-                    "Identify selected rarities",
-                    0,
-                    PLAN_STATE_SKIPPED,
-                    "No unidentified items found for the selected exact rarities.",
-                    status_hint=PREVIEW_STATUS_NO_MATCH,
-                )
-            )
-            return
-
-        id_kit_id = self._get_id_kit_id()
-        for item in candidates:
-            claimed_item_ids.add(int(item.item_id))
-            plan.identify_claimed_item_ids.append(int(item.item_id))
-            reason = self._get_identify_selection_reason(item)
-            if id_kit_id <= 0:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "identify",
-                        MERCHANT_TYPE_INVENTORY,
-                        item.name,
-                        item.quantity,
-                        PLAN_STATE_SKIPPED,
-                        "No ID kit found.",
-                        model_id=item.model_id,
-                        status_hint=PREVIEW_STATUS_BLOCKED,
-                    )
-                )
-                continue
-
-            plan.identify_item_ids.append(int(item.item_id))
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "identify",
-                    MERCHANT_TYPE_INVENTORY,
-                    item.name,
-                    item.quantity,
-                    PLAN_STATE_WILL_EXECUTE,
-                    reason,
-                    model_id=item.model_id,
-                )
-            )
+        return self._identify_planner.plan_identify_actions(plan, items, claimed_item_ids)
 
     def _has_enabled_salvage_settings(self) -> bool:
-        settings = _normalize_salvage_settings(self.salvage_settings)
-        return any(bool(rule.enabled) and _salvage_rule_has_selectors(rule) for rule in settings.rules)
-
-    def _get_salvage_category_key_for_item(self, item: InventoryItemInfo) -> str:
-        if bool(item.is_weapon_like):
-            return SALVAGE_CATEGORY_WEAPONS
-        if bool(item.is_armor_piece):
-            return SALVAGE_CATEGORY_ARMOR
-        if bool(item.is_material):
-            return SALVAGE_CATEGORY_MATERIALS
-        return SALVAGE_CATEGORY_OTHER
-
-    def _get_salvage_category_label(self, category_key: object) -> str:
-        safe_key = str(category_key or "").strip()
-        for key, label in SALVAGE_CATEGORY_ORDER:
-            if key == safe_key:
-                return label
-        return safe_key or "Unknown"
-
-    def _get_weapon_mod_required_salvage_option(
-        self,
-        identifier: object,
-        match: object | None = None,
-    ) -> str:
-        safe_identifier = str(identifier or "").strip()
-        if not safe_identifier:
-            return ""
-
-        weapon_mod = MOD_DB.weapon_mods.get(safe_identifier)
-        weapon_mod_name = str(
-            getattr(weapon_mod, "name", "")
-            or self.weapon_mod_names.get(safe_identifier, "")
-            or safe_identifier
-        ).strip()
-        if weapon_mod_name.startswith('"'):
-            return SALVAGE_OPTION_INSCRIPTION
-
-        mod_type = str(getattr(match, "mod_type", "") or "").strip()
-        if not mod_type:
-            mod_type = _get_weapon_mod_type_name(weapon_mod)
-        normalized_mod_type = mod_type.casefold()
-        if normalized_mod_type == "prefix":
-            return SALVAGE_OPTION_PREFIX
-        if normalized_mod_type == "suffix":
-            return SALVAGE_OPTION_SUFFIX
-        return ""
-
-    def _build_salvage_upgrade_target_match(
-        self,
-        label: object,
-        identifier: object,
-        match: object | None,
-        *,
-        source_kind: str = WEAPON_UPGRADE_SOURCE_KIND,
-        required_option: str = "",
-    ) -> SalvageUpgradeTargetMatch:
-        safe_identifier = str(identifier or "").strip()
-        safe_label = str(label or "").strip() or self._get_weapon_mod_generic_label(safe_identifier)
-        return SalvageUpgradeTargetMatch(
-            label=safe_label,
-            required_option=(
-                str(required_option or "").strip()
-                if str(required_option or "").strip()
-                else self._get_weapon_mod_required_salvage_option(safe_identifier, match)
-            ),
-            identifier=safe_identifier,
-            source_kind=str(source_kind or WEAPON_UPGRADE_SOURCE_KIND),
-        )
+        return self._salvage_planner.has_enabled_salvage_settings()
 
     def _get_salvage_rule_upgrade_target_matches(
         self,
         rule: SalvageRule,
         item: InventoryItemInfo,
     ) -> list[SalvageUpgradeTargetMatch]:
-        normalized_rule = _normalize_salvage_rule(rule)
-        if normalized_rule is None or not _salvage_rule_has_upgrade_targets(normalized_rule):
-            return []
-
-        target_matches: list[SalvageUpgradeTargetMatch] = []
-        seen_matches: set[tuple[str, str, str, str]] = set()
-        item_weapon_mod_identifiers = set(_dedupe_identifiers(getattr(item, "weapon_mod_identifiers", [])))
-        item_weapon_mod_matches = tuple(getattr(item, "weapon_mod_matches", []) or ())
-
-        def append_match(
-            label: object,
-            identifier: object,
-            match: object | None,
-            *,
-            source_kind: str = WEAPON_UPGRADE_SOURCE_KIND,
-            required_option: str = "",
-        ) -> None:
-            target_match = self._build_salvage_upgrade_target_match(
-                label,
-                identifier,
-                match,
-                source_kind=source_kind,
-                required_option=required_option,
-            )
-            match_key = (
-                target_match.source_kind,
-                target_match.identifier,
-                target_match.label,
-                target_match.required_option,
-            )
-            if match_key in seen_matches:
-                return
-            seen_matches.add(match_key)
-            target_matches.append(target_match)
-
-        if not bool(getattr(item, "is_armor_piece", False)):
-            for identifier in normalized_rule.target_weapon_mod_identifiers:
-                if identifier not in item_weapon_mod_identifiers:
-                    continue
-                parsed_matches = [
-                    match
-                    for match in item_weapon_mod_matches
-                    if str(getattr(match, "identifier", "") or "").strip() == identifier
-                ]
-                if parsed_matches:
-                    for match in parsed_matches:
-                        append_match(self._get_weapon_mod_generic_label(identifier), identifier, match)
-                else:
-                    append_match(self._get_weapon_mod_generic_label(identifier), identifier, None)
-
-            for threshold_rule in normalized_rule.target_weapon_mod_thresholds:
-                threshold_identifier = str(threshold_rule.identifier or "").strip()
-                if not threshold_identifier:
-                    continue
-                for match in item_weapon_mod_matches:
-                    if str(getattr(match, "identifier", "") or "").strip() != threshold_identifier:
-                        continue
-                    matched_value = getattr(match, "value", None)
-                    if matched_value is None:
-                        continue
-                    if _safe_int(matched_value, 0) >= int(threshold_rule.min_value):
-                        append_match(
-                            self._format_weapon_mod_threshold_rule(threshold_rule),
-                            threshold_identifier,
-                            match,
-                        )
-                        break
-
-            for variant_rule in normalized_rule.target_weapon_mod_variants:
-                for match in item_weapon_mod_matches:
-                    if _weapon_mod_variant_matches_parsed_match(variant_rule, match):
-                        append_match(
-                            self._format_weapon_mod_variant_rule(variant_rule),
-                            getattr(variant_rule, "identifier", ""),
-                            match,
-                        )
-                        break
-
-            for threshold_rule in normalized_rule.target_weapon_mod_variant_thresholds:
-                for match in item_weapon_mod_matches:
-                    if not _weapon_mod_variant_matches_parsed_match(threshold_rule, match):
-                        continue
-                    matched_value = getattr(match, "value", None)
-                    if matched_value is None:
-                        continue
-                    if _safe_int(matched_value, 0) >= int(threshold_rule.min_value):
-                        append_match(
-                            self._format_weapon_mod_variant_threshold_rule(threshold_rule),
-                            getattr(threshold_rule, "identifier", ""),
-                            match,
-                        )
-                        break
-
-        if bool(getattr(item, "is_armor_piece", False)) and int(
-            getattr(item, "item_type_id", 0)
-        ) != int(ItemType.Rune_Mod):
-            raw_modifiers = tuple(getattr(item, "raw_modifiers", ()) or ())
-            for identifier in normalized_rule.target_armor_upgrade_identifiers:
-                identity, _identity_error = _get_armor_upgrade_catalog_identity(identifier, mod_db=MOD_DB)
-                if identity is None:
-                    continue
-                target_signature_present = _armor_upgrade_signature_is_exactly_present(
-                    raw_modifiers,
-                    identity,
-                    require_generic_carrier=True,
-                )
-                alternate_minor_vigor_present = bool(
-                    identity.signature == ((9224, 0, 0x00FF),)
-                    and ARMOR_UPGRADE_ALT_MINOR_VIGOR_SIGNATURE in raw_modifiers
-                )
-                if not target_signature_present and not alternate_minor_vigor_present:
-                    continue
-                append_match(
-                    identity.name,
-                    identity.identifier,
-                    identity,
-                    source_kind=ARMOR_UPGRADE_SOURCE_KIND,
-                    required_option=identity.option,
-                )
-
-        return target_matches
+        return self._salvage_planner.get_salvage_rule_upgrade_target_matches(rule, item)
 
     def _get_salvage_rule_armor_upgrade_target_matches(
         self,
         rule: SalvageRule,
         item: InventoryItemInfo,
     ) -> list[SalvageUpgradeTargetMatch]:
-        return [
-            target_match
-            for target_match in self._get_salvage_rule_upgrade_target_matches(rule, item)
-            if target_match.source_kind == ARMOR_UPGRADE_SOURCE_KIND
-        ]
-
-    def _get_salvage_rule_upgrade_target_reason(self, rule: SalvageRule, item: InventoryItemInfo) -> str:
-        target_matches = self._get_salvage_rule_upgrade_target_matches(rule, item)
-        if not target_matches:
-            return ""
-        labels = _dedupe_identifiers([target_match.label for target_match in target_matches])
-        return f"specific upgrade target {self._format_compact_list(labels, limit=3)}"
+        return self._salvage_planner.get_salvage_rule_armor_upgrade_target_matches(rule, item)
 
     def _get_auto_salvage_upgrade_slot_resolution(
         self,
         rule: SalvageRule,
         item: InventoryItemInfo,
     ) -> SalvageUpgradeSlotResolution:
-        target_matches = self._get_salvage_rule_upgrade_target_matches(rule, item)
-        matched_labels = tuple(_dedupe_identifiers([target_match.label for target_match in target_matches]))
-        if not target_matches:
-            return SalvageUpgradeSlotResolution(
-                matched_labels=matched_labels,
-                block_reason="specific upgrade salvage requires a matching specific upgrade target",
-            )
-
-        unknown_option_labels = [
-            target_match.label
-            for target_match in target_matches
-            if not str(target_match.required_option or "").strip()
-        ]
-        if unknown_option_labels:
-            return SalvageUpgradeSlotResolution(
-                matched_labels=matched_labels,
-                block_reason=(
-                    "specific upgrade salvage cannot infer slot for target: "
-                    f"{self._format_compact_list(_dedupe_identifiers(unknown_option_labels), limit=3)}"
-                ),
-            )
-
-        required_options = sorted({
-            str(target_match.required_option or "").strip()
-            for target_match in target_matches
-            if str(target_match.required_option or "").strip()
-        })
-        if len(required_options) != 1:
-            required_option_labels = [
-                _get_salvage_option_label(required_option)
-                for required_option in required_options
-            ]
-            return SalvageUpgradeSlotResolution(
-                matched_labels=matched_labels,
-                block_reason=(
-                    "specific upgrade salvage ambiguous: matched targets require "
-                    f"{self._format_compact_list(required_option_labels, limit=3)}"
-                ),
-            )
-
-        inferred_option = required_options[0]
-        if inferred_option not in SALVAGE_UPGRADE_OPTIONS:
-            return SalvageUpgradeSlotResolution(
-                matched_labels=matched_labels,
-                block_reason=(
-                    "specific upgrade salvage cannot infer slot for target: "
-                    f"{self._format_compact_list(matched_labels, limit=3)}"
-                ),
-            )
-        return SalvageUpgradeSlotResolution(selected_option=inferred_option, matched_labels=matched_labels)
-
-    def _get_salvage_upgrade_target_option_block_reason(
-        self,
-        rule: SalvageRule,
-        item: InventoryItemInfo,
-        selected_option: object,
-    ) -> str:
-        armor_target_matches = self._get_salvage_rule_armor_upgrade_target_matches(rule, item)
-        if len(armor_target_matches) > 1:
-            return (
-                "specific upgrade salvage ambiguous: one rule matched both installed armor upgrades "
-                f"({self._format_compact_list([match.label for match in armor_target_matches], limit=3)})"
-            )
-        if _is_auto_exact_upgrade_salvage_option(selected_option):
-            return self._get_auto_salvage_upgrade_slot_resolution(rule, item).block_reason
-
-        target_matches = self._get_salvage_rule_upgrade_target_matches(rule, item)
-        if not target_matches:
-            return ""
-
-        unknown_option_labels = [
-            target_match.label
-            for target_match in target_matches
-            if not str(target_match.required_option or "").strip()
-        ]
-        if unknown_option_labels:
-            return (
-                "specific upgrade target option unknown: "
-                f"{self._format_compact_list(_dedupe_identifiers(unknown_option_labels), limit=3)}"
-            )
-
-        safe_selected_option = _resolve_salvage_operation(selected_option)
-        if safe_selected_option not in SALVAGE_UPGRADE_OPTIONS:
-            return "specific upgrade target requires prefix, suffix, or inscription salvage option"
-
-        required_options = {
-            str(target_match.required_option or "").strip()
-            for target_match in target_matches
-            if str(target_match.required_option or "").strip()
-        }
-        if safe_selected_option in required_options:
-            return ""
-
-        required_option_labels = [
-            _get_salvage_option_label(required_option)
-            for required_option in sorted(required_options)
-        ]
-        return (
-            f"specific upgrade target requires {self._format_compact_list(required_option_labels, limit=3)}; "
-            f"rule is configured for {_get_salvage_option_label(safe_selected_option)}"
-        )
+        return self._salvage_planner.get_auto_salvage_upgrade_slot_resolution(rule, item)
 
     def _get_common_material_target_match(
         self,
         rule: SalvageRule,
         item: InventoryItemInfo,
     ) -> tuple[bool, str]:
-        target_model_ids = _normalize_common_material_model_ids(
-            getattr(rule, "target_common_material_model_ids", [])
-        )
-        if not target_model_ids:
-            return True, ""
-        if _resolve_salvage_operation(getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT)) != SALVAGE_OPTION_MATERIALS:
-            return True, ""
-
-        item_key = (
-            max(0, _safe_int(getattr(item, "item_type_id", 0), 0)),
-            max(0, _safe_int(getattr(item, "model_id", 0), 0)),
-        )
-        possible_outputs = self.common_salvage_model_ids_by_item_key.get(item_key)
-        if not possible_outputs:
-            return False, "Skipped: salvage output data unavailable"
-
-        possible_output_ids = set(int(model_id) for model_id in possible_outputs)
-        matched_model_ids = [model_id for model_id in target_model_ids if model_id in possible_output_ids]
-        if not matched_model_ids:
-            return False, ""
-
-        labels = [self._get_model_name(model_id) or f"Model {model_id}" for model_id in matched_model_ids]
-        return True, f"Known possible common salvage: {self._format_compact_list(labels, limit=3)}"
+        return self._salvage_planner.get_common_material_target_match(rule, item)
 
     def _get_salvage_rule_filter_reason(self, rule: SalvageRule, item: InventoryItemInfo) -> str:
-        normalized_rule = _normalize_salvage_rule(rule)
-        if normalized_rule is None or not bool(normalized_rule.enabled):
-            return ""
-
-        is_targeted_specific_upgrade = (
-            _is_auto_exact_upgrade_salvage_option(normalized_rule.salvage_option)
-            and _salvage_rule_has_upgrade_targets(normalized_rule)
-        )
-        targeted_specific_upgrade_reason = (
-            self._get_salvage_rule_upgrade_target_reason(normalized_rule, item)
-            if is_targeted_specific_upgrade
-            else ""
-        )
-        if is_targeted_specific_upgrade and not targeted_specific_upgrade_reason:
-            return ""
-
-        rarity_filter_active = any(bool(value) for value in normalized_rule.rarities.values())
-        category_filter_active = any(bool(value) for value in normalized_rule.categories.values())
-        normal_selector_active = bool(normalized_rule.model_ids) or rarity_filter_active or category_filter_active
-        model_matches = int(item.model_id) in set(int(model_id) for model_id in normalized_rule.model_ids)
-
-        base_reason = ""
-        if model_matches:
-            base_reason = f"selected model {self._format_model_label(int(item.model_id))}"
-        else:
-            upgrade_target_reason = ""
-            if not is_targeted_specific_upgrade:
-                upgrade_target_reason = self._get_salvage_rule_upgrade_target_reason(normalized_rule, item)
-            if upgrade_target_reason:
-                base_reason = upgrade_target_reason
-            else:
-                rarity_key = _normalize_rarity_key(str(item.rarity or ""))
-                category_key = self._get_salvage_category_key_for_item(item)
-                rarity_matches = bool(normalized_rule.rarities.get(rarity_key, False))
-                category_matches = bool(normalized_rule.categories.get(category_key, False))
-                if rarity_filter_active and not rarity_matches:
-                    return ""
-                if category_filter_active and not category_matches:
-                    return ""
-                if rarity_filter_active or category_filter_active:
-                    reason_parts: list[str] = []
-                    if rarity_filter_active:
-                        reason_parts.append(f"rarity {str(item.rarity or rarity_key).strip() or rarity_key}")
-                    if category_filter_active:
-                        reason_parts.append(f"category {self._get_salvage_category_label(category_key)}")
-                    base_reason = f"selected {' and '.join(reason_parts)}"
-
-        if is_targeted_specific_upgrade:
-            if not base_reason and normal_selector_active:
-                return ""
-            if not model_matches:
-                base_reason = targeted_specific_upgrade_reason
-
-        target_model_ids = _normalize_common_material_model_ids(
-            getattr(normalized_rule, "target_common_material_model_ids", [])
-        )
-        if target_model_ids and _resolve_salvage_operation(normalized_rule.salvage_option) == SALVAGE_OPTION_MATERIALS:
-            if not base_reason:
-                base_reason = "selected common material output"
-            target_matches, target_reason = self._get_common_material_target_match(normalized_rule, item)
-            if not target_matches:
-                return ""
-            if target_reason:
-                return f"{base_reason}; {target_reason}"
-
-        return base_reason
-
-    def _collect_enabled_salvage_rules(self) -> list[tuple[int, SalvageRule]]:
-        settings = _normalize_salvage_settings(self.salvage_settings)
-        enabled_rules: list[tuple[int, SalvageRule]] = []
-        for rule_index, raw_rule in enumerate(settings.rules):
-            rule = _normalize_salvage_rule(raw_rule)
-            if rule is None or not bool(rule.enabled):
-                continue
-            if not _salvage_rule_has_selectors(rule):
-                continue
-            enabled_rules.append((rule_index, rule))
-        return enabled_rules
+        return self._salvage_planner.get_salvage_rule_filter_reason(rule, item)
 
     def _format_salvage_rule_reference(self, index: int, rule: SalvageRule) -> str:
         return self._format_rule_reference(index, "Salvage Rule", self._get_rule_custom_name(rule))
 
     def _get_matching_salvage_rule(self, item: InventoryItemInfo) -> tuple[int, SalvageRule, str] | None:
-        for rule_index, rule in self._collect_enabled_salvage_rules():
-            reason = self._get_salvage_rule_filter_reason(rule, item)
-            if reason:
-                return rule_index, rule, reason
-        return None
-
-    def _get_planned_specific_upgrade_salvage_rule(
-        self,
-        owner: PlannedSpecificUpgradeSalvageOwner,
-    ) -> tuple[int, SalvageRule] | None:
-        """Resolve only the rule identity retained by the final live Execute plan."""
-
-        expected_rule = _normalize_salvage_rule(owner.rule_snapshot)
-        expected_rule_index = int(owner.rule_index)
-        if (
-            expected_rule is None
-            or expected_rule_index < 0
-            or not _is_auto_exact_upgrade_salvage_option(expected_rule.salvage_option)
-            or not _salvage_rule_has_upgrade_targets(expected_rule)
-        ):
-            return None
-
-        for current_rule_index, current_rule in self._collect_enabled_salvage_rules():
-            if int(current_rule_index) != expected_rule_index:
-                continue
-            if _normalize_salvage_rule(current_rule) != expected_rule:
-                return None
-            return int(current_rule_index), current_rule
-        return None
+        return self._salvage_planner.get_matching_salvage_rule(item)
 
     def _get_salvage_selection_reason(self, item: InventoryItemInfo) -> str:
-        match = self._get_matching_salvage_rule(item)
-        if match is None:
-            return ""
-        rule_index, rule, reason = match
-        option_label = _get_salvage_option_label(rule.salvage_option)
-        return f"{reason}; {option_label} via {self._format_salvage_rule_reference(rule_index, rule)}"
+        return self._salvage_planner.get_salvage_selection_reason(item)
 
     def _get_specific_upgrade_salvage_reservation_reason(self, item: InventoryItemInfo) -> str:
         """Reserve a first-rule Specific Upgrade match even when extraction must fail closed."""
-
-        match = self._get_matching_salvage_rule(item)
-        if match is None:
-            return ""
-        rule_index, rule, reason = match
-        if not self._get_salvage_rule_upgrade_target_matches(rule, item):
-            return ""
-        option_label = _get_salvage_option_label(rule.salvage_option)
-        return f"{reason}; {option_label} via {self._format_salvage_rule_reference(rule_index, rule)}"
+        return self._salvage_planner.get_specific_upgrade_salvage_reservation_reason(item)
 
     def _get_normal_salvage_kit_id(self) -> int:
         item_api = getattr(GLOBAL_CACHE, "Item", None)
@@ -16831,126 +16354,21 @@ class MerchantRulesWidget:
         Hard protections, customization, identification state, kit suitability, exact-slot
         capability, and rule-option compatibility are evaluated before execution can claim it.
         """
-
-        hard_protection = self._get_hard_protection_hit(item, enabled_sell_rules)
-        if hard_protection is not None:
-            return f"protected: {hard_protection[1]}"
-        if not bool(item.salvageable):
-            return "unsalvageable: the game says this item is not salvageable"
-        if bool(item.is_customized):
-            return "customized: customized items are never salvaged"
-        rarity_key = _normalize_rarity_key(str(item.rarity or ""))
-        if not bool(item.identified) and rarity_key != "white":
-            return "unidentified non-white: identify before salvaging"
-        selected_rule = salvage_rule
-        if selected_rule is not None:
-            selection_reason = self._get_salvage_rule_filter_reason(selected_rule, item)
-        else:
-            rule_match = self._get_matching_salvage_rule(item)
-            selected_rule = rule_match[1] if rule_match is not None else None
-            selection_reason = rule_match[2] if rule_match is not None else ""
-        if not selection_reason:
-            return "not selected by salvage settings"
-        raw_selected_option = _normalize_salvage_rule_mode(
-            getattr(selected_rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
+        return self._salvage_planner.get_salvage_candidate_block_reason(
+            item,
+            enabled_sell_rules,
+            salvage_rule=salvage_rule,
+            require_salvage_kit=require_salvage_kit,
+            salvage_kit_id=salvage_kit_id,
+            mode=mode,
         )
-        armor_target_matches = (
-            self._get_salvage_rule_armor_upgrade_target_matches(selected_rule, item)
-            if selected_rule is not None
-            else []
-        )
-        if armor_target_matches:
-            armor_parse_error = str(
-                getattr(item, "armor_upgrade_parse_error", "") or ""
-            ).strip()
-            if armor_parse_error:
-                return f"armor specific upgrade identity invalid: {armor_parse_error}"
-        if (
-            selected_rule is not None
-            and _is_auto_exact_upgrade_salvage_option(raw_selected_option)
-            and not self._get_salvage_rule_upgrade_target_matches(selected_rule, item)
-        ):
-            return "specific upgrade salvage requires a matching specific upgrade target"
-        if require_salvage_kit:
-            selected_option = _resolve_salvage_operation(
-                raw_selected_option
-            )
-            if selected_rule is not None:
-                option_block_reason = self._get_salvage_upgrade_target_option_block_reason(
-                    selected_rule,
-                    item,
-                    selected_option,
-                )
-                if option_block_reason:
-                    return option_block_reason
-                if _is_auto_exact_upgrade_salvage_option(selected_option):
-                    selected_option = self._get_auto_salvage_upgrade_slot_resolution(
-                        selected_rule,
-                        item,
-                    ).selected_option
-            if selected_option in SALVAGE_UPGRADE_OPTIONS:
-                if armor_target_matches:
-                    upgrade_supported, support_reason = (
-                        self._get_armor_salvage_upgrade_support_status()
-                    )
-                else:
-                    upgrade_supported, support_reason = self._get_salvage_upgrade_support_status()
-                if not upgrade_supported:
-                    return support_reason or SALVAGE_UPGRADE_BACKEND_UNAVAILABLE_REASON
-            if int(salvage_kit_id) <= 0:
-                if selected_option in SALVAGE_UPGRADE_OPTIONS:
-                    return "no upgrade salvage kit"
-                return "no normal salvage kit"
-        if str(mode or "").strip().lower() == "auto" and not bool(_normalize_salvage_settings(self.salvage_settings).on_inventory_change):
-            return "immediate salvage is disabled"
-        return ""
 
     def _get_salvage_destroy_claim_reason(
         self,
         item: InventoryItemInfo,
         enabled_sell_rules: list[tuple[int, SellRule]],
     ) -> str:
-        specific_upgrade_reservation = self._get_specific_upgrade_salvage_reservation_reason(item)
-        if specific_upgrade_reservation:
-            return specific_upgrade_reservation
-        block_reason = self._get_salvage_candidate_block_reason(
-            item,
-            enabled_sell_rules,
-            require_salvage_kit=False,
-            mode="manual",
-        )
-        if block_reason:
-            return ""
-        return self._get_salvage_selection_reason(item)
-
-    def _get_salvage_block_bucket(self, reason: str) -> str:
-        safe_reason = str(reason or "").strip()
-        if not safe_reason:
-            return ""
-        lowered = safe_reason.lower()
-        for prefix, label in (
-            ("protected:", "protected"),
-            ("unsalvageable:", "unsalvageable"),
-            ("customized:", "customized"),
-            ("unidentified non-white:", "unidentified non-white"),
-            ("exact-upgrade salvage disabled:", "exact-upgrade salvage disabled"),
-            ("upgrade salvage backend unavailable:", "upgrade salvage backend unavailable"),
-            ("specific upgrade salvage requires", "specific upgrade salvage not executable"),
-            ("specific upgrade salvage cannot infer", "specific upgrade salvage not executable"),
-            ("specific upgrade salvage ambiguous", "specific upgrade salvage not executable"),
-            ("armor specific upgrade identity invalid:", "armor specific upgrade identity invalid"),
-            ("specific upgrade target option unknown:", "specific upgrade target option unknown"),
-            ("specific upgrade target requires", "specific upgrade target not executable"),
-            ("no normal salvage kit", "no normal salvage kit"),
-            ("no upgrade salvage kit", "no upgrade salvage kit"),
-            ("salvage option unavailable", "option unavailable"),
-            ("salvage popup mismatch", "popup mismatch"),
-            ("not selected", "not selected"),
-            ("immediate salvage is disabled", "immediate disabled"),
-        ):
-            if lowered.startswith(prefix):
-                return label
-        return safe_reason
+        return self._salvage_planner.get_salvage_destroy_claim_reason(item, enabled_sell_rules)
 
     def _collect_salvage_candidates(
         self,
@@ -16966,111 +16384,17 @@ class MerchantRulesWidget:
         planned_specific_upgrade_owners: dict[int, PlannedSpecificUpgradeSalvageOwner] | None = None,
     ) -> tuple[list[SalvageCandidate], dict[str, int]]:
         """Select salvage candidates by rule precedence and bucket every blocked reason."""
-
-        candidates: list[SalvageCandidate] = []
-        blocked_counts: dict[str, int] = {}
-        explicit_rule = _normalize_salvage_rule(manual_salvage_rule) if manual_salvage_rule is not None else None
-        for item in items:
-            rule_index = -1
-            salvage_rule: SalvageRule | None = None
-            selection_reason = ""
-            planned_owner = (
-                planned_specific_upgrade_owners.get(int(item.item_id))
-                if explicit_rule is None and planned_specific_upgrade_owners is not None
-                else None
-            )
-            if planned_owner is not None:
-                if int(item.model_id) != int(planned_owner.model_id):
-                    owner_block_reason = "planned Specific upgrade item identity changed before execution"
-                    blocked_counts[owner_block_reason] = blocked_counts.get(owner_block_reason, 0) + 1
-                    self._debug_log(
-                        f"MR Salvage skipped {self._format_inventory_item_log_label(item)} ({item.item_id}): "
-                        f"{owner_block_reason}."
-                    )
-                    continue
-                planned_rule_match = self._get_planned_specific_upgrade_salvage_rule(planned_owner)
-                if planned_rule_match is None:
-                    owner_block_reason = "planned Specific upgrade owner changed before execution"
-                    blocked_counts[owner_block_reason] = blocked_counts.get(owner_block_reason, 0) + 1
-                    self._debug_log(
-                        f"MR Salvage skipped {self._format_inventory_item_log_label(item)} ({item.item_id}): "
-                        f"{owner_block_reason}."
-                    )
-                    continue
-                rule_index, salvage_rule = planned_rule_match
-                selection_reason = self._get_salvage_rule_filter_reason(salvage_rule, item)
-                if not selection_reason:
-                    owner_block_reason = self._get_salvage_candidate_block_reason(
-                        item,
-                        enabled_sell_rules,
-                        salvage_rule=salvage_rule,
-                        require_salvage_kit=False,
-                        mode=mode,
-                    )
-                    if owner_block_reason in {"", "not selected by salvage settings"}:
-                        owner_block_reason = "planned Specific upgrade owner no longer matches"
-                    bucket = self._get_salvage_block_bucket(owner_block_reason) or owner_block_reason
-                    blocked_counts[bucket] = blocked_counts.get(bucket, 0) + 1
-                    self._debug_log(
-                        f"MR Salvage skipped {self._format_inventory_item_log_label(item)} ({item.item_id}): "
-                        f"{owner_block_reason}."
-                    )
-                    continue
-            elif explicit_rule is not None:
-                explicit_reason = self._get_salvage_rule_filter_reason(explicit_rule, item)
-                if explicit_reason:
-                    salvage_rule = explicit_rule
-                    selection_reason = f"{explicit_reason}; right-click salvage selection"
-            else:
-                rule_match = self._get_matching_salvage_rule(item)
-                if rule_match is not None:
-                    rule_index = int(rule_match[0])
-                    salvage_rule = rule_match[1]
-                    selection_reason = rule_match[2]
-            if salvage_rule is None or not selection_reason:
-                if include_not_selected_blocks:
-                    bucket = self._get_salvage_block_bucket("not selected by salvage settings")
-                    if bucket:
-                        blocked_counts[bucket] = blocked_counts.get(bucket, 0) + 1
-                continue
-            salvage_kit_id = 0
-            if salvage_rule is not None:
-                salvage_option = _normalize_salvage_rule_mode(
-                    getattr(salvage_rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
-                )
-                if max(0, _safe_int(preferred_salvage_kit_id, 0)) > 0:
-                    salvage_kit_id = self._get_salvage_kit_id_for_option(
-                        salvage_option,
-                        preferred_kit_id=preferred_salvage_kit_id,
-                        preferred_kit_model_id=preferred_salvage_kit_model_id,
-                    )
-                else:
-                    salvage_kit_id = self._get_salvage_kit_id_for_option(salvage_option)
-            reason = self._get_salvage_candidate_block_reason(
-                item,
-                enabled_sell_rules,
-                salvage_rule=salvage_rule,
-                require_salvage_kit=require_salvage_kit,
-                salvage_kit_id=salvage_kit_id,
-                mode=mode,
-            )
-            if reason:
-                bucket = self._get_salvage_block_bucket(reason)
-                if bucket and (include_not_selected_blocks or bucket != "not selected"):
-                    blocked_counts[bucket] = blocked_counts.get(bucket, 0) + 1
-                if bucket not in {"not selected", "unsalvageable"}:
-                    item_label = self._format_inventory_item_log_label(item)
-                    self._debug_log(f"MR Salvage skipped {item_label} ({item.item_id}): {reason}")
-                continue
-            candidates.append(
-                SalvageCandidate(
-                    item=item,
-                    rule_index=rule_index,
-                    rule=salvage_rule or SalvageRule(),
-                    reason=selection_reason,
-                )
-            )
-        return candidates, blocked_counts
+        return self._salvage_planner.collect_salvage_candidates(
+            items,
+            enabled_sell_rules,
+            require_salvage_kit=require_salvage_kit,
+            mode=mode,
+            preferred_salvage_kit_id=preferred_salvage_kit_id,
+            preferred_salvage_kit_model_id=preferred_salvage_kit_model_id,
+            include_not_selected_blocks=include_not_selected_blocks,
+            manual_salvage_rule=manual_salvage_rule,
+            planned_specific_upgrade_owners=planned_specific_upgrade_owners,
+        )
 
     def _can_use_local_storage_actions(self) -> bool:
         return bool(Map.IsMapReady() and (Map.IsOutpost() or Map.IsGuildHall()))
@@ -17991,77 +17315,6 @@ class MerchantRulesWidget:
                     return DestroySplitDestination(bag_id=int(bag_id), slot=int(slot))
         return None
 
-    def _get_destroy_split_block_reason(self, keep_quantity: int) -> str:
-        safe_keep_quantity = max(0, int(keep_quantity))
-        return (
-            f"Keep count requires splitting a stack to preserve {safe_keep_quantity} unit(s), "
-            "but no empty inventory slot was available and no earlier destroy action would free one."
-        )
-
-    def _plan_stackable_destroy_actions(
-        self,
-        items: list[InventoryItemInfo],
-        keep_count: int,
-    ) -> tuple[list[PlannedDestroyAction], dict[int, int], str, int]:
-        keep_count = max(0, int(keep_count))
-        if not items:
-            return [], {}, "", 0
-
-        total_quantity = sum(max(1, int(item.quantity)) for item in items)
-        if keep_count >= total_quantity:
-            return [], {item.item_id: max(1, int(item.quantity)) for item in items}, "", 0
-
-        whole_keep_ids, kept_total = _choose_keep_subset_at_most(items, keep_count)
-        keep_quantities: dict[int, int] = {
-            int(item.item_id): max(1, int(item.quantity))
-            for item in items
-            if item.item_id in whole_keep_ids
-        }
-
-        remaining_keep = max(0, keep_count - kept_total)
-        if remaining_keep > 0:
-            partial_candidates = [
-                item
-                for item in items
-                if item.item_id not in whole_keep_ids
-                and int(item.quantity) > remaining_keep
-            ]
-            if not partial_candidates:
-                return [], {}, self._get_destroy_split_block_reason(remaining_keep), 0
-
-            partial_item = min(
-                partial_candidates,
-                key=lambda item: (
-                    max(1, int(item.quantity)),
-                    str(item.name or "").lower(),
-                    int(item.item_id),
-                ),
-            )
-            keep_quantities[int(partial_item.item_id)] = remaining_keep
-
-        planned_actions: list[PlannedDestroyAction] = []
-        for item in items:
-            source_quantity = max(1, int(item.quantity))
-            keep_quantity = max(0, int(keep_quantities.get(int(item.item_id), 0)))
-            destroy_quantity = max(0, source_quantity - keep_quantity)
-            if destroy_quantity <= 0:
-                continue
-            planned_actions.append(
-                PlannedDestroyAction(
-                    item_id=int(item.item_id),
-                    model_id=int(item.model_id),
-                    label=str(item.name or f"Model {int(item.model_id)}"),
-                    quantity_to_destroy=destroy_quantity,
-                    source_quantity=source_quantity,
-                    keep_quantity=keep_quantity,
-                    requires_split=keep_quantity > 0 and destroy_quantity < source_quantity,
-                )
-            )
-        requires_external_free_slot = 0
-        if any(bool(action.requires_split) for action in planned_actions) and not any(not bool(action.requires_split) for action in planned_actions):
-            requires_external_free_slot = remaining_keep
-        return planned_actions, keep_quantities, "", requires_external_free_slot
-
     def _plan_material_sales(
         self,
         matching_items: list[InventoryItemInfo],
@@ -18132,13 +17385,7 @@ class MerchantRulesWidget:
         return False
 
     def _collect_enabled_destroy_rules(self) -> list[tuple[int, DestroyRule]]:
-        enabled_destroy_rules: list[tuple[int, DestroyRule]] = []
-        for rule_index, raw_destroy_rule in enumerate(self.destroy_rules):
-            destroy_rule = _normalize_destroy_rule(raw_destroy_rule)
-            if not destroy_rule.enabled:
-                continue
-            enabled_destroy_rules.append((rule_index, destroy_rule))
-        return enabled_destroy_rules
+        return self._destroy_planner.collect_enabled_destroy_rules()
 
     def _plan_destroy_rule(
         self,
@@ -18154,414 +17401,8 @@ class MerchantRulesWidget:
         Partial stack destruction is emitted only when a safe split destination is available.
         Session-only protected-item override state is reflected visibly in skipped entries.
         """
-
-        include_protected_items = bool(self.destroy_include_protected_items)
-        candidate_label = DESTROY_KIND_LABELS.get(rule.kind, "Destroy Rule")
-        rule_reference = self._format_destroy_rule_reference(rule_index, rule)
-        if rule.kind in (DESTROY_KIND_EXPLICIT_MODELS, DESTROY_KIND_MATERIALS):
-            whitelist_targets = _normalize_whitelist_targets(getattr(rule, "whitelist_targets", []))
-            if not whitelist_targets:
-                missing_reason = "No material model whitelist configured." if rule.kind == DESTROY_KIND_MATERIALS else "No explicit model whitelist configured."
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "destroy",
-                        MERCHANT_TYPE_INVENTORY,
-                        candidate_label,
-                        0,
-                        PLAN_STATE_SKIPPED,
-                        missing_reason,
-                    )
-                )
-                return
-
-            target_plans: list[dict[str, object]] = []
-            for target in whitelist_targets:
-                target_model_id = max(0, int(target.model_id))
-                target_keep_count = max(0, int(target.keep_count))
-                target_label = self._format_model_label(target_model_id)
-                matching_items = [
-                    item
-                    for item in items
-                    if item.item_id not in claimed_item_ids
-                    and (
-                        (rule.kind == DESTROY_KIND_EXPLICIT_MODELS and item.model_id == target_model_id)
-                        or (rule.kind == DESTROY_KIND_MATERIALS and item.is_material and item.model_id == target_model_id)
-                    )
-                ]
-                if not matching_items:
-                    missing_reason = "No matching material items found." if rule.kind == DESTROY_KIND_MATERIALS else "No matching inventory items found."
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "destroy",
-                            MERCHANT_TYPE_INVENTORY,
-                            target_label,
-                            0,
-                            PLAN_STATE_SKIPPED,
-                            missing_reason,
-                            status_hint=PREVIEW_STATUS_NO_MATCH,
-                        )
-                    )
-                    continue
-
-                protected_items: list[tuple[InventoryItemInfo, str]] = []
-                salvage_items: list[tuple[InventoryItemInfo, str]] = []
-                destroy_pool: list[tuple[InventoryItemInfo, str]] = []
-                for item in matching_items:
-                    hard_protection = self._get_hard_protection_hit(item, enabled_sell_rules)
-                    protection_reason = hard_protection[1] if hard_protection is not None else ""
-                    salvage_reason = self._get_salvage_destroy_claim_reason(item, enabled_sell_rules)
-                    if protection_reason and (not include_protected_items or salvage_reason):
-                        protected_items.append((item, protection_reason))
-                    elif salvage_reason:
-                        salvage_items.append((item, salvage_reason))
-                    else:
-                        destroy_pool.append((item, protection_reason))
-
-                keep_quantities: dict[int, int] = {}
-                planned_actions: list[PlannedDestroyAction] = []
-                destroy_block_reason = ""
-                split_keep_quantity_needed = 0
-                effective_keep_count = max(0, target_keep_count)
-                if not include_protected_items:
-                    effective_keep_count = max(
-                        0,
-                        effective_keep_count - sum(max(1, int(item.quantity)) for item, _reason in protected_items),
-                    )
-                effective_keep_count = max(
-                    0,
-                    effective_keep_count - sum(max(1, int(item.quantity)) for item, _reason in salvage_items),
-                )
-
-                destroy_items = [item for item, _reason in destroy_pool]
-                if any(int(item.quantity) > 1 for item in destroy_items):
-                    planned_actions, keep_quantities, destroy_block_reason, split_keep_quantity_needed = self._plan_stackable_destroy_actions(
-                        destroy_items,
-                        effective_keep_count,
-                    )
-                else:
-                    keep_ids = _choose_keep_subset(destroy_items, effective_keep_count)
-                    keep_quantities = {
-                        int(item.item_id): max(1, int(item.quantity))
-                        for item in destroy_items
-                        if item.item_id in keep_ids
-                    }
-                    planned_actions = [
-                        PlannedDestroyAction(
-                            item_id=int(item.item_id),
-                            model_id=int(item.model_id),
-                            label=str(item.name or f"Model {int(item.model_id)}"),
-                            quantity_to_destroy=max(1, int(item.quantity)),
-                            source_quantity=max(1, int(item.quantity)),
-                        )
-                        for item in destroy_items
-                        if item.item_id not in keep_ids
-                    ]
-
-                target_plans.append(
-                    {
-                        "label": target_label,
-                        "target_keep_count": target_keep_count,
-                        "matching_items": matching_items,
-                        "protected_items": protected_items,
-                        "salvage_items": salvage_items,
-                        "destroy_pool": destroy_pool,
-                        "keep_quantities": keep_quantities,
-                        "planned_actions": planned_actions,
-                        "destroy_block_reason": destroy_block_reason,
-                        "split_keep_quantity_needed": split_keep_quantity_needed,
-                    }
-                )
-
-            has_empty_slot_now = self._find_inventory_empty_slot(items) is not None
-            has_non_split_destroy_anywhere = any(not bool(action.requires_split) for action in plan.destroy_actions)
-            has_non_split_destroy_anywhere = has_non_split_destroy_anywhere or any(
-                any(not bool(action.requires_split) for action in target_plan["planned_actions"])
-                for target_plan in target_plans
-                if not str(target_plan["destroy_block_reason"] or "").strip()
-            )
-
-            total_matched = 0
-            total_protected = 0
-            total_salvage_reserved = 0
-            total_kept_quantity = 0
-            total_planned_destroys = 0
-            total_planned_destroy_quantity = 0
-            for target_plan in target_plans:
-                matching_items = list(target_plan["matching_items"])
-                protected_items = list(target_plan["protected_items"])
-                salvage_items = list(target_plan["salvage_items"])
-                destroy_pool = list(target_plan["destroy_pool"])
-                keep_quantities = dict(target_plan["keep_quantities"])
-                planned_actions = list(target_plan["planned_actions"])
-                destroy_block_reason = str(target_plan["destroy_block_reason"] or "")
-                split_keep_quantity_needed = max(0, int(target_plan["split_keep_quantity_needed"]))
-                target_keep_count = max(0, int(target_plan["target_keep_count"]))
-                target_label = str(target_plan["label"] or candidate_label)
-
-                for item in matching_items:
-                    claimed_item_ids.add(item.item_id)
-
-                if not destroy_block_reason and split_keep_quantity_needed > 0 and not (has_empty_slot_now or has_non_split_destroy_anywhere):
-                    destroy_block_reason = self._get_destroy_split_block_reason(split_keep_quantity_needed)
-                    keep_quantities = {}
-                    planned_actions = []
-
-                planned_actions_by_item_id = {
-                    int(action.item_id): action
-                    for action in planned_actions
-                }
-                kept_quantity_total = sum(max(0, int(quantity)) for quantity in keep_quantities.values())
-                planned_destroys = 0
-                planned_destroy_quantity = 0
-
-                total_matched += len(matching_items)
-                total_protected += len(protected_items)
-                total_salvage_reserved += len(salvage_items)
-                total_kept_quantity += kept_quantity_total
-
-                for item, protection_reason in protected_items:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "destroy",
-                            MERCHANT_TYPE_INVENTORY,
-                            item.name,
-                            item.quantity,
-                            PLAN_STATE_SKIPPED,
-                            f"Blocked by {rule_reference}: {protection_reason}",
-                            model_id=item.model_id,
-                            status_hint=PREVIEW_STATUS_PROTECTED,
-                        )
-                    )
-
-                for item, salvage_reason in salvage_items:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "destroy",
-                            MERCHANT_TYPE_INVENTORY,
-                            item.name,
-                            item.quantity,
-                            PLAN_STATE_SKIPPED,
-                            f"Blocked by {rule_reference}: selected for MR Salvage ({salvage_reason}); salvage wins over destroy.",
-                            model_id=item.model_id,
-                            status_hint=PREVIEW_STATUS_SKIPPED,
-                        )
-                    )
-
-                if destroy_block_reason:
-                    destroy_status_hint = (
-                        PREVIEW_STATUS_UNSAFE
-                        if "Keep count requires splitting" in destroy_block_reason
-                        else PREVIEW_STATUS_BLOCKED
-                    )
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "destroy",
-                            MERCHANT_TYPE_INVENTORY,
-                            target_label,
-                            0,
-                            PLAN_STATE_SKIPPED,
-                            f"Blocked by {rule_reference}: {destroy_block_reason}",
-                            status_hint=destroy_status_hint,
-                        )
-                    )
-
-                for item, protection_reason in destroy_pool:
-                    keep_quantity = max(0, int(keep_quantities.get(int(item.item_id), 0)))
-                    action = planned_actions_by_item_id.get(int(item.item_id))
-                    if action is not None:
-                        reason_parts = [f"Matched by {rule_reference}."]
-                        if action.requires_split:
-                            reason_parts.append(f"Split stack to keep {max(0, int(action.keep_quantity))} unit(s).")
-                        if protection_reason:
-                            reason_parts.append(f"Included protected item: {protection_reason}")
-                        plan.destroy_actions.append(action)
-                        plan.destroy_item_ids.append(int(action.item_id))
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "destroy",
-                                MERCHANT_TYPE_INVENTORY,
-                                item.name,
-                                max(0, int(action.quantity_to_destroy)),
-                                PLAN_STATE_WILL_EXECUTE,
-                                " ".join(reason_parts),
-                                model_id=item.model_id,
-                            )
-                        )
-                        planned_destroys += 1
-                        planned_destroy_quantity += max(0, int(action.quantity_to_destroy))
-
-                    if keep_quantity > 0:
-                        keep_reason = (
-                            f"Kept by {rule_reference}: reserved to satisfy keep count {target_keep_count}."
-                            if keep_quantity >= max(1, int(item.quantity))
-                            else (
-                                f"Kept by {rule_reference}: reserved {keep_quantity} unit(s) "
-                                f"to satisfy keep count {target_keep_count}."
-                            )
-                        )
-                        plan.entries.append(
-                            ExecutionPlanEntry(
-                                "destroy",
-                                MERCHANT_TYPE_INVENTORY,
-                                item.name,
-                                keep_quantity,
-                                PLAN_STATE_SKIPPED,
-                                keep_reason,
-                                model_id=item.model_id,
-                            )
-                        )
-
-                if planned_destroys <= 0 and not protected_items and kept_quantity_total > 0 and not destroy_block_reason:
-                    plan.entries.append(
-                        ExecutionPlanEntry(
-                            "destroy",
-                            MERCHANT_TYPE_INVENTORY,
-                            target_label,
-                            0,
-                            PLAN_STATE_SKIPPED,
-                            f"Kept by {rule_reference}: matching items were reserved to satisfy keep count {target_keep_count}.",
-                        )
-                    )
-
-                total_planned_destroys += planned_destroys
-                total_planned_destroy_quantity += planned_destroy_quantity
-
-            self._debug_log(
-                f"{candidate_label}: matched={total_matched} protected={total_protected} salvage_reserved={total_salvage_reserved} "
-                f"kept_quantity={total_kept_quantity} planned_destroys={total_planned_destroys} "
-                f"planned_destroy_quantity={total_planned_destroy_quantity} include_protected={include_protected_items}"
-            )
-            return
-
-        matching_items: list[InventoryItemInfo] = []
-        had_category_candidate = False
-        had_rarity_candidate = False
-        for item in items:
-            if item.item_id in claimed_item_ids:
-                continue
-            if rule.kind == DESTROY_KIND_WEAPONS:
-                if not item.is_weapon_like:
-                    continue
-            elif rule.kind == DESTROY_KIND_ARMOR:
-                if not item.is_armor_piece:
-                    continue
-            else:
-                continue
-
-            had_category_candidate = True
-            if not self._rule_matches_selected_rarity(item, rule):
-                continue
-            had_rarity_candidate = True
-            matching_items.append(item)
-
-        if not matching_items:
-            reason = (
-                "No matching items found for the enabled rarities."
-                if had_category_candidate and not had_rarity_candidate
-                else "No matching inventory items found."
-            )
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "destroy",
-                    MERCHANT_TYPE_INVENTORY,
-                    candidate_label,
-                    0,
-                    PLAN_STATE_SKIPPED,
-                    reason,
-                    status_hint=PREVIEW_STATUS_NO_MATCH,
-                )
-            )
-            return
-
-        for item in matching_items:
-            claimed_item_ids.add(item.item_id)
-
-        protected_items: list[tuple[InventoryItemInfo, str]] = []
-        salvage_items: list[tuple[InventoryItemInfo, str]] = []
-        destroy_pool: list[tuple[InventoryItemInfo, str]] = []
-        for item in matching_items:
-            hard_protection = self._get_hard_protection_hit(item, enabled_sell_rules)
-            protection_reason = hard_protection[1] if hard_protection is not None else ""
-            salvage_reason = self._get_salvage_destroy_claim_reason(item, enabled_sell_rules)
-            if protection_reason and (not include_protected_items or salvage_reason):
-                protected_items.append((item, protection_reason))
-            elif salvage_reason:
-                salvage_items.append((item, salvage_reason))
-            else:
-                destroy_pool.append((item, protection_reason))
-
-        planned_actions = [
-            PlannedDestroyAction(
-                item_id=int(item.item_id),
-                model_id=int(item.model_id),
-                label=str(item.name or f"Model {int(item.model_id)}"),
-                quantity_to_destroy=max(1, int(item.quantity)),
-                source_quantity=max(1, int(item.quantity)),
-            )
-            for item, _reason in destroy_pool
-        ]
-        planned_actions_by_item_id = {
-            int(action.item_id): action
-            for action in planned_actions
-        }
-
-        planned_destroys = 0
-        planned_destroy_quantity = 0
-        for item, protection_reason in protected_items:
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "destroy",
-                    MERCHANT_TYPE_INVENTORY,
-                    item.name,
-                    item.quantity,
-                    PLAN_STATE_SKIPPED,
-                    f"Blocked by {rule_reference}: {protection_reason}",
-                    model_id=item.model_id,
-                    status_hint=PREVIEW_STATUS_PROTECTED,
-                )
-            )
-
-        for item, salvage_reason in salvage_items:
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "destroy",
-                    MERCHANT_TYPE_INVENTORY,
-                    item.name,
-                    item.quantity,
-                    PLAN_STATE_SKIPPED,
-                    f"Blocked by {rule_reference}: selected for MR Salvage ({salvage_reason}); salvage wins over destroy.",
-                    model_id=item.model_id,
-                    status_hint=PREVIEW_STATUS_SKIPPED,
-                )
-            )
-
-        for item, protection_reason in destroy_pool:
-            action = planned_actions_by_item_id.get(int(item.item_id))
-            if action is None:
-                continue
-            reason_parts = [f"Matched by {rule_reference}."]
-            if protection_reason:
-                reason_parts.append(f"Included protected item: {protection_reason}")
-            plan.destroy_actions.append(action)
-            plan.destroy_item_ids.append(int(action.item_id))
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "destroy",
-                    MERCHANT_TYPE_INVENTORY,
-                    item.name,
-                    max(0, int(action.quantity_to_destroy)),
-                    PLAN_STATE_WILL_EXECUTE,
-                    " ".join(reason_parts),
-                    model_id=item.model_id,
-                )
-            )
-            planned_destroys += 1
-            planned_destroy_quantity += max(0, int(action.quantity_to_destroy))
-
-        self._debug_log(
-            f"{candidate_label}: matched={len(matching_items)} protected={len(protected_items)} salvage_reserved={len(salvage_items)} "
-            f"kept_quantity=0 planned_destroys={planned_destroys} "
-            f"planned_destroy_quantity={planned_destroy_quantity} include_protected={include_protected_items}"
+        return self._destroy_planner.plan_destroy_rule(
+            plan, items, rule, rule_index, claimed_item_ids, enabled_sell_rules
         )
 
     def _plan_destroy_actions(
@@ -18572,15 +17413,9 @@ class MerchantRulesWidget:
         enabled_sell_rules: list[tuple[int, SellRule]],
         claimed_item_ids: set[int],
     ) -> None:
-        for rule_index, destroy_rule in enabled_destroy_rules:
-            self._plan_destroy_rule(
-                plan,
-                items,
-                destroy_rule,
-                rule_index,
-                claimed_item_ids,
-                enabled_sell_rules,
-            )
+        return self._destroy_planner.plan_destroy_actions(
+            plan, items, enabled_destroy_rules, enabled_sell_rules, claimed_item_ids
+        )
 
     def _plan_salvage_actions(
         self,
@@ -18590,97 +17425,7 @@ class MerchantRulesWidget:
         claimed_item_ids: set[int],
     ) -> None:
         """Plan salvage actions before overlapping sell and destroy rules can claim the items."""
-
-        if not self._has_enabled_salvage_settings():
-            return
-
-        candidates, blocked_counts = self._collect_salvage_candidates(
-            items,
-            enabled_sell_rules,
-            require_salvage_kit=True,
-            mode="manual",
-        )
-        candidate_item_ids = {
-            max(0, int(candidate.item.item_id)) for candidate in candidates if max(0, int(candidate.item.item_id)) > 0
-        }
-        for item in items:
-            item_id = max(0, int(item.item_id))
-            if item_id <= 0 or item_id in candidate_item_ids:
-                continue
-            if self._get_specific_upgrade_salvage_reservation_reason(item):
-                claimed_item_ids.add(item_id)
-
-        for candidate in candidates:
-            item = candidate.item
-            item_id = max(0, int(item.item_id))
-            if item_id <= 0:
-                continue
-            rule = _normalize_salvage_rule(candidate.rule) or SalvageRule()
-            if (
-                int(candidate.rule_index) >= 0
-                and _is_auto_exact_upgrade_salvage_option(rule.salvage_option)
-                and _salvage_rule_has_upgrade_targets(rule)
-            ):
-                plan.salvage_specific_upgrade_owners[item_id] = PlannedSpecificUpgradeSalvageOwner(
-                    model_id=int(item.model_id),
-                    rule_index=int(candidate.rule_index),
-                    rule_snapshot=_normalize_salvage_rule(rule) or SalvageRule(),
-                )
-            rule_reference = (
-                self._format_salvage_rule_reference(int(candidate.rule_index), rule)
-                if int(candidate.rule_index) >= 0
-                else "salvage selection"
-            )
-            reason = str(candidate.reason or "").strip()
-            if not reason:
-                reason = "Selected for salvage"
-            option_label = _get_salvage_option_label(rule.salvage_option)
-            if _is_auto_exact_upgrade_salvage_option(rule.salvage_option):
-                slot_resolution = self._get_auto_salvage_upgrade_slot_resolution(rule, item)
-                if slot_resolution.selected_option:
-                    option_label = _get_salvage_option_label(slot_resolution.selected_option)
-            reason = f"{reason}; {option_label} via {rule_reference}."
-            if self._salvage_candidate_allows_stack_drain(candidate):
-                reason = (
-                    f"{reason} Up to {item.quantity} from this stack; stop early if it no longer qualifies "
-                    "or a safety check fails."
-                )
-            plan.salvage_item_ids.append(item_id)
-            claimed_item_ids.add(item_id)
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "salvage",
-                    MERCHANT_TYPE_INVENTORY,
-                    item.name,
-                    item.quantity,
-                    PLAN_STATE_WILL_EXECUTE,
-                    reason,
-                    model_id=item.model_id,
-                )
-            )
-
-        for reason, count in sorted(blocked_counts.items()):
-            safe_count = max(0, int(count))
-            if safe_count <= 0:
-                continue
-            status_hint = (
-                PREVIEW_STATUS_PROTECTED
-                if reason == "protected"
-                else PREVIEW_STATUS_SKIPPED
-                if reason in {"not selected", "immediate disabled"}
-                else PREVIEW_STATUS_BLOCKED
-            )
-            plan.entries.append(
-                ExecutionPlanEntry(
-                    "salvage",
-                    MERCHANT_TYPE_INVENTORY,
-                    "Salvage",
-                    safe_count,
-                    PLAN_STATE_SKIPPED,
-                    f"Skipped {safe_count} {reason}.",
-                    status_hint=status_hint,
-                )
-            )
+        return self._salvage_planner.plan_salvage_actions(plan, items, enabled_sell_rules, claimed_item_ids)
 
     def _build_simulated_model_counts(self, items: list[InventoryItemInfo], plan: PlanResult) -> dict[int, int]:
         return _planning.build_simulated_model_counts(items, plan)
@@ -25804,18 +24549,7 @@ class MerchantRulesWidget:
         return "failed"
 
     def _salvage_candidate_allows_stack_drain(self, candidate: SalvageCandidate) -> bool:
-        item = getattr(candidate, "item", None)
-        if not bool(getattr(item, "is_stackable", False)):
-            return False
-        rule = _normalize_salvage_rule(getattr(candidate, "rule", None))
-        if rule is None:
-            return False
-        configured_option = _normalize_salvage_rule_mode(
-            getattr(rule, "salvage_option", SALVAGE_OPTION_DEFAULT)
-        )
-        if _is_auto_exact_upgrade_salvage_option(configured_option):
-            return False
-        return _resolve_salvage_operation(configured_option) not in SALVAGE_UPGRADE_OPTIONS
+        return self._salvage_planner.salvage_candidate_allows_stack_drain(candidate)
 
     def _add_salvage_status_to_outcome(self, outcome: ExecutionPhaseOutcome, status: str) -> None:
         safe_status = str(status or "")
