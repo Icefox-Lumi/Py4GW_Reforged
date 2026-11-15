@@ -59,6 +59,7 @@ from Sources.icefox.MerchantRules import configuration as _configuration
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
 from Sources.icefox.MerchantRules import planning as _planning
+from Sources.icefox.MerchantRules import preview as _preview
 from Sources.icefox.MerchantRules import profiles as _profiles
 from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME as ACCOUNT_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
@@ -1578,11 +1579,11 @@ MERCHANT_RULES_OPCODE_ERROR_RESULT = 199
 PLAN_STATE_WILL_EXECUTE = _planning.PLAN_STATE_WILL_EXECUTE
 PLAN_STATE_CONDITIONAL = _planning.PLAN_STATE_CONDITIONAL
 PLAN_STATE_SKIPPED = _planning.PLAN_STATE_SKIPPED
-PREVIEW_STATUS_READY = "ready"
-PREVIEW_STATUS_LIVE_CHECK = "live_check"
-PREVIEW_STATUS_NEEDS_XUNLAI = "needs_xunlai"
-PREVIEW_STATUS_AFTER_TRAVEL = "after_travel"
-PREVIEW_STATUS_TRAVEL = "travel"
+PREVIEW_STATUS_READY = _preview.PREVIEW_STATUS_READY
+PREVIEW_STATUS_LIVE_CHECK = _preview.PREVIEW_STATUS_LIVE_CHECK
+PREVIEW_STATUS_NEEDS_XUNLAI = _preview.PREVIEW_STATUS_NEEDS_XUNLAI
+PREVIEW_STATUS_AFTER_TRAVEL = _preview.PREVIEW_STATUS_AFTER_TRAVEL
+PREVIEW_STATUS_TRAVEL = _preview.PREVIEW_STATUS_TRAVEL
 PROJECTED_PREVIEW_CONTEXT_COORDS = (0.0, 0.0)
 UI_COLOR_INFO = (0.30, 0.72, 1.00, 1.0)
 UI_COLOR_SUCCESS = (0.18, 0.86, 0.40, 1.0)
@@ -4886,6 +4887,78 @@ class MerchantRulesWidget:
     """
 
     @property
+    def preview_plan(self) -> PlanResult:
+        return self._preview_session.preview_plan
+
+    @preview_plan.setter
+    def preview_plan(self, value: PlanResult) -> None:
+        self._preview_session.preview_plan = value
+
+    @property
+    def preview_ready(self) -> bool:
+        return self._preview_session.preview_ready
+
+    @preview_ready.setter
+    def preview_ready(self, value: bool) -> None:
+        self._preview_session.preview_ready = value
+
+    @property
+    def preview_requires_execute_travel(self) -> bool:
+        return self._preview_session.preview_requires_execute_travel
+
+    @preview_requires_execute_travel.setter
+    def preview_requires_execute_travel(self, value: bool) -> None:
+        self._preview_session.preview_requires_execute_travel = value
+
+    @property
+    def preview_execute_travel_target_outpost_id(self) -> int:
+        return self._preview_session.preview_execute_travel_target_outpost_id
+
+    @preview_execute_travel_target_outpost_id.setter
+    def preview_execute_travel_target_outpost_id(self, value: int) -> None:
+        self._preview_session.preview_execute_travel_target_outpost_id = value
+
+    @property
+    def preview_execute_travel_target_outpost_name(self) -> str:
+        return self._preview_session.preview_execute_travel_target_outpost_name
+
+    @preview_execute_travel_target_outpost_name.setter
+    def preview_execute_travel_target_outpost_name(self, value: str) -> None:
+        self._preview_session.preview_execute_travel_target_outpost_name = value
+
+    @property
+    def preview_inventory_diff_summary(self) -> str:
+        return self._preview_session.preview_inventory_diff_summary
+
+    @preview_inventory_diff_summary.setter
+    def preview_inventory_diff_summary(self, value: str) -> None:
+        self._preview_session.preview_inventory_diff_summary = value
+
+    @property
+    def preview_inventory_diff_rows(self) -> list[str]:
+        return self._preview_session.preview_inventory_diff_rows
+
+    @preview_inventory_diff_rows.setter
+    def preview_inventory_diff_rows(self, value: list[str]) -> None:
+        self._preview_session.preview_inventory_diff_rows = value
+
+    @property
+    def last_preview_compare_duration_ms(self) -> float:
+        return self._preview_session.last_preview_compare_duration_ms
+
+    @last_preview_compare_duration_ms.setter
+    def last_preview_compare_duration_ms(self, value: float) -> None:
+        self._preview_session.last_preview_compare_duration_ms = value
+
+    @property
+    def execute_drift_requires_confirmation(self) -> bool:
+        return self._preview_session.execute_drift_requires_confirmation
+
+    @execute_drift_requires_confirmation.setter
+    def execute_drift_requires_confirmation(self, value: bool) -> None:
+        self._preview_session.execute_drift_requires_confirmation = value
+
+    @property
     def catalog_loaded(self) -> bool:
         return self._catalog_session.catalog_loaded
 
@@ -5189,6 +5262,18 @@ class MerchantRulesWidget:
     def _service_role_lifecycle_active(self, value: bool) -> None:
         self._service_resolution_session.lifecycle_active = value
 
+    @property
+    def last_plan_build_duration_ms(self) -> float:
+        return self._plan_composer.last_plan_build_duration_ms
+
+    @last_plan_build_duration_ms.setter
+    def last_plan_build_duration_ms(self, value: float) -> None:
+        self._plan_composer.last_plan_build_duration_ms = value
+
+    def _planning_storage_open(self) -> bool:
+        storage_api = getattr(GLOBAL_CACHE, "Inventory", None)
+        return bool(storage_api is not None and bool(getattr(storage_api, "IsStorageOpen", lambda: False)()))
+
     def __init__(self):
         self.initialized = False
         self._ranked_catalog_search = RankedCatalogSearch(
@@ -5279,11 +5364,34 @@ class MerchantRulesWidget:
         self.auto_travel_enabled = False
         self.target_outpost_id = 0
         self.favorite_outpost_ids: list[int] = []
-        self.preview_plan = PlanResult()
-        self.preview_ready = False
-        self.preview_requires_execute_travel = False
-        self.preview_execute_travel_target_outpost_id = 0
-        self.preview_execute_travel_target_outpost_name = ""
+        self._preview_session = _preview.PreviewSession(
+            initial_plan=PlanResult(),
+            collect_inventory=lambda: self._collect_inventory_items(),
+            get_model_counts=lambda: self._get_inventory_model_counts,
+            clock=lambda: time.perf_counter(),
+            get_model_label=lambda: self._format_model_label,
+            read_diff_row_limit=lambda: PREVIEW_DIFF_ROW_LIMIT,
+            read_merchant_labels=lambda: MERCHANT_TYPE_LABELS,
+            read_action_labels=lambda: ACTION_TYPE_LABELS,
+            read_status_labels=lambda: PREVIEW_STATUS_LABELS,
+            read_status_order=lambda: PREVIEW_NOT_CHANGED_STATUS_ORDER,
+            read_busy=lambda: (
+                self.execution_running
+                or self.travel_preview_running
+                or self.identify_running
+                or self.instant_destroy_running
+                or self.salvage_running
+                or self.storage_scan_running
+                or self.auto_cleanup_running
+                or self.manual_vendor_running
+            ),
+            read_detailed_preview=lambda: bool(getattr(self, "detailed_preview", False)),
+            read_hide_already_done=lambda: bool(self.preview_not_changed_hide_already_done),
+            read_status_message=lambda: self.status_message,
+            embark_name=lambda: self._get_embark_beach_outpost_name(),
+            get_skipped_classifier=lambda: _classify_skipped_preview_entry,
+            get_reason_formatter=lambda: normalize_preview_entry_reason_display_text,
+        )
         self.detailed_preview = False
         self.execution_running = False
         self.travel_preview_running = False
@@ -5315,7 +5423,7 @@ class MerchantRulesWidget:
         self.destroy_auto_enabled = False
         self.destroy_instant_enabled = False
         self.destroy_include_protected_items = False
-        self.status_message = "Preview the current map plan before execution."
+        self.status_message: str = "Preview the current map plan before execution."
         self.last_error = ""
         self.last_execution_summary = ""
         self.last_manual_vendor_summary = ""
@@ -5394,11 +5502,64 @@ class MerchantRulesWidget:
             weapon_mod_standalone_kind=WEAPON_MOD_STANDALONE_KIND,
             attribute_labels=MODEL_ID_ATTRIBUTE_FALLBACK_LABELS,
         )
+        self._plan_composer = _planning.PlanComposer(
+            normalizers=_planning.CompositionNormalizers(
+                get_buy_rule=lambda: _normalize_buy_rule,
+                get_sell_rule=lambda: _normalize_sell_rule,
+                get_material_targets=lambda: _normalize_material_targets,
+                get_merchant_stock_targets=lambda: _normalize_merchant_stock_targets,
+                get_rune_sell_targets=lambda: _normalize_rune_sell_targets,
+                get_rune_trader_targets=lambda: _normalize_rune_trader_targets,
+                get_whitelist_targets=lambda: _normalize_whitelist_targets,
+                get_unique_rule_id=lambda: _ensure_unique_rule_id,
+                get_safe_int=lambda: _safe_int,
+                get_scroll_stock=lambda: _is_scroll_trader_stock_model,
+                get_material_storage_permission=lambda: _sell_rule_can_include_material_storage,
+            ),
+            read_buy_rules=lambda: self.buy_rules,
+            read_sell_rules=lambda: self.sell_rules,
+            read_destroy_rules=lambda: self.destroy_rules,
+            read_auto_travel=lambda: self.auto_travel_enabled,
+            read_target_outpost=lambda: self.target_outpost_id,
+            read_reservation_active=lambda: getattr(self, "execute_reservation_scope_active", False),
+            read_reserved_item_ids=lambda: getattr(self, "execute_reserved_item_ids", set()),
+            read_sale_planner=lambda: self._sale_planner,
+            read_buy_planner=lambda: self._buy_planner,
+            read_cleanup_planner=lambda: self._cleanup_planner,
+            read_identify_planner=lambda: self._identify_planner,
+            read_salvage_planner=lambda: self._salvage_planner,
+            read_destroy_planner=lambda: self._destroy_planner,
+            read_policy=lambda: self._protection_policy,
+            get_inventory_items=lambda: self._collect_inventory_items,
+            get_storage_items=lambda: self._collect_storage_items,
+            get_reliable_storage_items=lambda: self._collect_storage_items_with_reliability,
+            get_material_storage_items=lambda: self._collect_material_storage_items,
+            get_supported_context=lambda: self._get_supported_context,
+            get_local_storage_ready=lambda: self._can_use_local_storage_actions,
+            get_storage_open=lambda: self._planning_storage_open,
+            get_map_id=lambda: Map.GetMapID,
+            get_outpost_name=lambda: self._get_outpost_name,
+            get_guild_hall_target=lambda: self._is_guild_hall_target,
+            get_target_reached=lambda: self._is_travel_target_reached,
+            get_embark_name=lambda: self._get_embark_beach_outpost_name,
+            read_embark_id=lambda: EMBARK_BEACH_MAP_ID,
+            read_projected_coords=lambda: PROJECTED_PREVIEW_CONTEXT_COORDS,
+            read_merchant_labels=lambda: MERCHANT_TYPE_LABELS,
+            read_recipes=lambda: CONSUMABLE_CRAFTER_RECIPES_BY_MODEL,
+            get_early_kit_models=lambda: self._early_kit_model_ids,
+            read_live_check_status=lambda: PREVIEW_STATUS_LIVE_CHECK,
+            get_quantity=lambda: GLOBAL_CACHE.Item.Properties.GetQuantity,
+            get_clock=lambda: time.perf_counter,
+            get_diagnostic=lambda: self._debug_log,
+            get_plan_summary=lambda: self._log_plan_summary,
+            get_plan_factory=lambda: PlanResult,
+            get_entry_factory=lambda: ExecutionPlanEntry,
+        )
         self.last_plan_build_duration_ms = 0.0
         self.last_preview_compare_duration_ms = 0.0
         self.last_execution_phase_durations_ms: dict[str, float] = {}
         self.preview_inventory_diff_summary = ""
-        self.preview_inventory_diff_rows: list[str] = []
+        self.preview_inventory_diff_rows = []
         self.execute_drift_requires_confirmation = False
         self._service_resolution_session = ServiceResolutionSession(
             default_selectors=DEFAULT_NPC_SELECTORS,
@@ -11130,16 +11291,11 @@ class MerchantRulesWidget:
             raise OSError(f"JsonFactory rejected the cross-account update for {target_email}.")
         return target_email
 
-    def _clear_preview_inventory_diff(self):
-        self.preview_inventory_diff_summary = ""
-        self.preview_inventory_diff_rows = []
-        self.last_preview_compare_duration_ms = 0.0
-        self.execute_drift_requires_confirmation = False
+    def _clear_preview_inventory_diff(self) -> None:
+        return self._preview_session.clear_preview_inventory_diff()
 
-    def _clear_preview_projection_state(self):
-        self.preview_requires_execute_travel = False
-        self.preview_execute_travel_target_outpost_id = 0
-        self.preview_execute_travel_target_outpost_name = ""
+    def _clear_preview_projection_state(self) -> None:
+        return self._preview_session.clear_preview_projection_state()
 
     def _set_preview_projection_state(
         self,
@@ -11147,21 +11303,15 @@ class MerchantRulesWidget:
         requires_travel: bool = False,
         target_outpost_id: int = 0,
         target_outpost_name: str = "",
-    ):
-        if not requires_travel:
-            self._clear_preview_projection_state()
-            return
-        self.preview_requires_execute_travel = True
-        self.preview_execute_travel_target_outpost_id = max(0, int(target_outpost_id))
-        self.preview_execute_travel_target_outpost_name = str(target_outpost_name or "").strip()
+    ) -> None:
+        return self._preview_session.set_preview_projection_state(
+            requires_travel=requires_travel,
+            target_outpost_id=target_outpost_id,
+            target_outpost_name=target_outpost_name,
+        )
 
     def _preview_has_execute_travel_pending(self) -> bool:
-        return bool(
-            self.preview_ready
-            and self.preview_requires_execute_travel
-            and self.preview_execute_travel_target_outpost_id > 0
-            and self.preview_execute_travel_target_outpost_name
-        )
+        return self._preview_session.preview_has_execute_travel_pending()
 
     def _clear_runtime_diagnostics(self):
         self._inventory_evidence.reset_statistics()
@@ -11532,58 +11682,7 @@ class MerchantRulesWidget:
         )
 
     def _compare_current_inventory_against_preview(self) -> bool:
-        """Compare live model counts with the preview snapshot and require drift confirmation.
-
-        Any difference invalidates one-click execution until the user explicitly confirms the
-        newly displayed drift; the stored plan itself is not silently rebuilt here.
-        """
-
-        self._clear_preview_inventory_diff()
-        if not self.preview_ready:
-            self.preview_inventory_diff_summary = "Run Preview before comparing inventory drift."
-            return False
-        if not self.preview_plan.inventory_snapshot_captured:
-            self.preview_inventory_diff_summary = "This preview did not capture an inventory snapshot to compare."
-            return False
-
-        started_at = time.perf_counter()
-        current_items = self._collect_inventory_items()
-        current_model_counts = self._get_inventory_model_counts(current_items)
-        self.last_preview_compare_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
-
-        preview_model_counts = dict(self.preview_plan.inventory_model_counts)
-        changed_rows: list[tuple[int, str]] = []
-        for model_id in sorted(set(preview_model_counts.keys()) | set(current_model_counts.keys())):
-            preview_count = max(0, int(preview_model_counts.get(model_id, 0)))
-            current_count = max(0, int(current_model_counts.get(model_id, 0)))
-            if current_count == preview_count:
-                continue
-            delta = current_count - preview_count
-            delta_prefix = "+" if delta > 0 else ""
-            changed_rows.append(
-                (
-                    abs(delta),
-                    f"{delta_prefix}{delta} {self._format_model_label(model_id)} (now {current_count}, preview {preview_count})",
-                )
-            )
-
-        if not changed_rows:
-            self.preview_inventory_diff_summary = (
-                f"Current inventory still matches the last preview snapshot across {len(current_items)} stack(s)."
-            )
-            self.execute_drift_requires_confirmation = False
-            return True
-
-        changed_rows.sort(key=lambda row: (-row[0], row[1].lower()))
-        self.preview_inventory_diff_rows = [label for _weight, label in changed_rows[:PREVIEW_DIFF_ROW_LIMIT]]
-        total_changed = len(changed_rows)
-        if total_changed > PREVIEW_DIFF_ROW_LIMIT:
-            self.preview_inventory_diff_rows.append(f"...and {total_changed - PREVIEW_DIFF_ROW_LIMIT} more changed model(s).")
-        self.preview_inventory_diff_summary = (
-            f"Inventory changed since preview: {total_changed} model(s) differ from the last snapshot."
-        )
-        self.execute_drift_requires_confirmation = True
-        return True
+        return self._preview_session.compare_current_inventory_against_preview()
 
     def _queue_execute_now(self):
         if self._merchant_rules_has_pending_or_active_work():
@@ -11840,30 +11939,13 @@ class MerchantRulesWidget:
         return outpost_name
 
     def _get_consumable_crafter_multi_stop_target(self) -> tuple[int, str]:
-        if not self.auto_travel_enabled or not self._has_enabled_consumable_crafter_buy_rules():
-            return 0, ""
-        target_outpost_id = max(0, _safe_int(self.target_outpost_id, 0))
-        if target_outpost_id <= 0 or target_outpost_id == EMBARK_BEACH_MAP_ID:
-            return 0, ""
-        target_outpost_name = self._get_outpost_name(target_outpost_id)
-        if not target_outpost_name:
-            return 0, ""
-        return target_outpost_id, target_outpost_name
+        return self._plan_composer.get_consumable_crafter_multi_stop_target()
 
     def _should_use_consumable_crafter_multi_stop_route(self) -> bool:
-        target_outpost_id, _target_outpost_name = self._get_consumable_crafter_multi_stop_target()
-        return target_outpost_id > 0
+        return self._plan_composer.should_use_consumable_crafter_multi_stop_route()
 
     def _get_preview_projection_target(self) -> tuple[int, str]:
-        target_outpost_id = max(0, int(self.target_outpost_id)) if self.auto_travel_enabled else 0
-        if target_outpost_id <= 0:
-            return 0, ""
-        target_outpost_name = self._get_outpost_name(target_outpost_id)
-        if not target_outpost_name:
-            return 0, ""
-        if self._is_travel_target_reached(target_outpost_id):
-            return 0, ""
-        return target_outpost_id, target_outpost_name
+        return self._plan_composer.get_preview_projection_target()
 
     def _travel_to_target_outpost(self, target_outpost_id: int):
         safe_outpost_id = max(0, _safe_int(target_outpost_id, 0))
@@ -12643,7 +12725,7 @@ class MerchantRulesWidget:
         return self._get_configured_xunlai_first_keep_by_model()
 
     def _has_enabled_xunlai_first_merchant_stock_targets(self) -> bool:
-        return bool(self._get_configured_xunlai_first_keep_by_model())
+        return self._plan_composer.has_enabled_xunlai_first_merchant_stock_targets()
 
     def _catalog_entry_matches_merchant_stock(self, entry: dict[str, object]) -> bool:
         return self._get_merchant_essential(_safe_int(entry.get("model_id", 0), 0)) is not None
@@ -15139,11 +15221,7 @@ class MerchantRulesWidget:
         return self._service_resolution_session.scan_live_roles(record_lifecycle=record_lifecycle)
 
     def _preview_uses_current_service_context(self) -> bool:
-        return bool(
-            self.preview_ready
-            and not self.preview_requires_execute_travel
-            and not bool(getattr(self.preview_plan, "multi_stop_route", False))
-        )
+        return self._preview_session.preview_uses_current_service_context()
 
     def _refresh_preview_from_service_context(
         self,
@@ -15355,94 +15433,7 @@ class MerchantRulesWidget:
             self.status_message = message
 
     def _get_required_service_types(self) -> set[str]:
-        """Return only merchant/trader services that enabled rules can actually use."""
-
-        required: set[str] = set()
-
-        for raw_rule in self.buy_rules:
-            rule = _normalize_buy_rule(raw_rule)
-            if rule is None or not rule.enabled:
-                continue
-
-            if rule.kind == BUY_KIND_MATERIAL_TARGET:
-                for target in _normalize_material_targets(rule.material_targets):
-                    model_id = max(0, int(target.model_id))
-                    if model_id > 0:
-                        required.add(self._get_material_merchant_type_by_model(model_id))
-                continue
-
-            if rule.kind == BUY_KIND_RUNE_TRADER_TARGET:
-                if _normalize_rune_trader_targets(rule.rune_targets):
-                    required.add(MERCHANT_TYPE_RUNE_TRADER)
-                continue
-
-            if rule.kind == BUY_KIND_SCROLL_TRADER_TARGET:
-                if any(
-                    _is_scroll_trader_stock_model(target.model_id)
-                    for target in _normalize_merchant_stock_targets(rule.merchant_stock_targets)
-                ):
-                    required.add(MERCHANT_TYPE_SCROLL_TRADER)
-                continue
-
-            if rule.kind == BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
-                if any(
-                    int(target.model_id) in CONSUMABLE_CRAFTER_RECIPES_BY_MODEL
-                    for target in _normalize_merchant_stock_targets(rule.merchant_stock_targets)
-                ):
-                    required.add(MERCHANT_TYPE_CONSUMABLE_CRAFTER)
-                continue
-
-            if rule.kind == BUY_KIND_MERCHANT_STOCK:
-                for target in _normalize_merchant_stock_targets(rule.merchant_stock_targets):
-                    if int(target.model_id) <= 0:
-                        continue
-                    required.add(
-                        MERCHANT_TYPE_SCROLL_TRADER
-                        if _is_scroll_trader_stock_model(target.model_id)
-                        else MERCHANT_TYPE_MERCHANT
-                    )
-
-        for raw_rule in self.sell_rules:
-            rule = _normalize_sell_rule(raw_rule)
-            if rule is None or not rule.enabled:
-                continue
-
-            if rule.kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-                if any(bool(value) for value in getattr(rule, "rarities", {}).values()):
-                    required.add(MERCHANT_TYPE_MERCHANT)
-                if (
-                    rule.kind == SELL_KIND_ARMOR
-                    and bool(getattr(rule, "include_standalone_runes", False))
-                ):
-                    required.add(MERCHANT_TYPE_RUNE_TRADER)
-                continue
-
-            if rule.kind == SELL_KIND_RUNE_TRADER_TARGET:
-                if _normalize_rune_sell_targets(getattr(rule, "rune_sell_targets", [])):
-                    required.add(MERCHANT_TYPE_RUNE_TRADER)
-                continue
-
-            if rule.kind == SELL_KIND_COMMON_MATERIALS:
-                # A material rule may contain common and/or rare materials.  Keep
-                # this conservative unless the plan has already narrowed the item set.
-                required.add(MERCHANT_TYPE_MATERIALS)
-                required.add(MERCHANT_TYPE_RARE_MATERIALS)
-                continue
-
-            if rule.kind == SELL_KIND_EXPLICIT_MODELS:
-                if _normalize_whitelist_targets(getattr(rule, "whitelist_targets", [])):
-                    # Explicit items can route to merchant, material traders or the
-                    # rune trader depending on the actual item type.
-                    required.update(
-                        {
-                            MERCHANT_TYPE_MERCHANT,
-                            MERCHANT_TYPE_MATERIALS,
-                            MERCHANT_TYPE_RARE_MATERIALS,
-                            MERCHANT_TYPE_RUNE_TRADER,
-                        }
-                    )
-
-        return required
+        return self._plan_composer.get_required_service_types()
 
     def _get_supported_context(
         self,
@@ -15458,119 +15449,13 @@ class MerchantRulesWidget:
         )
 
     def _get_projected_supported_context(self, target_outpost_id: int) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
-        safe_outpost_id = max(0, _safe_int(target_outpost_id, 0))
-        outpost_name = self._get_outpost_name(safe_outpost_id)
-        coords: dict[str, tuple[float, float] | None] = {
-            MERCHANT_TYPE_MERCHANT: PROJECTED_PREVIEW_CONTEXT_COORDS,
-            MERCHANT_TYPE_MATERIALS: PROJECTED_PREVIEW_CONTEXT_COORDS,
-            MERCHANT_TYPE_RUNE_TRADER: PROJECTED_PREVIEW_CONTEXT_COORDS,
-            MERCHANT_TYPE_SCROLL_TRADER: PROJECTED_PREVIEW_CONTEXT_COORDS,
-            MERCHANT_TYPE_RARE_MATERIALS: PROJECTED_PREVIEW_CONTEXT_COORDS,
-            MERCHANT_TYPE_CONSUMABLE_CRAFTER: PROJECTED_PREVIEW_CONTEXT_COORDS if safe_outpost_id == EMBARK_BEACH_MAP_ID else None,
-        }
-        if safe_outpost_id <= 0 or not outpost_name:
-            return False, "Projected preview target is not configured.", {
-                MERCHANT_TYPE_MERCHANT: None,
-                MERCHANT_TYPE_MATERIALS: None,
-                MERCHANT_TYPE_RUNE_TRADER: None,
-                MERCHANT_TYPE_SCROLL_TRADER: None,
-                MERCHANT_TYPE_RARE_MATERIALS: None,
-                MERCHANT_TYPE_CONSUMABLE_CRAFTER: None,
-            }
-
-        arrival_label = "Guild Hall arrival" if self._is_guild_hall_target(safe_outpost_id) else "arrival"
-        reason = (
-            f"Projected preview for {outpost_name} ({safe_outpost_id}). "
-            f"Travel + Execute will auto-travel, then recheck current items and available services after {arrival_label}. "
-            "Destination NPC and storage access will be confirmed on arrival."
-        )
-        return True, reason, coords
-
-    def _is_projected_destination_entry(self, entry: ExecutionPlanEntry) -> bool:
-        action_type = str(entry.action_type)
-        merchant_type = str(entry.merchant_type)
-        if merchant_type in (
-            MERCHANT_TYPE_MERCHANT,
-            MERCHANT_TYPE_MATERIALS,
-            MERCHANT_TYPE_RUNE_TRADER,
-            MERCHANT_TYPE_SCROLL_TRADER,
-            MERCHANT_TYPE_RARE_MATERIALS,
-            MERCHANT_TYPE_CONSUMABLE_CRAFTER,
-        ):
-            return action_type in {"buy", "sell"}
-        if merchant_type == MERCHANT_TYPE_STORAGE:
-            return action_type in {"deposit", "withdraw"}
-        return False
+        return self._plan_composer.get_projected_supported_context(target_outpost_id)
 
     def _get_projected_preview_reason_suffix(self, merchant_type: str, target_outpost_name: str) -> str:
-        target_label = str(target_outpost_name or "").strip() or "the selected outpost"
-        if str(merchant_type) == MERCHANT_TYPE_STORAGE:
-            return f"Projected after travel to {target_label}. Travel + Execute will reopen Xunlai after arrival."
-        merchant_label = MERCHANT_TYPE_LABELS.get(str(merchant_type), "merchant handling")
-        return (
-            f"Projected after travel to {target_label}. "
-            f"Travel + Execute will confirm live {merchant_label} access on arrival."
-        )
-
-    def _append_projected_preview_reason(self, reason: str, merchant_type: str, target_outpost_name: str) -> str:
-        suffix = self._get_projected_preview_reason_suffix(merchant_type, target_outpost_name)
-        normalized_reason = str(reason or "").strip()
-        if suffix and suffix in normalized_reason:
-            return normalized_reason
-        if not normalized_reason:
-            return suffix
-        return f"{normalized_reason} {suffix}".strip()
-
-    def _apply_projected_preview_post_processing(self, plan: PlanResult, target_outpost_name: str):
-        for entry in plan.entries:
-            if not self._is_projected_destination_entry(entry):
-                continue
-            if str(entry.state) == PLAN_STATE_WILL_EXECUTE:
-                entry.state = PLAN_STATE_CONDITIONAL
-            if str(entry.state) == PLAN_STATE_CONDITIONAL:
-                entry.reason = self._append_projected_preview_reason(entry.reason, entry.merchant_type, target_outpost_name)
+        return self._plan_composer.get_projected_preview_reason_suffix(merchant_type, target_outpost_name)
 
     def _build_travel_preview(self, target_outpost_id: int) -> PlanResult:
-        safe_outpost_id = max(0, _safe_int(target_outpost_id, 0))
-        outpost_name = self._get_outpost_name(safe_outpost_id)
-        if safe_outpost_id <= 0 or not outpost_name:
-            return PlanResult(
-                supported_map=False,
-                supported_reason="Auto-travel target is not configured.",
-                has_actions=False,
-            )
-
-        is_guild_hall_target = self._is_guild_hall_target(safe_outpost_id)
-        arrival_label = "Guild Hall arrival" if is_guild_hall_target else "arrival"
-        travel_reason = (
-            "Travel to the Guild Hall. After arrival, Merchant Rules will recheck current items and available "
-            "services before executing."
-            if is_guild_hall_target
-            else (
-                "After arrival, Merchant Rules will recheck current items and available services before executing."
-            )
-        )
-        result = PlanResult(
-            supported_map=True,
-            supported_reason=(
-                f"Previewing travel to {outpost_name} ({safe_outpost_id}). "
-                f"Merchant actions will be checked and re-planned after {arrival_label}."
-            ),
-            travel_to_outpost_id=safe_outpost_id,
-            travel_to_outpost_name=outpost_name,
-            has_actions=True,
-        )
-        result.entries.append(
-            ExecutionPlanEntry(
-                action_type="travel",
-                merchant_type=MERCHANT_TYPE_TRAVEL,
-                label=outpost_name,
-                quantity=1,
-                state=PLAN_STATE_WILL_EXECUTE,
-                reason=travel_reason,
-            )
-        )
-        return result
+        return self._plan_composer.build_travel_preview(target_outpost_id)
 
     def _build_consumable_crafter_multi_stop_preview(
         self,
@@ -15578,118 +15463,9 @@ class MerchantRulesWidget:
         *,
         execution_context: MerchantRulesExecutionContext | None = None,
     ) -> PlanResult:
-        safe_destination_id = max(0, _safe_int(destination_outpost_id, 0))
-        destination_name = self._get_outpost_name(safe_destination_id)
-        if safe_destination_id <= 0 or not destination_name:
-            return PlanResult(
-                supported_map=False,
-                supported_reason="Auto-travel target is not configured.",
-                has_actions=False,
-            )
-
-        embark_name = self._get_embark_beach_outpost_name()
-        embark_plan = self._build_plan(
-            projected_preview=True,
-            projected_target_override_outpost_id=EMBARK_BEACH_MAP_ID,
-            allow_consumable_multi_stop=False,
-            consumable_crafter_only=True,
-            execution_context=execution_context,
+        return self._plan_composer.build_consumable_crafter_multi_stop_preview(
+            destination_outpost_id, execution_context=execution_context
         )
-        destination_plan = self._build_plan(
-            projected_preview=True,
-            projected_target_override_outpost_id=safe_destination_id,
-            allow_consumable_multi_stop=False,
-            exclude_consumable_crafter=True,
-            execution_context=execution_context,
-        )
-
-        if not embark_plan.has_actions:
-            return destination_plan
-
-        storage_states = {str(embark_plan.storage_plan_state), str(destination_plan.storage_plan_state)}
-        if STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN in storage_states:
-            storage_plan_state = STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN
-        elif STORAGE_PLAN_STATE_EXACT_READY in storage_states:
-            storage_plan_state = STORAGE_PLAN_STATE_EXACT_READY
-        else:
-            storage_plan_state = STORAGE_PLAN_STATE_NOT_NEEDED
-
-        coords = dict(destination_plan.coords)
-        coords[MERCHANT_TYPE_CONSUMABLE_CRAFTER] = embark_plan.coords.get(MERCHANT_TYPE_CONSUMABLE_CRAFTER)
-        destination_has_work = bool(destination_plan.has_actions)
-        entries: list[ExecutionPlanEntry] = []
-        if not self._is_travel_target_reached(EMBARK_BEACH_MAP_ID):
-            entries.append(
-                ExecutionPlanEntry(
-                    action_type="travel",
-                    merchant_type=MERCHANT_TYPE_TRAVEL,
-                    label=embark_name,
-                    quantity=1,
-                    state=PLAN_STATE_WILL_EXECUTE,
-                    reason="Travel to Embark Beach first for Consumable Crafter buys.",
-                )
-            )
-        entries.extend(
-            replace(entry)
-            for entry in embark_plan.entries
-            if str(entry.merchant_type) == MERCHANT_TYPE_CONSUMABLE_CRAFTER
-        )
-        if destination_has_work:
-            entries.append(
-                ExecutionPlanEntry(
-                    action_type="travel",
-                    merchant_type=MERCHANT_TYPE_TRAVEL,
-                    label=destination_name,
-                    quantity=1,
-                    state=PLAN_STATE_WILL_EXECUTE,
-                    reason="Travel to the selected Auto Travel destination for remaining Merchant Rules work.",
-                )
-            )
-        entries.extend(
-            replace(entry)
-            for entry in destination_plan.entries
-            if str(entry.merchant_type) != MERCHANT_TYPE_CONSUMABLE_CRAFTER
-        )
-
-        result = PlanResult(
-            entries=entries,
-            supported_map=True,
-            supported_reason=(
-                f"Multi-stop preview: craft Consumable Crafter targets at {embark_name}"
-                + (f", then run remaining work at {destination_name}." if destination_has_work else " and stop there.")
-            ),
-            coords=coords,
-            multi_stop_route=True,
-            multi_stop_consumable_outpost_id=EMBARK_BEACH_MAP_ID,
-            multi_stop_consumable_outpost_name=embark_name,
-            multi_stop_destination_outpost_id=safe_destination_id if destination_has_work else 0,
-            multi_stop_destination_outpost_name=destination_name if destination_has_work else "",
-            merchant_stock_buys=list(destination_plan.merchant_stock_buys),
-            material_buys=list(destination_plan.material_buys),
-            rune_trader_buys=list(destination_plan.rune_trader_buys),
-            scroll_trader_buys=list(destination_plan.scroll_trader_buys),
-            consumable_crafter_buys=list(embark_plan.consumable_crafter_buys),
-            material_sales=list(destination_plan.material_sales),
-            storage_transfers=list(destination_plan.storage_transfers),
-            cleanup_transfers=list(destination_plan.cleanup_transfers),
-            identify_claimed_item_ids=list(destination_plan.identify_claimed_item_ids),
-            identify_item_ids=list(destination_plan.identify_item_ids),
-            salvage_item_ids=list(destination_plan.salvage_item_ids),
-            salvage_specific_upgrade_owners=dict(destination_plan.salvage_specific_upgrade_owners),
-            destroy_actions=list(destination_plan.destroy_actions),
-            destroy_item_ids=list(destination_plan.destroy_item_ids),
-            merchant_sell_item_ids=list(destination_plan.merchant_sell_item_ids),
-            rune_trader_sales=list(destination_plan.rune_trader_sales),
-            storage_plan_state=storage_plan_state,
-            storage_exact=bool(embark_plan.storage_exact and (destination_plan.storage_exact or not destination_has_work)),
-            inventory_snapshot_captured=bool(embark_plan.inventory_snapshot_captured or destination_plan.inventory_snapshot_captured),
-            inventory_model_counts=dict(embark_plan.inventory_model_counts or destination_plan.inventory_model_counts),
-            inventory_item_count=max(int(embark_plan.inventory_item_count), int(destination_plan.inventory_item_count)),
-            xunlai_first_merchant_stock_targets=dict(destination_plan.xunlai_first_merchant_stock_targets),
-            xunlai_first_storage_scan_reliable=bool(destination_plan.xunlai_first_storage_scan_reliable),
-            has_actions=bool(embark_plan.has_actions or destination_plan.has_actions),
-        )
-        return result
 
     def _get_bag_item_ids(self, bag_ids: tuple[int, ...] | list[int]) -> list[int]:
         return self._inventory_evidence.get_bag_item_ids(bag_ids)
@@ -16749,63 +16525,6 @@ class MerchantRulesWidget:
             return True
         return False
 
-    def _plan_has_authorized_early_kit_source(
-        self,
-        plan: PlanResult,
-        model_ids: set[int],
-    ) -> bool:
-        if any(
-            max(0, int(merchant_buy.model_id)) in model_ids
-            and max(0, int(merchant_buy.quantity)) > 0
-            and str(getattr(merchant_buy.cleanup, "rule_kind", "")) == BUY_KIND_MERCHANT_STOCK
-            for merchant_buy in plan.merchant_stock_buys
-        ):
-            return True
-        if any(
-            str(transfer.direction) == STORAGE_TRANSFER_WITHDRAW
-            and bool(transfer.xunlai_first_merchant_stock)
-            and max(0, int(transfer.model_id)) in model_ids
-            and max(0, int(transfer.quantity)) > 0
-            for transfer in plan.storage_transfers
-        ):
-            return True
-        if not plan.storage_exact and any(
-            max(0, int(model_id)) in model_ids
-            for model_id in plan.xunlai_first_merchant_stock_targets
-        ):
-            return True
-        return False
-
-    def _annotate_early_kit_preview(self, plan: PlanResult) -> None:
-        identification_models = set(self._early_kit_model_ids("identification"))
-        normal_salvage_models = set(self._early_kit_model_ids("normal_salvage"))
-        upgrade_salvage_models = set(self._early_kit_model_ids("upgrade_salvage"))
-        identification_source = self._plan_has_authorized_early_kit_source(plan, identification_models)
-        normal_source = self._plan_has_authorized_early_kit_source(plan, normal_salvage_models)
-        upgrade_source = self._plan_has_authorized_early_kit_source(plan, upgrade_salvage_models)
-
-        for entry in plan.entries:
-            if (
-                str(entry.action_type) == "identify"
-                and str(entry.state) == PLAN_STATE_SKIPPED
-                and str(entry.reason) == "No ID kit found."
-                and identification_source
-            ):
-                entry.state = PLAN_STATE_CONDITIONAL
-                entry.reason = "Identify after acquiring the configured Identification Kit."
-                entry.status_hint = PREVIEW_STATUS_LIVE_CHECK
-                continue
-            if str(entry.action_type) != "salvage" or str(entry.state) != PLAN_STATE_SKIPPED:
-                continue
-            if "no normal salvage kit" in str(entry.reason).lower() and normal_source:
-                entry.state = PLAN_STATE_CONDITIONAL
-                entry.reason = "Salvage after acquiring the configured normal Salvage Kit."
-                entry.status_hint = PREVIEW_STATUS_LIVE_CHECK
-            elif "no upgrade salvage kit" in str(entry.reason).lower() and upgrade_source:
-                entry.state = PLAN_STATE_CONDITIONAL
-                entry.reason = "Salvage after acquiring the configured Expert or Superior Salvage Kit."
-                entry.status_hint = PREVIEW_STATUS_LIVE_CHECK
-
     def _get_early_salvage_kit_categories(
         self,
         items: list[InventoryItemInfo],
@@ -17160,62 +16879,19 @@ class MerchantRulesWidget:
         )
 
     def _has_enabled_rune_buy_rules(self) -> bool:
-        for raw_rule in self.buy_rules:
-            rule = _normalize_buy_rule(raw_rule)
-            if rule is None or not rule.enabled or rule.kind != BUY_KIND_RUNE_TRADER_TARGET:
-                continue
-            if _normalize_rune_trader_targets(rule.rune_targets):
-                return True
-        return False
+        return self._plan_composer.has_enabled_rune_buy_rules()
 
     def _has_enabled_scroll_trader_buy_rules(self) -> bool:
-        for raw_rule in self.buy_rules:
-            rule = _normalize_buy_rule(raw_rule)
-            if rule is None or not rule.enabled:
-                continue
-            if rule.kind == BUY_KIND_SCROLL_TRADER_TARGET:
-                if any(_is_scroll_trader_stock_model(target.model_id) for target in _normalize_merchant_stock_targets(rule.merchant_stock_targets)):
-                    return True
-            elif rule.kind == BUY_KIND_MERCHANT_STOCK:
-                if any(_is_scroll_trader_stock_model(target.model_id) for target in _normalize_merchant_stock_targets(rule.merchant_stock_targets)):
-                    return True
-        return False
+        return self._plan_composer.has_enabled_scroll_trader_buy_rules()
 
     def _has_enabled_consumable_crafter_buy_rules(self) -> bool:
-        for raw_rule in self.buy_rules:
-            rule = _normalize_buy_rule(raw_rule)
-            if rule is None or not rule.enabled or rule.kind != BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
-                continue
-            if any(
-                int(target.model_id) in CONSUMABLE_CRAFTER_RECIPES_BY_MODEL
-                for target in _normalize_merchant_stock_targets(rule.merchant_stock_targets)
-            ):
-                return True
-        return False
+        return self._plan_composer.has_enabled_consumable_crafter_buy_rules()
 
     def _has_enabled_rules_excluding_consumable_crafters(self) -> bool:
-        return bool(
-            self._should_identify_before_execute()
-            or any(
-                bool(rule.enabled)
-                and (normalized_rule := _normalize_buy_rule(rule)) is not None
-                and normalized_rule.kind != BUY_KIND_CONSUMABLE_CRAFTER_TARGET
-                for rule in self.buy_rules
-            )
-            or any(bool(rule.enabled) for rule in self.sell_rules)
-            or self._has_enabled_salvage_settings()
-            or any(bool(rule.enabled) for rule in self.destroy_rules)
-            or self._has_cleanup_sources()
-        )
+        return self._plan_composer.has_enabled_rules_excluding_consumable_crafters()
 
     def _get_buy_rules_excluding_consumable_crafters(self) -> list[BuyRule]:
-        filtered_rules: list[BuyRule] = []
-        for raw_rule in self.buy_rules:
-            rule = _normalize_buy_rule(raw_rule)
-            if rule is None or rule.kind == BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
-                continue
-            filtered_rules.append(rule)
-        return filtered_rules
+        return self._plan_composer.get_buy_rules_excluding_consumable_crafters()
 
     def _get_items_after_planned_pre_buy_actions(
         self,
@@ -17268,20 +16944,10 @@ class MerchantRulesWidget:
         )
 
     def _has_cleanup_sources(self) -> bool:
-        return bool(
-            self._get_effective_cleanup_targets()
-            or self._get_effective_cleanup_protection_sources()
-        )
+        return self._plan_composer.has_cleanup_sources()
 
     def _has_enabled_rules(self) -> bool:
-        return (
-            self._should_identify_before_execute()
-            or any(bool(rule.enabled) for rule in self.buy_rules)
-            or any(bool(rule.enabled) for rule in self.sell_rules)
-            or self._has_enabled_salvage_settings()
-            or any(bool(rule.enabled) for rule in self.destroy_rules)
-            or self._has_cleanup_sources()
-        )
+        return self._plan_composer.has_enabled_rules()
 
     def _find_inventory_empty_slot(self, inventory_items: list[InventoryItemInfo] | None = None) -> DestroySplitDestination | None:
         if inventory_items is None:
@@ -17328,20 +16994,7 @@ class MerchantRulesWidget:
         )
 
     def _collect_enabled_sell_rules(self) -> list[tuple[int, SellRule]]:
-        enabled_sell_rules: list[tuple[int, SellRule]] = []
-        seen_rule_ids: set[str] = set()
-        for rule_index, raw_sell_rule in enumerate(self.sell_rules):
-            sell_rule = _normalize_sell_rule(raw_sell_rule)
-            if sell_rule is None or not sell_rule.enabled:
-                continue
-            sell_rule.rule_id = _ensure_unique_rule_id(
-                sell_rule.rule_id,
-                seen_ids=seen_rule_ids,
-                prefix="sell",
-                fallback_seed=f"{rule_index}:{sell_rule.kind}:{sell_rule.name}",
-            )
-            enabled_sell_rules.append((rule_index, sell_rule))
-        return enabled_sell_rules
+        return self._plan_composer.collect_enabled_sell_rules()
 
     def _collect_enabled_manual_salvage_protection_rules(self) -> list[tuple[int, SellRule]]:
         protection_rules: list[tuple[int, SellRule]] = []
@@ -17354,35 +17007,16 @@ class MerchantRulesWidget:
         self,
         enabled_sell_rules: list[tuple[int, SellRule]] | None = None,
     ) -> list[tuple[int, SellRule]]:
-        source_rules = (
-            self._collect_enabled_sell_rules()
-            if enabled_sell_rules is None
-            else enabled_sell_rules
-        )
-        return [
-            (rule_index, sell_rule)
-            for rule_index, sell_rule in source_rules
-            if bool(getattr(sell_rule, "sell_from_xunlai", False))
-        ]
+        return self._plan_composer.collect_enabled_xunlai_sell_rules(enabled_sell_rules)
 
     def _has_enabled_xunlai_sell_rules(self) -> bool:
-        return bool(self._collect_enabled_xunlai_sell_rules())
+        return self._plan_composer.has_enabled_xunlai_sell_rules()
 
     def _has_ready_xunlai_sell_rules(
         self,
         enabled_sell_rules: list[tuple[int, SellRule]] | None = None,
     ) -> bool:
-        for _rule_index, rule in self._collect_enabled_xunlai_sell_rules(enabled_sell_rules):
-            if rule.kind in (SELL_KIND_COMMON_MATERIALS, SELL_KIND_EXPLICIT_MODELS):
-                if _normalize_whitelist_targets(getattr(rule, "whitelist_targets", [])):
-                    return True
-            elif rule.kind == SELL_KIND_RUNE_TRADER_TARGET:
-                if _normalize_rune_sell_targets(getattr(rule, "rune_sell_targets", [])):
-                    return True
-            elif rule.kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
-                if any(bool(value) for value in getattr(rule, "rarities", {}).values()):
-                    return True
-        return False
+        return self._plan_composer.has_ready_xunlai_sell_rules(enabled_sell_rules)
 
     def _collect_enabled_destroy_rules(self) -> list[tuple[int, DestroyRule]]:
         return self._destroy_planner.collect_enabled_destroy_rules()
@@ -17471,302 +17105,20 @@ class MerchantRulesWidget:
         supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None,
         bypass_xunlai_first: bool = False,
     ) -> PlanResult:
-        """Build the complete preview plan without performing live merchant actions.
-
-        Planning snapshots inventory, applies rule precedence and hard protections, models
-        storage certainty and travel services, and records conditional or blocked work. The
-        resulting plan is intent only; every execution phase revalidates its live inputs.
-        """
-
-        started_at = time.perf_counter()
-        projected_target_outpost_id = 0
-        projected_target_outpost_name = ""
-        projected_destination_context = False
-        if not cleanup_only:
-            target_outpost_id = 0 if ignore_travel_target else (max(0, int(self.target_outpost_id)) if self.auto_travel_enabled else 0)
-            current_map_id = int(Map.GetMapID() or 0)
-            if projected_preview:
-                if (
-                    allow_consumable_multi_stop
-                    and not consumable_crafter_only
-                    and not exclude_consumable_crafter
-                    and self._should_use_consumable_crafter_multi_stop_route()
-                ):
-                    target_outpost_id, _target_outpost_name = self._get_consumable_crafter_multi_stop_target()
-                    multi_stop_plan = self._build_consumable_crafter_multi_stop_preview(
-                        target_outpost_id,
-                        execution_context=execution_context,
-                    )
-                    self._log_plan_summary("Plan built", multi_stop_plan)
-                    self.last_plan_build_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
-                    return multi_stop_plan
-                projected_target_override = max(0, _safe_int(projected_target_override_outpost_id, 0))
-                if projected_target_override > 0:
-                    projected_target_outpost_id = projected_target_override
-                    projected_target_outpost_name = self._get_outpost_name(projected_target_override)
-                    if projected_target_override == EMBARK_BEACH_MAP_ID:
-                        projected_target_outpost_name = self._get_embark_beach_outpost_name()
-                else:
-                    projected_target_outpost_id, projected_target_outpost_name = self._get_preview_projection_target()
-                projected_destination_context = projected_target_outpost_id > 0 and bool(projected_target_outpost_name)
-            if (
-                not projected_destination_context
-                and target_outpost_id > 0
-                and not self._is_travel_target_reached(target_outpost_id, current_map_id)
-            ):
-                travel_plan = self._build_travel_preview(target_outpost_id)
-                self._log_plan_summary("Plan built", travel_plan)
-                self.last_plan_build_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
-                return travel_plan
-
-        if projected_destination_context:
-            supported_map, supported_reason, coords = self._get_projected_supported_context(projected_target_outpost_id)
-        elif supported_context_override is not None:
-            supported_map, supported_reason, coords = supported_context_override
-        else:
-            supported_map, supported_reason, coords = self._get_supported_context(
-                passive=bool(cleanup_only)
-            )
-        plan = PlanResult(
-            supported_map=supported_map,
-            supported_reason=supported_reason,
-            coords=coords,
-        )
-        if consumable_crafter_only:
-            has_enabled_rules = self._has_enabled_consumable_crafter_buy_rules()
-        elif exclude_consumable_crafter:
-            has_enabled_rules = self._has_enabled_rules_excluding_consumable_crafters()
-        else:
-            has_enabled_rules = self._has_enabled_rules()
-        has_request_stock_targets = bool(
-            not cleanup_only
-            and not consumable_crafter_only
-            and (buy_action_rule_kinds is None or BUY_KIND_MERCHANT_STOCK in buy_action_rule_kinds)
-            and execution_context is not None
-            and any(
-                int(target.model_id) > 0 and int(target.target_count) > 0
-                for target in execution_context.merchant_stock_targets
-            )
-        )
-        if not has_enabled_rules and not has_request_stock_targets:
-            self._debug_log(
-                "Plan build skipped inventory snapshot because no buy, sell, salvage, destroy, or cleanup rules "
-                "are enabled and no request-scoped Merchant Stock targets apply."
-            )
-            self._log_plan_summary("Plan built", plan)
-            self.last_plan_build_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
-            return plan
-
-        items = self._collect_inventory_items()
-        if bool(getattr(self, "execute_reservation_scope_active", False)):
-            reserved_item_ids = set(
-                getattr(self, "execute_reserved_item_ids", set()) or set()
-            )
-            if reserved_item_ids:
-                items = [
-                    item
-                    for item in items
-                    if int(item.item_id) not in reserved_item_ids
-                ]
-        model_counts = self._get_inventory_model_counts(items)
-        plan.inventory_snapshot_captured = True
-        plan.inventory_model_counts = dict(model_counts)
-        plan.inventory_item_count = len(items)
-        storage_context_ready = projected_destination_context or self._can_use_local_storage_actions()
-        storage_api = getattr(GLOBAL_CACHE, "Inventory", None)
-        storage_open = bool(storage_api is not None and bool(getattr(storage_api, "IsStorageOpen", lambda: False)()))
-        storage_items: list[InventoryItemInfo] = []
-        xunlai_sell_material_storage_items: list[InventoryItemInfo] = []
-        enabled_sell_rules = [] if consumable_crafter_only else self._collect_enabled_sell_rules()
-        sell_action_rules = (
-            enabled_sell_rules
-            if sell_action_rule_kinds is None
-            else [
-                (rule_index, rule)
-                for rule_index, rule in enabled_sell_rules
-                if rule.kind in sell_action_rule_kinds
-            ]
-        )
-        enabled_xunlai_sell_action_rules = self._collect_enabled_xunlai_sell_rules(sell_action_rules)
-        needs_rune_storage_context = bool(not consumable_crafter_only and self._has_enabled_rune_buy_rules())
-        needs_consumable_storage_context = bool(not exclude_consumable_crafter and self._has_enabled_consumable_crafter_buy_rules())
-        needs_xunlai_sell_storage_context = bool(
-            not cleanup_only
-            and not consumable_crafter_only
-            and self._has_ready_xunlai_sell_rules(sell_action_rules)
-        )
-        needs_xunlai_first_storage_context = bool(
-            not cleanup_only
-            and not consumable_crafter_only
-            and not bypass_xunlai_first
-            and (buy_action_rule_kinds is None or BUY_KIND_MERCHANT_STOCK in buy_action_rule_kinds)
-            and self._has_enabled_xunlai_first_merchant_stock_targets()
-        )
-        if (
-            needs_rune_storage_context
-            or needs_consumable_storage_context
-            or needs_xunlai_sell_storage_context
-            or needs_xunlai_first_storage_context
-        ):
-            if storage_open:
-                if needs_xunlai_first_storage_context:
-                    storage_items, plan.xunlai_first_storage_scan_reliable = (
-                        self._collect_storage_items_with_reliability()
-                    )
-                else:
-                    storage_items = self._collect_storage_items()
-                if needs_xunlai_sell_storage_context:
-                    include_xunlai_material_storage = any(
-                        bool(getattr(rule, "include_material_storage", False))
-                        and _sell_rule_can_include_material_storage(rule)
-                        for _rule_index, rule in enabled_xunlai_sell_action_rules
-                    )
-                    if include_xunlai_material_storage:
-                        xunlai_sell_material_storage_items = self._collect_material_storage_items()
-                plan.storage_plan_state = STORAGE_PLAN_STATE_EXACT_READY
-                plan.storage_exact = True
-            else:
-                plan.storage_plan_state = STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN
-                plan.storage_exact = False
-
-        enabled_destroy_rules = [] if consumable_crafter_only else self._collect_enabled_destroy_rules()
-        claimed_item_ids: set[int] = set()
-        if not cleanup_only and not consumable_crafter_only:
-            self._plan_identify_actions(plan, items, claimed_item_ids)
-        if not consumable_crafter_only:
-            self._plan_destroy_actions(plan, items, enabled_destroy_rules, enabled_sell_rules, claimed_item_ids)
-        if not cleanup_only and not consumable_crafter_only:
-            self._plan_salvage_actions(plan, items, enabled_sell_rules, claimed_item_ids)
-        self._sale_planner.allocate_inventory_sales(
-            plan,
-            items,
-            enabled_sell_rules,
-            sell_action_rules,
-            claimed_item_ids,
-            coords,
-            storage_items,
-            xunlai_sell_material_storage_items,
-            policy=self._protection_policy,
-            consumable_crafter_only=consumable_crafter_only,
-            supported_map=supported_map,
-            storage_context_ready=storage_context_ready,
-            supported_reason=supported_reason,
-        )
-
-        has_xunlai_sell_withdrawals = False
-        if needs_xunlai_sell_storage_context:
-            xunlai_sell_transfers: list[PlannedStorageTransfer] = []
-            xunlai_sell_protected_preview_entries: list[ExecutionPlanEntry] = []
-            include_material_storage = any(
-                bool(getattr(rule, "include_material_storage", False))
-                and _sell_rule_can_include_material_storage(rule)
-                for _rule_index, rule in enabled_xunlai_sell_action_rules
-            )
-            source_detail = (
-                "regular Xunlai item panes and Material Storage"
-                if include_material_storage
-                else "regular Xunlai item panes"
-            )
-            if storage_open:
-                xunlai_sell_transfers, _adjusted_rules = self._plan_xunlai_sell_withdrawals(
-                    enabled_xunlai_sell_action_rules,
-                    items,
-                    storage_items,
-                    xunlai_sell_material_storage_items,
-                    coords,
-                    protected_preview_entries=xunlai_sell_protected_preview_entries,
-                )
-                self._debug_log(
-                    f"Xunlai sell preview: enabled_rules={len(enabled_xunlai_sell_action_rules)} "
-                    f"inventory_items={len(items)} regular_storage_items={len(storage_items)} "
-                    f"material_storage_items={len(xunlai_sell_material_storage_items)} "
-                    f"include_material_storage={include_material_storage} transfers={len(xunlai_sell_transfers)} "
-                    f"quantity={sum(max(0, int(transfer.quantity)) for transfer in xunlai_sell_transfers)} "
-                    f"protected_skips={len(xunlai_sell_protected_preview_entries)}"
-                )
-            if xunlai_sell_transfers:
-                has_xunlai_sell_withdrawals = True
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "sell",
-                        MERCHANT_TYPE_STORAGE,
-                        "Sell from Xunlai too",
-                        sum(max(0, int(transfer.quantity)) for transfer in xunlai_sell_transfers),
-                        PLAN_STATE_WILL_EXECUTE if storage_open else PLAN_STATE_CONDITIONAL,
-                        (
-                            f"Move matching item stacks from {source_detail} to inventory, then sell them under "
-                            "the enabled Sell from Xunlai rules."
-                        ),
-                    )
-                )
-            elif not storage_open:
-                plan.entries.append(
-                    ExecutionPlanEntry(
-                        "sell",
-                        MERCHANT_TYPE_STORAGE,
-                        "Sell from Xunlai too",
-                        0,
-                        PLAN_STATE_CONDITIONAL,
-                        (
-                            "Xunlai Storage has not been scanned. Use Open Xunlai + Refresh to confirm "
-                            f"matching item stacks in {source_detail}."
-                        ),
-                    )
-                )
-            if xunlai_sell_protected_preview_entries:
-                plan.entries.extend(xunlai_sell_protected_preview_entries)
-
-        sim_model_counts = self._build_simulated_model_counts(items, plan)
-        sim_inventory_items = self._get_items_after_planned_pre_buy_actions(items, plan)
-        pre_buy_model_counts = dict(sim_model_counts)
-        self._plan_buy_actions(
-            plan,
-            sim_model_counts,
+        return self._plan_composer.build_plan(
             execution_context=execution_context,
-            sim_inventory_items=sim_inventory_items,
-            storage_items=storage_items,
+            cleanup_only=cleanup_only,
+            projected_preview=projected_preview,
+            ignore_travel_target=ignore_travel_target,
+            projected_target_override_outpost_id=projected_target_override_outpost_id,
+            allow_consumable_multi_stop=allow_consumable_multi_stop,
             consumable_crafter_only=consumable_crafter_only,
             exclude_consumable_crafter=exclude_consumable_crafter,
-            allowed_rule_kinds=buy_action_rule_kinds,
+            buy_action_rule_kinds=buy_action_rule_kinds,
+            sell_action_rule_kinds=sell_action_rule_kinds,
+            supported_context_override=supported_context_override,
             bypass_xunlai_first=bypass_xunlai_first,
         )
-        self._plan_consumable_crafter_bag_space_warning(
-            plan,
-            inventory_model_counts=pre_buy_model_counts,
-        )
-        if not consumable_crafter_only:
-            self._plan_cleanup_actions(
-                plan,
-                sim_inventory_items,
-                enabled_sell_rules,
-                storage_open=storage_open,
-                storage_context_available=storage_context_ready,
-            )
-        if not cleanup_only and not consumable_crafter_only:
-            self._annotate_early_kit_preview(plan)
-        if projected_destination_context:
-            self._apply_projected_preview_post_processing(plan, projected_target_outpost_name)
-        plan.has_actions = bool(
-            plan.identify_item_ids
-            or plan.salvage_item_ids
-            or plan.destroy_actions
-            or plan.destroy_item_ids
-            or plan.merchant_stock_buys
-            or plan.material_buys
-            or plan.material_sales
-            or plan.merchant_sell_item_ids
-            or plan.rune_trader_sales
-            or plan.rune_trader_buys
-            or plan.scroll_trader_buys
-            or plan.consumable_crafter_buys
-            or plan.storage_transfers
-            or plan.cleanup_transfers
-            or has_xunlai_sell_withdrawals
-            or self._plan_needs_exact_storage_scan(plan)
-        )
-        self._log_plan_summary("Plan built", plan)
-        self.last_plan_build_duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
-        return plan
 
     def _get_inventory_plus_widget(self) -> object | None:
         try:
@@ -20995,21 +20347,12 @@ class MerchantRulesWidget:
         *,
         protected_preview_entries: list[ExecutionPlanEntry] | None = None,
     ) -> tuple[list[PlannedStorageTransfer], list[SellRule]]:
-        """Plan Xunlai withdrawals while reserving keep counts across overlapping sale rules.
-
-        Equipment protections and unsafe storage types produce visible protected entries rather
-        than withdrawal actions.
-        """
-
-        all_enabled_sell_rules = self._collect_enabled_sell_rules()
-        return self._sale_planner.plan_xunlai_withdrawals(
+        return self._plan_composer.plan_xunlai_sell_withdrawals(
             enabled_xunlai_rules,
             current_items,
             regular_storage_items,
             material_storage_items,
             coords,
-            all_enabled_sell_rules=all_enabled_sell_rules,
-            policy=self._protection_policy,
             protected_preview_entries=protected_preview_entries,
         )
 
@@ -25715,22 +25058,9 @@ class MerchantRulesWidget:
     ) -> str:
         safe_plan = plan if plan is not None else self.preview_plan
         local_availability = availability_here if availability_here is not None else self._get_preview_here_availability()
-        merchant_type = str(entry.merchant_type)
-        action_type = str(entry.action_type)
-        if merchant_type == MERCHANT_TYPE_TRAVEL or action_type == "travel":
-            return ""
-        if self._is_preview_entry_available_here(
-            entry,
-            availability_here=local_availability,
-            plan=safe_plan,
-        ):
-            return ""
-        if merchant_type != MERCHANT_TYPE_INVENTORY and not bool(local_availability.get(merchant_type, False)):
-            merchant_label = MERCHANT_TYPE_LABELS.get(merchant_type, merchant_type)
-            return f"{merchant_label} not available here."
-        if self._preview_entry_needs_local_storage_access(entry, plan=safe_plan):
-            return f"{MERCHANT_TYPE_LABELS[MERCHANT_TYPE_STORAGE]} not available here."
-        return "Not available here."
+        return self._preview_session.get_preview_unavailable_here_reason(
+            entry, availability_here=local_availability, plan=safe_plan
+        )
 
     def _get_locally_actionable_preview_counts(
         self,
@@ -25757,16 +25087,7 @@ class MerchantRulesWidget:
         return _planning.plan_has_local_storage_actions(plan)
 
     def _get_plan_local_action_labels(self, plan: PlanResult) -> list[str]:
-        labels: list[str] = []
-        if self._plan_has_local_identify_actions(plan):
-            labels.append("local identify")
-        if self._plan_has_local_salvage_actions(plan):
-            labels.append("local salvage")
-        if self._plan_has_local_destroy_actions(plan):
-            labels.append("local destroy actions")
-        if self._plan_has_local_storage_actions(plan):
-            labels.append("Xunlai deposits")
-        return labels
+        return self._preview_session.get_plan_local_action_labels(plan)
 
     def _plan_has_conditional_storage_actions(self, plan: PlanResult) -> bool:
         return _planning.plan_has_conditional_storage_actions(plan)
@@ -25859,49 +25180,16 @@ class MerchantRulesWidget:
         return "Ready", UI_COLOR_SUCCESS
 
     def _get_preview_state(self) -> tuple[str, tuple[float, float, float, float], str]:
-        actionable, skipped = self._split_preview_entries(self.preview_plan.entries)
-        if self.execution_running or self.travel_preview_running or self.identify_running or self.instant_destroy_running or self.salvage_running or self.storage_scan_running or self.auto_cleanup_running or self.manual_vendor_running:
-            return "Busy", UI_COLOR_WARNING, "Preview, identify, salvage, deposits, storage scan, merchant automation, or execution is currently running."
-        if self.preview_ready:
-            if self.preview_plan.multi_stop_route:
-                embark_label = self.preview_plan.multi_stop_consumable_outpost_name or self._get_embark_beach_outpost_name()
-                destination_label = self.preview_plan.multi_stop_destination_outpost_name
-                detail = (
-                    f"Preview routes Consumable Crafter buys through {embark_label}, then continues to {destination_label} for remaining work. "
-                    "Execute Here runs only entries marked Ready now."
-                    if destination_label
-                    else f"Preview routes Consumable Crafter buys through {embark_label} and stops there. Execute Here runs only entries marked Ready now."
-                )
-                if actionable:
-                    return "Multi-stop", UI_COLOR_INFO, detail
-                if skipped:
-                    return "Multi-stop", UI_COLOR_MUTED, detail
-                return "Multi-stop", UI_COLOR_MUTED, detail
-            if self._preview_has_execute_travel_pending():
-                target_label = self.preview_execute_travel_target_outpost_name or "the selected outpost"
-                detail = (
-                    f"Preview is projected assuming Auto Travel reaches {target_label}. "
-                    "Travel + Execute will travel, recheck current items and available services, then execute. "
-                    "Execute Here runs only entries marked Ready now."
-                )
-                if actionable:
-                    return "Projected", UI_COLOR_INFO, detail
-                if skipped:
-                    return "Projected", UI_COLOR_MUTED, detail
-                return "Projected", UI_COLOR_MUTED, detail
-            if actionable:
-                action_count = len(actionable)
-                action_word = "action" if action_count == 1 else "actions"
-                ready_verb = "is" if action_count == 1 else "are"
-                return (
-                    "Ready",
-                    UI_COLOR_SUCCESS,
-                    f"{action_count} {action_word} {ready_verb} ready in the current preview.",
-                )
-            if skipped:
-                return "Ready", UI_COLOR_MUTED, "Preview is current, but nothing will execute."
-            return "Ready", UI_COLOR_MUTED, "Preview is current."
-        return "Stale", UI_COLOR_WARNING, "Run Preview to refresh the current map and inventory state."
+        label, tone, detail = self._preview_session.get_preview_state()
+        if tone == "warning":
+            color = UI_COLOR_WARNING
+        elif tone == "info":
+            color = UI_COLOR_INFO
+        elif tone == "muted":
+            color = UI_COLOR_MUTED
+        else:
+            color = UI_COLOR_SUCCESS
+        return label, color, detail
 
     def _draw_live_config_recovery_section(self):
         doc_path = self._live_config_doc().path()
@@ -27610,112 +26898,16 @@ class MerchantRulesWidget:
 
     def build_remote_preview_result(self) -> dict[str, object]:
         """Summarize the follower's current preview into a transport-safe result payload."""
-
         self._ensure_initialized()
-        direct_count, conditional_count, skipped_count = self._get_preview_entry_counts(self.preview_plan.entries)
-        actionable_count = direct_count + conditional_count
-        local_identify_ready = self._plan_has_local_identify_actions(self.preview_plan)
-        local_destroy_ready = self._plan_has_local_destroy_actions(self.preview_plan)
-        local_salvage_ready = self._plan_has_local_salvage_actions(self.preview_plan)
-        local_storage_ready = self._plan_has_local_storage_actions(self.preview_plan)
-        local_action_labels = self._get_plan_local_action_labels(self.preview_plan)
-        local_non_storage_ready = bool(local_identify_ready or local_salvage_ready or local_destroy_ready)
-        conditional_cleanup_ready = self._plan_has_conditional_cleanup_actions(self.preview_plan)
-        projected_preview = self._preview_has_execute_travel_pending()
-        if actionable_count > 0:
-            if projected_preview:
-                status_label = "Projected"
-            elif (
-                not self.preview_plan.supported_map
-                and local_destroy_ready
-                and not local_identify_ready
-                and not local_salvage_ready
-                and not local_storage_ready
-            ):
-                status_label = "Destroy Ready"
-            elif not self.preview_plan.supported_map and local_non_storage_ready:
-                status_label = "Local Ready"
-            else:
-                status_label = "Conditional" if direct_count <= 0 and conditional_count > 0 else "Ready"
-            summary_parts = [f"{actionable_count} can run", f"{skipped_count} blocked"]
-            if conditional_count > 0:
-                summary_parts.append(f"{conditional_count} need live checks")
-            summary = ", ".join(summary_parts) + "."
-        elif projected_preview:
-            status_label = "No Actions"
-            summary = "No actionable merchant work found."
-        elif not self.preview_plan.supported_map:
-            status_label = "Unsupported"
-            summary = self.preview_plan.supported_reason or "Current map is not supported."
-        else:
-            status_label = "No Actions"
-            summary = "No actionable merchant work found."
-
-        if self.preview_plan.multi_stop_route:
-            embark_label = self.preview_plan.multi_stop_consumable_outpost_name or self._get_embark_beach_outpost_name()
-            destination_label = self.preview_plan.multi_stop_destination_outpost_name
-            detail_parts = [
-                (
-                    f"Multi-stop route: craft Consumable Crafter targets at {embark_label}, "
-                    f"then travel to {destination_label} for remaining Merchant Rules work."
-                )
-                if destination_label
-                else f"Multi-stop route: craft Consumable Crafter targets at {embark_label} and stop there."
-            ]
-            if self._plan_needs_exact_storage_scan(self.preview_plan):
-                detail_parts.append("Storage-aware planning is still partial until Xunlai is opened for an exact storage scan.")
-            elif conditional_cleanup_ready:
-                detail_parts.append("Planned Xunlai cleanup work will execute if storage can be opened after arrival.")
-            elif conditional_count > 0:
-                detail_parts.append("Conditional entries remain estimated until each stop is confirmed.")
-            detail = " ".join(detail_parts).strip()
-        elif projected_preview:
-            target_label = self.preview_execute_travel_target_outpost_name or "the selected outpost"
-            detail_parts = [
-                f"Projected after travel to {target_label}. Travel + Execute will auto-travel, recheck current items and available services, then execute.",
-            ]
-            if self._plan_needs_exact_storage_scan(self.preview_plan):
-                detail_parts.append("Storage-aware rune planning is still partial until Xunlai is opened for an exact storage scan.")
-            elif conditional_cleanup_ready:
-                detail_parts.append("Planned Xunlai cleanup work will execute if storage can be opened after arrival.")
-            elif conditional_count > 0:
-                detail_parts.append("Conditional entries remain estimated until the destination context is confirmed.")
-            detail = " ".join(detail_parts).strip()
-        elif actionable_count > 0 and not self.preview_plan.supported_map and local_non_storage_ready:
-            non_storage_labels = [
-                label
-                for label in local_action_labels
-                if label != "Xunlai deposits"
-            ]
-            detail = f"Merchant NPCs are unavailable here, but {', '.join(non_storage_labels or local_action_labels)} can still run."
-            if conditional_cleanup_ready:
-                detail = f"{detail} Planned Xunlai cleanup work will run if storage can be opened."
-        elif actionable_count > 0 and not self.preview_plan.supported_map and local_storage_ready:
-            detail = (
-                "Merchant NPCs are unavailable here, but Xunlai cleanup work is still ready."
-                if not conditional_cleanup_ready
-                else "Merchant NPCs are unavailable here, but planned Xunlai cleanup work will run if storage can be opened."
-            )
-        elif not self.preview_plan.supported_map:
-            detail = self.preview_plan.supported_reason or self.status_message or "Current map is not supported."
-        elif self._plan_needs_exact_storage_scan(self.preview_plan):
-            detail = "Storage-aware planning is still partial until Xunlai is opened for an exact storage scan."
-        elif conditional_cleanup_ready:
-            detail = "Planned Xunlai cleanup work will execute if storage can be opened."
-        elif conditional_count > 0:
-            detail = "Some actions need a live merchant, trader, crafter, or Xunlai check before MR can confirm them."
-        elif actionable_count > 0:
-            detail = self.status_message or self.preview_plan.supported_reason
-        else:
-            detail = self.status_message or self.preview_plan.supported_reason or summary
+        summary = self._preview_session.build_remote_preview_summary()
         return {
             "opcode": MERCHANT_RULES_OPCODE_PREVIEW_RESULT,
-            "primary_count": actionable_count,
-            "secondary_count": skipped_count,
+            "primary_count": summary.primary_count,
+            "secondary_count": summary.secondary_count,
             "success": True,
-            "status_label": status_label,
-            "summary": summary,
-            "detail": detail,
+            "status_label": summary.status_label,
+            "summary": summary.summary,
+            "detail": summary.detail,
         }
 
     def build_remote_execute_result(self) -> dict[str, object]:
@@ -34140,7 +33332,7 @@ class MerchantRulesWidget:
         entry: ExecutionPlanEntry,
         displayed_reason: str,
     ) -> str:
-        return _classify_skipped_preview_entry(entry)
+        return self._preview_session.get_skipped_preview_status_key(entry, displayed_reason)
 
     def _get_preview_status_presentation(
         self,
@@ -34163,25 +33355,15 @@ class MerchantRulesWidget:
         muted: bool,
         plan: PlanResult | None = None,
     ) -> str:
-        if muted:
-            return self._get_skipped_preview_status_key(entry, displayed_reason)
-        if str(entry.action_type) == "travel" or str(entry.merchant_type) == MERCHANT_TYPE_TRAVEL:
-            return PREVIEW_STATUS_TRAVEL
-        if is_conditional:
-            if self._preview_has_execute_travel_pending() or bool(
-                plan is not None and int(plan.travel_to_outpost_id) > 0
-            ):
-                return PREVIEW_STATUS_AFTER_TRAVEL
-            if str(entry.merchant_type) == MERCHANT_TYPE_STORAGE:
-                return PREVIEW_STATUS_NEEDS_XUNLAI
-            return PREVIEW_STATUS_LIVE_CHECK
-        if available_here:
-            return PREVIEW_STATUS_READY
-        if "xunlai" in str(unavailable_here_reason or "").lower():
-            return PREVIEW_STATUS_NEEDS_XUNLAI
-        if unavailable_here_reason:
-            return PREVIEW_STATUS_AFTER_TRAVEL
-        return PREVIEW_STATUS_READY
+        return self._preview_session.get_preview_entry_status_key(
+            entry,
+            displayed_reason,
+            is_conditional=is_conditional,
+            available_here=available_here,
+            unavailable_here_reason=unavailable_here_reason,
+            muted=muted,
+            plan=plan,
+        )
 
     def _get_preview_entry_status(
         self,
@@ -34424,52 +33606,10 @@ class MerchantRulesWidget:
         entry: ExecutionPlanEntry,
         reason: str,
     ) -> str:
-        reason = str(reason or "").strip()
-        if not reason:
-            return ""
-        action_type = str(entry.action_type or "").strip().lower()
-        state = str(entry.state or "").strip().lower()
-        # Other actions never read merchant_type in the original formatter.
-        is_consumable_crafter = action_type == "buy" and str(entry.merchant_type) == MERCHANT_TYPE_CONSUMABLE_CRAFTER
-        return normalize_preview_entry_reason_display_text(
-            reason,
-            action_type=action_type,
-            is_skipped=state == PLAN_STATE_SKIPPED,
-            will_execute=state == PLAN_STATE_WILL_EXECUTE,
-            is_consumable_crafter=is_consumable_crafter,
-        )
+        return self._preview_session.normalize_preview_entry_reason_display_text(entry, reason)
 
     def _get_preview_reason_for_display(self, entry: ExecutionPlanEntry) -> str:
-        reason = str(entry.reason or "").strip()
-        if not reason:
-            return ""
-        if not self._preview_has_execute_travel_pending():
-            return self._normalize_preview_entry_reason_display_text(entry, reason)
-
-        target_outpost_name = self.preview_execute_travel_target_outpost_name or "the selected outpost"
-        suffix = self._get_projected_preview_reason_suffix(entry.merchant_type, target_outpost_name)
-        if not suffix:
-            return self._normalize_preview_entry_reason_display_text(entry, reason)
-        legacy_suffix = suffix.replace("Travel + Execute", "Execute") if suffix else ""
-        if reason == suffix:
-            return ""
-        if legacy_suffix and reason == legacy_suffix:
-            return ""
-        spaced_suffix = f" {suffix}"
-        if reason.endswith(spaced_suffix):
-            return self._normalize_preview_entry_reason_display_text(entry, reason[: -len(spaced_suffix)].rstrip())
-        if reason.endswith(suffix):
-            return self._normalize_preview_entry_reason_display_text(entry, reason[: -len(suffix)].rstrip())
-        if legacy_suffix:
-            legacy_spaced_suffix = f" {legacy_suffix}"
-            if reason.endswith(legacy_spaced_suffix):
-                return self._normalize_preview_entry_reason_display_text(
-                    entry,
-                    reason[: -len(legacy_spaced_suffix)].rstrip(),
-                )
-            if reason.endswith(legacy_suffix):
-                return self._normalize_preview_entry_reason_display_text(entry, reason[: -len(legacy_suffix)].rstrip())
-        return self._normalize_preview_entry_reason_display_text(entry, reason)
+        return self._preview_session.get_preview_reason_for_display(entry)
 
     def _should_show_preview_reason(
         self,
@@ -34479,25 +33619,8 @@ class MerchantRulesWidget:
         show_reasons: bool = False,
         is_conditional: bool = False,
     ) -> bool:
-        if not str(displayed_reason or "").strip():
-            return False
-        raw_reason = str(entry.reason or "").strip().lower()
-        if str(entry.action_type) == "destroy" and str(entry.state) == PLAN_STATE_WILL_EXECUTE:
-            return True
-        if any(
-            marker in raw_reason
-            for marker in (
-                "included protected item",
-                "keep count requires splitting",
-                "protected-item override",
-                "permanently destroy",
-            )
-        ):
-            return True
-        return bool(
-            show_reasons
-            or is_conditional
-            or bool(getattr(self, "detailed_preview", False))
+        return self._preview_session.should_show_preview_reason(
+            entry, displayed_reason, show_reasons=show_reasons, is_conditional=is_conditional
         )
 
     def _draw_preview_plan_action_bar(self):
@@ -34713,31 +33836,16 @@ class MerchantRulesWidget:
         self,
         entries: list[ExecutionPlanEntry],
     ) -> list[tuple[str, list[ExecutionPlanEntry]]]:
-        grouped_entries: dict[str, list[ExecutionPlanEntry]] = {}
-        action_order: list[str] = []
-        for entry in entries:
-            action_type = str(entry.action_type or "unknown")
-            if action_type not in grouped_entries:
-                grouped_entries[action_type] = []
-                action_order.append(action_type)
-            grouped_entries[action_type].append(entry)
-        return [(action_type, grouped_entries[action_type]) for action_type in action_order]
+        return self._preview_session.group_preview_entries_by_action(entries)
 
     def _get_not_changed_entry_status_key(self, entry: ExecutionPlanEntry) -> str:
-        displayed_reason = self._get_preview_reason_for_display(entry)
-        return self._get_skipped_preview_status_key(entry, displayed_reason)
+        return self._preview_session.get_not_changed_entry_status_key(entry)
 
     def _get_visible_not_changed_entries(
         self,
         entries: list[ExecutionPlanEntry],
     ) -> list[ExecutionPlanEntry]:
-        if not bool(self.preview_not_changed_hide_already_done):
-            return list(entries)
-        return [
-            entry
-            for entry in entries
-            if self._get_not_changed_entry_status_key(entry) != PREVIEW_STATUS_ALREADY_DONE
-        ]
+        return self._preview_session.get_visible_not_changed_entries(entries)
 
     def _get_not_changed_group_header_id(self, action_type: str) -> str:
         return f"merchant_rules_preview_not_changed_group_{str(action_type or 'unknown')}"
@@ -34749,29 +33857,13 @@ class MerchantRulesWidget:
         self,
         entries: list[ExecutionPlanEntry],
     ) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for entry in entries:
-            status_key = self._get_not_changed_entry_status_key(entry)
-            counts[status_key] = counts.get(status_key, 0) + 1
-        return counts
+        return self._preview_session.get_not_changed_status_counts(entries)
 
     def _get_not_changed_group_default_open(
         self,
         entries: list[ExecutionPlanEntry],
     ) -> bool:
-        if not entries or len(entries) >= 20:
-            return False
-        status_counts = self._get_not_changed_status_counts(entries)
-        if set(status_counts).issubset({PREVIEW_STATUS_NO_MATCH, PREVIEW_STATUS_ALREADY_DONE}):
-            return False
-        attention_statuses = {
-            PREVIEW_STATUS_UNSAFE,
-            PREVIEW_STATUS_BLOCKED,
-            PREVIEW_STATUS_PROTECTED,
-            PREVIEW_STATUS_WARNING,
-            PREVIEW_STATUS_SKIPPED,
-        }
-        return any(status_counts.get(status_key, 0) > 0 for status_key in attention_statuses)
+        return self._preview_session.get_not_changed_group_default_open(entries)
 
     def _get_not_changed_group_header_text(
         self,
@@ -34779,54 +33871,7 @@ class MerchantRulesWidget:
         visible_entries: list[ExecutionPlanEntry],
         all_entries: list[ExecutionPlanEntry],
     ) -> tuple[str, str]:
-        action_label = ACTION_TYPE_LABELS.get(action_type, action_type.title())
-        visible_count = len(visible_entries)
-        full_count = len(all_entries)
-        count_text = str(visible_count) if visible_count == full_count else f"{visible_count} shown of {full_count}"
-        status_counts = self._get_not_changed_status_counts(visible_entries)
-        full_status_counts = self._get_not_changed_status_counts(all_entries)
-        nonzero_statuses = [
-            status_key
-            for status_key in PREVIEW_NOT_CHANGED_STATUS_ORDER
-            if status_counts.get(status_key, 0) > 0
-        ]
-        header_statuses = nonzero_statuses[:3]
-        header_parts = [f"{action_label} ({count_text})"]
-        header_parts.extend(
-            f"{PREVIEW_STATUS_LABELS[status_key]} {status_counts[status_key]}"
-            for status_key in header_statuses
-        )
-        if len(nonzero_statuses) > len(header_statuses):
-            header_parts.append(f"+{len(nonzero_statuses) - len(header_statuses)} more")
-
-        tooltip_parts = [f"{action_label}: showing {visible_count} of {full_count} entries."]
-        if nonzero_statuses:
-            tooltip_parts.append(
-                "Visible statuses: "
-                + ", ".join(
-                    f"{PREVIEW_STATUS_LABELS[status_key]} {status_counts[status_key]}"
-                    for status_key in nonzero_statuses
-                )
-                + "."
-            )
-        full_nonzero_statuses = [
-            status_key
-            for status_key in PREVIEW_NOT_CHANGED_STATUS_ORDER
-            if full_status_counts.get(status_key, 0) > 0
-        ]
-        if visible_count != full_count and full_nonzero_statuses:
-            tooltip_parts.append(
-                "Full statuses: "
-                + ", ".join(
-                    f"{PREVIEW_STATUS_LABELS[status_key]} {full_status_counts[status_key]}"
-                    for status_key in full_nonzero_statuses
-                )
-                + "."
-            )
-        hidden_count = full_count - visible_count
-        if hidden_count > 0:
-            tooltip_parts.append(f"Hidden by Hide Already done: {hidden_count}.")
-        return " | ".join(header_parts), " ".join(tooltip_parts)
+        return self._preview_session.get_not_changed_group_header_text(action_type, visible_entries, all_entries)
 
     def _draw_not_changed_entries_child(
         self,

@@ -1,6 +1,6 @@
 """Canonical plans, item selection, projections, assessment, and allocation.
 
-The widget retains acquisition, phase order, preview aggregation/publication,
+The widget retains native acquisition, preview publication coordination,
 application, execution reservations and live execution. Selection is evidence,
 not action authority; existing protection interpretation remains with its owner.
 """
@@ -60,8 +60,10 @@ from Sources.icefox.MerchantRules.configuration import CleanupProtectionSource
 from Sources.icefox.MerchantRules.configuration import CleanupTarget
 from Sources.icefox.MerchantRules.configuration import DestroyRule
 from Sources.icefox.MerchantRules.configuration import IdentifySettings
+from Sources.icefox.MerchantRules.configuration import MaterialTarget
 from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
 from Sources.icefox.MerchantRules.configuration import RuneSellTarget
+from Sources.icefox.MerchantRules.configuration import RuneTraderTarget
 from Sources.icefox.MerchantRules.configuration import SalvageRule
 from Sources.icefox.MerchantRules.configuration import SalvageSettings
 from Sources.icefox.MerchantRules.configuration import SellRule
@@ -5986,3 +5988,1022 @@ class DestroyPlanner:
                 claimed_item_ids,
                 enabled_sell_rules,
             )
+
+
+class RuleIdAllocator(Protocol):
+    def __call__(self, raw_value: object, *, seen_ids: set[str], prefix: str, fallback_seed: object = "") -> str: ...
+
+
+class SupportedContextReader(Protocol):
+    def __call__(self, *, passive: bool = False) -> tuple[bool, str, dict[str, tuple[float, float] | None]]: ...
+
+
+class TravelTargetReachedReader(Protocol):
+    def __call__(self, target_outpost_id: int, current_map_id: int | None = None) -> bool: ...
+
+
+class PlanSummaryLogger(Protocol):
+    def __call__(self, prefix: str, plan: PlanResult) -> None: ...
+
+
+@dataclass
+class CompositionNormalizers:
+    """Late aliases to existing normalizers; no rule-selection algorithms."""
+
+    get_buy_rule: Callable[[], Callable[[BuyRule], BuyRule | None]]
+    get_sell_rule: Callable[[], Callable[[SellRule], SellRule | None]]
+    get_material_targets: Callable[[], Callable[[object], list[MaterialTarget]]]
+    get_merchant_stock_targets: Callable[[], Callable[[object], list[MerchantStockTarget]]]
+    get_rune_sell_targets: Callable[[], Callable[[object], list[RuneSellTarget]]]
+    get_rune_trader_targets: Callable[[], Callable[[object], list[RuneTraderTarget]]]
+    get_whitelist_targets: Callable[[], Callable[[object], list[WhitelistTarget]]]
+    get_unique_rule_id: Callable[[], RuleIdAllocator]
+    get_safe_int: Callable[[], Callable[[object, int], int]]
+    get_scroll_stock: Callable[[], Callable[[object], bool]]
+    get_material_storage_permission: Callable[[], Callable[[SellRule], bool]]
+
+
+def projected_preview_reason_suffix(
+    merchant_type: str,
+    target_outpost_name: str,
+    *,
+    read_merchant_labels: Callable[[], Mapping[str, str]],
+) -> str:
+    target_label = str(target_outpost_name or "").strip() or "the selected outpost"
+    if str(merchant_type) == MERCHANT_TYPE_STORAGE:
+        return f"Projected after travel to {target_label}. Travel + Execute will reopen Xunlai after arrival."
+    merchant_label = read_merchant_labels().get(str(merchant_type), "merchant handling")
+    return (
+        f"Projected after travel to {target_label}. "
+        f"Travel + Execute will confirm live {merchant_label} access on arrival."
+    )
+
+
+class PlanComposer[
+    R: CrafterRecipeView, C: SalvageCandidateView, M: SalvageUpgradeMatchView, S: SalvageSlotResolutionView
+]:
+    """Compose intent using current owners and observations; retain only diagnostic duration."""
+
+    def __init__(
+        self,
+        *,
+        normalizers: CompositionNormalizers,
+        read_buy_rules: Callable[[], list[BuyRule]],
+        read_sell_rules: Callable[[], list[SellRule]],
+        read_destroy_rules: Callable[[], list[DestroyRule]],
+        read_auto_travel: Callable[[], bool],
+        read_target_outpost: Callable[[], int],
+        read_reservation_active: Callable[[], bool],
+        read_reserved_item_ids: Callable[[], set[int]],
+        read_sale_planner: Callable[[], SalePlanner],
+        read_buy_planner: Callable[[], BuyPlanner[R]],
+        read_cleanup_planner: Callable[[], CleanupPlanner],
+        read_identify_planner: Callable[[], IdentifyPlanner],
+        read_salvage_planner: Callable[[], SalvagePlanner[C, M, S]],
+        read_destroy_planner: Callable[[], DestroyPlanner],
+        read_policy: Callable[[], "ProtectionPolicy"],
+        get_inventory_items: Callable[[], Callable[[], list["InventoryItemInfo"]]],
+        get_storage_items: Callable[[], Callable[[], list["InventoryItemInfo"]]],
+        get_reliable_storage_items: Callable[[], Callable[[], tuple[list["InventoryItemInfo"], bool]]],
+        get_material_storage_items: Callable[[], Callable[[], list["InventoryItemInfo"]]],
+        get_supported_context: Callable[[], SupportedContextReader],
+        get_local_storage_ready: Callable[[], Callable[[], bool]],
+        get_storage_open: Callable[[], Callable[[], bool]],
+        get_map_id: Callable[[], Callable[[], int | None]],
+        get_outpost_name: Callable[[], Callable[[int], str]],
+        get_guild_hall_target: Callable[[], Callable[[int], bool]],
+        get_target_reached: Callable[[], TravelTargetReachedReader],
+        get_embark_name: Callable[[], Callable[[], str]],
+        read_embark_id: Callable[[], int],
+        read_projected_coords: Callable[[], tuple[float, float]],
+        read_merchant_labels: Callable[[], Mapping[str, str]],
+        read_recipes: Callable[[], Mapping[int, tuple[R, ...]]],
+        get_early_kit_models: Callable[[], Callable[[str], tuple[int, ...]]],
+        read_live_check_status: Callable[[], str],
+        get_quantity: Callable[[], Callable[[int], int]],
+        get_clock: Callable[[], Callable[[], float]],
+        get_diagnostic: Callable[[], Callable[[str], None]],
+        get_plan_summary: Callable[[], PlanSummaryLogger],
+        get_plan_factory: Callable[[], type[PlanResult]],
+        get_entry_factory: Callable[[], PlanEntryFactory],
+    ) -> None:
+        self._normalizers = normalizers
+        self._read_buy_rules = read_buy_rules
+        self._read_sell_rules = read_sell_rules
+        self._read_destroy_rules = read_destroy_rules
+        self._read_auto_travel = read_auto_travel
+        self._read_target_outpost = read_target_outpost
+        self._read_reservation_active = read_reservation_active
+        self._read_reserved_item_ids = read_reserved_item_ids
+        self._read_sale_planner = read_sale_planner
+        self._read_buy_planner = read_buy_planner
+        self._read_cleanup_planner = read_cleanup_planner
+        self._read_identify_planner = read_identify_planner
+        self._read_salvage_planner = read_salvage_planner
+        self._read_destroy_planner = read_destroy_planner
+        self._read_policy = read_policy
+        self._get_inventory_items = get_inventory_items
+        self._get_storage_items = get_storage_items
+        self._get_reliable_storage_items = get_reliable_storage_items
+        self._get_material_storage_items = get_material_storage_items
+        self._get_supported_context = get_supported_context
+        self._get_local_storage_ready = get_local_storage_ready
+        self._get_storage_open = get_storage_open
+        self._get_map_id = get_map_id
+        self._get_outpost_name = get_outpost_name
+        self._get_guild_hall_target = get_guild_hall_target
+        self._get_target_reached = get_target_reached
+        self._get_embark_name = get_embark_name
+        self._read_embark_id = read_embark_id
+        self._read_projected_coords = read_projected_coords
+        self._read_merchant_labels = read_merchant_labels
+        self._read_recipes = read_recipes
+        self._get_early_kit_models = get_early_kit_models
+        self._read_live_check_status = read_live_check_status
+        self._get_quantity = get_quantity
+        self._get_clock = get_clock
+        self._get_diagnostic = get_diagnostic
+        self._get_plan_summary = get_plan_summary
+        self._get_plan_factory = get_plan_factory
+        self._get_entry_factory = get_entry_factory
+        self.last_plan_build_duration_ms = 0.0
+
+    def get_consumable_crafter_multi_stop_target(self) -> tuple[int, str]:
+        if not self._read_auto_travel() or not self.has_enabled_consumable_crafter_buy_rules():
+            return 0, ""
+        target_outpost_id = max(0, self._normalizers.get_safe_int()(self._read_target_outpost(), 0))
+        if target_outpost_id <= 0 or target_outpost_id == self._read_embark_id():
+            return 0, ""
+        target_outpost_name = self._get_outpost_name()(target_outpost_id)
+        if not target_outpost_name:
+            return 0, ""
+        return target_outpost_id, target_outpost_name
+
+    def should_use_consumable_crafter_multi_stop_route(self) -> bool:
+        target_outpost_id, _target_outpost_name = self.get_consumable_crafter_multi_stop_target()
+        return target_outpost_id > 0
+
+    def get_preview_projection_target(self) -> tuple[int, str]:
+        target_outpost_id = max(0, int(self._read_target_outpost())) if self._read_auto_travel() else 0
+        if target_outpost_id <= 0:
+            return 0, ""
+        target_outpost_name = self._get_outpost_name()(target_outpost_id)
+        if not target_outpost_name:
+            return 0, ""
+        if self._get_target_reached()(target_outpost_id):
+            return 0, ""
+        return target_outpost_id, target_outpost_name
+
+    def get_required_service_types(self) -> set[str]:
+        """Return only merchant/trader services that enabled rules can actually use."""
+
+        required: set[str] = set()
+
+        for raw_rule in self._read_buy_rules():
+            rule = self._normalizers.get_buy_rule()(raw_rule)
+            if rule is None or not rule.enabled:
+                continue
+
+            if rule.kind == BUY_KIND_MATERIAL_TARGET:
+                for target in self._normalizers.get_material_targets()(rule.material_targets):
+                    model_id = max(0, int(target.model_id))
+                    if model_id > 0:
+                        required.add(material_destination(model_id))
+                continue
+
+            if rule.kind == BUY_KIND_RUNE_TRADER_TARGET:
+                if self._normalizers.get_rune_trader_targets()(rule.rune_targets):
+                    required.add(MERCHANT_TYPE_RUNE_TRADER)
+                continue
+
+            if rule.kind == BUY_KIND_SCROLL_TRADER_TARGET:
+                if any(
+                    self._normalizers.get_scroll_stock()(target.model_id)
+                    for target in self._normalizers.get_merchant_stock_targets()(rule.merchant_stock_targets)
+                ):
+                    required.add(MERCHANT_TYPE_SCROLL_TRADER)
+                continue
+
+            if rule.kind == BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
+                if any(
+                    int(target.model_id) in self._read_recipes()
+                    for target in self._normalizers.get_merchant_stock_targets()(rule.merchant_stock_targets)
+                ):
+                    required.add(MERCHANT_TYPE_CONSUMABLE_CRAFTER)
+                continue
+
+            if rule.kind == BUY_KIND_MERCHANT_STOCK:
+                for target in self._normalizers.get_merchant_stock_targets()(rule.merchant_stock_targets):
+                    if int(target.model_id) <= 0:
+                        continue
+                    required.add(
+                        MERCHANT_TYPE_SCROLL_TRADER
+                        if self._normalizers.get_scroll_stock()(target.model_id)
+                        else MERCHANT_TYPE_MERCHANT
+                    )
+
+        for raw_rule in self._read_sell_rules():
+            rule = self._normalizers.get_sell_rule()(raw_rule)
+            if rule is None or not rule.enabled:
+                continue
+
+            if rule.kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
+                if any(bool(value) for value in getattr(rule, "rarities", {}).values()):
+                    required.add(MERCHANT_TYPE_MERCHANT)
+                if rule.kind == SELL_KIND_ARMOR and bool(getattr(rule, "include_standalone_runes", False)):
+                    required.add(MERCHANT_TYPE_RUNE_TRADER)
+                continue
+
+            if rule.kind == SELL_KIND_RUNE_TRADER_TARGET:
+                if self._normalizers.get_rune_sell_targets()(getattr(rule, "rune_sell_targets", [])):
+                    required.add(MERCHANT_TYPE_RUNE_TRADER)
+                continue
+
+            if rule.kind == SELL_KIND_COMMON_MATERIALS:
+                # A material rule may contain common and/or rare materials.  Keep
+                # this conservative unless the plan has already narrowed the item set.
+                required.add(MERCHANT_TYPE_MATERIALS)
+                required.add(MERCHANT_TYPE_RARE_MATERIALS)
+                continue
+
+            if rule.kind == SELL_KIND_EXPLICIT_MODELS:
+                if self._normalizers.get_whitelist_targets()(getattr(rule, "whitelist_targets", [])):
+                    # Explicit items can route to merchant, material traders or the
+                    # rune trader depending on the actual item type.
+                    required.update(
+                        {
+                            MERCHANT_TYPE_MERCHANT,
+                            MERCHANT_TYPE_MATERIALS,
+                            MERCHANT_TYPE_RARE_MATERIALS,
+                            MERCHANT_TYPE_RUNE_TRADER,
+                        }
+                    )
+
+        return required
+
+    def get_projected_supported_context(
+        self, target_outpost_id: int
+    ) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
+        safe_outpost_id = max(0, self._normalizers.get_safe_int()(target_outpost_id, 0))
+        outpost_name = self._get_outpost_name()(safe_outpost_id)
+        coords: dict[str, tuple[float, float] | None] = {
+            MERCHANT_TYPE_MERCHANT: self._read_projected_coords(),
+            MERCHANT_TYPE_MATERIALS: self._read_projected_coords(),
+            MERCHANT_TYPE_RUNE_TRADER: self._read_projected_coords(),
+            MERCHANT_TYPE_SCROLL_TRADER: self._read_projected_coords(),
+            MERCHANT_TYPE_RARE_MATERIALS: self._read_projected_coords(),
+            MERCHANT_TYPE_CONSUMABLE_CRAFTER: (
+                self._read_projected_coords() if safe_outpost_id == self._read_embark_id() else None
+            ),
+        }
+        if safe_outpost_id <= 0 or not outpost_name:
+            return (
+                False,
+                "Projected preview target is not configured.",
+                {
+                    MERCHANT_TYPE_MERCHANT: None,
+                    MERCHANT_TYPE_MATERIALS: None,
+                    MERCHANT_TYPE_RUNE_TRADER: None,
+                    MERCHANT_TYPE_SCROLL_TRADER: None,
+                    MERCHANT_TYPE_RARE_MATERIALS: None,
+                    MERCHANT_TYPE_CONSUMABLE_CRAFTER: None,
+                },
+            )
+
+        arrival_label = "Guild Hall arrival" if self._get_guild_hall_target()(safe_outpost_id) else "arrival"
+        reason = (
+            f"Projected preview for {outpost_name} ({safe_outpost_id}). "
+            f"Travel + Execute will auto-travel, then recheck current items and available services after {arrival_label}. "
+            "Destination NPC and storage access will be confirmed on arrival."
+        )
+        return True, reason, coords
+
+    def is_projected_destination_entry(self, entry: ExecutionPlanEntry) -> bool:
+        action_type = str(entry.action_type)
+        merchant_type = str(entry.merchant_type)
+        if merchant_type in (
+            MERCHANT_TYPE_MERCHANT,
+            MERCHANT_TYPE_MATERIALS,
+            MERCHANT_TYPE_RUNE_TRADER,
+            MERCHANT_TYPE_SCROLL_TRADER,
+            MERCHANT_TYPE_RARE_MATERIALS,
+            MERCHANT_TYPE_CONSUMABLE_CRAFTER,
+        ):
+            return action_type in {"buy", "sell"}
+        if merchant_type == MERCHANT_TYPE_STORAGE:
+            return action_type in {"deposit", "withdraw"}
+        return False
+
+    def get_projected_preview_reason_suffix(self, merchant_type: str, target_outpost_name: str) -> str:
+        return projected_preview_reason_suffix(
+            merchant_type, target_outpost_name, read_merchant_labels=self._read_merchant_labels
+        )
+
+    def append_projected_preview_reason(self, reason: str, merchant_type: str, target_outpost_name: str) -> str:
+        suffix = self.get_projected_preview_reason_suffix(merchant_type, target_outpost_name)
+        normalized_reason = str(reason or "").strip()
+        if suffix and suffix in normalized_reason:
+            return normalized_reason
+        if not normalized_reason:
+            return suffix
+        return f"{normalized_reason} {suffix}".strip()
+
+    def apply_projected_preview_post_processing(self, plan: PlanResult, target_outpost_name: str) -> None:
+        for entry in plan.entries:
+            if not self.is_projected_destination_entry(entry):
+                continue
+            if str(entry.state) == PLAN_STATE_WILL_EXECUTE:
+                entry.state = PLAN_STATE_CONDITIONAL
+            if str(entry.state) == PLAN_STATE_CONDITIONAL:
+                entry.reason = self.append_projected_preview_reason(
+                    entry.reason, entry.merchant_type, target_outpost_name
+                )
+
+    def build_travel_preview(self, target_outpost_id: int) -> PlanResult:
+        safe_outpost_id = max(0, self._normalizers.get_safe_int()(target_outpost_id, 0))
+        outpost_name = self._get_outpost_name()(safe_outpost_id)
+        if safe_outpost_id <= 0 or not outpost_name:
+            return self._get_plan_factory()(
+                supported_map=False,
+                supported_reason="Auto-travel target is not configured.",
+                has_actions=False,
+            )
+
+        is_guild_hall_target = self._get_guild_hall_target()(safe_outpost_id)
+        arrival_label = "Guild Hall arrival" if is_guild_hall_target else "arrival"
+        travel_reason = (
+            "Travel to the Guild Hall. After arrival, Merchant Rules will recheck current items and available "
+            "services before executing."
+            if is_guild_hall_target
+            else ("After arrival, Merchant Rules will recheck current items and available services before executing.")
+        )
+        result = self._get_plan_factory()(
+            supported_map=True,
+            supported_reason=(
+                f"Previewing travel to {outpost_name} ({safe_outpost_id}). "
+                f"Merchant actions will be checked and re-planned after {arrival_label}."
+            ),
+            travel_to_outpost_id=safe_outpost_id,
+            travel_to_outpost_name=outpost_name,
+            has_actions=True,
+        )
+        result.entries.append(
+            self._get_entry_factory()(
+                action_type="travel",
+                merchant_type=MERCHANT_TYPE_TRAVEL,
+                label=outpost_name,
+                quantity=1,
+                state=PLAN_STATE_WILL_EXECUTE,
+                reason=travel_reason,
+            )
+        )
+        return result
+
+    def build_consumable_crafter_multi_stop_preview(
+        self,
+        destination_outpost_id: int,
+        *,
+        execution_context: PurchaseRequestView | None = None,
+    ) -> PlanResult:
+        safe_destination_id = max(0, self._normalizers.get_safe_int()(destination_outpost_id, 0))
+        destination_name = self._get_outpost_name()(safe_destination_id)
+        if safe_destination_id <= 0 or not destination_name:
+            return self._get_plan_factory()(
+                supported_map=False,
+                supported_reason="Auto-travel target is not configured.",
+                has_actions=False,
+            )
+
+        embark_name = self._get_embark_name()()
+        embark_plan = self.build_plan(
+            projected_preview=True,
+            projected_target_override_outpost_id=self._read_embark_id(),
+            allow_consumable_multi_stop=False,
+            consumable_crafter_only=True,
+            execution_context=execution_context,
+        )
+        destination_plan = self.build_plan(
+            projected_preview=True,
+            projected_target_override_outpost_id=safe_destination_id,
+            allow_consumable_multi_stop=False,
+            exclude_consumable_crafter=True,
+            execution_context=execution_context,
+        )
+
+        if not embark_plan.has_actions:
+            return destination_plan
+
+        storage_states = {str(embark_plan.storage_plan_state), str(destination_plan.storage_plan_state)}
+        if STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN in storage_states:
+            storage_plan_state = STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN
+        elif STORAGE_PLAN_STATE_EXACT_READY in storage_states:
+            storage_plan_state = STORAGE_PLAN_STATE_EXACT_READY
+        else:
+            storage_plan_state = STORAGE_PLAN_STATE_NOT_NEEDED
+
+        coords = dict(destination_plan.coords)
+        coords[MERCHANT_TYPE_CONSUMABLE_CRAFTER] = embark_plan.coords.get(MERCHANT_TYPE_CONSUMABLE_CRAFTER)
+        destination_has_work = bool(destination_plan.has_actions)
+        entries: list[ExecutionPlanEntry] = []
+        if not self._get_target_reached()(self._read_embark_id()):
+            entries.append(
+                self._get_entry_factory()(
+                    action_type="travel",
+                    merchant_type=MERCHANT_TYPE_TRAVEL,
+                    label=embark_name,
+                    quantity=1,
+                    state=PLAN_STATE_WILL_EXECUTE,
+                    reason="Travel to Embark Beach first for Consumable Crafter buys.",
+                )
+            )
+        entries.extend(
+            replace(entry)
+            for entry in embark_plan.entries
+            if str(entry.merchant_type) == MERCHANT_TYPE_CONSUMABLE_CRAFTER
+        )
+        if destination_has_work:
+            entries.append(
+                self._get_entry_factory()(
+                    action_type="travel",
+                    merchant_type=MERCHANT_TYPE_TRAVEL,
+                    label=destination_name,
+                    quantity=1,
+                    state=PLAN_STATE_WILL_EXECUTE,
+                    reason="Travel to the selected Auto Travel destination for remaining Merchant Rules work.",
+                )
+            )
+        entries.extend(
+            replace(entry)
+            for entry in destination_plan.entries
+            if str(entry.merchant_type) != MERCHANT_TYPE_CONSUMABLE_CRAFTER
+        )
+
+        result = self._get_plan_factory()(
+            entries=entries,
+            supported_map=True,
+            supported_reason=(
+                f"Multi-stop preview: craft Consumable Crafter targets at {embark_name}"
+                + (f", then run remaining work at {destination_name}." if destination_has_work else " and stop there.")
+            ),
+            coords=coords,
+            multi_stop_route=True,
+            multi_stop_consumable_outpost_id=self._read_embark_id(),
+            multi_stop_consumable_outpost_name=embark_name,
+            multi_stop_destination_outpost_id=safe_destination_id if destination_has_work else 0,
+            multi_stop_destination_outpost_name=destination_name if destination_has_work else "",
+            merchant_stock_buys=list(destination_plan.merchant_stock_buys),
+            material_buys=list(destination_plan.material_buys),
+            rune_trader_buys=list(destination_plan.rune_trader_buys),
+            scroll_trader_buys=list(destination_plan.scroll_trader_buys),
+            consumable_crafter_buys=list(embark_plan.consumable_crafter_buys),
+            material_sales=list(destination_plan.material_sales),
+            storage_transfers=list(destination_plan.storage_transfers),
+            cleanup_transfers=list(destination_plan.cleanup_transfers),
+            identify_claimed_item_ids=list(destination_plan.identify_claimed_item_ids),
+            identify_item_ids=list(destination_plan.identify_item_ids),
+            salvage_item_ids=list(destination_plan.salvage_item_ids),
+            salvage_specific_upgrade_owners=dict(destination_plan.salvage_specific_upgrade_owners),
+            destroy_actions=list(destination_plan.destroy_actions),
+            destroy_item_ids=list(destination_plan.destroy_item_ids),
+            merchant_sell_item_ids=list(destination_plan.merchant_sell_item_ids),
+            rune_trader_sales=list(destination_plan.rune_trader_sales),
+            storage_plan_state=storage_plan_state,
+            storage_exact=bool(
+                embark_plan.storage_exact and (destination_plan.storage_exact or not destination_has_work)
+            ),
+            inventory_snapshot_captured=bool(
+                embark_plan.inventory_snapshot_captured or destination_plan.inventory_snapshot_captured
+            ),
+            inventory_model_counts=dict(embark_plan.inventory_model_counts or destination_plan.inventory_model_counts),
+            inventory_item_count=max(int(embark_plan.inventory_item_count), int(destination_plan.inventory_item_count)),
+            xunlai_first_merchant_stock_targets=dict(destination_plan.xunlai_first_merchant_stock_targets),
+            xunlai_first_storage_scan_reliable=bool(destination_plan.xunlai_first_storage_scan_reliable),
+            has_actions=bool(embark_plan.has_actions or destination_plan.has_actions),
+        )
+        return result
+
+    def plan_has_authorized_early_kit_source(
+        self,
+        plan: PlanResult,
+        model_ids: set[int],
+    ) -> bool:
+        if any(
+            max(0, int(merchant_buy.model_id)) in model_ids
+            and max(0, int(merchant_buy.quantity)) > 0
+            and str(getattr(merchant_buy.cleanup, "rule_kind", "")) == BUY_KIND_MERCHANT_STOCK
+            for merchant_buy in plan.merchant_stock_buys
+        ):
+            return True
+        if any(
+            str(transfer.direction) == STORAGE_TRANSFER_WITHDRAW
+            and bool(transfer.xunlai_first_merchant_stock)
+            and max(0, int(transfer.model_id)) in model_ids
+            and max(0, int(transfer.quantity)) > 0
+            for transfer in plan.storage_transfers
+        ):
+            return True
+        if not plan.storage_exact and any(
+            max(0, int(model_id)) in model_ids for model_id in plan.xunlai_first_merchant_stock_targets
+        ):
+            return True
+        return False
+
+    def annotate_early_kit_preview(self, plan: PlanResult) -> None:
+        identification_models = set(self._get_early_kit_models()("identification"))
+        normal_salvage_models = set(self._get_early_kit_models()("normal_salvage"))
+        upgrade_salvage_models = set(self._get_early_kit_models()("upgrade_salvage"))
+        identification_source = self.plan_has_authorized_early_kit_source(plan, identification_models)
+        normal_source = self.plan_has_authorized_early_kit_source(plan, normal_salvage_models)
+        upgrade_source = self.plan_has_authorized_early_kit_source(plan, upgrade_salvage_models)
+
+        for entry in plan.entries:
+            if (
+                str(entry.action_type) == "identify"
+                and str(entry.state) == PLAN_STATE_SKIPPED
+                and str(entry.reason) == "No ID kit found."
+                and identification_source
+            ):
+                entry.state = PLAN_STATE_CONDITIONAL
+                entry.reason = "Identify after acquiring the configured Identification Kit."
+                entry.status_hint = self._read_live_check_status()
+                continue
+            if str(entry.action_type) != "salvage" or str(entry.state) != PLAN_STATE_SKIPPED:
+                continue
+            if "no normal salvage kit" in str(entry.reason).lower() and normal_source:
+                entry.state = PLAN_STATE_CONDITIONAL
+                entry.reason = "Salvage after acquiring the configured normal Salvage Kit."
+                entry.status_hint = self._read_live_check_status()
+            elif "no upgrade salvage kit" in str(entry.reason).lower() and upgrade_source:
+                entry.state = PLAN_STATE_CONDITIONAL
+                entry.reason = "Salvage after acquiring the configured Expert or Superior Salvage Kit."
+                entry.status_hint = self._read_live_check_status()
+
+    def has_enabled_rune_buy_rules(self) -> bool:
+        for raw_rule in self._read_buy_rules():
+            rule = self._normalizers.get_buy_rule()(raw_rule)
+            if rule is None or not rule.enabled or rule.kind != BUY_KIND_RUNE_TRADER_TARGET:
+                continue
+            if self._normalizers.get_rune_trader_targets()(rule.rune_targets):
+                return True
+        return False
+
+    def has_enabled_scroll_trader_buy_rules(self) -> bool:
+        for raw_rule in self._read_buy_rules():
+            rule = self._normalizers.get_buy_rule()(raw_rule)
+            if rule is None or not rule.enabled:
+                continue
+            if rule.kind == BUY_KIND_SCROLL_TRADER_TARGET:
+                if any(
+                    self._normalizers.get_scroll_stock()(target.model_id)
+                    for target in self._normalizers.get_merchant_stock_targets()(rule.merchant_stock_targets)
+                ):
+                    return True
+            elif rule.kind == BUY_KIND_MERCHANT_STOCK:
+                if any(
+                    self._normalizers.get_scroll_stock()(target.model_id)
+                    for target in self._normalizers.get_merchant_stock_targets()(rule.merchant_stock_targets)
+                ):
+                    return True
+        return False
+
+    def has_enabled_consumable_crafter_buy_rules(self) -> bool:
+        for raw_rule in self._read_buy_rules():
+            rule = self._normalizers.get_buy_rule()(raw_rule)
+            if rule is None or not rule.enabled or rule.kind != BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
+                continue
+            if any(
+                int(target.model_id) in self._read_recipes()
+                for target in self._normalizers.get_merchant_stock_targets()(rule.merchant_stock_targets)
+            ):
+                return True
+        return False
+
+    def has_enabled_rules_excluding_consumable_crafters(self) -> bool:
+        return bool(
+            self._read_identify_planner().should_identify_before_execute()
+            or any(
+                bool(rule.enabled)
+                and (normalized_rule := self._normalizers.get_buy_rule()(rule)) is not None
+                and normalized_rule.kind != BUY_KIND_CONSUMABLE_CRAFTER_TARGET
+                for rule in self._read_buy_rules()
+            )
+            or any(bool(rule.enabled) for rule in self._read_sell_rules())
+            or self._read_salvage_planner().has_enabled_salvage_settings()
+            or any(bool(rule.enabled) for rule in self._read_destroy_rules())
+            or self.has_cleanup_sources()
+        )
+
+    def get_buy_rules_excluding_consumable_crafters(self) -> list[BuyRule]:
+        filtered_rules: list[BuyRule] = []
+        for raw_rule in self._read_buy_rules():
+            rule = self._normalizers.get_buy_rule()(raw_rule)
+            if rule is None or rule.kind == BUY_KIND_CONSUMABLE_CRAFTER_TARGET:
+                continue
+            filtered_rules.append(rule)
+        return filtered_rules
+
+    def has_cleanup_sources(self) -> bool:
+        return bool(
+            self._read_cleanup_planner().get_effective_cleanup_targets()
+            or self._read_cleanup_planner().get_effective_cleanup_protection_sources()
+        )
+
+    def has_enabled_rules(self) -> bool:
+        return (
+            self._read_identify_planner().should_identify_before_execute()
+            or any(bool(rule.enabled) for rule in self._read_buy_rules())
+            or any(bool(rule.enabled) for rule in self._read_sell_rules())
+            or self._read_salvage_planner().has_enabled_salvage_settings()
+            or any(bool(rule.enabled) for rule in self._read_destroy_rules())
+            or self.has_cleanup_sources()
+        )
+
+    def collect_enabled_sell_rules(self) -> list[tuple[int, SellRule]]:
+        enabled_sell_rules: list[tuple[int, SellRule]] = []
+        seen_rule_ids: set[str] = set()
+        for rule_index, raw_sell_rule in enumerate(self._read_sell_rules()):
+            sell_rule = self._normalizers.get_sell_rule()(raw_sell_rule)
+            if sell_rule is None or not sell_rule.enabled:
+                continue
+            sell_rule.rule_id = self._normalizers.get_unique_rule_id()(
+                sell_rule.rule_id,
+                seen_ids=seen_rule_ids,
+                prefix="sell",
+                fallback_seed=f"{rule_index}:{sell_rule.kind}:{sell_rule.name}",
+            )
+            enabled_sell_rules.append((rule_index, sell_rule))
+        return enabled_sell_rules
+
+    def collect_enabled_xunlai_sell_rules(
+        self,
+        enabled_sell_rules: list[tuple[int, SellRule]] | None = None,
+    ) -> list[tuple[int, SellRule]]:
+        source_rules = self.collect_enabled_sell_rules() if enabled_sell_rules is None else enabled_sell_rules
+        return [
+            (rule_index, sell_rule)
+            for rule_index, sell_rule in source_rules
+            if bool(getattr(sell_rule, "sell_from_xunlai", False))
+        ]
+
+    def has_enabled_xunlai_sell_rules(self) -> bool:
+        return bool(self.collect_enabled_xunlai_sell_rules())
+
+    def has_ready_xunlai_sell_rules(
+        self,
+        enabled_sell_rules: list[tuple[int, SellRule]] | None = None,
+    ) -> bool:
+        for _rule_index, rule in self.collect_enabled_xunlai_sell_rules(enabled_sell_rules):
+            if rule.kind in (SELL_KIND_COMMON_MATERIALS, SELL_KIND_EXPLICIT_MODELS):
+                if self._normalizers.get_whitelist_targets()(getattr(rule, "whitelist_targets", [])):
+                    return True
+            elif rule.kind == SELL_KIND_RUNE_TRADER_TARGET:
+                if self._normalizers.get_rune_sell_targets()(getattr(rule, "rune_sell_targets", [])):
+                    return True
+            elif rule.kind in (SELL_KIND_WEAPONS, SELL_KIND_ARMOR):
+                if any(bool(value) for value in getattr(rule, "rarities", {}).values()):
+                    return True
+        return False
+
+    def has_enabled_xunlai_first_merchant_stock_targets(self) -> bool:
+        return bool(self._read_buy_planner().get_configured_xunlai_first_keep_by_model())
+
+    def plan_xunlai_sell_withdrawals(
+        self,
+        enabled_xunlai_rules: list[tuple[int, SellRule]],
+        current_items: list["InventoryItemInfo"],
+        regular_storage_items: list["InventoryItemInfo"],
+        material_storage_items: list["InventoryItemInfo"],
+        coords: dict[str, tuple[float, float] | None],
+        *,
+        protected_preview_entries: list[ExecutionPlanEntry] | None = None,
+    ) -> tuple[list[PlannedStorageTransfer], list[SellRule]]:
+        """Plan Xunlai withdrawals while reserving keep counts across overlapping sale rules.
+
+        Equipment protections and unsafe storage types produce visible protected entries rather
+        than withdrawal actions.
+        """
+
+        all_enabled_sell_rules = self.collect_enabled_sell_rules()
+        return self._read_sale_planner().plan_xunlai_withdrawals(
+            enabled_xunlai_rules,
+            current_items,
+            regular_storage_items,
+            material_storage_items,
+            coords,
+            all_enabled_sell_rules=all_enabled_sell_rules,
+            policy=self._read_policy(),
+            protected_preview_entries=protected_preview_entries,
+        )
+
+    def build_plan(
+        self,
+        *,
+        execution_context: PurchaseRequestView | None = None,
+        cleanup_only: bool = False,
+        projected_preview: bool = False,
+        ignore_travel_target: bool = False,
+        projected_target_override_outpost_id: int = 0,
+        allow_consumable_multi_stop: bool = True,
+        consumable_crafter_only: bool = False,
+        exclude_consumable_crafter: bool = False,
+        buy_action_rule_kinds: set[str] | None = None,
+        sell_action_rule_kinds: set[str] | None = None,
+        supported_context_override: tuple[bool, str, dict[str, tuple[float, float] | None]] | None = None,
+        bypass_xunlai_first: bool = False,
+    ) -> PlanResult:
+        """Build the complete preview plan without performing live merchant actions.
+
+        Planning snapshots inventory, applies rule precedence and hard protections, models
+        storage certainty and travel services, and records conditional or blocked work. The
+        resulting plan is intent only; every execution phase revalidates its live inputs.
+        """
+
+        started_at = self._get_clock()()
+        projected_target_outpost_id = 0
+        projected_target_outpost_name = ""
+        projected_destination_context = False
+        if not cleanup_only:
+            target_outpost_id = (
+                0
+                if ignore_travel_target
+                else (max(0, int(self._read_target_outpost())) if self._read_auto_travel() else 0)
+            )
+            current_map_id = int(self._get_map_id()() or 0)
+            if projected_preview:
+                if (
+                    allow_consumable_multi_stop
+                    and not consumable_crafter_only
+                    and not exclude_consumable_crafter
+                    and self.should_use_consumable_crafter_multi_stop_route()
+                ):
+                    target_outpost_id, _target_outpost_name = self.get_consumable_crafter_multi_stop_target()
+                    multi_stop_plan = self.build_consumable_crafter_multi_stop_preview(
+                        target_outpost_id,
+                        execution_context=execution_context,
+                    )
+                    self._get_plan_summary()("Plan built", multi_stop_plan)
+                    self.last_plan_build_duration_ms = max(0.0, (self._get_clock()() - started_at) * 1000.0)
+                    return multi_stop_plan
+                projected_target_override = max(
+                    0, self._normalizers.get_safe_int()(projected_target_override_outpost_id, 0)
+                )
+                if projected_target_override > 0:
+                    projected_target_outpost_id = projected_target_override
+                    projected_target_outpost_name = self._get_outpost_name()(projected_target_override)
+                    if projected_target_override == self._read_embark_id():
+                        projected_target_outpost_name = self._get_embark_name()()
+                else:
+                    projected_target_outpost_id, projected_target_outpost_name = self.get_preview_projection_target()
+                projected_destination_context = projected_target_outpost_id > 0 and bool(projected_target_outpost_name)
+            if (
+                not projected_destination_context
+                and target_outpost_id > 0
+                and not self._get_target_reached()(target_outpost_id, current_map_id)
+            ):
+                travel_plan = self.build_travel_preview(target_outpost_id)
+                self._get_plan_summary()("Plan built", travel_plan)
+                self.last_plan_build_duration_ms = max(0.0, (self._get_clock()() - started_at) * 1000.0)
+                return travel_plan
+
+        if projected_destination_context:
+            supported_map, supported_reason, coords = self.get_projected_supported_context(projected_target_outpost_id)
+        elif supported_context_override is not None:
+            supported_map, supported_reason, coords = supported_context_override
+        else:
+            supported_map, supported_reason, coords = self._get_supported_context()(passive=bool(cleanup_only))
+        plan = self._get_plan_factory()(
+            supported_map=supported_map,
+            supported_reason=supported_reason,
+            coords=coords,
+        )
+        if consumable_crafter_only:
+            has_enabled_rules = self.has_enabled_consumable_crafter_buy_rules()
+        elif exclude_consumable_crafter:
+            has_enabled_rules = self.has_enabled_rules_excluding_consumable_crafters()
+        else:
+            has_enabled_rules = self.has_enabled_rules()
+        has_request_stock_targets = bool(
+            not cleanup_only
+            and not consumable_crafter_only
+            and (buy_action_rule_kinds is None or BUY_KIND_MERCHANT_STOCK in buy_action_rule_kinds)
+            and execution_context is not None
+            and any(
+                int(target.model_id) > 0 and int(target.target_count) > 0
+                for target in execution_context.merchant_stock_targets
+            )
+        )
+        if not has_enabled_rules and not has_request_stock_targets:
+            self._get_diagnostic()(
+                "Plan build skipped inventory snapshot because no buy, sell, salvage, destroy, or cleanup rules "
+                "are enabled and no request-scoped Merchant Stock targets apply."
+            )
+            self._get_plan_summary()("Plan built", plan)
+            self.last_plan_build_duration_ms = max(0.0, (self._get_clock()() - started_at) * 1000.0)
+            return plan
+
+        items = self._get_inventory_items()()
+        if bool(self._read_reservation_active()):
+            reserved_item_ids = set(self._read_reserved_item_ids() or set())
+            if reserved_item_ids:
+                items = [item for item in items if int(item.item_id) not in reserved_item_ids]
+        model_counts = get_inventory_model_counts(items)
+        plan.inventory_snapshot_captured = True
+        plan.inventory_model_counts = dict(model_counts)
+        plan.inventory_item_count = len(items)
+        storage_context_ready = projected_destination_context or self._get_local_storage_ready()()
+        storage_open = self._get_storage_open()()
+        storage_items: list["InventoryItemInfo"] = []
+        xunlai_sell_material_storage_items: list["InventoryItemInfo"] = []
+        enabled_sell_rules = [] if consumable_crafter_only else self.collect_enabled_sell_rules()
+        sell_action_rules = (
+            enabled_sell_rules
+            if sell_action_rule_kinds is None
+            else [(rule_index, rule) for rule_index, rule in enabled_sell_rules if rule.kind in sell_action_rule_kinds]
+        )
+        enabled_xunlai_sell_action_rules = self.collect_enabled_xunlai_sell_rules(sell_action_rules)
+        needs_rune_storage_context = bool(not consumable_crafter_only and self.has_enabled_rune_buy_rules())
+        needs_consumable_storage_context = bool(
+            not exclude_consumable_crafter and self.has_enabled_consumable_crafter_buy_rules()
+        )
+        needs_xunlai_sell_storage_context = bool(
+            not cleanup_only and not consumable_crafter_only and self.has_ready_xunlai_sell_rules(sell_action_rules)
+        )
+        needs_xunlai_first_storage_context = bool(
+            not cleanup_only
+            and not consumable_crafter_only
+            and not bypass_xunlai_first
+            and (buy_action_rule_kinds is None or BUY_KIND_MERCHANT_STOCK in buy_action_rule_kinds)
+            and self.has_enabled_xunlai_first_merchant_stock_targets()
+        )
+        if (
+            needs_rune_storage_context
+            or needs_consumable_storage_context
+            or needs_xunlai_sell_storage_context
+            or needs_xunlai_first_storage_context
+        ):
+            if storage_open:
+                if needs_xunlai_first_storage_context:
+                    storage_items, plan.xunlai_first_storage_scan_reliable = self._get_reliable_storage_items()()
+                else:
+                    storage_items = self._get_storage_items()()
+                if needs_xunlai_sell_storage_context:
+                    include_xunlai_material_storage = any(
+                        bool(getattr(rule, "include_material_storage", False))
+                        and self._normalizers.get_material_storage_permission()(rule)
+                        for _rule_index, rule in enabled_xunlai_sell_action_rules
+                    )
+                    if include_xunlai_material_storage:
+                        xunlai_sell_material_storage_items = self._get_material_storage_items()()
+                plan.storage_plan_state = STORAGE_PLAN_STATE_EXACT_READY
+                plan.storage_exact = True
+            else:
+                plan.storage_plan_state = STORAGE_PLAN_STATE_NEEDS_EXACT_SCAN
+                plan.storage_exact = False
+
+        enabled_destroy_rules = (
+            [] if consumable_crafter_only else self._read_destroy_planner().collect_enabled_destroy_rules()
+        )
+        claimed_item_ids: set[int] = set()
+        if not cleanup_only and not consumable_crafter_only:
+            self._read_identify_planner().plan_identify_actions(plan, items, claimed_item_ids)
+        if not consumable_crafter_only:
+            self._read_destroy_planner().plan_destroy_actions(
+                plan, items, enabled_destroy_rules, enabled_sell_rules, claimed_item_ids
+            )
+        if not cleanup_only and not consumable_crafter_only:
+            self._read_salvage_planner().plan_salvage_actions(plan, items, enabled_sell_rules, claimed_item_ids)
+        self._read_sale_planner().allocate_inventory_sales(
+            plan,
+            items,
+            enabled_sell_rules,
+            sell_action_rules,
+            claimed_item_ids,
+            coords,
+            storage_items,
+            xunlai_sell_material_storage_items,
+            policy=self._read_policy(),
+            consumable_crafter_only=consumable_crafter_only,
+            supported_map=supported_map,
+            storage_context_ready=storage_context_ready,
+            supported_reason=supported_reason,
+        )
+
+        has_xunlai_sell_withdrawals = False
+        if needs_xunlai_sell_storage_context:
+            xunlai_sell_transfers: list[PlannedStorageTransfer] = []
+            xunlai_sell_protected_preview_entries: list[ExecutionPlanEntry] = []
+            include_material_storage = any(
+                bool(getattr(rule, "include_material_storage", False))
+                and self._normalizers.get_material_storage_permission()(rule)
+                for _rule_index, rule in enabled_xunlai_sell_action_rules
+            )
+            source_detail = (
+                "regular Xunlai item panes and Material Storage"
+                if include_material_storage
+                else "regular Xunlai item panes"
+            )
+            if storage_open:
+                xunlai_sell_transfers, _adjusted_rules = self.plan_xunlai_sell_withdrawals(
+                    enabled_xunlai_sell_action_rules,
+                    items,
+                    storage_items,
+                    xunlai_sell_material_storage_items,
+                    coords,
+                    protected_preview_entries=xunlai_sell_protected_preview_entries,
+                )
+                self._get_diagnostic()(
+                    f"Xunlai sell preview: enabled_rules={len(enabled_xunlai_sell_action_rules)} "
+                    f"inventory_items={len(items)} regular_storage_items={len(storage_items)} "
+                    f"material_storage_items={len(xunlai_sell_material_storage_items)} "
+                    f"include_material_storage={include_material_storage} transfers={len(xunlai_sell_transfers)} "
+                    f"quantity={sum(max(0, int(transfer.quantity)) for transfer in xunlai_sell_transfers)} "
+                    f"protected_skips={len(xunlai_sell_protected_preview_entries)}"
+                )
+            if xunlai_sell_transfers:
+                has_xunlai_sell_withdrawals = True
+                plan.entries.append(
+                    self._get_entry_factory()(
+                        "sell",
+                        MERCHANT_TYPE_STORAGE,
+                        "Sell from Xunlai too",
+                        sum(max(0, int(transfer.quantity)) for transfer in xunlai_sell_transfers),
+                        PLAN_STATE_WILL_EXECUTE if storage_open else PLAN_STATE_CONDITIONAL,
+                        (
+                            f"Move matching item stacks from {source_detail} to inventory, then sell them under "
+                            "the enabled Sell from Xunlai rules."
+                        ),
+                    )
+                )
+            elif not storage_open:
+                plan.entries.append(
+                    self._get_entry_factory()(
+                        "sell",
+                        MERCHANT_TYPE_STORAGE,
+                        "Sell from Xunlai too",
+                        0,
+                        PLAN_STATE_CONDITIONAL,
+                        (
+                            "Xunlai Storage has not been scanned. Use Open Xunlai + Refresh to confirm "
+                            f"matching item stacks in {source_detail}."
+                        ),
+                    )
+                )
+            if xunlai_sell_protected_preview_entries:
+                plan.entries.extend(xunlai_sell_protected_preview_entries)
+
+        sim_model_counts = build_simulated_model_counts(items, plan)
+        sim_inventory_items = self._items_after_pre_buy(items, plan)
+        pre_buy_model_counts = dict(sim_model_counts)
+        self._read_buy_planner().plan_buy_actions(
+            plan,
+            sim_model_counts,
+            execution_context=execution_context,
+            sim_inventory_items=sim_inventory_items,
+            storage_items=storage_items,
+            consumable_crafter_only=consumable_crafter_only,
+            exclude_consumable_crafter=exclude_consumable_crafter,
+            allowed_rule_kinds=buy_action_rule_kinds,
+            bypass_xunlai_first=bypass_xunlai_first,
+        )
+        self._read_buy_planner().plan_consumable_crafter_bag_space_warning(
+            plan,
+            inventory_model_counts=pre_buy_model_counts,
+        )
+        if not consumable_crafter_only:
+            self._read_cleanup_planner().plan_cleanup_actions(
+                plan,
+                sim_inventory_items,
+                enabled_sell_rules,
+                storage_open=storage_open,
+                storage_context_available=storage_context_ready,
+            )
+        if not cleanup_only and not consumable_crafter_only:
+            self.annotate_early_kit_preview(plan)
+        if projected_destination_context:
+            self.apply_projected_preview_post_processing(plan, projected_target_outpost_name)
+        plan.has_actions = bool(
+            plan.identify_item_ids
+            or plan.salvage_item_ids
+            or plan.destroy_actions
+            or plan.destroy_item_ids
+            or plan.merchant_stock_buys
+            or plan.material_buys
+            or plan.material_sales
+            or plan.merchant_sell_item_ids
+            or plan.rune_trader_sales
+            or plan.rune_trader_buys
+            or plan.scroll_trader_buys
+            or plan.consumable_crafter_buys
+            or plan.storage_transfers
+            or plan.cleanup_transfers
+            or has_xunlai_sell_withdrawals
+            or plan_needs_exact_storage_scan(plan)
+        )
+        self._get_plan_summary()("Plan built", plan)
+        self.last_plan_build_duration_ms = max(0.0, (self._get_clock()() - started_at) * 1000.0)
+        return plan
+
+    def _items_after_pre_buy(self, items: list["InventoryItemInfo"], plan: PlanResult) -> list["InventoryItemInfo"]:
+        return get_items_after_planned_pre_buy_actions(
+            items, plan, quantity_reader=lambda item_id: self._get_quantity()(item_id)
+        )

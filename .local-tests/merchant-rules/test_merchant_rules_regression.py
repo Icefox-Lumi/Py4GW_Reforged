@@ -39006,8 +39006,16 @@ def _test_preview_status_widget_contract(module: Any) -> None:
     )
     before_state = {name: deepcopy(getattr(widget, name)) for name in state_names}
     events: list[tuple[str, int]] = []
-    original_reason = widget._get_preview_reason_for_display
-    original_classifier = widget._get_skipped_preview_status_key
+    cp12_preview_owner = getattr(widget, "_preview_session", None)
+    cp12_reason_name = (
+        "get_preview_reason_for_display" if cp12_preview_owner is not None else "_get_preview_reason_for_display"
+    )
+    cp12_classifier_name = (
+        "get_skipped_preview_status_key" if cp12_preview_owner is not None else "_get_skipped_preview_status_key"
+    )
+    cp12_preview_owner = cp12_preview_owner if cp12_preview_owner is not None else widget
+    original_reason = getattr(cp12_preview_owner, cp12_reason_name)
+    original_classifier = getattr(cp12_preview_owner, cp12_classifier_name)
 
     def reason(entry: Any) -> str:
         events.append(("reason", id(entry)))
@@ -39017,8 +39025,9 @@ def _test_preview_status_widget_contract(module: Any) -> None:
         events.append(("classify", id(entry)))
         return cast(str, original_classifier(entry, displayed_reason))
 
-    widget._get_preview_reason_for_display = reason
-    widget._get_skipped_preview_status_key = classify
+    cp12_restore = _CP8Restoration()
+    cp12_restore.binding(cp12_preview_owner, cp12_reason_name, reason)
+    cp12_restore.binding(cp12_preview_owner, cp12_classifier_name, classify)
     try:
         _expect(
             widget._get_not_changed_entry_status_key(entries[0]) == "protected",
@@ -39139,8 +39148,7 @@ def _test_preview_status_widget_contract(module: Any) -> None:
         )
         _expect(widget.preview_not_changed_hide_already_done is True, "Helper changed the explicit filter selection")
     finally:
-        widget._get_preview_reason_for_display = original_reason
-        widget._get_skipped_preview_status_key = original_classifier
+        cp12_restore.restore()
 
 
 def _test_preview_status_import_isolation() -> None:
@@ -49517,8 +49525,6 @@ class _CP7Widget(Protocol):
 
     def _build_consumable_crafter_multi_stop_preview(self, destination_outpost_id: int) -> PlanResult: ...
 
-    def _apply_projected_preview_post_processing(self, plan: PlanResult, target_outpost_name: str) -> None: ...
-
     def _begin_execute_reservation_scope(self) -> bool: ...
 
     def _end_execute_reservation_scope(self, owned_scope: bool) -> None: ...
@@ -49630,11 +49636,11 @@ class _CP7WidgetAccess(_CP7Widget):
 
     @staticmethod
     def apply_projected_preview_post_processing(widget: _CP7Widget, plan: PlanResult, target_outpost_name: str) -> None:
-        return widget._apply_projected_preview_post_processing(plan, target_outpost_name)
+        return _cp12_projected_postprocess(widget, plan, target_outpost_name)
 
     @staticmethod
     def bound_apply_projected_preview_post_processing(widget: _CP7Widget) -> Callable[[PlanResult, str], None]:
-        return widget._apply_projected_preview_post_processing
+        return lambda plan, target: _cp12_projected_postprocess(widget, plan, target)
 
     @staticmethod
     def begin_execute_reservation_scope(widget: _CP7Widget) -> bool:
@@ -51019,7 +51025,7 @@ def _test_cp7_planning_multi_stop_identity_and_projection(module: types.ModuleTy
         return outpost_id == module.EMBARK_BEACH_MAP_ID
 
     try:
-        patches.set(widget, '_build_plan', build)
+        _cp12_patch_binding(widget, '_build_plan', build, patches.set)
         patches.set(widget, '_get_outpost_name', name)
         patches.set(widget, '_get_embark_beach_outpost_name', lambda: 'E')
         patches.set(widget, '_is_travel_target_reached', reached)
@@ -51085,6 +51091,9 @@ def _test_cp7_planning_retained_orchestration_and_authority(module: types.Module
     from Sources.icefox.MerchantRules.configuration import SellRule
 
     widget = _cp7_widget(module)
+    _cp12_original_count = p.get_inventory_model_counts
+    _cp12_original_simulate = p.build_simulated_model_counts
+    _cp12_original_project = p.get_items_after_planned_pre_buy_actions
     patches = _CP5PatchSet()
     trace: list[str] = []
     seen: list[list[int]] = []
@@ -51101,17 +51110,17 @@ def _test_cp7_planning_retained_orchestration_and_authority(module: types.Module
 
     def count(items: list[InventoryItemInfo]) -> dict[int, int]:
         seen.append([item.item_id for item in items])
-        return p.get_inventory_model_counts(items)
+        return _cp12_original_count(items)
 
     def simulate(items: list[InventoryItemInfo], plan: PlanResult) -> dict[int, int]:
         trace.append('model projection')
         seen.append([item.item_id for item in items])
-        return p.build_simulated_model_counts(items, plan)
+        return _cp12_original_simulate(items, plan)
 
     def project(items: list[InventoryItemInfo], plan: PlanResult) -> list[InventoryItemInfo]:
         trace.append('item projection')
         seen.append([item.item_id for item in items])
-        return p.get_items_after_planned_pre_buy_actions(items, plan, quantity_reader=lambda _item_id: 0)
+        return _cp12_original_project(items, plan, quantity_reader=lambda _item_id: 0)
 
     def identify(_plan: PlanResult, _items: list[InventoryItemInfo], _claimed: set[int]) -> None:
         trace.append('identify')
@@ -51175,7 +51184,7 @@ def _test_cp7_planning_retained_orchestration_and_authority(module: types.Module
             ('_build_simulated_model_counts', simulate),
             ('_get_items_after_planned_pre_buy_actions', project),
         ):
-            patches.set(widget, name, value)
+            _cp12_patch_binding(widget, name, value, patches.set)
         for name, adapter in (
             ('_plan_identify_actions', identify),
             ('_plan_destroy_actions', destroy),
@@ -51185,7 +51194,7 @@ def _test_cp7_planning_retained_orchestration_and_authority(module: types.Module
             ('_plan_cleanup_actions', cleanup),
             ('_annotate_early_kit_preview', early),
         ):
-            patches.set(widget, name, adapter)
+            _cp12_patch_binding(widget, name, adapter, patches.set)
         result = _CP7WidgetAccess.build_plan(
             widget, supported_context_override=(True, 'supported', {'merchant': (1.0, 2.0)})
         )
@@ -52298,7 +52307,6 @@ def _test_cp8_policy_upgrade_precedence(module: types.ModuleType) -> None:
 
 
 def _test_cp8_policy_construction_lifetimes(module: types.ModuleType) -> None:
-    from typing import Never
 
     from Sources.icefox.MerchantRules.configuration import RuleNormalizer
     from Sources.icefox.MerchantRules.requirement_protection import ProtectionPolicy
@@ -53196,7 +53204,7 @@ class _CP8ConsumerChecks(_CP8Checks):
             extra = _cp8_rule(module, rule_id='cp8-x-extra', blacklist_model_ids=[970], sell_from_xunlai=False)
             trace: list[object] = []
             recollected: list[list[tuple[int, SellRule]]] = []
-            original_collect = widget._collect_enabled_sell_rules
+            original_collect = _cp12_bound_sell_collection(widget)
             original_hit = widget._get_hard_protection_hit
 
             def collect() -> list[tuple[int, SellRule]]:
@@ -53230,7 +53238,7 @@ class _CP8ConsumerChecks(_CP8Checks):
                     expected_narrow,
                     'CP8 actual Xunlai action subset',
                 )
-                restore.binding(widget, '_collect_enabled_sell_rules', collect)
+                _cp12_patch_binding(widget, '_collect_enabled_sell_rules', collect, restore.binding)
                 if isinstance(widget, _CP8PolicyHolder):
                     policy = _CP8PolicyAccess.get(widget)
                     policy_type = type(policy)
@@ -53682,6 +53690,7 @@ class _CP9Checks(_CP9Widget):
             claims.append(claimed)
 
         actual_destroy = widget._plan_destroy_actions
+        saved_destroy: object = getattr(getattr(widget, "_destroy_planner", None), "plan_destroy_actions", None)
 
         def destroy(
             plan: PlanResult,
@@ -53691,7 +53700,12 @@ class _CP9Checks(_CP9Widget):
             claimed: set[int],
         ) -> None:
             trace.append('destroy')
-            actual_destroy(plan, selected, destroy_rules, sell_rules, claimed)
+            if hasattr(widget, "_plan_composer"):
+                if not isinstance(saved_destroy, types.MethodType):
+                    raise AssertionError("CP12 saved actual destroy owner method")
+                saved_destroy(plan, selected, destroy_rules, sell_rules, claimed)
+            else:
+                actual_destroy(plan, selected, destroy_rules, sell_rules, claimed)
 
         def salvage(
             _plan: PlanResult,
@@ -53747,7 +53761,7 @@ class _CP9Checks(_CP9Widget):
             ('_format_inventory_item_log_label', item_label),
             ('_debug_log', diagnostic),
         ):
-            restore.binding(widget, name, replacement)
+            _cp12_patch_binding(widget, name, replacement, restore.binding)
 
     @staticmethod
     def build(widget: _CP9Widget, *, services: bool = True, empty_actions: bool = False) -> PlanResult:
@@ -54019,7 +54033,7 @@ class _CP9Checks(_CP9Widget):
         extra = _cp9_rule(module, rule_id='cp9-extra', sell_from_xunlai=False)
         widget.sell_rules = [rule, extra]
         widget.protected_item_model_ids = [970]
-        original_collect = widget._collect_enabled_sell_rules
+        original_collect = _cp12_bound_sell_collection(widget)
         original_collect()
         action_rules = [(0, rule)]
         fresh: list[list[tuple[int, SellRule]]] = []
@@ -54048,7 +54062,7 @@ class _CP9Checks(_CP9Widget):
             return value
 
         try:
-            restore.binding(widget, '_collect_enabled_sell_rules', collect)
+            _cp12_patch_binding(widget, '_collect_enabled_sell_rules', collect, restore.binding)
             restore.binding(type(policy), 'get_hard_protection_hit', hit)
             result = widget._plan_xunlai_sell_withdrawals(
                 argument('actions', action_rules),
@@ -54724,21 +54738,43 @@ class _CP9Checks(_CP9Widget):
         owner_hits: set[str] = set()
         widget_class = type(widget)
         phase_codes: dict[types.CodeType, str] = {}
-        for name, label in (
-            ("_plan_identify_actions", "identify"),
-            ("_plan_destroy_actions", "destroy"),
-            ("_plan_salvage_actions", "salvage"),
-            ("_build_simulated_model_counts", "model projection"),
-            ("_get_items_after_planned_pre_buy_actions", "item projection"),
-            ("_plan_buy_actions", "buy"),
-            ("_plan_consumable_crafter_bag_space_warning", "bag-space warning"),
-            ("_plan_cleanup_actions", "cleanup"),
-            ("_annotate_early_kit_preview", "early-kit annotation"),
-        ):
-            method: object = getattr(widget_class, name)
-            if not isinstance(method, types.FunctionType):
-                raise AssertionError("CP11 retained phase code " + name)
-            phase_codes[method.__code__] = label
+        composer: object = getattr(widget, "_plan_composer", None)
+        widget_handoffs: list[object] = []
+        widget_build: object = getattr(widget_class, "_build_plan")
+        if not isinstance(widget_build, types.FunctionType):
+            raise AssertionError("CP12 retained concrete widget build handoff")
+        if composer is None:
+            for name, label in (
+                ("_plan_identify_actions", "identify"),
+                ("_plan_destroy_actions", "destroy"),
+                ("_plan_salvage_actions", "salvage"),
+                ("_build_simulated_model_counts", "model projection"),
+                ("_get_items_after_planned_pre_buy_actions", "item projection"),
+                ("_plan_buy_actions", "buy"),
+                ("_plan_consumable_crafter_bag_space_warning", "bag-space warning"),
+                ("_plan_cleanup_actions", "cleanup"),
+                ("_annotate_early_kit_preview", "early-kit annotation"),
+            ):
+                method: object = getattr(widget_class, name)
+                if not isinstance(method, types.FunctionType):
+                    raise AssertionError("CP11 retained phase code " + name)
+                phase_codes[method.__code__] = label
+        else:
+            for defining_owner, name, label in (
+                (planning.IdentifyPlanner, "plan_identify_actions", "identify"),
+                (planning.DestroyPlanner, "plan_destroy_actions", "destroy"),
+                (planning.SalvagePlanner, "plan_salvage_actions", "salvage"),
+                (planning, "build_simulated_model_counts", "model projection"),
+                (planning, "get_items_after_planned_pre_buy_actions", "item projection"),
+                (planning.BuyPlanner, "plan_buy_actions", "buy"),
+                (planning.BuyPlanner, "plan_consumable_crafter_bag_space_warning", "bag-space warning"),
+                (planning.CleanupPlanner, "plan_cleanup_actions", "cleanup"),
+                (type(composer), "annotate_early_kit_preview", "early-kit annotation"),
+            ):
+                function: object = getattr(defining_owner, name)
+                if not isinstance(function, types.FunctionType) or function.__globals__ is not planning_globals:
+                    raise AssertionError("CP12 actual canonical composition phase " + name)
+                phase_codes[function.__code__] = label
         buy_function: object = vars(planning.BuyPlanner)["plan_buy_actions"]
         if not isinstance(buy_function, types.FunctionType):
             raise AssertionError("CP11 actual canonical buy function")
@@ -54763,11 +54799,13 @@ class _CP9Checks(_CP9Widget):
 
         def trace(frame: types.FrameType, event: str, result: object) -> None:
             code = frame.f_code
+            if event == "call" and code is widget_build.__code__ and frame.f_locals.get("self") is widget:
+                widget_handoffs.append(frame.f_locals["supported_context_override"])
             if event == "call" and code in owner_codes:
                 owner_hits.add(owner_codes[code])
             if event == "call" and code is sale_code:
                 phases.append("sale")
-            if frame.f_locals.get("self") is widget and code in phase_codes:
+            if code in phase_codes and (composer is not None or frame.f_locals.get("self") is widget):
                 label = phase_codes[code]
                 if event == "call":
                     phases.append(label)
@@ -54909,6 +54947,12 @@ class _CP9Checks(_CP9Widget):
                 required |= {"identify", "destroy", "salvage"}
             _cp11_equal(owner_hits, required, "all integrated owners execute actual bodies")
             _cp8_unchanged(before, items)
+            _expect(len(widget_handoffs) == 1, "CP12 exactly one actual widget build handoff")
+            handed_context = widget_handoffs[0]
+            _expect(
+                isinstance(handed_context, tuple) and plan.coords is handed_context[2],
+                "CP12 supplied coordinate identity survives handoff",
+            )
             return {
                 "plan": _cp11_plain(plan),
                 "phases": phases,
@@ -57725,8 +57769,10 @@ class _CP10Checks(_CP10Widget):
             raise AssertionError("CP10 short-circuited source lookup executed")
 
         try:
-            restore.binding(widget, "_get_effective_cleanup_targets", lambda: [CleanupTarget(555, 0, "exact")])
-            restore.binding(widget, "_get_effective_cleanup_protection_sources", forbidden_sources)
+            _cp12_patch_binding(
+                widget, "_get_effective_cleanup_targets", lambda: [CleanupTarget(555, 0, "exact")], restore.binding
+            )
+            _cp12_patch_binding(widget, "_get_effective_cleanup_protection_sources", forbidden_sources, restore.binding)
             _expect(widget._has_cleanup_sources(), "CP10 useful wrapper short-circuit preserved")
         finally:
             restore.restore()
@@ -57814,17 +57860,32 @@ class _CP10Checks(_CP10Widget):
                 frozen_floor = widget.execute_xunlai_first_keep_by_model
                 _cp10_equal(frozen_floor, {555: 5}, "CP10 configured floor frozen at execution startup")
 
+                from Sources.icefox.MerchantRules import planning as cp12_planning
+
+                cp12_phase_codes: dict[types.CodeType, str] = {}
+                cp12_composer: object = getattr(widget, "_plan_composer", None)
+                for owner, method, label in (
+                    (cp12_planning.BuyPlanner, "plan_buy_actions", "_plan_buy_actions"),
+                    (
+                        cp12_planning.BuyPlanner,
+                        "plan_consumable_crafter_bag_space_warning",
+                        "_plan_consumable_crafter_bag_space_warning",
+                    ),
+                    (cp12_planning.CleanupPlanner, "plan_cleanup_actions", "_plan_cleanup_actions"),
+                ):
+                    function: object = (
+                        getattr(owner, method) if cp12_composer is not None else getattr(type(widget), label)
+                    )
+                    if not isinstance(function, types.FunctionType):
+                        raise AssertionError("CP12 actual cross-owner phase function")
+                    cp12_phase_codes[function.__code__] = label
+
                 def trace(frame: types.FrameType, event: str, _argument: object) -> None:
-                    if event == "call" and frame.f_locals.get("self") is widget:
-                        name = frame.f_code.co_name
-                        if name in {
-                            "_plan_buy_actions",
-                            "_plan_consumable_crafter_bag_space_warning",
-                            "_plan_cleanup_actions",
-                        }:
-                            phase_trace.append(name)
-                            if name == "_plan_cleanup_actions":
-                                deposit_inputs.append(_cp9_value(frame.f_locals["items"]))
+                    if event == "call" and frame.f_code in cp12_phase_codes:
+                        name = cp12_phase_codes[frame.f_code]
+                        phase_trace.append(name)
+                        if name == "_plan_cleanup_actions":
+                            deposit_inputs.append(_cp9_value(frame.f_locals["items"]))
 
                 sys.setprofile(trace)
                 try:
@@ -58327,6 +58388,10 @@ _CP10_ENV_KEYS: tuple[str, ...] = _CP9_ENV_KEYS + (
     "MERCHANT_RULES_CP11_ORACLE_ROOT",
     "MERCHANT_RULES_CP11_OUTPUT_PARENT",
     "MERCHANT_RULES_CP11_CASES",
+    "MERCHANT_RULES_CP11_CANDIDATE_ROOT",
+    "MERCHANT_RULES_CP12_ORACLE_ROOT",
+    "MERCHANT_RULES_CP12_OUTPUT_PARENT",
+    "MERCHANT_RULES_CP12_CASES",
 )
 
 
@@ -60010,6 +60075,8 @@ def _test_cp11_ownership(module: types.ModuleType) -> None:
         raise AssertionError("CP11 widget constructor class")
     raw: object = cls()
     other: object = cls()
+    if hasattr(raw, "_plan_composer"):
+        _cp12_assert_raw_owners(raw, other, module)
     for field, owner in (
         ("_identify_planner", planning.IdentifyPlanner),
         ("_salvage_planner", planning.SalvagePlanner),
@@ -61531,7 +61598,8 @@ def _cp11_external(kind: str) -> dict[str, object]:
     _expect(kind in ('cold', 'differential'), 'CP11 known external run kind')
     parent = _cp10_guard(Path(os.environ['MERCHANT_RULES_CP11_OUTPUT_PARENT']))
     oracle = Path(os.environ['MERCHANT_RULES_CP11_ORACLE_ROOT'])
-    candidate = REPO_ROOT
+    historical_candidate = os.environ.get("MERCHANT_RULES_CP11_CANDIDATE_ROOT", "")
+    candidate = Path(historical_candidate) if historical_candidate else REPO_ROOT
     _expect(
         not parent.is_relative_to(oracle) and not parent.is_relative_to(candidate),
         'CP11 output parent outside source roots',
@@ -61558,6 +61626,17 @@ def _cp11_external(kind: str) -> dict[str, object]:
         )
         for name, root in roots.items():
             before[name] = _cp10_pins(root)
+        if historical_candidate:
+            completed_cp11 = {
+                "Widgets/Guild Wars/Items & Loot/MerchantRules.py": "6f754387028018ec44d21d2e95b4c231ecbd236ea16627aec0abff592039ca77",
+                "Sources/icefox/MerchantRules/planning.py": "cfdeaf8ec216fa5230c556a70e61942bd5878ea57384b0ef21cbabca3708151f",
+                "Sources/icefox/MerchantRules/profiles.py": "15916f9703ad3eda3149e1796cfeb8401dabb86768c14a5cb185579019f68f8d",
+                ".local-tests/merchant-rules/test_merchant_rules_regression.py": "aebf143c3a900badd30f5606420ad9736423ab6f213ab56194b0c9c081ad8e0a",
+            }
+            for relative, digest in completed_cp11.items():
+                _requirement_contract_expect(
+                    before["candidate"][relative], digest, "CP11 retained completed original candidate " + relative
+                )
         fixed = {
             'Widgets/Guild Wars/Items & Loot/MerchantRules.py': '6ab728421ffee1e3527dc57d404db5d620268880fb687deed868620bc67b7ee7',
             'Sources/icefox/MerchantRules/planning.py': 'd98c83ef7a3a79ee3d6a4620dcc69dc87209d13524d789e53e91f7f1eaddee37',
@@ -61672,6 +61751,3383 @@ _CP11_CASES.extend(
         ("cp11_completed_cp10_differential", lambda _module: _test_cp11_completed_cp10_differential()),
     )
 )
+
+
+if TYPE_CHECKING:
+    from typing import Never
+
+    from Sources.icefox.MerchantRules.planning import CrafterRecipeView
+    from Sources.icefox.MerchantRules.planning import PlanComposer
+    from Sources.icefox.MerchantRules.planning import SalvageCandidateView
+    from Sources.icefox.MerchantRules.planning import SalvageSlotResolutionView
+    from Sources.icefox.MerchantRules.planning import SalvageUpgradeMatchView
+    from Sources.icefox.MerchantRules.preview import PreviewSession
+    from Sources.icefox.MerchantRules.preview import PreviewSummary
+    from Sources.icefox.MerchantRules.preview import ReasonFormatter
+
+type _CP12Composer = PlanComposer[
+    CrafterRecipeView, SalvageCandidateView, SalvageUpgradeMatchView, SalvageSlotResolutionView
+]
+
+
+def _cp12_is_composer(value: object) -> TypeGuard[_CP12Composer]:
+    from Sources.icefox.MerchantRules.planning import PlanComposer
+
+    # Runtime checks exact origin; canonical widget construction supplies the generic bound witnesses.
+    return type(value) is PlanComposer
+
+
+def _cp12_bound(owner: object, name: str) -> types.MethodType | types.FunctionType:
+    value: object = getattr(owner, name)
+    if not isinstance(value, (types.MethodType, types.FunctionType)):
+        raise AssertionError("CP12 concrete bound method or explicit native provider " + name)
+    return value
+
+
+def _cp12_is_items(value: object) -> TypeGuard[list[InventoryItemInfo]]:
+    from Sources.icefox.MerchantRules.inventory_evidence import InventoryItemInfo
+
+    return (
+        _cp9_is_sequence(value)
+        and isinstance(value, list)
+        and all(isinstance(item, InventoryItemInfo) for item in value)
+    )
+
+
+def _cp12_is_result(value: object) -> TypeGuard[dict[str, object]]:
+    return _cp9_is_mapping(value) and isinstance(value, dict) and all(isinstance(key, str) for key in value)
+
+
+def _cp12_is_buy_rules(value: object) -> TypeGuard[list[BuyRule]]:
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+
+    return _cp9_is_sequence(value) and isinstance(value, list) and all(isinstance(rule, BuyRule) for rule in value)
+
+
+def _cp12_is_services(value: object) -> TypeGuard[set[str]]:
+    return _cp9_is_set(value) and isinstance(value, set) and all(isinstance(name, str) for name in value)
+
+
+def _cp12_is_iterator(value: object) -> TypeGuard[Iterator[object]]:
+    return isinstance(value, Iterator)
+
+
+def _cp12_is_generator(value: object) -> TypeGuard[Generator[object, None, object]]:
+    # These adapters admit only the known actual widget generator methods; yielded values are object.
+    return isinstance(value, types.GeneratorType)
+
+
+class _CP12WidgetAccess:
+    """Finite exact signatures for retained widget methods absent from the earlier typed views."""
+
+    @staticmethod
+    def build(widget: object, *, projected_preview: bool = False) -> PlanResult:
+        result: object = _cp12_bound(widget, "_build_plan")(projected_preview=projected_preview)
+        return _cp12_plan(result)
+
+    @staticmethod
+    def inventory(widget: object) -> list[InventoryItemInfo]:
+        result: object = _cp12_bound(widget, "_collect_inventory_items")()
+        if not _cp12_is_items(result):
+            raise AssertionError("CP12 canonical inventory list")
+        return result
+
+    @staticmethod
+    def compare(widget: object) -> bool:
+        result: object = _cp12_bound(widget, "_compare_current_inventory_against_preview")()
+        if not isinstance(result, bool):
+            raise AssertionError("CP12 compare boolean")
+        return result
+
+    @staticmethod
+    def scan(widget: object) -> bool | None:
+        result: object = _cp12_bound(widget, "_scan_preview")()
+        if result is not None and not isinstance(result, bool):
+            raise AssertionError("CP12 scan result")
+        return result
+
+    @staticmethod
+    def queue_now(widget: object) -> None:
+        _expect(_cp12_bound(widget, "_queue_execute_now")() is None, "CP12 queue now return")
+
+    @staticmethod
+    def queue_here(widget: object) -> None:
+        _expect(_cp12_bound(widget, "_queue_execute_here")() is None, "CP12 queue here return")
+
+    @staticmethod
+    def update_services(widget: object) -> None:
+        _expect(_cp12_bound(widget, "_update_service_resolution_lifecycle")() is None, "CP12 update return")
+
+    @staticmethod
+    def remote_summary(widget: object) -> dict[str, object]:
+        result: object = _cp12_bound(widget, "build_remote_preview_result")()
+        if not _cp12_is_result(result):
+            raise AssertionError("CP12 exact dictionary result")
+        return result
+
+    @staticmethod
+    def unavailable(
+        widget: object,
+        entry: ExecutionPlanEntry,
+        *,
+        availability_here: dict[str, bool] | None = None,
+        plan: PlanResult | None = None,
+    ) -> str:
+        result: object = _cp12_bound(widget, "_get_preview_unavailable_here_reason")(
+            entry, availability_here=availability_here, plan=plan
+        )
+        if not isinstance(result, str):
+            raise AssertionError("CP12 unavailable reason")
+        return result
+
+    @staticmethod
+    def dirty(widget: object, message: str = "") -> None:
+        _expect(_cp12_bound(widget, "_mark_preview_dirty")(message) is None, "CP12 dirty return")
+
+    @staticmethod
+    def diagnostics(widget: object) -> None:
+        _expect(_cp12_bound(widget, "_clear_runtime_diagnostics")() is None, "CP12 diagnostics return")
+
+    @staticmethod
+    def profile_reset(widget: object, *, log_profile_load_summary: bool = False) -> None:
+        _expect(
+            _cp12_bound(widget, "_reset_runtime_after_profile_load")(log_profile_load_summary=log_profile_load_summary)
+            is None,
+            "CP12 profile reset return",
+        )
+
+    @staticmethod
+    def remote_message(widget: object, message: types.SimpleNamespace) -> Iterator[object]:
+        result: object = _cp12_bound(widget, "handle_shared_multibox_message")(message)
+        if not _cp12_is_iterator(result):
+            raise AssertionError("CP12 actual remote owned iterator")
+        return result
+
+    @staticmethod
+    def execute(
+        widget: object, *, local_only: bool = False, post_gold_balance: bool = True
+    ) -> Generator[object, None, object]:
+        result: object = _cp12_bound(widget, "_execute_now")(local_only=local_only, post_gold_balance=post_gold_balance)
+        if not _cp12_is_generator(result):
+            raise AssertionError("CP12 actual execute generator")
+        return result
+
+    @staticmethod
+    def buy_rules_excluding_crafters(widget: object) -> list[BuyRule]:
+        result: object = _cp12_bound(widget, "_get_buy_rules_excluding_consumable_crafters")()
+        if not _cp12_is_buy_rules(result):
+            raise AssertionError("CP12 canonical buy rules")
+        return result
+
+    @staticmethod
+    def required_services(widget: object) -> set[str]:
+        result: object = _cp12_bound(widget, "_get_required_service_types")()
+        if not _cp12_is_services(result):
+            raise AssertionError("CP12 service type set")
+        return result
+
+    @staticmethod
+    def legacy_projected(widget: object, plan: PlanResult, target: str) -> None:
+        _expect(
+            _cp12_bound(widget, "_apply_projected_preview_post_processing")(plan, target) is None,
+            "CP12 old facade return",
+        )
+
+
+def _cp12_patch_binding(
+    widget: object, name: str, replacement: object, bind: Callable[[object, str, object], None]
+) -> None:
+    """Route bounded legacy fixtures to the actual moved seam, never into production callbacks."""
+    import inspect
+
+    from Sources.icefox.MerchantRules import planning
+
+    composer: object = getattr(widget, "_plan_composer", None)
+    if composer is None:
+        bind(widget, name, replacement)
+        return
+    phase_owners = {
+        "_plan_identify_actions": "_identify_planner",
+        "_plan_destroy_actions": "_destroy_planner",
+        "_collect_enabled_destroy_rules": "_destroy_planner",
+        "_plan_salvage_actions": "_salvage_planner",
+        "_plan_buy_actions": "_buy_planner",
+        "_plan_cleanup_actions": "_cleanup_planner",
+        "_get_effective_cleanup_targets": "_cleanup_planner",
+        "_get_effective_cleanup_protection_sources": "_cleanup_planner",
+        "_plan_consumable_crafter_bag_space_warning": "_buy_planner",
+    }
+    if name in phase_owners:
+        bind(getattr(widget, phase_owners[name]), name[1:], replacement)
+    elif name == "_get_items_after_planned_pre_buy_actions":
+        bind(composer, "_items_after_pre_buy", replacement)
+    elif name == "_build_simulated_model_counts":
+        bind(planning, "build_simulated_model_counts", replacement)
+    elif name == "_get_inventory_model_counts":
+        original = planning.get_inventory_model_counts
+        method: object = getattr(type(composer), "build_plan")
+        if not isinstance(method, types.FunctionType) or not isinstance(replacement, types.FunctionType):
+            raise AssertionError("CP12 legacy direct-count observer")
+
+        def count(items: list[InventoryItemInfo]) -> dict[int, int]:
+            frame = inspect.currentframe()
+            try:
+                if frame is None or frame.f_back is None:
+                    raise AssertionError("CP12 capture direct-count caller frame")
+                direct = frame.f_back.f_code is method.__code__
+            finally:
+                del frame
+            if direct:
+                result: object = replacement(items)
+                if not _cp9_is_mapping(result) or not isinstance(result, dict):
+                    raise AssertionError("CP12 count fixture mapping")
+                counts: dict[int, int] = {}
+                for key, value in result.items():
+                    if not isinstance(key, int) or not isinstance(value, int):
+                        raise AssertionError("CP12 canonical count fixture values")
+                    counts[key] = value
+                return counts
+            return original(items)
+
+        bind(planning, "get_inventory_model_counts", count)
+    elif name in {
+        "_build_plan",
+        "_has_enabled_rules",
+        "_collect_enabled_sell_rules",
+        "_has_enabled_rune_buy_rules",
+        "_has_enabled_consumable_crafter_buy_rules",
+        "_has_enabled_xunlai_first_merchant_stock_targets",
+        "_annotate_early_kit_preview",
+    }:
+        bind(composer, name[1:], replacement)
+    else:
+        bind(widget, name, replacement)
+
+
+def _cp12_projected_postprocess(widget: object, plan: PlanResult, target: str) -> None:
+    composer: object = getattr(widget, "_plan_composer", None)
+    if composer is None:
+        _CP12WidgetAccess.legacy_projected(widget, plan, target)
+    else:
+        _cp12_composer(widget).apply_projected_preview_post_processing(plan, target)
+
+
+# CP12 local proof: canonical owners, publication order, and actual consumers.
+_CP12_PREVIEW_FIELDS = (
+    "preview_plan",
+    "preview_ready",
+    "preview_requires_execute_travel",
+    "preview_execute_travel_target_outpost_id",
+    "preview_execute_travel_target_outpost_name",
+    "preview_inventory_diff_summary",
+    "preview_inventory_diff_rows",
+    "last_preview_compare_duration_ms",
+    "execute_drift_requires_confirmation",
+)
+
+
+def _cp12_plan(value: object) -> PlanResult:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    if not isinstance(value, PlanResult):
+        raise AssertionError("CP12 canonical plan")
+    return value
+
+
+def _cp12_preview(widget: object) -> PreviewSession:
+    from Sources.icefox.MerchantRules.preview import PreviewSession
+
+    owner: object = getattr(widget, "_preview_session")
+    if not isinstance(owner, PreviewSession) or type(owner) is not PreviewSession:
+        raise AssertionError("CP12 actual PreviewSession")
+    return owner
+
+
+def _cp12_composer(widget: object) -> _CP12Composer:
+    owner: object = getattr(widget, "_plan_composer")
+    if not _cp12_is_composer(owner):
+        raise AssertionError("CP12 actual PlanComposer")
+    return owner
+
+
+def _cp12_snapshot(widget: object) -> dict[str, object]:
+    return {
+        name: _cp11_plain(getattr(widget, name)) for name in (*_CP12_PREVIEW_FIELDS, "status_message", "last_error")
+    }
+
+
+def _cp12_fixture(module: types.ModuleType) -> object:
+    from Sources.icefox.MerchantRules.configuration import IdentifySettings
+    from Sources.icefox.MerchantRules.configuration import SalvageSettings
+
+    widget: object = _cp9_widget(module)
+
+    def collect() -> list[InventoryItemInfo]:
+        return []
+
+    def context(*, passive: bool = False) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
+        return True, "Fixture", {}
+
+    bindings: dict[str, object] = {
+        "buy_rules": [],
+        "sell_rules": [],
+        "destroy_rules": [],
+        "cleanup_targets": [],
+        "cleanup_protection_sources": [],
+        "identify_settings": IdentifySettings(),
+        "salvage_settings": SalvageSettings(rules=[]),
+        "auto_travel_enabled": False,
+        "_collect_inventory_items": collect,
+        "_get_supported_context": context,
+    }
+    for name, value in bindings.items():
+        setattr(widget, name, value)
+    return widget
+
+
+def _cp12_assert_raw_owners(raw: object, other: object, module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules import preview
+
+    for field, cls, defining in (
+        ("_plan_composer", planning.PlanComposer, planning),
+        ("_preview_session", preview.PreviewSession, preview),
+    ):
+        owner: object = getattr(raw, field)
+        _expect(type(owner) is cls and owner is not getattr(other, field), "CP12 raw independent owner " + field)
+        for member in vars(cls).values():
+            functions = (member.fget, member.fset) if isinstance(member, property) else (member,)
+            for function in functions:
+                if isinstance(function, types.FunctionType):
+                    _expect(function.__globals__ is vars(defining), "CP12 canonical globals")
+                    _expect(
+                        Path(function.__code__.co_filename).resolve() == Path(str(defining.__file__)).resolve(),
+                        "CP12 canonical source origin",
+                    )
+    session = _cp12_preview(raw)
+    for name in _CP12_PREVIEW_FIELDS:
+        descriptor: object = vars(type(raw))[name]
+        _expect(isinstance(descriptor, property), "CP12 transparent property " + name)
+        _expect(name not in vars(raw), "CP12 state stored exactly once " + name)
+        _expect(getattr(raw, name) is getattr(session, name), "CP12 property reference " + name)
+    raw_plan = _cp12_plan(getattr(raw, "preview_plan"))
+    other_plan = _cp12_plan(getattr(other, "preview_plan"))
+    _expect(raw_plan is not other_plan and raw_plan.entries is not other_plan.entries, "CP12 independent plan defaults")
+    rows: object = getattr(raw, "preview_inventory_diff_rows")
+    _expect(isinstance(rows, list), "CP12 row list")
+    if not _cp9_is_sequence(rows) or not isinstance(rows, list):
+        raise AssertionError("CP12 mutable row list")
+    _expect(rows is not getattr(other, "preview_inventory_diff_rows"), "CP12 independent row defaults")
+    rows.append("local alias")
+    _cp11_equal(getattr(session, "preview_inventory_diff_rows"), ["local alias"], "CP12 alias mutation reaches owner")
+    rows.clear()
+    _expect(getattr(raw, "last_plan_build_duration_ms") == 0.0, "CP12 raw composer duration")
+    _expect(getattr(raw, "merchant_rules_lifecycle_generation") == 0, "CP12 raw has no primed lifecycle authority")
+    _expect(getattr(raw, "_character_profile_ready") is False, "CP12 raw has no primed character authority")
+    _expect(getattr(module, "PlanResult") is planning.PlanResult, "CP12 canonical widget plan alias")
+
+
+def _test_cp12_raw_construction(module: types.ModuleType) -> None:
+    _test_cp11_ownership(module)
+
+
+def _test_cp12_composer_constructor(module: types.ModuleType) -> None:
+    fixture = _CP12CompositionFixture(module)
+    first = fixture.make()
+    other_fixture = _CP12CompositionFixture(module)
+    second = other_fixture.make()
+    _expect(
+        fixture.items is not other_fixture.items and fixture.reserved_ids is not other_fixture.reserved_ids,
+        "CP12 independent direct fixture inputs",
+    )
+    _cp11_equal(
+        fixture.trace + other_fixture.trace,
+        [],
+        "CP12 explicit provider fixture observes nothing during either construction",
+    )
+    _expect(first is not second, "CP12 independent explicitly constructed canonical composers")
+    _expect(
+        first.last_plan_build_duration_ms == second.last_plan_build_duration_ms == 0.0,
+        "CP12 independent initial duration",
+    )
+    plan = first.build_plan(supported_context_override=(True, "Direct", {}))
+    _expect(
+        plan.supported_reason == "Direct" and not plan.inventory_snapshot_captured, "CP12 direct owner no-rule behavior"
+    )
+    _expect(
+        first.last_plan_build_duration_ms == 1.0 and second.last_plan_build_duration_ms == 0.0,
+        "CP12 independent second duration after first build",
+    )
+    _cp11_equal(
+        fixture.trace,
+        [
+            "clock",
+            "map",
+            "diagnostic:Plan build skipped inventory snapshot because no buy, sell, salvage, destroy, or cleanup rules are enabled and no request-scoped Merchant Stock targets apply.",
+            "summary:Plan built:False",
+            "clock",
+        ],
+        "CP12 direct no-demand literal trace",
+    )
+
+
+def _cp12_composer_acquisition(module: types.ModuleType, mode: str) -> dict[str, object]:
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+
+    widget = _cp12_fixture(module)
+    owner = _cp12_composer(widget)
+    trace: list[str] = []
+    clocks = iter((1.0, 1.125))
+    restore = _CP8Restoration()
+    previous = sys.getprofile()
+    phase_codes: dict[types.CodeType, str] = {}
+    for name, label in (
+        ("should_use_consumable_crafter_multi_stop_route", "route"),
+        ("get_preview_projection_target", "projection-target"),
+        ("has_enabled_rules", "demand"),
+    ):
+        function: object = getattr(type(owner), name)
+        if not isinstance(function, types.FunctionType):
+            raise AssertionError("CP12 actual acquisition decision")
+        phase_codes[function.__code__] = label
+
+    def profile(frame: types.FrameType, event: str, _value: object) -> None:
+        if event == "call" and frame.f_locals.get("self") is owner and frame.f_code in phase_codes:
+            trace.append(phase_codes[frame.f_code])
+
+    def clock() -> float:
+        trace.append("clock")
+        return next(clocks)
+
+    def map_id() -> int:
+        trace.append("map")
+        return 700
+
+    def context(*, passive: bool = False) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
+        trace.append("context:" + str(passive))
+        return True, "Fixture", {}
+
+    def inventory() -> list[InventoryItemInfo]:
+        trace.append("inventory")
+        return []
+
+    def summary(_prefix: str, _plan: PlanResult) -> None:
+        trace.append("summary")
+
+    try:
+        restore.binding(module, "time", types.SimpleNamespace(perf_counter=clock))
+        restore.binding(getattr(module, "Map"), "GetMapID", map_id)
+        restore.binding(widget, "_get_supported_context", context)
+        restore.binding(widget, "_collect_inventory_items", inventory)
+        restore.binding(widget, "_log_plan_summary", summary)
+        if mode != "no-rules":
+            setattr(widget, "buy_rules", [BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 1)])])
+        sys.setprofile(profile)
+        if mode == "empty":
+            plan = owner.build_plan(
+                buy_action_rule_kinds=set(),
+                sell_action_rule_kinds=set(),
+                supported_context_override=(False, "Explicit empty", {}),
+                allow_consumable_multi_stop=False,
+                cleanup_only=False,
+                projected_preview=False,
+                bypass_xunlai_first=False,
+            )
+        else:
+            plan = owner.build_plan(projected_preview=mode == "no-rules")
+        sys.setprofile(previous)
+        _expect(
+            "inventory" not in trace if mode == "no-rules" else "inventory" in trace,
+            "CP12 demand inventory short circuit",
+        )
+        _expect(trace[0:2] == ["clock", "map"], "CP12 clock and map before route/context/demand")
+        if mode == "no-rules":
+            _cp11_equal(
+                trace,
+                ["clock", "map", "route", "projection-target", "context:False", "demand", "summary", "clock"],
+                "CP12 complete no-rule acquisition trace",
+            )
+        elif mode == "empty":
+            _expect(not any(row.startswith("context:") for row in trace), "CP12 explicit context skips acquisition")
+            _expect(
+                plan.supported_reason == "Explicit empty" and plan.coords == {}, "CP12 false/empty context supplied"
+            )
+            _expect(not plan.has_actions, "CP12 explicit empty filters")
+        else:
+            _expect("context:False" in trace, "CP12 ordinary supported-context acquisition")
+        _expect(trace[-2:] == ["summary", "clock"], "CP12 log precedes duration")
+        _expect(getattr(widget, "last_plan_build_duration_ms") == 125.0, "CP12 elapsed duration literal")
+        return {"plan": _cp11_plain(plan), "trace": trace, "duration": getattr(widget, "last_plan_build_duration_ms")}
+    finally:
+        sys.setprofile(previous)
+        restore.restore()
+
+
+def _test_cp12_composer_acquisition(module: types.ModuleType, mode: str) -> None:
+    _cp12_composer_acquisition(module, mode)
+
+
+def _test_cp12_late_composer_inputs(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+    from Sources.icefox.MerchantRules.planning import BuyPlanner
+
+    widget = _cp12_fixture(module)
+    owner = _cp12_composer(widget)
+    original_plan = owner.build_plan(supported_context_override=(True, "F", {"merchant": (1.0, 2.0)}))
+    _expect(not original_plan.has_actions, "CP12 initial no-rule decision")
+    items = [_cp8_item(module, item_id=7, model_id=555, quantity=2)]
+    setattr(widget, "_collect_inventory_items", lambda: items)
+    setattr(widget, "buy_rules", [BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 5)])])
+    setattr(
+        widget, "catalog_merchant_essentials", [{"model_id": 555, "name": "Identification Kit", "item_type": "kit"}]
+    )
+    first = owner.build_plan(supported_context_override=(True, "F", {"merchant": (1.0, 2.0)}))
+    _cp11_equal(
+        [(b.model_id, b.quantity) for b in first.merchant_stock_buys],
+        [(555, 3)],
+        "CP12 replaced rules/provider real buy",
+    )
+    donor = _CP10BuyFixture(module)
+    donor.rules = [BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 9)])]
+    _expect(type(donor.owner) is BuyPlanner, "CP12 real replacement BuyPlanner")
+    setattr(widget, "_buy_planner", donor.owner)
+    second = owner.build_plan(supported_context_override=(True, "F", {"merchant": (1.0, 2.0)}))
+    _cp11_equal(
+        [(b.model_id, b.quantity) for b in second.merchant_stock_buys],
+        [(555, 7)],
+        "CP12 late planner replacement real decision",
+    )
+    _cp11_equal(
+        [(item.item_id, item.quantity) for item in items], [(7, 2)], "CP12 inputs unchanged by both real builds"
+    )
+
+
+class _CP12DriftProbe:
+    """Independent relevant-state snapshots plus a trace of the actual clear method."""
+
+    def __init__(self, subject: object) -> None:
+        self.subject = subject
+        self.plan = _cp12_plan(getattr(subject, "preview_plan"))
+        self.plan_counts: object = vars(self.plan)["inventory_model_counts"]
+        self.plan_entries: object = vars(self.plan)["entries"]
+        self.stale_rows = ["stale row A", "stale row B"]
+        setattr(subject, "preview_inventory_diff_summary", "stale drift summary")
+        setattr(subject, "preview_inventory_diff_rows", self.stale_rows)
+        setattr(subject, "last_preview_compare_duration_ms", 987.5)
+        setattr(subject, "execute_drift_requires_confirmation", True)
+        setattr(subject, "preview_requires_execute_travel", True)
+        setattr(subject, "preview_execute_travel_target_outpost_id", 73)
+        setattr(subject, "preview_execute_travel_target_outpost_name", "Untouched projection")
+        self.before = self.snapshot()
+        self.clear_snapshots: list[dict[str, object]] = []
+        self.cleared_rows: list[object] = []
+        self.clear_owner: object = getattr(subject, "_preview_session", subject)
+        clear_name = (
+            "clear_preview_inventory_diff"
+            if hasattr(self.clear_owner, "clear_preview_inventory_diff")
+            else "_clear_preview_inventory_diff"
+        )
+        clear: object = getattr(type(self.clear_owner), clear_name)
+        if not isinstance(clear, types.FunctionType):
+            raise AssertionError("CP12 actual clear method definition")
+        self.clear_code = clear.__code__
+        self.previous_profile = sys.getprofile()
+
+    def snapshot(self) -> dict[str, object]:
+        plan = _cp12_plan(getattr(self.subject, "preview_plan"))
+        # vars reads the dataclass's actual stored fields without triggering the
+        # deliberately failing snapshot-property accessor in the failure case.
+        result = {
+            name: _cp11_plain(getattr(self.subject, name)) for name in _CP12_PREVIEW_FIELDS if name != "preview_plan"
+        }
+        result["preview_plan"] = _cp11_plain(vars(plan))
+        for name in ("status_message", "last_error", "last_plan_build_duration_ms"):
+            if hasattr(self.subject, name):
+                result[name] = _cp11_plain(getattr(self.subject, name))
+        return result
+
+    def profile(self, frame: types.FrameType, event: str, _result: object) -> None:
+        if event == "return" and frame.f_code is self.clear_code and frame.f_locals.get("self") is self.clear_owner:
+            self.cleared_rows.append(getattr(self.subject, "preview_inventory_diff_rows"))
+            self.clear_snapshots.append(self.snapshot())
+
+    def start(self) -> None:
+        sys.setprofile(self.profile)
+
+    def stop(self) -> None:
+        sys.setprofile(self.previous_profile)
+        _expect(sys.getprofile() is self.previous_profile, "CP12 exact drift profiler restoration")
+
+    def assert_after(
+        self,
+        actual: dict[str, object],
+        *,
+        summary: str,
+        rows: list[str],
+        duration: float,
+        confirmation: bool,
+        replaced_after_clear: bool,
+    ) -> None:
+        expected_clear = dict(self.before)
+        expected_clear.update(
+            {
+                "preview_inventory_diff_summary": "",
+                "preview_inventory_diff_rows": [],
+                "last_preview_compare_duration_ms": 0.0,
+                "execute_drift_requires_confirmation": False,
+            }
+        )
+        _cp11_equal(self.clear_snapshots, [expected_clear], "CP12 exactly one real initial clearing prefix")
+        _expect(len(self.cleared_rows) == 1, "CP12 one clear-list allocation")
+        cleared = self.cleared_rows[0]
+        current: object = getattr(self.subject, "preview_inventory_diff_rows")
+        _expect(cleared is not self.stale_rows, "CP12 initial clear replaces stale row list")
+        _expect(current is not self.stale_rows, "CP12 comparison never republishes stale rows")
+        _expect((current is not cleared) is replaced_after_clear, "CP12 exact later row replacement distinction")
+        _cp11_equal(self.stale_rows, ["stale row A", "stale row B"], "CP12 old row aliases retain their contents")
+        expected = dict(self.before)
+        expected.update(
+            {
+                "preview_inventory_diff_summary": summary,
+                "preview_inventory_diff_rows": rows,
+                "last_preview_compare_duration_ms": duration,
+                "execute_drift_requires_confirmation": confirmation,
+            }
+        )
+        _cp11_equal(actual, expected, "CP12 complete immediate drift state and unrelated-state preservation")
+        _expect(getattr(self.subject, "preview_plan") is self.plan, "CP12 published plan reference retained")
+        _expect(
+            vars(self.plan)["inventory_model_counts"] is self.plan_counts, "CP12 original snapshot mapping retained"
+        )
+        _expect(vars(self.plan)["entries"] is self.plan_entries, "CP12 original entry container retained")
+        _expect(
+            self.before["preview_inventory_diff_rows"] is not self.stale_rows, "CP12 pre-call row snapshot independent"
+        )
+        _expect(
+            actual["preview_inventory_diff_rows"] is not current, "CP12 immediate post-call row snapshot independent"
+        )
+        _expect(self.before["preview_plan"] is not vars(self.plan), "CP12 pre-call plan snapshot independent")
+        _expect(actual["preview_plan"] is not vars(self.plan), "CP12 post-call plan snapshot independent")
+        before_copy = _cp11_plain(self.before)
+        after_copy = _cp11_plain(actual)
+        self.stale_rows.append("later stale-list mutation")
+        _cp11_equal(self.before, before_copy, "CP12 pre-call snapshot survives later stale alias mutation")
+        _cp11_equal(actual, after_copy, "CP12 immediate snapshot survives later stale alias mutation")
+        self.stale_rows.pop()
+
+
+class _CP12PreviewFixture:
+    def __init__(self, module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules import planning
+        from Sources.icefox.MerchantRules.preview import PreviewSession
+
+        self.module = module
+        self.trace: list[str] = []
+        self.provider_reads: list[str] = []
+        self.construction_reads: list[str] = []
+        self.constructing = False
+        self.items: list[InventoryItemInfo] = []
+        self.clock_values = iter((10.0, 10.25))
+        self.fail: BaseException | None = None
+        self.busy = False
+        self.labels: dict[int, str] = {}
+        self.merchant_labels: dict[str, str] = {"merchant": "Merchant", "storage": "Xunlai"}
+        self.action_labels: dict[str, str] = {"buy": "Buy", "sell": "Sell", "deposit": "Deposit"}
+        self.status_labels: dict[str, str] = {}
+        fixture = self
+
+        class SuppliedPlan(planning.PlanResult):
+            def __getattribute__(self, name: str) -> object:
+                # initial_plan is the sole directly supplied data object. Its
+                # fields must not be inspected while the session is constructed.
+                if fixture.constructing:
+                    fixture.observe("initial_plan." + name)
+                return super().__getattribute__(name)
+
+        self.plan = SuppliedPlan()
+        self.constructing = True
+        try:
+            self.owner = PreviewSession(
+                initial_plan=self.plan,
+                collect_inventory=self.inventory,
+                get_model_counts=self.model_counts,
+                clock=self.clock,
+                get_model_label=self.model_label,
+                read_diff_row_limit=self.diff_row_limit,
+                read_merchant_labels=self.merchant_label_mapping,
+                read_action_labels=self.action_label_mapping,
+                read_status_labels=self.status_label_mapping,
+                read_status_order=self.status_order,
+                read_busy=self.is_busy,
+                read_detailed_preview=self.detailed_preview,
+                read_hide_already_done=self.hide_already_done,
+                read_status_message=self.status_message,
+                embark_name=self.embark_name,
+                get_skipped_classifier=self.skipped_classifier,
+                get_reason_formatter=self.reason_formatter,
+            )
+        finally:
+            self.constructing = False
+        _cp11_equal(self.construction_reads, [], "CP12 all supplied constructor observations are trapped")
+        _cp11_equal(self.provider_reads, [], "CP12 construction did not consume a provider")
+        _cp11_equal(self.trace, [], "CP12 construction did not consume live evidence")
+
+    def observe(self, name: str) -> None:
+        if self.constructing:
+            self.construction_reads.append(name)
+            raise AssertionError("CP12 constructor observed " + name)
+        self.provider_reads.append(name)
+
+    def inventory(self) -> list[InventoryItemInfo]:
+        self.observe("collect_inventory")
+        self.trace.append("inventory")
+        return self.items
+
+    def model_counts(self) -> Callable[[list[InventoryItemInfo]], dict[int, int]]:
+        from Sources.icefox.MerchantRules import planning
+
+        self.observe("get_model_counts")
+        return planning.get_inventory_model_counts
+
+    def clock(self) -> float:
+        self.observe("clock")
+        self.trace.append("clock")
+        return next(self.clock_values)
+
+    def model_label(self) -> Callable[[int], str]:
+        self.observe("get_model_label")
+        return self.label
+
+    def label(self, model_id: int) -> str:
+        self.observe("model_label")
+        self.trace.append("label:" + str(model_id))
+        _expect(self.owner.last_preview_compare_duration_ms == 250.0, "CP12 duration before labels")
+        if self.fail is not None:
+            raise self.fail
+        return self.labels.get(model_id, "Model " + str(model_id))
+
+    def diff_row_limit(self) -> int:
+        self.observe("read_diff_row_limit")
+        return 8
+
+    def merchant_label_mapping(self) -> Mapping[str, str]:
+        self.observe("read_merchant_labels")
+        return self.merchant_labels
+
+    def action_label_mapping(self) -> Mapping[str, str]:
+        self.observe("read_action_labels")
+        return self.action_labels
+
+    def status_label_mapping(self) -> Mapping[str, str]:
+        self.observe("read_status_labels")
+        return self.status_labels
+
+    def status_order(self) -> tuple[str, ...]:
+        self.observe("read_status_order")
+        return ()
+
+    def is_busy(self) -> bool:
+        self.observe("read_busy")
+        return self.busy
+
+    def detailed_preview(self) -> bool:
+        self.observe("read_detailed_preview")
+        return False
+
+    def hide_already_done(self) -> bool:
+        self.observe("read_hide_already_done")
+        return False
+
+    def status_message(self) -> str:
+        self.observe("read_status_message")
+        return ""
+
+    def embark_name(self) -> str:
+        self.observe("embark_name")
+        return "Embark Beach"
+
+    def skipped_classifier(self) -> Callable[[ExecutionPlanEntry], str]:
+        self.observe("get_skipped_classifier")
+        return self.classify_skipped
+
+    def classify_skipped(self, entry: ExecutionPlanEntry) -> str:
+        from Sources.icefox.MerchantRules.preview_status import classify_skipped_preview_entry
+
+        self.observe("skipped_classifier")
+        return classify_skipped_preview_entry(entry)
+
+    def reason_formatter(self) -> ReasonFormatter:
+        self.observe("get_reason_formatter")
+        return self.format_reason
+
+    def format_reason(
+        self,
+        reason: str,
+        *,
+        action_type: str,
+        is_skipped: bool,
+        will_execute: bool,
+        is_consumable_crafter: bool,
+    ) -> str:
+        from Sources.icefox.MerchantRules.preview_text import normalize_preview_entry_reason_display_text
+
+        self.observe("reason_formatter")
+        return normalize_preview_entry_reason_display_text(
+            reason,
+            action_type=action_type,
+            is_skipped=is_skipped,
+            will_execute=will_execute,
+            is_consumable_crafter=is_consumable_crafter,
+        )
+
+
+def _cp12_drift_observation(module: types.ModuleType, mode: str) -> dict[str, object]:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    widget = _cp12_fixture(module)
+    trace: list[str] = []
+    clock_values = iter((10.0, 10.25))
+    restore = _CP8Restoration()
+    items = [_cp8_item(module, item_id=i, model_id=i, quantity=i) for i in range(1, 11)]
+    counts = {i: i if mode == "match" else 0 for i in range(1, 11)}
+    plan = PlanResult(inventory_snapshot_captured=True, inventory_model_counts=counts)
+    setattr(widget, "preview_plan", plan)
+    setattr(widget, "preview_ready", mode != "not-ready")
+    if mode == "no-snapshot":
+        plan.inventory_snapshot_captured = False
+    setattr(widget, "status_message", "Untouched drift status")
+    setattr(widget, "last_error", "Untouched drift error")
+    inputs_before = _cp8_values(items)
+    probe = _CP12DriftProbe(widget)
+
+    def clock() -> float:
+        trace.append("clock")
+        _expect(len(probe.clear_snapshots) == 1, "CP12 real initial clear precedes the first clock")
+        return next(clock_values)
+
+    def collect() -> list[InventoryItemInfo]:
+        trace.append("inventory")
+        return items
+
+    def label(model_id: int) -> str:
+        trace.append("label:" + str(model_id))
+        _expect(getattr(widget, "last_preview_compare_duration_ms") == 250.0, "CP12 duration published before label")
+        return "Model " + str(model_id)
+
+    try:
+        restore.binding(module, "time", types.SimpleNamespace(perf_counter=clock))
+        restore.binding(widget, "_collect_inventory_items", collect)
+        restore.binding(widget, "_format_model_label", label)
+        probe.start()
+        returned = _CP12WidgetAccess.compare(widget)
+        actual = probe.snapshot()
+        observed_trace = list(trace)
+        probe.stop()
+        if mode == "not-ready":
+            expected_summary = "Run Preview before comparing inventory drift."
+            expected_rows: list[str] = []
+            expected_duration = 0.0
+            expected_confirmation = False
+            expected_trace: list[str] = []
+            _expect(returned is False, "CP12 not-ready return literal")
+        elif mode == "no-snapshot":
+            expected_summary = "This preview did not capture an inventory snapshot to compare."
+            expected_rows = []
+            expected_duration = 0.0
+            expected_confirmation = False
+            expected_trace = []
+            _expect(returned is False, "CP12 uncaptured return literal")
+        elif mode == "match":
+            expected_summary = "Current inventory still matches the last preview snapshot across 10 stack(s)."
+            expected_rows = []
+            expected_duration = 250.0
+            expected_confirmation = False
+            expected_trace = ["clock", "inventory", "clock"]
+            _expect(returned is True, "CP12 matching return literal")
+        elif mode == "changed":
+            expected_summary = "Inventory changed since preview: 10 model(s) differ from the last snapshot."
+            expected_rows = [
+                "+10 Model 10 (now 10, preview 0)",
+                "+9 Model 9 (now 9, preview 0)",
+                "+8 Model 8 (now 8, preview 0)",
+                "+7 Model 7 (now 7, preview 0)",
+                "+6 Model 6 (now 6, preview 0)",
+                "+5 Model 5 (now 5, preview 0)",
+                "+4 Model 4 (now 4, preview 0)",
+                "+3 Model 3 (now 3, preview 0)",
+                "...and 2 more changed model(s).",
+            ]
+            expected_duration = 250.0
+            expected_confirmation = True
+            expected_trace = ["clock", "inventory", "clock", *["label:" + str(i) for i in range(1, 11)]]
+            _expect(returned is True, "CP12 changed return literal")
+        else:
+            raise AssertionError("CP12 unknown ordinary drift route")
+        probe.assert_after(
+            actual,
+            summary=expected_summary,
+            rows=expected_rows,
+            duration=expected_duration,
+            confirmation=expected_confirmation,
+            replaced_after_clear=mode == "changed",
+        )
+        _cp11_equal(observed_trace, expected_trace, "CP12 complete ordered drift observations and skipped suffix")
+        _cp8_unchanged(inputs_before, items)
+        _expect(plan.inventory_model_counts is counts, "CP12 supplied model-count dictionary remains original")
+        return {
+            "returned": returned,
+            "before": probe.before,
+            "clear_prefix": probe.clear_snapshots,
+            "after": actual,
+            "summary": actual["preview_inventory_diff_summary"],
+            "rows": actual["preview_inventory_diff_rows"],
+            "confirmation": actual["execute_drift_requires_confirmation"],
+            "trace": observed_trace,
+            "duration": actual["last_preview_compare_duration_ms"],
+        }
+    finally:
+        probe.stop()
+        restore.restore()
+
+
+def _test_cp12_drift(module: types.ModuleType, mode: str) -> None:
+    _cp12_drift_observation(module, mode)
+
+
+def _test_cp12_preview_direct(module: types.ModuleType) -> None:
+    fixture = _CP12PreviewFixture(module)
+    other = _CP12PreviewFixture(module)
+    session = fixture.owner
+    _expect(session.preview_plan is fixture.plan, "CP12 initial plan identity")
+    _expect(
+        session.preview_inventory_diff_rows is not other.owner.preview_inventory_diff_rows,
+        "CP12 independent direct rows",
+    )
+    _cp11_equal(fixture.construction_reads, [], "CP12 first fixture traps all constructor inputs")
+    _cp11_equal(other.construction_reads, [], "CP12 second fixture traps all constructor inputs")
+    session.preview_ready = True
+    session.preview_plan.inventory_snapshot_captured = True
+    session.preview_plan.inventory_model_counts = {3: 1}
+    fixture.items = [_cp8_item(module, item_id=1, model_id=3, quantity=4)]
+    inputs_before = _cp8_values(fixture.items)
+    first = _CP12DriftProbe(session)
+    try:
+        first.start()
+        returned = session.compare_current_inventory_against_preview()
+        actual = first.snapshot()
+        trace = list(fixture.trace)
+        first.stop()
+        _expect(returned is True, "CP12 direct owner compare")
+        first.assert_after(
+            actual,
+            summary="Inventory changed since preview: 1 model(s) differ from the last snapshot.",
+            rows=["+3 Model 3 (now 4, preview 1)"],
+            duration=250.0,
+            confirmation=True,
+            replaced_after_clear=True,
+        )
+        _cp11_equal(trace, ["clock", "inventory", "clock", "label:3"], "CP12 direct canonical count trace")
+        _cp8_unchanged(inputs_before, fixture.items)
+    finally:
+        first.stop()
+
+    published_rows = session.preview_inventory_diff_rows
+    session.clear_preview_inventory_diff()
+    _cp11_equal(
+        (
+            session.preview_inventory_diff_summary,
+            session.preview_inventory_diff_rows,
+            session.last_preview_compare_duration_ms,
+            session.execute_drift_requires_confirmation,
+        ),
+        ("", list[str](), 0.0, False),
+        "CP12 explicit clear remains independently exercised",
+    )
+    _expect(session.preview_inventory_diff_rows is not published_rows, "CP12 explicit clear replaces rows")
+    _cp11_equal(published_rows, ["+3 Model 3 (now 4, preview 1)"], "CP12 explicit clear preserves the old row alias")
+    _expect(session.preview_plan is fixture.plan, "CP12 explicit clear retains original plan")
+
+    # Retain negative/equal-magnitude and zero-clamping proof independently of
+    # the same-sign mixed-case ordering subcase below.
+    fixture.clock_values = iter((10.0, 10.25))
+    fixture.trace.clear()
+    fixture.provider_reads.clear()
+    session.preview_plan.inventory_model_counts = {1: 4, 2: 2, 3: -4}
+    fixture.items = [
+        _cp8_item(module, item_id=11, model_id=1, quantity=1),
+        _cp8_item(module, item_id=12, model_id=2, quantity=5),
+        _cp8_item(module, item_id=13, model_id=3, quantity=0),
+    ]
+    inputs_before = _cp8_values(fixture.items)
+    negative = _CP12DriftProbe(session)
+    try:
+        negative.start()
+        returned = session.compare_current_inventory_against_preview()
+        actual = negative.snapshot()
+        trace = list(fixture.trace)
+        negative.stop()
+        _expect(returned is True, "CP12 direct decrease comparison")
+        negative.assert_after(
+            actual,
+            summary="Inventory changed since preview: 2 model(s) differ from the last snapshot.",
+            rows=["+3 Model 2 (now 5, preview 2)", "-3 Model 1 (now 1, preview 4)"],
+            duration=250.0,
+            confirmation=True,
+            replaced_after_clear=True,
+        )
+        _cp11_equal(
+            trace,
+            ["clock", "inventory", "clock", "label:1", "label:2"],
+            "CP12 zero/negative normalized model 3 skips label acquisition",
+        )
+        _cp8_unchanged(inputs_before, fixture.items)
+    finally:
+        negative.stop()
+
+    # Both rows have +2 delta, current 3 and preview 1. Raw lexical ordering
+    # would put uppercase Zebra first; the actual lowercased key puts apple first.
+    fixture.clock_values = iter((10.0, 10.25))
+    fixture.trace.clear()
+    fixture.provider_reads.clear()
+    fixture.labels = {1: "Zebra", 2: "apple"}
+    session.preview_plan.inventory_model_counts = {1: 1, 2: 1}
+    fixture.items = [
+        _cp8_item(module, item_id=21, model_id=1, quantity=3),
+        _cp8_item(module, item_id=22, model_id=2, quantity=3),
+    ]
+    inputs_before = _cp8_values(fixture.items)
+    mixed_case = _CP12DriftProbe(session)
+    try:
+        mixed_case.start()
+        returned = session.compare_current_inventory_against_preview()
+        actual = mixed_case.snapshot()
+        trace = list(fixture.trace)
+        reads = list(fixture.provider_reads)
+        mixed_case.stop()
+        _expect(returned is True, "CP12 same-sign mixed-case comparison")
+        mixed_case.assert_after(
+            actual,
+            summary="Inventory changed since preview: 2 model(s) differ from the last snapshot.",
+            rows=["+2 apple (now 3, preview 1)", "+2 Zebra (now 3, preview 1)"],
+            duration=250.0,
+            confirmation=True,
+            replaced_after_clear=True,
+        )
+        _cp11_equal(
+            trace,
+            ["clock", "inventory", "clock", "label:1", "label:2"],
+            "CP12 label acquisition remains model-ordered before case-insensitive sorting",
+        )
+        _cp11_equal(
+            reads,
+            [
+                "clock",
+                "collect_inventory",
+                "get_model_counts",
+                "clock",
+                "get_model_label",
+                "model_label",
+                "get_model_label",
+                "model_label",
+                "read_diff_row_limit",
+                "read_diff_row_limit",
+            ],
+            "CP12 late count/label/limit observations retain exact order and multiplicity",
+        )
+        _cp8_unchanged(inputs_before, fixture.items)
+    finally:
+        mixed_case.stop()
+
+
+def _test_cp12_drift_failure(module: types.ModuleType, where: str) -> None:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    fixture = _CP12PreviewFixture(module)
+    failure = RuntimeError("CP12 drift " + where)
+    session = fixture.owner
+    session.preview_ready = True
+    session.preview_plan.inventory_snapshot_captured = True
+    session.preview_plan.inventory_model_counts = {1: 1}
+    fixture.items = [_cp8_item(module, item_id=1, model_id=1, quantity=3)]
+    inputs_before = _cp8_values(fixture.items)
+    restore = _CP8Restoration()
+
+    class BadInt(int):
+        def __int__(self) -> int:
+            raise failure
+
+    class BadSnapshot(PlanResult):
+        def __getattribute__(self, name: str) -> object:
+            if name == "inventory_model_counts":
+                raise failure
+            return super().__getattribute__(name)
+
+    if where == "snapshot":
+        session.preview_plan = BadSnapshot(inventory_snapshot_captured=True, inventory_model_counts={1: 1})
+    elif where == "conversion":
+        session.preview_plan.inventory_model_counts = {1: BadInt(1)}
+    elif where == "label":
+        fixture.fail = failure
+    elif where != "inventory":
+        raise AssertionError("CP12 unknown drift boundary")
+    probe = _CP12DriftProbe(session)
+
+    def fail_inventory() -> list[InventoryItemInfo]:
+        fixture.observe("collect_inventory")
+        fixture.trace.append("inventory")
+        raise failure
+
+    try:
+        if where == "inventory":
+            restore.binding(session, "_collect_inventory", fail_inventory)
+        probe.start()
+        _cp9_same_exception(session.compare_current_inventory_against_preview, failure)
+        actual = probe.snapshot()
+        observed_trace = list(fixture.trace)
+        observed_reads = list(fixture.provider_reads)
+        probe.stop()
+        expected_duration = 0.0 if where == "inventory" else 250.0
+        probe.assert_after(
+            actual,
+            summary="",
+            rows=[],
+            duration=expected_duration,
+            confirmation=False,
+            replaced_after_clear=False,
+        )
+        if where == "inventory":
+            expected_trace = ["clock", "inventory"]
+            expected_reads = ["clock", "collect_inventory"]
+        else:
+            expected_trace = ["clock", "inventory", "clock"]
+            expected_reads = ["clock", "collect_inventory", "get_model_counts", "clock"]
+            if where == "label":
+                expected_trace.append("label:1")
+                expected_reads.extend(("get_model_label", "model_label"))
+        _cp11_equal(observed_trace, expected_trace, "CP12 exact failure observation prefix")
+        _cp11_equal(observed_reads, expected_reads, "CP12 skipped later getters/formatting/row-limit observations")
+        _cp8_unchanged(inputs_before, fixture.items)
+        live_rows = session.preview_inventory_diff_rows
+        live_rows.append("later current-list mutation")
+        _cp11_equal(
+            actual["preview_inventory_diff_rows"], [], "CP12 immediate failure snapshot is not a live row alias"
+        )
+        live_rows.pop()
+        _expect(
+            session.preview_inventory_diff_rows is live_rows,
+            "CP12 test restores live-list contents without replacing it",
+        )
+    finally:
+        probe.stop()
+        restore.restore()
+
+
+def _test_cp12_projection_failure(module: types.ModuleType, where: str) -> None:
+    fixture = _CP12PreviewFixture(module)
+    owner = fixture.owner
+    failure = RuntimeError("CP12 projection " + where)
+
+    class BadInt(int):
+        def __int__(self) -> int:
+            raise failure
+
+    class BadStr(str):
+        def __str__(self) -> str:
+            raise failure
+
+    owner.preview_execute_travel_target_outpost_id = 7
+    owner.preview_execute_travel_target_outpost_name = "old"
+    target = BadInt(9) if where == "id" else 9
+    name = BadStr("new") if where == "name" else "new"
+    _cp9_same_exception(
+        lambda: owner.set_preview_projection_state(
+            requires_travel=True, target_outpost_id=target, target_outpost_name=name
+        ),
+        failure,
+    )
+    _cp11_equal(
+        (
+            owner.preview_requires_execute_travel,
+            owner.preview_execute_travel_target_outpost_id,
+            owner.preview_execute_travel_target_outpost_name,
+        ),
+        (True, 7 if where == "id" else 9, "old"),
+        "CP12 ordered projection publication",
+    )
+
+
+def _test_cp12_scan_publication(module: types.ModuleType, boundary: str) -> None:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    widget = _cp12_fixture(module)
+    session = _cp12_preview(widget)
+    old = PlanResult(supported_reason="old")
+    seeds: dict[str, object] = {
+        "preview_plan": old,
+        "preview_ready": False,
+        "preview_requires_execute_travel": True,
+        "preview_execute_travel_target_outpost_id": 77,
+        "preview_execute_travel_target_outpost_name": "old",
+        "preview_inventory_diff_summary": "old drift",
+        "preview_inventory_diff_rows": ["old row"],
+        "last_preview_compare_duration_ms": 99.0,
+        "execute_drift_requires_confirmation": True,
+        "status_message": "old status",
+        "last_error": "old error",
+    }
+    for name, value in seeds.items():
+        setattr(widget, name, value)
+    failure = RuntimeError("CP12 scan handoff " + boundary)
+    trace: list[str] = []
+    restore = _CP8Restoration()
+    old_rows: object = getattr(widget, "preview_inventory_diff_rows")
+    if not _cp9_is_sequence(old_rows) or not isinstance(old_rows, list):
+        raise AssertionError("CP12 seeded mutable drift rows")
+
+    def install(owner: object, name: str) -> None:
+        cls = type(owner)
+
+        def read(instance: object) -> object:
+            return vars(instance)[name]
+
+        def write(instance: object, value: object) -> None:
+            if instance is owner:
+                trace.append(name)
+                if name == boundary:
+                    raise failure
+            vars(instance)[name] = value
+
+        restore.binding(cls, name, property(read, write))
+
+    try:
+        for name in _CP12_PREVIEW_FIELDS:
+            install(session, name)
+        for name in ("status_message", "last_error"):
+            install(widget, name)
+        _cp9_same_exception(lambda: _CP12WidgetAccess.scan(widget), failure)
+        actual = _cp12_snapshot(widget)
+        publication = [
+            "preview_plan",
+            "preview_ready",
+            "preview_requires_execute_travel",
+            "preview_execute_travel_target_outpost_id",
+            "preview_execute_travel_target_outpost_name",
+            "preview_inventory_diff_summary",
+            "preview_inventory_diff_rows",
+            "last_preview_compare_duration_ms",
+            "execute_drift_requires_confirmation",
+            "status_message",
+            "last_error",
+        ]
+        position = publication.index(boundary)
+        _cp11_equal(trace, publication[: position + 1], "CP12 exact publication prefix")
+        expected = {name: _cp11_plain(value) for name, value in seeds.items()}
+        completed: dict[str, object] = {
+            "preview_ready": True,
+            "preview_requires_execute_travel": False,
+            "preview_execute_travel_target_outpost_id": 0,
+            "preview_execute_travel_target_outpost_name": "",
+            "preview_inventory_diff_summary": "",
+            "preview_inventory_diff_rows": [],
+            "last_preview_compare_duration_ms": 0.0,
+            "execute_drift_requires_confirmation": False,
+            "status_message": "Preview complete. No actionable merchant work was found.",
+            "last_error": "",
+        }
+        independent_plan = PlanResult(supported_map=True, supported_reason="Fixture", coords={})
+        for name in publication[:position]:
+            expected[name] = _cp11_plain(independent_plan) if name == "preview_plan" else completed[name]
+        _cp11_equal(actual, expected, "CP12 complete immediate state after publication fault")
+        _expect((getattr(widget, "preview_plan") is old) == (position == 0), "CP12 plan assignment boundary identity")
+        _expect(
+            (getattr(widget, "preview_inventory_diff_rows") is old_rows) == (position <= 6),
+            "CP12 list replacement boundary identity",
+        )
+        old_rows.append("after snapshot")
+        _expect("after snapshot" not in str(actual), "CP12 snapshot independent of original mutable rows")
+    finally:
+        restore.restore()
+
+
+def _test_cp12_queue_admission(module: types.ModuleType) -> None:
+    widget = _cp12_fixture(module)
+    restore = _CP8Restoration()
+    events: list[object] = []
+    failure = RuntimeError("CP12 enqueue after admission")
+    try:
+        restore.binding(widget, "_merchant_rules_has_pending_or_active_work", lambda: True)
+        setattr(widget, "execute_drift_requires_confirmation", True)
+        _CP12WidgetAccess.queue_now(widget)
+        _expect(
+            getattr(widget, "execute_drift_requires_confirmation") is True,
+            "CP12 rejected busy admission retains confirmation",
+        )
+        restore.binding(widget, "_merchant_rules_has_pending_or_active_work", lambda: False)
+
+        def queue(_generator: object) -> None:
+            events.append(getattr(widget, "execute_drift_requires_confirmation"))
+            raise failure
+
+        restore.binding(widget, "_queue_merchant_rules_owned_work", queue)
+        for operation in (_CP12WidgetAccess.queue_now, _CP12WidgetAccess.queue_here):
+            setattr(widget, "execute_drift_requires_confirmation", True)
+            _cp9_same_exception(lambda: operation(widget), failure)
+            _expect(
+                getattr(widget, "execute_drift_requires_confirmation") is False,
+                "CP12 admitted clear precedes failing enqueue",
+            )
+        _cp11_equal(events, [False, False], "CP12 queue sees cleared confirmation")
+    finally:
+        restore.restore()
+
+
+def _cp12_differential_observations(module: types.ModuleType) -> dict[str, object]:
+    return {
+        "combined_six_planners": _cp11_combined_observation(module),
+        "drift": {
+            mode: _cp12_drift_observation(module, mode) for mode in ("not-ready", "no-snapshot", "match", "changed")
+        },
+        "multi_stop": _cp12_real_multistop_observation(module),
+    }
+
+
+def _cp12_multistop_literal_observations() -> dict[str, object]:
+    """Fix complete expected records from CP11 source and explicit fixture inputs."""
+
+    return {
+        "result": {
+            "entries": [
+                {
+                    "action_type": "travel",
+                    "merchant_type": "travel",
+                    "label": "Embark Beach",
+                    "quantity": 1,
+                    "state": "will execute",
+                    "reason": "Travel to Embark Beach first for Consumable Crafter buys.",
+                    "model_id": 0,
+                    "status_hint": "",
+                },
+                {
+                    "action_type": "buy",
+                    "merchant_type": "consumable_crafter",
+                    "label": "Armor of Salvation (24860)",
+                    "quantity": 1,
+                    "state": "conditional",
+                    "reason": "Craft 1 with Alcus Nailbiter; current rank 10 meets required rank 3 (Legendary Delver). Craft-amount mode ignores existing finished consumables. Projected after travel to Embark Beach. Travel + Execute will confirm live Consumable Crafter access on arrival.",
+                    "model_id": 0,
+                    "status_hint": "",
+                },
+                {
+                    "action_type": "travel",
+                    "merchant_type": "travel",
+                    "label": "Regression Harbor",
+                    "quantity": 1,
+                    "state": "will execute",
+                    "reason": "Travel to the selected Auto Travel destination for remaining Merchant Rules work.",
+                    "model_id": 0,
+                    "status_hint": "",
+                },
+                {
+                    "action_type": "buy",
+                    "merchant_type": "material_trader",
+                    "label": "Wood Plank (946)",
+                    "quantity": 10,
+                    "state": "conditional",
+                    "reason": "Inventory has 0; target is 1. Buy 10 as 1 trader lots of 10; the shortage is 1. Live check: verify carried gold before each purchase. Projected after travel to Regression Harbor. Travel + Execute will confirm live Material Trader access on arrival.",
+                    "model_id": 0,
+                    "status_hint": "",
+                },
+            ],
+            "supported_map": True,
+            "supported_reason": "Multi-stop preview: craft Consumable Crafter targets at Embark Beach, then run remaining work at Regression Harbor.",
+            "coords": {
+                "merchant": [0.0, 0.0],
+                "material_trader": [0.0, 0.0],
+                "rune_trader": [0.0, 0.0],
+                "scroll_trader": [0.0, 0.0],
+                "rare_material_trader": [0.0, 0.0],
+                "consumable_crafter": [0.0, 0.0],
+            },
+            "travel_to_outpost_id": 0,
+            "travel_to_outpost_name": "",
+            "multi_stop_route": True,
+            "multi_stop_consumable_outpost_id": 857,
+            "multi_stop_consumable_outpost_name": "Embark Beach",
+            "multi_stop_destination_outpost_id": 2,
+            "multi_stop_destination_outpost_name": "Regression Harbor",
+            "merchant_stock_buys": [],
+            "material_buys": [
+                {
+                    "merchant_type": "material_trader",
+                    "model_id": 946,
+                    "quantity": 10,
+                    "label": "Wood Plank (946)",
+                    "batch_size": 10,
+                    "cleanup": {
+                        "rule_kind": "buy_material_target",
+                        "rule_index": 1,
+                        "target_key": "946",
+                        "target_count": 1,
+                        "max_per_run": 10,
+                        "after_purchase": "keep",
+                        "completes_target": True,
+                        "xunlai_involved": False,
+                    },
+                },
+            ],
+            "rune_trader_buys": [],
+            "scroll_trader_buys": [],
+            "consumable_crafter_buys": [
+                {
+                    "model_id": 24860,
+                    "quantity": 1,
+                    "label": "Armor of Salvation (24860)",
+                    "vendor_key": "alcus",
+                    "vendor_name": "Alcus Nailbiter",
+                    "coords": [3673.02, -131.27],
+                    "cleanup": {
+                        "rule_kind": "consumable_crafter_target",
+                        "rule_index": 0,
+                        "target_key": "24860",
+                        "target_count": 1,
+                        "max_per_run": 1,
+                        "after_purchase": "keep",
+                        "completes_target": True,
+                        "xunlai_involved": False,
+                    },
+                },
+            ],
+            "material_sales": [],
+            "storage_transfers": [],
+            "cleanup_transfers": [],
+            "identify_claimed_item_ids": [],
+            "identify_item_ids": [],
+            "salvage_item_ids": [],
+            "salvage_specific_upgrade_owners": {},
+            "destroy_actions": [],
+            "destroy_item_ids": [],
+            "merchant_sell_item_ids": [],
+            "rune_trader_sales": [],
+            "storage_plan_state": "exact_ready",
+            "storage_exact": False,
+            "inventory_snapshot_captured": True,
+            "inventory_model_counts": {
+                921: 50,
+                948: 50,
+            },
+            "inventory_item_count": 2,
+            "xunlai_first_merchant_stock_targets": {},
+            "xunlai_first_storage_scan_reliable": True,
+            "has_actions": True,
+        },
+        "embark": {
+            "entries": [
+                {
+                    "action_type": "buy",
+                    "merchant_type": "consumable_crafter",
+                    "label": "Armor of Salvation (24860)",
+                    "quantity": 1,
+                    "state": "conditional",
+                    "reason": "Craft 1 with Alcus Nailbiter; current rank 10 meets required rank 3 (Legendary Delver). Craft-amount mode ignores existing finished consumables. Projected after travel to Embark Beach. Travel + Execute will confirm live Consumable Crafter access on arrival.",
+                    "model_id": 0,
+                    "status_hint": "",
+                },
+            ],
+            "supported_map": True,
+            "supported_reason": "Projected preview for Embark Beach (857). Travel + Execute will auto-travel, then recheck current items and available services after arrival. Destination NPC and storage access will be confirmed on arrival.",
+            "coords": {
+                "merchant": [0.0, 0.0],
+                "material_trader": [0.0, 0.0],
+                "rune_trader": [0.0, 0.0],
+                "scroll_trader": [0.0, 0.0],
+                "rare_material_trader": [0.0, 0.0],
+                "consumable_crafter": [0.0, 0.0],
+            },
+            "travel_to_outpost_id": 0,
+            "travel_to_outpost_name": "",
+            "multi_stop_route": False,
+            "multi_stop_consumable_outpost_id": 0,
+            "multi_stop_consumable_outpost_name": "",
+            "multi_stop_destination_outpost_id": 0,
+            "multi_stop_destination_outpost_name": "",
+            "merchant_stock_buys": [],
+            "material_buys": [],
+            "rune_trader_buys": [],
+            "scroll_trader_buys": [],
+            "consumable_crafter_buys": [
+                {
+                    "model_id": 24860,
+                    "quantity": 1,
+                    "label": "Armor of Salvation (24860)",
+                    "vendor_key": "alcus",
+                    "vendor_name": "Alcus Nailbiter",
+                    "coords": [3673.02, -131.27],
+                    "cleanup": {
+                        "rule_kind": "consumable_crafter_target",
+                        "rule_index": 0,
+                        "target_key": "24860",
+                        "target_count": 1,
+                        "max_per_run": 1,
+                        "after_purchase": "keep",
+                        "completes_target": True,
+                        "xunlai_involved": False,
+                    },
+                },
+            ],
+            "material_sales": [],
+            "storage_transfers": [],
+            "cleanup_transfers": [],
+            "identify_claimed_item_ids": [],
+            "identify_item_ids": [],
+            "salvage_item_ids": [],
+            "salvage_specific_upgrade_owners": {},
+            "destroy_actions": [],
+            "destroy_item_ids": [],
+            "merchant_sell_item_ids": [],
+            "rune_trader_sales": [],
+            "storage_plan_state": "exact_ready",
+            "storage_exact": True,
+            "inventory_snapshot_captured": True,
+            "inventory_model_counts": {
+                921: 50,
+                948: 50,
+            },
+            "inventory_item_count": 2,
+            "xunlai_first_merchant_stock_targets": {},
+            "xunlai_first_storage_scan_reliable": True,
+            "has_actions": True,
+        },
+        "destination": {
+            "entries": [
+                {
+                    "action_type": "buy",
+                    "merchant_type": "material_trader",
+                    "label": "Wood Plank (946)",
+                    "quantity": 10,
+                    "state": "conditional",
+                    "reason": "Inventory has 0; target is 1. Buy 10 as 1 trader lots of 10; the shortage is 1. Live check: verify carried gold before each purchase. Projected after travel to Regression Harbor. Travel + Execute will confirm live Material Trader access on arrival.",
+                    "model_id": 0,
+                    "status_hint": "",
+                },
+            ],
+            "supported_map": True,
+            "supported_reason": "Projected preview for Regression Harbor (2). Travel + Execute will auto-travel, then recheck current items and available services after arrival. Destination NPC and storage access will be confirmed on arrival.",
+            "coords": {
+                "merchant": [0.0, 0.0],
+                "material_trader": [0.0, 0.0],
+                "rune_trader": [0.0, 0.0],
+                "scroll_trader": [0.0, 0.0],
+                "rare_material_trader": [0.0, 0.0],
+                "consumable_crafter": None,
+            },
+            "travel_to_outpost_id": 0,
+            "travel_to_outpost_name": "",
+            "multi_stop_route": False,
+            "multi_stop_consumable_outpost_id": 0,
+            "multi_stop_consumable_outpost_name": "",
+            "multi_stop_destination_outpost_id": 0,
+            "multi_stop_destination_outpost_name": "",
+            "merchant_stock_buys": [],
+            "material_buys": [
+                {
+                    "merchant_type": "material_trader",
+                    "model_id": 946,
+                    "quantity": 10,
+                    "label": "Wood Plank (946)",
+                    "batch_size": 10,
+                    "cleanup": {
+                        "rule_kind": "buy_material_target",
+                        "rule_index": 1,
+                        "target_key": "946",
+                        "target_count": 1,
+                        "max_per_run": 10,
+                        "after_purchase": "keep",
+                        "completes_target": True,
+                        "xunlai_involved": False,
+                    },
+                },
+            ],
+            "rune_trader_buys": [],
+            "scroll_trader_buys": [],
+            "consumable_crafter_buys": [],
+            "material_sales": [],
+            "storage_transfers": [],
+            "cleanup_transfers": [],
+            "identify_claimed_item_ids": [],
+            "identify_item_ids": [],
+            "salvage_item_ids": [],
+            "salvage_specific_upgrade_owners": {},
+            "destroy_actions": [],
+            "destroy_item_ids": [],
+            "merchant_sell_item_ids": [],
+            "rune_trader_sales": [],
+            "storage_plan_state": "not_needed",
+            "storage_exact": False,
+            "inventory_snapshot_captured": True,
+            "inventory_model_counts": {
+                921: 70,
+                948: 70,
+            },
+            "inventory_item_count": 2,
+            "xunlai_first_merchant_stock_targets": {},
+            "xunlai_first_storage_scan_reliable": True,
+            "has_actions": True,
+        },
+        "trace": ["inventory:0", "inventory:1"],
+    }
+
+
+def _cp12_real_multistop_observation(module: types.ModuleType) -> dict[str, object]:
+    from Sources.icefox.MerchantRules import planning
+
+    widget: object = _cp12_bound(sys.modules[__name__], "_configure_consumable_multistop_fixture")(
+        module, include_material_buy=True
+    )
+    items = _CP12WidgetAccess.inventory(widget)
+    snapshots = [items, [replace(item, quantity=item.quantity + 20) for item in items]]
+    before = _cp8_values(*snapshots)
+    trace: list[str] = []
+    legs: list[tuple[bool, bool, PlanResult]] = []
+    build_owner: object = getattr(widget, "_plan_composer", widget)
+    build_name = "build_plan" if build_owner is not widget else "_build_plan"
+    build_method: object = getattr(type(build_owner), build_name)
+    if not isinstance(build_method, types.FunctionType):
+        raise AssertionError("CP12 actual build code")
+    previous = sys.getprofile()
+
+    def title(_title_id: int) -> types.SimpleNamespace:
+        return types.SimpleNamespace(current_points=999999)
+
+    restore = _CP8Restoration()
+
+    def collect() -> list[InventoryItemInfo]:
+        index = len(trace)
+        trace.append("inventory:" + str(index))
+        if index >= len(snapshots):
+            raise AssertionError("CP12 unexpected third leg inventory observation")
+        return snapshots[index]
+
+    def profile(frame: types.FrameType, event: str, result: object) -> None:
+        if frame.f_code is build_method.__code__ and frame.f_locals.get("self") is build_owner and event == "return":
+            if not isinstance(result, planning.PlanResult):
+                raise AssertionError("CP12 real build return")
+            if frame.f_locals.get("allow_consumable_multi_stop") is False:
+                legs.append(
+                    (
+                        bool(frame.f_locals["consumable_crafter_only"]),
+                        bool(frame.f_locals["exclude_consumable_crafter"]),
+                        result,
+                    )
+                )
+
+    try:
+        restore.binding(widget, "_collect_inventory_items", collect)
+        restore.binding(
+            getattr(module, "GLOBAL_CACHE"),
+            "Inventory",
+            types.SimpleNamespace(
+                IsStorageOpen=lambda: True,
+                GetGoldOnCharacter=lambda: 1000,
+                GetGoldInStorage=lambda: 0,
+                GetFreeSlotCount=lambda: 10,
+            ),
+        )
+        restore.binding(
+            module,
+            "Player",
+            types.SimpleNamespace(
+                GetAccountEmail=lambda: "merchant.rules@example.com",
+                GetName=lambda: "Merchant Rules Tester",
+                GetPlayerUUID=lambda: (1, 2, 3, 4),
+                GetSkillPointData=lambda: (5, 100),
+                GetTitle=title,
+            ),
+        )
+        sys.setprofile(profile)
+        result = _CP12WidgetAccess.build(widget, projected_preview=True)
+        sys.setprofile(previous)
+        _cp11_equal(trace, ["inventory:0", "inventory:1"], "CP12 two actual independent leg observations")
+        _cp11_equal([(a, b) for a, b, _ in legs], [(True, False), (False, True)], "CP12 actual distinct builds")
+        embark, destination = legs[0][2], legs[1][2]
+        _cp11_equal(embark.inventory_model_counts, {948: 50, 921: 50}, "CP12 embark literal evidence")
+        _cp11_equal(destination.inventory_model_counts, {948: 70, 921: 70}, "CP12 destination fresh literal evidence")
+        _expect(
+            embark.inventory_model_counts != destination.inventory_model_counts, "CP12 legs distinguish observations"
+        )
+        _expect(result.multi_stop_route and result.has_actions, "CP12 actual multi-stop decisions")
+        _cp11_equal(
+            [(entry.label, entry.quantity) for entry in result.entries if entry.action_type == "travel"],
+            [("Embark Beach", 1), ("Regression Harbor", 1)],
+            "CP12 literal travel order",
+        )
+        _cp11_equal(
+            [(buy.model_id, buy.quantity) for buy in result.consumable_crafter_buys],
+            [(24860, 1)],
+            "CP12 actual craft literal",
+        )
+        _cp11_equal(
+            [(buy.model_id, buy.quantity) for buy in result.material_buys],
+            [(946, 10)],
+            "CP12 destination material literal",
+        )
+        _expect(
+            result.inventory_model_counts == embark.inventory_model_counts
+            and result.inventory_model_counts is not embark.inventory_model_counts,
+            "CP12 first truthy copied evidence",
+        )
+        _expect(result.coords is not destination.coords, "CP12 copied outer coords")
+        for field_name, _annotation, kind, _default in _CP7_RECORD_FIELDS["PlanResult"]:
+            if kind != "factory" or field_name in {"entries", "coords", "inventory_model_counts"}:
+                continue
+            source = embark if field_name == "consumable_crafter_buys" else destination
+            original: object = getattr(source, field_name)
+            combined: object = getattr(result, field_name)
+            _expect(combined is not original and combined == original, "CP12 copied outer container " + field_name)
+            if (
+                _cp9_is_sequence(original)
+                and _cp9_is_sequence(combined)
+                and isinstance(original, list)
+                and isinstance(combined, list)
+            ):
+                _expect(
+                    all(a is b for a, b in zip(original, combined, strict=True)), "CP12 shared members " + field_name
+                )
+            elif (
+                _cp9_is_mapping(original)
+                and _cp9_is_mapping(combined)
+                and isinstance(original, dict)
+                and isinstance(combined, dict)
+            ):
+                _expect(all(combined[key] is value for key, value in original.items()), "CP12 shared mapping members")
+        source_entries = [entry for entry in embark.entries if entry.merchant_type == "consumable_crafter"]
+        source_entries += [entry for entry in destination.entries if entry.merchant_type != "consumable_crafter"]
+        combined_entries = [entry for entry in result.entries if entry.action_type != "travel"]
+        _expect(len(combined_entries) == len(source_entries), "CP12 exact real-entry count")
+        for cloned, source_entry in zip(combined_entries, source_entries, strict=True):
+            _expect(cloned is not source_entry and cloned == source_entry, "CP12 shallow entry replacement")
+        _cp8_unchanged(before, *snapshots)
+        observation = {
+            "result": _cp11_plain(result),
+            "embark": _cp11_plain(embark),
+            "destination": _cp11_plain(destination),
+            "trace": trace,
+        }
+        _cp11_equal(
+            observation, _cp12_multistop_literal_observations(), "CP12 complete independent multi-stop literals"
+        )
+        return observation
+    finally:
+        sys.setprofile(previous)
+        restore.restore()
+        _expect(sys.getprofile() is previous, "CP12 profiler restored")
+
+
+def _test_cp12_real_multistop(module: types.ModuleType) -> None:
+    _cp12_real_multistop_observation(module)
+
+
+def _test_cp12_nested_timing_failure(module: types.ModuleType) -> None:
+    widget: object = _cp12_bound(sys.modules[__name__], "_configure_consumable_multistop_fixture")(
+        module, include_material_buy=True
+    )
+
+    def title(_title_id: int) -> types.SimpleNamespace:
+        return types.SimpleNamespace(current_points=999999)
+
+    restore = _CP8Restoration()
+    clocks = iter((1.0, 2.0, 2.125, 3.0, 3.250))
+    log_durations: list[float] = []
+    failure = RuntimeError("CP12 outer summary")
+    original_duration = 991.0
+    setattr(widget, "last_plan_build_duration_ms", original_duration)
+
+    def summary(_prefix: str, _plan: PlanResult) -> None:
+        value: object = getattr(widget, "last_plan_build_duration_ms")
+        if not isinstance(value, float):
+            raise AssertionError("CP12 float duration")
+        log_durations.append(value)
+        if len(log_durations) == 3:
+            raise failure
+
+    try:
+        restore.binding(module, "time", types.SimpleNamespace(perf_counter=lambda: next(clocks)))
+        restore.binding(widget, "_log_plan_summary", summary)
+        restore.binding(
+            getattr(module, "GLOBAL_CACHE"),
+            "Inventory",
+            types.SimpleNamespace(
+                IsStorageOpen=lambda: True,
+                GetGoldOnCharacter=lambda: 1000,
+                GetGoldInStorage=lambda: 0,
+                GetFreeSlotCount=lambda: 10,
+            ),
+        )
+        restore.binding(module, "Player", types.SimpleNamespace(GetSkillPointData=lambda: (5, 100), GetTitle=title))
+        _cp9_same_exception(lambda: _CP12WidgetAccess.build(widget, projected_preview=True), failure)
+        snapshot = (list(log_durations), getattr(widget, "last_plan_build_duration_ms"))
+        _cp11_equal(
+            snapshot,
+            ([991.0, 125.0, 250.0], 250.0),
+            "CP12 inner durations survive outer logging failure; no finally timer",
+        )
+    finally:
+        restore.restore()
+
+
+def _test_cp12_service_double_refresh(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    state, restore_native = _install_service_resolution_agent_fixture(module)
+    widget = _cp12_fixture(module)
+    delattr(widget, "_get_supported_context")
+    session: object = getattr(widget, "_service_resolution_session")
+    composer = _cp12_composer(widget)
+    preview = _cp12_preview(widget)
+    patches = _CP5PatchSet()
+    previous = sys.getprofile()
+    trace: list[str] = []
+    contexts: list[object] = []
+    plans: list[PlanResult] = []
+    c1 = (
+        False,
+        "pending C1",
+        {
+            name: None
+            for name in (
+                "merchant",
+                "material_trader",
+                "rune_trader",
+                "scroll_trader",
+                "rare_material_trader",
+                "consumable_crafter",
+            )
+        },
+    )
+    clock_values = iter((100.0, 100.125))
+    original_snapshot: object = getattr(widget, "_get_live_service_candidate_snapshot")
+    build_code: object = getattr(type(composer), "build_plan")
+    clear_code: object = getattr(type(preview), "clear_preview_inventory_diff")
+    if not isinstance(build_code, types.FunctionType) or not isinstance(clear_code, types.FunctionType):
+        raise AssertionError("CP12 concrete integrated owner methods")
+
+    def clock() -> float:
+        trace.append("clock")
+        return next(clock_values)
+
+    def snapshot() -> object:
+        trace.append("snapshot")
+        if not isinstance(original_snapshot, types.MethodType):
+            raise AssertionError("CP12 native snapshot method")
+        result: object = original_snapshot()
+        return result
+
+    def profile(frame: types.FrameType, event: str, result: object) -> None:
+        if frame.f_code is build_code.__code__ and frame.f_locals.get("self") is composer:
+            if event == "call":
+                contexts.append(frame.f_locals["supported_context_override"])
+                trace.append("build:C" + str(len(contexts)))
+            elif event == "return":
+                plans.append(_cp12_plan(result))
+        if frame.f_code is clear_code.__code__ and frame.f_locals.get("self") is preview and event == "call":
+            trace.append("clear")
+
+    try:
+        _cp6_generic_map(module, patches)
+        patches.set(module, "time", types.SimpleNamespace(monotonic=clock, perf_counter=lambda: 0.0))
+        patches.set(widget, "_get_live_service_candidate_snapshot", snapshot)
+        setattr(session, "lifecycle_active", True)
+        setattr(session, "next_poll_at", 0.0)
+        setattr(session, "candidate_fingerprint", (1,))
+        setattr(session, "player_anchor", (0.0, 0.0))
+        state["npc_ids"] = [2]
+        state["positions"] = {99: (0.0, 0.0), 2: (20.0, 0.0)}
+        state["names"] = {2: "Changed [Merchant]"}
+        setattr(widget, "preview_plan", PlanResult())
+        setattr(widget, "preview_ready", True)
+        setattr(widget, "_service_role_preview_refresh_pending", True)
+        setattr(widget, "cached_context_map_id", 700)
+        setattr(widget, "cached_supported_context", c1)
+        sys.setprofile(profile)
+        _CP12WidgetAccess.update_services(widget)
+        sys.setprofile(previous)
+        _cp11_equal(
+            trace,
+            ["build:C1", "clear", "clock", "snapshot", "snapshot", "clock", "build:C2", "clear"],
+            "CP12 actual Composer/PreviewSession/ServiceResolutionSession same-update order",
+        )
+        _expect(
+            contexts[0] is c1 and contexts[1] is getattr(session, "cached_supported_context"),
+            "CP12 exact context identities",
+        )
+        _expect(
+            plans[0] is not plans[1] and getattr(widget, "preview_plan") is plans[1], "CP12 sequential real publication"
+        )
+        _expect(
+            plans[0].supported_map is False and plans[1].coords["merchant"] == (20.0, 0.0),
+            "CP12 distinct literal contexts",
+        )
+        _expect(
+            getattr(widget, "_service_role_preview_refresh_pending") is False, "CP12 pending consumed by real widget"
+        )
+        _expect(
+            getattr(widget, "status_message")
+            == "Live merchant/trader services changed. Preview refreshed automatically.",
+            "CP12 final status literal",
+        )
+    finally:
+        sys.setprofile(previous)
+        patches.restore()
+        restore_native()
+        _expect(sys.getprofile() is previous, "CP12 integrated profiler restored")
+
+
+def _test_cp12_remote_consumer(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.planning import ExecutionPlanEntry
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    widget: object = _prime_initialized_widget(module, _make_widget(module))
+    session = _cp12_preview(widget)
+    restore = _CP8Restoration()
+    events: list[str] = []
+    plan = PlanResult(
+        supported_map=True,
+        entries=[
+            ExecutionPlanEntry("sell", "merchant", "Sell", 1, "will execute"),
+            ExecutionPlanEntry("buy", "merchant", "Buy", 1, "conditional"),
+            ExecutionPlanEntry("sell", "merchant", "Blocked", 1, "skipped", "Protected by rules."),
+        ],
+        has_actions=True,
+    )
+    setattr(widget, "preview_plan", plan)
+    original_initialize: object = getattr(widget, "_ensure_initialized")
+    original_summary = session.build_remote_preview_summary
+
+    def initialize() -> None:
+        events.append("initialize")
+        if not isinstance(original_initialize, types.MethodType):
+            raise AssertionError("CP12 initialization method")
+        original_initialize()
+
+    def summary() -> PreviewSummary:
+        events.append("summary")
+        return original_summary()
+
+    try:
+        restore.binding(widget, "_ensure_initialized", initialize)
+        restore.binding(session, "build_remote_preview_summary", summary)
+        result = _CP12WidgetAccess.remote_summary(widget)
+        _cp11_equal(events, ["initialize", "summary"], "CP12 remote initialization remains first")
+        _cp11_equal(
+            result,
+            {
+                "opcode": getattr(module, "MERCHANT_RULES_OPCODE_PREVIEW_RESULT"),
+                "success": True,
+                "primary_count": 2,
+                "secondary_count": 1,
+                "status_label": "Ready",
+                "summary": "2 can run, 1 blocked, 1 need live checks.",
+                "detail": "Some actions need a live merchant, trader, crafter, or Xunlai check before MR can confirm them.",
+            },
+            "CP12 exact seven-key remote result",
+        )
+        if type(result) is not dict:
+            raise AssertionError("CP12 remote result dictionary")
+        _cp11_equal(
+            list(result),
+            ["opcode", "primary_count", "secondary_count", "success", "status_label", "summary", "detail"],
+            "CP12 wire key order",
+        )
+        _expect(getattr(session, "preview_plan") is plan, "CP12 summary borrows published reference")
+    finally:
+        restore.restore()
+
+
+def _test_cp12_execution_consumer(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+
+    widget: object = _prime_initialized_widget(module, _cp12_fixture(module))
+    previous_plan = _cp12_seed_preview(widget)
+    composer = _cp12_composer(widget)
+    preview = _cp12_preview(widget)
+    plans: list[PlanResult] = []
+    buy_calls: list[object] = []
+    availability_plans: list[PlanResult] = []
+    previous = sys.getprofile()
+    restore = _CP8Restoration()
+    items = [_cp8_item(module, item_id=41, model_id=555, quantity=2)]
+    inputs_before = _cp8_values(items)
+    context: tuple[bool, str, dict[str, tuple[float, float] | None]] = (True, "Fixture", {"merchant": (1.0, 2.0)})
+
+    def profile(frame: types.FrameType, event: str, result: object) -> None:
+        if (
+            frame.f_code is _cp12_bound(planning.PlanComposer, "build_plan").__code__
+            and frame.f_locals.get("self") is composer
+            and event == "return"
+        ):
+            plans.append(_cp12_plan(result))
+        if frame.f_code is _cp12_bound(planning.BuyPlanner, "plan_buy_actions").__code__ and event == "call":
+            buy_calls.append(frame.f_locals["execution_context"])
+
+    def availability() -> dict[str, bool]:
+        availability_plans.append(preview.preview_plan)
+        return {"merchant": True}
+
+    try:
+        setattr(widget, "buy_rules", [BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 2)])])
+        setattr(
+            widget, "catalog_merchant_essentials", [{"model_id": 555, "name": "Identification Kit", "item_type": "kit"}]
+        )
+        restore.binding(widget, "_collect_inventory_items", lambda: items)
+        restore.binding(widget, "_get_supported_context", lambda *, passive=False: context)
+        restore.binding(widget, "_get_preview_here_availability", availability)
+        sys.setprofile(profile)
+        _drain_generator_return(_CP12WidgetAccess.execute(widget, local_only=True, post_gold_balance=False))
+        sys.setprofile(previous)
+        _expect(
+            len(plans) == 1 and plans[0] is preview.preview_plan and preview.preview_plan is not previous_plan,
+            "CP12 real Execute publishes actual Composer result",
+        )
+        _expect(
+            availability_plans == plans and availability_plans[0] is plans[0],
+            "CP12 actual availability observes newly published reference",
+        )
+        _cp11_equal(buy_calls, [None], "CP12 actual BuyPlanner receives ordinary execution request identity")
+        plan = plans[0]
+        _cp11_equal(plan.inventory_model_counts, {555: 2}, "CP12 actual execution inventory snapshot")
+        _expect(
+            plan.coords is context[2] and not plan.has_actions and not plan.merchant_stock_buys,
+            "CP12 context identity and met target decision",
+        )
+        _cp11_equal(
+            [(entry.action_type, entry.state, entry.reason) for entry in plan.entries],
+            [("buy", "skipped", "Target already met: inventory has 2; target is 2.")],
+            "CP12 literal canonical already-met execution plan",
+        )
+        _expect(
+            getattr(widget, "status_message") == "Nothing to execute for the current rules and inventory state.",
+            "CP12 real no-action execution completion",
+        )
+        _expect(
+            getattr(widget, "last_error") == "" and getattr(widget, "execution_running") is False,
+            "CP12 execution final state",
+        )
+        _expect(
+            getattr(widget, "execute_reservation_scope_active") is False
+            and getattr(widget, "execute_reserved_item_ids") == set(),
+            "CP12 actual execution finally releases owned reservations",
+        )
+        _cp11_equal(
+            (
+                preview.preview_ready,
+                preview.preview_requires_execute_travel,
+                preview.preview_inventory_diff_summary,
+                preview.preview_inventory_diff_rows,
+                preview.last_preview_compare_duration_ms,
+                preview.execute_drift_requires_confirmation,
+            ),
+            (True, False, "", list[str](), 0.0, False),
+            "CP12 no-action return retains readiness while ordinary execution clears projection and drift",
+        )
+        _cp8_unchanged(inputs_before, items)
+    finally:
+        sys.setprofile(previous)
+        restore.restore()
+
+
+def _test_cp12_empty_availability(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.planning import ExecutionPlanEntry
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    widget = _cp12_fixture(module)
+    restore = _CP8Restoration()
+    trace: list[str] = []
+    entry = ExecutionPlanEntry("sell", "merchant", "Sell", 1, "will execute")
+    plan = PlanResult(supported_map=True, entries=[entry])
+
+    def acquire() -> dict[str, bool]:
+        trace.append("availability")
+        return {"merchant": True}
+
+    try:
+        restore.binding(widget, "_get_preview_here_availability", acquire)
+        explicit = _CP12WidgetAccess.unavailable(widget, entry, availability_here={}, plan=plan)
+        _expect(trace == [] and type(explicit) is str and bool(explicit), "CP12 explicit empty availability retained")
+        _CP12WidgetAccess.unavailable(widget, entry, plan=plan)
+        _cp11_equal(trace, ["availability"], "CP12 omitted availability observes native boundary once")
+    finally:
+        restore.restore()
+
+
+def _cp12_seed_preview(widget: object) -> PlanResult:
+    from Sources.icefox.MerchantRules.planning import PlanResult
+
+    plan = PlanResult(supported_map=True, supported_reason="seed")
+    for name, value in (
+        ("preview_plan", plan),
+        ("preview_ready", True),
+        ("preview_requires_execute_travel", True),
+        ("preview_execute_travel_target_outpost_id", 7),
+        ("preview_execute_travel_target_outpost_name", "Seven"),
+        ("preview_inventory_diff_summary", "drift"),
+        ("preview_inventory_diff_rows", ["row"]),
+        ("last_preview_compare_duration_ms", 55.0),
+        ("execute_drift_requires_confirmation", True),
+    ):
+        setattr(widget, name, value)
+    return plan
+
+
+def _test_cp12_reset_distinctions(module: types.ModuleType, mode: str) -> None:
+    widget = _cp12_fixture(module)
+    plan = _cp12_seed_preview(widget)
+    rows = getattr(widget, "preview_inventory_diff_rows")
+    restore = _CP8Restoration()
+    try:
+        if mode == "dirty":
+            _CP12WidgetAccess.dirty(widget, "changed")
+            _expect(getattr(widget, "preview_plan") is plan, "CP12 dirty retains plan")
+            _cp11_equal(
+                tuple(getattr(widget, name) for name in _CP12_PREVIEW_FIELDS[1:]),
+                (False, False, 0, "", "", list[str](), 0.0, False),
+                "CP12 dirty exact state",
+            )
+            _expect(getattr(widget, "status_message") == "changed", "CP12 dirty status")
+        elif mode == "diagnostics":
+            _CP12WidgetAccess.diagnostics(widget)
+            _expect(
+                getattr(widget, "preview_plan") is plan and getattr(widget, "preview_inventory_diff_rows") is rows,
+                "CP12 diagnostics keeps plan and rows",
+            )
+            _cp11_equal(
+                tuple(getattr(widget, name) for name in _CP12_PREVIEW_FIELDS[1:]),
+                (True, True, 7, "Seven", "drift", ["row"], 0.0, True),
+                "CP12 diagnostics clears only comparison duration",
+            )
+        elif mode == "profile-prefix":
+            failure = RuntimeError("CP12 intervening profile runtime reset")
+
+            def stop() -> None:
+                raise failure
+
+            restore.binding(widget, "_clear_inventory_monitor_signatures", stop)
+            _cp9_same_exception(
+                lambda: _CP12WidgetAccess.profile_reset(widget, log_profile_load_summary=False), failure
+            )
+            _expect(
+                getattr(widget, "preview_plan") is not plan and getattr(widget, "preview_inventory_diff_rows") is rows,
+                "CP12 profile prefix replaces plan but retains drift identity",
+            )
+            _cp11_equal(
+                tuple(getattr(widget, name) for name in _CP12_PREVIEW_FIELDS[1:]),
+                (False, False, 0, "", "drift", ["row"], 55.0, True),
+                "CP12 drift reset remains after intervening runtime resets",
+            )
+        else:
+            raise AssertionError("CP12 reset mode")
+    finally:
+        restore.restore()
+
+
+def _test_cp12_interpretation(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.planning import ExecutionPlanEntry
+
+    fixture = _CP12PreviewFixture(module)
+    owner = fixture.owner
+    failure = RuntimeError("CP12 entry iteration before busy")
+    reads: list[str] = []
+    restore = _CP8Restoration()
+
+    class Entries(list[ExecutionPlanEntry]):
+        def __iter__(self) -> Iterator[ExecutionPlanEntry]:
+            raise failure
+
+    def busy() -> bool:
+        reads.append("busy")
+        return True
+
+    def friendly(
+        reason: str, *, action_type: str, is_skipped: bool, will_execute: bool, is_consumable_crafter: bool
+    ) -> str:
+        reads.append("friendly:" + reason)
+        return "Friendly display cannot grant execution."
+
+    try:
+        owner.preview_plan.entries = Entries()
+        restore.binding(owner, "_read_busy", busy)
+        _cp9_same_exception(owner.get_preview_state, failure)
+        _cp11_equal(reads, [], "CP12 entry split occurs before busy observation")
+        entry = ExecutionPlanEntry("sell", "merchant", "Protected", 1, "skipped", "Protected by rules.")
+        owner.preview_plan.entries = [entry]
+        restore.binding(owner, "_get_reason_formatter", lambda: friendly)
+        _expect(
+            owner.get_preview_reason_for_display(entry) == "Friendly display cannot grant execution.",
+            "CP12 late display formatter",
+        )
+        _expect(
+            owner.get_not_changed_entry_status_key(entry) == "protected",
+            "CP12 raw reason classification remains separate",
+        )
+        _expect(entry.reason == "Protected by rules.", "CP12 display never rewrites raw reason")
+    finally:
+        restore.restore()
+
+
+def _test_cp12_actual_remote_execution(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning
+
+    widget: object = _prime_initialized_widget(module, _cp12_fixture(module))
+    restore = _CP8Restoration()
+    previous = sys.getprofile()
+    plans: list[PlanResult] = []
+    payloads: list[dict[str, object]] = []
+    composer = _cp12_composer(widget)
+    code: object = getattr(type(composer), "build_plan")
+    if not isinstance(code, types.FunctionType):
+        raise AssertionError("CP12 actual remote composer")
+    items = [_cp8_item(module, item_id=1, model_id=555, quantity=2)]
+    plan_before = _cp12_seed_preview(widget)
+    rows_before = getattr(widget, "preview_inventory_diff_rows")
+
+    def profile(frame: types.FrameType, event: str, result: object) -> None:
+        if event == "return" and frame.f_code is code.__code__ and frame.f_locals.get("self") is composer:
+            plans.append(_cp12_plan(result))
+
+    def send(_receiver: str, **kwargs: object) -> bool:
+        payloads.append(dict(kwargs))
+        # Seed immediately at the transport boundary: Execute has already cleared old drift.
+        for name, value in (
+            ("preview_requires_execute_travel", True),
+            ("preview_execute_travel_target_outpost_id", 7),
+            ("preview_execute_travel_target_outpost_name", "Seven"),
+            ("preview_inventory_diff_summary", "drift"),
+            ("preview_inventory_diff_rows", rows_before),
+            ("last_preview_compare_duration_ms", 55.0),
+            ("execute_drift_requires_confirmation", True),
+        ):
+            setattr(widget, name, value)
+        return True
+
+    def no_options(_email: str) -> None:
+        return None
+
+    def restore_options(_email: str, _snapshot: object) -> None:
+        return None
+
+    def status(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    try:
+        restore.binding(widget, "_collect_inventory_items", lambda: items)
+        restore.binding(
+            widget, "_get_supported_context", lambda *, passive=False: (True, "Fixture", {"merchant": (1.0, 2.0)})
+        )
+        for name in ("_snapshot_multibox_hero_ai_options", "_disable_multibox_hero_ai_options"):
+            restore.binding(widget, name, no_options)
+        restore.binding(widget, "_restore_multibox_hero_ai_options", restore_options)
+        restore.binding(widget, "_send_multibox_status_message", status)
+        restore.binding(widget, "_send_multibox_result_message", send)
+        message = types.SimpleNamespace(
+            SenderEmail="leader@example.com",
+            ReceiverEmail="follower@example.com",
+            Params=(float(getattr(module, "MERCHANT_RULES_OPCODE_EXECUTE")), 0.0, 0.0, 0.0),
+            ExtraData=("cp12-real", "stock:555:2", "0", "0"),
+        )
+        sys.setprofile(profile)
+        result = _CP12WidgetAccess.remote_message(widget, message)
+        if type(result) is not getattr(module, "_MerchantRulesOwnedGenerator"):
+            raise AssertionError("CP12 actual remote owned iterator")
+        _drain_generator_return(result)
+        sys.setprofile(previous)
+        _expect(
+            bool(plans) and all(type(plan) is planning.PlanResult for plan in plans),
+            "CP12 remote dispatch really composes",
+        )
+        _expect(
+            payloads[-1]["opcode"] == getattr(module, "MERCHANT_RULES_OPCODE_EXECUTE_RESULT")
+            and payloads[-1]["success_flag"] is True,
+            "CP12 real remote stock outcome",
+        )
+        _expect(
+            getattr(widget, "preview_plan") is not plan_before
+            and all(getattr(widget, "preview_plan") is not p for p in plans),
+            "CP12 remote finally replaces published plan",
+        )
+        _cp11_equal(
+            tuple(getattr(widget, name) for name in _CP12_PREVIEW_FIELDS[1:5]),
+            (False, False, 0, ""),
+            "CP12 remote reset projection/readiness",
+        )
+        _expect(
+            getattr(widget, "preview_inventory_diff_rows") is rows_before,
+            "CP12 remote cleanup retains drift row identity",
+        )
+        _cp11_equal(
+            tuple(getattr(widget, name) for name in _CP12_PREVIEW_FIELDS[5:]),
+            ("drift", ["row"], 55.0, True),
+            "CP12 remote cleanup retains drift/duration/confirmation",
+        )
+    finally:
+        sys.setprofile(previous)
+        restore.restore()
+
+
+def _test_cp12_compatibility_facades(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+
+    widget = _cp12_fixture(module)
+    owner = _cp12_composer(widget)
+    merchant_rule = BuyRule(enabled=True, merchant_stock_targets=[MerchantStockTarget(555, 1)])
+    setattr(widget, "buy_rules", [merchant_rule])
+    direct = owner.get_buy_rules_excluding_consumable_crafters()
+    delegated = _CP12WidgetAccess.buy_rules_excluding_crafters(widget)
+    _cp11_equal(delegated, direct, "CP12 explicit compatibility facade result")
+    if type(direct) is not list or type(delegated) is not list:
+        raise AssertionError("CP12 buy compatibility list")
+    _expect(
+        direct is not delegated and direct[0] is merchant_rule and delegated[0] is merchant_rule,
+        "CP12 collection outer copies share normalized originals",
+    )
+    _cp11_equal(
+        _CP12WidgetAccess.required_services(widget),
+        owner.get_required_service_types(),
+        "CP12 retained service compatibility facade",
+    )
+
+
+def _cp12_is_sell_collection(value: object) -> TypeGuard[list[tuple[int, SellRule]]]:
+    from Sources.icefox.MerchantRules.configuration import SellRule
+
+    return (
+        _cp9_is_sequence(value)
+        and isinstance(value, list)
+        and all(
+            _cp9_is_sequence(row)
+            and isinstance(row, tuple)
+            and len(row) == 2
+            and isinstance(row[0], int)
+            and isinstance(row[1], SellRule)
+            for row in value
+        )
+    )
+
+
+def _cp12_bound_sell_collection(widget: object) -> Callable[[], list[tuple[int, SellRule]]]:
+    composer: object = getattr(widget, "_plan_composer", None)
+    method: object = (
+        getattr(widget, "_collect_enabled_sell_rules")
+        if composer is None
+        else getattr(composer, "collect_enabled_sell_rules")
+    )
+    if not isinstance(method, types.MethodType):
+        raise AssertionError("CP12 saved actual sell collection")
+
+    def collect() -> list[tuple[int, SellRule]]:
+        result: object = method()
+        if not _cp12_is_sell_collection(result):
+            raise AssertionError("CP12 typed original sell list")
+        return result
+
+    return collect
+
+
+def _test_cp12_request_filter_identity(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import MerchantStockTarget
+
+    @dataclass
+    class Request:
+        merchant_stock_targets: tuple[MerchantStockTarget, ...]
+
+    widget = _cp12_fixture(module)
+    owner = _cp12_composer(widget)
+    request = Request((MerchantStockTarget(555, 3),))
+    context: tuple[bool, str, dict[str, tuple[float, float] | None]] = (True, "Fixture", {"merchant": (1.0, 2.0)})
+    setattr(
+        widget, "catalog_merchant_essentials", [{"model_id": 555, "name": "Identification Kit", "item_type": "kit"}]
+    )
+    observations: list[object] = []
+    previous = sys.getprofile()
+
+    def profile(frame: types.FrameType, event: str, _value: object) -> None:
+        if event == "call" and frame.f_code is _cp12_bound(planning.BuyPlanner, "plan_buy_actions").__code__:
+            observations.append(frame.f_locals["execution_context"])
+
+    try:
+        sys.setprofile(profile)
+        allowed = owner.build_plan(
+            execution_context=request, supported_context_override=context, buy_action_rule_kinds=None
+        )
+        excluded = owner.build_plan(
+            execution_context=request, supported_context_override=context, buy_action_rule_kinds=set()
+        )
+        sys.setprofile(previous)
+        _cp11_equal(
+            [(buy.model_id, buy.quantity) for buy in allowed.merchant_stock_buys],
+            [(555, 3)],
+            "CP12 None admits actual request targets",
+        )
+        _expect(allowed.coords is context[2], "CP12 supported context mapping identity")
+        _expect(
+            not excluded.inventory_snapshot_captured and not excluded.merchant_stock_buys,
+            "CP12 explicit empty set skips request-only inventory acquisition",
+        )
+        _expect(
+            observations == [request] and observations[0] is request,
+            "CP12 PurchaseRequestView identity crosses real buy owner",
+        )
+    finally:
+        sys.setprofile(previous)
+
+
+def _test_cp12_late_sell_normalizer(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules.configuration import RuleNormalizer
+    from Sources.icefox.MerchantRules.configuration import SellRule
+    from Sources.icefox.MerchantRules.configuration import WhitelistTarget
+
+    widget = _cp12_fixture(module)
+    owner = _cp12_composer(widget)
+    rule = SellRule(
+        enabled=True, kind="sell_explicit_models", rule_id="cp12-sell", whitelist_targets=[WhitelistTarget(500, 0)]
+    )
+    setattr(widget, "sell_rules", [rule])
+    normalizer_value: object = getattr(module, "_rule_normalizer")
+    if not isinstance(normalizer_value, RuleNormalizer):
+        raise AssertionError("CP12 canonical RuleNormalizer")
+    original = normalizer_value.normalize_sell_rule
+    saved_alias: object = getattr(module, "_normalize_sell_rule")
+    if (
+        not isinstance(saved_alias, types.MethodType)
+        or saved_alias.__self__ is not normalizer_value
+        or saved_alias.__func__ is not original.__func__
+    ):
+        raise AssertionError("CP12 original already-bound normalizer alias")
+    trace: list[object] = []
+    restore = _CP8Restoration()
+
+    def normalizer(raw: SellRule) -> SellRule | None:
+        trace.append(raw)
+        return original(raw)
+
+    try:
+        restore.binding(module, "_normalize_sell_rule", normalizer)
+        first = owner.collect_enabled_sell_rules()
+        _expect(_cp12_is_sell_collection(first), "CP12 actual normalized collection")
+        if not _cp12_is_sell_collection(first):
+            raise AssertionError("CP12 typed first collection")
+        _expect(
+            first[0][1] is rule and rule.rule_id == "cp12-sell", "CP12 normalization preserves original reference/ID"
+        )
+        changed = SellRule(
+            enabled=True, kind="sell_explicit_models", rule_id="cp12-new", whitelist_targets=[WhitelistTarget(501, 0)]
+        )
+        setattr(widget, "sell_rules", [changed])
+        second = owner.collect_enabled_sell_rules()
+        _expect(_cp12_is_sell_collection(second), "CP12 second canonical collection")
+        if not _cp12_is_sell_collection(second):
+            raise AssertionError("CP12 typed second collection")
+        _expect(first is not second and second[0][1] is changed, "CP12 late rules and fresh outer collection")
+        _expect(
+            trace == [rule, changed] and trace[0] is rule and trace[1] is changed,
+            "CP12 replaced normalizer observed at actual collection",
+        )
+    finally:
+        restore.restore()
+
+
+def _test_cp12_multistop_destination_identity(module: types.ModuleType) -> None:
+    from Sources.icefox.MerchantRules import planning
+    from Sources.icefox.MerchantRules.configuration import BuyRule
+
+    widget: object = _cp12_bound(sys.modules[__name__], "_configure_consumable_multistop_fixture")(
+        module, include_material_buy=True
+    )
+    rules: object = getattr(widget, "buy_rules")
+    if not _cp12_is_buy_rules(rules):
+        raise AssertionError("CP12 configured buy rules")
+    # The established fixture constructs the crafter rule first.
+    if not rules or type(rules[0]) is not BuyRule:
+        raise AssertionError("CP12 original crafter fixture first rule")
+    rules[0].enabled = False
+    composer = _cp12_composer(widget)
+    method: object = getattr(type(composer), "build_plan")
+    if not isinstance(method, types.FunctionType):
+        raise AssertionError("CP12 real recursive build")
+    plans: list[PlanResult] = []
+    previous = sys.getprofile()
+
+    def profile(frame: types.FrameType, event: str, value: object) -> None:
+        if frame.f_code is method.__code__ and frame.f_locals.get("self") is composer and event == "return":
+            plans.append(_cp12_plan(value))
+
+    try:
+        sys.setprofile(profile)
+        result = composer.build_consumable_crafter_multi_stop_preview(2)
+        sys.setprofile(previous)
+        _expect(len(plans) == 2 and not plans[0].has_actions, "CP12 real no-Embark branch")
+        _expect(result is plans[1], "CP12 destination plan itself is returned")
+        _expect(type(result) is planning.PlanResult, "CP12 actual destination plan")
+    finally:
+        sys.setprofile(previous)
+
+
+def _test_cp12_execution_publication(module: types.ModuleType) -> None:
+    widget: object = _prime_initialized_widget(module, _cp12_fixture(module))
+    old = _cp12_seed_preview(widget)
+    failure = RuntimeError("CP12 availability after execution publication")
+    captured: list[dict[str, object]] = []
+    references: list[PlanResult] = []
+    restore = _CP8Restoration()
+
+    def availability() -> dict[str, bool]:
+        plan = _cp12_plan(getattr(widget, "preview_plan"))
+        _expect(plan is not old, "CP12 real execution published before availability")
+        references.append(plan)
+        captured.append(_cp12_snapshot(widget))
+        raise failure
+
+    try:
+        restore.binding(widget, "_get_preview_here_availability", availability)
+        result = _CP12WidgetAccess.execute(widget, local_only=True, post_gold_balance=False)
+        if not isinstance(result, types.GeneratorType):
+            raise AssertionError("CP12 real execution generator")
+        _drain_generator_return(result)
+        _expect(
+            len(references) == 1 and getattr(widget, "preview_plan") is references[0],
+            "CP12 execution failure retains published plan",
+        )
+        _expect(
+            getattr(widget, "last_error") == str(failure), "CP12 execution preserves existing exception-to-error policy"
+        )
+        _expect(
+            getattr(widget, "status_message") == "Execution failed. See the console log for details.",
+            "CP12 execution failure status",
+        )
+        _expect(captured[0]["last_error"] == "", "CP12 independent snapshot precedes catch publication")
+    finally:
+        restore.restore()
+
+
+class _CP12CompositionFixture:
+    """Independent real composer for no-demand and skipped-acquisition paths."""
+
+    def __init__(self, module: types.ModuleType) -> None:
+        from Sources.icefox.MerchantRules import configuration as c
+
+        self.local = _CP11LocalFixture(module)
+        self.local.identify_settings = c.IdentifySettings()
+        self.local.salvage_settings = c.SalvageSettings(rules=[])
+        self.local.destroy_rules = []
+        self.buy_fixture = _CP10BuyFixture(module)
+        self.cleanup_fixture = _CP10CleanupFixture(module)
+        self.buy = self.buy_fixture.owner
+        self.trace: list[str] = []
+        self.items: list[InventoryItemInfo] = []
+        self.storage_items: list[InventoryItemInfo] = []
+        self.material_items: list[InventoryItemInfo] = []
+        self.sell_rules: list[SellRule] = []
+        self.reserved_ids: set[int] = set()
+        self.labels: dict[str, str] = {}
+        self.quantities: dict[int, int] = {}
+        self.auto_travel = False
+        self.target_outpost = 0
+        self.map_id = 1
+        self.reservation_active = False
+        self.storage_reliable = True
+        self.storage_is_open = False
+        self.local_storage_ready = False
+        self.context: tuple[bool, str, dict[str, tuple[float, float] | None]] = (True, "Direct", {})
+        self.clock_value = 0.0
+        self.constructing = False
+
+    def construction_read[T](self, read: Callable[[], T]) -> T:
+        if self.constructing:
+            raise AssertionError("CP12 composer constructor observed a collaborator")
+        return read()
+
+    def make(self) -> PlanComposer[_CP10Recipe, _CP11Candidate, _CP11Match, _CP11Resolution]:
+        from Sources.icefox.MerchantRules import configuration as c
+        from Sources.icefox.MerchantRules.item_values import safe_int
+        from Sources.icefox.MerchantRules.planning import CompositionNormalizers
+        from Sources.icefox.MerchantRules.planning import ExecutionPlanEntry
+        from Sources.icefox.MerchantRules.planning import PlanComposer
+        from Sources.icefox.MerchantRules.planning import PlanResult
+
+        self.constructing = True
+        try:
+            owner: PlanComposer[_CP10Recipe, _CP11Candidate, _CP11Match, _CP11Resolution] = PlanComposer(
+                normalizers=CompositionNormalizers(
+                    get_buy_rule=lambda: self.construction_read(lambda: self.buy_fixture.normalize),
+                    get_sell_rule=lambda: self.construction_read(lambda: self.local.normalizer.normalize_sell_rule),
+                    get_material_targets=lambda: self.construction_read(lambda: c.normalize_material_targets),
+                    get_merchant_stock_targets=lambda: self.construction_read(
+                        lambda: c.normalize_merchant_stock_targets
+                    ),
+                    get_rune_sell_targets=lambda: self.construction_read(lambda: c.normalize_rune_sell_targets),
+                    get_rune_trader_targets=lambda: self.construction_read(lambda: c.normalize_rune_trader_targets),
+                    get_whitelist_targets=lambda: self.construction_read(lambda: c.normalize_whitelist_targets),
+                    get_unique_rule_id=lambda: self.construction_read(lambda: c.ensure_unique_rule_id),
+                    get_safe_int=lambda: self.construction_read(lambda: safe_int),
+                    get_scroll_stock=lambda: self.construction_read(
+                        lambda: self.local.normalizer.is_scroll_trader_stock_model
+                    ),
+                    get_material_storage_permission=lambda: self.construction_read(
+                        lambda: c.sell_rule_can_include_material_storage
+                    ),
+                ),
+                read_buy_rules=lambda: self.construction_read(lambda: self.buy_fixture.rules),
+                read_sell_rules=lambda: self.construction_read(lambda: self.sell_rules),
+                read_destroy_rules=lambda: self.construction_read(lambda: self.local.destroy_rules),
+                read_auto_travel=lambda: self.construction_read(lambda: self.auto_travel),
+                read_target_outpost=lambda: self.construction_read(lambda: self.target_outpost),
+                read_reservation_active=lambda: self.construction_read(lambda: self.reservation_active),
+                read_reserved_item_ids=lambda: self.construction_read(lambda: self.reserved_ids),
+                read_sale_planner=lambda: self.construction_read(self.unexpected_sale),
+                read_buy_planner=lambda: self.construction_read(lambda: self.buy),
+                read_cleanup_planner=lambda: self.construction_read(lambda: self.cleanup_fixture.owner),
+                read_identify_planner=lambda: self.construction_read(lambda: self.local.identify),
+                read_salvage_planner=lambda: self.construction_read(lambda: self.local.salvage),
+                read_destroy_planner=lambda: self.construction_read(lambda: self.local.destroy),
+                read_policy=lambda: self.construction_read(self.unexpected_policy),
+                get_inventory_items=lambda: self.construction_read(lambda: self.read_inventory),
+                get_storage_items=lambda: self.construction_read(lambda: self.read_storage),
+                get_reliable_storage_items=lambda: self.construction_read(lambda: self.read_reliable_storage),
+                get_material_storage_items=lambda: self.construction_read(lambda: self.read_material_storage),
+                get_supported_context=lambda: self.construction_read(lambda: self.read_context),
+                get_local_storage_ready=lambda: self.construction_read(lambda: self.read_local_storage_ready),
+                get_storage_open=lambda: self.construction_read(lambda: self.read_storage_open),
+                get_map_id=lambda: self.construction_read(lambda: self.read_map),
+                get_outpost_name=lambda: self.construction_read(lambda: self.outpost_name),
+                get_guild_hall_target=lambda: self.construction_read(lambda: self.guild_hall_target),
+                get_target_reached=lambda: self.construction_read(lambda: self.target_reached),
+                get_embark_name=lambda: self.construction_read(lambda: self.embark_name),
+                read_embark_id=lambda: self.construction_read(lambda: 857),
+                read_projected_coords=lambda: self.construction_read(lambda: (0.0, 0.0)),
+                read_merchant_labels=lambda: self.construction_read(lambda: self.labels),
+                read_recipes=lambda: self.construction_read(lambda: self.buy_fixture.recipes),
+                get_early_kit_models=lambda: self.construction_read(lambda: self.early_kit_models),
+                read_live_check_status=lambda: self.construction_read(lambda: "live_check"),
+                get_quantity=lambda: self.construction_read(lambda: self.quantity),
+                get_clock=lambda: self.construction_read(lambda: self.clock),
+                get_diagnostic=lambda: self.construction_read(lambda: self.diagnostic),
+                get_plan_summary=lambda: self.construction_read(lambda: self.summary),
+                get_plan_factory=lambda: self.construction_read(lambda: PlanResult),
+                get_entry_factory=lambda: self.construction_read(lambda: ExecutionPlanEntry),
+            )
+        finally:
+            self.constructing = False
+        return owner
+
+    def unexpected_sale(self) -> Never:
+        raise AssertionError("CP12 no-demand path acquired SalePlanner")
+
+    def unexpected_policy(self) -> Never:
+        raise AssertionError("CP12 no-demand path acquired ProtectionPolicy")
+
+    def read_inventory(self) -> list[InventoryItemInfo]:
+        self.trace.append("inventory")
+        return self.items
+
+    def read_storage(self) -> list[InventoryItemInfo]:
+        self.trace.append("storage")
+        return self.storage_items
+
+    def read_reliable_storage(self) -> tuple[list[InventoryItemInfo], bool]:
+        self.trace.append("storage:reliable")
+        return self.storage_items, self.storage_reliable
+
+    def read_material_storage(self) -> list[InventoryItemInfo]:
+        self.trace.append("storage:material")
+        return self.material_items
+
+    def read_context(self, *, passive: bool = False) -> tuple[bool, str, dict[str, tuple[float, float] | None]]:
+        self.trace.append(f"context:{passive}")
+        return self.context
+
+    def read_local_storage_ready(self) -> bool:
+        self.trace.append("local-storage")
+        return self.local_storage_ready
+
+    def read_storage_open(self) -> bool:
+        self.trace.append("storage-open")
+        return self.storage_is_open
+
+    def read_map(self) -> int:
+        self.trace.append("map")
+        return self.map_id
+
+    def outpost_name(self, outpost_id: int) -> str:
+        self.trace.append(f"outpost:{outpost_id}")
+        return f"Outpost {outpost_id}"
+
+    def guild_hall_target(self, outpost_id: int) -> bool:
+        self.trace.append(f"guild-hall:{outpost_id}")
+        return False
+
+    def target_reached(self, target_outpost_id: int, current_map_id: int | None = None) -> bool:
+        self.trace.append(f"target-reached:{target_outpost_id}:{current_map_id}")
+        return target_outpost_id == (self.map_id if current_map_id is None else current_map_id)
+
+    def embark_name(self) -> str:
+        self.trace.append("embark-name")
+        return "Embark Beach"
+
+    def early_kit_models(self, option: str) -> tuple[int, ...]:
+        self.trace.append("early-kit:" + option)
+        return ()
+
+    def quantity(self, item_id: int) -> int:
+        self.trace.append(f"quantity:{item_id}")
+        return self.quantities.get(item_id, 0)
+
+    def clock(self) -> float:
+        self.trace.append("clock")
+        current = self.clock_value
+        self.clock_value += 0.001
+        return current
+
+    def diagnostic(self, message: str) -> None:
+        self.trace.append("diagnostic:" + message)
+
+    def summary(self, prefix: str, plan: PlanResult) -> None:
+        self.trace.append(f"summary:{prefix}:{plan.inventory_snapshot_captured}")
+
+
+_CP12_CASES: list[tuple[str, Callable[[types.ModuleType], None]]] = [
+    ("cp12_composer_constructor", _test_cp12_composer_constructor),
+    ("cp12_acquisition_no_rules", lambda module: _test_cp12_composer_acquisition(module, "no-rules")),
+    ("cp12_acquisition_normal", lambda module: _test_cp12_composer_acquisition(module, "normal")),
+    ("cp12_acquisition_empty", lambda module: _test_cp12_composer_acquisition(module, "empty")),
+    ("cp12_late_composer_inputs", _test_cp12_late_composer_inputs),
+    ("cp12_late_sell_normalizer", _test_cp12_late_sell_normalizer),
+    ("cp12_request_filter_identity", _test_cp12_request_filter_identity),
+    ("cp12_real_multistop", _test_cp12_real_multistop),
+    ("cp12_multistop_destination_identity", _test_cp12_multistop_destination_identity),
+    ("cp12_nested_timing_failure", _test_cp12_nested_timing_failure),
+    ("cp12_compatibility_facades", _test_cp12_compatibility_facades),
+    ("cp12_preview_direct", _test_cp12_preview_direct),
+    ("cp12_drift_not_ready", lambda module: _test_cp12_drift(module, "not-ready")),
+    ("cp12_drift_no_snapshot", lambda module: _test_cp12_drift(module, "no-snapshot")),
+    ("cp12_drift_match", lambda module: _test_cp12_drift(module, "match")),
+    ("cp12_drift_changed", lambda module: _test_cp12_drift(module, "changed")),
+    ("cp12_drift_failure_inventory", lambda module: _test_cp12_drift_failure(module, "inventory")),
+    ("cp12_drift_failure_snapshot", lambda module: _test_cp12_drift_failure(module, "snapshot")),
+    ("cp12_drift_failure_conversion", lambda module: _test_cp12_drift_failure(module, "conversion")),
+    ("cp12_drift_failure_label", lambda module: _test_cp12_drift_failure(module, "label")),
+    ("cp12_projection_failure_id", lambda module: _test_cp12_projection_failure(module, "id")),
+    ("cp12_projection_failure_name", lambda module: _test_cp12_projection_failure(module, "name")),
+    ("cp12_scan_publication_preview_plan", lambda module: _test_cp12_scan_publication(module, "preview_plan")),
+    ("cp12_scan_publication_preview_ready", lambda module: _test_cp12_scan_publication(module, "preview_ready")),
+    (
+        "cp12_scan_publication_preview_requires_execute_travel",
+        lambda module: _test_cp12_scan_publication(module, "preview_requires_execute_travel"),
+    ),
+    (
+        "cp12_scan_publication_preview_execute_travel_target_outpost_id",
+        lambda module: _test_cp12_scan_publication(module, "preview_execute_travel_target_outpost_id"),
+    ),
+    (
+        "cp12_scan_publication_preview_execute_travel_target_outpost_name",
+        lambda module: _test_cp12_scan_publication(module, "preview_execute_travel_target_outpost_name"),
+    ),
+    (
+        "cp12_scan_publication_preview_inventory_diff_summary",
+        lambda module: _test_cp12_scan_publication(module, "preview_inventory_diff_summary"),
+    ),
+    (
+        "cp12_scan_publication_preview_inventory_diff_rows",
+        lambda module: _test_cp12_scan_publication(module, "preview_inventory_diff_rows"),
+    ),
+    (
+        "cp12_scan_publication_last_preview_compare_duration_ms",
+        lambda module: _test_cp12_scan_publication(module, "last_preview_compare_duration_ms"),
+    ),
+    (
+        "cp12_scan_publication_execute_drift_requires_confirmation",
+        lambda module: _test_cp12_scan_publication(module, "execute_drift_requires_confirmation"),
+    ),
+    ("cp12_scan_publication_status_message", lambda module: _test_cp12_scan_publication(module, "status_message")),
+    ("cp12_scan_publication_last_error", lambda module: _test_cp12_scan_publication(module, "last_error")),
+    ("cp12_reset_dirty", lambda module: _test_cp12_reset_distinctions(module, "dirty")),
+    ("cp12_reset_diagnostics", lambda module: _test_cp12_reset_distinctions(module, "diagnostics")),
+    ("cp12_reset_profile_prefix", lambda module: _test_cp12_reset_distinctions(module, "profile-prefix")),
+    ("cp12_queue_admission", _test_cp12_queue_admission),
+    ("cp12_interpretation", _test_cp12_interpretation),
+    ("cp12_empty_availability", _test_cp12_empty_availability),
+    ("cp12_raw_construction", _test_cp12_raw_construction),
+    ("cp12_service_double_refresh", _test_cp12_service_double_refresh),
+    ("cp12_remote_consumer", _test_cp12_remote_consumer),
+    ("cp12_execution_consumer", _test_cp12_execution_consumer),
+    ("cp12_actual_remote_execution", _test_cp12_actual_remote_execution),
+    ("cp12_execution_publication", _test_cp12_execution_publication),
+    ("cp12_cold_import", lambda _module: _test_cp12_cold_import()),
+    ("cp12_completed_cp11_differential", lambda _module: _test_cp12_completed_cp11_differential()),
+]
+
+_CP12_STAGE_CASES: dict[str, tuple[str, ...]] = {
+    "composition": (
+        "cp12_composer_constructor",
+        "cp12_acquisition_no_rules",
+        "cp12_acquisition_normal",
+        "cp12_acquisition_empty",
+        "cp12_late_composer_inputs",
+        "cp12_late_sell_normalizer",
+        "cp12_request_filter_identity",
+        "cp12_real_multistop",
+        "cp12_multistop_destination_identity",
+        "cp12_nested_timing_failure",
+        "cp12_compatibility_facades",
+    ),
+    "preview": (
+        "cp12_preview_direct",
+        "cp12_drift_not_ready",
+        "cp12_drift_no_snapshot",
+        "cp12_drift_match",
+        "cp12_drift_changed",
+        "cp12_drift_failure_inventory",
+        "cp12_drift_failure_snapshot",
+        "cp12_drift_failure_conversion",
+        "cp12_drift_failure_label",
+        "cp12_projection_failure_id",
+        "cp12_projection_failure_name",
+        "cp12_scan_publication_preview_plan",
+        "cp12_scan_publication_preview_ready",
+        "cp12_scan_publication_preview_requires_execute_travel",
+        "cp12_scan_publication_preview_execute_travel_target_outpost_id",
+        "cp12_scan_publication_preview_execute_travel_target_outpost_name",
+        "cp12_scan_publication_preview_inventory_diff_summary",
+        "cp12_scan_publication_preview_inventory_diff_rows",
+        "cp12_scan_publication_last_preview_compare_duration_ms",
+        "cp12_scan_publication_execute_drift_requires_confirmation",
+        "cp12_scan_publication_status_message",
+        "cp12_scan_publication_last_error",
+        "cp12_reset_dirty",
+        "cp12_reset_diagnostics",
+        "cp12_reset_profile_prefix",
+        "cp12_queue_admission",
+        "cp12_interpretation",
+        "cp12_empty_availability",
+    ),
+    "integration": (
+        "cp12_raw_construction",
+        "cp12_service_double_refresh",
+        "cp12_remote_consumer",
+        "cp12_execution_consumer",
+        "cp12_actual_remote_execution",
+        "cp12_execution_publication",
+        "cp12_cold_import",
+        "cp12_completed_cp11_differential",
+    ),
+}
+
+_CP12_STAGE_REUSED_CASES: dict[str, tuple[str, ...]] = {
+    "composition": (
+        "cp7_planning_multi_stop_identity_and_projection",
+        "cp7_planning_retained_orchestration_and_authority",
+        "cp8_policy_xunlai_routes",
+        "cp9_sale_nonempty_phase",
+        "cp9_sale_fresh_collection",
+        "cp9_sale_xunlai_order_sharing",
+        "cp10_combined_route",
+        "cp11_combined_actual_route",
+    ),
+    "preview": (
+        "preview_status_widget_contract",
+        "inventory_owner_profile_and_resets",
+        "request_execute_now_queues_only_when_preview_matches",
+        "lifecycle_same_map_uptime_rollback_invalidates_preview",
+        "cross_profile_after_purchase_cleanup_waits_for_owned_execution",
+    ),
+    "integration": ("cp11_combined_actual_route",),
+}
+
+
+_CP12_INPUTS: tuple[str, ...] = _CP11_INPUTS + ("Sources/icefox/MerchantRules/preview.py",)
+
+
+def _cp12_preview_digest(root: Path) -> str:
+    from hashlib import sha256
+
+    parent = _cp10_guard(root / "Sources/icefox/MerchantRules")
+    path = parent / "preview.py"
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return "ABSENT"
+    return sha256(_cp10_guard(path).read_bytes()).hexdigest()
+
+
+def _cp12_pins(root: Path) -> dict[str, str]:
+    result = _cp10_pins(root)
+    result["Sources/icefox/MerchantRules/preview.py"] = _cp12_preview_digest(root)
+    return result
+
+
+def _cp12_capture_final(
+    roots: Mapping[str, Path],
+    before: Mapping[str, dict[str, str]],
+    final: dict[str, object],
+    errors: list[str],
+) -> None:
+    for name, root in roots.items():
+        observed = _cp10_final_state(root)
+        preview: str | None = None
+        try:
+            preview = _cp12_preview_digest(root)
+        except Exception as error:
+            errors.append(name + "/preview.py: " + type(error).__name__ + ": " + str(error))
+        record = {"common": observed, "preview.py": preview}
+        final[name] = record
+        if observed["errors"] or not observed["namespace_absent"]:
+            errors.append(name + ": incomplete common final capture")
+        if name not in before:
+            errors.append(name + ": initial capture unavailable; final observation is not equality proof")
+        else:
+            expected_common = {
+                key: value for key, value in before[name].items() if key != "Sources/icefox/MerchantRules/preview.py"
+            }
+            if observed["pins"] != expected_common:
+                errors.append(name + ": common source pins changed")
+            if preview != before[name].get("Sources/icefox/MerchantRules/preview.py"):
+                errors.append(name + ": preview presence/identity changed")
+
+
+def _cp12_is_method_descriptor(
+    value: object,
+) -> TypeGuard[staticmethod[..., object] | classmethod[object, ..., object]]:
+    return isinstance(value, (staticmethod, classmethod))
+
+
+def _cp12_bindings(module: types.ModuleType) -> dict[str, str]:
+    origins = _cp11_bindings(module)
+    widget_owner: object = module.MerchantRulesWidget
+    if not isinstance(widget_owner, type):
+        raise AssertionError("CP12 concrete widget owner")
+    widget_namespace: Mapping[str, object] = vars(widget_owner)
+    for value in widget_namespace.values():
+        if isinstance(value, property):
+            for accessor in (value.fget, value.fset):
+                if isinstance(accessor, types.FunctionType):
+                    _expect(accessor.__globals__ is vars(module), "CP12 widget property defining globals")
+                    _expect(
+                        Path(accessor.__code__.co_filename).resolve() == MERCHANT_RULES_PATH.resolve(),
+                        "CP12 widget property defining source",
+                    )
+    planning = sys.modules["Sources.icefox.MerchantRules.planning"]
+    candidate = hasattr(planning, "PlanComposer")
+    preview_name = "Sources.icefox.MerchantRules.preview"
+    if not candidate:
+        _expect(preview_name not in sys.modules, "CP12 old side never imports candidate preview")
+        _requirement_contract_expect(_cp12_preview_digest(REPO_ROOT), "ABSENT", "CP12 genuine old preview absence")
+        return origins
+    preview = sys.modules.get(preview_name)
+    _expect(preview is not None, "CP12 canonical preview acquisition")
+    if preview is None:
+        raise AssertionError("CP12 preview module missing")
+    _expect(preview.PlanResult is planning.PlanResult is module.PlanResult, "CP12 canonical PlanResult")
+    for loaded, owner_name in ((planning, "PlanComposer"), (preview, "PreviewSession")):
+        owner: object = getattr(loaded, owner_name)
+        if not isinstance(owner, type):
+            raise AssertionError("CP12 canonical owner class: " + owner_name)
+        filename: object = getattr(loaded, "__file__", None)
+        if not isinstance(filename, str):
+            raise AssertionError("CP12 owner module origin")
+        origin = _cp10_guard(Path(filename))
+        _expect(origin.is_relative_to(REPO_ROOT), "CP12 owner source is side-local")
+        for value in vars(owner).values():
+            functions: list[object] = [value]
+            if _cp12_is_method_descriptor(value):
+                functions = [getattr(value, "__func__")]
+            elif isinstance(value, property):
+                functions = [value.fget, value.fset]
+            for target in functions:
+                if isinstance(target, types.FunctionType):
+                    _expect(target.__globals__ is vars(loaded), "CP12 owner defining globals")
+                    _expect(Path(target.__code__.co_filename).resolve() == origin, "CP12 owner defining source")
+    return origins
+
+
+def _cp12_cold_widget(scratch: Path) -> dict[str, object]:
+    from typing import get_type_hints
+
+    events: list[str] = []
+    _install_stub_modules(scratch)
+    database: object = getattr(sys.modules['Sources.marks_sources.mods_parser'], 'ModDatabase')
+    _expect(isinstance(database, type), 'CP12 stub database class')
+    original_load: object = getattr(database, 'load')
+    if not isinstance(original_load, types.FunctionType):
+        raise AssertionError('CP12 stub database loader')
+
+    def load(path: str) -> object:
+        result: object = original_load(path)
+        events.append('mod_database_initialized')
+        return result
+
+    setattr(database, 'load', staticmethod(load))
+
+    class Watch(importlib.abc.MetaPathFinder):
+        def find_spec(
+            self,
+            fullname: str,
+            path: Sequence[str] | None = None,
+            target: types.ModuleType | None = None,
+        ) -> importlib.machinery.ModuleSpec | None:
+            if fullname == 'Sources.icefox.MerchantRules.planning':
+                events.append('planning')
+                _expect(
+                    'Sources.icefox.MerchantRules.requirement_protection' not in sys.modules,
+                    'CP12 planning precedes protection acquisition',
+                )
+            if fullname == 'Sources.icefox.MerchantRules.requirement_protection':
+                partial = sys.modules.get('merchant_rules_regression_target')
+                _expect(
+                    partial is not None and 'MOD_DB' in vars(partial),
+                    'CP12 MOD_DB bound before first protection acquisition',
+                )
+                events.append('requirement_first_acquisition')
+            return None
+
+    annotations: Mapping[str, object] = get_type_hints(Watch.find_spec)
+    _expect(
+        annotations['return'] == importlib.machinery.ModuleSpec | None
+        and annotations['target'] == types.ModuleType | None
+        and annotations['path'] == Sequence[str] | None,
+        'CP12 watcher annotations resolve through the global importlib binding',
+    )
+    watcher = Watch()
+    sys.meta_path.insert(0, watcher)
+    try:
+        spec = importlib.util.spec_from_file_location('merchant_rules_regression_target', MERCHANT_RULES_PATH)
+        if spec is None or spec.loader is None:
+            raise AssertionError('CP12 widget import specification')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        setattr(module, 'PROFILE_BACKEND', sys.modules['Sources.icefox.MerchantRules.profiles'])
+    finally:
+        sys.meta_path.remove(watcher)
+    _requirement_contract_expect(
+        events,
+        ['planning', 'mod_database_initialized', 'requirement_first_acquisition'],
+        'CP12 real widget-driven acquisition order',
+    )
+    from Sources.icefox.MerchantRules import planning
+
+    candidate = hasattr(planning, "PlanComposer")
+    if candidate:
+        _test_cp12_raw_construction(module)
+    return {
+        'annotations_resolved': True,
+        'events': events,
+        'bindings': _cp12_bindings(module),
+        'candidate_constructor_checked': candidate,
+        'loader': 'widget stub packages; namespace proof is a separate child',
+    }
+
+
+def _cp12_child(mode: str, scratch: Path) -> int:
+    import importlib
+
+    global _cp10_storage_root
+
+    primary: BaseException | None = None
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    errors: list[str] = []
+    storage_ready = False
+    result: dict[str, object] = {}
+    try:
+        _cp10_guard(scratch)
+        _expect(
+            not scratch.is_relative_to(REPO_ROOT) and not REPO_ROOT.is_relative_to(scratch),
+            'CP12 source and writable storage roots are disjoint',
+        )
+        _cp10_storage_root = scratch
+        storage_ready = True
+        before['source'] = _cp12_pins(REPO_ROOT)
+        _expect(
+            not any(name == 'Sources' or name.startswith('Sources.') for name in sys.modules),
+            'CP12 fresh process starts without project packages',
+        )
+        sys.path.insert(0, str(REPO_ROOT))
+
+        def owned_write(raw: object) -> None:
+            if not _cp10_is_path(raw):
+                return
+            path = Path(os.path.abspath(os.fsdecode(raw)))
+            _expect(path.is_relative_to(scratch), 'CP12 write outside owned storage: ' + str(path))
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                _cp10_guard(path.parent)
+            else:
+                _cp10_guard(path)
+
+        def audit(event: str, arguments: tuple[object, ...]) -> None:
+            if event.startswith('socket.') or event in ('ctypes.dlopen', 'subprocess.Popen'):
+                raise RuntimeError('CP12 offline child forbids ' + event)
+            if event == 'open':
+                flags = arguments[2]
+                if isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC):
+                    owned_write(arguments[0])
+            elif event in ('os.mkdir', 'os.remove', 'os.rmdir', 'shutil.rmtree'):
+                owned_write(arguments[0])
+            elif event in ('os.rename', 'os.replace'):
+                owned_write(arguments[0])
+                owned_write(arguments[1])
+
+        sys.addaudithook(audit)
+        if mode in ('planning', 'preview'):
+            planning = importlib.import_module('Sources.icefox.MerchantRules.' + mode)
+            parent = sys.modules['Sources']
+            spec = parent.__spec__
+            if getattr(parent, '__file__', None) is not None or spec is None or spec.origin is not None:
+                raise AssertionError('CP12 actual namespace parent')
+            locations = spec.submodule_search_locations
+            if locations is None or list(locations) != [str(REPO_ROOT / 'Sources')]:
+                raise AssertionError('CP12 namespace uses exactly the selected root')
+            for name in (
+                'Py4GWCoreLib',
+                'PyJson',
+                'Sources.icefox.MerchantRules.inventory_evidence',
+                'Sources.icefox.MerchantRules.requirement_protection',
+            ):
+                _expect(name not in sys.modules, 'CP12 isolated planning acquired forbidden dependency: ' + name)
+            filename = planning.__file__
+            if (
+                filename is None
+                or Path(filename).resolve() != (REPO_ROOT / f'Sources/icefox/MerchantRules/{mode}.py').resolve()
+            ):
+                raise AssertionError('CP12 canonical planning origin')
+            candidate_routes = hasattr(planning, "PlanComposer" if mode == "planning" else "PreviewSession")
+            if mode == 'planning':
+                _requirement_contract_expect(planning.material_batch_size(921), 10, 'CP12 cold pure batch primitive')
+                _requirement_contract_expect(
+                    planning.material_destination(923),
+                    'rare_material_trader',
+                    'CP12 cold pure destination primitive',
+                )
+            result = {
+                'namespace': True,
+                'eager_inventory': False,
+                'eager_protection': False,
+                'new_owner': candidate_routes,
+            }
+        elif mode == 'widget':
+            result = _cp12_cold_widget(scratch)
+        elif mode == 'observations':
+            module: types.ModuleType = _load_merchant_rules_module(scratch)
+            origins = _cp12_bindings(module)
+            result = {
+                'values': _cp12_differential_observations(module),
+                'bindings': origins,
+                'within_process_identity_assertions': True,
+            }
+            _cp12_bindings(module)
+        else:
+            raise AssertionError('CP12 unknown child mode: ' + mode)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        _cp12_capture_final({'source': REPO_ROOT}, before, final, errors)
+        record = {
+            'mode': mode,
+            'status': 'failed' if primary is not None or errors else 'completed',
+            'exception': None if primary is None else {'type': type(primary).__name__, 'message': str(primary)},
+            'source_root': str(REPO_ROOT),
+            'widget_path': str(MERCHANT_RULES_PATH),
+            'script_dir': str(SCRIPT_DIR),
+            'storage_root': str(scratch),
+            'flags': {
+                'isolated': sys.flags.isolated,
+                'no_site': sys.flags.no_site,
+                'dont_write_bytecode': sys.flags.dont_write_bytecode,
+                'optimize': sys.flags.optimize,
+                'utf8_mode': sys.flags.utf8_mode,
+            },
+            'environment': _cp10_environment(os.environ),
+            'before': before,
+            'final': final,
+            'evidence_errors': errors,
+        }
+        if storage_ready:
+            _cp10_attempt('child final write', lambda: _cp10_write_json(scratch / 'child-final.json', record), errors)
+        else:
+            _cp10_attempt(
+                'child final stream', lambda: print('CP12_FINAL=' + json.dumps(record, sort_keys=True)), errors
+            )
+        _cp10_preserve_failure(primary, errors)
+    print('CP12_JSON=' + json.dumps(result, sort_keys=True))
+    return 0
+
+
+def _cp12_external(kind: str) -> dict[str, object]:
+    from uuid import uuid4
+
+    _expect(kind in ('cold', 'differential'), 'CP12 known external run kind')
+    parent = _cp10_guard(Path(os.environ['MERCHANT_RULES_CP12_OUTPUT_PARENT']))
+    oracle = Path(os.environ['MERCHANT_RULES_CP12_ORACLE_ROOT'])
+    candidate = REPO_ROOT
+    _expect(
+        not parent.is_relative_to(oracle) and not parent.is_relative_to(candidate),
+        'CP12 output parent outside source roots',
+    )
+    output = parent / ('cp11-' + kind + '-' + uuid4().hex[:8])
+    output.mkdir()
+    roots = {'oracle': oracle, 'candidate': candidate}
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    reports: dict[str, object] = {}
+    errors: list[str] = []
+    primary: BaseException | None = None
+    comparison = 'not-started' if kind == 'differential' else 'not-applicable'
+    mode_sets = {
+        side: (
+            (("planning", "widget", "preview") if side == "candidate" else ("planning", "widget"))
+            if kind == "cold"
+            else ("observations",)
+        )
+        for side in roots
+    }
+    jobs: dict[str, dict[str, object]] = {
+        side + '-' + mode: {'status': 'not-started', 'exit': None} for side in roots for mode in mode_sets[side]
+    }
+    try:
+        _cp10_guard(oracle)
+        _cp10_guard(candidate)
+        _expect(
+            oracle != candidate and not oracle.is_relative_to(candidate) and not candidate.is_relative_to(oracle),
+            'CP12 independent source roots',
+        )
+        for name, root in roots.items():
+            before[name] = _cp12_pins(root)
+        fixed = {
+            'Widgets/Guild Wars/Items & Loot/MerchantRules.py': '6f754387028018ec44d21d2e95b4c231ecbd236ea16627aec0abff592039ca77',
+            'Sources/icefox/MerchantRules/planning.py': 'cfdeaf8ec216fa5230c556a70e61942bd5878ea57384b0ef21cbabca3708151f',
+            'Sources/icefox/MerchantRules/profiles.py': '15916f9703ad3eda3149e1796cfeb8401dabb86768c14a5cb185579019f68f8d',
+            'Py4GWCoreLib/py4gwcorelib_src/JsonFactory.py': '993c20c987b1e64257db35ab10bb4ab1da74b837d4ab2292172f997ce5f7f3e1',
+        }
+        for relative, digest in fixed.items():
+            _requirement_contract_expect(before['oracle'][relative], digest, 'CP12 completed-CP11 oracle ' + relative)
+        _requirement_contract_expect(
+            before["oracle"]["Sources/icefox/MerchantRules/preview.py"], "ABSENT", "CP12 old preview absent"
+        )
+        _expect(
+            before["candidate"]["Sources/icefox/MerchantRules/preview.py"] != "ABSENT", "CP12 candidate preview exists"
+        )
+        for relative in _CP12_INPUTS:
+            if relative not in (
+                'Widgets/Guild Wars/Items & Loot/MerchantRules.py',
+                'Sources/icefox/MerchantRules/planning.py',
+                'Sources/icefox/MerchantRules/preview.py',
+            ):
+                _requirement_contract_expect(
+                    before['oracle'][relative],
+                    before['candidate'][relative],
+                    'CP12 identical non-production-delta input: ' + relative,
+                )
+        for side, root in roots.items():
+            for mode in mode_sets[side]:
+                key = side + '-' + mode
+                location = output / key
+                location.mkdir()
+                scratch = location / 'storage'
+                scratch.mkdir()
+                child = root / '.local-tests/merchant-rules/test_merchant_rules_regression.py'
+                command = [sys.executable, '-I', '-B', '-S', str(child), '--cp12-child', mode, str(scratch)]
+                environment = os.environ.copy()
+                environment['PYTHONDONTWRITEBYTECODE'] = '1'
+                for name in ('TEMP', 'TMP', 'TMPDIR'):
+                    environment[name] = str(scratch)
+                launch = jobs[key]
+                launch.update(
+                    {
+                        'source_pins': before[side],
+                        'source_root': str(root),
+                        'storage_root': str(scratch),
+                        'mode': mode,
+                    }
+                )
+                completed = _cp10_run_process(command, scratch, environment, location, launch, timeout=300)
+                records = [
+                    line.removeprefix('CP12_JSON=')
+                    for line in completed.stdout.decode('utf-8').splitlines()
+                    if line.startswith('CP12_JSON=')
+                ]
+                _expect(len(records) == 1, 'CP12 exactly one complete child observation')
+                report: object = json.loads(records[0])
+                reports[key] = report
+        if kind == 'differential':
+            comparison = 'comparing'
+            old_report, new_report = reports["oracle-observations"], reports["candidate-observations"]
+            if not _cp10_is_dict(old_report) or not _cp10_is_dict(new_report):
+                raise AssertionError("CP12 observation report shape")
+            _requirement_contract_expect(
+                old_report["values"],
+                new_report["values"],
+                "CP12 complete common literal values and ordered traces; origins asserted independently",
+            )
+            comparison = 'passed'
+    except BaseException as error:
+        primary = error
+        if comparison == 'comparing':
+            comparison = 'failed'
+        raise
+    finally:
+        _cp12_capture_final(roots, before, final, errors)
+        record = {
+            'kind': kind,
+            'status': 'failed' if primary is not None or errors else 'completed',
+            'exception': None if primary is None else {'type': type(primary).__name__, 'message': str(primary)},
+            'comparison': comparison,
+            'jobs': jobs,
+            'reports': reports,
+            'environment': _cp10_environment(os.environ),
+            'before': before,
+            'final': final,
+            'evidence_errors': errors,
+        }
+        _cp10_attempt('external report write', lambda: _cp10_write_json(output / 'report.json', record), errors)
+        _cp10_preserve_failure(primary, errors)
+    print('CP12 ' + kind + ' evidence: ' + str(output / 'report.json'))
+    return reports
+
+
+def _test_cp12_cold_import() -> None:
+    reports = _cp12_external("cold")
+    _cp10_equal(
+        set(reports),
+        {"oracle-planning", "oracle-widget", "candidate-planning", "candidate-widget", "candidate-preview"},
+        "CP12 five cold children",
+    )
+    for side in ("oracle", "candidate"):
+        planning = reports[side + "-planning"]
+        widget = reports[side + "-widget"]
+        if not _cp10_is_dict(planning) or not _cp10_is_dict(widget):
+            raise AssertionError("CP12 cold report object")
+        _expect(planning["new_owner"] is (side == "candidate"), "CP12 composer old/new presence")
+        _expect(
+            widget["candidate_constructor_checked"] is (side == "candidate"),
+            "CP12 raw-construction proof reaches only candidate owner",
+        )
+    preview = reports["candidate-preview"]
+    if not _cp10_is_dict(preview):
+        raise AssertionError("CP12 preview cold report object")
+    _expect(preview["namespace"] is True and preview["new_owner"] is True, "CP12 independent preview namespace import")
+
+
+def _test_cp12_completed_cp11_differential() -> None:
+    reports = _cp12_external("differential")
+    _cp10_equal(
+        set(reports),
+        {"oracle-observations", "candidate-observations"},
+        "CP12 two independently source-bound comparisons",
+    )
 
 
 def main() -> int:
@@ -63372,6 +66828,7 @@ def main() -> int:
 
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP10_CASES)
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP11_CASES)
+        tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP12_CASES)
 
         catalog_contract_tests = [
             (
@@ -63404,8 +66861,12 @@ def main() -> int:
             tests = catalog_contract_tests
 
         _expect(
-            not (os.environ.get("MERCHANT_RULES_CP10_CASES", "") and os.environ.get("MERCHANT_RULES_CP11_CASES", "")),
-            "CP10 and CP11 selections are mutually exclusive",
+            sum(
+                bool(os.environ.get(name, ""))
+                for name in ("MERCHANT_RULES_CP10_CASES", "MERCHANT_RULES_CP11_CASES", "MERCHANT_RULES_CP12_CASES")
+            )
+            <= 1,
+            "CP10, CP11 and CP12 selections are mutually exclusive",
         )
         requested = os.environ.get("MERCHANT_RULES_CP10_CASES", "")
         if requested:
@@ -63437,6 +66898,21 @@ def main() -> int:
             _expect(set(names_cp11) <= registered_cp11, "CP11 selection names must all be registered")
             tests = [test for test in tests if test[0] in names_cp11]
 
+        requested_cp12 = os.environ.get("MERCHANT_RULES_CP12_CASES", "")
+        if requested_cp12:
+            _expect(
+                not any(
+                    os.environ.get(name) == "1"
+                    for name in ("MERCHANT_RULES_CATALOG_ONLY", "MERCHANT_RULES_SALVAGE_KIT_ONLY")
+                ),
+                "CP12 selection cannot combine historical ONLY flags",
+            )
+            names_cp12 = requested_cp12.split(",")
+            _expect(len(names_cp12) == len(set(names_cp12)) and all(names_cp12), "CP12 unique nonempty selection")
+            registered_cp12 = {name for name, _ in tests}
+            _expect(set(names_cp12) <= registered_cp12, "CP12 every selected case is registered")
+            tests = [test for test in tests if test[0] in names_cp12]
+
         failures: list[tuple[str, str]] = []
         for name, test_fn in tests:
             try:
@@ -63465,12 +66941,18 @@ def main() -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        if len(sys.argv) != 4 or sys.argv[1] not in {"--cp9-child", "--cp10-child", "--cp11-child"}:
-            raise SystemExit("Expected --cp9-child, --cp10-child or --cp11-child MODE OWNED_STORAGE, or no arguments.")
+        if len(sys.argv) != 4 or sys.argv[1] not in {"--cp9-child", "--cp10-child", "--cp11-child", "--cp12-child"}:
+            raise SystemExit(
+                "Expected --cp9-child, --cp10-child, --cp11-child or --cp12-child MODE OWNED_STORAGE, or no arguments."
+            )
         child = (
-            _cp11_child
-            if sys.argv[1] == "--cp11-child"
-            else _cp10_child if sys.argv[1] == "--cp10-child" else _cp9_child
+            _cp12_child
+            if sys.argv[1] == "--cp12-child"
+            else (
+                _cp11_child
+                if sys.argv[1] == "--cp11-child"
+                else _cp10_child if sys.argv[1] == "--cp10-child" else _cp9_child
+            )
         )
         raise SystemExit(child(sys.argv[2], Path(sys.argv[3])))
     raise SystemExit(main())
