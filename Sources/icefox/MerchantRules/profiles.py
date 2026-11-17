@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import unicodedata
 from typing import TYPE_CHECKING
+from typing import Literal
+from typing import Protocol
 
 from Sources.icefox.MerchantRules.item_values import safe_int
 
@@ -1829,3 +1831,1233 @@ class SavedProfileSession:
         self.profile_selected_identities[PROFILE_SCOPE_ACCOUNT] = None
         self.profile_name_inputs[PROFILE_SCOPE_ACCOUNT] = ""
         self.profile_name_input_dirty[PROFILE_SCOPE_ACCOUNT] = False
+
+
+LiveProfileLogLevel = Literal["Info", "Warning", "Error"]
+
+
+class LiveProfileRuntime(Protocol):
+
+    @property
+    def account_key(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def initialized(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    def active_workspace(self) -> str:
+        raise NotImplementedError
+
+    @active_workspace.setter
+    def active_workspace(self, value: str) -> None:
+        raise NotImplementedError
+
+    @property
+    def active_rules_workspace(self) -> str:
+        raise NotImplementedError
+
+    @active_rules_workspace.setter
+    def active_rules_workspace(self, value: str) -> None:
+        raise NotImplementedError
+
+    @property
+    def status_message(self) -> str:
+        raise NotImplementedError
+
+    @status_message.setter
+    def status_message(self, value: str) -> None:
+        raise NotImplementedError
+
+    def get_account_key(self) -> str:
+        raise NotImplementedError
+
+    def get_current_character_observation(self) -> tuple[str, str] | None:
+        raise NotImplementedError
+
+    def get_profile_application_block_message(
+        self,
+        action: str,
+        *,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> str:
+        raise NotImplementedError
+
+    def merchant_rules_has_pending_or_active_work(
+        self,
+        *,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> bool:
+        raise NotImplementedError
+
+    def merchant_rules_lifecycle_block_reason(
+        self,
+        *,
+        require_service: bool = False,
+        require_character_profile: bool = True,
+    ) -> str:
+        raise NotImplementedError
+
+    def ensure_initialized(self) -> None:
+        raise NotImplementedError
+
+    def reset_runtime_after_profile_load(
+        self,
+        *,
+        status_message: str = "",
+        profile_display_name: str = "",
+        log_profile_load_summary: bool = True,
+    ) -> None:
+        raise NotImplementedError
+
+    def write_profile_payload_for_account(
+        self,
+        account_key: str,
+        payload: dict[str, object],
+    ) -> str:
+        raise NotImplementedError
+
+    def merchant_rules_is_generation_current(self, generation: int | None = None) -> bool:
+        raise NotImplementedError
+
+    def debug_log(self, message: str) -> None:
+        raise NotImplementedError
+
+    def log_profile_loaded_summary(self) -> None:
+        raise NotImplementedError
+
+    def clear_multibox_batch_runtime(self) -> None:
+        raise NotImplementedError
+
+    def clear_unresolved_preview(self) -> None:
+        raise NotImplementedError
+
+    def advance_profile_generation(self) -> None:
+        raise NotImplementedError
+
+    def publish_configuration_rescans(self) -> None:
+        raise NotImplementedError
+
+    def capture_log(self) -> Callable[[str, LiveProfileLogLevel], None]:
+        raise NotImplementedError
+
+
+class LiveDefaultProfilePayloadFactory(Protocol):
+    def __call__(self, *, include_rule_templates: bool) -> dict[str, object]:
+        raise NotImplementedError
+
+
+class LiveProfileConfiguration(Protocol):
+
+    @property
+    def build_profile_payload(self) -> Callable[[], dict[str, object]]:
+        raise NotImplementedError
+
+    @property
+    def build_default_profile_payload(self) -> LiveDefaultProfilePayloadFactory:
+        raise NotImplementedError
+
+    @property
+    def normalize_profile_payload(self) -> Callable[[object], dict[str, object]]:
+        raise NotImplementedError
+
+    @property
+    def apply_profile_payload(self) -> Callable[[dict[str, object]], None]:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class LiveProfileBindings:
+    factory_type: Callable[[], type[JsonFactory]]
+    profile_store: Callable[[], ProfileStore]
+    saved_session: Callable[[], SavedProfileSession]
+    safe_int: Callable[[], Callable[[object, int], int]]
+    profile_version: Callable[[], int]
+    confirmation_ticks: Callable[[], int]
+    retry_interval: Callable[[], float]
+    wall_time: Callable[[], float]
+    monotonic: Callable[[], float]
+    workspace_rules: Callable[[], str]
+    workspace_overview: Callable[[], str]
+    rules_workspace_buy: Callable[[], str]
+    live_doc_name: Callable[[], str]
+    backup_doc_name: Callable[[], str]
+    loaded_doc_name: Callable[[], str]
+    character_doc_name: Callable[[], str]
+    character_schema: Callable[[], str]
+    character_schema_version: Callable[[], int]
+    association_type: Callable[[], type[CharacterProfileAssociation]]
+    provenance_type: Callable[[], type[LoadedProfileProvenance]]
+    normalize_character_root: Callable[[], Callable[[object], dict[str, object]]]
+    association_from_json: Callable[[], Callable[[object], CharacterProfileAssociation]]
+    association_to_json: Callable[[], Callable[[CharacterProfileAssociation], dict[str, object]]]
+    copy_payload: Callable[[], Callable[[dict[str, object]], dict[str, object]]]
+    path_lexists: Callable[[], Callable[[str], bool]]
+    path_basename: Callable[[], Callable[[str], str]]
+    path_splitext: Callable[[], Callable[[str], tuple[str, str]]]
+
+
+class LiveProfileSession:
+    config_path: str
+    active_profile_display_name: str
+    loaded_profile_provenance: LoadedProfileProvenance | None
+    loaded_profile_provenance_warning: str
+    character_profile_ready: bool
+    character_profile_resolved_identity: tuple[str, str] | None
+    character_profile_resolved_observation: tuple[str, str] | None
+    character_profile_resolved_profile_identity: ProfileIdentity | None
+    character_profile_candidate_identity: tuple[str, str] | None
+    character_profile_candidate_observation: tuple[str, str] | None
+    character_profile_candidate_ticks: int
+    character_profile_resolution_target: tuple[str, str] | None
+    character_profile_pending_association: CharacterProfileAssociation | None
+    character_profile_pending_profile: ProfileSummary | None
+    character_profile_pending_needs_persist: bool
+    character_profile_pending_is_new_blank: bool
+    character_profile_pending_message: str
+    character_profile_last_attempt_at: float
+    character_profile_resolution_error: str
+    character_profile_last_failure_signature: tuple[str, str, str] | None
+    character_profile_resolution_started: bool
+    new_profile_session: bool
+    profile_warning: str
+    profile_notice: str
+    profile_write_blocked: bool
+
+    def __init__(
+        self,
+        *,
+        runtime: LiveProfileRuntime,
+        configuration: LiveProfileConfiguration,
+        bindings: LiveProfileBindings,
+    ) -> None:
+        self._runtime = runtime
+        self._configuration = configuration
+        self._bindings = bindings
+
+    @property
+    def _profile_store(self) -> ProfileStore:
+        return self._bindings.profile_store()
+
+    @property
+    def _saved_profile_session(self) -> SavedProfileSession:
+        return self._bindings.saved_session()
+
+    def live_config_doc(self) -> JsonFactory:
+        """The current account's live working config (account-scoped, self-persisting)."""
+        return self._bindings.factory_type()(self._bindings.live_doc_name())
+
+    def backup_doc(self) -> JsonFactory:
+        """Account-scoped last-known-good live profile used by the Restore Backup action."""
+        return self._bindings.factory_type()(self._bindings.backup_doc_name())
+
+    def loaded_profile_state_doc(self) -> JsonFactory:
+        """Account-scoped provenance for the exact saved profile last loaded explicitly."""
+        return self._bindings.factory_type()(self._bindings.loaded_doc_name())
+
+    def character_profile_state_doc(self) -> JsonFactory:
+        """Account-scoped character-to-profile associations, separate from load provenance."""
+        return self._bindings.factory_type()(self._bindings.character_doc_name(), "account")
+
+    def get_live_profile_display_name(self) -> str:
+        config_path = str(self.config_path or "").strip()
+        if config_path:
+            profile_name = self._bindings.path_splitext()(self._bindings.path_basename()(config_path))[0].strip()
+            if profile_name:
+                return profile_name
+        account_key = str(self._runtime.account_key or '').strip()
+        return account_key or "default"
+
+    def mark_character_profile_unresolved(self, message: str = "") -> None:
+        self.character_profile_ready = False
+        self._runtime.clear_unresolved_preview()
+        self._clear_profile_confirmation_state()
+        status = str(message or "").strip()
+        if not status:
+            status = "Waiting for this character to finish loading."
+        self._runtime.status_message = status
+
+    def read_character_profile_state_root(self, doc: JsonFactory) -> dict[str, object] | None:
+        if not doc.is_ready():
+            raise OSError("The account-scoped character profile state is not ready.")
+        if not doc.reload():
+            try:
+                document_path = str(doc.path() or "").strip()
+                if not document_path:
+                    raise OSError("The character profile state path is not available.")
+                if not self._bindings.path_lexists()(document_path):
+                    return None
+            except Exception as exc:
+                raise OSError("The character profile state path could not be checked.") from exc
+            raise OSError("The character profile state could not be refreshed.")
+        raw_state = doc.get_json("", None)
+        if raw_state is None:
+            if doc.has(""):
+                raise ValueError("The character profile state root is malformed.")
+            return None
+        if raw_state == {}:
+            return {}
+        return self._bindings.normalize_character_root()(raw_state)
+
+    def read_character_profile_association_state(
+        self,
+        character_uuid_key: str,
+    ) -> tuple[CharacterProfileAssociation | None, bool]:
+        doc = self.character_profile_state_doc()
+        root = self.read_character_profile_state_root(doc)
+        if root is None or root == {}:
+            return None, False
+        characters = root.get("characters", {})
+        if not isinstance(characters, dict):
+            raise ValueError("The character profile state entries are malformed.")
+        if character_uuid_key not in characters:
+            return None, False
+        try:
+            return self._bindings.association_from_json()(characters[character_uuid_key]), False
+        except Exception as exc:
+            self._runtime.capture_log()(
+                (
+                    "The current character's saved profile association is malformed; "
+                    f"it will be removed after safe blank settings are verified. Technical detail: {exc}"
+                ),
+                'Warning',
+            )
+            return None, True
+
+    def load_character_profile_association(
+        self,
+        character_uuid_key: str,
+    ) -> CharacterProfileAssociation | None:
+        association, _malformed = self.read_character_profile_association_state(character_uuid_key)
+        return association
+
+    def persist_character_profile_association(
+        self,
+        character_uuid_key: str,
+        association: CharacterProfileAssociation,
+    ) -> None:
+        doc = self.character_profile_state_doc()
+        root = self.read_character_profile_state_root(doc)
+        if root not in (None, {}):
+            self._bindings.normalize_character_root()(root)
+        serialized_entry = self._bindings.association_to_json()(association)
+        if not doc.has("schema"):
+            doc.set_str("schema", self._bindings.character_schema())
+        if not doc.has("schema_version"):
+            doc.set_int("schema_version", self._bindings.character_schema_version())
+        doc.set_json(f"characters/{character_uuid_key}", serialized_entry)
+        if not doc.save():
+            doc.reload()
+            raise OSError("JsonFactory could not flush the character profile association.")
+        if not doc.reload():
+            raise OSError("The character profile association was saved but could not be reloaded.")
+        verified_root = doc.get_json("", None)
+        normalized_root = self._bindings.normalize_character_root()(verified_root)
+        verified_characters = normalized_root.get("characters", {})
+        if not isinstance(verified_characters, dict):
+            raise RuntimeError("The saved character profile state entries are malformed.")
+        verified_association = self._bindings.association_from_json()(verified_characters.get(character_uuid_key))
+        expected_association = self._bindings.association_from_json()(serialized_entry)
+        if verified_association != expected_association:
+            raise RuntimeError("The character profile association failed post-save verification.")
+
+    def delete_character_profile_association(self, character_uuid_key: str) -> None:
+        """Remove a stale current-character leaf after its safe replacement is live."""
+
+        doc = self.character_profile_state_doc()
+        root = self.read_character_profile_state_root(doc)
+        if root is None or root == {}:
+            return
+        characters = root.get("characters", {})
+        if not isinstance(characters, dict):
+            raise ValueError("The character profile state entries are malformed.")
+        if character_uuid_key not in characters:
+            return
+
+        expected_root = self._bindings.copy_payload()(root)
+        expected_characters = expected_root.get("characters", {})
+        if not isinstance(expected_characters, dict):
+            raise ValueError("The character profile state entries are malformed.")
+        expected_characters.pop(character_uuid_key, None)
+
+        if not doc.delete(f"characters/{character_uuid_key}"):
+            raise OSError("The stale character profile association could not be removed.")
+        if not doc.save():
+            doc.reload()
+            raise OSError("JsonFactory could not flush the removed character profile association.")
+        if not doc.reload():
+            raise OSError("The removed character profile association could not be reloaded.")
+
+        verified_raw = doc.get_json("", None)
+        if verified_raw is None:
+            raise RuntimeError("The character profile state disappeared while removing a stale association.")
+        verified_root = self._bindings.normalize_character_root()(verified_raw)
+        verified_characters = verified_root.get("characters", {})
+        if not isinstance(verified_characters, dict):
+            raise RuntimeError("The saved character profile state entries are malformed.")
+        if character_uuid_key in verified_characters:
+            raise RuntimeError("The stale character profile association remained after removal.")
+        if verified_root != expected_root:
+            raise RuntimeError("Unrelated character profile state changed while removing a stale association.")
+
+    def refresh_character_profile_scope(self, scope: str) -> None:
+        if not self._refresh_profile_entries(scope, reload_document=True):
+            raise OSError(f"{self._profile_scope_label(scope)} could not be refreshed.")
+        if (
+            self._saved_profile_session.profile_document_reload_failed[scope]
+            or self._saved_profile_session.saved_profile_failure_signatures[scope]
+            or self._saved_profile_session.profile_scan_conflicts[scope]
+            or self._saved_profile_session.saved_profile_scan_warnings[scope]
+        ):
+            raise OSError(f"Some {self._profile_scope_label(scope)} could not be verified during refresh.")
+
+    def set_character_profile_resolution_failure(self, exc: Exception) -> None:
+        self.mark_character_profile_unresolved(
+            "Merchant Rules could not finish loading this character's profile. " "Automatic actions are paused."
+        )
+        failure_text = self._format_exception_chain_for_log(exc)
+        target = self.character_profile_resolution_target or self.character_profile_candidate_identity
+        target_context = repr((target, self.character_profile_candidate_observation))
+        try:
+            document_path = str(self.character_profile_state_doc().path() or '').strip() or "<unbound>"
+        except Exception:
+            document_path = "<unavailable>"
+        failure_signature = (target_context, document_path, failure_text)
+        self.character_profile_resolution_error = str(exc or type(exc).__name__)
+        self.character_profile_last_attempt_at = self._bindings.monotonic()
+        if failure_signature != self.character_profile_last_failure_signature:
+            self._runtime.capture_log()(
+                ("Character profile resolution remains blocked. " f"Technical detail: {failure_text}"),
+                'Warning',
+            )
+            self.character_profile_last_failure_signature = failure_signature
+
+    def retain_profile_load_for_character_retry(
+        self,
+        profile: ProfileSummary,
+        exc: Exception,
+    ) -> None:
+        resolved_identity = self.character_profile_resolved_identity
+        resolved_observation = self.character_profile_resolved_observation
+        if resolved_identity is None:
+            self.set_character_profile_resolution_failure(exc)
+            return
+        self.character_profile_resolution_target = resolved_identity
+        self.character_profile_pending_association = self._bindings.association_type()(
+            profile_identity=profile.identity,
+            character_name_snapshot=(resolved_observation[1] if resolved_observation else ""),
+        )
+        self.character_profile_pending_profile = profile
+        self.character_profile_pending_needs_persist = True
+        self.character_profile_pending_is_new_blank = False
+        self.character_profile_pending_message = (
+            f"Loaded {self._profile_scope_badge(profile.scope).title()} profile "
+            f"'{profile.display_name}' for this character."
+        )
+        self.set_character_profile_resolution_failure(exc)
+
+    def clear_character_profile_pending_target(self) -> None:
+        self.character_profile_pending_association = None
+        self.character_profile_pending_profile = None
+        self.character_profile_pending_needs_persist = False
+        self.character_profile_pending_is_new_blank = False
+        self.character_profile_pending_message = ""
+
+    def prepare_character_profile_pending_target(
+        self,
+        character_uuid_key: str,
+    ) -> tuple[ProfileSummary | None, CharacterProfileAssociation | None, bool]:
+        if self.character_profile_pending_association is not None:
+            identity = self.character_profile_pending_association.profile_identity
+            if self.character_profile_pending_profile is not None:
+                return (
+                    self.character_profile_pending_profile,
+                    self.character_profile_pending_association,
+                    False,
+                )
+            self.refresh_character_profile_scope(identity.scope)
+            profile = self._get_profile_by_identity(identity)
+            if profile is not None:
+                self.character_profile_pending_profile = profile
+                return profile, self.character_profile_pending_association, False
+            self.character_profile_pending_association = None
+
+        association, malformed = self.read_character_profile_association_state(character_uuid_key)
+        if association is None:
+            self.character_profile_pending_association = None
+            self.character_profile_pending_profile = None
+            self.character_profile_pending_needs_persist = False
+            self.character_profile_pending_is_new_blank = False
+            self.character_profile_pending_message = (
+                "This character has no saved profile assigned; using safe blank settings."
+                if not malformed
+                else "This character's saved profile association was stale; using safe blank settings."
+            )
+            return None, None, malformed
+
+        identity = association.profile_identity
+        self.refresh_character_profile_scope(identity.scope)
+        profile = self._get_profile_by_identity(identity)
+        if profile is not None:
+            self.character_profile_pending_association = association
+            self.character_profile_pending_profile = profile
+            self.character_profile_pending_needs_persist = False
+            self.character_profile_pending_is_new_blank = False
+            return profile, association, False
+
+        self.character_profile_pending_association = None
+        self.character_profile_pending_profile = None
+        self.character_profile_pending_needs_persist = False
+        self.character_profile_pending_is_new_blank = False
+        self.character_profile_pending_message = (
+            "This character's saved profile could not be found; using safe blank settings."
+        )
+        return None, None, True
+
+    def apply_verified_profile_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        expected_serialized_payload: str,
+        operation_description: str = "the verified profile payload",
+        status_message: str = "",
+        preserve_workspace_state: bool = True,
+        profile_display_name: str = "",
+        log_profile_load_summary: bool = False,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> None:
+        normalized_payload = self._configuration.normalize_profile_payload(self._bindings.copy_payload()(payload))
+        live_doc = self.live_config_doc()
+        self._runtime.write_profile_payload_for_account(self._runtime.account_key, normalized_payload)
+        if not live_doc.save():
+            rollback_loaded = live_doc.reload()
+            rollback_detail = (
+                "" if rollback_loaded else " Merchant Rules also could not restore the previous current settings."
+            )
+            raise OSError(
+                f"Merchant Rules could not save {operation_description} as the current settings." f"{rollback_detail}"
+            )
+        if not live_doc.reload():
+            raise OSError("Merchant Rules could not verify the saved current settings.")
+        if not self.reload_profile_from_disk(
+            status_message=status_message,
+            preserve_workspace_state=preserve_workspace_state,
+            log_profile_load_summary=log_profile_load_summary,
+            profile_display_name=profile_display_name,
+            include_remote_dispatch=include_remote_dispatch,
+            include_pending_reload=include_pending_reload,
+        ):
+            raise OSError(f"Merchant Rules could not apply {operation_description}.")
+        loaded_payload_serialized = self._serialize_shareable_profile_payload(self._build_shareable_profile_payload())
+        if loaded_payload_serialized != expected_serialized_payload:
+            raise RuntimeError(f"The current settings do not match {operation_description} after loading.")
+
+    def apply_saved_profile_summary(
+        self,
+        profile: ProfileSummary,
+        *,
+        status_message: str = "",
+        preserve_workspace_state: bool = True,
+        log_profile_load_summary: bool = False,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> None:
+        self.apply_verified_profile_payload(
+            profile.payload,
+            expected_serialized_payload=profile.serialized_payload,
+            operation_description="the selected profile",
+            status_message=status_message,
+            preserve_workspace_state=preserve_workspace_state,
+            profile_display_name=f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}",
+            log_profile_load_summary=log_profile_load_summary,
+            include_remote_dispatch=include_remote_dispatch,
+            include_pending_reload=include_pending_reload,
+        )
+
+    def character_profile_gate_block_reason(self) -> str:
+        if self.character_profile_resolution_error:
+            return "Merchant Rules could not finish loading this character's profile. " "Automatic actions are paused."
+        if not self.character_profile_ready:
+            return "Waiting for this character to finish loading."
+        resolved_identity = self.character_profile_resolved_identity
+        resolved_observation = self.character_profile_resolved_observation
+        current_account = self._runtime.get_account_key()
+        current_observation = self._runtime.get_current_character_observation()
+        if (
+            resolved_identity is None
+            or resolved_observation is None
+            or not current_account
+            or resolved_identity[0] != current_account
+            or current_observation is None
+            or current_observation != resolved_observation
+        ):
+            return "Waiting for this character to finish loading."
+        return ""
+
+    def is_character_profile_observation_current(
+        self,
+        identity: tuple[str, str],
+        observation: tuple[str, str],
+    ) -> bool:
+        return bool(
+            self._runtime.get_account_key() == identity[0]
+            and observation[0] == identity[1]
+            and self._runtime.get_current_character_observation() == observation
+        )
+
+    def advance_character_profile_resolution(self) -> None:
+        self.character_profile_resolution_started = True
+        lifecycle_reason = self._runtime.merchant_rules_lifecycle_block_reason(
+            require_character_profile=False,
+        )
+        if lifecycle_reason:
+            self.character_profile_candidate_identity = None
+            self.character_profile_candidate_observation = None
+            self.character_profile_candidate_ticks = 0
+            self.mark_character_profile_unresolved()
+            return
+
+        current_account = self._runtime.get_account_key()
+        observation = self._runtime.get_current_character_observation()
+        if not current_account or observation is None:
+            self.character_profile_candidate_identity = None
+            self.character_profile_candidate_observation = None
+            self.character_profile_candidate_ticks = 0
+            self.mark_character_profile_unresolved()
+            return
+
+        identity = (current_account, observation[0])
+        if (
+            self.character_profile_candidate_identity == identity
+            and self.character_profile_candidate_observation == observation
+        ):
+            self.character_profile_candidate_ticks += 1
+        else:
+            self.character_profile_candidate_identity = identity
+            self.character_profile_candidate_observation = observation
+            self.character_profile_candidate_ticks = 1
+
+        if (
+            self.character_profile_resolved_identity != identity
+            or self.character_profile_resolved_observation != observation
+        ):
+            self.mark_character_profile_unresolved()
+
+        if self.character_profile_candidate_ticks < self._bindings.confirmation_ticks():
+            return
+
+        if identity == self.character_profile_resolved_identity and self.character_profile_resolution_target is None:
+            self.character_profile_resolved_observation = observation
+            self.character_profile_ready = True
+            self.character_profile_resolution_error = ""
+            self.character_profile_last_failure_signature = None
+            return
+
+        if self.character_profile_resolution_target != identity:
+            self._runtime.advance_profile_generation()
+            self._runtime.clear_multibox_batch_runtime()
+            self.character_profile_resolution_target = identity
+            self.clear_character_profile_pending_target()
+            self.character_profile_resolution_error = ""
+            self.character_profile_last_failure_signature = None
+            self.character_profile_last_attempt_at = 0.0
+            self.mark_character_profile_unresolved()
+
+        if self._runtime.merchant_rules_has_pending_or_active_work(
+            include_remote_dispatch=False,
+            include_pending_reload=False,
+        ):
+            self._runtime.status_message = "Waiting for Merchant Rules to finish current work."
+            return
+
+        if not self._runtime.initialized or self._runtime.account_key != current_account:
+            self._runtime.status_message = "Waiting for this character to finish loading."
+            return
+
+        if self._bindings.monotonic() - self.character_profile_last_attempt_at < self._bindings.retry_interval():
+            return
+
+        try:
+            profile, association, remove_stale_association = self.prepare_character_profile_pending_target(
+                observation[0]
+            )
+            if profile is None or association is None:
+                blank_payload = self._configuration.normalize_profile_payload(
+                    self._configuration.build_default_profile_payload(include_rule_templates=False)
+                )
+                self.apply_verified_profile_payload(
+                    blank_payload,
+                    expected_serialized_payload=self._serialize_shareable_profile_payload(blank_payload),
+                    operation_description="safe blank settings",
+                    status_message=(
+                        self.character_profile_pending_message
+                        or "This character has no saved profile assigned; using safe blank settings."
+                    ),
+                    preserve_workspace_state=True,
+                    profile_display_name="",
+                    log_profile_load_summary=False,
+                    include_remote_dispatch=False,
+                    include_pending_reload=False,
+                )
+                if not self.is_character_profile_observation_current(identity, observation):
+                    raise RuntimeError("The current character changed while safe blank settings were loading.")
+                if remove_stale_association:
+                    self.delete_character_profile_association(observation[0])
+                if not self.is_character_profile_observation_current(identity, observation):
+                    raise RuntimeError("The current character changed before its blank settings could be confirmed.")
+                resolved_profile_identity = None
+            else:
+                self.apply_saved_profile_summary(
+                    profile,
+                    preserve_workspace_state=True,
+                    log_profile_load_summary=False,
+                    include_remote_dispatch=False,
+                    include_pending_reload=False,
+                )
+                if not self.is_character_profile_observation_current(identity, observation):
+                    raise RuntimeError("The current character changed while its saved profile was loading.")
+                if self.character_profile_pending_needs_persist:
+                    self.persist_character_profile_association(observation[0], association)
+                if not self.is_character_profile_observation_current(identity, observation):
+                    raise RuntimeError("The current character changed before its profile could be confirmed.")
+                resolved_profile_identity = association.profile_identity
+
+            self.character_profile_resolved_identity = identity
+            self.character_profile_resolved_observation = observation
+            self.character_profile_resolved_profile_identity = resolved_profile_identity
+            self.character_profile_ready = True
+            self.character_profile_resolution_target = None
+            self.character_profile_resolution_error = ""
+            self.character_profile_last_failure_signature = None
+            self.character_profile_last_attempt_at = 0.0
+            if self.character_profile_pending_message:
+                self._runtime.status_message = self.character_profile_pending_message
+            elif profile is not None:
+                self._runtime.status_message = (
+                    f"Loaded {self._profile_scope_badge(profile.scope).title()} profile "
+                    f"'{profile.display_name}' for this character."
+                )
+            else:
+                self._runtime.status_message = (
+                    "This character has no saved profile assigned; using safe blank settings."
+                )
+            self._runtime.publish_configuration_rescans()
+            self.clear_character_profile_pending_target()
+        except Exception as exc:
+            self.set_character_profile_resolution_failure(exc)
+
+    def load_loaded_profile_provenance(self) -> None:
+        self.loaded_profile_provenance = None
+        self.loaded_profile_provenance_warning = ""
+        try:
+            raw_state = self.loaded_profile_state_doc().get_json("", None)
+            if raw_state in (None, {}):
+                return
+            provenance = self._normalize_loaded_profile_provenance(raw_state)
+            self.loaded_profile_provenance = provenance
+            self.active_profile_display_name = (
+                f"[{self._profile_scope_badge(provenance.source_identity.scope)}] "
+                f"{provenance.display_name_snapshot}"
+            )
+        except Exception as exc:
+            self.loaded_profile_provenance_warning = (
+                "Merchant Rules could not read which profile was last loaded for this account. "
+                "The existing record was left unchanged."
+            )
+            self._runtime.capture_log()(
+                f"{self.loaded_profile_provenance_warning} Technical detail: {exc}",
+                'Warning',
+            )
+
+    def require_loaded_profile_state_writable(self, doc: JsonFactory) -> None:
+        raw_state = doc.get_json("", None)
+        if raw_state in (None, {}):
+            return
+        try:
+            self._normalize_loaded_profile_provenance(raw_state)
+        except Exception as exc:
+            raise ValueError(
+                "The existing last-loaded profile record is unreadable or was created by a newer "
+                "Merchant Rules version, so it was left unchanged."
+            ) from exc
+
+    def record_loaded_profile_provenance(self, profile: ProfileSummary) -> None:
+        provenance = self._bindings.provenance_type()(
+            source_identity=profile.identity,
+            display_name_snapshot=profile.display_name,
+            normalized_content_fingerprint=self._shareable_profile_content_fingerprint(profile.serialized_payload),
+            associated_at_unix_ms=int(self._bindings.wall_time() * 1000),
+        )
+        doc = self.loaded_profile_state_doc()
+        self.require_loaded_profile_state_writable(doc)
+        expected_state = self._loaded_profile_provenance_to_json(provenance)
+        doc.set_json("", expected_state)
+        if not doc.save():
+            doc.reload()
+            raise OSError("JsonFactory could not flush loaded-profile provenance.")
+        if not doc.reload():
+            raise OSError("Loaded-profile provenance was saved but could not be reloaded.")
+        verified = self._normalize_loaded_profile_provenance(doc.get_json("", None))
+        if self._loaded_profile_provenance_to_json(verified) != expected_state:
+            raise RuntimeError("Loaded-profile provenance failed post-save verification.")
+        self.loaded_profile_provenance = verified
+        self.loaded_profile_provenance_warning = ""
+        self.active_profile_display_name = f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}"
+
+    def clear_loaded_profile_provenance(self, reason: str = "") -> bool:
+        self.loaded_profile_provenance = None
+        self.active_profile_display_name = self.get_live_profile_display_name()
+        doc = self.loaded_profile_state_doc()
+        try:
+            if doc.get_json("", None) in (None, {}):
+                self.loaded_profile_provenance_warning = ""
+                return True
+            self.require_loaded_profile_state_writable(doc)
+            doc.set_json("", {})
+            if not doc.save():
+                doc.reload()
+                raise OSError("JsonFactory could not clear loaded-profile provenance.")
+            if not doc.reload():
+                raise OSError("Loaded-profile provenance was cleared but could not be reloaded.")
+            if doc.get_json("", None) not in (None, {}):
+                raise RuntimeError("Loaded-profile provenance is still present after clearing it.")
+            self.loaded_profile_provenance_warning = ""
+            return True
+        except Exception as exc:
+            reason_suffix = f" after {reason}" if reason else ""
+            self.loaded_profile_provenance_warning = (
+                f"Merchant Rules could not clear the last-loaded profile record{reason_suffix}. "
+                "The existing record was left unchanged."
+            )
+            self._runtime.capture_log()(
+                f"{self.loaded_profile_provenance_warning} Technical detail: {exc}",
+                'Warning',
+            )
+            return False
+
+    def load_selected_profile(
+        self,
+        scope: str,
+        expected_fingerprint: str = "",
+    ) -> bool | None:
+        if self._runtime.get_profile_application_block_message("loading another profile"):
+            return False
+        gate_reason = self.character_profile_gate_block_reason()
+        if gate_reason:
+            self._runtime.status_message = gate_reason
+            self._set_saved_profile_feedback(scope, warning=gate_reason)
+            return False
+        self._runtime.ensure_initialized()
+        gate_reason = self.character_profile_gate_block_reason()
+        if gate_reason:
+            self._runtime.status_message = gate_reason
+            self._set_saved_profile_feedback(scope, warning=gate_reason)
+            return False
+        selected_profile = self._get_selected_profile(scope)
+        if selected_profile is None:
+            self._set_saved_profile_feedback(
+                scope,
+                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to load.",
+            )
+            return
+
+        current: ProfileSummary | None = None
+        application_started = False
+        try:
+            current = self._resolve_profile_for_action(
+                selected_profile.identity,
+                expected_fingerprint=expected_fingerprint,
+                reload_shared=True,
+            )
+            observation = self._runtime.get_current_character_observation()
+            resolved_identity = self.character_profile_resolved_identity
+            if observation is None or resolved_identity is None or observation[0] != resolved_identity[1]:
+                raise RuntimeError("The current character is still loading.")
+            application_started = True
+            self.apply_saved_profile_summary(
+                current,
+                status_message="",
+                preserve_workspace_state=True,
+                log_profile_load_summary=False,
+            )
+            if not self.is_character_profile_observation_current(
+                resolved_identity,
+                observation,
+            ):
+                raise RuntimeError("The current character changed while the selected profile was loading.")
+            association = self._bindings.association_type()(
+                profile_identity=current.identity,
+                character_name_snapshot=observation[1],
+            )
+            self.persist_character_profile_association(observation[0], association)
+            if not self.is_character_profile_observation_current(
+                resolved_identity,
+                observation,
+            ):
+                raise RuntimeError("The current character changed before its profile could be confirmed.")
+            self.character_profile_resolved_profile_identity = current.identity
+            badge = self._profile_scope_badge(scope)
+            provenance_warning = ""
+            self.loaded_profile_provenance = None
+            self.active_profile_display_name = self.get_live_profile_display_name()
+            try:
+                self.record_loaded_profile_provenance(current)
+            except Exception as provenance_exc:
+                clear_succeeded = self.clear_loaded_profile_provenance("a loaded-profile provenance write failure")
+                provenance_warning = (
+                    "The profile loaded successfully, but Merchant Rules could not update this account's "
+                    "record of the last profile loaded."
+                )
+                if not clear_succeeded:
+                    provenance_warning += " The previous last-loaded profile record also could not be cleared."
+                self.loaded_profile_provenance_warning = provenance_warning
+                self._runtime.capture_log()(
+                    f"{provenance_warning} Technical detail: {provenance_exc}",
+                    'Warning',
+                )
+            self._runtime.status_message = (
+                f"Loaded {badge.title()} profile '{current.display_name}' for this character."
+            )
+            self._runtime.log_profile_loaded_summary()
+            self._refresh_profile_entries(scope)
+            self._select_profile_after_action(scope, current.key)
+            self._clear_profile_confirmation_state()
+            self._set_saved_profile_feedback(
+                scope,
+                notice=(
+                    f"Loaded {badge.title()} profile '{current.display_name}'. "
+                    "Use Sync Rules to Selected when you want followers updated."
+                    + (
+                        " The account's record of the last profile loaded could not be updated."
+                        if provenance_warning
+                        else ""
+                    )
+                ),
+            )
+        except Exception as exc:
+            if application_started and current is not None:
+                self.retain_profile_load_for_character_retry(current, exc)
+                warning = (
+                    "Merchant Rules could not finish loading this character's profile. "
+                    f"Automatic actions are paused. The saved profile remains selected for retry: {exc}"
+                )
+            else:
+                warning = f"Failed to load {self._profile_scope_badge(scope).title()} profile: {exc}"
+            self._runtime.status_message = warning
+            self._set_saved_profile_feedback(scope, warning=warning)
+
+    def get_backup_payload(self) -> dict[str, object] | None:
+        return self._profile_store.get_backup_payload(self.backup_doc().get_json("", None))
+
+    def store_backup_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        slot: str = "last_known_good",
+    ) -> None:
+        backup_doc = self.backup_doc()
+        backup_root = self._profile_store.build_backup_root(
+            backup_doc.get_json("", {}),
+            payload,
+            slot=slot,
+        )
+        backup_doc.set_json("", backup_root)
+
+    def write_live_profile_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        create_backup: bool = True,
+        force_save: bool = False,
+    ) -> None:
+        raw_version = self._bindings.safe_int()(payload.get("version", 0), 0)
+        if raw_version > self._bindings.profile_version():
+            raise ValueError(f"Cannot write future Merchant Rules profile version {raw_version}.")
+        normalized_payload = self._configuration.normalize_profile_payload(payload)
+        live_doc = self.live_config_doc()
+        existing = live_doc.get_json("", None)
+        if create_backup and existing not in (None, {}):
+            if not isinstance(existing, dict):
+                raise ValueError("Stored Merchant Rules live config is malformed; refusing to overwrite it.")
+            existing_version = self._bindings.safe_int()(existing.get("version", 0), 0)
+            if existing_version > self._bindings.profile_version():
+                raise ValueError(
+                    f"Stored live config version {existing_version} is newer than Merchant Rules "
+                    f"version {self._bindings.profile_version()}; refusing to overwrite it."
+                )
+            self.store_backup_payload(existing)
+        live_doc.set_json("", normalized_payload)
+        if force_save and not live_doc.save():
+            raise OSError("JsonFactory could not flush the Merchant Rules live config")
+
+    def restore_profile_from_backup(self) -> bool:
+        """Restore the account-scoped last-known-good JsonFactory profile."""
+
+        if self._runtime.get_profile_application_block_message("restoring the backup"):
+            return False
+
+        try:
+            normalized_payload = self.get_backup_payload()
+        except Exception as exc:
+            self.profile_warning = f"Failed to validate Merchant Rules backup: {exc}"
+            self._runtime.capture_log()(self.profile_warning, 'Error')
+            return False
+        if normalized_payload is None:
+            self.profile_warning = "No valid Merchant Rules JsonFactory backup was found to restore."
+            return False
+
+        try:
+            current_payload = self.live_config_doc().get_json("", None)
+            if isinstance(current_payload, dict) and current_payload:
+                current_version = self._bindings.safe_int()(current_payload.get("version", 0), 0)
+                if current_version <= self._bindings.profile_version():
+                    try:
+                        self.store_backup_payload(current_payload, slot="pre_restore")
+                    except Exception:
+                        pass
+            if not self.backup_doc().save():
+                raise OSError("JsonFactory could not flush the Merchant Rules backup document")
+            self.write_live_profile_payload(
+                normalized_payload,
+                create_backup=False,
+                force_save=True,
+            )
+            self.clear_loaded_profile_provenance("Restore Backup")
+            self.profile_write_blocked = False
+            self.reload_profile_from_disk(
+                status_message="Merchant Rules live config restored from the last backup.",
+                preserve_workspace_state=True,
+            )
+            self.profile_warning = ""
+            self.profile_notice = "Restored current settings from this account's backup."
+            return True
+        except Exception as exc:
+            self.profile_warning = f"Failed to restore Merchant Rules live config backup: {exc}"
+            self._runtime.capture_log()(self.profile_warning, 'Error')
+            return False
+
+    def reload_profile_from_disk(
+        self,
+        *,
+        status_message: str = "Merchant Rules live config reloaded from disk.",
+        preserve_workspace_state: bool = False,
+        preserve_window_geometry: bool | None = None,
+        profile_display_name: str = "",
+        log_profile_load_summary: bool = True,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> bool:
+        """Reload the active profile and optionally preserve workspace state."""
+
+        if self._runtime.get_profile_application_block_message(
+            "reloading the active profile",
+            include_remote_dispatch=include_remote_dispatch,
+            include_pending_reload=include_pending_reload,
+        ):
+            return False
+        if preserve_window_geometry is not None:
+            preserve_workspace_state = bool(preserve_window_geometry)
+        workspace_snapshot = self._runtime.active_workspace if preserve_workspace_state else ""
+        rules_workspace_snapshot = self._runtime.active_rules_workspace if preserve_workspace_state else ""
+        self._runtime.ensure_initialized()
+        # Pick up any external write (e.g. a multibox leader's cross-account overlay) before reloading.
+        self.live_config_doc().reload()
+        self.load_profile()
+        if preserve_workspace_state:
+            self._runtime.active_workspace = workspace_snapshot or self._runtime.active_workspace
+            self._runtime.active_rules_workspace = rules_workspace_snapshot or self._runtime.active_rules_workspace
+        self._runtime.reset_runtime_after_profile_load(
+            status_message=status_message,
+            profile_display_name=profile_display_name,
+            log_profile_load_summary=log_profile_load_summary,
+        )
+        return True
+
+    def load_profile(self) -> None:
+        """Load the account-scoped JsonFactory profile with fail-closed version safeguards."""
+
+        doc = self.live_config_doc()
+        stored_payload = doc.get_json("", None)
+        profile_exists = stored_payload not in (None, {})
+        self.new_profile_session = not profile_exists
+        self.active_profile_display_name = self.get_live_profile_display_name()
+        self._runtime.active_workspace = (
+            self._bindings.workspace_rules() if self.new_profile_session else self._bindings.workspace_overview()
+        )
+        self._runtime.active_rules_workspace = self._bindings.rules_workspace_buy()
+        self.profile_warning = ""
+        self.profile_notice = ""
+        self.profile_write_blocked = False
+
+        stored_version = (
+            self._bindings.safe_int()(stored_payload.get("version", 0), 0) if isinstance(stored_payload, dict) else 0
+        )
+        if profile_exists and stored_version > self._bindings.profile_version():
+            self.profile_write_blocked = True
+            self._runtime.active_workspace = self._bindings.workspace_rules()
+            self.profile_warning = (
+                f"Live config version {stored_version} is newer than Merchant Rules version {self._bindings.profile_version()}. "
+                "The config was not applied and will not be rewritten."
+            )
+            self._runtime.capture_log()(self.profile_warning, 'Error')
+            return
+
+        default_payload = self._configuration.build_default_profile_payload(
+            include_rule_templates=profile_exists,
+        )
+        self._configuration.apply_profile_payload(default_payload)
+
+        if not profile_exists:
+            return
+
+        should_save_normalized = False
+        allow_normalized_save = True
+        raw_version = 0
+        normalized_payload: dict[str, object] | None = None
+        try:
+            raw_payload = doc.get_json("", {})
+            raw_version = (
+                self._bindings.safe_int()(raw_payload.get("version", 0), 0) if isinstance(raw_payload, dict) else 0
+            )
+            normalized_payload = self._configuration.normalize_profile_payload(raw_payload)
+            should_save_normalized = self._serialize_profile_payload(raw_payload) != self._serialize_profile_payload(
+                normalized_payload
+            )
+            self._configuration.apply_profile_payload(normalized_payload)
+        except Exception as exc:
+            # Native JSON writes are atomic, so the stored document cannot be half-written;
+            # a failure here is a normalization/shape problem. Keep the stored file and fall
+            # back to in-memory defaults - no recovery snapshot is needed.
+            self.profile_warning = "Live config load failed; using in-memory defaults and preserving the stored file."
+            self.profile_write_blocked = True
+            self._runtime.active_workspace = self._bindings.workspace_rules()
+            self._runtime.capture_log()(f"Failed to load live config {self.config_path}: {exc}", 'Error')
+            return
+
+        if raw_version <= 0 and not self.profile_warning:
+            self.profile_notice = "Loaded a legacy live config without a version marker."
+        elif 0 < raw_version < self._bindings.profile_version() and not self.profile_warning:
+            self.profile_notice = "Merchant Rules loaded older settings and updated them to the current format."
+
+        if should_save_normalized and allow_normalized_save and normalized_payload is not None:
+            if self.save_profile():
+                if raw_version <= 0:
+                    self.profile_notice = (
+                        f"Legacy live config normalized and saved safely to v{self._bindings.profile_version()}."
+                    )
+                elif raw_version < self._bindings.profile_version():
+                    self.profile_notice = f"Live config migrated from v{raw_version} to v{self._bindings.profile_version()} and saved safely."
+                else:
+                    self.profile_notice = "Live config normalized and saved safely."
+
+    def save_profile(self) -> bool:
+        """Persist through JsonFactory while retaining a last-known-good account backup."""
+
+        if not self._runtime.merchant_rules_is_generation_current():
+            self._runtime.debug_log("Skipped a stale Merchant Rules profile save.")
+            return False
+        payload = self._configuration.build_profile_payload()
+        if self.profile_write_blocked:
+            self.profile_warning = (
+                "Merchant Rules live-config writes are blocked because the stored profile "
+                "could not be handled safely."
+            )
+            return False
+        try:
+            self.write_live_profile_payload(payload)
+            return True
+        except Exception as exc:
+            self.profile_warning = f"Failed to save Merchant Rules live config safely: {exc}"
+            self._runtime.capture_log()(f"Failed to save live config {self.config_path}: {exc}", 'Error')
+            return False
+
+    def _profile_scope_label(self, scope: str) -> str:
+        return self._saved_profile_session.profile_scope_label(scope)
+
+    def _profile_scope_badge(self, scope: str) -> str:
+        return self._saved_profile_session.profile_scope_badge(scope)
+
+    def _refresh_profile_entries(
+        self,
+        scope: str,
+        *,
+        reload_document: bool = False,
+        report_reload_failure: bool = True,
+    ) -> bool:
+        return self._saved_profile_session.refresh_profile_entries(
+            scope, reload_document=reload_document, report_reload_failure=report_reload_failure
+        )
+
+    def _format_exception_chain_for_log(self, exc: Exception) -> str:
+        return self._saved_profile_session.format_exception_chain_for_log(exc)
+
+    def _get_profile_by_identity(
+        self,
+        identity: ProfileIdentity | None,
+    ) -> ProfileSummary | None:
+        return self._saved_profile_session.get_profile_by_identity(identity)
+
+    def _get_selected_profile(self, scope: str) -> ProfileSummary | None:
+        return self._saved_profile_session.get_selected_profile(scope)
+
+    def _resolve_profile_for_action(
+        self,
+        identity: ProfileIdentity,
+        *,
+        expected_fingerprint: str = "",
+        reload_shared: bool = True,
+    ) -> ProfileSummary:
+        return self._saved_profile_session.resolve_profile_for_action(
+            identity, expected_fingerprint=expected_fingerprint, reload_shared=reload_shared
+        )
+
+    def _select_profile_after_action(
+        self,
+        scope: str,
+        profile_key: str,
+        *,
+        activate_scope: bool = False,
+    ) -> None:
+        return self._saved_profile_session.select_profile_after_action(
+            scope, profile_key, activate_scope=activate_scope
+        )
+
+    def _clear_profile_confirmation_state(self) -> None:
+        return self._saved_profile_session.clear_profile_confirmation_state()
+
+    def _set_saved_profile_feedback(
+        self,
+        scope: str,
+        *,
+        warning: str = "",
+        notice: str = "",
+    ) -> None:
+        return self._saved_profile_session.set_saved_profile_feedback(scope, warning=warning, notice=notice)
+
+    def _serialize_profile_payload(self, payload: dict[str, object]) -> str:
+        return self._profile_store.serialize_profile_payload(payload)
+
+    def _serialize_shareable_profile_payload(self, payload: dict[str, object]) -> str:
+        return self._profile_store.serialize_profile_payload(payload)
+
+    def _shareable_profile_content_fingerprint(self, serialized_payload: str) -> str:
+        return self._profile_store.shareable_profile_content_fingerprint(serialized_payload)
+
+    def _loaded_profile_provenance_to_json(
+        self,
+        provenance: LoadedProfileProvenance,
+    ) -> dict[str, object]:
+        return self._profile_store.provenance_to_json(provenance)
+
+    def _normalize_loaded_profile_provenance(
+        self,
+        raw_state: object,
+    ) -> LoadedProfileProvenance:
+        return self._profile_store.normalize_provenance(raw_state)
+
+    def _build_shareable_profile_payload(self) -> dict[str, object]:
+        return self._configuration.normalize_profile_payload(self._configuration.build_profile_payload())

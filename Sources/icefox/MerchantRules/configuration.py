@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from enum import IntEnum
 from hashlib import md5
+from typing import Protocol
 
 from Sources.icefox.MerchantRules.item_values import dedupe_identifiers as _dedupe_identifiers
 from Sources.icefox.MerchantRules.item_values import (
@@ -2250,3 +2251,242 @@ class RuleNormalizer:
             "protected_item_model_ids": serialize_protected_item_model_ids(normalized_protected_item_model_ids),
             "protected_item_targets": self.serialize_protected_item_targets(normalized_protected_item_targets),
         }
+
+
+class _ManualVendorCategoryFlagsNormalizer(Protocol):
+    def __call__(self, raw_flags: object, category_kinds: tuple[str, ...], *, field_name: str) -> dict[str, bool]:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class ActiveConfigurationBindings:
+    """Exact existing normalization and constant lookup sites; no widget state."""
+
+    get_profile_version: Callable[[], int]
+    get_default_target_carried_gold: Callable[[], int]
+    get_helper_tooltips_default: Callable[[], bool]
+    get_buy_category_kinds: Callable[[], tuple[str, ...]]
+    get_sell_category_kinds: Callable[[], tuple[str, ...]]
+    get_rule_normalizer: Callable[[], RuleNormalizer]
+    get_buy_rule_serializer: Callable[[], Callable[[BuyRule], dict[str, object]]]
+    get_safe_int: Callable[[], Callable[[object, int], int]]
+    get_coerce_list: Callable[[], Callable[[object], list[object]]]
+    get_gold_target_normalizer: Callable[[], Callable[[object], int]]
+    get_category_normalizer: Callable[[], _ManualVendorCategoryFlagsNormalizer]
+    get_buy_rules_normalizer: Callable[[], Callable[[list[BuyRule]], list[BuyRule]]]
+    get_sell_rules_normalizer: Callable[[], Callable[[list[SellRule]], list[SellRule]]]
+    get_destroy_rules_normalizer: Callable[[], Callable[[list[DestroyRule]], list[DestroyRule]]]
+    get_identify_normalizer: Callable[[], Callable[[object], IdentifySettings]]
+    get_salvage_normalizer: Callable[[], Callable[[object], SalvageSettings]]
+    get_cleanup_targets_normalizer: Callable[[], Callable[[object], list[CleanupTarget]]]
+    get_cleanup_blacklist_normalizer: Callable[[], Callable[[object], list[int]]]
+    get_cleanup_sources_normalizer: Callable[[], Callable[[object], list[CleanupProtectionSource]]]
+    get_protected_models_normalizer: Callable[[], Callable[[object], list[int]]]
+    get_protected_targets_normalizer: Callable[[], Callable[[object], list[ExactProtectionTarget]]]
+    get_sell_rule_serializer: Callable[[], Callable[[SellRule], dict[str, object]]]
+    get_destroy_rule_serializer: Callable[[], Callable[[DestroyRule], dict[str, object]]]
+    get_identify_serializer: Callable[[], Callable[[IdentifySettings], dict[str, object]]]
+    get_salvage_serializer: Callable[[], Callable[[SalvageSettings], dict[str, object]]]
+    get_cleanup_targets_serializer: Callable[[], Callable[[object], list[dict[str, object]]]]
+    get_cleanup_blacklist_serializer: Callable[[], Callable[[object], list[int]]]
+    get_cleanup_sources_serializer: Callable[[], Callable[[object], list[dict[str, str]]]]
+    get_protected_models_serializer: Callable[[], Callable[[object], list[int]]]
+    get_protected_targets_serializer: Callable[[], Callable[[object], list[dict[str, int]]]]
+    get_outpost_normalizer: Callable[[], Callable[[list[int]], list[int]]]
+
+
+@dataclass(frozen=True)
+class ConfigurationApplyResult:
+    cleanup_targets_changed: bool
+
+
+class ActiveConfiguration:
+    """Own persisted settings; widget assignment sites establish their original defaults."""
+
+    auto_cleanup_on_outpost_entry: bool
+    gold_balance_enabled: bool
+    gold_balance_on_outpost_entry: bool
+    gold_balance_after_mr_trading: bool
+    gold_balance_after_manual_session: bool
+    target_carried_gold: int
+    auto_sell_on_manual_vendor_interaction: bool
+    auto_buy_on_manual_vendor_interaction: bool
+    manual_vendor_auto_buy_categories: dict[str, bool]
+    manual_vendor_auto_sell_categories: dict[str, bool]
+    auto_sell_to_any_merchant: bool
+    auto_sell_any_merchant_normal_items: bool
+    auto_sell_any_merchant_materials: bool
+    auto_sell_any_merchant_runes: bool
+    inventory_right_click_shortcuts_enabled: bool
+    inventory_right_click_live_actions_enabled: bool
+    destroy_auto_enabled: bool
+    auto_travel_enabled: bool
+    target_outpost_id: int
+    favorite_outpost_ids: list[int]
+    debug_logging: bool
+    helper_tooltips_enabled: bool
+    detailed_preview: bool
+    buy_rules: list[BuyRule]
+    sell_rules: list[SellRule]
+    destroy_rules: list[DestroyRule]
+    identify_settings: IdentifySettings
+    salvage_settings: SalvageSettings
+    cleanup_targets: list[CleanupTarget]
+    cleanup_blacklist_model_ids: list[int]
+    cleanup_protection_sources: list[CleanupProtectionSource]
+    protected_item_model_ids: list[int]
+    protected_item_targets: list[ExactProtectionTarget]
+
+    def __init__(self, *, bindings: ActiveConfigurationBindings) -> None:
+        self._bindings = bindings
+
+    def build_payload(self) -> dict[str, object]:
+        """Serialize current settings into a normalized profile-v40 payload."""
+
+        payload = {
+            "version": self._bindings.get_profile_version(),
+            "auto_cleanup_on_outpost_entry": bool(self.auto_cleanup_on_outpost_entry),
+            "gold_balance_enabled": bool(self.gold_balance_enabled),
+            "gold_balance_on_outpost_entry": bool(self.gold_balance_on_outpost_entry),
+            "gold_balance_after_mr_trading": bool(self.gold_balance_after_mr_trading),
+            "gold_balance_after_manual_session": bool(self.gold_balance_after_manual_session),
+            "target_carried_gold": self._bindings.get_gold_target_normalizer()(self.target_carried_gold),
+            "auto_sell_on_manual_vendor_interaction": bool(self.auto_sell_on_manual_vendor_interaction),
+            "auto_buy_on_manual_vendor_interaction": bool(self.auto_buy_on_manual_vendor_interaction),
+            "manual_vendor_auto_buy_categories": self._bindings.get_category_normalizer()(
+                self.manual_vendor_auto_buy_categories,
+                self._bindings.get_buy_category_kinds(),
+                field_name="manual_vendor_auto_buy_categories",
+            ),
+            "manual_vendor_auto_sell_categories": self._bindings.get_category_normalizer()(
+                self.manual_vendor_auto_sell_categories,
+                self._bindings.get_sell_category_kinds(),
+                field_name="manual_vendor_auto_sell_categories",
+            ),
+            "auto_sell_to_any_merchant": bool(self.auto_sell_to_any_merchant),
+            "auto_sell_any_merchant_normal_items": bool(self.auto_sell_any_merchant_normal_items),
+            "auto_sell_any_merchant_materials": bool(self.auto_sell_any_merchant_materials),
+            "auto_sell_any_merchant_runes": bool(self.auto_sell_any_merchant_runes),
+            "inventory_right_click_shortcuts_enabled": bool(self.inventory_right_click_shortcuts_enabled),
+            "inventory_right_click_live_actions_enabled": bool(self.inventory_right_click_live_actions_enabled),
+            "destroy_auto_enabled": bool(self.destroy_auto_enabled),
+            "auto_travel_enabled": bool(self.auto_travel_enabled),
+            "target_outpost_id": max(0, int(self.target_outpost_id)),
+            "favorite_outpost_ids": self._bindings.get_outpost_normalizer()(self.favorite_outpost_ids),
+            "debug_logging": bool(self.debug_logging),
+            "helper_tooltips_enabled": bool(self.helper_tooltips_enabled),
+            "detailed_preview": bool(self.detailed_preview),
+            "buy_rules": [
+                self._bindings.get_buy_rule_serializer()(rule)
+                for rule in self._bindings.get_buy_rules_normalizer()(self.buy_rules)
+            ],
+            "sell_rules": [
+                payload_entry
+                for payload_entry in (
+                    self._bindings.get_sell_rule_serializer()(rule)
+                    for rule in self._bindings.get_sell_rules_normalizer()(self.sell_rules)
+                )
+                if payload_entry
+            ],
+            "destroy_rules": [
+                self._bindings.get_destroy_rule_serializer()(rule)
+                for rule in self._bindings.get_destroy_rules_normalizer()(self.destroy_rules)
+            ],
+            "identify_settings": self._bindings.get_identify_serializer()(self.identify_settings),
+            "salvage_settings": self._bindings.get_salvage_serializer()(self.salvage_settings),
+            "cleanup_targets": self._bindings.get_cleanup_targets_serializer()(self.cleanup_targets),
+            "cleanup_blacklist_model_ids": self._bindings.get_cleanup_blacklist_serializer()(
+                self.cleanup_blacklist_model_ids
+            ),
+            "cleanup_protection_sources": self._bindings.get_cleanup_sources_serializer()(
+                self.cleanup_protection_sources
+            ),
+            "protected_item_model_ids": self._bindings.get_protected_models_serializer()(self.protected_item_model_ids),
+            "protected_item_targets": self._bindings.get_protected_targets_serializer()(self.protected_item_targets),
+        }
+        return payload
+
+    def apply_payload(self, payload: dict[str, object]) -> ConfigurationApplyResult:
+        """Replace in-memory rules and settings from an already normalized profile payload."""
+
+        previous_cleanup_targets = self.cleanup_targets
+        self.buy_rules = self._bindings.get_rule_normalizer().materialize_profile_buy_rules(
+            payload.get("buy_rules", [])
+        )
+        self.sell_rules = self._bindings.get_rule_normalizer().materialize_profile_sell_rules(
+            payload.get("sell_rules", [])
+        )
+        self.destroy_rules = self._bindings.get_rule_normalizer().materialize_profile_destroy_rules(
+            payload.get("destroy_rules", [])
+        )
+        self.identify_settings = self._bindings.get_identify_normalizer()(payload.get("identify_settings", {}))
+        self.salvage_settings = self._bindings.get_salvage_normalizer()(payload.get("salvage_settings", {}))
+        self.cleanup_targets = self._bindings.get_cleanup_targets_normalizer()(
+            self._bindings.get_coerce_list()(payload.get("cleanup_targets", []))
+        )
+        self.cleanup_blacklist_model_ids = self._bindings.get_cleanup_blacklist_normalizer()(
+            self._bindings.get_coerce_list()(payload.get("cleanup_blacklist_model_ids", []))
+        )
+        self.cleanup_protection_sources = self._bindings.get_cleanup_sources_normalizer()(
+            self._bindings.get_coerce_list()(payload.get("cleanup_protection_sources", []))
+        )
+        self.protected_item_model_ids = self._bindings.get_protected_models_normalizer()(
+            self._bindings.get_coerce_list()(payload.get("protected_item_model_ids", []))
+        )
+        self.protected_item_targets = self._bindings.get_protected_targets_normalizer()(
+            self._bindings.get_coerce_list()(payload.get("protected_item_targets", []))
+        )
+        self.auto_cleanup_on_outpost_entry = bool(payload.get("auto_cleanup_on_outpost_entry", False))
+        self.gold_balance_enabled = bool(payload.get("gold_balance_enabled", False))
+        self.gold_balance_on_outpost_entry = bool(payload.get("gold_balance_on_outpost_entry", False))
+        self.gold_balance_after_mr_trading = bool(payload.get("gold_balance_after_mr_trading", False))
+        self.gold_balance_after_manual_session = bool(payload.get("gold_balance_after_manual_session", False))
+        self.target_carried_gold = self._bindings.get_gold_target_normalizer()(
+            payload.get("target_carried_gold", self._bindings.get_default_target_carried_gold())
+        )
+        self.auto_sell_on_manual_vendor_interaction = bool(payload.get("auto_sell_on_manual_vendor_interaction", False))
+        self.auto_buy_on_manual_vendor_interaction = bool(payload.get("auto_buy_on_manual_vendor_interaction", False))
+        self.manual_vendor_auto_buy_categories = self._bindings.get_category_normalizer()(
+            payload.get("manual_vendor_auto_buy_categories"),
+            self._bindings.get_buy_category_kinds(),
+            field_name="manual_vendor_auto_buy_categories",
+        )
+        self.manual_vendor_auto_sell_categories = self._bindings.get_category_normalizer()(
+            payload.get("manual_vendor_auto_sell_categories"),
+            self._bindings.get_sell_category_kinds(),
+            field_name="manual_vendor_auto_sell_categories",
+        )
+        self.auto_sell_to_any_merchant = bool(payload.get("auto_sell_to_any_merchant", False))
+        self.auto_sell_any_merchant_normal_items = bool(payload.get("auto_sell_any_merchant_normal_items", False))
+        self.auto_sell_any_merchant_materials = bool(payload.get("auto_sell_any_merchant_materials", False))
+        self.auto_sell_any_merchant_runes = bool(payload.get("auto_sell_any_merchant_runes", False))
+        self.inventory_right_click_shortcuts_enabled = bool(
+            payload.get("inventory_right_click_shortcuts_enabled", False)
+        )
+        self.inventory_right_click_live_actions_enabled = bool(
+            payload.get("inventory_right_click_live_actions_enabled", False)
+        )
+        self.destroy_auto_enabled = bool(payload.get("destroy_auto_enabled", False))
+        self.auto_travel_enabled = bool(payload.get("auto_travel_enabled", False))
+        self.target_outpost_id = max(0, self._bindings.get_safe_int()(payload.get("target_outpost_id", 0), 0))
+        self.favorite_outpost_ids = self._bindings.get_outpost_normalizer()(
+            self._bindings.get_coerce_list()(payload.get("favorite_outpost_ids", []))
+        )
+        self.debug_logging = bool(payload.get("debug_logging", False))
+        self.helper_tooltips_enabled = bool(
+            payload.get("helper_tooltips_enabled", self._bindings.get_helper_tooltips_default())
+        )
+        self.detailed_preview = bool(payload.get("detailed_preview", False))
+        self.buy_rules = self._bindings.get_buy_rules_normalizer()(self.buy_rules)
+        self.sell_rules = self._bindings.get_sell_rules_normalizer()(self.sell_rules)
+        self.destroy_rules = self._bindings.get_destroy_rules_normalizer()(self.destroy_rules)
+        self.cleanup_targets = self._bindings.get_cleanup_targets_normalizer()(self.cleanup_targets)
+        self.cleanup_blacklist_model_ids = self._bindings.get_cleanup_blacklist_normalizer()(
+            self.cleanup_blacklist_model_ids
+        )
+        self.cleanup_protection_sources = self._bindings.get_cleanup_sources_normalizer()(
+            self.cleanup_protection_sources
+        )
+        self.protected_item_model_ids = self._bindings.get_protected_models_normalizer()(self.protected_item_model_ids)
+        self.protected_item_targets = self._bindings.get_protected_targets_normalizer()(self.protected_item_targets)
+        return ConfigurationApplyResult(cleanup_targets_changed=self.cleanup_targets != previous_cleanup_targets)

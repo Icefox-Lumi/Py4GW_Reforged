@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from Sources.icefox.MerchantRules.planning import PlannedMaterialSale
     from Sources.icefox.MerchantRules.planning import PlannedTraderSale
     from Sources.icefox.MerchantRules.planning import SalePlanner
+    from Sources.icefox.MerchantRules.profiles import ProfileSummary
     from Sources.icefox.MerchantRules.service_observation import ServiceResolutionSession
 
 
@@ -958,7 +959,11 @@ class _ServiceResolutionSessionReader(_ServiceResolutionSessionOwner):
 def _make_widget(module, *, use_json_factory: bool = False):
     widget = module.MerchantRulesWidget()
     if not use_json_factory:
-        widget._live_config_doc = lambda: _DynamicTestLiveConfigDoc(module, widget)
+        _cp13_fixture_set(
+            lambda: _DynamicTestLiveConfigDoc(module, widget),
+            _cp13_validated_widget({"widget": widget}),
+            "_live_config_doc",
+        )
     widget.outpost_entries = [
         {"id": 1, "name": "Temple of Testing"},
         {"id": 2, "name": "Regression Harbor"},
@@ -990,7 +995,7 @@ def _make_widget(module, *, use_json_factory: bool = False):
 
 def _make_inventory_shortcut_test_widget(module):
     widget = _make_widget(module)
-    widget._save_profile = lambda: True
+    _cp13_fixture_set(lambda: True, _cp13_validated_widget({"widget": widget}), "_save_profile")
 
     def _mark_preview_dirty(message: str = "", **_kwargs) -> None:
         widget.preview_ready = False
@@ -4236,7 +4241,7 @@ def _test_merchant_stock_after_purchase_resets_completed_target(module) -> None:
                 ],
             )
         ]
-        widget._save_profile = lambda: True
+        _cp13_fixture_set(lambda: True, _cp13_validated_widget({"widget": widget}), "_save_profile")
         cleanup = module.PurchaseTargetCleanup(
             rule_kind=module.BUY_KIND_MERCHANT_STOCK,
             rule_index=0,
@@ -4305,7 +4310,7 @@ def _test_merchant_stock_after_purchase_skips_without_inventory_gain(module) -> 
                 ],
             )
         ]
-        widget._save_profile = lambda: True
+        _cp13_fixture_set(lambda: True, _cp13_validated_widget({"widget": widget}), "_save_profile")
         cleanup = module.PurchaseTargetCleanup(
             rule_kind=module.BUY_KIND_MERCHANT_STOCK,
             rule_index=0,
@@ -29398,7 +29403,11 @@ def _test_bounded_direct_name_search_expansion_contract(module) -> None:
 
     save_payloads: list[dict[str, object]] = []
     dirty_messages: list[str] = []
-    editor_widget._save_profile = lambda: save_payloads.append(editor_widget._build_profile_payload()) or True
+    _cp13_fixture_set(
+        lambda: save_payloads.append(editor_widget._build_profile_payload()) or True,
+        _cp13_validated_widget({"widget": editor_widget}),
+        "_save_profile",
+    )
     editor_widget._mark_preview_dirty = lambda message="": dirty_messages.append(str(message))
 
     imgui = module.PyImGui
@@ -29492,7 +29501,7 @@ def _test_bounded_direct_name_search_expansion_contract(module) -> None:
         collision_editor.protected_item_search_text = "collision"
         collision_editor.protected_item_model_ids = []
         collision_editor.protected_item_targets = []
-        collision_editor._save_profile = lambda: True
+        _cp13_fixture_set(lambda: True, _cp13_validated_widget({"widget": collision_editor}), "_save_profile")
         collision_editor._mark_preview_dirty = lambda *_args, **_kwargs: None
         for method_name in (
             "_draw_section_heading",
@@ -31642,11 +31651,29 @@ def _test_reload_profile_multibox_message_omits_window_geometry(module) -> None:
     widget = _make_widget(module)
     reload_calls: list[tuple[str, bool]] = []
 
-    def _fake_reload_profile_from_disk(*, status_message: str = "", preserve_workspace_state: bool = False):
+    def _fake_reload_profile_from_disk(
+        *,
+        status_message: str = "",
+        preserve_workspace_state: bool = False,
+        preserve_window_geometry: bool | None = None,
+        profile_display_name: str = "",
+        log_profile_load_summary: bool = True,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> bool:
+        _expect(
+            (profile_display_name, log_profile_load_summary, include_remote_dispatch, include_pending_reload)
+            == ("", True, True, True),
+            "CP13 relocated reload fake receives the original explicit defaults",
+        )
+        if preserve_window_geometry is not None:
+            raise TypeError("unexpected keyword argument 'preserve_window_geometry'")
         reload_calls.append((status_message, preserve_workspace_state))
         return True
 
-    widget.reload_profile_from_disk = _fake_reload_profile_from_disk
+    _cp13_fixture_set(
+        _fake_reload_profile_from_disk, _cp13_validated_widget({"widget": widget}), "reload_profile_from_disk"
+    )
     message = types.SimpleNamespace(
         SenderEmail="leader@example.com",
         ReceiverEmail="follower@example.com",
@@ -31760,7 +31787,9 @@ def _test_profile_application_blocks_owned_state_matrix(module) -> None:
         initialized_calls: list[str] = []
         loaded_calls: list[str] = []
         widget._ensure_initialized = lambda: initialized_calls.append("initialized")
-        widget._load_profile = lambda: loaded_calls.append("loaded")
+        _cp13_fixture_set(
+            lambda: loaded_calls.append("loaded"), _cp13_validated_widget({"widget": widget}), "_load_profile"
+        )
         before_refusals = _snapshot_profile_refusal_state(widget)
 
         _expect(
@@ -32588,8 +32617,16 @@ def _test_account_identity_transition_generation_contract(module) -> None:
 
         changed_account_loads: list[str] = []
         changed_account_widget._refresh_profile_entries = lambda scope: changed_account_loads.append(f"refresh:{scope}")
-        changed_account_widget._load_profile = lambda: changed_account_loads.append("load")
-        changed_account_widget._load_loaded_profile_provenance = lambda: changed_account_loads.append("provenance")
+        _cp13_fixture_set(
+            lambda: changed_account_loads.append("load"),
+            _cp13_validated_widget({"widget": changed_account_widget}),
+            "_load_profile",
+        )
+        _cp13_fixture_set(
+            lambda: changed_account_loads.append("provenance"),
+            _cp13_validated_widget({"widget": changed_account_widget}),
+            "_load_loaded_profile_provenance",
+        )
         changed_account_widget._reset_runtime_after_profile_load = lambda: changed_account_loads.append("reset")
         changed_account_widget._ensure_initialized()
         _expect(
@@ -32604,7 +32641,11 @@ def _test_account_identity_transition_generation_contract(module) -> None:
         unbound_widget = _make_widget(module)
         unbound_widget.catalog_loaded = True
         unbound_loads: list[str] = []
-        unbound_widget._load_profile = lambda: unbound_loads.append("load")
+        _cp13_fixture_set(
+            lambda: unbound_loads.append("load"),
+            _cp13_validated_widget({"widget": unbound_widget}),
+            "_load_profile",
+        )
         unbound_widget._ensure_initialized()
         _expect(
             not unbound_widget.initialized
@@ -32617,7 +32658,11 @@ def _test_account_identity_transition_generation_contract(module) -> None:
 
         identity_state["email"] = account_a
         unbound_widget._refresh_profile_entries = lambda _scope: None
-        unbound_widget._load_loaded_profile_provenance = lambda: None
+        _cp13_fixture_set(
+            lambda: None,
+            _cp13_validated_widget({"widget": unbound_widget}),
+            "_load_loaded_profile_provenance",
+        )
         unbound_widget._reset_runtime_after_profile_load = lambda: None
         unbound_widget._ensure_initialized()
         _expect(
@@ -32647,13 +32692,33 @@ def _test_multibox_profile_reload_defers_latest_until_owned_work_is_idle(module)
         "SALVAGE": [object()],
     }
 
-    widget._clear_loaded_profile_provenance = lambda reason: provenance_clears.append(str(reason)) or True
+    def clear_provenance(reason: str) -> bool:
+        return provenance_clears.append(str(reason)) or True
 
-    def _fake_reload_profile_from_disk(*, status_message: str = "", preserve_window_geometry: bool = False):
+    _cp13_fixture_set(clear_provenance, _cp13_validated_widget({"widget": widget}), "_clear_loaded_profile_provenance")
+
+    def _fake_reload_profile_from_disk(
+        *,
+        status_message: str = "",
+        preserve_workspace_state: bool = False,
+        preserve_window_geometry: bool = False,
+        profile_display_name: str = "",
+        log_profile_load_summary: bool = True,
+        include_remote_dispatch: bool = True,
+        include_pending_reload: bool = True,
+    ) -> bool:
+        _expect(
+            (profile_display_name, log_profile_load_summary, include_remote_dispatch, include_pending_reload)
+            == ("", True, True, True),
+            "CP13 relocated reload fake receives the original explicit defaults",
+        )
+        _expect(not preserve_workspace_state, "CP13 relocated compatibility fake retains its geometry keyword route")
         reload_calls.append((status_message, preserve_window_geometry))
         return True
 
-    widget.reload_profile_from_disk = _fake_reload_profile_from_disk
+    _cp13_fixture_set(
+        _fake_reload_profile_from_disk, _cp13_validated_widget({"widget": widget}), "reload_profile_from_disk"
+    )
 
     def _reload_message(request_id: str):
         return types.SimpleNamespace(
@@ -32855,15 +32920,21 @@ def _test_cross_profile_after_purchase_cleanup_waits_for_owned_execution(module)
     widget.buy_rules = [old_rule]
     save_calls: list[str] = []
     profile_loads: list[str] = []
-    widget._save_profile = lambda: save_calls.append("saved") or True
+    _cp13_fixture_set(
+        lambda: save_calls.append("saved") or True, _cp13_validated_widget({"widget": widget}), "_save_profile"
+    )
     widget._ensure_initialized = lambda: None
-    widget._live_config_doc = lambda: types.SimpleNamespace(reload=lambda: True)
+    _cp13_fixture_set(
+        lambda: types.SimpleNamespace(reload=lambda: True),
+        _cp13_validated_widget({"widget": widget}),
+        "_live_config_doc",
+    )
 
     def _load_new_profile():
         profile_loads.append("new")
         widget.buy_rules = [new_rule]
 
-    widget._load_profile = _load_new_profile
+    _cp13_fixture_set(_load_new_profile, _cp13_validated_widget({"widget": widget}), "_load_profile")
     widget._reset_runtime_after_profile_load = lambda **_kwargs: None
 
     def _paused_verified_purchase():
@@ -33973,11 +34044,17 @@ def _test_character_profile_memory_switches_and_profile_operations(module) -> No
         original_map_id = module.Map.GetMapID
         original_map_ready = module.Map.IsMapReady
         apply_calls: list[str] = []
-        original_apply_saved_profile = widget._apply_saved_profile_summary
-        widget._apply_saved_profile_summary = lambda profile, **kwargs: (
-            apply_calls.append(profile.key),
-            original_apply_saved_profile(profile, **kwargs),
-        )[1]
+        original_apply_saved_profile = _cp13_fixture_get(
+            _cp13_validated_widget({"widget": widget}), "_apply_saved_profile_summary"
+        )
+
+        def record_apply(profile: ProfileSummary, **kwargs: object) -> object:
+            return (
+                apply_calls.append(profile.key),
+                original_apply_saved_profile(profile, **kwargs),
+            )[1]
+
+        _cp13_fixture_set(record_apply, _cp13_validated_widget({"widget": widget}), "_apply_saved_profile_summary")
         module.Map.GetMapID = lambda: 101
         try:
             widget._refresh_merchant_rules_lifecycle_state()
@@ -33995,7 +34072,11 @@ def _test_character_profile_memory_switches_and_profile_operations(module) -> No
         finally:
             module.Map.GetMapID = original_map_id
             module.Map.IsMapReady = original_map_ready
-            widget._apply_saved_profile_summary = original_apply_saved_profile
+            _cp13_fixture_set(
+                original_apply_saved_profile,
+                _cp13_validated_widget({"widget": widget}),
+                "_apply_saved_profile_summary",
+            )
         _expect(
             widget._character_profile_ready
             and widget.merchant_rules_profile_generation == profile_generation_before_travel
@@ -34235,12 +34316,17 @@ def _test_character_profile_memory_fails_closed_and_recovers(module) -> None:
 
         # A missing UUID never falls back to the diagnostic name or existing live settings.
         original_name = module.Player.GetName
-        original_apply = widget._apply_saved_profile_summary
+        original_apply = _cp13_fixture_get(_cp13_validated_widget({"widget": widget}), "_apply_saved_profile_summary")
+
         apply_calls: list[str] = []
-        widget._apply_saved_profile_summary = lambda profile, **kwargs: (
-            apply_calls.append(profile.key),
-            original_apply(profile, **kwargs),
-        )[1]
+
+        def record_apply(profile: ProfileSummary, **kwargs: object) -> object:
+            return (
+                apply_calls.append(profile.key),
+                original_apply(profile, **kwargs),
+            )[1]
+
+        _cp13_fixture_set(record_apply, _cp13_validated_widget({"widget": widget}), "_apply_saved_profile_summary")
         module.Player.GetPlayerUUID = lambda: (0, 0, 0, 0)
         try:
             _advance_character_profile(widget, 1)
@@ -34271,7 +34357,7 @@ def _test_character_profile_memory_fails_closed_and_recovers(module) -> None:
             and apply_calls == [],
             "A temporarily unavailable UUID should recover the already-resolved unassigned state without reapplying it.",
         )
-        widget._apply_saved_profile_summary = original_apply
+        _cp13_fixture_set(original_apply, _cp13_validated_widget({"widget": widget}), "_apply_saved_profile_summary")
     finally:
         module.Player.GetPlayerUUID = original_uuid
 
@@ -34510,19 +34596,29 @@ def _test_character_profile_memory_retries_without_duplicate_blanks(module) -> N
         widget._save_current_as_new_profile(module.PROFILE_SCOPE_SHARED)
         manual_profile = widget._get_selected_profile(module.PROFILE_SCOPE_SHARED)
         _expect(manual_profile is not None, "The manual profile fixture should be saved before loading.")
-        original_persist_association = widget._persist_character_profile_association
+        original_persist_association = _cp13_fixture_get(
+            _cp13_validated_widget({"widget": widget}), "_persist_character_profile_association"
+        )
 
-        def _fail_manual_association_write(*_args, **_kwargs):
+        def _fail_manual_association_write(*_args: object, **_kwargs: object) -> None:
             raise OSError("injected manual association write failure")
 
-        widget._persist_character_profile_association = _fail_manual_association_write
+        _cp13_fixture_set(
+            _fail_manual_association_write,
+            _cp13_validated_widget({"widget": widget}),
+            "_persist_character_profile_association",
+        )
         try:
             widget._load_selected_profile(
                 module.PROFILE_SCOPE_SHARED,
                 manual_profile.fingerprint,
             )
         finally:
-            widget._persist_character_profile_association = original_persist_association
+            _cp13_fixture_set(
+                original_persist_association,
+                _cp13_validated_widget({"widget": widget}),
+                "_persist_character_profile_association",
+            )
         current_uuid_key = widget._get_current_character_observation()[0]
         _expect(
             not widget._character_profile_ready
@@ -34569,18 +34665,24 @@ def _test_character_profile_transition_restarts_for_latest_uuid(module) -> None:
             "A new UUID during B resolution must discard B's incomplete confirmation.",
         )
         uuid_key_c = widget._get_current_character_observation()[0]
-        original_apply = widget._apply_verified_profile_payload
+        original_apply = _cp13_fixture_get(
+            _cp13_validated_widget({"widget": widget}), "_apply_verified_profile_payload"
+        )
 
-        def _apply_and_interrupt(payload, **kwargs):
+        def _apply_and_interrupt(payload: dict[str, object], **kwargs: object) -> None:
             original_apply(payload, **kwargs)
             uuid_state["value"] = (1501, 1502, 1503, 1504)
             name_state["value"] = "Character D"
 
-        widget._apply_verified_profile_payload = _apply_and_interrupt
+        _cp13_fixture_set(
+            _apply_and_interrupt, _cp13_validated_widget({"widget": widget}), "_apply_verified_profile_payload"
+        )
         try:
             _advance_character_profile(widget, 1)
         finally:
-            widget._apply_verified_profile_payload = original_apply
+            _cp13_fixture_set(
+                original_apply, _cp13_validated_widget({"widget": widget}), "_apply_verified_profile_payload"
+            )
         state_after_interruption = _character_profile_state_root(widget)
         _expect(
             not widget._character_profile_ready
@@ -34894,13 +34996,13 @@ def _test_character_profile_same_direct_ready_jump_reconfirms_without_reload(mod
         profile_identity_before = widget._character_profile_resolved_profile_identity
         profile_generation_before = widget.merchant_rules_profile_generation
         apply_calls: list[str] = []
-        original_apply = widget._apply_saved_profile_summary
+        original_apply = _cp13_fixture_get(_cp13_validated_widget({"widget": widget}), "_apply_saved_profile_summary")
 
-        def _record_apply(profile, **kwargs):
+        def _record_apply(profile: ProfileSummary, **kwargs: object) -> object:
             apply_calls.append(profile.identity.key)
             return original_apply(profile, **kwargs)
 
-        widget._apply_saved_profile_summary = _record_apply
+        _cp13_fixture_set(_record_apply, _cp13_validated_widget({"widget": widget}), "_apply_saved_profile_summary")
         observer_calls: list[str] = []
         widget._update_manual_gold_session_runtime = lambda: observer_calls.append("manual_gold")
 
@@ -35040,13 +35142,13 @@ def _test_character_profile_resolution_allows_deferred_reload(module) -> None:
         )
 
         reload_calls: list[dict[str, object]] = []
-        original_reload = widget.reload_profile_from_disk
+        original_reload = _cp13_fixture_get(_cp13_validated_widget({"widget": widget}), "reload_profile_from_disk")
 
-        def _record_reload(**kwargs):
+        def _record_reload(**kwargs: object) -> object:
             reload_calls.append(dict(kwargs))
             return original_reload(**kwargs)
 
-        widget.reload_profile_from_disk = _record_reload
+        _cp13_fixture_set(_record_reload, _cp13_validated_widget({"widget": widget}), "reload_profile_from_disk")
         uuid_state["value"] = (2201, 2202, 2203, 2204)
         name_state["value"] = "Character B"
         _advance_character_profile(widget, 1)
@@ -37088,7 +37190,7 @@ def _test_jsonfactory_standalone_stale_mutation_protection(module) -> None:
     )
 
 
-def _test_jsonfactory_standalone_profile_refresh_timer(module) -> None:
+def _test_jsonfactory_standalone_profile_refresh_timer(module: types.ModuleType) -> None:
     _reset_jsonfactory_persistence_fixture(module)
     widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
     shared_scope = module.PROFILE_SCOPE_SHARED
@@ -37152,6 +37254,11 @@ def _test_jsonfactory_standalone_profile_refresh_timer(module) -> None:
         refresh_calls.append((scope, bool(kwargs.get("reload_document", False))))
         return original_refresh(scope, **kwargs)
 
+    def same_line(_offset: float = 0.0, _spacing: float = -1.0) -> None:
+        return None
+
+    layout_restore = _CP8Restoration()
+    layout_restore.binding(module.PyImGui, "same_line", same_line)
     original_summary = widget._draw_live_configuration_profile_summary
     original_saved_section = widget._draw_saved_profile_section
     original_workspace_button = widget._draw_workspace_button
@@ -37196,6 +37303,7 @@ def _test_jsonfactory_standalone_profile_refresh_timer(module) -> None:
             "A profile refresh must not replace or remove standalone profile files.",
         )
     finally:
+        layout_restore.restore()
         widget._refresh_profile_entries = original_refresh
         widget._draw_live_configuration_profile_summary = original_summary
         widget._draw_saved_profile_section = original_saved_section
@@ -38018,7 +38126,6 @@ print("PASS: normal formatter import; no runtime dependencies, initialization, o
         timeout=30,
     )
     _expect(result.returncode == 0, f"Formatter import isolation failed: {result.stdout}\n{result.stderr}")
-
 
 
 def _capture_service_observation_case(module: Any, case: str) -> dict[str, Any]:
@@ -43525,7 +43632,6 @@ assert not any(name.startswith("Sources.icefox.MerchantRules.") and name != item
     _expect(result.returncode == 0, f"CP1 ordinary item_values import failed: {result.stdout}\n{result.stderr}")
 
 
-
 # Exact CP1 observation source SHA-256: ff410aadee8106fe1269ea37bfc8e367273622adbb8e7aba35524261548d0d52
 _INVENTORY_OBSERVATION_CP1_SOURCE = r'''class FrozenCheckpoint1Observation:
     def __init__(self):
@@ -47864,7 +47970,8 @@ def _cp5_query_literal_loader(
     fixture_root = Path(raw_root)
     _expect(fixture_root.is_absolute(), "CP5 fixture root must be absolute")
     root = fixture_root / label
-    root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        root.mkdir(parents=True, exist_ok=True)
     documents: dict[str, object] = {"catalog.json": {}, "drop.json": [], "runes.json": {}}
     if rich_rows is not None:
         documents["items.json"] = rich_rows
@@ -60781,14 +60888,16 @@ def _test_cp11_current_policy_replacement(module: types.ModuleType, route: str) 
         restore.mapping(selected_rule.rarities)
         restore.mapping(selected_rule.categories)
         restore.mapping(destroy_rule.rarities)
+        configuration_owner: object = getattr(widget, "_active_configuration", widget)
+        donor_configuration_owner: object = getattr(donor, "_active_configuration", donor)
         for target, name, value in (
-            (widget, "protected_item_model_ids", original_models),
-            (widget, "protected_item_targets", original_targets),
-            (widget, "salvage_settings", settings),
+            (configuration_owner, "protected_item_model_ids", original_models),
+            (configuration_owner, "protected_item_targets", original_targets),
+            (configuration_owner, "salvage_settings", settings),
             (widget, "destroy_include_protected_items", False),
             (widget, "_find_inventory_empty_slot", empty_slot),
-            (donor, "protected_item_model_ids", replacement_models),
-            (donor, "protected_item_targets", replacement_targets),
+            (donor_configuration_owner, "protected_item_model_ids", replacement_models),
+            (donor_configuration_owner, "protected_item_targets", replacement_targets),
         ):
             namespace: Mapping[str, object] = vars(target)
             replaced_bindings.append((target, name, name in namespace, namespace.get(name)))
@@ -64972,7 +65081,7 @@ def _cp12_external(kind: str) -> dict[str, object]:
     _expect(kind in ('cold', 'differential'), 'CP12 known external run kind')
     parent = _cp10_guard(Path(os.environ['MERCHANT_RULES_CP12_OUTPUT_PARENT']))
     oracle = Path(os.environ['MERCHANT_RULES_CP12_ORACLE_ROOT'])
-    candidate = REPO_ROOT
+    candidate = Path(os.environ.get("MERCHANT_RULES_CP12_CANDIDATE_ROOT", str(REPO_ROOT)))
     _expect(
         not parent.is_relative_to(oracle) and not parent.is_relative_to(candidate),
         'CP12 output parent outside source roots',
@@ -65128,6 +65237,3212 @@ def _test_cp12_completed_cp11_differential() -> None:
         {"oracle-observations", "candidate-observations"},
         "CP12 two independently source-bound comparisons",
     )
+
+
+# CP13 additive proof. Existing cases and assertions remain registered and unchanged.
+_CP13_LIVE_METHODS = (
+    "_live_config_doc",
+    "_backup_doc",
+    "_loaded_profile_state_doc",
+    "_character_profile_state_doc",
+    "_get_live_profile_display_name",
+    "_mark_character_profile_unresolved",
+    "_read_character_profile_state_root",
+    "_read_character_profile_association_state",
+    "_load_character_profile_association",
+    "_persist_character_profile_association",
+    "_delete_character_profile_association",
+    "_refresh_character_profile_scope",
+    "_set_character_profile_resolution_failure",
+    "_retain_profile_load_for_character_retry",
+    "_clear_character_profile_pending_target",
+    "_prepare_character_profile_pending_target",
+    "_apply_verified_profile_payload",
+    "_apply_saved_profile_summary",
+    "_character_profile_gate_block_reason",
+    "_is_character_profile_observation_current",
+    "_advance_character_profile_resolution",
+    "_load_loaded_profile_provenance",
+    "_require_loaded_profile_state_writable",
+    "_record_loaded_profile_provenance",
+    "_clear_loaded_profile_provenance",
+    "_load_selected_profile",
+    "_get_backup_payload",
+    "_store_backup_payload",
+    "_write_live_profile_payload",
+    "_restore_profile_from_backup",
+    "reload_profile_from_disk",
+    "_load_profile",
+    "_save_profile",
+)
+_CP13_CONFIG_FIELDS = (
+    "auto_cleanup_on_outpost_entry",
+    "gold_balance_enabled",
+    "gold_balance_on_outpost_entry",
+    "gold_balance_after_mr_trading",
+    "gold_balance_after_manual_session",
+    "target_carried_gold",
+    "auto_sell_on_manual_vendor_interaction",
+    "auto_buy_on_manual_vendor_interaction",
+    "manual_vendor_auto_buy_categories",
+    "manual_vendor_auto_sell_categories",
+    "auto_sell_to_any_merchant",
+    "auto_sell_any_merchant_normal_items",
+    "auto_sell_any_merchant_materials",
+    "auto_sell_any_merchant_runes",
+    "inventory_right_click_shortcuts_enabled",
+    "inventory_right_click_live_actions_enabled",
+    "destroy_auto_enabled",
+    "auto_travel_enabled",
+    "target_outpost_id",
+    "favorite_outpost_ids",
+    "debug_logging",
+    "helper_tooltips_enabled",
+    "detailed_preview",
+    "buy_rules",
+    "sell_rules",
+    "destroy_rules",
+    "identify_settings",
+    "salvage_settings",
+    "cleanup_targets",
+    "cleanup_blacklist_model_ids",
+    "cleanup_protection_sources",
+    "protected_item_model_ids",
+    "protected_item_targets",
+)
+_CP13_EXTRA_FIELDS = (
+    "profile_warning",
+    "profile_notice",
+    "profile_write_blocked",
+    "new_profile_session",
+    "active_profile_display_name",
+    "loaded_profile_provenance",
+    "loaded_profile_provenance_warning",
+    "merchant_rules_profile_generation",
+    "active_workspace",
+    "active_rules_workspace",
+    "status_message",
+    "preview_ready",
+    "_cleanup_targets_revision",
+    "outpost_search_text",
+    "cleanup_model_search_text",
+    "protected_item_search_text",
+    "identify_rescan_requested",
+    "salvage_rescan_requested",
+    "instant_destroy_rescan_requested",
+    "destroy_instant_enabled",
+    "destroy_include_protected_items",
+)
+_CP13_XUNLAI_FIELDS = (
+    "buy_rules",
+    "sell_rules",
+    "destroy_rules",
+    "identify_settings",
+    "cleanup_targets",
+    "cleanup_blacklist_model_ids",
+    "cleanup_protection_sources",
+)
+# name, stage, route, actual method, source-line substring, occurrence
+_CP13_FAULT_ROWS = (
+    ("config_identify", "configuration", "apply", "_apply_profile_payload", "self.identify_settings =", 1),
+    ("config_salvage", "configuration", "apply", "_apply_profile_payload", "self.salvage_settings =", 1),
+    ("config_cleanup", "configuration", "apply", "_apply_profile_payload", "self.cleanup_targets =", 1),
+    (
+        "config_categories",
+        "configuration",
+        "apply",
+        "_apply_profile_payload",
+        "self.manual_vendor_auto_buy_categories =",
+        1,
+    ),
+    ("config_late_buy", "configuration", "apply", "_apply_profile_payload", "self.buy_rules =", 2),
+    ("config_late_sell", "configuration", "apply", "_apply_profile_payload", "self.sell_rules =", 2),
+    ("config_late_destroy", "configuration", "apply", "_apply_profile_payload", "self.destroy_rules =", 2),
+    ("config_late_cleanup", "configuration", "apply", "_apply_profile_payload", "self.cleanup_targets =", 2),
+    ("finalize_revision", "configuration", "apply", "finalize", "self._cleanup_targets_revision +=", 1),
+    (
+        "finalize_invalidation",
+        "configuration",
+        "apply",
+        "finalize",
+        "self._invalidate_cleanup_target_display_cache()",
+        1,
+    ),
+    ("finalize_editors", "configuration", "apply", "finalize", 'self.outpost_search_text = ""', 1),
+    ("finalize_ui", "configuration", "apply", "finalize", "self._refresh_rule_ui_caches()", 1),
+    ("live_copy", "live", "selected", "_apply_verified_profile_payload", "normalized_payload =", 1),
+    ("live_acquire", "live", "selected", "_apply_verified_profile_payload", "live_doc = self._live_config_doc()", 1),
+    ("live_save", "live", "selected", "_apply_verified_profile_payload", "if not live_doc.save():", 1),
+    ("live_verify_reload", "live", "selected", "_apply_verified_profile_payload", "if not live_doc.reload():", 1),
+    ("live_runtime", "live", "selected", "_apply_verified_profile_payload", "if not self.reload_profile_from_disk(", 1),
+    ("live_comparison", "live", "selected", "_apply_verified_profile_payload", "if loaded_payload_serialized !=", 1),
+    ("load_default", "live", "load", "_load_profile", "_apply_profile_payload(default_payload)", 1),
+    ("load_stored", "live", "load", "_load_profile", "_apply_profile_payload(normalized_payload)", 1),
+    ("load_finalization", "live", "load", "finalize", "self._refresh_rule_ui_caches()", 1),
+    ("reload_initialize", "live", "reload", "reload_profile_from_disk", "_ensure_initialized()", 1),
+    ("reload_document", "live", "reload", "reload_profile_from_disk", "self._live_config_doc().reload()", 1),
+    ("reload_load", "live", "reload", "reload_profile_from_disk", "self._load_profile()", 1),
+    (
+        "reload_reset",
+        "live",
+        "reload",
+        "_reset_runtime_after_profile_load",
+        "self._clear_inventory_monitor_signatures()",
+        1,
+    ),
+    ("restore_save", "live", "restore", "_restore_profile_from_backup", "if not self._backup_doc().save():", 1),
+    (
+        "restore_clear",
+        "live",
+        "restore",
+        "_clear_loaded_profile_provenance",
+        "doc = self._loaded_profile_state_doc()",
+        1,
+    ),
+    (
+        "restore_reset",
+        "live",
+        "restore",
+        "_reset_runtime_after_profile_load",
+        "self._clear_inventory_monitor_signatures()",
+        1,
+    ),
+    (
+        "association_schema",
+        "character",
+        "selected",
+        "_persist_character_profile_association",
+        'if not doc.has("schema"):',
+        1,
+    ),
+    (
+        "association_leaf",
+        "character",
+        "selected",
+        "_persist_character_profile_association",
+        'doc.set_json(f"characters/',
+        1,
+    ),
+    ("association_save", "character", "selected", "_persist_character_profile_association", "if not doc.save():", 1),
+    (
+        "association_reload",
+        "character",
+        "selected",
+        "_persist_character_profile_association",
+        "if not doc.reload():",
+        1,
+    ),
+    (
+        "association_verify",
+        "character",
+        "selected",
+        "_persist_character_profile_association",
+        "verified_root = doc.get_json",
+        1,
+    ),
+    ("provenance_save", "character", "selected", "_record_loaded_profile_provenance", "if not doc.save():", 1),
+    ("provenance_reload", "character", "selected", "_record_loaded_profile_provenance", "if not doc.reload():", 1),
+    ("provenance_verify", "character", "selected", "_record_loaded_profile_provenance", "verified = ", 1),
+    (
+        "blank_before_delete",
+        "character",
+        "stale",
+        "_delete_character_profile_association",
+        "doc = self._character_profile_state_doc()",
+        1,
+    ),
+    ("stale_delete", "character", "stale", "_delete_character_profile_association", "if not doc.delete(", 1),
+    (
+        "stale_verify",
+        "character",
+        "stale",
+        "_delete_character_profile_association",
+        "if verified_root != expected_root:",
+        1,
+    ),
+)
+
+
+_CP13_PUBLIC_METHODS: dict[str, str] = {
+    "_live_config_doc": "live_config_doc",
+    "_backup_doc": "backup_doc",
+    "_loaded_profile_state_doc": "loaded_profile_state_doc",
+    "_character_profile_state_doc": "character_profile_state_doc",
+    "_get_live_profile_display_name": "get_live_profile_display_name",
+    "_mark_character_profile_unresolved": "mark_character_profile_unresolved",
+    "_read_character_profile_state_root": "read_character_profile_state_root",
+    "_read_character_profile_association_state": "read_character_profile_association_state",
+    "_load_character_profile_association": "load_character_profile_association",
+    "_persist_character_profile_association": "persist_character_profile_association",
+    "_delete_character_profile_association": "delete_character_profile_association",
+    "_refresh_character_profile_scope": "refresh_character_profile_scope",
+    "_set_character_profile_resolution_failure": "set_character_profile_resolution_failure",
+    "_retain_profile_load_for_character_retry": "retain_profile_load_for_character_retry",
+    "_clear_character_profile_pending_target": "clear_character_profile_pending_target",
+    "_prepare_character_profile_pending_target": "prepare_character_profile_pending_target",
+    "_apply_verified_profile_payload": "apply_verified_profile_payload",
+    "_apply_saved_profile_summary": "apply_saved_profile_summary",
+    "_character_profile_gate_block_reason": "character_profile_gate_block_reason",
+    "_is_character_profile_observation_current": "is_character_profile_observation_current",
+    "_advance_character_profile_resolution": "advance_character_profile_resolution",
+    "_load_loaded_profile_provenance": "load_loaded_profile_provenance",
+    "_require_loaded_profile_state_writable": "require_loaded_profile_state_writable",
+    "_record_loaded_profile_provenance": "record_loaded_profile_provenance",
+    "_clear_loaded_profile_provenance": "clear_loaded_profile_provenance",
+    "_load_selected_profile": "load_selected_profile",
+    "_get_backup_payload": "get_backup_payload",
+    "_store_backup_payload": "store_backup_payload",
+    "_write_live_profile_payload": "write_live_profile_payload",
+    "_restore_profile_from_backup": "restore_profile_from_backup",
+    "reload_profile_from_disk": "reload_profile_from_disk",
+    "_load_profile": "load_profile",
+    "_save_profile": "save_profile",
+}
+
+_CP13_PUBLIC_FIELDS: dict[str, str] = {
+    "config_path": "config_path",
+    "active_profile_display_name": "active_profile_display_name",
+    "loaded_profile_provenance": "loaded_profile_provenance",
+    "loaded_profile_provenance_warning": "loaded_profile_provenance_warning",
+    "_character_profile_ready": "character_profile_ready",
+    "_character_profile_resolved_identity": "character_profile_resolved_identity",
+    "_character_profile_resolved_observation": "character_profile_resolved_observation",
+    "_character_profile_resolved_profile_identity": "character_profile_resolved_profile_identity",
+    "_character_profile_candidate_identity": "character_profile_candidate_identity",
+    "_character_profile_candidate_observation": "character_profile_candidate_observation",
+    "_character_profile_candidate_ticks": "character_profile_candidate_ticks",
+    "_character_profile_resolution_target": "character_profile_resolution_target",
+    "_character_profile_pending_association": "character_profile_pending_association",
+    "_character_profile_pending_profile": "character_profile_pending_profile",
+    "_character_profile_pending_needs_persist": "character_profile_pending_needs_persist",
+    "_character_profile_pending_is_new_blank": "character_profile_pending_is_new_blank",
+    "_character_profile_pending_message": "character_profile_pending_message",
+    "_character_profile_last_attempt_at": "character_profile_last_attempt_at",
+    "_character_profile_resolution_error": "character_profile_resolution_error",
+    "_character_profile_last_failure_signature": "character_profile_last_failure_signature",
+    "_character_profile_resolution_started": "character_profile_resolution_started",
+    "new_profile_session": "new_profile_session",
+    "profile_warning": "profile_warning",
+    "profile_notice": "profile_notice",
+    "profile_write_blocked": "profile_write_blocked",
+}
+
+
+def _cp13_member_name(widget: object, name: str) -> str:
+    _expect(name in _CP13_PUBLIC_METHODS, "CP13 enumerated fixture member " + name)
+    return _CP13_PUBLIC_METHODS[name] if hasattr(widget, "_live_profile_session") else name
+
+
+def _cp13_fixture_target(widget: object, name: str) -> object:
+    owner: object = getattr(widget, "_live_profile_session", widget)
+    _expect(callable(getattr(owner, _cp13_member_name(widget, name))), "CP13 actual fixture target " + name)
+    return owner
+
+
+def _cp13_validated_widget(reference: dict[str, object]) -> _CP10Widget:
+    widget = reference["widget"]
+    if not isinstance(widget, _CP10Widget):
+        raise AssertionError("CP13 relocated fixture requires the existing widget compatibility surfaces")
+    return widget
+
+
+def _cp13_fixture_set(value: object, widget: object, name: str) -> None:
+    # Value is the first argument: original assignment evaluates RHS before its target.
+    setattr(_cp13_fixture_target(widget, name), _cp13_member_name(widget, name), value)
+
+
+def _cp13_fixture_get(widget: object, name: str) -> types.MethodType | types.FunctionType:
+    return _cp12_bound(_cp13_fixture_target(widget, name), _cp13_member_name(widget, name))
+
+
+def _cp13_logical_name(instance: object, name: str) -> str:
+    if type(instance).__name__ == "LiveProfileSession":
+        return next((original for original, public in _CP13_PUBLIC_METHODS.items() if public == name), name)
+    return name
+
+
+def _cp13_source_line(line: str) -> str:
+    # Only checkpoint matching is canonicalized; executed function/code/receiver remain actual.
+    result = line.replace("self._runtime.", "self.").replace("self._configuration.", "self.")
+    names = dict(_CP13_PUBLIC_METHODS)
+    names.update(
+        {
+            "_apply_profile_payload": "apply_profile_payload",
+            "_ensure_initialized": "ensure_initialized",
+            "_get_profile_application_block_message": "get_profile_application_block_message",
+            "_reset_runtime_after_profile_load": "reset_runtime_after_profile_load",
+        }
+    )
+    for original, public in sorted(names.items(), key=lambda pair: -len(pair[1])):
+        result = re.sub(r"\." + re.escape(public) + r"(?=\W|$)", "." + original, result)
+    return result
+
+
+def _cp13_call(target: object, name: str, *args: object, **kwargs: object) -> object:
+    return _cp12_bound(target, name)(*args, **kwargs)
+
+
+def _cp13_dict(value: object) -> dict[str, object]:
+    if not _cp12_is_result(value):
+        raise AssertionError("CP13 expected a string-keyed dictionary")
+    return value
+
+
+def _cp13_method(widget: object, name: str) -> tuple[object, types.MethodType]:
+    owner: object = widget
+    actual_name = name
+    if name == "finalize":
+        actual_name = (
+            "_finalize_configuration_apply" if hasattr(widget, "_active_configuration") else "_apply_profile_payload"
+        )
+    elif name == "_apply_profile_payload" and hasattr(widget, "_active_configuration"):
+        owner, actual_name = getattr(widget, "_active_configuration"), "apply_payload"
+    elif name in _CP13_LIVE_METHODS:
+        owner = _cp13_fixture_target(widget, name)
+        actual_name = _cp13_member_name(widget, name)
+    method: object = getattr(owner, actual_name)
+    if not isinstance(method, types.MethodType):
+        raise AssertionError("CP13 bound actual algorithm " + name)
+    _expect(method.__self__ is owner, "CP13 actual owner receiver " + name)
+    return owner, method
+
+
+def _cp13_clean(value: object) -> object:
+    plain: object = _cp11_plain(value)
+    if isinstance(plain, str):
+        return plain.replace(str(REPO_ROOT), "<source>").replace(str(_cp10_storage_root), "<storage>")
+    if _cp9_is_sequence(plain):
+        return [_cp13_clean(entry) for entry in plain]
+    if _cp9_is_mapping(plain):
+        result: dict[str, object] = {}
+        for key, entry in plain.items():
+            if isinstance(key, str):
+                encoded = "@cp13:str:" + key if key.startswith("@cp13:") else key
+            elif isinstance(key, int) and not isinstance(key, bool):
+                encoded = "@cp13:int:" + str(key)
+            elif (
+                _cp9_is_sequence(key)
+                and isinstance(key, tuple)
+                and len(key) == 2
+                and all(isinstance(part, str) for part in key)
+            ):
+                encoded = "@cp13:tuple:" + json.dumps(key, ensure_ascii=True, separators=(",", ":"))
+            else:
+                raise AssertionError("CP13 unsupported observation mapping key: " + type(key).__name__)
+            if encoded in result:
+                raise AssertionError("CP13 observation mapping key encoding collision")
+            result[encoded] = _cp13_clean(entry)
+        return result
+    return plain
+
+
+def _cp13_clean_contract() -> None:
+    values = [1]
+    record: dict[str, object] = {"values": values}
+    items: list[object] = [record]
+    source: dict[object, object] = {
+        13: {"items": items},
+        "13": "string key",
+        ("account", "doc"): {"tuple value": [2]},
+        "('account', 'doc')": "tuple spelling",
+        "@cp13:int:13": "integer encoding spelling",
+        '@cp13:tuple:["account","doc"]': "tuple encoding spelling",
+        "@cp13:str:@cp13:int:13": "escaped string spelling",
+    }
+    expected: dict[str, object] = {
+        "@cp13:int:13": {"items": [{"values": [1]}]},
+        "13": "string key",
+        '@cp13:tuple:["account","doc"]': {"tuple value": [2]},
+        "('account', 'doc')": "tuple spelling",
+        "@cp13:str:@cp13:int:13": "integer encoding spelling",
+        '@cp13:str:@cp13:tuple:["account","doc"]': "tuple encoding spelling",
+        "@cp13:str:@cp13:str:@cp13:int:13": "escaped string spelling",
+    }
+    snapshot = _cp13_dict(_cp13_clean(source))
+    _cp10_equal(snapshot, expected, "CP13 literal distinct integer/string/tuple/escaped mapping keys")
+    _expect(len(snapshot) == 7, "CP13 all seven distinct key entries retained")
+    _expect(json.loads(json.dumps(snapshot, sort_keys=True)) == expected, "CP13 complete key-control JSON round trip")
+    copied_items = _cp13_dict(snapshot["@cp13:int:13"])["items"]
+    if not _cp9_is_sequence(copied_items) or not isinstance(copied_items, list):
+        raise AssertionError("CP13 copied nested list")
+    copied_record = _cp13_dict(copied_items[0])
+    _expect(
+        snapshot is not source
+        and copied_items is not items
+        and copied_record is not record
+        and copied_record["values"] is not values,
+        "CP13 independent recursive snapshot containers",
+    )
+    values.append(9)
+    record["later"] = True
+    items.append({"values": []})
+    source["later"] = "source mutation"
+    _cp10_equal(snapshot, expected, "CP13 later recursive source mutations leave snapshot untouched")
+    copied_record["snapshot_only"] = True
+    _expect("snapshot_only" not in record, "CP13 snapshot mutation does not reach the source")
+    for unsupported in (True, 1.5, ("account", 13), ("account",)):
+        try:
+            _cp13_clean({unsupported: "unsupported key"})
+        except AssertionError as error:
+            _expect(
+                str(error).startswith("CP13 unsupported observation mapping key:"),
+                "CP13 unsupported keys fail at the explicit key boundary",
+            )
+        else:
+            raise AssertionError("CP13 unsupported mapping key was silently accepted")
+
+
+def _cp13_snapshot(widget: object, module: types.ModuleType) -> dict[str, object]:
+    character_names = sorted(
+        name for name in dir(widget) if name.startswith("_character_profile_") and not callable(getattr(widget, name))
+    )
+    fields = {
+        name: _cp13_clean(getattr(widget, name))
+        for name in (*_CP13_CONFIG_FIELDS, *_CP13_EXTRA_FIELDS, *character_names)
+    }
+    factory: object = getattr(module, "JsonFactory")
+    documents: dict[str, object] = {}
+    for attribute in ("_documents", "_persisted_documents", "_operation_log", "_apply_calls"):
+        documents[attribute] = _cp13_clean(getattr(factory, attribute))
+    fields["documents"] = documents
+    fields["saved_warnings"] = _cp13_clean(getattr(widget, "saved_profile_warnings"))
+    fields["saved_notices"] = _cp13_clean(getattr(widget, "saved_profile_notices"))
+    return fields
+
+
+@contextmanager
+def _cp13_clock(module: types.ModuleType) -> Iterator[None]:
+    from Sources.icefox.MerchantRules import configuration
+    from Sources.icefox.MerchantRules import profiles
+
+    restore = _CP8Restoration()
+    clock = types.SimpleNamespace(
+        time=lambda: 1000.0, monotonic=lambda: 100.0, perf_counter=lambda: 20.0, time_ns=lambda: 1000000000
+    )
+    try:
+        restore.binding(module, "time", clock)
+        restore.binding(profiles, "time", clock)
+        restore.binding(configuration, "time", clock)
+        yield
+    finally:
+        restore.restore()
+
+
+def _cp13_fixture(module: types.ModuleType, route: str) -> tuple[object, dict[str, object], object]:
+    _reset_jsonfactory_persistence_fixture(module)
+    widget: object = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    payload = _cp13_dict(_cp13_call(widget, "_build_default_profile_payload", include_rule_templates=False))
+    payload.update(favorite_outpost_ids=[2], destroy_auto_enabled=True, debug_logging=True)
+    payload["cleanup_targets"] = [{"model_id": 222, "keep_on_character": 2, "scope": "exact"}]
+    payload = _cp13_dict(_cp13_call(widget, "_normalize_profile_payload", payload))
+    baseline = dict(payload, favorite_outpost_ids=[1], destroy_auto_enabled=False, cleanup_targets=[])
+    doc = _cp13_call(widget, "_live_config_doc")
+    _cp13_call(doc, "set_json", "", baseline)
+    _expect(_cp13_call(doc, "save") is True, "CP13 baseline live save")
+    _cp13_call(widget, "_load_profile")
+    wrapper = _cp13_dict(
+        _cp13_call(
+            widget,
+            "_build_shared_profile_wrapper",
+            "CP13 Selected",
+            payload=payload,
+            profile_id="profile_" + "a" * 32,
+            saved_at_unix_ms=1000,
+        )
+    )
+    _write_standalone_profile(widget, "account", "CP13 Selected.json", wrapper)
+    _expect(
+        _cp13_call(widget, "_refresh_profile_entries", "account", reload_document=True) is True, "CP13 saved discovery"
+    )
+    _cp13_call(widget, "_set_selected_profile_key", "account", "profile_" + "a" * 32)
+    selected = _cp13_call(widget, "_get_selected_profile", "account")
+    _expect(selected is not None, "CP13 exact selected summary")
+    setattr(widget, "active_workspace", getattr(module, "WORKSPACE_PROFILES"))
+    setattr(widget, "active_rules_workspace", getattr(module, "RULES_WORKSPACE_SELL"))
+    setattr(widget, "outpost_search_text", "retain until finalization")
+    setattr(widget, "preview_ready", True)
+    if route in ("load", "reload"):
+        _cp13_call(doc, "set_json", "", payload)
+        _expect(_cp13_call(doc, "save") is True, "CP13 reload target")
+    elif route == "restore":
+        _cp13_call(widget, "_store_backup_payload", payload)
+    elif route in ("blank", "stale"):
+        for name, value in (
+            ("_character_profile_ready", False),
+            ("_character_profile_resolved_identity", None),
+            ("_character_profile_resolved_observation", None),
+            ("_character_profile_resolved_profile_identity", None),
+            ("_character_profile_candidate_identity", None),
+            ("_character_profile_candidate_observation", None),
+            ("_character_profile_candidate_ticks", 0),
+            ("_character_profile_resolution_target", None),
+        ):
+            setattr(widget, name, value)
+        if route == "stale":
+            observation: object = _cp13_call(widget, "_get_current_character_observation")
+            if not _cp9_is_sequence(observation) or not isinstance(observation, tuple):
+                raise AssertionError("CP13 available character")
+            state = {
+                "schema": getattr(module, "CHARACTER_PROFILE_STATE_SCHEMA"),
+                "schema_version": getattr(module, "CHARACTER_PROFILE_STATE_SCHEMA_VERSION"),
+                "characters": {
+                    str(observation[0]): {"source_scope": "invalid"},
+                    "other": {
+                        "source_scope": "account",
+                        "source_key": "profile_" + "b" * 32,
+                        "character_name_snapshot": "Other",
+                    },
+                },
+                "unrelated": {"preserve": True},
+            }
+            state_doc = _cp13_call(widget, "_character_profile_state_doc")
+            _cp13_call(state_doc, "set_json", "", state)
+            _expect(_cp13_call(state_doc, "save") is True, "CP13 stale fixture")
+        _cp13_call(widget, "_advance_character_profile_resolution")
+    factory: object = getattr(module, "JsonFactory")
+    operations: object = getattr(factory, "_operation_log")
+    if isinstance(operations, list):
+        operations.clear()
+    return widget, payload, selected
+
+
+def _cp13_act(widget: object, route: str, payload: dict[str, object], selected: object) -> object:
+    if route == "apply":
+        return _cp13_call(widget, "_apply_profile_payload", payload)
+    if route == "selected":
+        return _cp13_call(widget, "_load_selected_profile", "account", getattr(selected, "fingerprint"))
+    if route == "load":
+        return _cp13_call(widget, "_load_profile")
+    if route == "reload":
+        return _cp13_call(
+            widget, "reload_profile_from_disk", preserve_workspace_state=True, log_profile_load_summary=False
+        )
+    if route == "restore":
+        return _cp13_call(widget, "_restore_profile_from_backup")
+    if route in ("blank", "stale"):
+        return _cp13_call(widget, "_advance_character_profile_resolution")
+    raise AssertionError("CP13 unknown route " + route)
+
+
+_CP13_APPLY_EDITOR_SEED = {
+    "outpost_search_text": "retain until finalization",
+    "cleanup_model_search_text": "cleanup model before apply",
+    "cleanup_target_list_search_text": "cleanup list before apply",
+    "cleanup_blacklist_search_text": "blacklist before apply",
+    "cleanup_blacklist_list_search_text": "blacklist list before apply",
+    "protected_item_search_text": "protected item before apply",
+    "protected_item_list_search_text": "protected list before apply",
+    "protected_item_type_filter_category": "equipment",
+    "protected_item_type_filter_subcategory": "equipment_weapons",
+    "cleanup_item_type_filter_category": "materials",
+    "cleanup_item_type_filter_subcategory": "materials_common",
+}
+_CP13_UI_EDITOR_SEED = {
+    "rule_name_edit_key": "buy:13",
+    "rule_name_edit_text": "rule name before refresh",
+    "manual_model_ids_edit_key": "sell:17",
+    "manual_model_ids_edit_text": "701, 702",
+}
+
+
+def _cp13_seed_finalization(widget: object, module: types.ModuleType) -> tuple[object, object, object]:
+    key = (41, 73, "materials", "materials_common", "display before apply")
+    targets: object = _cp13_call(
+        module,
+        "_normalize_cleanup_targets",
+        [
+            {"model_id": 701, "keep_on_character": 3, "scope": "exact"},
+            {"model_id": 702, "keep_on_character": 4, "scope": "exact"},
+        ],
+    )
+    if not _cp9_is_sequence(targets) or not isinstance(targets, list) or len(targets) != 2:
+        raise AssertionError("CP13 populated display fixture")
+    cache = (targets[:1], targets[1:], targets[:])
+    buy_cache = {13: "buy query before refresh", 17: "second buy query"}
+    setattr(widget, "_cleanup_targets_revision", 41)
+    setattr(widget, "_cleanup_target_display_cache_key", key)
+    setattr(widget, "_cleanup_target_display_cache", cache)
+    setattr(widget, "buy_model_search_cache", buy_cache)
+    for field, value in (*_CP13_APPLY_EDITOR_SEED.items(), *_CP13_UI_EDITOR_SEED.items()):
+        setattr(widget, field, value)
+    return key, cache, buy_cache
+
+
+def _cp13_finalization_snapshot(widget: object, refs: tuple[object, object, object]) -> dict[str, object]:
+    key, cache, buy_cache = refs
+    # _cp13_clean recursively copies the lists, records and dictionaries; no snapshot aliases a live cache.
+    return {
+        "revision": getattr(widget, "_cleanup_targets_revision"),
+        "display_key": _cp13_clean(getattr(widget, "_cleanup_target_display_cache_key")),
+        "display_cache": _cp13_clean(getattr(widget, "_cleanup_target_display_cache")),
+        "display_key_is_original": getattr(widget, "_cleanup_target_display_cache_key") is key,
+        "display_cache_is_original": getattr(widget, "_cleanup_target_display_cache") is cache,
+        "retained_display_key": _cp13_clean(key),
+        "retained_display_cache": _cp13_clean(cache),
+        "apply_editors": {field: getattr(widget, field) for field in _CP13_APPLY_EDITOR_SEED},
+        "ui_editors": {field: getattr(widget, field) for field in _CP13_UI_EDITOR_SEED},
+        "buy_cache": _cp13_clean(getattr(widget, "buy_model_search_cache")),
+        "buy_cache_is_original": getattr(widget, "buy_model_search_cache") is buy_cache,
+        "retained_buy_cache": _cp13_clean(buy_cache),
+    }
+
+
+def _cp13_assert_finalization(state: dict[str, object], phase: str, context: str) -> None:
+    _expect(
+        phase in {"untouched", "revised", "invalidated", "editors_reset", "complete"}, context + " known literal phase"
+    )
+    original_key = [41, 73, "materials", "materials_common", "display before apply"]
+    original_cache = [
+        [{"model_id": 701, "keep_on_character": 3, "scope": "exact"}],
+        [{"model_id": 702, "keep_on_character": 4, "scope": "exact"}],
+        [
+            {"model_id": 701, "keep_on_character": 3, "scope": "exact"},
+            {"model_id": 702, "keep_on_character": 4, "scope": "exact"},
+        ],
+    ]
+    invalidated = phase in {"invalidated", "editors_reset", "complete"}
+    editors_reset = phase in {"editors_reset", "complete"}
+    _expect(state["revision"] == (41 if phase == "untouched" else 42), context + " exact revision prefix")
+    _expect(state["display_key"] == (None if invalidated else original_key), context + " display key prefix")
+    _expect(state["display_cache"] == (None if invalidated else original_cache), context + " populated display prefix")
+    _expect(state["display_key_is_original"] is (not invalidated), context + " exact original key reference")
+    _expect(state["display_cache_is_original"] is (not invalidated), context + " exact original display reference")
+    _expect(
+        state["retained_display_key"] == original_key and state["retained_display_cache"] == original_cache,
+        context + " invalidation leaves held originals untouched",
+    )
+    _expect(
+        state["apply_editors"]
+        == (
+            {
+                "outpost_search_text": "",
+                "cleanup_model_search_text": "",
+                "cleanup_target_list_search_text": "",
+                "cleanup_blacklist_search_text": "",
+                "cleanup_blacklist_list_search_text": "",
+                "protected_item_search_text": "",
+                "protected_item_list_search_text": "",
+                "protected_item_type_filter_category": "all",
+                "protected_item_type_filter_subcategory": "all",
+                "cleanup_item_type_filter_category": "all",
+                "cleanup_item_type_filter_subcategory": "all",
+            }
+            if editors_reset
+            else _CP13_APPLY_EDITOR_SEED
+        ),
+        context + " exact editor and filter prefix",
+    )
+    _expect(
+        state["ui_editors"]
+        == (
+            {
+                "rule_name_edit_key": "",
+                "rule_name_edit_text": "",
+                "manual_model_ids_edit_key": "",
+                "manual_model_ids_edit_text": "",
+            }
+            if phase == "complete"
+            else _CP13_UI_EDITOR_SEED
+        ),
+        context + " exact UI editor prefix",
+    )
+    expected_buy = (
+        {} if phase == "complete" else {"@cp13:int:13": "buy query before refresh", "@cp13:int:17": "second buy query"}
+    )
+    _expect(
+        state["buy_cache"] == expected_buy and state["retained_buy_cache"] == expected_buy,
+        context + " exact buy search contents",
+    )
+    _expect(state["buy_cache_is_original"] is True, context + " UI clears original buy cache in place")
+
+
+def _cp13_finalization_success(module: types.ModuleType) -> dict[str, object]:
+    widget, payload, selected = _cp13_fixture(module, "apply")
+    refs = _cp13_seed_finalization(widget, module)
+    before = _cp13_finalization_snapshot(widget, refs)
+    invalidation_code = _cp13_method(widget, "_invalidate_cleanup_target_display_cache")[1].__func__.__code__
+    ui_code = _cp13_method(widget, "_refresh_rule_ui_caches")[1].__func__.__code__
+    entries: list[tuple[str, dict[str, object]]] = []
+    old_profile = sys.getprofile()
+
+    def profile(frame: types.FrameType, event: str, result: object) -> None:
+        if event == "call" and frame.f_locals.get("self") is widget:
+            if frame.f_code is invalidation_code:
+                entries.append(("invalidation", _cp13_finalization_snapshot(widget, refs)))
+            elif frame.f_code is ui_code:
+                entries.append(("ui", _cp13_finalization_snapshot(widget, refs)))
+
+    try:
+        sys.setprofile(profile)
+        _expect(_cp13_act(widget, "apply", payload, selected) is None, "CP13 successful actual apply returns None")
+    finally:
+        sys.setprofile(old_profile)
+    after = _cp13_finalization_snapshot(widget, refs)
+    _expect([name for name, _state in entries] == ["invalidation", "ui"], "CP13 actual invalidation then UI entry")
+    _cp13_assert_finalization(before, "untouched", "CP13 independent before snapshot after successful cache clear")
+    _cp13_assert_finalization(entries[0][1], "revised", "CP13 actual invalidation entry")
+    _cp13_assert_finalization(entries[1][1], "editors_reset", "CP13 actual UI entry")
+    _cp13_assert_finalization(after, "complete", "CP13 successful real finalization")
+    return {"before": before, "entries": entries, "after": after}
+
+
+def _cp13_fault_observation(module: types.ModuleType, row: tuple[str, str, str, str, str, int]) -> dict[str, object]:
+    import inspect
+
+    name, _stage, route, method_name, needle, occurrence = row
+    with _cp13_clock(module):
+        widget, payload, selected = _cp13_fixture(module, route)
+        finalization_refs = _cp13_seed_finalization(widget, module) if route == "apply" else None
+        finalization_before = (
+            _cp13_finalization_snapshot(widget, finalization_refs) if finalization_refs is not None else None
+        )
+        finalization_reached: list[dict[str, object]] = []
+        finalization_entries: list[tuple[str, dict[str, object]]] = []
+        invalidation_code = _cp13_method(widget, "_invalidate_cleanup_target_display_cache")[1].__func__.__code__
+        ui_code = _cp13_method(widget, "_refresh_rule_ui_caches")[1].__func__.__code__
+        target, method = _cp13_method(widget, method_name)
+        lines, first = inspect.getsourcelines(method.__func__)
+        candidates = [first + index for index, line in enumerate(lines) if needle in _cp13_source_line(line)]
+        _expect(len(candidates) >= occurrence, "CP13 exact checkpoint exists " + name)
+        line_number = candidates[occurrence - 1]
+        marker = RuntimeError("CP13 boundary " + name)
+        reached: list[dict[str, object]] = []
+        old_trace = sys.gettrace()
+        outcome: object = None
+        escaped = False
+        before = _cp13_snapshot(widget, module)
+        previous_plan: object = getattr(widget, "preview_plan")
+        saved_owner: object = getattr(widget, "_saved_profile_session")
+        selected_resolved: list[object] = []
+        old_profile = sys.getprofile()
+
+        def profile(frame: types.FrameType, event: str, result: object) -> None:
+            if (
+                event == "return"
+                and frame.f_code.co_name == "resolve_profile_for_action"
+                and frame.f_locals.get("self") is saved_owner
+            ):
+                selected_resolved.append(result)
+            if finalization_refs is not None and event == "call" and frame.f_locals.get("self") is widget:
+                if frame.f_code is invalidation_code:
+                    finalization_entries.append(
+                        ("invalidation", _cp13_finalization_snapshot(widget, finalization_refs))
+                    )
+                elif frame.f_code is ui_code:
+                    finalization_entries.append(("ui", _cp13_finalization_snapshot(widget, finalization_refs)))
+
+        def trace(frame: types.FrameType, event: str, value: object) -> _CP7Trace | None:
+            if (
+                frame.f_code is method.__func__.__code__
+                and frame.f_locals.get("self") is target
+                and event == "line"
+                and frame.f_lineno == line_number
+            ):
+                reached.append(_cp13_snapshot(widget, module))
+                if finalization_refs is not None:
+                    finalization_reached.append(_cp13_finalization_snapshot(widget, finalization_refs))
+                raise marker
+            return trace
+
+        try:
+            sys.setprofile(profile)
+            sys.settrace(trace)
+            try:
+                outcome = _cp13_act(widget, route, payload, selected)
+            except RuntimeError as error:
+                _expect(error is marker, "CP13 original exception identity " + name)
+                escaped = True
+        finally:
+            sys.settrace(old_trace)
+            sys.setprofile(old_profile)
+        _expect(len(reached) == 1, "CP13 positive failure reachability " + name)
+        if route == "apply" and not name.startswith("finalize_"):
+            _expect(
+                getattr(widget, "outpost_search_text") == "retain until finalization",
+                "CP13 early error skips finalizer",
+            )
+        if route == "selected" and getattr(widget, "_character_profile_pending_profile") is not None:
+            _expect(
+                bool(selected_resolved)
+                and getattr(widget, "_character_profile_pending_profile") is selected_resolved[-1],
+                "CP13 retry retains exact resolved current summary, not reconstructed selection",
+            )
+        if name == "blank_before_delete":
+            _expect(
+                getattr(widget, "favorite_outpost_ids") == [] and getattr(widget, "destroy_auto_enabled") is False,
+                "CP13 safe blank applied before stale deletion",
+            )
+        after = _cp13_snapshot(widget, module)
+        finalization: dict[str, object] | None = None
+        if finalization_refs is not None:
+            _expect(
+                escaped is True and len(finalization_reached) == 1, "CP13 actual apply failure escapes once " + name
+            )
+            phase = {
+                "finalize_revision": "untouched",
+                "finalize_invalidation": "revised",
+                "finalize_editors": "invalidated",
+                "finalize_ui": "editors_reset",
+            }.get(name, "untouched")
+            finalization_after = _cp13_finalization_snapshot(widget, finalization_refs)
+            if finalization_before is None:
+                raise AssertionError("CP13 finalization before snapshot missing")
+            _cp13_assert_finalization(finalization_before, "untouched", "CP13 independent before " + name)
+            _cp13_assert_finalization(finalization_reached[0], phase, "CP13 exact boundary " + name)
+            _cp13_assert_finalization(finalization_after, phase, "CP13 retained failure prefix " + name)
+            expected_entries = ["invalidation"] if phase in {"invalidated", "editors_reset"} else []
+            _expect(
+                [entry for entry, _state in finalization_entries] == expected_entries,
+                "CP13 actual entry prefix " + name,
+            )
+            for _entry, state in finalization_entries:
+                _cp13_assert_finalization(state, "revised", "CP13 reached invalidation entry " + name)
+            finalization = {
+                "before": finalization_before,
+                "at_boundary": finalization_reached[0],
+                "after": finalization_after,
+                "entries": finalization_entries,
+            }
+            if name == "finalize_ui":
+                finalization["successful_apply"] = _cp13_finalization_success(module)
+        return {
+            "name": name,
+            "before": before,
+            "at_boundary": reached[0],
+            "after": after,
+            "escaped_same_exception": escaped,
+            "return": _cp13_clean(outcome),
+            "preview_same_reference": getattr(widget, "preview_plan") is previous_plan,
+            "finalization": finalization,
+        }
+
+
+def _test_cp13_fault(module: types.ModuleType, row: tuple[str, str, str, str, str, int]) -> None:
+    _cp13_fault_observation(module, row)
+
+
+def _cp13_raw_inner(module: types.ModuleType, *, require_candidate: bool) -> dict[str, object]:
+    record_names = {"BuyRule", "SellRule", "DestroyRule", "IdentifySettings", "SalvageSettings", "SalvageRule"}
+    allocations: list[str] = []
+    prior = sys.getprofile()
+
+    def profile(frame: types.FrameType, event: str, value: object) -> None:
+        instance: object = frame.f_locals.get("self")
+        if event == "call" and frame.f_code.co_name == "__init__" and type(instance).__name__ in record_names:
+            allocations.append(type(instance).__name__)
+
+    try:
+        sys.setprofile(profile)
+        first: object = module.MerchantRulesWidget()
+        first_allocations = list(allocations)
+        allocations.clear()
+        second: object = module.MerchantRulesWidget()
+    finally:
+        sys.setprofile(prior)
+    _cp10_equal(first_allocations, allocations, "CP13 raw default allocation sequence repeats exactly")
+    candidate = hasattr(first, "_active_configuration")
+    if require_candidate:
+        _expect(candidate and hasattr(first, "_live_profile_session"), "CP13 both candidate owners constructed")
+    _expect(getattr(first, "_character_profile_ready") is False, "CP13 raw character not primed")
+    _expect(getattr(first, "merchant_rules_lifecycle_generation") == 0, "CP13 raw lifecycle not primed")
+    _expect(getattr(first, "destroy_auto_enabled") is False, "CP13 persisted destroy-auto default")
+    before = {name: _cp13_clean(getattr(first, name)) for name in _CP13_CONFIG_FIELDS}
+    if candidate:
+        from Sources.icefox.MerchantRules import configuration
+        from Sources.icefox.MerchantRules import profiles
+
+        for attribute, expected, defining in (
+            ("_active_configuration", configuration.ActiveConfiguration, configuration),
+            ("_live_profile_session", profiles.LiveProfileSession, profiles),
+        ):
+            owner: object = getattr(first, attribute)
+            _expect(
+                type(owner) is expected and owner is not getattr(second, attribute), "CP13 independent canonical owner"
+            )
+            for member in vars(expected).values():
+                if isinstance(member, types.FunctionType):
+                    _expect(member.__globals__ is vars(defining), "CP13 owner executes in canonical defining module")
+                    _expect(
+                        Path(member.__code__.co_filename).resolve() == Path(str(defining.__file__)).resolve(),
+                        "CP13 algorithm source origin",
+                    )
+        for name in _CP13_CONFIG_FIELDS:
+            owner = getattr(first, "_active_configuration")
+            original: object = getattr(first, name)
+            _expect(name not in vars(first), "CP13 no duplicated widget configuration storage " + name)
+            _expect(getattr(owner, name) is original, "CP13 transparent getter " + name)
+            if isinstance(original, (list, dict)):
+                _expect(original is not getattr(second, name), "CP13 independent mutable defaults " + name)
+            revision: object = getattr(first, "_cleanup_targets_revision")
+            sentinel = object()
+            setattr(first, name, sentinel)
+            _expect(getattr(owner, name) is sentinel, "CP13 setter neither copies nor normalizes " + name)
+            _expect(getattr(first, "_cleanup_targets_revision") == revision, "CP13 setter has no revision side effect")
+            setattr(owner, name, original)
+            _expect(getattr(first, name) is original, "CP13 owner replacement visible through facade")
+        live: object = getattr(first, "_live_profile_session")
+        for name in (
+            "config_path",
+            "active_profile_display_name",
+            "loaded_profile_provenance",
+            "loaded_profile_provenance_warning",
+            "new_profile_session",
+            "profile_warning",
+            "profile_notice",
+            "profile_write_blocked",
+            *(
+                entry
+                for entry in dir(first)
+                if entry.startswith("_character_profile_") and not callable(getattr(first, entry))
+            ),
+        ):
+            _expect(
+                name not in vars(first) and getattr(first, name) is getattr(live, _CP13_PUBLIC_FIELDS[name]),
+                "CP13 single live-state owner " + name,
+            )
+    _cp10_equal(
+        before,
+        {name: _cp13_clean(getattr(first, name)) for name in _CP13_CONFIG_FIELDS},
+        "CP13 probes restore defaults",
+    )
+    return {"defaults": before, "allocations": allocations, "unprimed": True}
+
+
+def _cp13_raw_observation(module: types.ModuleType, *, require_candidate: bool) -> dict[str, object]:
+    with _cp13_clock(module):
+        return _cp13_raw_inner(module, require_candidate=require_candidate)
+
+
+def _test_cp13_raw_construction(module: types.ModuleType) -> None:
+    _cp13_raw_observation(module, require_candidate=True)
+    _cp13_clean_contract()
+
+
+def _cp13_binding_observation(module: types.ModuleType) -> dict[str, object]:
+    widget: object = _make_widget(module)
+    from Sources.icefox.MerchantRules import configuration
+
+    normalizer: object = getattr(module, "_rule_normalizer")
+    captured: object = getattr(widget, "_profile_payload_normalizer")
+    if not isinstance(captured, partial):
+        raise AssertionError("CP13 construction-captured partial")
+    old_func: object = captured.func
+    _expect(isinstance(old_func, types.MethodType), "CP13 captured normalizer bound method")
+    original_materialize = _cp12_bound(normalizer, "materialize_profile_buy_rules")
+    original_sell: object = getattr(module, "_normalize_sell_rules")
+    if not isinstance(original_sell, types.MethodType):
+        raise AssertionError("CP13 originally bound sell alias")
+    calls: list[str] = []
+    replacement_error = RuntimeError("CP13 replacement captured only by later construction")
+    restore = _CP8Restoration()
+
+    def forbidden(_owner: object, _raw: object, **kwargs: object) -> dict[str, object]:
+        calls.append("new-normalize-profile")
+        raise replacement_error
+
+    def materialize(raw: object) -> object:
+        calls.append("dynamic-materializer")
+        return original_materialize(raw)
+
+    def sell(raw: object) -> object:
+        calls.append("current-sell-alias")
+        return original_sell(raw)
+
+    try:
+        restore.binding(configuration.RuleNormalizer, "normalize_profile_payload", forbidden)
+        payload: object = _cp13_call(
+            widget, "_normalize_profile_payload", {"version": getattr(module, "PROFILE_VERSION")}
+        )
+        _expect(calls == [], "CP13 original partial ignores later class replacement")
+        other: object = module.MerchantRulesWidget()
+        other_captured: object = getattr(other, "_profile_payload_normalizer")
+        if not isinstance(other_captured, partial) or not isinstance(other_captured.func, types.MethodType):
+            raise AssertionError("CP13 later captured bound partial")
+        _expect(
+            other_captured.func.__func__ is forbidden and other_captured.func.__self__ is normalizer,
+            "CP13 later construction captures exact replacement function and receiver",
+        )
+        _cp9_same_exception(lambda: _cp13_call(other, "_normalize_profile_payload", payload), replacement_error)
+        restore.binding(normalizer, "materialize_profile_buy_rules", materialize)
+        restore.binding(module, "_normalize_sell_rules", sell)
+        _cp13_call(widget, "_apply_profile_payload", payload)
+        _cp10_equal(
+            calls,
+            ["new-normalize-profile", "dynamic-materializer", "current-sell-alias"],
+            "CP13 distinct late lookup and captured binding behavior",
+        )
+        _expect(
+            getattr(widget, "_profile_payload_normalizer") is captured and captured.func is old_func,
+            "CP13 stable captured callable identity",
+        )
+        return {"calls": calls, "captured_unchanged": True}
+    finally:
+        restore.restore()
+
+
+def _test_cp13_binding_timing(module: types.ModuleType) -> None:
+    _cp13_binding_observation(module)
+
+
+def _cp13_xunlai_observation(module: types.ModuleType, failing: bool) -> dict[str, object]:
+    widget = _cp12_fixture(module)
+    originals = {name: getattr(widget, name) for name in _CP13_XUNLAI_FIELDS}
+    replacement: list[object] = []
+    composer: object = getattr(widget, "_plan_composer")
+    function = _cp12_bound(composer, "build_plan")
+    if not isinstance(function, types.MethodType):
+        raise AssertionError("CP13 actual bound composer")
+    marker = RuntimeError("CP13 Xunlai actual composer boundary")
+    calls: list[str] = []
+    previous = sys.getprofile()
+
+    def profile(frame: types.FrameType, event: str, value: object) -> None:
+        if event == "call" and frame.f_code is function.__func__.__code__ and frame.f_locals.get("self") is composer:
+            calls.append("actual-composer")
+            _expect(getattr(widget, "sell_rules") is replacement, "CP13 exact temporary sell list")
+            _expect(
+                all(getattr(widget, field) is not originals[field] for field in _CP13_XUNLAI_FIELDS),
+                "CP13 all seven substitutions are actual replacements",
+            )
+            if hasattr(widget, "_active_configuration"):
+                owner: object = getattr(widget, "_active_configuration")
+                _expect(
+                    all(getattr(widget, field) is getattr(owner, field) for field in _CP13_XUNLAI_FIELDS),
+                    "CP13 actual composer observes active owner substitutions",
+                )
+            if failing:
+                raise marker
+
+    try:
+        sys.setprofile(profile)
+        if failing:
+            _cp9_same_exception(lambda: _cp13_call(widget, "_build_xunlai_sell_subplan", replacement), marker)
+        else:
+            _cp13_call(widget, "_build_xunlai_sell_subplan", replacement)
+    finally:
+        sys.setprofile(previous)
+    _cp10_equal(calls, ["actual-composer"], "CP13 actual Xunlai consumer reached")
+    _expect(
+        all(getattr(widget, name) is original for name, original in originals.items()),
+        "CP13 exact original seven references restored after either exit",
+    )
+    return {"actual_composer_calls": calls, "exceptional": failing, "seven_exact_restorations": True}
+
+
+def _test_cp13_xunlai(module: types.ModuleType) -> None:
+    _cp13_xunlai_observation(module, False)
+    _cp13_xunlai_observation(module, True)
+
+
+def _cp13_consumer_observation(module: types.ModuleType, route: str) -> dict[str, object]:
+    with _cp13_clock(module):
+        widget, payload, selected = _cp13_fixture(module, route)
+        methods = (
+            "_live_config_doc",
+            "_backup_doc",
+            "_loaded_profile_state_doc",
+            "_character_profile_state_doc",
+            "_load_profile",
+            "_save_profile",
+            "reload_profile_from_disk",
+            "_apply_verified_profile_payload",
+            "_apply_saved_profile_summary",
+            "_persist_character_profile_association",
+            "_clear_loaded_profile_provenance",
+            "_record_loaded_profile_provenance",
+            "_advance_character_profile_resolution",
+            "_load_selected_profile",
+        )
+        codes = {
+            _cp13_method(widget, name)[1].__func__.__code__: (name, _cp13_method(widget, name)[0]) for name in methods
+        }
+        config_target, config_method = _cp13_method(widget, "_apply_profile_payload")
+        final_target, final_method = _cp13_method(widget, "finalize")
+        events: list[str] = []
+        previous = sys.getprofile()
+
+        def profile(frame: types.FrameType, event: str, value: object) -> None:
+            if event != "call":
+                return
+            pair = codes.get(frame.f_code)
+            if pair is not None and frame.f_locals.get("self") is pair[1]:
+                events.append(pair[0])
+            if frame.f_code is config_method.__func__.__code__ and frame.f_locals.get("self") is config_target:
+                events.append("configuration-application")
+            if (
+                hasattr(widget, "_active_configuration")
+                and frame.f_code is final_method.__func__.__code__
+                and frame.f_locals.get("self") is final_target
+            ):
+                events.append("configuration-finalization")
+
+        try:
+            sys.setprofile(profile)
+            result = _cp13_act(widget, route, payload, selected)
+        finally:
+            sys.setprofile(previous)
+        _expect("configuration-application" in events, "CP13 actual configuration algorithm reached by " + route)
+        if hasattr(widget, "_active_configuration"):
+            _expect("configuration-finalization" in events, "CP13 live route reaches widget finalization " + route)
+            _expect(
+                events.index("configuration-application") < events.index("configuration-finalization"),
+                "CP13 finalization follows owner apply",
+            )
+        if route == "selected":
+            for name in (
+                "_apply_saved_profile_summary",
+                "_apply_verified_profile_payload",
+                "_persist_character_profile_association",
+                "_record_loaded_profile_provenance",
+            ):
+                _expect(name in events, "CP13 actual selected-owner route " + name)
+            _expect(
+                events.index("_persist_character_profile_association")
+                < events.index("_record_loaded_profile_provenance"),
+                "CP13 association before provenance",
+            )
+        if route == "restore":
+            _expect("_clear_loaded_profile_provenance" in events, "CP13 actual restore provenance clearing")
+        return {
+            "route": route,
+            "return": _cp13_clean(result),
+            "events": [event for event in events if event != "configuration-finalization"],
+            "state": _cp13_snapshot(widget, module),
+        }
+
+
+def _test_cp13_consumer(module: types.ModuleType, route: str) -> None:
+    observation = _cp13_consumer_observation(module, route)
+    if route == "selected":
+        state = _cp13_dict(observation["state"])
+        documents = _cp13_dict(state["documents"])
+        factory: object = getattr(module, "JsonFactory")
+        key = ("merchant.rules@example.com", "Widgets/MerchantRules/CharacterProfileState.json")
+        encoded = '@cp13:tuple:["merchant.rules@example.com","Widgets/MerchantRules/CharacterProfileState.json"]'
+        for name in ("_documents", "_persisted_documents"):
+            original: object = getattr(factory, name)
+            if not _cp9_is_mapping(original):
+                raise AssertionError("CP13 real controlled document map")
+            captured = _cp13_dict(documents[name])
+            _expect(
+                key in original and encoded in captured,
+                "CP13 actual tuple-keyed association document reached and retained in " + name,
+            )
+            _expect(
+                len(captured) == len(original) and len(captured) > 0,
+                "CP13 complete controlled document inventory retained in " + name,
+            )
+            _expect(
+                captured is not original and captured[encoded] is not original[key],
+                "CP13 document map and association snapshot are independent containers",
+            )
+        _expect(
+            json.loads(json.dumps(observation, sort_keys=True)) == observation,
+            "CP13 complete selected observation serializes through the child JSON representation",
+        )
+
+
+_CP13_PERSISTENCE_MODES = (
+    "live_save_false",
+    "live_recovery_raises",
+    "live_reload_false",
+    "live_mismatch",
+    "association_save_false",
+    "association_reload_false",
+    "association_mismatch",
+    "provenance_save_false",
+    "provenance_clear_acquisition",
+    "provenance_reload_false",
+    "provenance_mismatch",
+    "reload_ignored_false",
+)
+
+
+def _cp13_persistence_observation(module: types.ModuleType, mode: str) -> dict[str, object]:
+    with _cp13_clock(module):
+        route = "reload" if mode == "reload_ignored_false" else "selected"
+        widget, payload, selected = _cp13_fixture(module, route)
+        factory: object = getattr(module, "JsonFactory")
+        if not isinstance(factory, type):
+            raise AssertionError("CP13 concrete factory class")
+        live_name = str(getattr(module, "LIVE_CONFIG_DOC_NAME"))
+        association_name = str(getattr(module, "CHARACTER_PROFILE_STATE_DOC_NAME"))
+        provenance_name = str(getattr(module, "LOADED_PROFILE_STATE_DOC_NAME"))
+        if mode.startswith("provenance"):
+            _cp13_call(widget, "_record_loaded_profile_provenance", selected)
+        baseline = _cp13_dict(_cp13_call(_cp13_call(widget, "_live_config_doc"), "get_json", "", {}))
+        old_init = _cp12_bound(factory, "__init__")
+        old_save = _cp12_bound(factory, "save")
+        old_reload = _cp12_bound(factory, "reload")
+        events: list[tuple[str, str]] = []
+        marker = RuntimeError("CP13 recovery supersedes original error")
+        recovery = RuntimeError("CP13 provenance clear acquisition")
+        flags = {
+            "live_failed": False,
+            "association_saved": False,
+            "provenance_failed": False,
+            "provenance_saved": False,
+        }
+        expected_branches: dict[str, tuple[str, ...]] = {
+            "live_save_false": ("live_save_false",),
+            "live_recovery_raises": ("live_save_false", "live_recovery_raises"),
+            "live_reload_false": ("live_reload_false",),
+            "live_mismatch": ("live_mismatch",),
+            "association_save_false": ("association_save_false",),
+            "association_reload_false": ("association_reload_false",),
+            "association_mismatch": ("association_mismatch",),
+            "provenance_save_false": ("provenance_record_save_false", "provenance_clear_save_false"),
+            "provenance_clear_acquisition": ("provenance_record_save_false", "provenance_clear_acquisition"),
+            "provenance_reload_false": ("provenance_record_reload_false", "provenance_clear_reload_false"),
+            "provenance_mismatch": ("provenance_mismatch",),
+            "reload_ignored_false": ("reload_ignored_false",),
+        }
+        _expect(mode in expected_branches, "CP13 enumerated persistence mode")
+        injection_hits: dict[str, int] = {branch: 0 for branches in expected_branches.values() for branch in branches}
+        clear_owner = _cp13_fixture_target(widget, "_clear_loaded_profile_provenance")
+        clear_member = _cp13_member_name(widget, "_clear_loaded_profile_provenance")
+        original_clear = _cp13_fixture_get(widget, "_clear_loaded_profile_provenance")
+        if not isinstance(original_clear, types.MethodType):
+            raise AssertionError("CP13 captured concrete clear helper")
+        _expect(original_clear.__self__ is clear_owner, "CP13 clear helper exact receiver")
+        clear_entries: list[dict[str, object]] = []
+        clear_returns: list[object] = []
+        clear_errors: list[BaseException] = []
+        clearing = False
+        retry_owner, retry_method = _cp13_method(widget, "_retain_profile_load_for_character_retry")
+        retry_errors: list[object] = []
+        retry_profiles: list[object] = []
+        resolved: list[object] = []
+        saved_owner: object = getattr(widget, "_saved_profile_session")
+        previous_profile = sys.getprofile()
+        restore = _CP8Restoration()
+
+        def hit(branch: str) -> None:
+            injection_hits[branch] += 1
+
+        def profile(frame: types.FrameType, event: str, value: object) -> None:
+            if (
+                event == "return"
+                and frame.f_code.co_name == "resolve_profile_for_action"
+                and frame.f_locals.get("self") is saved_owner
+            ):
+                resolved.append(value)
+            if (
+                event == "call"
+                and frame.f_code is retry_method.__func__.__code__
+                and frame.f_locals.get("self") is retry_owner
+            ):
+                retry_errors.append(frame.f_locals["exc"])
+                retry_profiles.append(frame.f_locals["profile"])
+
+        def clear(receiver: object, *args: object, **kwargs: object) -> object:
+            nonlocal clearing
+            _expect(receiver is clear_owner and not clearing, "CP13 reached exact nonrecursive real clear helper")
+            clear_entries.append(_cp13_snapshot(widget, module))
+            clearing = True
+            try:
+                value: object = original_clear(*args, **kwargs)
+            except BaseException as error:
+                clear_errors.append(error)
+                raise
+            else:
+                clear_returns.append(value)
+                return value
+            finally:
+                clearing = False
+
+        def initialize(document: object, name: str, scope: str = "account") -> None:
+            events.append(("construct", name + ":" + scope))
+            if mode == "provenance_clear_acquisition" and name == provenance_name and flags["provenance_failed"]:
+                _expect(clearing, "CP13 acquisition fault is inside the actual clear call")
+                hit("provenance_clear_acquisition")
+                raise recovery
+            old_init(document, name, scope)
+
+        def save(document: object) -> bool:
+            name = str(getattr(document, "name"))
+            events.append(("save", name))
+            if name == live_name and mode in ("live_save_false", "live_recovery_raises"):
+                hit("live_save_false")
+                flags["live_failed"] = True
+                return False
+            if name == association_name and mode == "association_save_false":
+                hit("association_save_false")
+                return False
+            if name == provenance_name and mode in ("provenance_save_false", "provenance_clear_acquisition"):
+                hit("provenance_clear_save_false" if clearing else "provenance_record_save_false")
+                flags["provenance_failed"] = True
+                return False
+            result: object = old_save(document)
+            _expect(isinstance(result, bool), "CP13 original save result type")
+            if name == association_name:
+                flags["association_saved"] = True
+            if name == provenance_name:
+                flags["provenance_saved"] = True
+            return result is True
+
+        def reload(document: object) -> bool:
+            name = str(getattr(document, "name"))
+            events.append(("reload", name))
+            if name == live_name and mode == "live_recovery_raises" and flags["live_failed"]:
+                hit("live_recovery_raises")
+                raise marker
+            if name == live_name and mode in ("live_reload_false", "reload_ignored_false"):
+                hit(mode)
+                return False
+            if name == association_name and mode == "association_reload_false" and flags["association_saved"]:
+                hit("association_reload_false")
+                return False
+            if name == provenance_name and mode == "provenance_reload_false" and flags["provenance_saved"]:
+                hit("provenance_clear_reload_false" if clearing else "provenance_record_reload_false")
+                return False
+            result: object = old_reload(document)
+            if name == live_name and mode == "live_mismatch":
+                hit("live_mismatch")
+                _cp13_call(document, "set_json", "", baseline)
+            if name == association_name and mode == "association_mismatch" and flags["association_saved"]:
+                observation: object = _cp13_call(widget, "_get_current_character_observation")
+                if not _cp9_is_sequence(observation) or not isinstance(observation, tuple):
+                    raise AssertionError("CP13 observed character for mismatch")
+                hit("association_mismatch")
+                _cp13_call(
+                    document,
+                    "set_json",
+                    "characters/" + str(observation[0]),
+                    {
+                        "source_scope": "account",
+                        "source_key": "profile_" + "f" * 32,
+                        "character_name_snapshot": "Wrong",
+                    },
+                )
+            if name == provenance_name and mode == "provenance_mismatch" and flags["provenance_saved"]:
+                state = _cp13_dict(_cp13_call(document, "get_json", "", {}))
+                if state:
+                    hit("provenance_mismatch")
+                    state["display_name_snapshot"] = "CP13 mismatched source"
+                    _cp13_call(document, "set_json", "", state)
+            return result is True
+
+        try:
+            restore.binding(factory, "__init__", initialize)
+            restore.binding(factory, "save", save)
+            restore.binding(factory, "reload", reload)
+            restore.binding(clear_owner, clear_member, types.MethodType(clear, clear_owner))
+            sys.setprofile(profile)
+            result = _cp13_act(widget, route, payload, selected)
+        finally:
+            sys.setprofile(previous_profile)
+            restore.restore()
+        _expect(bool(events), "CP13 concrete persistence boundary reached")
+        intended = set(expected_branches[mode])
+        reached = {branch for branch, count in injection_hits.items() if count > 0}
+        _cp10_equal(reached, intended, "CP13 exact intended injection branches reached for " + mode)
+        _expect(
+            all(injection_hits[branch] > 0 for branch in expected_branches[mode]),
+            "CP13 every intended save/reload/mismatch/acquisition injection fired for " + mode,
+        )
+        if mode.startswith("provenance"):
+            _expect(len(clear_entries) == 1, "CP13 selected-load recovery actually entered the exact clear helper once")
+            publication = clear_entries[0]
+            _expect(
+                publication["_character_profile_ready"] is True
+                and publication["favorite_outpost_ids"] == [2]
+                and publication["preview_ready"] is False
+                and flags["association_saved"],
+                "CP13 live application, reset and association save completed before clear recovery",
+            )
+            _cp10_equal(
+                publication["_character_profile_resolved_profile_identity"],
+                _cp13_clean(getattr(selected, "identity")),
+                "CP13 resolved association identity was published before clear recovery",
+            )
+            if mode == "provenance_clear_acquisition":
+                _expect(
+                    not clear_returns and len(clear_errors) == 1 and clear_errors[0] is recovery,
+                    "CP13 document acquisition escapes the actual clear helper with identical exception",
+                )
+                _expect(
+                    len(retry_errors) == 1 and retry_errors[0] is recovery,
+                    "CP13 outer selected-load handler receives that acquisition exception for retry",
+                )
+                _expect(
+                    bool(resolved) and len(retry_profiles) == 1 and retry_profiles[0] is resolved[-1],
+                    "CP13 outer retry receives the exact resolved current summary",
+                )
+            else:
+                expected_clear = mode == "provenance_mismatch"
+                _cp10_equal(clear_returns, [expected_clear], "CP13 actual clear-helper boolean result")
+                _expect(
+                    not clear_errors and not retry_errors,
+                    "CP13 clear-helper handled operation failure does not enter outer retry",
+                )
+                if not expected_clear:
+                    _expect(
+                        clear_returns[0] is False,
+                        "CP13 failed clear operation was caught inside the helper and returned False",
+                    )
+        else:
+            _expect(
+                not clear_entries and not clear_returns and not clear_errors,
+                "CP13 earlier persistence modes cannot credit an unrelated clear path",
+            )
+        if mode == "reload_ignored_false":
+            _expect(
+                result is True and getattr(widget, "preview_ready") is False,
+                "CP13 ordinary reload preserves ignored False and reset",
+            )
+        elif mode.startswith("provenance") and mode != "provenance_clear_acquisition":
+            _expect(
+                getattr(widget, "_character_profile_ready") is True,
+                "CP13 caught provenance failures preserve successful load",
+            )
+            _expect(
+                getattr(widget, "favorite_outpost_ids") == [2],
+                "CP13 provenance failure does not roll back live settings",
+            )
+            _expect(bool(getattr(widget, "loaded_profile_provenance_warning")), "CP13 successful-load warning present")
+        else:
+            _expect(
+                getattr(widget, "_character_profile_ready") is False,
+                "CP13 failed earlier transition retains closed gate",
+            )
+            _expect(
+                bool(resolved) and getattr(widget, "_character_profile_pending_profile") is resolved[-1],
+                "CP13 exact resolved current retained for retry",
+            )
+        if mode == "live_recovery_raises":
+            _expect(
+                str(marker) in str(getattr(widget, "_character_profile_resolution_error")),
+                "CP13 recovery exception supersedes intended save error",
+            )
+        if mode == "provenance_clear_acquisition":
+            _expect(
+                str(recovery) in str(getattr(widget, "_character_profile_resolution_error")),
+                "CP13 acquisition outside clear try reaches outer retry",
+            )
+            _expect(
+                getattr(widget, "_character_profile_resolved_profile_identity") == getattr(selected, "identity"),
+                "CP13 resolved identity publication survives outer retry",
+            )
+        return {
+            "mode": mode,
+            "events": events,
+            "injection_hits": injection_hits,
+            "clear_entries": clear_entries,
+            "clear_returns": _cp13_clean(clear_returns),
+            "clear_errors": [
+                {"type": type(error).__name__, "message": _cp13_clean(str(error))} for error in clear_errors
+            ],
+            "retry_errors": [
+                {"type": type(error).__name__, "message": _cp13_clean(str(error))} for error in retry_errors
+            ],
+            "return": _cp13_clean(result),
+            "state": _cp13_snapshot(widget, module),
+        }
+
+
+def _test_cp13_persistence(module: types.ModuleType, mode: str) -> None:
+    _cp13_persistence_observation(module, mode)
+
+
+def _test_cp13_late_factory(module: types.ModuleType) -> None:
+    widget: object = _make_widget(module, use_json_factory=True)
+    factory: object = getattr(module, "JsonFactory")
+    if not isinstance(factory, type):
+        raise AssertionError("CP13 concrete original factory")
+    original_init = _cp12_bound(factory, "__init__")
+    events: list[tuple[str, str]] = []
+    restore = _CP8Restoration()
+
+    def initialize(document: object, name: str, scope: str = "account") -> None:
+        events.append((name, scope))
+        original_init(document, name, scope)
+
+    replacement = type("CP13ConcreteFactory", (factory,), {"__init__": initialize})
+    try:
+        restore.binding(module, "JsonFactory", replacement)
+        names = ("_live_config_doc", "_backup_doc", "_loaded_profile_state_doc", "_character_profile_state_doc")
+        for _ in range(2):
+            for name in names:
+                document = _cp13_call(widget, name)
+                _expect(type(document) is replacement, "CP13 postconstruction concrete factory replacement " + name)
+        _expect(
+            len(events) == 8 and events[:4] == events[4:],
+            "CP13 every repeated constructor expression remains observable",
+        )
+    finally:
+        restore.restore()
+
+
+def _test_cp13_backup_ignored_result(module: types.ModuleType) -> None:
+    import dis
+    import inspect
+
+    with _cp13_clock(module):
+        widget, payload, selected = _cp13_fixture(module, "restore")
+        target, method = _cp13_method(widget, "_restore_profile_from_backup")
+        lines, start = inspect.getsourcelines(method.__func__)
+        matches = [start + index for index, line in enumerate(lines) if "self.reload_profile_from_disk(" in line]
+        _expect(len(matches) == 1, "CP13 exact nested backup reload boundary")
+        offsets = [
+            offset for offset, source_line in dis.findlinestarts(method.__func__.__code__) if source_line == matches[0]
+        ]
+        _expect(bool(offsets), "CP13 nested backup reload has an executable entry offset")
+        entry_offset = min(offsets)
+        hits: list[str] = []
+        previous = sys.gettrace()
+
+        def trace(frame: types.FrameType, event: str, value: object) -> _CP7Trace | None:
+            if (
+                event == "line"
+                and frame.f_code is method.__func__.__code__
+                and frame.f_locals.get("self") is target
+                and frame.f_lineno == matches[0]
+                and frame.f_lasti == entry_offset
+            ):
+                hits.append("nested-reload")
+                setattr(widget, "merchant_rules_owned_work_count", 1)
+            return trace
+
+        try:
+            sys.settrace(trace)
+            result = _cp13_act(widget, "restore", payload, selected)
+        finally:
+            sys.settrace(previous)
+            setattr(widget, "merchant_rules_owned_work_count", 0)
+        _cp10_equal(hits, ["nested-reload"], "CP13 positive real admission probe")
+        _expect(
+            result is True and getattr(widget, "favorite_outpost_ids") == [1],
+            "CP13 ignored nested False does not apply/reset yet returns True",
+        )
+        live = _cp13_dict(_cp13_call(_cp13_call(widget, "_live_config_doc"), "get_json", "", {}))
+        _expect(live["favorite_outpost_ids"] == [2], "CP13 persisted restore prefix survives blocked runtime reload")
+
+
+def _cp13_migration_reachability(module: types.ModuleType) -> None:
+    # Probe the relocated injection member itself, then delegate its captured bound algorithm.
+    cases = (
+        ("_live_config_doc", "selected"),
+        ("_save_profile", "normalize"),
+        ("reload_profile_from_disk", "selected"),
+        ("_load_profile", "reload"),
+        ("_load_loaded_profile_provenance", "initialize"),
+        ("_clear_loaded_profile_provenance", "restore"),
+        ("_apply_saved_profile_summary", "selected"),
+        ("_persist_character_profile_association", "selected"),
+        ("_apply_verified_profile_payload", "selected"),
+    )
+    for name, route in cases:
+        for fail_after_delegate in (False, True):
+            with _cp13_clock(module):
+                fixture_route = "reload" if route == "normalize" else "selected" if route == "initialize" else route
+                widget, payload, selected = _cp13_fixture(module, fixture_route)
+                if route == "normalize":
+                    legacy = dict(payload)
+                    del legacy["version"]
+                    document = _cp13_call(widget, "_live_config_doc")
+                    _cp13_call(document, "set_json", "", legacy)
+                    _expect(_cp13_call(document, "save") is True, "CP13 actual legacy-load consumer fixture")
+                    normalized = _cp13_call(widget, "_normalize_profile_payload", legacy)
+                    _expect(
+                        _cp13_call(widget, "_serialize_profile_payload", legacy)
+                        != _cp13_call(widget, "_serialize_profile_payload", normalized),
+                        "CP13 literal legacy normalization must reach the real load-to-save branch",
+                    )
+                elif route == "initialize":
+                    setattr(widget, "initialized", False)
+                owner = _cp13_fixture_target(widget, name)
+                member = _cp13_member_name(widget, name)
+                original = _cp13_fixture_get(widget, name)
+                if not isinstance(original, types.MethodType):
+                    raise AssertionError("CP13 exact original bound migration method " + name)
+                _expect(original.__self__ is owner, "CP13 captured original receiver " + name)
+                if hasattr(widget, "_live_profile_session"):
+                    _expect(
+                        owner is getattr(widget, "_live_profile_session") and owner is not widget,
+                        "CP13 migration probe belongs to this exact live owner " + name,
+                    )
+                present = member in vars(owner)
+                prior_value: object = vars(owner).get(member)
+                calls: list[object] = []
+                original_entries: list[object] = []
+                original_returns: list[object] = []
+                original_errors: list[BaseException] = []
+                injected: list[RuntimeError] = []
+                marker = RuntimeError("CP13 delegated migration probe " + name)
+                escaped: BaseException | None = None
+                previous = sys.getprofile()
+                restore = _CP8Restoration()
+
+                original_code = original.__func__.__code__
+
+                def profile(frame: types.FrameType, event: str, value: object) -> None:
+                    if event == "call" and frame.f_code is original_code and frame.f_locals.get("self") is owner:
+                        original_entries.append(owner)
+
+                def probe(receiver: object, *args: object, **kwargs: object) -> object:
+                    _expect(
+                        receiver is owner and _cp13_fixture_target(widget, name) is owner,
+                        "CP13 only the selected owner can credit the relocated injection " + name,
+                    )
+                    calls.append(receiver)
+                    try:
+                        result: object = original(*args, **kwargs)
+                    except BaseException as error:
+                        original_errors.append(error)
+                        raise
+                    original_returns.append(result)
+                    if fail_after_delegate:
+                        injected.append(marker)
+                        raise marker
+                    return result
+
+                try:
+                    restore.binding(owner, member, types.MethodType(probe, owner))
+                    installed = _cp13_fixture_get(widget, name)
+                    if not isinstance(installed, types.MethodType):
+                        raise AssertionError("CP13 bound installed migration probe " + name)
+                    _expect(
+                        installed.__self__ is owner and installed.__func__ is probe,
+                        "CP13 exact relocated member receives the probe " + name,
+                    )
+                    sys.setprofile(profile)
+                    try:
+                        if route == "initialize":
+                            _cp13_call(widget, "_ensure_initialized")
+                        else:
+                            _cp13_act(widget, "reload" if route == "normalize" else route, payload, selected)
+                    except BaseException as error:
+                        escaped = error
+                finally:
+                    sys.setprofile(previous)
+                    restore.restore()
+                    _expect(
+                        (member in vars(owner)) is present, "CP13 restores inherited-versus-instance member " + name
+                    )
+                    if present:
+                        _expect(
+                            vars(owner)[member] is prior_value, "CP13 restores exact original instance value " + name
+                        )
+                    restored = _cp13_fixture_get(widget, name)
+                    if not isinstance(restored, types.MethodType):
+                        raise AssertionError("CP13 restored bound migration method " + name)
+                    _expect(
+                        restored.__self__ is owner and restored.__func__ is original.__func__,
+                        "CP13 restores captured function and receiver after either path " + name,
+                    )
+                _expect(
+                    bool(calls) and len(original_entries) == len(calls) == len(original_returns),
+                    "CP13 real consumer reached and completed every exact-owner delegation " + name,
+                )
+                _expect(not original_errors, "CP13 probe cannot credit a naturally failed original algorithm " + name)
+                if fail_after_delegate:
+                    _expect(
+                        len(injected) == len(calls) and all(error is marker for error in injected),
+                        "CP13 reached post-delegation failure branch " + name,
+                    )
+                    _expect(
+                        escaped is None or escaped is marker,
+                        "CP13 outer consumer either handled or propagated the exact injected failure " + name,
+                    )
+                else:
+                    _expect(not injected and escaped is None, "CP13 normal migration delegation completed " + name)
+                if name == "_save_profile":
+                    _expect(
+                        all(value is True for value in original_returns),
+                        "CP13 actual legacy normalization reached successful save before the optional failure",
+                    )
+                    if not fail_after_delegate:
+                        _expect(
+                            getattr(widget, "profile_notice")
+                            == "Legacy live config normalized and saved safely to v"
+                            + str(getattr(module, "PROFILE_VERSION"))
+                            + ".",
+                            "CP13 literal real load-to-save branch completed",
+                        )
+
+
+def _test_cp13_fixture_reachability(module: types.ModuleType) -> None:
+    _cp13_migration_reachability(module)
+
+
+def _cp13_workspace_observation(module: types.ModuleType, mode: str) -> dict[str, object]:
+    import dis
+    import inspect
+
+    with _cp13_clock(module):
+        widget, payload, selected = _cp13_fixture(module, "reload")
+        if mode != "normal":
+            replacement = (
+                {"version": int(getattr(module, "PROFILE_VERSION")) + 1}
+                if mode == "future"
+                else {
+                    "version": getattr(module, "PROFILE_VERSION"),
+                    "buy_rules": "invalid",
+                }
+            )
+            doc = _cp13_call(widget, "_live_config_doc")
+            _cp13_call(doc, "set_json", "", replacement)
+            _expect(_cp13_call(doc, "save") is True, "CP13 workspace fixture")
+        target, reload_method = _cp13_method(widget, "reload_profile_from_disk")
+        load_target, load_method = _cp13_method(widget, "_load_profile")
+        lines, first = inspect.getsourcelines(reload_method.__func__)
+        labels: dict[int, str] = {}
+        for index, line in enumerate(lines):
+            text = _cp13_source_line(line).strip()
+            for prefix, label in (
+                ("if self._", "admission"),
+                ("workspace_snapshot =", "capture"),
+                ("self._ensure_initialized()", "initialize"),
+                ("self._runtime._ensure_initialized()", "initialize"),
+                ("self._live_config_doc().reload()", "reload"),
+                ("self._load_profile()", "load"),
+                ("self.active_workspace = workspace_snapshot", "restore_workspace"),
+                ("self._runtime.active_workspace = workspace_snapshot", "restore_workspace"),
+                ("self._reset_runtime_after_profile_load(", "reset"),
+                ("self._runtime._reset_runtime_after_profile_load(", "reset"),
+            ):
+                if text.startswith(prefix) and (
+                    label != "admission" or "_get_profile_application_block_message(" in text
+                ):
+                    labels[first + index] = label
+        first_offsets: dict[int, int] = {}
+        for offset, source_line in dis.findlinestarts(reload_method.__func__.__code__):
+            first_offsets.setdefault(source_line, offset)
+        _expect(set(labels) <= set(first_offsets), "CP13 every workspace checkpoint has an executable entry offset")
+        events: list[str] = []
+        workspace: list[tuple[object, object]] = []
+        prior = sys.gettrace()
+
+        def trace(frame: types.FrameType, event: str, value: object) -> _CP7Trace | None:
+            if (
+                event == "line"
+                and frame.f_code is reload_method.__func__.__code__
+                and frame.f_locals.get("self") is target
+            ):
+                label = labels.get(frame.f_lineno)
+                if label is not None and frame.f_lasti == first_offsets[frame.f_lineno]:
+                    events.append(label)
+            if (
+                event == "line"
+                and frame.f_code is load_method.__func__.__code__
+                and frame.f_locals.get("self") is load_target
+            ):
+                state = (getattr(widget, "active_workspace"), getattr(widget, "active_rules_workspace"))
+                if not workspace or state != workspace[-1]:
+                    workspace.append(state)
+            return trace
+
+        try:
+            sys.settrace(trace)
+            result = _cp13_act(widget, "reload", payload, selected)
+        finally:
+            sys.settrace(prior)
+        _cp10_equal(
+            events,
+            ["admission", "capture", "initialize", "reload", "load", "restore_workspace", "reset"],
+            "CP13 exact reload coordination order",
+        )
+        _expect(
+            result is True and getattr(widget, "preview_ready") is False,
+            "CP13 handled load still resets and returns True",
+        )
+        _expect(
+            getattr(widget, "active_workspace") == getattr(module, "WORKSPACE_PROFILES")
+            and getattr(widget, "active_rules_workspace") == getattr(module, "RULES_WORKSPACE_SELL"),
+            "CP13 captured workspace restored after interleaved load effects",
+        )
+        _expect(
+            getattr(widget, "profile_write_blocked") is (mode != "normal"),
+            "CP13 handled future/malformed behavior retained",
+        )
+        if mode != "normal":
+            _expect(
+                any(state[0] == getattr(module, "WORKSPACE_RULES") for state in workspace),
+                "CP13 intermediate recovery workspace was actually published",
+            )
+        return {
+            "mode": mode,
+            "events": events,
+            "intermediate_workspaces": workspace,
+            "state": _cp13_snapshot(widget, module),
+        }
+
+
+def _test_cp13_workspace(module: types.ModuleType, mode: str) -> None:
+    _cp13_workspace_observation(module, mode)
+
+
+def _test_cp13_readiness_prefix(module: types.ModuleType) -> None:
+    with _cp13_clock(module):
+        widget, payload, selected = _cp13_fixture(module, "blank")
+        observed: list[bool] = []
+        marker = RuntimeError("CP13 rescan normalization after readiness")
+        prior = sys.getprofile()
+
+        def profile(frame: types.FrameType, event: str, value: object) -> None:
+            parent = frame.f_back
+            if (
+                event == "call"
+                and frame.f_code.co_name == "normalize_identify_settings"
+                and parent is not None
+                and parent.f_code.co_name
+                in (
+                    "_advance_character_profile_resolution",
+                    "advance_character_profile_resolution",
+                    "publish_configuration_rescans",
+                )
+            ):
+                observed.append(getattr(widget, "_character_profile_ready") is True)
+                raise marker
+
+        try:
+            sys.setprofile(profile)
+            _cp13_act(widget, "blank", payload, selected)
+        finally:
+            sys.setprofile(prior)
+        _cp10_equal(observed, [True], "CP13 readiness is published before later rescan normalization")
+        _expect(
+            str(marker) in str(getattr(widget, "_character_profile_resolution_error")),
+            "CP13 real resolver catches later rescan error",
+        )
+
+
+def _test_cp13_rendered_handoff(module: types.ModuleType, action: str) -> None:
+    with _cp13_clock(module):
+        route = "selected" if action == "load" else "restore"
+        widget, _payload, _selected = _cp13_fixture(module, route)
+        owner, method = _cp13_method(
+            widget, "_load_selected_profile" if action == "load" else "_restore_profile_from_backup"
+        )
+        prior = sys.getprofile()
+        calls: list[str] = []
+        buttons: list[str] = []
+        restore = _CP8Restoration()
+        imgui: object = getattr(module, "PyImGui")
+        suffix = "merchant_rules_account_profile_load" if action == "load" else "merchant_rules_restore_backup"
+
+        def noop(*args: object, **kwargs: object) -> None:
+            return None
+
+        def button(label: str, *args: object, **kwargs: object) -> bool:
+            buttons.append(label)
+            return label.endswith("##" + suffix)
+
+        def no_click(*args: object, **kwargs: object) -> bool:
+            return False
+
+        def input_text(label: str, value: str, *args: object, **kwargs: object) -> str:
+            return value
+
+        def profile(frame: types.FrameType, event: str, value: object) -> None:
+            if event == "call" and frame.f_code is method.__func__.__code__ and frame.f_locals.get("self") is owner:
+                calls.append(action)
+
+        try:
+            for name in (
+                "_draw_section_heading",
+                "_draw_subsection_heading",
+                "_draw_secondary_text",
+                "_draw_warning_text",
+                "_draw_hover_tooltip",
+                "_draw_colored_text",
+                "_draw_selected_profile_detail_line",
+                "_draw_profile_relationship_badges",
+                "_push_destructive_confirm_button_style",
+            ):
+                restore.binding(widget, name, noop)
+            for name in ("separator", "same_line", "begin_disabled", "end_disabled", "end_child", "pop_style_color"):
+                restore.binding(imgui, name, noop)
+            for name in ("small_button", "begin_child", "collapsing_header"):
+                restore.binding(imgui, name, no_click)
+            restore.binding(imgui, "button", button)
+            restore.binding(imgui, "input_text", input_text)
+            sys.setprofile(profile)
+            for frame_number in range(2):
+                if action == "load":
+                    serialized = _cp13_call(
+                        widget,
+                        "_serialize_shareable_profile_payload",
+                        _cp13_call(widget, "_build_shareable_profile_payload"),
+                    )
+                    _cp13_call(widget, "_draw_saved_profile_section", "account", serialized)
+                else:
+                    _cp13_call(widget, "_draw_live_config_recovery_section")
+                _expect(calls == ([] if frame_number == 0 else [action]), "CP13 real rendered two-click handoff")
+        finally:
+            sys.setprofile(prior)
+            restore.restore()
+        _expect(
+            any(label.startswith("Confirm ") and label.endswith("##" + suffix) for label in buttons),
+            "CP13 actual confirmation control rendered",
+        )
+        _expect(
+            getattr(widget, "favorite_outpost_ids") == [2] and getattr(widget, "preview_ready") is False,
+            "CP13 rendered handler reaches actual live application and reset",
+        )
+
+
+def _test_cp13_captured_remote(module: types.ModuleType) -> None:
+    observed: set[str] = set()
+    prior = sys.getprofile()
+
+    def profile(frame: types.FrameType, event: str, value: object) -> None:
+        if event == "call":
+            instance: object = frame.f_locals.get("self")
+            if type(instance).__name__ == "LiveProfileSession":
+                observed.add(_cp13_logical_name(instance, frame.f_code.co_name))
+
+    try:
+        sys.setprofile(profile)
+        _test_character_profile_resolution_allows_deferred_reload(module)
+    finally:
+        sys.setprofile(prior)
+    _expect(
+        {
+            "_advance_character_profile_resolution",
+            "_apply_verified_profile_payload",
+            "_load_profile",
+            "reload_profile_from_disk",
+        }
+        <= observed,
+        "CP13 captured remote handler and remembered character route execute live owner",
+    )
+
+
+def _cp13_observations(module: types.ModuleType) -> dict[str, object]:
+    return {
+        "raw": _cp13_raw_observation(module, require_candidate=False),
+        "binding": _cp13_binding_observation(module),
+        "replacement_timing": _cp13_replacement_observation(module),
+        "xunlai": [_cp13_xunlai_observation(module, value) for value in (False, True)],
+        "consumers": [
+            _cp13_consumer_observation(module, route)
+            for route in ("selected", "load", "reload", "restore", "blank", "stale")
+        ],
+        "faults": [_cp13_fault_observation(module, row) for row in _CP13_FAULT_ROWS],
+        "persistence": [_cp13_persistence_observation(module, mode) for mode in _CP13_PERSISTENCE_MODES],
+        "workspace": [_cp13_workspace_observation(module, mode) for mode in ("normal", "future", "caught")],
+    }
+
+
+class _CP13Capture:
+    """One attempt's finite observations and remembered access boundaries."""
+
+    empty_paths: tuple[str, str] = (
+        r"C:\Users\O_o\Desktop\Py4GW-Recovery\MerchantRules\cp9-implementation-20261111T094357Z-5ea2397d-d08d-4d5c-a29b-a25a8a38ad6f\static-support-case-corrected-483c3663-36c2-4136-90f1-eaa44a3a271f\typeshed\stubs",
+        r"C:\Users\O_o\Desktop\Py4GW-Recovery\MerchantRules\cp9-implementation-20261111T094357Z-5ea2397d-d08d-4d5c-a29b-a25a8a38ad6f\static-environments\isolated\Lib\site-packages",
+    )
+
+    def __init__(self, denied: dict[Path, str] | None = None) -> None:
+        self.denied: dict[Path, str] = {} if denied is None else denied
+        self.errors: list[str] = []
+        self.first: BaseException | None = None
+
+    @staticmethod
+    def describe(error: BaseException) -> str:
+        try:
+            message = str(error)
+        except BaseException:
+            message = "<exception message unavailable>"
+        return type(error).__name__ + ": " + message
+
+    def error(self, label: str, error: BaseException) -> None:
+        self.errors.append(label + ": " + self.describe(error))
+        if self.first is None:
+            self.first = error
+
+    def remember(self, path: Path, error: BaseException) -> None:
+        if isinstance(error, PermissionError) or (isinstance(error, OSError) and getattr(error, "winerror", None) == 5):
+            self.denied.setdefault(path.absolute(), self.describe(error))
+
+    def plain(self, path: Path, *, absent_ok: bool = False) -> bool:
+        import stat
+
+        absolute = path.absolute()
+        excluded = {
+            ".shatter-static-bf1x6b9l",
+            "_hr_typecheck_odz4_ms_",
+            "_sy_naming_validation_el_msghe",
+            "_sy_naming_validation_a_aoiqsp",
+        }
+        if any(part in excluded for part in absolute.parts):
+            raise RuntimeError("Excluded path: " + str(absolute))
+        for boundary, reason in self.denied.items():
+            if absolute == boundary or boundary in absolute.parents:
+                raise RuntimeError("Unavailable at remembered boundary " + str(boundary) + ": " + reason)
+        for component in (*reversed(absolute.parents), absolute):
+            try:
+                metadata = component.lstat()
+            except FileNotFoundError:
+                if absent_ok:
+                    return False
+                raise
+            except BaseException as error:
+                self.remember(component, error)
+                raise
+            if stat.S_ISLNK(metadata.st_mode) or (
+                getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            ):
+                self.denied[component] = "Reparse boundary"
+                raise RuntimeError("Reparse boundary: " + str(component))
+        return True
+
+    def read(self, path: Path) -> bytes:
+        self.plain(path)
+        try:
+            return path.read_bytes()
+        except BaseException as error:
+            self.remember(path, error)
+            raise
+
+    def mkdir(self, path: Path) -> None:
+        self.plain(path.parent)
+        if self.plain(path, absent_ok=True):
+            raise FileExistsError(str(path))
+        try:
+            path.mkdir()
+        except BaseException as error:
+            self.remember(path.parent, error)
+            raise
+
+    def write(self, path: Path, data: bytes) -> None:
+        self.plain(path.parent)
+        if self.plain(path, absent_ok=True):
+            raise FileExistsError(str(path))
+        try:
+            with path.open("xb") as stream:
+                stream.write(data)
+        except BaseException as error:
+            self.remember(path.parent, error)
+            raise
+
+    @staticmethod
+    def unavailable(reason: str) -> dict[str, object]:
+        return {"status": "unavailable", "observed": {}, "capture_errors": {"capture": reason}}
+
+    def group(self, expected: dict[str, str | None], *, compare: bool = True) -> dict[str, object]:
+        from hashlib import sha256
+
+        observed: dict[str, str | None] = {}
+        failures: dict[str, str] = {}
+        for name, digest in expected.items():
+            try:
+                path = Path(name)
+                exists = self.plain(path, absent_ok=digest is None)
+                observed[name] = sha256(self.read(path)).hexdigest() if exists else None
+                if (compare or digest is None) and observed[name] != digest:
+                    raise RuntimeError("expected " + repr(digest) + ", observed " + repr(observed[name]))
+            except BaseException as error:
+                failures[name] = self.describe(error)
+                self.error(name, error)
+        return {
+            "status": "incomplete" if failures else "complete",
+            "observed": observed,
+            "capture_errors": failures,
+        }
+
+    def groups(
+        self,
+        expected: dict[str, dict[str, str | None]],
+        destination: dict[str, object],
+        *,
+        compare: bool = True,
+    ) -> None:
+        for name, values in expected.items():
+            try:
+                destination[name] = self.group(values, compare=compare)
+            except BaseException as error:
+                destination[name] = self.unavailable(self.describe(error))
+                self.error(name, error)
+
+    def empties(self, phase: str, destination: dict[str, object]) -> None:
+        import os
+        import stat
+
+        records: list[dict[str, object]] = []
+        for name in self.empty_paths:
+            record: dict[str, object] = {"path": name, "status": "unavailable", "error": None}
+            records.append(record)
+            path = Path(name)
+            try:
+                self.plain(path)
+                try:
+                    metadata = path.lstat()
+                except BaseException as error:
+                    self.remember(path, error)
+                    raise
+                if stat.S_ISLNK(metadata.st_mode) or (
+                    getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                ):
+                    self.denied[path] = "Reparse boundary"
+                    raise RuntimeError("Reparse boundary: " + name)
+                if not stat.S_ISDIR(metadata.st_mode):
+                    record["status"] = "not-directory"
+                    raise NotADirectoryError(name)
+                try:
+                    with os.scandir(path) as entries:
+                        has_entry = next(entries, None) is not None
+                except BaseException as error:
+                    self.remember(path, error)
+                    raise
+                record["status"] = "not-empty" if has_entry else "empty"
+                if has_entry:
+                    raise RuntimeError("Required directory contains an immediate entry; contents not inspected")
+            except BaseException as error:
+                if isinstance(error, FileNotFoundError):
+                    record["status"] = "missing"
+                record["error"] = self.describe(error)
+                self.error(phase + "/must_remain_empty/" + name, error)
+        destination[phase] = records
+
+    @classmethod
+    def initial_empty(cls) -> dict[str, object]:
+        return {
+            phase: [
+                {"path": name, "status": "unavailable", "error": "Observation not attempted"}
+                for name in cls.empty_paths
+            ]
+            for phase in ("before", "final")
+        }
+
+    def attempt(self, label: str, operation: Callable[[], object], errors: list[str]) -> None:
+        try:
+            operation()
+        except BaseException as error:
+            errors.append(label + ": " + self.describe(error))
+            self.error(label, error)
+
+    def write_json(self, path: Path, value: object) -> None:
+        import json
+
+        self.write(path, (json.dumps(value, indent=2, ensure_ascii=True) + "\n").encode("utf-8"))
+
+    def preserve(self, primary: BaseException | None, errors: list[str]) -> None:
+        if errors:
+            preserved = primary if primary is not None else self.first
+            if preserved is None:
+                preserved = RuntimeError("CP13 evidence capture incomplete")
+            for message in errors:
+                self.note(preserved, message)
+            if primary is None:
+                raise preserved
+
+    @staticmethod
+    def note(primary: BaseException, message: str) -> None:
+        try:
+            primary.add_note(message)
+        except BaseException:
+            pass
+
+    def report(
+        self,
+        path: Path | None,
+        record: dict[str, object],
+        primary: BaseException | None,
+    ) -> None:
+        import json
+        import sys
+
+        record["errors"] = self.errors
+        record["denied_boundaries"] = {str(name): reason for name, reason in self.denied.items()}
+        preserved = primary if primary is not None else self.first
+        record["primary"] = (
+            None
+            if preserved is None
+            else {
+                "type": type(preserved).__name__,
+                "message": self.describe(preserved),
+            }
+        )
+        record["status"] = "failed" if primary is not None or self.errors else "completed"
+        try:
+            if path is None:
+                raise RuntimeError("Report path unavailable; no alternate filesystem output is permitted")
+            self.write(path, (json.dumps(record, indent=2, ensure_ascii=True) + "\n").encode("utf-8"))
+        except BaseException as error:
+            self.error("report write/serialization", error)
+            preserved = primary if primary is not None else self.first
+            record["primary"] = (
+                None
+                if preserved is None
+                else {
+                    "type": type(preserved).__name__,
+                    "message": self.describe(preserved),
+                }
+            )
+            record["status"] = "failed"
+            record["denied_boundaries"] = {str(name): reason for name, reason in self.denied.items()}
+            try:
+                sys.stderr.write("CP13_CAPTURE_STREAM:" + json.dumps(record, ensure_ascii=True) + "\n")
+                sys.stderr.flush()
+            except BaseException as stream_error:
+                self.error("report stream/serialization", stream_error)
+        if primary is not None:
+            for secondary in self.errors:
+                self.note(primary, secondary)
+        elif self.first is not None:
+            for secondary in self.errors:
+                self.note(self.first, secondary)
+            raise self.first
+
+
+_CP13_INPUTS = _CP12_INPUTS
+_CP13_ENV_KEYS = (
+    "MERCHANT_RULES_CP13_CASES",
+    "MERCHANT_RULES_CP13_ORACLE_ROOT",
+    "MERCHANT_RULES_CP13_OUTPUT_PARENT",
+    "MERCHANT_RULES_CP12_CANDIDATE_ROOT",
+)
+
+
+def _cp13_environment() -> dict[str, object]:
+    return {
+        **_cp10_environment(os.environ),
+        **{name: {"set": name in os.environ, "value": os.environ.get(name)} for name in _CP13_ENV_KEYS},
+    }
+
+
+_CP13_DENIED_BOUNDARIES: dict[Path, str] = {}
+_CP13_INITIAL_CAPTURES: dict[str, object] = {}
+
+
+def _cp13_source_observation(root: Path, capture: _CP13Capture) -> dict[str, object]:
+    from hashlib import sha256
+    from typing import cast
+
+    expected: dict[str, str | None] = {str(root / relative): "" for relative in _CP10_INPUTS}
+    namespace = str(root / "Sources/__init__.py")
+    expected[namespace] = None
+    record = capture.group(expected, compare=False)
+    observed = cast(dict[str, str | None], record["observed"])
+    failures = cast(dict[str, str], record["capture_errors"])
+    pins = {relative: observed[str(root / relative)] for relative in _CP10_INPUTS if str(root / relative) in observed}
+    preview: str | None = None
+    path = root / "Sources/icefox/MerchantRules/preview.py"
+    try:
+        preview = sha256(capture.read(path)).hexdigest() if capture.plain(path, absent_ok=True) else "ABSENT"
+    except BaseException as error:
+        capture.error(str(path), error)
+        failures[str(path)] = capture.describe(error)
+    return {
+        "status": "incomplete" if failures else "complete",
+        "common": {
+            "pins": pins,
+            "namespace_absent": namespace in observed and observed[namespace] is None,
+            "errors": list(failures.values()),
+        },
+        "preview.py": preview,
+        "capture_errors": failures,
+    }
+
+
+def _cp13_pins(root: Path) -> dict[str, str]:
+    from typing import cast
+
+    capture = _CP13Capture(_CP13_DENIED_BOUNDARIES)
+    record = _cp13_source_observation(root, capture)
+    _CP13_INITIAL_CAPTURES.setdefault(str(root), record)
+    if capture.first is not None:
+        raise capture.first
+    common = _cp13_dict(record["common"])
+    pins = dict(cast(dict[str, str], common["pins"]))
+    preview = record["preview.py"]
+    if not isinstance(preview, str):
+        raise AssertionError("CP13 preview observation unavailable")
+    pins["Sources/icefox/MerchantRules/preview.py"] = preview
+    return pins
+
+
+def _cp13_capture_final(
+    roots: Mapping[str, Path],
+    before: Mapping[str, dict[str, str]],
+    final: dict[str, object],
+    errors: list[str],
+) -> None:
+    capture = _CP13Capture(_CP13_DENIED_BOUNDARIES)
+    for name, root in roots.items():
+        try:
+            record = _cp13_source_observation(root, capture)
+            record["initial_capture"] = _CP13_INITIAL_CAPTURES.get(
+                str(root), capture.unavailable("No initial source capture was retained")
+            )
+            final[name] = record
+            common = _cp13_dict(record["common"])
+            if common["errors"] or not common["namespace_absent"]:
+                errors.append(name + ": incomplete common final capture")
+            if name not in before:
+                errors.append(name + ": initial capture unavailable; final observation is not equality proof")
+            else:
+                expected_common = {
+                    key: value
+                    for key, value in before[name].items()
+                    if key != "Sources/icefox/MerchantRules/preview.py"
+                }
+                if common["pins"] != expected_common:
+                    errors.append(name + ": common source pins changed")
+                if record["preview.py"] != before[name].get("Sources/icefox/MerchantRules/preview.py"):
+                    errors.append(name + ": preview presence/identity changed")
+        except BaseException as error:
+            final[name] = capture.unavailable(capture.describe(error))
+            capture.error(name + "/final", error)
+    errors.extend(capture.errors)
+
+
+def _cp13_origins(module: types.ModuleType) -> dict[str, str]:
+    result = _cp12_bindings(module)
+    for module_name, class_name in (("configuration", "ActiveConfiguration"), ("profiles", "LiveProfileSession")):
+        defining = sys.modules["Sources.icefox.MerchantRules." + module_name]
+        cls: object = getattr(defining, class_name, None)
+        if cls is None:
+            continue
+        if not isinstance(cls, type):
+            raise AssertionError("CP13 actual canonical class")
+        origin = _cp10_guard(Path(str(defining.__file__)))
+        _expect(
+            origin == _cp10_guard(REPO_ROOT / "Sources/icefox/MerchantRules" / (module_name + ".py")),
+            "CP13 selected-root owner module",
+        )
+        for member in vars(cls).values():
+            if isinstance(member, types.FunctionType):
+                _expect(
+                    member.__globals__ is vars(defining)
+                    and Path(member.__code__.co_filename).resolve() == origin.resolve(),
+                    "CP13 substantive defining owner code",
+                )
+        result[class_name] = str(origin)
+    return result
+
+
+def _cp13_cold() -> dict[str, object]:
+    import importlib
+
+    configuration = importlib.import_module("Sources.icefox.MerchantRules.configuration")
+    forbidden = (
+        "Py4GWCoreLib",
+        "PyJson",
+        "PyImGui",
+        "merchant_rules_regression_target",
+        "Sources.icefox.MerchantRules.profiles",
+        "Sources.icefox.MerchantRules.planning",
+        "Sources.icefox.MerchantRules.preview",
+    )
+    _expect(not any(name in sys.modules for name in forbidden), "CP13 configuration has no reverse/runtime dependency")
+    profiles = importlib.import_module("Sources.icefox.MerchantRules.profiles")
+    _expect(
+        not any(name in sys.modules for name in forbidden if name != "Sources.icefox.MerchantRules.profiles"),
+        "CP13 profiles cold import remains runtime-free",
+    )
+    parent = sys.modules["Sources"]
+    spec = parent.__spec__
+    _expect(
+        getattr(parent, "__file__", None) is None and spec is not None and spec.origin is None, "CP13 namespace parent"
+    )
+    if spec is None or spec.submodule_search_locations is None:
+        raise AssertionError("CP13 namespace locations")
+    _cp10_equal(list(spec.submodule_search_locations), [str(REPO_ROOT / "Sources")], "CP13 exact namespace search root")
+    return {
+        "namespace": True,
+        "configuration_isolated": True,
+        "profiles_isolated": True,
+        "active_owner": hasattr(configuration, "ActiveConfiguration"),
+        "live_owner": hasattr(profiles, "LiveProfileSession"),
+    }
+
+
+def _cp13_child(mode: str, scratch: Path) -> int:
+    global _cp10_storage_root
+    primary: BaseException | None = None
+    before: dict[str, dict[str, str]] = {}
+    final: dict[str, object] = {}
+    errors: list[str] = []
+    result: dict[str, object] = {}
+    storage_ready = False
+    path_capture = _CP13Capture(_CP13_DENIED_BOUNDARIES)
+    try:
+        _cp10_guard(scratch)
+        _expect(
+            not scratch.is_relative_to(REPO_ROOT) and not REPO_ROOT.is_relative_to(scratch),
+            "CP13 sources and writable storage disjoint",
+        )
+        _cp10_storage_root = scratch
+        storage_ready = True
+        before["source"] = _cp13_pins(REPO_ROOT)
+        _expect(not any(name == "Sources" or name.startswith("Sources.") for name in sys.modules), "CP13 fresh process")
+        sys.path.insert(0, str(REPO_ROOT))
+
+        def owned_write(raw: object) -> None:
+            if not _cp10_is_path(raw):
+                return
+            path = Path(os.path.abspath(os.fsdecode(raw)))
+            _expect(path.is_relative_to(scratch), "CP13 write outside owned storage: " + str(path))
+            path_capture.plain(path, absent_ok=True)
+
+        def audit(event: str, arguments: tuple[object, ...]) -> None:
+            if event.startswith("socket.") or event in ("ctypes.dlopen", "subprocess.Popen"):
+                raise RuntimeError("CP13 offline child forbids " + event)
+            if event == "open":
+                flags = arguments[2]
+                if isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC):
+                    owned_write(arguments[0])
+            elif event in ("os.mkdir", "os.remove", "os.rmdir", "shutil.rmtree"):
+                owned_write(arguments[0])
+            elif event in ("os.rename", "os.replace"):
+                owned_write(arguments[0])
+                owned_write(arguments[1])
+
+        sys.addaudithook(audit)
+        if mode == "cold":
+            result = _cp13_cold()
+        elif mode == "raw":
+            inherited = _cp12_cold_widget(scratch)
+            module = sys.modules["merchant_rules_regression_target"]
+            result = {
+                "values": _cp13_raw_observation(module, require_candidate=False),
+                "inherited_cold": inherited,
+                "bindings": _cp13_origins(module),
+            }
+        elif mode == "observations":
+            module = _load_merchant_rules_module(scratch)
+            result = {
+                "values": _cp13_observations(module),
+                "bindings": _cp13_origins(module),
+                "identity_assertions": True,
+            }
+        else:
+            raise AssertionError("CP13 unknown child mode " + mode)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        _cp13_capture_final({"source": REPO_ROOT}, before, final, errors)
+        record = {
+            "mode": mode,
+            "status": "failed" if primary is not None or errors else "completed",
+            "exception": None if primary is None else {"type": type(primary).__name__, "message": str(primary)},
+            "source_root": str(REPO_ROOT),
+            "storage_root": str(scratch),
+            "widget_path": str(MERCHANT_RULES_PATH),
+            "flags": {
+                "isolated": sys.flags.isolated,
+                "no_site": sys.flags.no_site,
+                "dont_write_bytecode": sys.flags.dont_write_bytecode,
+                "optimize": sys.flags.optimize,
+                "utf8_mode": sys.flags.utf8_mode,
+            },
+            "environment": _cp13_environment(),
+            "before": before,
+            "final": final,
+            "evidence_errors": errors,
+        }
+        if storage_ready:
+            _cp10_attempt(
+                "CP13 child final write", lambda: _cp10_write_json(scratch / "child-final.json", record), errors
+            )
+        else:
+            _cp10_attempt(
+                "CP13 child final stream", lambda: print("CP13_FINAL:" + json.dumps(record, sort_keys=True)), errors
+            )
+        _cp10_preserve_failure(primary, errors)
+    print("CP13_JSON:" + json.dumps(result, sort_keys=True))
+    return 0
+
+
+def _cp13_external(kind: str) -> dict[str, object]:
+    import re
+    from typing import cast
+    from uuid import uuid4
+
+    capture = _CP13Capture(_CP13_DENIED_BOUNDARIES)
+    roots = {"candidate": REPO_ROOT}
+    before: dict[str, dict[str, str]] = {}
+    before_captures: dict[str, object] = {
+        side: capture.unavailable("Source observation not attempted") for side in ("oracle", "candidate")
+    }
+    final: dict[str, object] = {
+        side: capture.unavailable("Source observation not attempted") for side in ("oracle", "candidate")
+    }
+    empty_observations = capture.initial_empty()
+    reports: dict[str, object] = {}
+    primary: BaseException | None = None
+    output: Path | None = None
+    comparison = "not-started" if kind == "differential" else "not-applicable"
+    modes = ("observations",) if kind == "differential" else ("cold", "raw")
+    jobs: dict[str, dict[str, object]] = {
+        side + "-" + mode: {"status": "not-started", "exit": None} for side in ("oracle", "candidate") for mode in modes
+    }
+
+    def source_groups() -> dict[str, dict[str, str | None]]:
+        result: dict[str, dict[str, str | None]] = {}
+        for side, root in roots.items():
+            result[side] = {str(root / relative): "" for relative in _CP13_INPUTS}
+            result[side][str(root / "Sources/__init__.py")] = None
+        return result
+
+    try:
+        try:
+            _expect(kind in ("cold", "differential"), "CP13 known external kind")
+            candidate = REPO_ROOT
+            frozen = candidate.parent
+            approved_parent = Path(r"C:\Users\O_o\Desktop\Py4GW-Recovery\MerchantRules\c13i-fe2673d85bcc")
+            _expect(
+                candidate.name == "a"
+                and frozen.parent == approved_parent
+                and re.fullmatch(r"c13v-[0-9a-f]{12}", frozen.name) is not None,
+                "CP13 external candidate must be approved frozen R/a",
+            )
+            oracle, parent = frozen / "b", frozen / "r"
+            roots = {"oracle": oracle, "candidate": candidate}
+            _expect(
+                os.environ.get("MERCHANT_RULES_CP13_ORACLE_ROOT") == str(oracle),
+                "CP13 oracle environment must equal the code-derived approved R/b",
+            )
+            _expect(
+                os.environ.get("MERCHANT_RULES_CP13_OUTPUT_PARENT") == str(parent),
+                "CP13 output environment must equal the code-derived approved R/r",
+            )
+            capture.plain(candidate)
+            capture.plain(oracle)
+            capture.plain(parent)
+            proposed = parent / ("cp13-" + kind + "-" + uuid4().hex[:8])
+            capture.mkdir(proposed)
+            output = proposed
+        except BaseException as error:
+            primary = error
+            capture.error("external preparation", error)
+        capture.groups(source_groups(), before_captures, compare=False)
+        capture.empties("before", empty_observations)
+        for side, root in roots.items():
+            record = _cp13_dict(before_captures[side])
+            if record["status"] != "complete":
+                continue
+            values = cast(dict[str, str | None], record["observed"])
+            selected: dict[str, str] = {}
+            for relative in _CP13_INPUTS:
+                value = values[str(root / relative)]
+                if not isinstance(value, str):
+                    raise AssertionError("CP13 required source file observation: " + relative)
+                selected[relative] = value
+            before[side] = selected
+        if primary is None:
+            primary = capture.first
+        if primary is not None:
+            raise primary
+        if output is None:
+            raise AssertionError("CP13 output preparation did not establish a fresh directory")
+        fixed = {
+            "Widgets/Guild Wars/Items & Loot/MerchantRules.py": "9b3eb8159b74759cdf1b06af7264f9a1ea53c5e877163f5aa0638364192cc5d2",
+            "Sources/icefox/MerchantRules/configuration.py": "0eb38032984e6cd4d85740f70eb843a9a868c1f69b4ad0fb634f1d7b5e8dfe35",
+            "Sources/icefox/MerchantRules/profiles.py": "15916f9703ad3eda3149e1796cfeb8401dabb86768c14a5cb185579019f68f8d",
+            "Sources/icefox/MerchantRules/planning.py": "f7877da06cb80afdcef2022e387225c23cf899578614e092804dc0ede2d94a81",
+            "Sources/icefox/MerchantRules/preview.py": "09fe063d359600a4edc0f0cca4b717c2f8e760ff47a7a67071d5587bec29ddf1",
+        }
+        for relative, digest in fixed.items():
+            _cp10_equal(
+                before["oracle"][relative], digest, "CP13 independently frozen completed-CP12 source " + relative
+            )
+        changed = {
+            "Widgets/Guild Wars/Items & Loot/MerchantRules.py",
+            "Sources/icefox/MerchantRules/configuration.py",
+            "Sources/icefox/MerchantRules/profiles.py",
+        }
+        for relative in _CP13_INPUTS:
+            if relative not in changed:
+                _cp10_equal(
+                    before["oracle"][relative], before["candidate"][relative], "CP13 identical common input " + relative
+                )
+        for side, root in roots.items():
+            for mode in modes:
+                key = side + "-" + mode
+                location = output / key
+                capture.mkdir(location)
+                scratch = location / "storage"
+                capture.mkdir(scratch)
+                command = [
+                    sys.executable,
+                    "-I",
+                    "-B",
+                    "-S",
+                    str(root / ".local-tests/merchant-rules/test_merchant_rules_regression.py"),
+                    "--cp13-child",
+                    mode,
+                    str(scratch),
+                ]
+                environment = os.environ.copy()
+                environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    environment[name] = str(scratch)
+                launch = jobs[key]
+                launch.update(source_pins=before[side], source_root=str(root), storage_root=str(scratch), mode=mode)
+                completed = _cp13_run_process(
+                    command, scratch, environment, location, launch, timeout=300, capture=capture
+                )
+                records = [
+                    line.removeprefix("CP13_JSON:")
+                    for line in completed.stdout.decode("utf-8").splitlines()
+                    if line.startswith("CP13_JSON:")
+                ]
+                _expect(len(records) == 1, "CP13 exactly one completed child marker")
+                report: object = json.loads(records[0])
+                reports[key] = report
+        if kind == "differential":
+            comparison = "comparing"
+            old = _cp13_dict(reports["oracle-observations"])
+            new = _cp13_dict(reports["candidate-observations"])
+            _cp10_equal(
+                old["values"], new["values"], "CP13 complete normalized observations, traces, and failure prefixes"
+            )
+            comparison = "passed"
+        else:
+            for side in roots:
+                cold = _cp13_dict(reports[side + "-cold"])
+                _expect(
+                    cold["namespace"] is True
+                    and cold["configuration_isolated"] is True
+                    and cold["profiles_isolated"] is True,
+                    "CP13 independent cold imports",
+                )
+                _expect(
+                    cold["active_owner"] is (side == "candidate") and cold["live_owner"] is (side == "candidate"),
+                    "CP13 true owner absence/presence",
+                )
+            _cp10_equal(
+                _cp13_dict(reports["oracle-raw"])["values"],
+                _cp13_dict(reports["candidate-raw"])["values"],
+                "CP13 raw default values and allocation order",
+            )
+    except BaseException as error:
+        if primary is None:
+            primary = error
+        elif error is not primary:
+            capture.error("secondary external failure", error)
+        if comparison == "comparing":
+            comparison = "failed"
+        raise primary
+    finally:
+        try:
+            capture.groups(source_groups(), final, compare=False)
+            for side in ("oracle", "candidate"):
+                if side not in roots:
+                    final[side] = capture.unavailable("No trusted oracle root was established")
+                    capture.error(side + "/final", RuntimeError("Source root unavailable"))
+                    continue
+                observed = _cp13_dict(final[side])
+                if side not in before:
+                    capture.error(
+                        side + "/final",
+                        RuntimeError("Initial capture unavailable; final observation is not equality proof"),
+                    )
+                elif observed["status"] == "complete":
+                    values = cast(dict[str, str | None], observed["observed"])
+                    current = {relative: values[str(roots[side] / relative)] for relative in _CP13_INPUTS}
+                    if current != before[side]:
+                        capture.error(side + "/final", RuntimeError("Source pins changed"))
+        except BaseException as error:
+            capture.error("external final source captures", error)
+        try:
+            capture.empties("final", empty_observations)
+        except BaseException as error:
+            capture.error("external final empty-directory captures", error)
+        record: dict[str, object] = {
+            "kind": kind,
+            "comparison": comparison,
+            "jobs": jobs,
+            "reports": reports,
+            "before": before_captures,
+            "before_pins": before,
+            "final": final,
+            "must_remain_empty": empty_observations,
+        }
+        try:
+            record["environment"] = _cp13_environment()
+        except BaseException as error:
+            record["environment"] = {"status": "unavailable", "error": capture.describe(error)}
+            capture.error("external environment capture", error)
+        try:
+            capture.report(None if output is None else output / "report.json", record, primary)
+        except BaseException as error:
+            if primary is None:
+                raise
+            capture.note(primary, "external final reporting: " + capture.describe(error))
+    if output is None:
+        raise AssertionError("CP13 successful external capture has an output directory")
+    print("CP13 " + kind + " evidence: " + str(output / "report.json"))
+    return reports
+
+
+def _test_cp13_cold_import() -> None:
+    _cp13_external("cold")
+
+
+def _test_cp13_completed_cp12_differential() -> None:
+    _cp13_external("differential")
+
+
+def _cp13_replacement_observation(module: types.ModuleType) -> dict[str, object]:
+    with _cp13_clock(module):
+        _reset_jsonfactory_persistence_fixture(module)
+        first: object = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+        other: object = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+        first_saved: object = getattr(first, "_saved_profile_session")
+        later_saved: object = getattr(other, "_saved_profile_session")
+        original_badge = _cp12_bound(first_saved, "profile_scope_badge")
+        restore = _CP8Restoration()
+        events: list[str] = []
+
+        def badge(scope: str) -> object:
+            result: object = original_badge(scope)
+            events.append("badge-argument")
+            setattr(first, "_saved_profile_session", later_saved)
+            return result
+
+        try:
+            restore.binding(first_saved, "profile_scope_badge", badge)
+            _cp13_call(first, "_load_selected_profile", "account")
+            first_warnings = _cp13_dict(getattr(first_saved, "saved_profile_warnings"))
+            later_warnings = _cp13_dict(getattr(later_saved, "saved_profile_warnings"))
+            _expect(
+                first_warnings["account"] == "" and later_warnings["account"] == "Select a Account profile to load.",
+                "CP13 feedback owner is acquired after its badge argument replaces SavedProfileSession",
+            )
+        finally:
+            setattr(first, "_saved_profile_session", first_saved)
+            restore.restore()
+
+        widget, _payload, selected = _cp13_fixture(module, "selected")
+        old_store: object = getattr(widget, "_profile_store")
+        later_store: object = getattr(other, "_profile_store")
+        factory: object = getattr(module, "JsonFactory")
+        if not isinstance(factory, type):
+            raise AssertionError("CP13 concrete factory for Store timing")
+        old_get = _cp12_bound(factory, "get_json")
+        old_save = _cp12_bound(factory, "save")
+        provenance_name = str(getattr(module, "LOADED_PROFILE_STATE_DOC_NAME"))
+        saved = False
+        prior = sys.getprofile()
+        restore = _CP8Restoration()
+
+        def save(document: object) -> object:
+            nonlocal saved
+            result: object = old_save(document)
+            if getattr(document, "name") == provenance_name:
+                saved = True
+            return result
+
+        def get(document: object, path: str = "", default: object = None) -> object:
+            result: object = old_get(document, path, default)
+            if saved and getattr(document, "name") == provenance_name:
+                events.append("get-json-argument")
+                setattr(widget, "_profile_store", later_store)
+            return result
+
+        def profile(frame: types.FrameType, event: str, value: object) -> None:
+            if event == "call" and frame.f_code.co_name == "normalize_provenance":
+                instance: object = frame.f_locals.get("self")
+                if instance is old_store or instance is later_store:
+                    events.append("normalize-later" if instance is later_store else "normalize-old")
+
+        try:
+            restore.binding(factory, "get_json", get)
+            restore.binding(factory, "save", save)
+            sys.setprofile(profile)
+            _cp13_call(widget, "_record_loaded_profile_provenance", selected)
+        finally:
+            sys.setprofile(prior)
+            setattr(widget, "_profile_store", old_store)
+            restore.restore()
+        _cp10_equal(
+            events,
+            ["badge-argument", "get-json-argument", "normalize-later"],
+            "CP13 concrete owner acquisition remains after argument evaluation",
+        )
+        original_build = _cp12_bound(widget, "_build_profile_payload")
+        original_normalize = _cp12_bound(widget, "_normalize_profile_payload")
+        restore = _CP8Restoration()
+
+        def captured_normalize(raw: object) -> object:
+            events.append("captured-normalize")
+            return original_normalize(raw)
+
+        def later_normalize(raw: object) -> object:
+            events.append("incorrect-later-normalize")
+            return original_normalize(raw)
+
+        def build() -> object:
+            value: object = original_build()
+            events.append("build-replaces-normalize")
+            setattr(widget, "_normalize_profile_payload", later_normalize)
+            return value
+
+        try:
+            restore.binding(widget, "_normalize_profile_payload", captured_normalize)
+            restore.binding(widget, "_build_profile_payload", build)
+            shareable_owner: object = getattr(widget, "_live_profile_session", widget)
+            result = _cp13_dict(_cp13_call(shareable_owner, "_build_shareable_profile_payload"))
+            _expect(result["favorite_outpost_ids"] == [1], "CP13 actual shareable normalization result")
+        finally:
+            restore.restore()
+        _cp10_equal(
+            events,
+            [
+                "badge-argument",
+                "get-json-argument",
+                "normalize-later",
+                "build-replaces-normalize",
+                "captured-normalize",
+            ],
+            "CP13 bound configuration callable is captured before nested build argument changes its facade",
+        )
+        return {
+            "events": events,
+            "feedback_published_to_replacement": True,
+            "provenance_normalized_by_replacement": True,
+            "configuration_callable_captured_before_argument": True,
+        }
+
+
+def _test_cp13_replacement_timing(module: types.ModuleType) -> None:
+    _cp13_replacement_observation(module)
+
+
+_CP13_CASES: list[tuple[str, Callable[[types.ModuleType], None]]] = [
+    *[("cp13_" + row[0], partial(_test_cp13_fault, row=row)) for row in _CP13_FAULT_ROWS],
+    *[("cp13_persistence_" + mode, partial(_test_cp13_persistence, mode=mode)) for mode in _CP13_PERSISTENCE_MODES],
+    ("cp13_raw_construction", _test_cp13_raw_construction),
+    ("cp13_binding_timing", _test_cp13_binding_timing),
+    ("cp13_xunlai_identity", _test_cp13_xunlai),
+    ("cp13_late_factory", _test_cp13_late_factory),
+    ("cp13_replacement_timing", _test_cp13_replacement_timing),
+    ("cp13_fixture_reachability", _test_cp13_fixture_reachability),
+    ("cp13_consumer_selected", partial(_test_cp13_consumer, route="selected")),
+    ("cp13_consumer_load", partial(_test_cp13_consumer, route="load")),
+    ("cp13_consumer_reload", partial(_test_cp13_consumer, route="reload")),
+    ("cp13_consumer_restore", partial(_test_cp13_consumer, route="restore")),
+    ("cp13_consumer_blank", partial(_test_cp13_consumer, route="blank")),
+    ("cp13_consumer_stale", partial(_test_cp13_consumer, route="stale")),
+    ("cp13_backup_ignored_result", _test_cp13_backup_ignored_result),
+    ("cp13_workspace_normal", partial(_test_cp13_workspace, mode="normal")),
+    ("cp13_workspace_future", partial(_test_cp13_workspace, mode="future")),
+    ("cp13_workspace_caught", partial(_test_cp13_workspace, mode="caught")),
+    ("cp13_readiness_prefix", _test_cp13_readiness_prefix),
+    ("cp13_rendered_load", partial(_test_cp13_rendered_handoff, action="load")),
+    ("cp13_rendered_restore", partial(_test_cp13_rendered_handoff, action="restore")),
+    ("cp13_captured_remote", _test_cp13_captured_remote),
+    ("cp13_cold_import", lambda _module: _test_cp13_cold_import()),
+    ("cp13_completed_cp12_differential", lambda _module: _test_cp13_completed_cp12_differential()),
+]
+
+_CP13_CASE_NAMES: tuple[str, ...] = (
+    "cp13_config_identify",
+    "cp13_config_salvage",
+    "cp13_config_cleanup",
+    "cp13_config_categories",
+    "cp13_config_late_buy",
+    "cp13_config_late_sell",
+    "cp13_config_late_destroy",
+    "cp13_config_late_cleanup",
+    "cp13_finalize_revision",
+    "cp13_finalize_invalidation",
+    "cp13_finalize_editors",
+    "cp13_finalize_ui",
+    "cp13_live_copy",
+    "cp13_live_acquire",
+    "cp13_live_save",
+    "cp13_live_verify_reload",
+    "cp13_live_runtime",
+    "cp13_live_comparison",
+    "cp13_load_default",
+    "cp13_load_stored",
+    "cp13_load_finalization",
+    "cp13_reload_initialize",
+    "cp13_reload_document",
+    "cp13_reload_load",
+    "cp13_reload_reset",
+    "cp13_restore_save",
+    "cp13_restore_clear",
+    "cp13_restore_reset",
+    "cp13_association_schema",
+    "cp13_association_leaf",
+    "cp13_association_save",
+    "cp13_association_reload",
+    "cp13_association_verify",
+    "cp13_provenance_save",
+    "cp13_provenance_reload",
+    "cp13_provenance_verify",
+    "cp13_blank_before_delete",
+    "cp13_stale_delete",
+    "cp13_stale_verify",
+    "cp13_persistence_live_save_false",
+    "cp13_persistence_live_recovery_raises",
+    "cp13_persistence_live_reload_false",
+    "cp13_persistence_live_mismatch",
+    "cp13_persistence_association_save_false",
+    "cp13_persistence_association_reload_false",
+    "cp13_persistence_association_mismatch",
+    "cp13_persistence_provenance_save_false",
+    "cp13_persistence_provenance_clear_acquisition",
+    "cp13_persistence_provenance_reload_false",
+    "cp13_persistence_provenance_mismatch",
+    "cp13_persistence_reload_ignored_false",
+    "cp13_raw_construction",
+    "cp13_binding_timing",
+    "cp13_xunlai_identity",
+    "cp13_late_factory",
+    "cp13_replacement_timing",
+    "cp13_fixture_reachability",
+    "cp13_consumer_selected",
+    "cp13_consumer_load",
+    "cp13_consumer_reload",
+    "cp13_consumer_restore",
+    "cp13_consumer_blank",
+    "cp13_consumer_stale",
+    "cp13_backup_ignored_result",
+    "cp13_workspace_normal",
+    "cp13_workspace_future",
+    "cp13_workspace_caught",
+    "cp13_readiness_prefix",
+    "cp13_rendered_load",
+    "cp13_rendered_restore",
+    "cp13_captured_remote",
+    "cp13_cold_import",
+    "cp13_completed_cp12_differential",
+)
+
+_CP13_STAGE_CASES: dict[str, tuple[str, ...]] = {
+    "configuration": (
+        "cp13_config_identify",
+        "cp13_config_salvage",
+        "cp13_config_cleanup",
+        "cp13_config_categories",
+        "cp13_config_late_buy",
+        "cp13_config_late_sell",
+        "cp13_config_late_destroy",
+        "cp13_config_late_cleanup",
+        "cp13_finalize_revision",
+        "cp13_finalize_invalidation",
+        "cp13_finalize_editors",
+        "cp13_finalize_ui",
+        "cp13_raw_construction",
+        "cp13_binding_timing",
+        "cp13_xunlai_identity",
+    ),
+    "live": (
+        "cp13_live_copy",
+        "cp13_live_acquire",
+        "cp13_live_save",
+        "cp13_live_verify_reload",
+        "cp13_live_runtime",
+        "cp13_live_comparison",
+        "cp13_load_default",
+        "cp13_load_stored",
+        "cp13_load_finalization",
+        "cp13_reload_initialize",
+        "cp13_reload_document",
+        "cp13_reload_load",
+        "cp13_reload_reset",
+        "cp13_restore_save",
+        "cp13_restore_clear",
+        "cp13_restore_reset",
+        "cp13_persistence_live_save_false",
+        "cp13_persistence_live_recovery_raises",
+        "cp13_persistence_live_reload_false",
+        "cp13_persistence_live_mismatch",
+        "cp13_persistence_reload_ignored_false",
+        "cp13_late_factory",
+        "cp13_replacement_timing",
+        "cp13_consumer_selected",
+        "cp13_consumer_load",
+        "cp13_consumer_reload",
+        "cp13_consumer_restore",
+        "cp13_backup_ignored_result",
+        "cp13_workspace_normal",
+        "cp13_workspace_future",
+        "cp13_workspace_caught",
+    ),
+    "character": (
+        "cp13_association_schema",
+        "cp13_association_leaf",
+        "cp13_association_save",
+        "cp13_association_reload",
+        "cp13_association_verify",
+        "cp13_provenance_save",
+        "cp13_provenance_reload",
+        "cp13_provenance_verify",
+        "cp13_blank_before_delete",
+        "cp13_stale_delete",
+        "cp13_stale_verify",
+        "cp13_persistence_association_save_false",
+        "cp13_persistence_association_reload_false",
+        "cp13_persistence_association_mismatch",
+        "cp13_persistence_provenance_save_false",
+        "cp13_persistence_provenance_clear_acquisition",
+        "cp13_persistence_provenance_reload_false",
+        "cp13_persistence_provenance_mismatch",
+        "cp13_consumer_blank",
+        "cp13_consumer_stale",
+        "cp13_readiness_prefix",
+    ),
+    "integration": (
+        "cp13_fixture_reachability",
+        "cp13_rendered_load",
+        "cp13_rendered_restore",
+        "cp13_captured_remote",
+        "cp13_cold_import",
+        "cp13_completed_cp12_differential",
+    ),
+}
+
+_CP13_STAGE_REUSED_CASES: dict[str, tuple[str, ...]] = {
+    "configuration": (
+        "configuration_records_and_binding",
+        "configuration_constructor_is_reference_only",
+        "configuration_payload_literals",
+        "configuration_materializers_dispatch_and_passes",
+        "configuration_materializers_assignment_failures",
+        "cp8_policy_configuration_liveness",
+        "cp10_combined_route",
+        "cp12_reset_profile_prefix",
+    ),
+    "live": (
+        "configuration_profile_lifecycle_owner",
+        "jsonfactory_standalone_profile_lifecycle",
+        "jsonfactory_standalone_load_failure_rolls_back",
+        "jsonfactory_backup_restore_without_window_geometry",
+        "saved_profile_management_preserves_preview_and_idle_load_invalidates",
+        "profile_application_blocks_owned_state_matrix",
+        "reload_profile_from_disk_ignores_obsolete_window_geometry",
+    ),
+    "character": (
+        "character_profile_memory_switches_and_profile_operations",
+        "character_profile_state_refresh_failure_blocks_and_deduplicates",
+        "character_profile_memory_fails_closed_and_recovers",
+        "character_profile_memory_retries_without_duplicate_blanks",
+        "character_profile_transition_restarts_for_latest_uuid",
+        "character_profile_change_invalidates_owned_work_and_multibox",
+        "character_profile_resolution_tick_boundary",
+        "character_profile_direct_ready_jump_closes_gate",
+        "character_profile_same_direct_ready_jump_reconfirms_without_reload",
+        "character_profile_resolution_allows_deferred_reload",
+        "character_profile_resolution_allows_inert_remote_lease",
+        "account_identity_transition_generation_contract",
+    ),
+    "integration": (
+        "busy_profile_buttons_are_disabled_without_confirmation_state",
+        "profile_confirmation_binds_exact_scope_key_and_fingerprint",
+        "jsonfactory_standalone_profile_refresh_timer",
+        "cp10_confirmation_bridge",
+        "cp12_raw_construction",
+        "cp12_remote_consumer",
+        "cp12_execution_consumer",
+        "cp12_actual_remote_execution",
+        "cp12_execution_publication",
+        "cp12_cold_import",
+        "cp12_completed_cp11_differential",
+    ),
+}
+
+_expect(tuple(name for name, _ in _CP13_CASES) == _CP13_CASE_NAMES, "CP13 exact generated registration accounting")
+_expect(
+    set(_CP13_CASE_NAMES) == {name for names in _CP13_STAGE_CASES.values() for name in names},
+    "CP13 every addition has one stage",
+)
+
+
+def _cp13_run_process(
+    command: list[str],
+    cwd: Path,
+    environment: dict[str, str],
+    location: Path,
+    launch: dict[str, object],
+    *,
+    timeout: float,
+    capture: _CP13Capture,
+    allowed_exits: tuple[int, ...] = (0,),
+) -> subprocess.CompletedProcess[bytes]:
+    from hashlib import sha256
+    from time import monotonic
+
+    started = monotonic()
+    stdout = b''
+    stderr = b''
+    stdout_available = False
+    stderr_available = False
+    primary: BaseException | None = None
+    completed: subprocess.CompletedProcess[bytes] | None = None
+    launch.update(
+        {
+            'command': command,
+            'cwd': str(cwd),
+            'environment': {
+                **_cp10_environment(environment),
+                **{name: {'set': name in environment, 'value': environment.get(name)} for name in _CP13_ENV_KEYS},
+            },
+            'status': 'not-started',
+            'exit': None,
+            'timeout_seconds': timeout,
+        }
+    )
+    errors: list[str] = []
+    try:
+        launch['executable_sha256'] = sha256(capture.read(Path(command[0]))).hexdigest()
+        launch['status'] = 'launch-attempted'
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=environment,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        stdout, stderr = completed.stdout, completed.stderr
+        stdout_available = stderr_available = True
+        launch.update({'status': 'exited', 'exit': completed.returncode})
+        if completed.returncode not in allowed_exits:
+            primary = AssertionError('CP10 command exited with ' + str(completed.returncode) + ': ' + str(location))
+    except subprocess.TimeoutExpired as error:
+        primary = error
+        launch.update({'status': 'timed-out', 'exit': None})
+        stdout_available = error.output is not None
+        stderr_available = error.stderr is not None
+        stdout = _cp10_stream_bytes(error.output)
+        stderr = _cp10_stream_bytes(error.stderr)
+        raise
+    except BaseException as error:
+        primary = error
+        if launch['status'] == 'launch-attempted':
+            launch['status'] = 'launch-or-wait-exception'
+        raise
+    finally:
+        launch['elapsed_seconds'] = monotonic() - started
+        launch['exception'] = (
+            None
+            if primary is None
+            else {
+                'type': type(primary).__name__,
+                'message': capture.describe(primary),
+            }
+        )
+        launch['stream_bytes'] = {'stdout': len(stdout), 'stderr': len(stderr)}
+        launch['stream_capture'] = {
+            'complete': launch['status'] == 'exited',
+            'stdout_available': stdout_available,
+            'stderr_available': stderr_available,
+        }
+        capture.attempt('stdout write', lambda: capture.write(location / 'stdout.txt', stdout), errors)
+        capture.attempt('stderr write', lambda: capture.write(location / 'stderr.txt', stderr), errors)
+        launch['evidence_errors'] = list(errors)
+        capture.attempt('launch write', lambda: capture.write_json(location / 'launch.json', launch), errors)
+        if errors:
+            launch['stream_fallback'] = {
+                'stdout_available': stdout_available,
+                'stderr_available': stderr_available,
+                'stdout_hex': stdout.hex(),
+                'stderr_hex': stderr.hex(),
+            }
+        capture.preserve(primary, errors)
+    if primary is not None:
+        raise primary
+    return completed
 
 
 def main() -> int:
@@ -66829,6 +70144,7 @@ def main() -> int:
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP10_CASES)
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP11_CASES)
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP12_CASES)
+        tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP13_CASES)
 
         catalog_contract_tests = [
             (
@@ -66863,10 +70179,15 @@ def main() -> int:
         _expect(
             sum(
                 bool(os.environ.get(name, ""))
-                for name in ("MERCHANT_RULES_CP10_CASES", "MERCHANT_RULES_CP11_CASES", "MERCHANT_RULES_CP12_CASES")
+                for name in (
+                    "MERCHANT_RULES_CP10_CASES",
+                    "MERCHANT_RULES_CP11_CASES",
+                    "MERCHANT_RULES_CP12_CASES",
+                    "MERCHANT_RULES_CP13_CASES",
+                )
             )
             <= 1,
-            "CP10, CP11 and CP12 selections are mutually exclusive",
+            "CP10, CP11, CP12 and CP13 selections are mutually exclusive",
         )
         requested = os.environ.get("MERCHANT_RULES_CP10_CASES", "")
         if requested:
@@ -66913,6 +70234,21 @@ def main() -> int:
             _expect(set(names_cp12) <= registered_cp12, "CP12 every selected case is registered")
             tests = [test for test in tests if test[0] in names_cp12]
 
+        requested_cp13 = os.environ.get("MERCHANT_RULES_CP13_CASES", "")
+        if requested_cp13:
+            _expect(
+                not any(
+                    os.environ.get(name) == "1"
+                    for name in ("MERCHANT_RULES_CATALOG_ONLY", "MERCHANT_RULES_SALVAGE_KIT_ONLY")
+                ),
+                "CP13 selection cannot combine historical ONLY flags",
+            )
+            names_cp13 = requested_cp13.split(",")
+            _expect(len(names_cp13) == len(set(names_cp13)) and all(names_cp13), "CP13 unique nonempty selection")
+            registered_cp13 = {name for name, _ in tests}
+            _expect(set(names_cp13) <= registered_cp13, "CP13 every selected case is registered")
+            tests = [test for test in tests if test[0] in names_cp13]
+
         failures: list[tuple[str, str]] = []
         for name, test_fn in tests:
             try:
@@ -66941,18 +70277,22 @@ def main() -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        if len(sys.argv) != 4 or sys.argv[1] not in {"--cp9-child", "--cp10-child", "--cp11-child", "--cp12-child"}:
+        if len(sys.argv) != 4 or sys.argv[1] not in {
+            "--cp9-child",
+            "--cp10-child",
+            "--cp11-child",
+            "--cp12-child",
+            "--cp13-child",
+        }:
             raise SystemExit(
-                "Expected --cp9-child, --cp10-child, --cp11-child or --cp12-child MODE OWNED_STORAGE, or no arguments."
+                "Expected --cp9-child, --cp10-child, --cp11-child, --cp12-child or --cp13-child MODE OWNED_STORAGE, or no arguments."
             )
-        child = (
-            _cp12_child
-            if sys.argv[1] == "--cp12-child"
-            else (
-                _cp11_child
-                if sys.argv[1] == "--cp11-child"
-                else _cp10_child if sys.argv[1] == "--cp10-child" else _cp9_child
-            )
-        )
-        raise SystemExit(child(sys.argv[2], Path(sys.argv[3])))
+        dispatch = {
+            "--cp9-child": _cp9_child,
+            "--cp10-child": _cp10_child,
+            "--cp11-child": _cp11_child,
+            "--cp12-child": _cp12_child,
+            "--cp13-child": _cp13_child,
+        }
+        raise SystemExit(dispatch[sys.argv[1]](sys.argv[2], Path(sys.argv[3])))
     raise SystemExit(main())

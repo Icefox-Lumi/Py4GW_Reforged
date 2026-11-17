@@ -3,7 +3,7 @@
 Merchant Rules separates preview construction from live execution: rules first produce a
 ``PlanResult`` from an inventory snapshot, and execution then revalidates live state before
 performing queued or destructive actions. Profiles, shared profiles, recovery documents,
-multibox requests, and Reforged compatibility adapters are owned by ``MerchantRulesWidget``.
+live-profile application, and saved-profile sessions use feature-owned services; multibox requests and Reforged compatibility adapters remain widget-coordinated.
 
 Safety-sensitive operations fail closed when protections, required services, deterministic
 salvage APIs, storage capacity, or preview consistency cannot be verified.
@@ -4878,6 +4878,390 @@ def _has_explicit_equippable_hard_protection(rule: SellRule) -> bool:
 
 
 class MerchantRulesWidget:
+
+    class _MerchantRulesLiveProfileRuntime:
+
+        def __init__(self, widget: "MerchantRulesWidget") -> None:
+            self._widget = widget
+
+        @property
+        def account_key(self) -> str:
+            return self._widget.account_key
+
+        @property
+        def initialized(self) -> bool:
+            return self._widget.initialized
+
+        @property
+        def active_workspace(self) -> str:
+            return self._widget.active_workspace
+
+        @active_workspace.setter
+        def active_workspace(self, value: str) -> None:
+            self._widget.active_workspace = value
+
+        @property
+        def active_rules_workspace(self) -> str:
+            return self._widget.active_rules_workspace
+
+        @active_rules_workspace.setter
+        def active_rules_workspace(self, value: str) -> None:
+            self._widget.active_rules_workspace = value
+
+        @property
+        def status_message(self) -> str:
+            return self._widget.status_message
+
+        @status_message.setter
+        def status_message(self, value: str) -> None:
+            self._widget.status_message = value
+
+        def get_account_key(self) -> str:
+            return self._widget._get_account_key()
+
+        def get_current_character_observation(self) -> tuple[str, str] | None:
+            return self._widget._get_current_character_observation()
+
+        def get_profile_application_block_message(
+            self,
+            action: str,
+            *,
+            include_remote_dispatch: bool = True,
+            include_pending_reload: bool = True,
+        ) -> str:
+            return self._widget._get_profile_application_block_message(
+                action,
+                include_remote_dispatch=include_remote_dispatch,
+                include_pending_reload=include_pending_reload,
+            )
+
+        def merchant_rules_has_pending_or_active_work(
+            self,
+            *,
+            include_remote_dispatch: bool = True,
+            include_pending_reload: bool = True,
+        ) -> bool:
+            return self._widget._merchant_rules_has_pending_or_active_work(
+                include_remote_dispatch=include_remote_dispatch,
+                include_pending_reload=include_pending_reload,
+            )
+
+        def merchant_rules_lifecycle_block_reason(
+            self,
+            *,
+            require_service: bool = False,
+            require_character_profile: bool = True,
+        ) -> str:
+            return self._widget._merchant_rules_lifecycle_block_reason(
+                require_service=require_service,
+                require_character_profile=require_character_profile,
+            )
+
+        def ensure_initialized(self) -> None:
+            return self._widget._ensure_initialized()
+
+        def reset_runtime_after_profile_load(
+            self,
+            *,
+            status_message: str = "",
+            profile_display_name: str = "",
+            log_profile_load_summary: bool = True,
+        ) -> None:
+            return self._widget._reset_runtime_after_profile_load(
+                status_message=status_message,
+                profile_display_name=profile_display_name,
+                log_profile_load_summary=log_profile_load_summary,
+            )
+
+        def write_profile_payload_for_account(
+            self,
+            account_key: str,
+            payload: dict[str, object],
+        ) -> str:
+            return self._widget._write_profile_payload_for_account(
+                account_key,
+                payload,
+            )
+
+        def merchant_rules_is_generation_current(self, generation: int | None = None) -> bool:
+            return self._widget._merchant_rules_is_generation_current(
+                generation,
+            )
+
+        def debug_log(self, message: str) -> None:
+            return self._widget._debug_log(
+                message,
+            )
+
+        def log_profile_loaded_summary(self) -> None:
+            return self._widget._log_profile_loaded_summary()
+
+        def clear_multibox_batch_runtime(self) -> None:
+            return self._widget._clear_multibox_batch_runtime()
+
+        def clear_unresolved_preview(self) -> None:
+            self._widget.preview_ready = False
+            self._widget.preview_plan = PlanResult()
+            self._widget._clear_preview_projection_state()
+            self._widget._clear_preview_inventory_diff()
+
+        def advance_profile_generation(self) -> None:
+            self._widget.merchant_rules_profile_generation = (
+                max(0, int(self._widget.merchant_rules_profile_generation)) + 1
+            )
+
+        def publish_configuration_rescans(self) -> None:
+            identify_settings = _normalize_identify_settings(self._widget.identify_settings)
+            self._widget.identify_rescan_requested = bool(
+                identify_settings.on_inventory_change
+                and any((bool(value) for value in identify_settings.rarities.values()))
+            )
+            salvage_settings = _normalize_salvage_settings(self._widget.salvage_settings)
+            self._widget.salvage_rescan_requested = bool(
+                salvage_settings.on_inventory_change
+                and any((bool(rule.enabled) and _salvage_rule_has_selectors(rule) for rule in salvage_settings.rules))
+            )
+            self._widget.instant_destroy_rescan_requested = bool(self._widget.destroy_auto_enabled)
+
+        def capture_log(self) -> Callable[[str, _profiles.LiveProfileLogLevel], None]:
+
+            def emit_log(
+                message: str,
+                level: _profiles.LiveProfileLogLevel,
+                *,
+                logger: Callable[[str, str, int], None] = ConsoleLog,
+                module_name: str = MODULE_NAME,
+            ) -> None:
+                if level == "Info":
+                    logger(module_name, message, Console.MessageType.Info)
+                elif level == "Warning":
+                    logger(module_name, message, Console.MessageType.Warning)
+                else:
+                    logger(module_name, message, Console.MessageType.Error)
+
+            return emit_log
+
+    class _MerchantRulesLiveProfileConfiguration:
+
+        def __init__(self, widget: "MerchantRulesWidget") -> None:
+            self._widget = widget
+
+        @property
+        def build_profile_payload(self) -> Callable[[], dict[str, object]]:
+            return self._widget._build_profile_payload
+
+        @property
+        def build_default_profile_payload(self) -> _profiles.LiveDefaultProfilePayloadFactory:
+            return self._widget._build_default_profile_payload
+
+        @property
+        def normalize_profile_payload(self) -> Callable[[object], dict[str, object]]:
+            return self._widget._normalize_profile_payload
+
+        @property
+        def apply_profile_payload(self) -> Callable[[dict[str, object]], None]:
+            return self._widget._apply_profile_payload
+
+    @property
+    def config_path(self) -> str:
+        return self._live_profile_session.config_path
+
+    @config_path.setter
+    def config_path(self, value: str) -> None:
+        self._live_profile_session.config_path = value
+
+    @property
+    def active_profile_display_name(self) -> str:
+        return self._live_profile_session.active_profile_display_name
+
+    @active_profile_display_name.setter
+    def active_profile_display_name(self, value: str) -> None:
+        self._live_profile_session.active_profile_display_name = value
+
+    @property
+    def loaded_profile_provenance(self) -> LoadedProfileProvenance | None:
+        return self._live_profile_session.loaded_profile_provenance
+
+    @loaded_profile_provenance.setter
+    def loaded_profile_provenance(self, value: LoadedProfileProvenance | None) -> None:
+        self._live_profile_session.loaded_profile_provenance = value
+
+    @property
+    def loaded_profile_provenance_warning(self) -> str:
+        return self._live_profile_session.loaded_profile_provenance_warning
+
+    @loaded_profile_provenance_warning.setter
+    def loaded_profile_provenance_warning(self, value: str) -> None:
+        self._live_profile_session.loaded_profile_provenance_warning = value
+
+    @property
+    def _character_profile_ready(self) -> bool:
+        return self._live_profile_session.character_profile_ready
+
+    @_character_profile_ready.setter
+    def _character_profile_ready(self, value: bool) -> None:
+        self._live_profile_session.character_profile_ready = value
+
+    @property
+    def _character_profile_resolved_identity(self) -> tuple[str, str] | None:
+        return self._live_profile_session.character_profile_resolved_identity
+
+    @_character_profile_resolved_identity.setter
+    def _character_profile_resolved_identity(self, value: tuple[str, str] | None) -> None:
+        self._live_profile_session.character_profile_resolved_identity = value
+
+    @property
+    def _character_profile_resolved_observation(self) -> tuple[str, str] | None:
+        return self._live_profile_session.character_profile_resolved_observation
+
+    @_character_profile_resolved_observation.setter
+    def _character_profile_resolved_observation(self, value: tuple[str, str] | None) -> None:
+        self._live_profile_session.character_profile_resolved_observation = value
+
+    @property
+    def _character_profile_resolved_profile_identity(self) -> ProfileIdentity | None:
+        return self._live_profile_session.character_profile_resolved_profile_identity
+
+    @_character_profile_resolved_profile_identity.setter
+    def _character_profile_resolved_profile_identity(self, value: ProfileIdentity | None) -> None:
+        self._live_profile_session.character_profile_resolved_profile_identity = value
+
+    @property
+    def _character_profile_candidate_identity(self) -> tuple[str, str] | None:
+        return self._live_profile_session.character_profile_candidate_identity
+
+    @_character_profile_candidate_identity.setter
+    def _character_profile_candidate_identity(self, value: tuple[str, str] | None) -> None:
+        self._live_profile_session.character_profile_candidate_identity = value
+
+    @property
+    def _character_profile_candidate_observation(self) -> tuple[str, str] | None:
+        return self._live_profile_session.character_profile_candidate_observation
+
+    @_character_profile_candidate_observation.setter
+    def _character_profile_candidate_observation(self, value: tuple[str, str] | None) -> None:
+        self._live_profile_session.character_profile_candidate_observation = value
+
+    @property
+    def _character_profile_candidate_ticks(self) -> int:
+        return self._live_profile_session.character_profile_candidate_ticks
+
+    @_character_profile_candidate_ticks.setter
+    def _character_profile_candidate_ticks(self, value: int) -> None:
+        self._live_profile_session.character_profile_candidate_ticks = value
+
+    @property
+    def _character_profile_resolution_target(self) -> tuple[str, str] | None:
+        return self._live_profile_session.character_profile_resolution_target
+
+    @_character_profile_resolution_target.setter
+    def _character_profile_resolution_target(self, value: tuple[str, str] | None) -> None:
+        self._live_profile_session.character_profile_resolution_target = value
+
+    @property
+    def _character_profile_pending_association(self) -> CharacterProfileAssociation | None:
+        return self._live_profile_session.character_profile_pending_association
+
+    @_character_profile_pending_association.setter
+    def _character_profile_pending_association(self, value: CharacterProfileAssociation | None) -> None:
+        self._live_profile_session.character_profile_pending_association = value
+
+    @property
+    def _character_profile_pending_profile(self) -> ProfileSummary | None:
+        return self._live_profile_session.character_profile_pending_profile
+
+    @_character_profile_pending_profile.setter
+    def _character_profile_pending_profile(self, value: ProfileSummary | None) -> None:
+        self._live_profile_session.character_profile_pending_profile = value
+
+    @property
+    def _character_profile_pending_needs_persist(self) -> bool:
+        return self._live_profile_session.character_profile_pending_needs_persist
+
+    @_character_profile_pending_needs_persist.setter
+    def _character_profile_pending_needs_persist(self, value: bool) -> None:
+        self._live_profile_session.character_profile_pending_needs_persist = value
+
+    @property
+    def _character_profile_pending_is_new_blank(self) -> bool:
+        return self._live_profile_session.character_profile_pending_is_new_blank
+
+    @_character_profile_pending_is_new_blank.setter
+    def _character_profile_pending_is_new_blank(self, value: bool) -> None:
+        self._live_profile_session.character_profile_pending_is_new_blank = value
+
+    @property
+    def _character_profile_pending_message(self) -> str:
+        return self._live_profile_session.character_profile_pending_message
+
+    @_character_profile_pending_message.setter
+    def _character_profile_pending_message(self, value: str) -> None:
+        self._live_profile_session.character_profile_pending_message = value
+
+    @property
+    def _character_profile_last_attempt_at(self) -> float:
+        return self._live_profile_session.character_profile_last_attempt_at
+
+    @_character_profile_last_attempt_at.setter
+    def _character_profile_last_attempt_at(self, value: float) -> None:
+        self._live_profile_session.character_profile_last_attempt_at = value
+
+    @property
+    def _character_profile_resolution_error(self) -> str:
+        return self._live_profile_session.character_profile_resolution_error
+
+    @_character_profile_resolution_error.setter
+    def _character_profile_resolution_error(self, value: str) -> None:
+        self._live_profile_session.character_profile_resolution_error = value
+
+    @property
+    def _character_profile_last_failure_signature(self) -> tuple[str, str, str] | None:
+        return self._live_profile_session.character_profile_last_failure_signature
+
+    @_character_profile_last_failure_signature.setter
+    def _character_profile_last_failure_signature(self, value: tuple[str, str, str] | None) -> None:
+        self._live_profile_session.character_profile_last_failure_signature = value
+
+    @property
+    def _character_profile_resolution_started(self) -> bool:
+        return self._live_profile_session.character_profile_resolution_started
+
+    @_character_profile_resolution_started.setter
+    def _character_profile_resolution_started(self, value: bool) -> None:
+        self._live_profile_session.character_profile_resolution_started = value
+
+    @property
+    def new_profile_session(self) -> bool:
+        return self._live_profile_session.new_profile_session
+
+    @new_profile_session.setter
+    def new_profile_session(self, value: bool) -> None:
+        self._live_profile_session.new_profile_session = value
+
+    @property
+    def profile_warning(self) -> str:
+        return self._live_profile_session.profile_warning
+
+    @profile_warning.setter
+    def profile_warning(self, value: str) -> None:
+        self._live_profile_session.profile_warning = value
+
+    @property
+    def profile_notice(self) -> str:
+        return self._live_profile_session.profile_notice
+
+    @profile_notice.setter
+    def profile_notice(self, value: str) -> None:
+        self._live_profile_session.profile_notice = value
+
+    @property
+    def profile_write_blocked(self) -> bool:
+        return self._live_profile_session.profile_write_blocked
+
+    @profile_write_blocked.setter
+    def profile_write_blocked(self, value: bool) -> None:
+        self._live_profile_session.profile_write_blocked = value
+
     """Own Merchant Rules profiles, planning, execution, UI state, and runtime automation.
 
     Preview methods create a ``PlanResult`` from normalized rules and live snapshots. Execution
@@ -5274,8 +5658,307 @@ class MerchantRulesWidget:
         storage_api = getattr(GLOBAL_CACHE, "Inventory", None)
         return bool(storage_api is not None and bool(getattr(storage_api, "IsStorageOpen", lambda: False)()))
 
+    @property
+    def auto_cleanup_on_outpost_entry(self) -> bool:
+        return self._active_configuration.auto_cleanup_on_outpost_entry
+
+    @auto_cleanup_on_outpost_entry.setter
+    def auto_cleanup_on_outpost_entry(self, value: bool) -> None:
+        self._active_configuration.auto_cleanup_on_outpost_entry = value
+
+    @property
+    def gold_balance_enabled(self) -> bool:
+        return self._active_configuration.gold_balance_enabled
+
+    @gold_balance_enabled.setter
+    def gold_balance_enabled(self, value: bool) -> None:
+        self._active_configuration.gold_balance_enabled = value
+
+    @property
+    def gold_balance_on_outpost_entry(self) -> bool:
+        return self._active_configuration.gold_balance_on_outpost_entry
+
+    @gold_balance_on_outpost_entry.setter
+    def gold_balance_on_outpost_entry(self, value: bool) -> None:
+        self._active_configuration.gold_balance_on_outpost_entry = value
+
+    @property
+    def gold_balance_after_mr_trading(self) -> bool:
+        return self._active_configuration.gold_balance_after_mr_trading
+
+    @gold_balance_after_mr_trading.setter
+    def gold_balance_after_mr_trading(self, value: bool) -> None:
+        self._active_configuration.gold_balance_after_mr_trading = value
+
+    @property
+    def gold_balance_after_manual_session(self) -> bool:
+        return self._active_configuration.gold_balance_after_manual_session
+
+    @gold_balance_after_manual_session.setter
+    def gold_balance_after_manual_session(self, value: bool) -> None:
+        self._active_configuration.gold_balance_after_manual_session = value
+
+    @property
+    def target_carried_gold(self) -> int:
+        return self._active_configuration.target_carried_gold
+
+    @target_carried_gold.setter
+    def target_carried_gold(self, value: int) -> None:
+        self._active_configuration.target_carried_gold = value
+
+    @property
+    def auto_sell_on_manual_vendor_interaction(self) -> bool:
+        return self._active_configuration.auto_sell_on_manual_vendor_interaction
+
+    @auto_sell_on_manual_vendor_interaction.setter
+    def auto_sell_on_manual_vendor_interaction(self, value: bool) -> None:
+        self._active_configuration.auto_sell_on_manual_vendor_interaction = value
+
+    @property
+    def auto_buy_on_manual_vendor_interaction(self) -> bool:
+        return self._active_configuration.auto_buy_on_manual_vendor_interaction
+
+    @auto_buy_on_manual_vendor_interaction.setter
+    def auto_buy_on_manual_vendor_interaction(self, value: bool) -> None:
+        self._active_configuration.auto_buy_on_manual_vendor_interaction = value
+
+    @property
+    def manual_vendor_auto_buy_categories(self) -> dict[str, bool]:
+        return self._active_configuration.manual_vendor_auto_buy_categories
+
+    @manual_vendor_auto_buy_categories.setter
+    def manual_vendor_auto_buy_categories(self, value: dict[str, bool]) -> None:
+        self._active_configuration.manual_vendor_auto_buy_categories = value
+
+    @property
+    def manual_vendor_auto_sell_categories(self) -> dict[str, bool]:
+        return self._active_configuration.manual_vendor_auto_sell_categories
+
+    @manual_vendor_auto_sell_categories.setter
+    def manual_vendor_auto_sell_categories(self, value: dict[str, bool]) -> None:
+        self._active_configuration.manual_vendor_auto_sell_categories = value
+
+    @property
+    def auto_sell_to_any_merchant(self) -> bool:
+        return self._active_configuration.auto_sell_to_any_merchant
+
+    @auto_sell_to_any_merchant.setter
+    def auto_sell_to_any_merchant(self, value: bool) -> None:
+        self._active_configuration.auto_sell_to_any_merchant = value
+
+    @property
+    def auto_sell_any_merchant_normal_items(self) -> bool:
+        return self._active_configuration.auto_sell_any_merchant_normal_items
+
+    @auto_sell_any_merchant_normal_items.setter
+    def auto_sell_any_merchant_normal_items(self, value: bool) -> None:
+        self._active_configuration.auto_sell_any_merchant_normal_items = value
+
+    @property
+    def auto_sell_any_merchant_materials(self) -> bool:
+        return self._active_configuration.auto_sell_any_merchant_materials
+
+    @auto_sell_any_merchant_materials.setter
+    def auto_sell_any_merchant_materials(self, value: bool) -> None:
+        self._active_configuration.auto_sell_any_merchant_materials = value
+
+    @property
+    def auto_sell_any_merchant_runes(self) -> bool:
+        return self._active_configuration.auto_sell_any_merchant_runes
+
+    @auto_sell_any_merchant_runes.setter
+    def auto_sell_any_merchant_runes(self, value: bool) -> None:
+        self._active_configuration.auto_sell_any_merchant_runes = value
+
+    @property
+    def inventory_right_click_shortcuts_enabled(self) -> bool:
+        return self._active_configuration.inventory_right_click_shortcuts_enabled
+
+    @inventory_right_click_shortcuts_enabled.setter
+    def inventory_right_click_shortcuts_enabled(self, value: bool) -> None:
+        self._active_configuration.inventory_right_click_shortcuts_enabled = value
+
+    @property
+    def inventory_right_click_live_actions_enabled(self) -> bool:
+        return self._active_configuration.inventory_right_click_live_actions_enabled
+
+    @inventory_right_click_live_actions_enabled.setter
+    def inventory_right_click_live_actions_enabled(self, value: bool) -> None:
+        self._active_configuration.inventory_right_click_live_actions_enabled = value
+
+    @property
+    def destroy_auto_enabled(self) -> bool:
+        return self._active_configuration.destroy_auto_enabled
+
+    @destroy_auto_enabled.setter
+    def destroy_auto_enabled(self, value: bool) -> None:
+        self._active_configuration.destroy_auto_enabled = value
+
+    @property
+    def auto_travel_enabled(self) -> bool:
+        return self._active_configuration.auto_travel_enabled
+
+    @auto_travel_enabled.setter
+    def auto_travel_enabled(self, value: bool) -> None:
+        self._active_configuration.auto_travel_enabled = value
+
+    @property
+    def target_outpost_id(self) -> int:
+        return self._active_configuration.target_outpost_id
+
+    @target_outpost_id.setter
+    def target_outpost_id(self, value: int) -> None:
+        self._active_configuration.target_outpost_id = value
+
+    @property
+    def favorite_outpost_ids(self) -> list[int]:
+        return self._active_configuration.favorite_outpost_ids
+
+    @favorite_outpost_ids.setter
+    def favorite_outpost_ids(self, value: list[int]) -> None:
+        self._active_configuration.favorite_outpost_ids = value
+
+    @property
+    def debug_logging(self) -> bool:
+        return self._active_configuration.debug_logging
+
+    @debug_logging.setter
+    def debug_logging(self, value: bool) -> None:
+        self._active_configuration.debug_logging = value
+
+    @property
+    def helper_tooltips_enabled(self) -> bool:
+        return self._active_configuration.helper_tooltips_enabled
+
+    @helper_tooltips_enabled.setter
+    def helper_tooltips_enabled(self, value: bool) -> None:
+        self._active_configuration.helper_tooltips_enabled = value
+
+    @property
+    def detailed_preview(self) -> bool:
+        return self._active_configuration.detailed_preview
+
+    @detailed_preview.setter
+    def detailed_preview(self, value: bool) -> None:
+        self._active_configuration.detailed_preview = value
+
+    @property
+    def buy_rules(self) -> list[BuyRule]:
+        return self._active_configuration.buy_rules
+
+    @buy_rules.setter
+    def buy_rules(self, value: list[BuyRule]) -> None:
+        self._active_configuration.buy_rules = value
+
+    @property
+    def sell_rules(self) -> list[SellRule]:
+        return self._active_configuration.sell_rules
+
+    @sell_rules.setter
+    def sell_rules(self, value: list[SellRule]) -> None:
+        self._active_configuration.sell_rules = value
+
+    @property
+    def destroy_rules(self) -> list[DestroyRule]:
+        return self._active_configuration.destroy_rules
+
+    @destroy_rules.setter
+    def destroy_rules(self, value: list[DestroyRule]) -> None:
+        self._active_configuration.destroy_rules = value
+
+    @property
+    def identify_settings(self) -> IdentifySettings:
+        return self._active_configuration.identify_settings
+
+    @identify_settings.setter
+    def identify_settings(self, value: IdentifySettings) -> None:
+        self._active_configuration.identify_settings = value
+
+    @property
+    def salvage_settings(self) -> SalvageSettings:
+        return self._active_configuration.salvage_settings
+
+    @salvage_settings.setter
+    def salvage_settings(self, value: SalvageSettings) -> None:
+        self._active_configuration.salvage_settings = value
+
+    @property
+    def cleanup_targets(self) -> list[CleanupTarget]:
+        return self._active_configuration.cleanup_targets
+
+    @cleanup_targets.setter
+    def cleanup_targets(self, value: list[CleanupTarget]) -> None:
+        self._active_configuration.cleanup_targets = value
+
+    @property
+    def cleanup_blacklist_model_ids(self) -> list[int]:
+        return self._active_configuration.cleanup_blacklist_model_ids
+
+    @cleanup_blacklist_model_ids.setter
+    def cleanup_blacklist_model_ids(self, value: list[int]) -> None:
+        self._active_configuration.cleanup_blacklist_model_ids = value
+
+    @property
+    def cleanup_protection_sources(self) -> list[CleanupProtectionSource]:
+        return self._active_configuration.cleanup_protection_sources
+
+    @cleanup_protection_sources.setter
+    def cleanup_protection_sources(self, value: list[CleanupProtectionSource]) -> None:
+        self._active_configuration.cleanup_protection_sources = value
+
+    @property
+    def protected_item_model_ids(self) -> list[int]:
+        return self._active_configuration.protected_item_model_ids
+
+    @protected_item_model_ids.setter
+    def protected_item_model_ids(self, value: list[int]) -> None:
+        self._active_configuration.protected_item_model_ids = value
+
+    @property
+    def protected_item_targets(self) -> list[ExactProtectionTarget]:
+        return self._active_configuration.protected_item_targets
+
+    @protected_item_targets.setter
+    def protected_item_targets(self, value: list[ExactProtectionTarget]) -> None:
+        self._active_configuration.protected_item_targets = value
+
     def __init__(self):
         self.initialized = False
+        self._active_configuration = _configuration.ActiveConfiguration(
+            bindings=_configuration.ActiveConfigurationBindings(
+                get_profile_version=lambda: PROFILE_VERSION,
+                get_default_target_carried_gold=lambda: DEFAULT_TARGET_CARRIED_GOLD,
+                get_helper_tooltips_default=lambda: HELPER_TOOLTIPS_ENABLED_DEFAULT,
+                get_buy_category_kinds=lambda: MANUAL_VENDOR_BUY_CATEGORY_KINDS,
+                get_sell_category_kinds=lambda: MANUAL_VENDOR_SELL_CATEGORY_KINDS,
+                get_rule_normalizer=lambda: _rule_normalizer,
+                get_buy_rule_serializer=lambda: asdict,
+                get_safe_int=lambda: _safe_int,
+                get_coerce_list=lambda: _coerce_list,
+                get_gold_target_normalizer=lambda: _normalize_gold_target,
+                get_category_normalizer=lambda: _normalize_manual_vendor_category_flags,
+                get_buy_rules_normalizer=lambda: _normalize_buy_rules,
+                get_sell_rules_normalizer=lambda: _normalize_sell_rules,
+                get_destroy_rules_normalizer=lambda: _normalize_destroy_rules,
+                get_identify_normalizer=lambda: _normalize_identify_settings,
+                get_salvage_normalizer=lambda: _normalize_salvage_settings,
+                get_cleanup_targets_normalizer=lambda: _normalize_cleanup_targets,
+                get_cleanup_blacklist_normalizer=lambda: _normalize_cleanup_blacklist_model_ids,
+                get_cleanup_sources_normalizer=lambda: _normalize_cleanup_protection_sources,
+                get_protected_models_normalizer=lambda: _normalize_protected_item_model_ids,
+                get_protected_targets_normalizer=lambda: _normalize_protected_item_targets,
+                get_sell_rule_serializer=lambda: _serialize_sell_rule,
+                get_destroy_rule_serializer=lambda: _serialize_destroy_rule,
+                get_identify_serializer=lambda: _serialize_identify_settings,
+                get_salvage_serializer=lambda: _serialize_salvage_settings,
+                get_cleanup_targets_serializer=lambda: _serialize_cleanup_targets,
+                get_cleanup_blacklist_serializer=lambda: _serialize_cleanup_blacklist_model_ids,
+                get_cleanup_sources_serializer=lambda: _serialize_cleanup_protection_sources,
+                get_protected_models_serializer=lambda: _serialize_protected_item_model_ids,
+                get_protected_targets_serializer=lambda: _serialize_protected_item_targets,
+                get_outpost_normalizer=lambda: self._normalize_outpost_ids,
+            ),
+        )
         self._ranked_catalog_search = RankedCatalogSearch(
             normalize_text=_normalize_catalog_search_text,
             coerce_int=_safe_int,
@@ -5291,26 +5974,59 @@ class MerchantRulesWidget:
             profile_version=PROFILE_VERSION,
         )
         self.account_key: str = ""
+        self._live_profile_session = _profiles.LiveProfileSession(
+            runtime=MerchantRulesWidget._MerchantRulesLiveProfileRuntime(self),
+            configuration=MerchantRulesWidget._MerchantRulesLiveProfileConfiguration(self),
+            bindings=_profiles.LiveProfileBindings(
+                factory_type=lambda: JsonFactory,
+                profile_store=lambda: self._profile_store,
+                saved_session=lambda: self._saved_profile_session,
+                safe_int=lambda: _safe_int,
+                profile_version=lambda: PROFILE_VERSION,
+                confirmation_ticks=lambda: CHARACTER_PROFILE_CONFIRMATION_TICKS,
+                retry_interval=lambda: CHARACTER_PROFILE_RETRY_INTERVAL_SECONDS,
+                wall_time=lambda: time.time(),
+                monotonic=lambda: time.monotonic(),
+                workspace_rules=lambda: WORKSPACE_RULES,
+                workspace_overview=lambda: WORKSPACE_OVERVIEW,
+                rules_workspace_buy=lambda: RULES_WORKSPACE_BUY,
+                live_doc_name=lambda: LIVE_CONFIG_DOC_NAME,
+                backup_doc_name=lambda: BACKUP_DOC_NAME,
+                loaded_doc_name=lambda: LOADED_PROFILE_STATE_DOC_NAME,
+                character_doc_name=lambda: CHARACTER_PROFILE_STATE_DOC_NAME,
+                character_schema=lambda: CHARACTER_PROFILE_STATE_SCHEMA,
+                character_schema_version=lambda: CHARACTER_PROFILE_STATE_SCHEMA_VERSION,
+                association_type=lambda: CharacterProfileAssociation,
+                provenance_type=lambda: LoadedProfileProvenance,
+                normalize_character_root=lambda: normalize_character_profile_state_root,
+                association_from_json=lambda: character_profile_association_from_json,
+                association_to_json=lambda: character_profile_association_to_json,
+                copy_payload=lambda: deepcopy,
+                path_lexists=lambda: os.path.lexists,
+                path_basename=lambda: os.path.basename,
+                path_splitext=lambda: os.path.splitext,
+            ),
+        )
         self.config_path = ""
         self.active_profile_display_name = ""
-        self.loaded_profile_provenance: LoadedProfileProvenance | None = None
+        self.loaded_profile_provenance = None
         self.loaded_profile_provenance_warning = ""
         self._character_profile_ready = False
-        self._character_profile_resolved_identity: tuple[str, str] | None = None
-        self._character_profile_resolved_observation: tuple[str, str] | None = None
-        self._character_profile_resolved_profile_identity: ProfileIdentity | None = None
-        self._character_profile_candidate_identity: tuple[str, str] | None = None
-        self._character_profile_candidate_observation: tuple[str, str] | None = None
+        self._character_profile_resolved_identity = None
+        self._character_profile_resolved_observation = None
+        self._character_profile_resolved_profile_identity = None
+        self._character_profile_candidate_identity = None
+        self._character_profile_candidate_observation = None
         self._character_profile_candidate_ticks = 0
-        self._character_profile_resolution_target: tuple[str, str] | None = None
-        self._character_profile_pending_association: CharacterProfileAssociation | None = None
-        self._character_profile_pending_profile: ProfileSummary | None = None
+        self._character_profile_resolution_target = None
+        self._character_profile_pending_association = None
+        self._character_profile_pending_profile = None
         self._character_profile_pending_needs_persist = False
         self._character_profile_pending_is_new_blank = False
         self._character_profile_pending_message = ""
         self._character_profile_last_attempt_at = 0.0
         self._character_profile_resolution_error = ""
-        self._character_profile_last_failure_signature: tuple[str, str, str] | None = None
+        self._character_profile_last_failure_signature = None
         self._character_profile_resolution_started = False
         self.new_profile_session = False
         self.profile_warning = ""
@@ -5331,16 +6047,16 @@ class MerchantRulesWidget:
         self.rule_name_edit_text = ""
         self.manual_model_ids_edit_key = ""
         self.manual_model_ids_edit_text = ""
-        self.buy_rules: list[BuyRule] = []
-        self.sell_rules: list[SellRule] = []
-        self.destroy_rules: list[DestroyRule] = []
+        self.buy_rules = []
+        self.sell_rules = []
+        self.destroy_rules = []
         self.identify_settings = IdentifySettings()
         self.salvage_settings = SalvageSettings()
-        self.cleanup_targets: list[CleanupTarget] = []
-        self.cleanup_blacklist_model_ids: list[int] = []
-        self.cleanup_protection_sources: list[CleanupProtectionSource] = []
-        self.protected_item_model_ids: list[int] = []
-        self.protected_item_targets: list[ExactProtectionTarget] = []
+        self.cleanup_targets = []
+        self.cleanup_blacklist_model_ids = []
+        self.cleanup_protection_sources = []
+        self.protected_item_model_ids = []
+        self.protected_item_targets = []
         self.auto_cleanup_on_outpost_entry = False
         self.gold_balance_enabled = False
         self.gold_balance_on_outpost_entry = False
@@ -5363,7 +6079,7 @@ class MerchantRulesWidget:
         self.inventory_right_click_live_actions_enabled = False
         self.auto_travel_enabled = False
         self.target_outpost_id = 0
-        self.favorite_outpost_ids: list[int] = []
+        self.favorite_outpost_ids = []
         self._preview_session = _preview.PreviewSession(
             initial_plan=PlanResult(),
             collect_inventory=lambda: self._collect_inventory_items(),
@@ -6026,8 +6742,7 @@ class MerchantRulesWidget:
             return ""
 
     def _live_config_doc(self) -> JsonFactory:
-        """The current account's live working config (account-scoped, self-persisting)."""
-        return JsonFactory(LIVE_CONFIG_DOC_NAME)
+        return self._live_profile_session.live_config_doc()
 
     @staticmethod
     def _validate_profile_filename(filename: str) -> str:
@@ -6050,25 +6765,16 @@ class MerchantRulesWidget:
         return self._saved_profile_session.allocate_profile_filename(scope, display_name)
 
     def _backup_doc(self) -> JsonFactory:
-        """Account-scoped last-known-good live profile used by the Restore Backup action."""
-        return JsonFactory(BACKUP_DOC_NAME)
+        return self._live_profile_session.backup_doc()
 
     def _loaded_profile_state_doc(self) -> JsonFactory:
-        """Account-scoped provenance for the exact saved profile last loaded explicitly."""
-        return JsonFactory(LOADED_PROFILE_STATE_DOC_NAME)
+        return self._live_profile_session.loaded_profile_state_doc()
 
     def _character_profile_state_doc(self) -> JsonFactory:
-        """Account-scoped character-to-profile associations, separate from load provenance."""
-        return JsonFactory(CHARACTER_PROFILE_STATE_DOC_NAME, "account")
+        return self._live_profile_session.character_profile_state_doc()
 
     def _get_live_profile_display_name(self) -> str:
-        config_path = str(self.config_path or "").strip()
-        if config_path:
-            profile_name = os.path.splitext(os.path.basename(config_path))[0].strip()
-            if profile_name:
-                return profile_name
-        account_key = str(self.account_key or "").strip()
-        return account_key or "default"
+        return self._live_profile_session.get_live_profile_display_name()
 
     def _get_active_profile_display_name(self) -> str:
         provenance = self.loaded_profile_provenance
@@ -9358,16 +10064,9 @@ class MerchantRulesWidget:
             return False
 
     def _mark_character_profile_unresolved(self, message: str = "") -> None:
-        self._character_profile_ready = False
-        self.preview_ready = False
-        self.preview_plan = PlanResult()
-        self._clear_preview_projection_state()
-        self._clear_preview_inventory_diff()
-        self._clear_profile_confirmation_state()
-        status = str(message or "").strip()
-        if not status:
-            status = "Waiting for this character to finish loading."
-        self.status_message = status
+        return self._live_profile_session.mark_character_profile_unresolved(
+            message,
+        )
 
     def _get_current_character_observation(self) -> tuple[str, str] | None:
         try:
@@ -9394,246 +10093,71 @@ class MerchantRulesWidget:
         return uuid_key, character_name
 
     def _read_character_profile_state_root(self, doc: JsonFactory) -> dict[str, object] | None:
-        if not doc.is_ready():
-            raise OSError("The account-scoped character profile state is not ready.")
-        if not doc.reload():
-            try:
-                document_path = str(doc.path() or "").strip()
-                if not document_path:
-                    raise OSError("The character profile state path is not available.")
-                if not os.path.lexists(document_path):
-                    return None
-            except Exception as exc:
-                raise OSError("The character profile state path could not be checked.") from exc
-            raise OSError("The character profile state could not be refreshed.")
-        raw_state = doc.get_json("", None)
-        if raw_state is None:
-            if doc.has(""):
-                raise ValueError("The character profile state root is malformed.")
-            return None
-        if raw_state == {}:
-            return {}
-        return normalize_character_profile_state_root(raw_state)
+        return self._live_profile_session.read_character_profile_state_root(
+            doc,
+        )
 
     def _read_character_profile_association_state(
         self,
         character_uuid_key: str,
     ) -> tuple[CharacterProfileAssociation | None, bool]:
-        doc = self._character_profile_state_doc()
-        root = self._read_character_profile_state_root(doc)
-        if root is None or root == {}:
-            return None, False
-        characters = root.get("characters", {})
-        if not isinstance(characters, dict):
-            raise ValueError("The character profile state entries are malformed.")
-        if character_uuid_key not in characters:
-            return None, False
-        try:
-            return character_profile_association_from_json(characters[character_uuid_key]), False
-        except Exception as exc:
-            ConsoleLog(
-                MODULE_NAME,
-                (
-                    "The current character's saved profile association is malformed; "
-                    f"it will be removed after safe blank settings are verified. Technical detail: {exc}"
-                ),
-                Console.MessageType.Warning,
-            )
-            return None, True
+        return self._live_profile_session.read_character_profile_association_state(
+            character_uuid_key,
+        )
 
     def _load_character_profile_association(
         self,
         character_uuid_key: str,
     ) -> CharacterProfileAssociation | None:
-        association, _malformed = self._read_character_profile_association_state(character_uuid_key)
-        return association
+        return self._live_profile_session.load_character_profile_association(
+            character_uuid_key,
+        )
 
     def _persist_character_profile_association(
         self,
         character_uuid_key: str,
         association: CharacterProfileAssociation,
     ) -> None:
-        doc = self._character_profile_state_doc()
-        root = self._read_character_profile_state_root(doc)
-        if root not in (None, {}):
-            normalize_character_profile_state_root(root)
-        serialized_entry = character_profile_association_to_json(association)
-        if not doc.has("schema"):
-            doc.set_str("schema", CHARACTER_PROFILE_STATE_SCHEMA)
-        if not doc.has("schema_version"):
-            doc.set_int("schema_version", CHARACTER_PROFILE_STATE_SCHEMA_VERSION)
-        doc.set_json(f"characters/{character_uuid_key}", serialized_entry)
-        if not doc.save():
-            doc.reload()
-            raise OSError("JsonFactory could not flush the character profile association.")
-        if not doc.reload():
-            raise OSError("The character profile association was saved but could not be reloaded.")
-        verified_root = doc.get_json("", None)
-        normalized_root = normalize_character_profile_state_root(verified_root)
-        verified_characters = normalized_root.get("characters", {})
-        if not isinstance(verified_characters, dict):
-            raise RuntimeError("The saved character profile state entries are malformed.")
-        verified_association = character_profile_association_from_json(verified_characters.get(character_uuid_key))
-        expected_association = character_profile_association_from_json(serialized_entry)
-        if verified_association != expected_association:
-            raise RuntimeError("The character profile association failed post-save verification.")
+        return self._live_profile_session.persist_character_profile_association(
+            character_uuid_key,
+            association,
+        )
 
     def _delete_character_profile_association(self, character_uuid_key: str) -> None:
-        """Remove a stale current-character leaf after its safe replacement is live."""
-
-        doc = self._character_profile_state_doc()
-        root = self._read_character_profile_state_root(doc)
-        if root is None or root == {}:
-            return
-        characters = root.get("characters", {})
-        if not isinstance(characters, dict):
-            raise ValueError("The character profile state entries are malformed.")
-        if character_uuid_key not in characters:
-            return
-
-        expected_root = deepcopy(root)
-        expected_characters = expected_root.get("characters", {})
-        if not isinstance(expected_characters, dict):
-            raise ValueError("The character profile state entries are malformed.")
-        expected_characters.pop(character_uuid_key, None)
-
-        if not doc.delete(f"characters/{character_uuid_key}"):
-            raise OSError("The stale character profile association could not be removed.")
-        if not doc.save():
-            doc.reload()
-            raise OSError("JsonFactory could not flush the removed character profile association.")
-        if not doc.reload():
-            raise OSError("The removed character profile association could not be reloaded.")
-
-        verified_raw = doc.get_json("", None)
-        if verified_raw is None:
-            raise RuntimeError("The character profile state disappeared while removing a stale association.")
-        verified_root = normalize_character_profile_state_root(verified_raw)
-        verified_characters = verified_root.get("characters", {})
-        if not isinstance(verified_characters, dict):
-            raise RuntimeError("The saved character profile state entries are malformed.")
-        if character_uuid_key in verified_characters:
-            raise RuntimeError("The stale character profile association remained after removal.")
-        if verified_root != expected_root:
-            raise RuntimeError("Unrelated character profile state changed while removing a stale association.")
+        return self._live_profile_session.delete_character_profile_association(
+            character_uuid_key,
+        )
 
     def _refresh_character_profile_scope(self, scope: str) -> None:
-        if not self._refresh_profile_entries(scope, reload_document=True):
-            raise OSError(f"{self._profile_scope_label(scope)} could not be refreshed.")
-        if (
-            self.profile_document_reload_failed[scope]
-            or self.saved_profile_failure_signatures[scope]
-            or self.profile_scan_conflicts[scope]
-            or self.saved_profile_scan_warnings[scope]
-        ):
-            raise OSError(f"Some {self._profile_scope_label(scope)} could not be verified during refresh.")
+        return self._live_profile_session.refresh_character_profile_scope(
+            scope,
+        )
 
     def _set_character_profile_resolution_failure(self, exc: Exception) -> None:
-        self._mark_character_profile_unresolved(
-            "Merchant Rules could not finish loading this character's profile. " "Automatic actions are paused."
+        return self._live_profile_session.set_character_profile_resolution_failure(
+            exc,
         )
-        failure_text = self._format_exception_chain_for_log(exc)
-        target = self._character_profile_resolution_target or self._character_profile_candidate_identity
-        target_context = repr((target, self._character_profile_candidate_observation))
-        try:
-            document_path = str(self._character_profile_state_doc().path() or "").strip() or "<unbound>"
-        except Exception:
-            document_path = "<unavailable>"
-        failure_signature = (target_context, document_path, failure_text)
-        self._character_profile_resolution_error = str(exc or type(exc).__name__)
-        self._character_profile_last_attempt_at = time.monotonic()
-        if failure_signature != self._character_profile_last_failure_signature:
-            ConsoleLog(
-                MODULE_NAME,
-                (
-                    "Character profile resolution remains blocked. "
-                    f"Technical detail: {failure_text}"
-                ),
-                Console.MessageType.Warning,
-            )
-            self._character_profile_last_failure_signature = failure_signature
 
     def _retain_profile_load_for_character_retry(
         self,
         profile: ProfileSummary,
         exc: Exception,
     ) -> None:
-        resolved_identity = self._character_profile_resolved_identity
-        resolved_observation = self._character_profile_resolved_observation
-        if resolved_identity is None:
-            self._set_character_profile_resolution_failure(exc)
-            return
-        self._character_profile_resolution_target = resolved_identity
-        self._character_profile_pending_association = CharacterProfileAssociation(
-            profile_identity=profile.identity,
-            character_name_snapshot=(resolved_observation[1] if resolved_observation else ""),
+        return self._live_profile_session.retain_profile_load_for_character_retry(
+            profile,
+            exc,
         )
-        self._character_profile_pending_profile = profile
-        self._character_profile_pending_needs_persist = True
-        self._character_profile_pending_is_new_blank = False
-        self._character_profile_pending_message = (
-            f"Loaded {self._profile_scope_badge(profile.scope).title()} profile "
-            f"'{profile.display_name}' for this character."
-        )
-        self._set_character_profile_resolution_failure(exc)
 
     def _clear_character_profile_pending_target(self) -> None:
-        self._character_profile_pending_association = None
-        self._character_profile_pending_profile = None
-        self._character_profile_pending_needs_persist = False
-        self._character_profile_pending_is_new_blank = False
-        self._character_profile_pending_message = ""
+        return self._live_profile_session.clear_character_profile_pending_target()
 
     def _prepare_character_profile_pending_target(
         self,
         character_uuid_key: str,
     ) -> tuple[ProfileSummary | None, CharacterProfileAssociation | None, bool]:
-        if self._character_profile_pending_association is not None:
-            identity = self._character_profile_pending_association.profile_identity
-            if self._character_profile_pending_profile is not None:
-                return (
-                    self._character_profile_pending_profile,
-                    self._character_profile_pending_association,
-                    False,
-                )
-            self._refresh_character_profile_scope(identity.scope)
-            profile = self._get_profile_by_identity(identity)
-            if profile is not None:
-                self._character_profile_pending_profile = profile
-                return profile, self._character_profile_pending_association, False
-            self._character_profile_pending_association = None
-
-        association, malformed = self._read_character_profile_association_state(character_uuid_key)
-        if association is None:
-            self._character_profile_pending_association = None
-            self._character_profile_pending_profile = None
-            self._character_profile_pending_needs_persist = False
-            self._character_profile_pending_is_new_blank = False
-            self._character_profile_pending_message = (
-                "This character has no saved profile assigned; using safe blank settings."
-                if not malformed
-                else "This character's saved profile association was stale; using safe blank settings."
-            )
-            return None, None, malformed
-
-        identity = association.profile_identity
-        self._refresh_character_profile_scope(identity.scope)
-        profile = self._get_profile_by_identity(identity)
-        if profile is not None:
-            self._character_profile_pending_association = association
-            self._character_profile_pending_profile = profile
-            self._character_profile_pending_needs_persist = False
-            self._character_profile_pending_is_new_blank = False
-            return profile, association, False
-
-        self._character_profile_pending_association = None
-        self._character_profile_pending_profile = None
-        self._character_profile_pending_needs_persist = False
-        self._character_profile_pending_is_new_blank = False
-        self._character_profile_pending_message = (
-            "This character's saved profile could not be found; using safe blank settings."
+        return self._live_profile_session.prepare_character_profile_pending_target(
+            character_uuid_key,
         )
-        return None, None, True
 
     def _apply_verified_profile_payload(
         self,
@@ -9648,31 +10172,17 @@ class MerchantRulesWidget:
         include_remote_dispatch: bool = True,
         include_pending_reload: bool = True,
     ) -> None:
-        normalized_payload = self._normalize_profile_payload(deepcopy(payload))
-        live_doc = self._live_config_doc()
-        self._write_profile_payload_for_account(self.account_key, normalized_payload)
-        if not live_doc.save():
-            rollback_loaded = live_doc.reload()
-            rollback_detail = (
-                "" if rollback_loaded else " Merchant Rules also could not restore the previous current settings."
-            )
-            raise OSError(
-                f"Merchant Rules could not save {operation_description} as the current settings." f"{rollback_detail}"
-            )
-        if not live_doc.reload():
-            raise OSError("Merchant Rules could not verify the saved current settings.")
-        if not self.reload_profile_from_disk(
+        return self._live_profile_session.apply_verified_profile_payload(
+            payload,
+            expected_serialized_payload=expected_serialized_payload,
+            operation_description=operation_description,
             status_message=status_message,
             preserve_workspace_state=preserve_workspace_state,
-            log_profile_load_summary=log_profile_load_summary,
             profile_display_name=profile_display_name,
+            log_profile_load_summary=log_profile_load_summary,
             include_remote_dispatch=include_remote_dispatch,
             include_pending_reload=include_pending_reload,
-        ):
-            raise OSError(f"Merchant Rules could not apply {operation_description}.")
-        loaded_payload_serialized = self._serialize_shareable_profile_payload(self._build_shareable_profile_payload())
-        if loaded_payload_serialized != expected_serialized_payload:
-            raise RuntimeError(f"The current settings do not match {operation_description} after loading.")
+        )
 
     def _apply_saved_profile_summary(
         self,
@@ -9684,203 +10194,30 @@ class MerchantRulesWidget:
         include_remote_dispatch: bool = True,
         include_pending_reload: bool = True,
     ) -> None:
-        self._apply_verified_profile_payload(
-            profile.payload,
-            expected_serialized_payload=profile.serialized_payload,
-            operation_description="the selected profile",
+        return self._live_profile_session.apply_saved_profile_summary(
+            profile,
             status_message=status_message,
             preserve_workspace_state=preserve_workspace_state,
-            profile_display_name=f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}",
             log_profile_load_summary=log_profile_load_summary,
             include_remote_dispatch=include_remote_dispatch,
             include_pending_reload=include_pending_reload,
         )
 
     def _character_profile_gate_block_reason(self) -> str:
-        if self._character_profile_resolution_error:
-            return "Merchant Rules could not finish loading this character's profile. " "Automatic actions are paused."
-        if not self._character_profile_ready:
-            return "Waiting for this character to finish loading."
-        resolved_identity = self._character_profile_resolved_identity
-        resolved_observation = self._character_profile_resolved_observation
-        current_account = self._get_account_key()
-        current_observation = self._get_current_character_observation()
-        if (
-            resolved_identity is None
-            or resolved_observation is None
-            or not current_account
-            or resolved_identity[0] != current_account
-            or current_observation is None
-            or current_observation != resolved_observation
-        ):
-            return "Waiting for this character to finish loading."
-        return ""
+        return self._live_profile_session.character_profile_gate_block_reason()
 
     def _is_character_profile_observation_current(
         self,
         identity: tuple[str, str],
         observation: tuple[str, str],
     ) -> bool:
-        return bool(
-            self._get_account_key() == identity[0]
-            and observation[0] == identity[1]
-            and self._get_current_character_observation() == observation
+        return self._live_profile_session.is_character_profile_observation_current(
+            identity,
+            observation,
         )
 
     def _advance_character_profile_resolution(self) -> None:
-        self._character_profile_resolution_started = True
-        lifecycle_reason = self._merchant_rules_lifecycle_block_reason(
-            require_character_profile=False,
-        )
-        if lifecycle_reason:
-            self._character_profile_candidate_identity = None
-            self._character_profile_candidate_observation = None
-            self._character_profile_candidate_ticks = 0
-            self._mark_character_profile_unresolved()
-            return
-
-        current_account = self._get_account_key()
-        observation = self._get_current_character_observation()
-        if not current_account or observation is None:
-            self._character_profile_candidate_identity = None
-            self._character_profile_candidate_observation = None
-            self._character_profile_candidate_ticks = 0
-            self._mark_character_profile_unresolved()
-            return
-
-        identity = (current_account, observation[0])
-        if (
-            self._character_profile_candidate_identity == identity
-            and self._character_profile_candidate_observation == observation
-        ):
-            self._character_profile_candidate_ticks += 1
-        else:
-            self._character_profile_candidate_identity = identity
-            self._character_profile_candidate_observation = observation
-            self._character_profile_candidate_ticks = 1
-
-        if (
-            self._character_profile_resolved_identity != identity
-            or self._character_profile_resolved_observation != observation
-        ):
-            self._mark_character_profile_unresolved()
-
-        if self._character_profile_candidate_ticks < CHARACTER_PROFILE_CONFIRMATION_TICKS:
-            return
-
-        if identity == self._character_profile_resolved_identity and self._character_profile_resolution_target is None:
-            self._character_profile_resolved_observation = observation
-            self._character_profile_ready = True
-            self._character_profile_resolution_error = ""
-            self._character_profile_last_failure_signature = None
-            return
-
-        if self._character_profile_resolution_target != identity:
-            self.merchant_rules_profile_generation = (
-                max(
-                    0,
-                    int(self.merchant_rules_profile_generation),
-                )
-                + 1
-            )
-            self._clear_multibox_batch_runtime()
-            self._character_profile_resolution_target = identity
-            self._clear_character_profile_pending_target()
-            self._character_profile_resolution_error = ""
-            self._character_profile_last_failure_signature = None
-            self._character_profile_last_attempt_at = 0.0
-            self._mark_character_profile_unresolved()
-
-        if self._merchant_rules_has_pending_or_active_work(
-            include_remote_dispatch=False,
-            include_pending_reload=False,
-        ):
-            self.status_message = "Waiting for Merchant Rules to finish current work."
-            return
-
-        if not self.initialized or self.account_key != current_account:
-            self.status_message = "Waiting for this character to finish loading."
-            return
-
-        if time.monotonic() - self._character_profile_last_attempt_at < CHARACTER_PROFILE_RETRY_INTERVAL_SECONDS:
-            return
-
-        try:
-            profile, association, remove_stale_association = self._prepare_character_profile_pending_target(
-                observation[0]
-            )
-            if profile is None or association is None:
-                blank_payload = self._normalize_profile_payload(
-                    self._build_default_profile_payload(include_rule_templates=False)
-                )
-                self._apply_verified_profile_payload(
-                    blank_payload,
-                    expected_serialized_payload=self._serialize_shareable_profile_payload(blank_payload),
-                    operation_description="safe blank settings",
-                    status_message=(
-                        self._character_profile_pending_message
-                        or "This character has no saved profile assigned; using safe blank settings."
-                    ),
-                    preserve_workspace_state=True,
-                    profile_display_name="",
-                    log_profile_load_summary=False,
-                    include_remote_dispatch=False,
-                    include_pending_reload=False,
-                )
-                if not self._is_character_profile_observation_current(identity, observation):
-                    raise RuntimeError("The current character changed while safe blank settings were loading.")
-                if remove_stale_association:
-                    self._delete_character_profile_association(observation[0])
-                if not self._is_character_profile_observation_current(identity, observation):
-                    raise RuntimeError("The current character changed before its blank settings could be confirmed.")
-                resolved_profile_identity = None
-            else:
-                self._apply_saved_profile_summary(
-                    profile,
-                    preserve_workspace_state=True,
-                    log_profile_load_summary=False,
-                    include_remote_dispatch=False,
-                    include_pending_reload=False,
-                )
-                if not self._is_character_profile_observation_current(identity, observation):
-                    raise RuntimeError("The current character changed while its saved profile was loading.")
-                if self._character_profile_pending_needs_persist:
-                    self._persist_character_profile_association(observation[0], association)
-                if not self._is_character_profile_observation_current(identity, observation):
-                    raise RuntimeError("The current character changed before its profile could be confirmed.")
-                resolved_profile_identity = association.profile_identity
-
-            self._character_profile_resolved_identity = identity
-            self._character_profile_resolved_observation = observation
-            self._character_profile_resolved_profile_identity = resolved_profile_identity
-            self._character_profile_ready = True
-            self._character_profile_resolution_target = None
-            self._character_profile_resolution_error = ""
-            self._character_profile_last_failure_signature = None
-            self._character_profile_last_attempt_at = 0.0
-            if self._character_profile_pending_message:
-                self.status_message = self._character_profile_pending_message
-            elif profile is not None:
-                self.status_message = (
-                    f"Loaded {self._profile_scope_badge(profile.scope).title()} profile "
-                    f"'{profile.display_name}' for this character."
-                )
-            else:
-                self.status_message = "This character has no saved profile assigned; using safe blank settings."
-            identify_settings = _normalize_identify_settings(self.identify_settings)
-            self.identify_rescan_requested = bool(
-                identify_settings.on_inventory_change
-                and any(bool(value) for value in identify_settings.rarities.values())
-            )
-            salvage_settings = _normalize_salvage_settings(self.salvage_settings)
-            self.salvage_rescan_requested = bool(
-                salvage_settings.on_inventory_change
-                and any(bool(rule.enabled) and _salvage_rule_has_selectors(rule) for rule in salvage_settings.rules)
-            )
-            self.instant_destroy_rescan_requested = bool(self.destroy_auto_enabled)
-            self._clear_character_profile_pending_target()
-        except Exception as exc:
-            self._set_character_profile_resolution_failure(exc)
+        return self._live_profile_session.advance_character_profile_resolution()
 
     def _merchant_rules_lifecycle_block_reason(
         self,
@@ -10660,57 +10997,7 @@ class MerchantRulesWidget:
         return _rule_normalizer.build_default_profile_payload(include_rule_templates=include_rule_templates)
 
     def _build_profile_payload(self) -> dict[str, object]:
-        """Serialize current settings into a normalized profile-v40 payload."""
-
-        payload = {
-            "version": PROFILE_VERSION,
-            "auto_cleanup_on_outpost_entry": bool(self.auto_cleanup_on_outpost_entry),
-            "gold_balance_enabled": bool(self.gold_balance_enabled),
-            "gold_balance_on_outpost_entry": bool(self.gold_balance_on_outpost_entry),
-            "gold_balance_after_mr_trading": bool(self.gold_balance_after_mr_trading),
-            "gold_balance_after_manual_session": bool(self.gold_balance_after_manual_session),
-            "target_carried_gold": _normalize_gold_target(self.target_carried_gold),
-            "auto_sell_on_manual_vendor_interaction": bool(self.auto_sell_on_manual_vendor_interaction),
-            "auto_buy_on_manual_vendor_interaction": bool(self.auto_buy_on_manual_vendor_interaction),
-            "manual_vendor_auto_buy_categories": _normalize_manual_vendor_category_flags(
-                self.manual_vendor_auto_buy_categories,
-                MANUAL_VENDOR_BUY_CATEGORY_KINDS,
-                field_name="manual_vendor_auto_buy_categories",
-            ),
-            "manual_vendor_auto_sell_categories": _normalize_manual_vendor_category_flags(
-                self.manual_vendor_auto_sell_categories,
-                MANUAL_VENDOR_SELL_CATEGORY_KINDS,
-                field_name="manual_vendor_auto_sell_categories",
-            ),
-            "auto_sell_to_any_merchant": bool(self.auto_sell_to_any_merchant),
-            "auto_sell_any_merchant_normal_items": bool(self.auto_sell_any_merchant_normal_items),
-            "auto_sell_any_merchant_materials": bool(self.auto_sell_any_merchant_materials),
-            "auto_sell_any_merchant_runes": bool(self.auto_sell_any_merchant_runes),
-            "inventory_right_click_shortcuts_enabled": bool(self.inventory_right_click_shortcuts_enabled),
-            "inventory_right_click_live_actions_enabled": bool(self.inventory_right_click_live_actions_enabled),
-            "destroy_auto_enabled": bool(self.destroy_auto_enabled),
-            "auto_travel_enabled": bool(self.auto_travel_enabled),
-            "target_outpost_id": max(0, int(self.target_outpost_id)),
-            "favorite_outpost_ids": self._normalize_outpost_ids(self.favorite_outpost_ids),
-            "debug_logging": bool(self.debug_logging),
-            "helper_tooltips_enabled": bool(self.helper_tooltips_enabled),
-            "detailed_preview": bool(self.detailed_preview),
-            "buy_rules": [asdict(rule) for rule in _normalize_buy_rules(self.buy_rules)],
-            "sell_rules": [
-                payload_entry
-                for payload_entry in (_serialize_sell_rule(rule) for rule in _normalize_sell_rules(self.sell_rules))
-                if payload_entry
-            ],
-            "destroy_rules": [_serialize_destroy_rule(rule) for rule in _normalize_destroy_rules(self.destroy_rules)],
-            "identify_settings": _serialize_identify_settings(self.identify_settings),
-            "salvage_settings": _serialize_salvage_settings(self.salvage_settings),
-            "cleanup_targets": _serialize_cleanup_targets(self.cleanup_targets),
-            "cleanup_blacklist_model_ids": _serialize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids),
-            "cleanup_protection_sources": _serialize_cleanup_protection_sources(self.cleanup_protection_sources),
-            "protected_item_model_ids": _serialize_protected_item_model_ids(self.protected_item_model_ids),
-            "protected_item_targets": _serialize_protected_item_targets(self.protected_item_targets),
-        }
-        return payload
+        return self._active_configuration.build_payload()
 
     def _serialize_profile_payload(self, payload: dict[str, object]) -> str:
         return self._profile_store.serialize_profile_payload(payload)
@@ -10718,76 +11005,12 @@ class MerchantRulesWidget:
     def _normalize_profile_payload(self, raw_payload: object) -> dict[str, object]:
         return self._profile_payload_normalizer(raw_payload)
 
-    def _apply_profile_payload(self, payload: dict[str, object]):
-        """Replace in-memory rules and settings from an already normalized profile payload."""
+    def _apply_profile_payload(self, payload: dict[str, object]) -> None:
+        result = self._active_configuration.apply_payload(payload)
+        self._finalize_configuration_apply(result)
 
-        previous_cleanup_targets = self.cleanup_targets
-        self.buy_rules = _rule_normalizer.materialize_profile_buy_rules(payload.get("buy_rules", []))
-        self.sell_rules = _rule_normalizer.materialize_profile_sell_rules(payload.get("sell_rules", []))
-        self.destroy_rules = _rule_normalizer.materialize_profile_destroy_rules(payload.get("destroy_rules", []))
-        self.identify_settings = _normalize_identify_settings(payload.get("identify_settings", {}))
-        self.salvage_settings = _normalize_salvage_settings(payload.get("salvage_settings", {}))
-        self.cleanup_targets = _normalize_cleanup_targets(_coerce_list(payload.get("cleanup_targets", [])))
-        self.cleanup_blacklist_model_ids = _normalize_cleanup_blacklist_model_ids(
-            _coerce_list(payload.get("cleanup_blacklist_model_ids", []))
-        )
-        self.cleanup_protection_sources = _normalize_cleanup_protection_sources(
-            _coerce_list(payload.get("cleanup_protection_sources", []))
-        )
-        self.protected_item_model_ids = _normalize_protected_item_model_ids(
-            _coerce_list(payload.get("protected_item_model_ids", []))
-        )
-        self.protected_item_targets = _normalize_protected_item_targets(
-            _coerce_list(payload.get("protected_item_targets", []))
-        )
-        self.auto_cleanup_on_outpost_entry = bool(payload.get("auto_cleanup_on_outpost_entry", False))
-        self.gold_balance_enabled = bool(payload.get("gold_balance_enabled", False))
-        self.gold_balance_on_outpost_entry = bool(payload.get("gold_balance_on_outpost_entry", False))
-        self.gold_balance_after_mr_trading = bool(payload.get("gold_balance_after_mr_trading", False))
-        self.gold_balance_after_manual_session = bool(payload.get("gold_balance_after_manual_session", False))
-        self.target_carried_gold = _normalize_gold_target(
-            payload.get("target_carried_gold", DEFAULT_TARGET_CARRIED_GOLD)
-        )
-        self.auto_sell_on_manual_vendor_interaction = bool(payload.get("auto_sell_on_manual_vendor_interaction", False))
-        self.auto_buy_on_manual_vendor_interaction = bool(payload.get("auto_buy_on_manual_vendor_interaction", False))
-        self.manual_vendor_auto_buy_categories = _normalize_manual_vendor_category_flags(
-            payload.get("manual_vendor_auto_buy_categories"),
-            MANUAL_VENDOR_BUY_CATEGORY_KINDS,
-            field_name="manual_vendor_auto_buy_categories",
-        )
-        self.manual_vendor_auto_sell_categories = _normalize_manual_vendor_category_flags(
-            payload.get("manual_vendor_auto_sell_categories"),
-            MANUAL_VENDOR_SELL_CATEGORY_KINDS,
-            field_name="manual_vendor_auto_sell_categories",
-        )
-        self.auto_sell_to_any_merchant = bool(payload.get("auto_sell_to_any_merchant", False))
-        self.auto_sell_any_merchant_normal_items = bool(payload.get("auto_sell_any_merchant_normal_items", False))
-        self.auto_sell_any_merchant_materials = bool(payload.get("auto_sell_any_merchant_materials", False))
-        self.auto_sell_any_merchant_runes = bool(payload.get("auto_sell_any_merchant_runes", False))
-        self.inventory_right_click_shortcuts_enabled = bool(
-            payload.get("inventory_right_click_shortcuts_enabled", False)
-        )
-        self.inventory_right_click_live_actions_enabled = bool(
-            payload.get("inventory_right_click_live_actions_enabled", False)
-        )
-        self.destroy_auto_enabled = bool(payload.get("destroy_auto_enabled", False))
-        self.auto_travel_enabled = bool(payload.get("auto_travel_enabled", False))
-        self.target_outpost_id = max(0, _safe_int(payload.get("target_outpost_id", 0), 0))
-        self.favorite_outpost_ids = self._normalize_outpost_ids(_coerce_list(payload.get("favorite_outpost_ids", [])))
-        self.debug_logging = bool(payload.get("debug_logging", False))
-        self.helper_tooltips_enabled = bool(
-            payload.get("helper_tooltips_enabled", HELPER_TOOLTIPS_ENABLED_DEFAULT)
-        )
-        self.detailed_preview = bool(payload.get("detailed_preview", False))
-        self.buy_rules = _normalize_buy_rules(self.buy_rules)
-        self.sell_rules = _normalize_sell_rules(self.sell_rules)
-        self.destroy_rules = _normalize_destroy_rules(self.destroy_rules)
-        self.cleanup_targets = _normalize_cleanup_targets(self.cleanup_targets)
-        self.cleanup_blacklist_model_ids = _normalize_cleanup_blacklist_model_ids(self.cleanup_blacklist_model_ids)
-        self.cleanup_protection_sources = _normalize_cleanup_protection_sources(self.cleanup_protection_sources)
-        self.protected_item_model_ids = _normalize_protected_item_model_ids(self.protected_item_model_ids)
-        self.protected_item_targets = _normalize_protected_item_targets(self.protected_item_targets)
-        if self.cleanup_targets != previous_cleanup_targets:
+    def _finalize_configuration_apply(self, result: _configuration.ConfigurationApplyResult) -> None:
+        if result.cleanup_targets_changed:
             self._cleanup_targets_revision += 1
         self._invalidate_cleanup_target_display_cache()
         self.outpost_search_text = ""
@@ -10836,100 +11059,23 @@ class MerchantRulesWidget:
     ) -> LoadedProfileProvenance:
         return self._profile_store.normalize_provenance(raw_state)
 
-    def _load_loaded_profile_provenance(self):
-        self.loaded_profile_provenance = None
-        self.loaded_profile_provenance_warning = ""
-        try:
-            raw_state = self._loaded_profile_state_doc().get_json("", None)
-            if raw_state in (None, {}):
-                return
-            provenance = self._normalize_loaded_profile_provenance(raw_state)
-            self.loaded_profile_provenance = provenance
-            self.active_profile_display_name = (
-                f"[{self._profile_scope_badge(provenance.source_identity.scope)}] "
-                f"{provenance.display_name_snapshot}"
-            )
-        except Exception as exc:
-            self.loaded_profile_provenance_warning = (
-                "Merchant Rules could not read which profile was last loaded for this account. "
-                "The existing record was left unchanged."
-            )
-            ConsoleLog(
-                MODULE_NAME,
-                f"{self.loaded_profile_provenance_warning} Technical detail: {exc}",
-                Console.MessageType.Warning,
-            )
+    def _load_loaded_profile_provenance(self) -> None:
+        return self._live_profile_session.load_loaded_profile_provenance()
 
-    def _require_loaded_profile_state_writable(self, doc: JsonFactory):
-        raw_state = doc.get_json("", None)
-        if raw_state in (None, {}):
-            return
-        try:
-            self._normalize_loaded_profile_provenance(raw_state)
-        except Exception as exc:
-            raise ValueError(
-                "The existing last-loaded profile record is unreadable or was created by a newer "
-                "Merchant Rules version, so it was left unchanged."
-            ) from exc
-
-    def _record_loaded_profile_provenance(self, profile: ProfileSummary):
-        provenance = LoadedProfileProvenance(
-            source_identity=profile.identity,
-            display_name_snapshot=profile.display_name,
-            normalized_content_fingerprint=self._shareable_profile_content_fingerprint(
-                profile.serialized_payload
-            ),
-            associated_at_unix_ms=int(time.time() * 1000),
+    def _require_loaded_profile_state_writable(self, doc: JsonFactory) -> None:
+        return self._live_profile_session.require_loaded_profile_state_writable(
+            doc,
         )
-        doc = self._loaded_profile_state_doc()
-        self._require_loaded_profile_state_writable(doc)
-        expected_state = self._loaded_profile_provenance_to_json(provenance)
-        doc.set_json("", expected_state)
-        if not doc.save():
-            doc.reload()
-            raise OSError("JsonFactory could not flush loaded-profile provenance.")
-        if not doc.reload():
-            raise OSError("Loaded-profile provenance was saved but could not be reloaded.")
-        verified = self._normalize_loaded_profile_provenance(doc.get_json("", None))
-        if self._loaded_profile_provenance_to_json(verified) != expected_state:
-            raise RuntimeError("Loaded-profile provenance failed post-save verification.")
-        self.loaded_profile_provenance = verified
-        self.loaded_profile_provenance_warning = ""
-        self.active_profile_display_name = (
-            f"[{self._profile_scope_badge(profile.scope)}] {profile.display_name}"
+
+    def _record_loaded_profile_provenance(self, profile: ProfileSummary) -> None:
+        return self._live_profile_session.record_loaded_profile_provenance(
+            profile,
         )
 
     def _clear_loaded_profile_provenance(self, reason: str = "") -> bool:
-        self.loaded_profile_provenance = None
-        self.active_profile_display_name = self._get_live_profile_display_name()
-        doc = self._loaded_profile_state_doc()
-        try:
-            if doc.get_json("", None) in (None, {}):
-                self.loaded_profile_provenance_warning = ""
-                return True
-            self._require_loaded_profile_state_writable(doc)
-            doc.set_json("", {})
-            if not doc.save():
-                doc.reload()
-                raise OSError("JsonFactory could not clear loaded-profile provenance.")
-            if not doc.reload():
-                raise OSError("Loaded-profile provenance was cleared but could not be reloaded.")
-            if doc.get_json("", None) not in (None, {}):
-                raise RuntimeError("Loaded-profile provenance is still present after clearing it.")
-            self.loaded_profile_provenance_warning = ""
-            return True
-        except Exception as exc:
-            reason_suffix = f" after {reason}" if reason else ""
-            self.loaded_profile_provenance_warning = (
-                f"Merchant Rules could not clear the last-loaded profile record{reason_suffix}. "
-                "The existing record was left unchanged."
-            )
-            ConsoleLog(
-                MODULE_NAME,
-                f"{self.loaded_profile_provenance_warning} Technical detail: {exc}",
-                Console.MessageType.Warning,
-            )
-            return False
+        return self._live_profile_session.clear_loaded_profile_provenance(
+            reason,
+        )
 
     def _serialize_saved_profile_wrapper(self, wrapper: object) -> str:
         return self._profile_store.serialize_saved_profile_wrapper(wrapper)
@@ -11080,111 +11226,11 @@ class MerchantRulesWidget:
         self,
         scope: str,
         expected_fingerprint: str = "",
-    ):
-        if self._get_profile_application_block_message("loading another profile"):
-            return False
-        gate_reason = self._character_profile_gate_block_reason()
-        if gate_reason:
-            self.status_message = gate_reason
-            self._set_saved_profile_feedback(scope, warning=gate_reason)
-            return False
-        self._ensure_initialized()
-        gate_reason = self._character_profile_gate_block_reason()
-        if gate_reason:
-            self.status_message = gate_reason
-            self._set_saved_profile_feedback(scope, warning=gate_reason)
-            return False
-        selected_profile = self._get_selected_profile(scope)
-        if selected_profile is None:
-            self._set_saved_profile_feedback(
-                scope,
-                warning=f"Select a {self._profile_scope_badge(scope).title()} profile to load.",
-            )
-            return
-
-        current: ProfileSummary | None = None
-        application_started = False
-        try:
-            current = self._resolve_profile_for_action(
-                selected_profile.identity,
-                expected_fingerprint=expected_fingerprint,
-                reload_shared=True,
-            )
-            observation = self._get_current_character_observation()
-            resolved_identity = self._character_profile_resolved_identity
-            if observation is None or resolved_identity is None or observation[0] != resolved_identity[1]:
-                raise RuntimeError("The current character is still loading.")
-            application_started = True
-            self._apply_saved_profile_summary(
-                current,
-                status_message="",
-                preserve_workspace_state=True,
-                log_profile_load_summary=False,
-            )
-            if not self._is_character_profile_observation_current(
-                resolved_identity,
-                observation,
-            ):
-                raise RuntimeError("The current character changed while the selected profile was loading.")
-            association = CharacterProfileAssociation(
-                profile_identity=current.identity,
-                character_name_snapshot=observation[1],
-            )
-            self._persist_character_profile_association(observation[0], association)
-            if not self._is_character_profile_observation_current(
-                resolved_identity,
-                observation,
-            ):
-                raise RuntimeError("The current character changed before its profile could be confirmed.")
-            self._character_profile_resolved_profile_identity = current.identity
-            badge = self._profile_scope_badge(scope)
-            provenance_warning = ""
-            self.loaded_profile_provenance = None
-            self.active_profile_display_name = self._get_live_profile_display_name()
-            try:
-                self._record_loaded_profile_provenance(current)
-            except Exception as provenance_exc:
-                clear_succeeded = self._clear_loaded_profile_provenance("a loaded-profile provenance write failure")
-                provenance_warning = (
-                    "The profile loaded successfully, but Merchant Rules could not update this account's "
-                    "record of the last profile loaded."
-                )
-                if not clear_succeeded:
-                    provenance_warning += " The previous last-loaded profile record also could not be cleared."
-                self.loaded_profile_provenance_warning = provenance_warning
-                ConsoleLog(
-                    MODULE_NAME,
-                    f"{provenance_warning} Technical detail: {provenance_exc}",
-                    Console.MessageType.Warning,
-                )
-            self.status_message = f"Loaded {badge.title()} profile '{current.display_name}' for this character."
-            self._log_profile_loaded_summary()
-            self._refresh_profile_entries(scope)
-            self._select_profile_after_action(scope, current.key)
-            self._clear_profile_confirmation_state()
-            self._set_saved_profile_feedback(
-                scope,
-                notice=(
-                    f"Loaded {badge.title()} profile '{current.display_name}'. "
-                    "Use Sync Rules to Selected when you want followers updated."
-                    + (
-                        " The account's record of the last profile loaded could not be updated."
-                        if provenance_warning
-                        else ""
-                    )
-                ),
-            )
-        except Exception as exc:
-            if application_started and current is not None:
-                self._retain_profile_load_for_character_retry(current, exc)
-                warning = (
-                    "Merchant Rules could not finish loading this character's profile. "
-                    f"Automatic actions are paused. The saved profile remains selected for retry: {exc}"
-                )
-            else:
-                warning = f"Failed to load {self._profile_scope_badge(scope).title()} profile: {exc}"
-            self.status_message = warning
-            self._set_saved_profile_feedback(scope, warning=warning)
+    ) -> bool | None:
+        return self._live_profile_session.load_selected_profile(
+            scope,
+            expected_fingerprint,
+        )
 
     def _copy_selected_profile_to_other_scope(
         self,
@@ -11223,21 +11269,18 @@ class MerchantRulesWidget:
             return False
 
     def _get_backup_payload(self) -> dict[str, object] | None:
-        return self._profile_store.get_backup_payload(self._backup_doc().get_json("", None))
+        return self._live_profile_session.get_backup_payload()
 
     def _store_backup_payload(
         self,
         payload: dict[str, object],
         *,
         slot: str = "last_known_good",
-    ):
-        backup_doc = self._backup_doc()
-        backup_root = self._profile_store.build_backup_root(
-            backup_doc.get_json("", {}),
+    ) -> None:
+        return self._live_profile_session.store_backup_payload(
             payload,
             slot=slot,
         )
-        backup_doc.set_json("", backup_root)
 
     def _write_live_profile_payload(
         self,
@@ -11245,26 +11288,12 @@ class MerchantRulesWidget:
         *,
         create_backup: bool = True,
         force_save: bool = False,
-    ):
-        raw_version = _safe_int(payload.get("version", 0), 0)
-        if raw_version > PROFILE_VERSION:
-            raise ValueError(f"Cannot write future Merchant Rules profile version {raw_version}.")
-        normalized_payload = self._normalize_profile_payload(payload)
-        live_doc = self._live_config_doc()
-        existing = live_doc.get_json("", None)
-        if create_backup and existing not in (None, {}):
-            if not isinstance(existing, dict):
-                raise ValueError("Stored Merchant Rules live config is malformed; refusing to overwrite it.")
-            existing_version = _safe_int(existing.get("version", 0), 0)
-            if existing_version > PROFILE_VERSION:
-                raise ValueError(
-                    f"Stored live config version {existing_version} is newer than Merchant Rules "
-                    f"version {PROFILE_VERSION}; refusing to overwrite it."
-                )
-            self._store_backup_payload(existing)
-        live_doc.set_json("", normalized_payload)
-        if force_save and not live_doc.save():
-            raise OSError("JsonFactory could not flush the Merchant Rules live config")
+    ) -> None:
+        return self._live_profile_session.write_live_profile_payload(
+            payload,
+            create_backup=create_backup,
+            force_save=force_save,
+        )
 
     def _write_profile_payload_for_account(
         self,
@@ -11320,50 +11349,7 @@ class MerchantRulesWidget:
         self.last_execution_phase_durations_ms = {}
 
     def _restore_profile_from_backup(self) -> bool:
-        """Restore the account-scoped last-known-good JsonFactory profile."""
-
-        if self._get_profile_application_block_message("restoring the backup"):
-            return False
-
-        try:
-            normalized_payload = self._get_backup_payload()
-        except Exception as exc:
-            self.profile_warning = f"Failed to validate Merchant Rules backup: {exc}"
-            ConsoleLog(MODULE_NAME, self.profile_warning, Console.MessageType.Error)
-            return False
-        if normalized_payload is None:
-            self.profile_warning = "No valid Merchant Rules JsonFactory backup was found to restore."
-            return False
-
-        try:
-            current_payload = self._live_config_doc().get_json("", None)
-            if isinstance(current_payload, dict) and current_payload:
-                current_version = _safe_int(current_payload.get("version", 0), 0)
-                if current_version <= PROFILE_VERSION:
-                    try:
-                        self._store_backup_payload(current_payload, slot="pre_restore")
-                    except Exception:
-                        pass
-            if not self._backup_doc().save():
-                raise OSError("JsonFactory could not flush the Merchant Rules backup document")
-            self._write_live_profile_payload(
-                normalized_payload,
-                create_backup=False,
-                force_save=True,
-            )
-            self._clear_loaded_profile_provenance("Restore Backup")
-            self.profile_write_blocked = False
-            self.reload_profile_from_disk(
-                status_message="Merchant Rules live config restored from the last backup.",
-                preserve_workspace_state=True,
-            )
-            self.profile_warning = ""
-            self.profile_notice = "Restored current settings from this account's backup."
-            return True
-        except Exception as exc:
-            self.profile_warning = f"Failed to restore Merchant Rules live config backup: {exc}"
-            ConsoleLog(MODULE_NAME, self.profile_warning, Console.MessageType.Error)
-            return False
+        return self._live_profile_session.restore_profile_from_backup()
 
     def _open_profile_config_folder(self) -> bool:
         doc_path = self._live_config_doc().path()
@@ -11481,32 +11467,16 @@ class MerchantRulesWidget:
         log_profile_load_summary: bool = True,
         include_remote_dispatch: bool = True,
         include_pending_reload: bool = True,
-    ):
-        """Reload the active profile and optionally preserve workspace state."""
-
-        if self._get_profile_application_block_message(
-            "reloading the active profile",
-            include_remote_dispatch=include_remote_dispatch,
-            include_pending_reload=include_pending_reload,
-        ):
-            return False
-        if preserve_window_geometry is not None:
-            preserve_workspace_state = bool(preserve_window_geometry)
-        workspace_snapshot = self.active_workspace if preserve_workspace_state else ""
-        rules_workspace_snapshot = self.active_rules_workspace if preserve_workspace_state else ""
-        self._ensure_initialized()
-        # Pick up any external write (e.g. a multibox leader's cross-account overlay) before reloading.
-        self._live_config_doc().reload()
-        self._load_profile()
-        if preserve_workspace_state:
-            self.active_workspace = workspace_snapshot or self.active_workspace
-            self.active_rules_workspace = rules_workspace_snapshot or self.active_rules_workspace
-        self._reset_runtime_after_profile_load(
+    ) -> bool:
+        return self._live_profile_session.reload_profile_from_disk(
             status_message=status_message,
+            preserve_workspace_state=preserve_workspace_state,
+            preserve_window_geometry=preserve_window_geometry,
             profile_display_name=profile_display_name,
             log_profile_load_summary=log_profile_load_summary,
+            include_remote_dispatch=include_remote_dispatch,
+            include_pending_reload=include_pending_reload,
         )
-        return True
 
     def _ensure_initialized(self):
         previous_lifecycle_generation = int(self.merchant_rules_lifecycle_generation)
@@ -15331,99 +15301,11 @@ class MerchantRulesWidget:
     def _has_local_storage_access(self) -> bool:
         return self._service_resolution_session.has_local_storage_access()
 
-    def _load_profile(self):
-        """Load the account-scoped JsonFactory profile with fail-closed version safeguards."""
-
-        doc = self._live_config_doc()
-        stored_payload = doc.get_json("", None)
-        profile_exists = stored_payload not in (None, {})
-        self.new_profile_session = not profile_exists
-        self.active_profile_display_name = self._get_live_profile_display_name()
-        self.active_workspace = WORKSPACE_RULES if self.new_profile_session else WORKSPACE_OVERVIEW
-        self.active_rules_workspace = RULES_WORKSPACE_BUY
-        self.profile_warning = ""
-        self.profile_notice = ""
-        self.profile_write_blocked = False
-
-        stored_version = (
-            _safe_int(stored_payload.get("version", 0), 0)
-            if isinstance(stored_payload, dict)
-            else 0
-        )
-        if profile_exists and stored_version > PROFILE_VERSION:
-            self.profile_write_blocked = True
-            self.active_workspace = WORKSPACE_RULES
-            self.profile_warning = (
-                f"Live config version {stored_version} is newer than Merchant Rules version {PROFILE_VERSION}. "
-                "The config was not applied and will not be rewritten."
-            )
-            ConsoleLog(MODULE_NAME, self.profile_warning, Console.MessageType.Error)
-            return
-
-        default_payload = self._build_default_profile_payload(
-            include_rule_templates=profile_exists,
-        )
-        self._apply_profile_payload(default_payload)
-
-        if not profile_exists:
-            return
-
-        should_save_normalized = False
-        allow_normalized_save = True
-        raw_version = 0
-        normalized_payload: dict[str, object] | None = None
-        try:
-            raw_payload = doc.get_json("", {})
-            raw_version = _safe_int(raw_payload.get("version", 0), 0) if isinstance(raw_payload, dict) else 0
-            normalized_payload = self._normalize_profile_payload(raw_payload)
-            should_save_normalized = self._serialize_profile_payload(raw_payload) != self._serialize_profile_payload(normalized_payload)
-            self._apply_profile_payload(normalized_payload)
-        except Exception as exc:
-            # Native JSON writes are atomic, so the stored document cannot be half-written;
-            # a failure here is a normalization/shape problem. Keep the stored file and fall
-            # back to in-memory defaults - no recovery snapshot is needed.
-            self.profile_warning = (
-                "Live config load failed; using in-memory defaults and preserving the stored file."
-            )
-            self.profile_write_blocked = True
-            self.active_workspace = WORKSPACE_RULES
-            ConsoleLog(MODULE_NAME, f"Failed to load live config {self.config_path}: {exc}", Console.MessageType.Error)
-            return
-
-        if raw_version <= 0 and not self.profile_warning:
-            self.profile_notice = "Loaded a legacy live config without a version marker."
-        elif 0 < raw_version < PROFILE_VERSION and not self.profile_warning:
-            self.profile_notice = "Merchant Rules loaded older settings and updated them to the current format."
-
-        if should_save_normalized and allow_normalized_save and normalized_payload is not None:
-            if self._save_profile():
-                if raw_version <= 0:
-                    self.profile_notice = f"Legacy live config normalized and saved safely to v{PROFILE_VERSION}."
-                elif raw_version < PROFILE_VERSION:
-                    self.profile_notice = f"Live config migrated from v{raw_version} to v{PROFILE_VERSION} and saved safely."
-                else:
-                    self.profile_notice = "Live config normalized and saved safely."
+    def _load_profile(self) -> None:
+        return self._live_profile_session.load_profile()
 
     def _save_profile(self) -> bool:
-        """Persist through JsonFactory while retaining a last-known-good account backup."""
-
-        if not self._merchant_rules_is_generation_current():
-            self._debug_log("Skipped a stale Merchant Rules profile save.")
-            return False
-        payload = self._build_profile_payload()
-        if self.profile_write_blocked:
-            self.profile_warning = (
-                "Merchant Rules live-config writes are blocked because the stored profile "
-                "could not be handled safely."
-            )
-            return False
-        try:
-            self._write_live_profile_payload(payload)
-            return True
-        except Exception as exc:
-            self.profile_warning = f"Failed to save Merchant Rules live config safely: {exc}"
-            ConsoleLog(MODULE_NAME, f"Failed to save live config {self.config_path}: {exc}", Console.MessageType.Error)
-            return False
+        return self._live_profile_session.save_profile()
 
     def _mark_preview_dirty(self, message: str = ""):
         self.preview_ready = False
