@@ -55,6 +55,7 @@ from Sources.marks_sources.mods_parser import parse_modifiers
 from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import DEFAULT_NPC_SELECTORS
 from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import SUPPORTED_MAP_NPC_SELECTORS
 
+from Sources.icefox.MerchantRules import automatic_triggers as _automatic_triggers
 from Sources.icefox.MerchantRules import configuration as _configuration
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
@@ -4879,6 +4880,214 @@ def _has_explicit_equippable_hard_protection(rule: SellRule) -> bool:
 
 class MerchantRulesWidget:
 
+    class _AutomaticTriggerRuntime:
+        def __init__(self, widget: "MerchantRulesWidget") -> None:
+            self._widget = widget
+
+        @property
+        def current_triggers(self) -> _automatic_triggers.AutomaticTriggers:
+            return self._widget._automatic_triggers
+
+        def identify_settings(self) -> IdentifySettings:
+            return _normalize_identify_settings(self._widget.identify_settings)
+
+        def salvage_settings(self) -> SalvageSettings:
+            return _normalize_salvage_settings(self._widget.salvage_settings)
+
+        def salvage_rule_has_selectors(self, rule: SalvageRule) -> bool:
+            return _salvage_rule_has_selectors(rule)
+
+        def destroy_auto_enabled(self) -> bool:
+            return self._widget._is_destroy_auto_enabled()
+
+        @property
+        def auto_cleanup_on_outpost_entry(self) -> bool:
+            return self._widget.auto_cleanup_on_outpost_entry
+
+        @property
+        def gold_balance_enabled(self) -> bool:
+            return self._widget.gold_balance_enabled
+
+        @property
+        def gold_balance_on_outpost_entry(self) -> bool:
+            return self._widget.gold_balance_on_outpost_entry
+
+        @property
+        def execution_running(self) -> bool:
+            return self._widget.execution_running
+
+        @property
+        def travel_preview_running(self) -> bool:
+            return self._widget.travel_preview_running
+
+        @property
+        def identify_running(self) -> bool:
+            return self._widget.identify_running
+
+        @property
+        def instant_destroy_running(self) -> bool:
+            return self._widget.instant_destroy_running
+
+        @property
+        def salvage_running(self) -> bool:
+            return self._widget.salvage_running
+
+        @property
+        def storage_scan_running(self) -> bool:
+            return self._widget.storage_scan_running
+
+        @property
+        def auto_cleanup_running(self) -> bool:
+            return self._widget.auto_cleanup_running
+
+        @property
+        def gold_balance_running(self) -> bool:
+            return self._widget.gold_balance_running
+
+        @property
+        def manual_vendor_running(self) -> bool:
+            return self._widget.manual_vendor_running
+
+        def refresh_lifecycle(self) -> None:
+            self._widget._refresh_merchant_rules_lifecycle_state()
+
+        def lifecycle_block_reason(self) -> str:
+            return self._widget._merchant_rules_lifecycle_block_reason()
+
+        def service_block_reason(self) -> str:
+            return self._widget._merchant_rules_lifecycle_block_reason(require_service=True)
+
+        def has_pending_work(self) -> bool:
+            return self._widget._merchant_rules_has_pending_or_active_work()
+
+        def has_cleanup_sources(self) -> bool:
+            return self._widget._has_cleanup_sources()
+
+        def is_outpost(self) -> bool:
+            return Map.IsOutpost()
+
+        def is_guild_hall(self) -> bool:
+            return Map.IsGuildHall()
+
+        def inventory_signature(self) -> tuple[tuple[int, int], ...]:
+            return self._widget._get_runtime_inventory_signature()
+
+        def identify_poll_expired(self) -> bool:
+            return True if self._widget.identify_poll_timer.IsExpired() else False
+
+        def reset_identify_poll(self) -> None:
+            self._widget.identify_poll_timer.Reset()
+
+        def salvage_poll_expired(self) -> bool:
+            return True if self._widget.salvage_poll_timer.IsExpired() else False
+
+        def reset_salvage_poll(self) -> None:
+            self._widget.salvage_poll_timer.Reset()
+
+        def instant_destroy_poll_expired(self) -> bool:
+            return True if self._widget.instant_destroy_poll_timer.IsExpired() else False
+
+        def reset_instant_destroy_poll(self) -> None:
+            self._widget.instant_destroy_poll_timer.Reset()
+
+        def submit_identify(self) -> None:
+            self._widget._queue_identify_now(auto_triggered=True)
+
+        def submit_salvage(self) -> None:
+            self._widget._queue_salvage_now(auto_triggered=True)
+
+        def submit_cleanup(self) -> None:
+            self._widget._queue_cleanup_now(auto_triggered=True)
+
+        def submit_gold(self) -> None:
+            self._widget._queue_merchant_rules_owned_work(self._widget._run_gold_balance_trigger("outpost entry"))
+
+        def submit_destroy(self) -> None:
+            self._widget._queue_merchant_rules_owned_work(
+                self._widget._run_instant_destroy_pass(),
+                reset_values_before_start=(("instant_destroy_rescan_requested", True),),
+            )
+
+    @property
+    def auto_cleanup_zone_attempted(self) -> bool:
+        return self._automatic_triggers.auto_cleanup_zone_attempted
+
+    @auto_cleanup_zone_attempted.setter
+    def auto_cleanup_zone_attempted(self, value: bool) -> None:
+        self._automatic_triggers.auto_cleanup_zone_attempted = value
+
+    @property
+    def auto_cleanup_zone_token(self) -> str:
+        return self._automatic_triggers.auto_cleanup_zone_token
+
+    @auto_cleanup_zone_token.setter
+    def auto_cleanup_zone_token(self, value: str) -> None:
+        self._automatic_triggers.auto_cleanup_zone_token = value
+
+    @property
+    def gold_entry_attempted(self) -> bool:
+        return self._automatic_triggers.gold_entry_attempted
+
+    @gold_entry_attempted.setter
+    def gold_entry_attempted(self, value: bool) -> None:
+        self._automatic_triggers.gold_entry_attempted = value
+
+    @property
+    def gold_entry_zone_token(self) -> str:
+        return self._automatic_triggers.gold_entry_zone_token
+
+    @gold_entry_zone_token.setter
+    def gold_entry_zone_token(self, value: str) -> None:
+        self._automatic_triggers.gold_entry_zone_token = value
+
+    @property
+    def instant_destroy_rescan_requested(self) -> bool:
+        return self._automatic_triggers.instant_destroy_rescan_requested
+
+    @instant_destroy_rescan_requested.setter
+    def instant_destroy_rescan_requested(self, value: bool) -> None:
+        self._automatic_triggers.instant_destroy_rescan_requested = value
+
+    @property
+    def instant_destroy_last_signature(self) -> tuple[tuple[int, int], ...]:
+        return self._automatic_triggers.instant_destroy_last_signature
+
+    @instant_destroy_last_signature.setter
+    def instant_destroy_last_signature(self, value: tuple[tuple[int, int], ...]) -> None:
+        self._automatic_triggers.instant_destroy_last_signature = value
+
+    @property
+    def salvage_rescan_requested(self) -> bool:
+        return self._automatic_triggers.salvage_rescan_requested
+
+    @salvage_rescan_requested.setter
+    def salvage_rescan_requested(self, value: bool) -> None:
+        self._automatic_triggers.salvage_rescan_requested = value
+
+    @property
+    def salvage_last_signature(self) -> tuple[tuple[int, int], ...]:
+        return self._automatic_triggers.salvage_last_signature
+
+    @salvage_last_signature.setter
+    def salvage_last_signature(self, value: tuple[tuple[int, int], ...]) -> None:
+        self._automatic_triggers.salvage_last_signature = value
+
+    @property
+    def identify_rescan_requested(self) -> bool:
+        return self._automatic_triggers.identify_rescan_requested
+
+    @identify_rescan_requested.setter
+    def identify_rescan_requested(self, value: bool) -> None:
+        self._automatic_triggers.identify_rescan_requested = value
+
+    @property
+    def identify_last_signature(self) -> tuple[tuple[int, int], ...]:
+        return self._automatic_triggers.identify_last_signature
+
+    @identify_last_signature.setter
+    def identify_last_signature(self, value: tuple[tuple[int, int], ...]) -> None:
+        self._automatic_triggers.identify_last_signature = value
+
     class _MerchantRulesLiveProfileRuntime:
 
         def __init__(self, widget: "MerchantRulesWidget") -> None:
@@ -6190,6 +6399,9 @@ class MerchantRulesWidget:
         self.map_snapshot = 0
         self.map_ready_snapshot = False
         self.map_instance_uptime_snapshot_ms = 0
+        self._automatic_triggers = _automatic_triggers.AutomaticTriggers(
+            MerchantRulesWidget._AutomaticTriggerRuntime(self)
+        )
         self.auto_cleanup_zone_attempted = False
         self.auto_cleanup_zone_token = ""
         self.gold_entry_attempted = False
@@ -6497,13 +6709,13 @@ class MerchantRulesWidget:
         self._runtime_inventory_signature_provider: Callable[[], tuple[tuple[int, int], ...]] | None = None
         self.instant_destroy_poll_timer = ThrottledTimer(INSTANT_DESTROY_POLL_MS)
         self.instant_destroy_rescan_requested = False
-        self.instant_destroy_last_signature: tuple[tuple[int, int], ...] = ()
+        self.instant_destroy_last_signature = ()
         self.salvage_poll_timer = ThrottledTimer(SALVAGE_POLL_MS)
         self.salvage_rescan_requested = False
-        self.salvage_last_signature: tuple[tuple[int, int], ...] = ()
+        self.salvage_last_signature = ()
         self.identify_poll_timer = ThrottledTimer(IDENTIFY_POLL_MS)
         self.identify_rescan_requested = False
-        self.identify_last_signature: tuple[tuple[int, int], ...] = ()
+        self.identify_last_signature = ()
         self.active_workspace = WORKSPACE_OVERVIEW
         self.active_preview_plan_workspace = PREVIEW_PLAN_WORKSPACE_PLANNED
         self.preview_not_changed_hide_already_done = False
@@ -22586,75 +22798,14 @@ class MerchantRulesWidget:
                     self._debug_log("Xunlai Deposits: resumed Inventory Plus.")
             yield
 
-    def _update_auto_cleanup_runtime(self):
-        if not self.auto_cleanup_on_outpost_entry:
-            return
-        # _tick_runtime refreshes lifecycle state before observers and resets this latch on transitions.
-        if self.auto_cleanup_zone_attempted:
-            return
+    def _update_auto_cleanup_runtime(self) -> None:
+        self._automatic_triggers.update_auto_cleanup_runtime()
 
-        self._refresh_merchant_rules_lifecycle_state()
-        if self._merchant_rules_lifecycle_block_reason(require_service=True):
-            return
-        if self._merchant_rules_has_pending_or_active_work():
-            return
-        if not self._has_cleanup_sources():
-            return
-        if not (Map.IsOutpost() or Map.IsGuildHall()):
-            return
-        if (
-            self.execution_running
-            or self.travel_preview_running
-            or self.identify_running
-            or self.instant_destroy_running
-            or self.salvage_running
-            or self.storage_scan_running
-            or self.auto_cleanup_running
-            or self.manual_vendor_running
-        ):
-            return
-        self.auto_cleanup_zone_attempted = True
-        self._queue_cleanup_now(auto_triggered=True)
-
-    def _update_auto_gold_runtime(self):
-        if not self.gold_balance_enabled or not self.gold_balance_on_outpost_entry:
-            return
-        # _tick_runtime refreshes lifecycle state before observers and resets this latch on transitions.
-        if self.gold_entry_attempted:
-            return
-
-        self._refresh_merchant_rules_lifecycle_state()
-        if self._merchant_rules_lifecycle_block_reason(require_service=True):
-            return
-        if not (Map.IsOutpost() or Map.IsGuildHall()):
-            return
-        if self._merchant_rules_has_pending_or_active_work():
-            return
-        if (
-            self.execution_running
-            or self.travel_preview_running
-            or self.identify_running
-            or self.instant_destroy_running
-            or self.salvage_running
-            or self.storage_scan_running
-            or self.auto_cleanup_running
-            or self.gold_balance_running
-            or self.manual_vendor_running
-        ):
-            return
-        self.gold_entry_attempted = True
-        try:
-            self._queue_merchant_rules_owned_work(
-                self._run_gold_balance_trigger("outpost entry")
-            )
-        except Exception:
-            self.gold_entry_attempted = False
-            raise
+    def _update_auto_gold_runtime(self) -> None:
+        self._automatic_triggers.update_auto_gold_runtime()
 
     def _clear_inventory_monitor_signatures(self) -> None:
-        self.identify_last_signature = ()
-        self.salvage_last_signature = ()
-        self.instant_destroy_last_signature = ()
+        self._automatic_triggers.clear_inventory_monitor_signatures()
 
     def _get_runtime_inventory_signature(self) -> tuple[tuple[int, int], ...]:
         if self._runtime_inventory_signature_provider is not None:
@@ -22912,47 +23063,14 @@ class MerchantRulesWidget:
             yield
         return outcome
 
-    def _request_identify_rescan(self):
-        self.identify_rescan_requested = True
+    def _request_identify_rescan(self) -> None:
+        self._automatic_triggers.request_identify_rescan()
 
-    def _update_identify_runtime(self):
-        settings = _normalize_identify_settings(self.identify_settings)
-        if not bool(settings.on_inventory_change) or not any(bool(value) for value in settings.rarities.values()):
-            self.identify_rescan_requested = False
-            return
+    def _update_identify_runtime(self) -> None:
+        self._automatic_triggers.update_identify_runtime()
 
-        should_rescan = bool(self.identify_rescan_requested)
-        if not should_rescan and not self.identify_poll_timer.IsExpired():
-            return
-
-        self._refresh_merchant_rules_lifecycle_state()
-        if self._merchant_rules_lifecycle_block_reason():
-            return
-        if self._merchant_rules_has_pending_or_active_work():
-            return
-        if (
-            self.execution_running
-            or self.travel_preview_running
-            or self.identify_running
-            or self.instant_destroy_running
-            or self.salvage_running
-            or self.storage_scan_running
-            or self.auto_cleanup_running
-            or self.gold_balance_running
-            or self.manual_vendor_running
-        ):
-            return
-
-        current_signature = self._get_runtime_inventory_signature()
-        self.identify_poll_timer.Reset()
-        if not should_rescan and current_signature == self.identify_last_signature:
-            return
-
-        self.identify_rescan_requested = False
-        self._queue_identify_now(auto_triggered=True)
-
-    def _request_salvage_rescan(self):
-        self.salvage_rescan_requested = True
+    def _request_salvage_rescan(self) -> None:
+        self._automatic_triggers.request_salvage_rescan()
 
     def _format_salvage_summary(
         self,
@@ -24099,48 +24217,14 @@ class MerchantRulesWidget:
             self.salvage_last_signature = self._get_inventory_signature()
             yield
 
-    def _update_salvage_runtime(self):
-        settings = _normalize_salvage_settings(self.salvage_settings)
-        if not bool(settings.on_inventory_change) or not any(
-            bool(rule.enabled) and _salvage_rule_has_selectors(rule) for rule in settings.rules
-        ):
-            self.salvage_rescan_requested = False
-            return
-
-        should_rescan = bool(self.salvage_rescan_requested)
-        if not should_rescan and not self.salvage_poll_timer.IsExpired():
-            return
-
-        self._refresh_merchant_rules_lifecycle_state()
-        if self._merchant_rules_lifecycle_block_reason():
-            return
-        if self._merchant_rules_has_pending_or_active_work():
-            return
-        if (
-            self.execution_running
-            or self.travel_preview_running
-            or self.identify_running
-            or self.instant_destroy_running
-            or self.salvage_running
-            or self.storage_scan_running
-            or self.auto_cleanup_running
-            or self.manual_vendor_running
-        ):
-            return
-
-        current_signature = self._get_runtime_inventory_signature()
-        self.salvage_poll_timer.Reset()
-        if not should_rescan and current_signature == self.salvage_last_signature:
-            return
-
-        self.salvage_rescan_requested = False
-        self._queue_salvage_now(auto_triggered=True)
+    def _update_salvage_runtime(self) -> None:
+        self._automatic_triggers.update_salvage_runtime()
 
     def _is_destroy_auto_enabled(self) -> bool:
         return bool(self.destroy_instant_enabled or self.destroy_auto_enabled)
 
-    def _request_instant_destroy_rescan(self):
-        self.instant_destroy_rescan_requested = True
+    def _request_instant_destroy_rescan(self) -> None:
+        self._automatic_triggers.request_instant_destroy_rescan()
 
     def _run_destroy_pass(
         self,
@@ -24272,42 +24356,8 @@ class MerchantRulesWidget:
             )
         )
 
-    def _update_instant_destroy_runtime(self):
-        if not self._is_destroy_auto_enabled():
-            self.instant_destroy_rescan_requested = False
-            return
-
-        should_rescan = bool(self.instant_destroy_rescan_requested)
-        if not should_rescan and not self.instant_destroy_poll_timer.IsExpired():
-            return
-
-        self._refresh_merchant_rules_lifecycle_state()
-        if self._merchant_rules_lifecycle_block_reason():
-            return
-        if self._merchant_rules_has_pending_or_active_work():
-            return
-        if (
-            self.execution_running
-            or self.travel_preview_running
-            or self.identify_running
-            or self.instant_destroy_running
-            or self.salvage_running
-            or self.storage_scan_running
-            or self.auto_cleanup_running
-            or self.manual_vendor_running
-        ):
-            return
-
-        current_signature = self._get_runtime_inventory_signature()
-        self.instant_destroy_poll_timer.Reset()
-        if not should_rescan and current_signature == self.instant_destroy_last_signature:
-            return
-
-        self.instant_destroy_rescan_requested = False
-        self._queue_merchant_rules_owned_work(
-            self._run_instant_destroy_pass(),
-            reset_values_before_start=(("instant_destroy_rescan_requested", True),),
-        )
+    def _update_instant_destroy_runtime(self) -> None:
+        self._automatic_triggers.update_instant_destroy_runtime()
 
     def _push_active_button_style(self, color: tuple[float, float, float, float]):
         base = (max(color[0] - 0.06, 0.0), max(color[1] - 0.10, 0.0), max(color[2] - 0.06, 0.0), 0.46)

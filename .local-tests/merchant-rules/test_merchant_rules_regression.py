@@ -67754,7 +67754,9 @@ def _cp13_external(kind: str) -> dict[str, object]:
     from uuid import uuid4
 
     capture = _CP13Capture(_CP13_DENIED_BOUNDARIES)
-    roots = {"candidate": REPO_ROOT}
+    roots = {
+        "candidate": Path(r"C:\Users\O_o\Desktop\Py4GW-Recovery\MerchantRules\c13i-fe2673d85bcc\c13v-3c4b7520bbd3\a")
+    }
     before: dict[str, dict[str, str]] = {}
     before_captures: dict[str, object] = {
         side: capture.unavailable("Source observation not attempted") for side in ("oracle", "candidate")
@@ -67782,7 +67784,7 @@ def _cp13_external(kind: str) -> dict[str, object]:
     try:
         try:
             _expect(kind in ("cold", "differential"), "CP13 known external kind")
-            candidate = REPO_ROOT
+            candidate = roots["candidate"]
             frozen = candidate.parent
             approved_parent = Path(r"C:\Users\O_o\Desktop\Py4GW-Recovery\MerchantRules\c13i-fe2673d85bcc")
             _expect(
@@ -68443,6 +68445,2444 @@ def _cp13_run_process(
     if primary is not None:
         raise primary
     return completed
+
+
+# CP14 names in this section are the only new registrations.
+_CP14_STAGE_CASES: dict[str, tuple[str, ...]] = {
+    "state": (
+        "cp14_raw_timer_construction",
+        "cp14_cold_trigger_owner",
+        "cp14_cold_fresh_interpreter",
+        "cp14_canonical_trigger_facades",
+        "cp14_reset_cp12",
+        "cp14_reset_reload",
+        "cp14_reset_restore",
+        "cp14_resolver_publication",
+        "cp13_raw_construction",
+        "cp13_readiness_prefix",
+        "cp13_reload_reset",
+        "cp13_restore_reset",
+        "inventory_monitor_baselines_reset_on_lifecycle",
+        "character_profile_same_direct_ready_jump_reconfirms_without_reload",
+    ),
+    "inventory": (
+        "cp14_inventory_late_bindings",
+        "cp14_timer_replaced_while_reading",
+        "cp14_inventory_failure_prefixes",
+        "cp14_identify_admission",
+        "cp14_salvage_admission",
+        "cp14_destroy_admission",
+        "cp14_retry_identify",
+        "cp14_retry_salvage",
+        "cp14_retry_destroy",
+        "cp14_captured_identify",
+        "cp14_rendered_inventory",
+        "inventory_monitor_polling_and_forced_rescan",
+        "inventory_monitor_tick_signature_is_shared_but_not_cached_across_ticks",
+        "inventory_signature_failure_retries_without_consuming_monitor_state",
+        "identify_active_pass_preserves_new_forced_rescan",
+        "salvage_active_pass_preserves_new_forced_rescan",
+        "destroy_active_pass_preserves_new_forced_rescan",
+        "unstarted_rescan_retry_respects_profile_and_lifecycle_generations",
+    ),
+    "entry": (
+        "cp14_entry_late_bindings",
+        "cp14_frame_shared",
+        "cp14_frame_contended",
+        "cp14_frame_late_fault",
+        "cp14_provider_nesting",
+        "cp14_cleanup_admission",
+        "cp14_gold_exception_boundary",
+        "cp14_secondary_running_masks",
+        "cp14_cleanup_successor_next",
+        "cp14_cleanup_successor_close",
+        "cp14_gold_consumed",
+        "cp14_rendered_entry",
+        "auto_cleanup_disabled_and_handled_observers_skip_work",
+        "auto_cleanup_latch_resets_on_new_instance",
+        "auto_gold_disabled_and_handled_observers_skip_work",
+        "gold_entry_is_independent_and_one_shot",
+        "gold_entry_latch_resets_on_new_instance",
+        "character_profile_resolution_tick_boundary",
+        "multibox_profile_reload_defers_latest_until_owned_work_is_idle",
+        "cp13_captured_remote",
+        "cp13_rendered_load",
+        "cp13_rendered_restore",
+    ),
+}
+_CP14_COMMON_CASES: tuple[str, ...] = (
+    "cp14_raw_timer_construction",
+    "cp14_reset_cp12",
+    "cp14_reset_reload",
+    "cp14_reset_restore",
+    "cp14_resolver_publication",
+    "cp14_timer_replaced_while_reading",
+    "cp14_inventory_failure_prefixes",
+    "cp14_identify_admission",
+    "cp14_salvage_admission",
+    "cp14_destroy_admission",
+    "cp14_retry_identify",
+    "cp14_retry_salvage",
+    "cp14_retry_destroy",
+    "cp14_captured_identify",
+    "cp14_rendered_inventory",
+    "cp14_frame_shared",
+    "cp14_frame_contended",
+    "cp14_frame_late_fault",
+    "cp14_provider_nesting",
+    "cp14_cleanup_admission",
+    "cp14_gold_exception_boundary",
+    "cp14_secondary_running_masks",
+    "cp14_cleanup_successor_next",
+    "cp14_cleanup_successor_close",
+    "cp14_gold_consumed",
+    "cp14_rendered_entry",
+)
+_CP14_CANDIDATE_ONLY: tuple[str, ...] = (
+    "cp14_cold_trigger_owner",
+    "cp14_cold_fresh_interpreter",
+    "cp14_canonical_trigger_facades",
+    "cp14_inventory_late_bindings",
+    "cp14_entry_late_bindings",
+)
+_cp14_current: str | None = None
+_cp14_observations: dict[str, list[list[object]]] = {}
+
+
+def _cp14_observe(key: str, value: object) -> None:
+    if _cp14_current is None:
+        return
+    # Snapshot mutable observations at the observation point. Keep repeats in order.
+    snapshot: object = json.loads(json.dumps(value, ensure_ascii=True, allow_nan=False))
+    _cp14_observations[_cp14_current].append([key, snapshot])
+
+
+def _cp14_registered(module: types.ModuleType, name: str, operation: Callable[[types.ModuleType], None]) -> None:
+    global _cp14_current
+    if os.environ.get("MERCHANT_RULES_CP14_OBSERVATIONS") != "1":
+        operation(module)
+        return
+    _expect(name in _CP14_COMMON_CASES and name not in _cp14_observations, "CP14 common identity " + name)
+    _expect(_cp14_current is None, "CP14 single registration owner")
+    _cp14_observations[name] = []
+    _cp14_current = name
+    try:
+        operation(module)
+        _expect(bool(_cp14_observations[name]), "CP14 case must publish its actual observations " + name)
+    finally:
+        _cp14_current = None
+
+
+_CP14A_INV = ("identify", "salvage", "instant_destroy")
+_CP14A_NAMES = ("identify", "auto_cleanup", "auto_gold", "salvage", "instant_destroy")
+_CP14A_DEFAULTS = {
+    "auto_cleanup_zone_attempted": False,
+    "auto_cleanup_zone_token": "",
+    "gold_entry_attempted": False,
+    "gold_entry_zone_token": "",
+    "instant_destroy_rescan_requested": False,
+    "instant_destroy_last_signature": (),
+    "salvage_rescan_requested": False,
+    "salvage_last_signature": (),
+    "identify_rescan_requested": False,
+    "identify_last_signature": (),
+}
+
+
+@contextmanager
+def _cp14a_changes() -> Iterator[_CP8Restoration]:
+    changes = _CP8Restoration()
+    try:
+        yield changes
+    finally:
+        changes.restore()
+
+
+def _cp14a_call(owner: object, name: str, *args: object, **kwargs: object) -> object:
+    return getattr(owner, name)(*args, **kwargs)
+
+
+def _cp14a_equal(actual: object, expected: object, label: str) -> None:
+    _expect(actual == expected, f"CP14 {label}, expected {expected!r}, observed {actual!r}")
+
+
+def _cp14a_fields(widget: object) -> dict[str, object]:
+    return {name: getattr(widget, name) for name in _CP14A_DEFAULTS}
+
+
+def _cp14a_fault(error: BaseException, operation: Callable[[], object], label: str) -> None:
+    try:
+        operation()
+    except BaseException as observed:
+        _expect(observed is error, f"CP14 {label}, different exception {observed!r}")
+    else:
+        raise AssertionError("CP14 error did not escape " + label)
+
+
+class _CP14ATimer:
+    def __init__(self, channel: str, events: list[str], expired: bool = True) -> None:
+        self.channel = channel
+        self.events = events
+        self.expired = expired
+        self.failure: BaseException | None = None
+        self.before_failure: Callable[[], None] | None = None
+
+    def IsExpired(self) -> bool:
+        self.events.append(self.channel + ".expiry")
+        return self.expired
+
+    def Reset(self) -> None:
+        self.events.append(self.channel + ".reset")
+        if self.failure is not None:
+            if self.before_failure is not None:
+                self.before_failure()
+            raise self.failure
+
+
+def _cp14a_enable(widget: object, module: types.ModuleType) -> None:
+    setattr(widget, "identify_settings", _identify_settings(module, rarities=["blue"], on_inventory_change=True))
+    setattr(widget, "salvage_settings", _salvage_settings(module, rarities=["blue"], on_inventory_change=True))
+    setattr(widget, "destroy_auto_enabled", True)
+    setattr(widget, "auto_cleanup_on_outpost_entry", True)
+    setattr(widget, "gold_balance_enabled", True)
+    setattr(widget, "gold_balance_on_outpost_entry", True)
+
+
+def _cp14a_update(widget: object, channel: str) -> object:
+    return _cp14a_call(widget, "_update_" + channel + "_runtime")
+
+
+_CP14_COLD_PROGRAM = r'''import importlib
+import importlib.abc
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+if len(sys.argv) != 2 or root != root.resolve(strict=True):
+    raise AssertionError("cold candidate root")
+if (sys.flags.isolated, sys.flags.no_site, sys.flags.dont_write_bytecode, sys.flags.optimize) != (1, 1, 1, 0):
+    raise AssertionError("cold interpreter flags")
+
+def forbidden(name):
+    top = name.partition(".")[0]
+    return top.startswith("Py") or top in {
+        "Widgets", "MerchantRules", "merchant_rules_regression_target", "cp14_selected_harness", "GWCA"
+    } or name == "Sources.marks_sources" or name.startswith("Sources.marks_sources.")
+
+def project(name):
+    return name == "Sources" or name.startswith("Sources.") or forbidden(name)
+
+if any(project(name) for name in sys.modules):
+    raise AssertionError("project modules already loaded in fresh interpreter")
+blocked = []
+
+class Block(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if forbidden(fullname):
+            blocked.append(fullname)
+            raise ImportError(fullname)
+        return None
+
+class Trap:
+    def __getattribute__(self, name):
+        raise AssertionError("construction consulted runtime: " + name)
+
+def read_only(event, args):
+    if event == "open" and isinstance(args[2], int) and args[2] & (os.O_CREAT | os.O_RDWR | os.O_WRONLY | os.O_TRUNC):
+        raise PermissionError(event)
+    if event.startswith("socket.") or event in {
+        "subprocess.Popen", "ctypes.dlopen", "os.system", "os.startfile", "os.mkdir", "os.remove", "os.rename",
+        "os.rmdir", "os.link", "os.symlink", "os.chmod", "os.truncate", "os.utime"
+    }:
+        raise PermissionError(event)
+
+sys.addaudithook(read_only)
+sys.meta_path.insert(0, Block())
+sys.path.insert(0, str(root))
+name = "Sources.icefox.MerchantRules.automatic_triggers"
+actual = importlib.import_module(name)
+origins = {}
+for part, relative in (
+    ("Sources.icefox", "Sources/icefox/__init__.py"),
+    ("Sources.icefox.MerchantRules", "Sources/icefox/MerchantRules/__init__.py"),
+    (name, "Sources/icefox/MerchantRules/automatic_triggers.py"),
+):
+    imported = sys.modules[part]
+    expected = root / relative
+    if Path(imported.__file__).resolve(strict=True) != expected or Path(imported.__spec__.origin) != expected:
+        raise AssertionError("module origin: " + part)
+    origins[part] = expected.relative_to(root).as_posix()
+namespace = sys.modules["Sources"]
+if namespace.__spec__.origin is not None or tuple(map(Path, namespace.__path__)) != (root / "Sources",):
+    raise AssertionError("Sources namespace origin")
+trap = Trap()
+owner = actual.AutomaticTriggers(trap)
+values = dict(vars(owner))
+if values.pop("_runtime") is not trap or actual.AutomaticTriggers.__module__ != name:
+    raise AssertionError("runtime or class identity")
+expected = {
+    "auto_cleanup_zone_attempted": False,
+    "auto_cleanup_zone_token": "",
+    "gold_entry_attempted": False,
+    "gold_entry_zone_token": "",
+    "instant_destroy_rescan_requested": False,
+    "instant_destroy_last_signature": (),
+    "salvage_rescan_requested": False,
+    "salvage_last_signature": (),
+    "identify_rescan_requested": False,
+    "identify_last_signature": (),
+}
+if values.keys() != expected.keys() or any(
+    type(values[k]) is not type(v) or values[k] != v for k, v in expected.items()
+):
+    raise AssertionError("passive construction defaults")
+if blocked or {n for n in sys.modules if project(n)} != {"Sources", *origins}:
+    raise AssertionError("unexpected project import: " + repr(blocked))
+print(json.dumps({"origins": origins, "namespace": "Sources", "blocked": blocked, "defaults": values}, sort_keys=True))
+'''
+
+
+def _cp14a_cold_fresh(_module: types.ModuleType) -> None:
+    from hashlib import sha256
+
+    digest = sha256(_CP14_COLD_PROGRAM.encode("utf-8")).hexdigest()
+    _expect(digest == "3f3cdc3c5d6a316f54c20d14a4eeda45cc125f7bf546176011162ac59a95ff3c", "CP14 isolated child literal")
+    location = SCRIPT_DIR / "cp14-cold-trigger"
+    environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR") if key in os.environ}
+    command = [sys.executable, "-I", "-B", "-S", "-c", _CP14_COLD_PROGRAM, str(REPO_ROOT)]
+    launch: dict[str, object] = {"status": "not-started", "exit": None}
+    record: dict[str, object] = {
+        "operation": "cp14_cold_fresh_interpreter",
+        "program_sha256": digest,
+        "environment": environment,
+        "launch": launch,
+    }
+    capture = _CP13Capture()
+    report_path: Path | None = None
+    primary: BaseException | None = None
+    try:
+        capture.mkdir(location)
+        report_path = location / "final.json"
+        completed = _cp13_run_process(command, location, environment, location, launch, timeout=120, capture=capture)
+        _expect(completed.stderr == b"", "CP14 fresh child unexpected stderr")
+        observed = json.loads(completed.stdout.decode("utf-8"))
+        expected = {
+            "origins": {
+                "Sources.icefox": "Sources/icefox/__init__.py",
+                "Sources.icefox.MerchantRules": "Sources/icefox/MerchantRules/__init__.py",
+                "Sources.icefox.MerchantRules.automatic_triggers": "Sources/icefox/MerchantRules/automatic_triggers.py",
+            },
+            "namespace": "Sources",
+            "blocked": list[str](),
+            "defaults": json.loads(json.dumps(_CP14A_DEFAULTS)),
+        }
+        record["observed"] = observed
+        _expect(observed == expected, "CP14 isolated child origin, blocked imports and passive state")
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            capture.report(report_path, record, primary)
+        except BaseException as error:
+            if primary is None:
+                raise
+            capture.note(primary, "CP14 cold report: " + capture.describe(error))
+
+
+def _cp14a_cold(module: types.ModuleType) -> None:
+    import importlib
+    from importlib.abc import MetaPathFinder
+
+    package = "Sources.icefox.MerchantRules.automatic_triggers"
+    blocked: list[str] = []
+    forbidden = {"MerchantRules", "merchant_rules_regression_target", module.__name__, "Widgets", "GWCA"}
+
+    def native_or_widget(name: str) -> bool:
+        root = name.split(".")[0]
+        return root in forbidden or root.startswith("Py") or name.startswith("Sources.marks_sources")
+
+    def affected(name: str) -> bool:
+        return name == "Sources" or name.startswith("Sources.") or native_or_widget(name)
+
+    class Block(MetaPathFinder):
+        def find_spec(self, fullname: str, path: object = None, target: object = None) -> None:
+            if native_or_widget(fullname):
+                blocked.append(fullname)
+                raise ImportError("CP14 forbidden cold import " + fullname)
+            return None
+
+    saved = {name: value for name, value in tuple(sys.modules.items()) if affected(name)}
+    finder = Block()
+    old_path = sys.path[:]
+    old_meta = sys.meta_path[:]
+    try:
+        for name in saved:
+            del sys.modules[name]
+        sys.path.insert(0, str(REPO_ROOT))
+        sys.meta_path.insert(0, finder)
+        defining = importlib.import_module(package)
+        _expect(
+            Path(str(defining.__file__)).resolve() == REPO_ROOT / "Sources/icefox/MerchantRules/automatic_triggers.py",
+            "CP14 canonical trigger module after harness initialization",
+        )
+
+        class Trap:
+            def __getattribute__(self, name: str) -> object:
+                raise AssertionError("CP14 construction observed runtime " + name)
+
+        cls = getattr(defining, "AutomaticTriggers")
+        owner = cls(Trap())
+        _cp14a_equal(_cp14a_fields(owner), _CP14A_DEFAULTS, "passive owner defaults")
+        _cp14a_equal(blocked, [], "no swallowed forbidden imports")
+        _expect(not any(native_or_widget(name) for name in sys.modules), "CP14 runtime-free cold namespace")
+    finally:
+        for name in tuple(sys.modules):
+            if affected(name):
+                del sys.modules[name]
+        sys.modules.update(saved)
+        sys.path[:] = old_path
+        sys.meta_path[:] = old_meta
+
+
+def _cp14a_raw(module: types.ModuleType) -> None:
+    timers: list[tuple[object, object]] = []
+    original = getattr(module, "ThrottledTimer")
+
+    def factory(interval: int) -> object:
+        timer = original(interval)
+        timers.append((interval, timer))
+        return timer
+
+    with _cp14a_changes() as changes:
+        changes.binding(module, "ThrottledTimer", factory)
+        widgets = [getattr(module, "MerchantRulesWidget")() for _ in range(2)]
+    _cp14_observe(
+        "raw",
+        {
+            "intervals": [row[0] for row in timers],
+            "states": [_cp14a_fields(w) for w in widgets],
+            "distinct": len({id(timer) for _, timer in timers}),
+            "handle_identity": [
+                [
+                    getattr(w, field) is timers[4 * i + j][1]
+                    for j, field in enumerate(
+                        (
+                            "shared_profile_refresh_timer",
+                            "instant_destroy_poll_timer",
+                            "salvage_poll_timer",
+                            "identify_poll_timer",
+                        )
+                    )
+                ]
+                for i, w in enumerate(widgets)
+            ],
+        },
+    )
+    _cp14a_equal(len(timers), 8, "two complete raw timer sequences")
+    for offset, widget in enumerate(widgets):
+        group = timers[4 * offset : 4 * offset + 4]
+        _cp14a_equal(
+            [row[0] for row in group],
+            [getattr(module, "SHARED_PROFILE_REFRESH_INTERVAL_MS"), 400, 400, 400],
+            "raw timer intervals",
+        )
+        for row, name in zip(
+            group,
+            ("shared_profile_refresh_timer", "instant_destroy_poll_timer", "salvage_poll_timer", "identify_poll_timer"),
+            strict=True,
+        ):
+            _expect(getattr(widget, name) is row[1] and vars(widget)[name] is row[1], "CP14 widget-owned timer " + name)
+        _cp14a_equal(_cp14a_fields(widget), _CP14A_DEFAULTS, "raw widget defaults")
+        _expect(getattr(widget, "_runtime_inventory_signature_provider") is None, "CP14 raw provider")
+    _expect(len({id(timer) for _, timer in timers}) == 8, "CP14 independent timers")
+
+
+def _cp14a_instance_type(instance: object) -> type[object]:
+    return type(instance)
+
+
+def _cp14a_owner(module: types.ModuleType) -> None:
+    widget = getattr(module, "MerchantRulesWidget")()
+    other = getattr(module, "MerchantRulesWidget")()
+    owner = getattr(widget, "_automatic_triggers")
+    second = getattr(other, "_automatic_triggers")
+    defining = sys.modules["Sources.icefox.MerchantRules.automatic_triggers"]
+    _expect(
+        type(owner) is getattr(defining, "AutomaticTriggers") and type(second) is type(owner) and owner is not second,
+        "CP14 independent canonical owners",
+    )
+    for name, default in _CP14A_DEFAULTS.items():
+        prop = getattr(_cp14a_instance_type(widget), name)
+        _expect(
+            isinstance(prop, property) and prop.fget is not None and prop.fset is not None and name not in vars(widget),
+            "CP14 two-way descriptor " + name,
+        )
+        value = ((67, 23),) if type(default) is tuple else "visit:7" if type(default) is str else True
+        setattr(widget, name, value)
+        _expect(getattr(owner, name) is value and getattr(second, name) == default, "CP14 single backing slot " + name)
+        setattr(owner, name, default)
+        _expect(getattr(widget, name) is default, "CP14 owner update " + name)
+    setattr(widget, "_automatic_triggers", second)
+    try:
+        for name in _CP14A_DEFAULTS:
+            probe = object()
+            setattr(widget, name, probe)
+            _expect(
+                getattr(second, name) is probe and getattr(owner, name) == _CP14A_DEFAULTS[name],
+                "CP14 facade targets current owner " + name,
+            )
+    finally:
+        setattr(widget, "_automatic_triggers", owner)
+
+
+def _cp14a_replacements(module: types.ModuleType, entries: bool) -> None:
+    widget = _make_widget(module)
+    other = _make_widget(module)
+    original_owner = getattr(widget, "_automatic_triggers")
+    replacement = getattr(other, "_automatic_triggers")
+    labels: list[str] = []
+    channels = ("auto_cleanup", "auto_gold") if entries else _CP14A_INV
+    with _cp14a_changes() as changes:
+        changes.value(widget, "_automatic_triggers")
+        setattr(widget, "_automatic_triggers", replacement)
+        for channel in channels:
+            method = "update_" + channel + "_runtime"
+
+            def visit(receiver: object, label: str = channel) -> None:
+                _expect(receiver is replacement, "CP14 facade invokes replacement receiver " + label)
+                labels.append(label)
+
+            changes.binding(_cp14a_instance_type(replacement), method, visit)
+            _cp14a_update(widget, channel)
+        _cp14a_equal(labels, list(channels), "delegate uses current owner method")
+    _expect(getattr(widget, "_automatic_triggers") is original_owner, "CP14 restored original owner")
+    # Swap the current configuration after constructing the adapter. Replace different methods
+    # at two separate observation points to detect construction-time method capture.
+    _cp14a_enable(other, module)
+    widget._active_configuration = other._active_configuration
+    events: list[str] = []
+
+    def swap(*args: object, **kwargs: object) -> int:
+        events.append("refresh")
+
+        def replacement_reason(**_kw: object) -> str:
+            events.append("replacement")
+            return "blocked"
+
+        widget._merchant_rules_lifecycle_block_reason = replacement_reason
+        return 1
+
+    widget._refresh_merchant_rules_lifecycle_state = swap
+    for channel in channels:
+
+        def old_reason(**_kw: object) -> str:
+            events.append("old")
+            return ""
+
+        widget._merchant_rules_lifecycle_block_reason = old_reason
+        if channel in _CP14A_INV:
+            setattr(widget, channel + "_rescan_requested", True)
+        _cp14a_update(widget, channel)
+    _cp14a_equal(events, ["refresh", "replacement"] * len(channels), "late configuration and readiness method")
+    if entries:
+        gold_widget = _make_widget(module)
+        other_gold = _make_widget(module)
+        _cp14a_enable(gold_widget, module)
+        old_config = getattr(gold_widget, "_active_configuration")
+        new_config = getattr(other_gold, "_active_configuration")
+        config_reads: list[str] = []
+
+        class SwitchConfiguration:
+            def __bool__(self) -> bool:
+                config_reads.append("enabled")
+                setattr(gold_widget, "_active_configuration", new_config)
+                return True
+
+        class VisitSetting:
+            def __init__(self, source: str) -> None:
+                self.source = source
+
+            def __bool__(self) -> bool:
+                config_reads.append(self.source)
+                return True
+
+        with _cp14a_changes() as changes:
+            changes.value(gold_widget, "_active_configuration")
+            changes.value(old_config, "gold_balance_enabled")
+            changes.value(old_config, "gold_balance_on_outpost_entry")
+            changes.value(new_config, "gold_balance_on_outpost_entry")
+            setattr(old_config, "gold_balance_enabled", SwitchConfiguration())
+            setattr(old_config, "gold_balance_on_outpost_entry", VisitSetting("old visit"))
+            setattr(new_config, "gold_balance_on_outpost_entry", VisitSetting("new visit"))
+
+            def readiness(**_kwargs: object) -> str:
+                config_reads.append("readiness")
+                return "blocked"
+
+            changes.binding(gold_widget, "_merchant_rules_lifecycle_block_reason", readiness)
+            _cp14a_update(gold_widget, "auto_gold")
+            _cp14a_equal(config_reads, ["enabled", "new visit", "readiness"], "Gold config replacement between reads")
+
+        previous = getattr(gold_widget, "_automatic_triggers")
+        successor = getattr(other_gold, "_automatic_triggers")
+        setattr(successor, "gold_entry_attempted", True)
+        marker = RuntimeError("CP14 Gold submission replaced trigger owner")
+        prefixes: list[tuple[bool, bool]] = []
+
+        def swap_then_fail(work: object) -> None:
+            _cp14a_call(work, "close")
+            prefixes.append((getattr(previous, "gold_entry_attempted"), getattr(successor, "gold_entry_attempted")))
+            setattr(gold_widget, "_automatic_triggers", successor)
+            raise marker
+
+        with _cp14a_changes() as changes:
+            changes.value(gold_widget, "_automatic_triggers")
+            changes.binding(gold_widget, "_queue_merchant_rules_owned_work", swap_then_fail)
+            _cp14a_fault(marker, lambda: _cp14a_update(gold_widget, "auto_gold"), "late Gold catch owner")
+            _cp14a_equal(
+                (prefixes, getattr(previous, "gold_entry_attempted"), getattr(successor, "gold_entry_attempted")),
+                ([(True, True)], True, False),
+                "Gold rearm targets current owner at catch",
+            )
+        return
+
+    for channel in _CP14A_INV:
+        inventory_widget = _make_widget(module)
+        other_inventory = _make_widget(module)
+        _cp14a_enable(inventory_widget, module)
+        original = getattr(inventory_widget, "_automatic_triggers")
+        successor = getattr(other_inventory, "_automatic_triggers")
+        request = channel + "_rescan_requested"
+        setattr(original, request, True)
+        setattr(successor, request, True)
+        steps: list[tuple[str, bool, bool]] = []
+
+        def replace_at_signature() -> tuple[tuple[int, int], ...]:
+            steps.append(("signature", getattr(original, request), getattr(successor, request)))
+            setattr(inventory_widget, "_automatic_triggers", successor)
+            return ((77, 4),)
+
+        def consumed(*args: object, **kwargs: object) -> None:
+            steps.append(("submit", getattr(original, request), getattr(successor, request)))
+            if channel == "instant_destroy":
+                _cp14a_call(args[0], "close")
+
+        queue_method = {
+            "identify": "_queue_identify_now",
+            "salvage": "_queue_salvage_now",
+            "instant_destroy": "_queue_merchant_rules_owned_work",
+        }[channel]
+        with _cp14a_changes() as changes:
+            changes.value(inventory_widget, "_automatic_triggers")
+            changes.binding(inventory_widget, "_get_inventory_signature", replace_at_signature)
+            changes.binding(inventory_widget, queue_method, consumed)
+            _cp14a_update(inventory_widget, channel)
+            _cp14a_equal(
+                steps,
+                [("signature", True, True), ("submit", True, False)],
+                channel + " consumption targets owner current after signature",
+            )
+
+
+def _cp14a_seed_frame_profile(module: types.ModuleType) -> str:
+    # Populate the independent saved-profile store before creating the unresolved consumer.
+    seed = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+    _cp14a_enable(seed, module)
+    seed.favorite_outpost_ids = [2]
+    seed.gold_balance_after_manual_session = False
+    seed.cleanup_targets = [module.CleanupTarget(model_id=111, keep_on_character=0)]
+    key = "profile_" + "1" * 32
+    wrapper = seed._build_shared_profile_wrapper(
+        "CP14 Frame", payload=seed._build_profile_payload(), profile_id=key, saved_at_unix_ms=1400
+    )
+    _write_standalone_profile(seed, "account", "CP14 Frame.json", wrapper)
+    _expect(seed._refresh_profile_entries("account", reload_document=True) is True, "CP14 frame saved discovery")
+    seed._set_selected_profile_key("account", key)
+    selected = seed._get_selected_profile("account")
+    if selected is None or (selected.scope, selected.key) != ("account", key):
+        raise AssertionError("CP14 frame saved profile identity")
+    observation = seed._get_current_character_observation()
+    if observation is None:
+        raise AssertionError("CP14 frame seed character identity")
+    seed._persist_character_profile_association(
+        observation[0], module.CharacterProfileAssociation(selected.identity, observation[1])
+    )
+    return key
+
+
+if TYPE_CHECKING:
+    from Sources.icefox.MerchantRules.profiles import LiveProfileRuntime
+    from Sources.icefox.MerchantRules.profiles import ProfileIdentity
+
+
+type _CP14SignatureProvider = Callable[[], tuple[tuple[int, int], ...]] | None
+
+
+class _CP14PublicationSession(Protocol):
+    @property
+    def _runtime(self) -> LiveProfileRuntime: ...
+
+
+class _CP14FrameWidget(Protocol):
+    identify_rescan_requested: bool
+    salvage_rescan_requested: bool
+    instant_destroy_rescan_requested: bool
+    gold_balance_running: bool
+    status_message: str
+    favorite_outpost_ids: list[int]
+    identify_settings: IdentifySettings
+    salvage_settings: SalvageSettings
+    destroy_auto_enabled: bool
+    destroy_instant_enabled: bool
+    auto_cleanup_on_outpost_entry: bool
+    gold_balance_enabled: bool
+    gold_balance_on_outpost_entry: bool
+    gold_balance_after_manual_session: bool
+    cleanup_targets: list[CleanupTarget]
+    auto_cleanup_zone_attempted: bool
+    gold_entry_attempted: bool
+    merchant_rules_owned_work_count: int
+    identify_running: bool
+    _character_profile_ready: bool
+    _character_profile_resolved_profile_identity: ProfileIdentity | None
+    _runtime_inventory_signature_provider: _CP14SignatureProvider
+
+    @property
+    def _live_profile_session(self) -> _CP14PublicationSession: ...
+
+    def _tick_runtime(self) -> None: ...
+
+
+class _CP14FrameAccess(_CP14FrameWidget, _CP14PublicationSession):
+    @staticmethod
+    def publication_runtime(widget: _CP14FrameWidget) -> LiveProfileRuntime:
+        return widget._live_profile_session._runtime
+
+    @staticmethod
+    def tick(widget: _CP14FrameWidget) -> Callable[[], None]:
+        return widget._tick_runtime
+
+    @staticmethod
+    def ready(widget: _CP14FrameWidget) -> bool:
+        return widget._character_profile_ready
+
+    @staticmethod
+    def identity(widget: _CP14FrameWidget) -> ProfileIdentity | None:
+        return widget._character_profile_resolved_profile_identity
+
+    @staticmethod
+    def provider(widget: _CP14FrameWidget) -> _CP14SignatureProvider:
+        return widget._runtime_inventory_signature_provider
+
+    @staticmethod
+    def set_provider(widget: _CP14FrameWidget, provider: _CP14SignatureProvider) -> None:
+        widget._runtime_inventory_signature_provider = provider
+
+
+def _cp14a_frame(module: types.ModuleType, contended: bool, *, late_fault: bool = False) -> None:
+    calls: list[str] = []
+    predicates: list[str] = []
+    timers: list[str] = []
+    raw: list[int] = []
+    active: list[str] = []
+    stable = ((14, 8),)
+    queue: list[object] = []
+    fixture = "frame-late-fault" if late_fault else "frame-contended" if contended else "frame-shared"
+    marker = RuntimeError("CP14 explicit Cleanup location after successful Identify poll")
+    with _cp14_isolated_fixture(module, fixture), _cp14a_changes() as changes:
+        changes.binding(module.Player, "GetAccountEmail", lambda: "merchant.rules@example.com")
+        changes.binding(module.Player, "GetPlayerUUID", lambda: (1401, 1402, 1403, 1404))
+        changes.binding(module.GLOBAL_CACHE, "Coroutines", queue)
+        key = _cp14a_seed_frame_profile(module) if contended else None
+
+        def make_widget(
+            factory: Callable[[types.ModuleType], _CP14FrameWidget] = _make_unresolved_character_profile_widget,
+        ) -> _CP14FrameWidget:
+            return factory(module)
+
+        widget = make_widget()
+
+        def requests() -> tuple[bool, bool, bool]:
+            return (
+                widget.identify_rescan_requested,
+                widget.salvage_rescan_requested,
+                widget.instant_destroy_rescan_requested,
+            )
+
+        def traced(channel: str, operation: Callable[[], object]) -> Callable[[], object]:
+            def invoke() -> object:
+                calls.append(channel)
+                active.append(channel)
+                old_running = widget.gold_balance_running
+                if channel == "auto_gold" and not contended:
+                    widget.gold_balance_running = True
+                try:
+                    return operation()
+                finally:
+                    if channel == "auto_gold" and not contended:
+                        widget.gold_balance_running = old_running
+                    active.pop()
+
+            return invoke
+
+        for channel in _CP14A_NAMES:
+            name = "_update_" + channel + "_runtime"
+            changes.binding(widget, name, traced(channel, getattr(widget, name)))
+        for channel in _CP14A_INV:
+            setattr(widget, channel + "_poll_timer", _CP14ATimer(channel, timers))
+
+        published: list[tuple[bool, bool, bool]] = []
+        runtime = _CP14FrameAccess.publication_runtime(widget)
+        publish = _cp12_bound(runtime, "publish_configuration_rescans")
+        if not isinstance(publish, types.MethodType):
+            raise AssertionError("CP14 unresolved frame real publication method")
+        publication_code = publish.__func__.__code__
+        previous_trace = sys.gettrace()
+
+        def trace(frame: types.FrameType, event: str, arg: object) -> _CP7Trace | None:
+            if frame.f_code is publication_code and frame.f_locals.get("self") is runtime:
+                if event in ("line", "return"):
+                    state = requests()
+                    if not published or published[-1] != state:
+                        published.append(state)
+            return trace
+
+        try:
+            if contended:
+                sys.settrace(trace)
+            _CP14FrameAccess.tick(widget)()
+            first = (_CP14FrameAccess.ready(widget), calls[:], published[:])
+            _CP14FrameAccess.tick(widget)()
+            second = (_CP14FrameAccess.ready(widget), calls[:], published[:])
+        finally:
+            if contended:
+                sys.settrace(previous_trace)
+        _cp14_observe("resolution", [first, second])
+        expected_publication = (
+            [(False, False, False), (True, False, False), (True, True, False), (True, True, True)] if contended else []
+        )
+        expected_ticks: list[tuple[bool, list[str], list[tuple[bool, bool, bool]]]] = [
+            (False, [], []),
+            (True, [], expected_publication),
+        ]
+        _cp14a_equal([first, second], expected_ticks, "two resolution ticks")
+        if contended:
+            identity = _CP14FrameAccess.identity(widget)
+            resolved = (
+                None if identity is None else (identity.scope, identity.key),
+                widget.status_message,
+                list(widget.favorite_outpost_ids),
+                requests(),
+                widget.identify_settings.on_inventory_change,
+                widget.salvage_settings.on_inventory_change,
+                widget.destroy_auto_enabled,
+                widget.destroy_instant_enabled,
+                widget.auto_cleanup_on_outpost_entry,
+                widget.gold_balance_enabled,
+                widget.gold_balance_on_outpost_entry,
+            )
+            _cp14_observe("remembered_publication", resolved)
+            _cp14a_equal(
+                resolved,
+                (
+                    ("account", key),
+                    "Loaded Account profile 'CP14 Frame' for this character.",
+                    [2],
+                    (True, True, True),
+                    True,
+                    True,
+                    True,
+                    False,
+                    True,
+                    True,
+                    True,
+                ),
+                "saved nonblank configuration and published requests",
+            )
+        else:
+            _cp14a_enable(widget, module)
+            widget.gold_balance_after_manual_session = False
+            widget.cleanup_targets = [module.CleanupTarget(model_id=111, keep_on_character=0)]
+            for channel in _CP14A_INV:
+                setattr(widget, channel + "_last_signature", stable)
+                setattr(widget, channel + "_rescan_requested", late_fault and channel != "identify")
+        timer_start = len(timers)
+        changes.binding(widget, "_get_inventory_signature", lambda: raw.append(1) or stable)
+
+        def previous_provider() -> tuple[tuple[int, int], ...]:
+            raise AssertionError("CP14 active frame unexpectedly called its prior provider")
+
+        original_provider = _CP14FrameAccess.provider(widget)
+        if late_fault:
+            changes.value(widget, "_runtime_inventory_signature_provider")
+            _CP14FrameAccess.set_provider(widget, previous_provider)
+
+        def result() -> tuple[object, ...]:
+            return (
+                calls[:],
+                predicates[:],
+                timers[timer_start:],
+                raw[:],
+                requests(),
+                widget.auto_cleanup_zone_attempted,
+                widget.gold_entry_attempted,
+                len(queue),
+                widget.merchant_rules_owned_work_count,
+                widget.identify_running,
+            )
+
+        def recording_method(label: str, original: Callable[..., object]) -> Callable[..., object]:
+            def invoke(*args: object, **kwargs: object) -> object:
+                if active and active[-1] in ("auto_cleanup", "auto_gold"):
+                    predicates.append(active[-1] + "." + label)
+                return original(*args, **kwargs)
+
+            return invoke
+
+        for name, label in (
+            ("_merchant_rules_lifecycle_block_reason", "ready"),
+            ("_merchant_rules_has_pending_or_active_work", "busy"),
+            ("_has_cleanup_sources", "sources"),
+        ):
+            changes.binding(widget, name, recording_method(label, getattr(widget, name)))
+        original_outpost = module.Map.IsOutpost
+        original_hall = module.Map.IsGuildHall
+
+        def outpost() -> bool:
+            if active and active[-1] in ("auto_cleanup", "auto_gold"):
+                event = active[-1] + ".outpost"
+                predicates.append(event)
+                if active[-1] == "auto_cleanup" and predicates.count(event) == 2:
+                    if late_fault:
+                        frame_provider = _CP14FrameAccess.provider(widget)
+                        under_frame = frame_provider is not None and frame_provider is not previous_provider
+                        _cp14_observe("cleanup_before_fault", (result(), under_frame))
+                        _expect(under_frame, "CP14 Cleanup fault reached inside the real frame provider scope")
+                        raise marker
+                    return False
+                return True
+            return original_outpost()
+
+        def hall() -> bool:
+            if active and active[-1] in ("auto_cleanup", "auto_gold"):
+                predicates.append(active[-1] + ".hall")
+                return False
+            return original_hall()
+
+        changes.binding(module.Map, "IsOutpost", outpost)
+        changes.binding(module.Map, "IsGuildHall", hall)
+        try:
+            if late_fault:
+                _cp14a_fault(marker, _CP14FrameAccess.tick(widget), "real Cleanup explicit outpost read")
+                escaped = result()
+                previous_restored = _CP14FrameAccess.provider(widget) is previous_provider
+                _cp14_observe("cleanup_after_fault", (escaped, previous_restored))
+                _cp14a_equal(
+                    (escaped, previous_restored),
+                    (
+                        (
+                            ["identify", "auto_cleanup"],
+                            [
+                                "auto_cleanup.ready",
+                                "auto_cleanup.outpost",
+                                "auto_cleanup.busy",
+                                "auto_cleanup.sources",
+                                "auto_cleanup.outpost",
+                            ],
+                            ["identify.expiry", "identify.reset"],
+                            [1],
+                            (False, True, True),
+                            False,
+                            False,
+                            0,
+                            0,
+                            False,
+                        ),
+                        True,
+                    ),
+                    "earlier real Identify poll survives real Cleanup error and later observers do not start",
+                )
+                return
+
+            _CP14FrameAccess.tick(widget)()
+            observed = result()
+            _cp14_observe("eligible", observed)
+            prefix = ["auto_cleanup.ready", "auto_cleanup.outpost", "auto_cleanup.busy"]
+            if not contended:
+                prefix += ["auto_cleanup.sources", "auto_cleanup.outpost", "auto_cleanup.hall"]
+            expected_predicates = prefix + [
+                "auto_gold.ready",
+                "auto_gold.outpost",
+                "auto_gold.outpost",
+                "auto_gold.busy",
+            ]
+            expected_timers = (
+                ["identify.reset"]
+                if contended
+                else [c + "." + suffix for c in _CP14A_INV for suffix in ("expiry", "reset")]
+            )
+            _cp14a_equal(
+                observed,
+                (
+                    list(_CP14A_NAMES),
+                    expected_predicates,
+                    expected_timers,
+                    [1],
+                    (False, contended, contended),
+                    False,
+                    False,
+                    int(contended),
+                    int(contended),
+                    contended,
+                ),
+                "real observer frame",
+            )
+            _expect(_CP14FrameAccess.provider(widget) is original_provider, "CP14 restored frame provider")
+            if contended:
+                _expect(
+                    type(queue[0]) is getattr(module, "_MerchantRulesOwnedGenerator"),
+                    "CP14 accepted automatic Identify owns the pending iterator",
+                )
+        finally:
+            for item in queue:
+                _cp14a_call(item, "close")
+
+
+def _cp14a_timer_swap(module: types.ModuleType) -> None:
+    evidence: dict[str, object] = {}
+    for channel in _CP14A_INV:
+        widget = _make_widget(module)
+        _cp14a_enable(widget, module)
+        events: list[str] = []
+        field = channel + "_poll_timer"
+        old = _CP14ATimer("old", events)
+        new = _CP14ATimer("new", events)
+        setattr(widget, field, old)
+        signature = ((25, 6),)
+        setattr(widget, channel + "_last_signature", signature)
+
+        def read() -> tuple[tuple[int, int], ...]:
+            events.append("read")
+            setattr(widget, field, new)
+            return signature
+
+        widget._get_inventory_signature = read
+        _cp14a_update(widget, channel)
+        evidence[channel] = (events[:], getattr(widget, field) is new)
+        _cp14a_equal(evidence[channel], (["old.expiry", "read", "new.reset"], True), channel + " late reset")
+    _cp14_observe("timers", evidence)
+
+
+def _cp14a_provider(module: types.ModuleType) -> None:
+    widget = _prime_initialized_widget(module, _make_widget(module))
+    widget.auto_cleanup_on_outpost_entry = False
+    widget.gold_balance_enabled = False
+    widget.destroy_auto_enabled = False
+    widget.destroy_instant_enabled = False
+    widget.salvage_settings = _salvage_settings(module)
+    signature = widget._get_runtime_inventory_signature
+    original_prior = widget._runtime_inventory_signature_provider
+    events: list[str] = []
+    raw: list[tuple[tuple[int, int], ...]] = []
+
+    class Prior:
+        def __bool__(self) -> bool:
+            return False
+
+        def __call__(self) -> tuple[tuple[int, int], ...]:
+            events.append("prior")
+            return ((91, 1),)
+
+    prior = Prior()
+
+    def sample() -> tuple[tuple[int, int], ...]:
+        raw.append(((len(raw) + 1, 1),))
+        return raw[-1]
+
+    depth = 0
+    fault_at: str | None = None
+    marker = RuntimeError("CP14 frame interruption")
+    observed: list[object] = []
+
+    def identify() -> None:
+        nonlocal depth
+        events.append("enter" + str(depth))
+        provider = widget._runtime_inventory_signature_provider
+        value = signature()
+        if depth == 1:
+            observed.append(("inner", value, provider is not prior, signature() is value))
+            if fault_at == "inner":
+                _cp14_observe("inner_prefix", (events[:], raw[:], observed[:]))
+                raise marker
+            return
+        depth += 1
+        try:
+            widget._tick_runtime()
+        finally:
+            depth -= 1
+            observed.append(
+                ("outer", value, widget._runtime_inventory_signature_provider is provider, signature() is value)
+            )
+        if fault_at == "outer":
+            _cp14_observe("outer_prefix", (events[:], raw[:], observed[:]))
+            raise marker
+
+    with _cp14a_changes() as changes:
+        changes.binding(widget, "_get_inventory_signature", sample)
+        changes.value(widget, "_runtime_inventory_signature_provider")
+        widget._runtime_inventory_signature_provider = prior
+        direct = signature()
+        widget._runtime_inventory_signature_provider = None
+        first_raw, second_raw = signature(), signature()
+        _cp14_observe("direct", [direct, first_raw, second_raw])
+        _cp14a_equal((direct, first_raw, second_raw), (((91, 1),), ((1, 1),), ((2, 1),)), "direct provider and raw")
+        widget._runtime_inventory_signature_provider = prior
+        changes.binding(widget, "_update_identify_runtime", identify)
+        for mode in (None, "inner", "outer"):
+            fault_at = mode
+            raw.clear()
+            events.clear()
+            observed.clear()
+            if mode is None:
+                widget._tick_runtime()
+            else:
+                _cp14a_fault(marker, widget._tick_runtime, mode)
+            result = (events[:], raw[:], observed[:], widget._runtime_inventory_signature_provider is prior)
+            _cp14_observe("frames_" + str(mode), result)
+            _cp14a_equal(
+                result,
+                (
+                    ["enter0", "enter1"],
+                    [((1, 1),), ((2, 1),)],
+                    [("inner", ((2, 1),), True, True), ("outer", ((1, 1),), True, True)],
+                    True,
+                ),
+                "nesting and exact provider restoration " + str(mode),
+            )
+    _expect(widget._runtime_inventory_signature_provider is original_prior, "CP14 fixture restores prior provider")
+
+
+def _cp14a_inventory_faults(module: types.ModuleType) -> None:
+    for channel in _CP14A_INV:
+        for boundary in ("signature", "reset", "submission"):
+            widget = _make_widget(module)
+            _cp14a_enable(widget, module)
+            events: list[str] = []
+            marker = RuntimeError(channel + "." + boundary)
+            request = channel + "_rescan_requested"
+            baseline = ((5, 6),)
+            setattr(widget, request, True)
+            setattr(widget, channel + "_last_signature", baseline)
+            timer = _CP14ATimer("timer", events)
+            setattr(widget, channel + "_poll_timer", timer)
+            if boundary == "reset":
+                timer.failure = marker
+
+            def state() -> tuple[object, ...]:
+                return (
+                    events[:],
+                    getattr(widget, request),
+                    getattr(widget, channel + "_last_signature") is baseline,
+                    widget.merchant_rules_owned_work_count,
+                )
+
+            if boundary == "reset":
+                timer.before_failure = lambda: _cp14_observe(str(marker) + "_prefix", state())
+
+            def read() -> tuple[tuple[int, int], ...]:
+                events.append("signature")
+                if boundary == "signature":
+                    _cp14_observe(str(marker) + "_prefix", state())
+                    raise marker
+                return ((7, 1),)
+
+            def submit(*args: object, **kwargs: object) -> None:
+                events.append("submit")
+                if channel == "instant_destroy":
+                    _cp14a_call(args[0], "close")
+                    _cp14a_equal(
+                        kwargs,
+                        {"reset_values_before_start": (("instant_destroy_rescan_requested", True),)},
+                        "Destroy automatic submission contract",
+                    )
+                else:
+                    _cp14a_equal(kwargs, {"auto_triggered": True}, "automatic " + channel + " submission")
+                _cp14_observe(str(marker) + "_prefix", state())
+                raise marker
+
+            widget._get_inventory_signature = read
+            method = {
+                "identify": "_queue_identify_now",
+                "salvage": "_queue_salvage_now",
+                "instant_destroy": "_queue_merchant_rules_owned_work",
+            }[channel]
+            setattr(widget, method, submit)
+            _cp14a_fault(marker, lambda: _cp14a_update(widget, channel), str(marker))
+            result = state()
+            _cp14_observe(str(marker), result)
+            expected = {
+                "signature": ["signature"],
+                "reset": ["signature", "timer.reset"],
+                "submission": ["signature", "timer.reset", "submit"],
+            }[boundary]
+            _cp14a_equal(result, (expected, boundary != "submission", True, 0), str(marker))
+
+
+def _cp14a_admission(module: types.ModuleType, channel: str) -> None:
+    inventory = channel in _CP14A_INV
+    field = channel + "_rescan_requested" if inventory else "auto_cleanup_zone_attempted"
+    factory_name = {
+        "identify": "_run_identify_pass",
+        "salvage": "_run_salvage_pass",
+        "instant_destroy": "_run_instant_destroy_pass",
+        "auto_cleanup": "_execute_cleanup_now",
+    }[channel]
+    running_field = {
+        "identify": "identify_running",
+        "salvage": "salvage_running",
+        "instant_destroy": "instant_destroy_running",
+        "auto_cleanup": "auto_cleanup_running",
+    }[channel]
+    boundaries = ["factory", "character", "tracker", "append"]
+    if channel != "instant_destroy":
+        boundaries.append("recheck")
+    for boundary in boundaries:
+        events: list[str] = []
+        queue_entries: list[object] = []
+        releases: list[int] = []
+        marker = RuntimeError(channel + "." + boundary)
+        widget = _make_widget(module)
+        _cp14a_enable(widget, module)
+        widget.cleanup_targets = [module.CleanupTarget(model_id=111, keep_on_character=0)]
+        widget._get_inventory_signature = lambda: ((41, 3),)
+        widget.auto_cleanup_zone_token = "current-visit"
+        setattr(widget, field, inventory)
+        token = widget.auto_cleanup_zone_token
+        others = object()
+
+        class Raw:
+            def __iter__(self) -> object:
+                return self
+
+            def __next__(self) -> object:
+                raise AssertionError("CP14 admission advanced raw work")
+
+            def close(self) -> None:
+                events.append("close")
+
+        raw = Raw()
+
+        def snapshot() -> tuple[object, ...]:
+            return (
+                events[:],
+                getattr(widget, field),
+                getattr(widget, running_field),
+                widget.auto_cleanup_zone_token,
+                releases[:],
+                widget.merchant_rules_owned_work_count,
+                queue_entries == [others],
+            )
+
+        def remember(suffix: str) -> None:
+            value = snapshot()
+            _cp14_observe(str(marker) + "_" + suffix, value)
+            if suffix == "prefix":
+                trace = {"factory": ["factory"], "tracker": ["factory", "tracker"], "append": ["factory", "append"]}[
+                    boundary
+                ]
+                _cp14a_equal(
+                    value,
+                    (
+                        trace,
+                        not inventory,
+                        channel != "instant_destroy",
+                        token,
+                        list[int](),
+                        int(boundary in ("tracker", "append")),
+                        True,
+                    ),
+                    str(marker) + " at injection",
+                )
+
+        def factory(*args: object, **kwargs: object) -> object:
+            events.append("factory")
+            if boundary == "factory":
+                remember("prefix")
+                raise marker
+            if boundary == "character":
+                widget._character_profile_ready = False
+            return raw
+
+        def broken_tracker(*args: object, **kwargs: object) -> object:
+            events.append("tracker")
+            remember("prefix")
+            raise marker
+
+        original_release = widget._release_merchant_rules_owned_work
+
+        def release() -> None:
+            releases.append(widget.merchant_rules_owned_work_count)
+            original_release()
+
+        class Sink:
+            def append(self, obj: object) -> None:
+                events.append("append")
+                if boundary == "append":
+                    _cp14a_equal(type(obj).__name__, "_MerchantRulesOwnedGenerator", "real owned append object")
+                    remember("prefix")
+                    raise marker
+                queue_entries.append(obj)
+
+        with _cp14a_changes() as changes:
+            queue_entries.append(others)
+            changes.binding(module.GLOBAL_CACHE, "Coroutines", Sink())
+            changes.binding(widget, factory_name, factory)
+            changes.binding(widget, "_release_merchant_rules_owned_work", release)
+            if boundary == "tracker":
+                # Fail construction inside the real tracker after its increment.
+                changes.binding(module, "_MerchantRulesOwnedGenerator", broken_tracker)
+            if boundary == "recheck":
+                original_busy = widget._merchant_rules_has_pending_or_active_work
+                calls = 0
+
+                def become_busy(*args: object, **kwargs: object) -> bool:
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        widget.manual_vendor_running = True
+                    events.append("busy")
+                    return original_busy(*args, **kwargs)
+
+                changes.binding(widget, "_merchant_rules_has_pending_or_active_work", become_busy)
+            if boundary in ("character", "recheck"):
+                _cp14a_update(widget, channel)
+            else:
+                _cp14a_fault(marker, lambda: _cp14a_update(widget, channel), str(marker))
+            remember("final")
+            expected_events = {
+                "factory": ["factory"],
+                "character": ["factory", "close"],
+                "tracker": ["factory", "tracker", "close"],
+                "append": ["factory", "append", "close"],
+                "recheck": ["busy", "busy"],
+            }[boundary]
+            restored = boundary in ("tracker", "append")
+            expected_field = restored if inventory else not restored
+            expected_running = boundary == "factory" and channel != "instant_destroy"
+            expected_token = "" if restored and not inventory else token
+            _cp14a_equal(
+                snapshot(),
+                (expected_events, expected_field, expected_running, expected_token, [1] if restored else [], 0, True),
+                str(marker),
+            )
+
+
+def _cp14a_gold_errors(module: types.ModuleType) -> None:
+    class OutsideException(BaseException):
+        pass
+
+    for boundary in ("factory", "exception", "base"):
+        widget = _make_widget(module)
+        _cp14a_enable(widget, module)
+        widget.gold_entry_zone_token = "visit"
+        events: list[str] = []
+        error = OutsideException("gold base") if boundary == "base" else ValueError("gold " + boundary)
+
+        def state() -> tuple[object, ...]:
+            return (
+                events[:],
+                widget.gold_entry_attempted,
+                widget.gold_entry_zone_token,
+                widget.merchant_rules_owned_work_count,
+                widget.gold_balance_running,
+            )
+
+        def factory(reason: str) -> object:
+            events.append(reason)
+            if boundary == "factory":
+                _cp14_observe("gold_" + boundary + "_prefix", state())
+                raise error
+            return _return_generator(None)
+
+        def submit(work: object) -> None:
+            events.append("submit")
+            _cp14a_call(work, "close")
+            _cp14_observe("gold_" + boundary + "_prefix", state())
+            raise error
+
+        widget._run_gold_balance_trigger = factory
+        widget._queue_merchant_rules_owned_work = submit
+        _cp14a_fault(error, widget._update_auto_gold_runtime, boundary)
+        _cp14_observe("gold_" + boundary + "_final", state())
+        _cp14a_equal(
+            state(),
+            (["outpost entry"] + ([] if boundary == "factory" else ["submit"]), boundary == "base", "visit", 0, False),
+            "Gold exception boundary",
+        )
+
+
+def _cp14a_masks(module: types.ModuleType) -> None:
+    # Make the real common busy observation before introducing the Gold running flag.
+    for channel in _CP14A_NAMES:
+        widget = _make_widget(module)
+        _cp14a_enable(widget, module)
+        events: list[str] = []
+        widget.cleanup_targets = [module.CleanupTarget(model_id=111, keep_on_character=0)]
+        if channel in _CP14A_INV:
+            setattr(widget, channel + "_rescan_requested", True)
+        original_busy = widget._merchant_rules_has_pending_or_active_work
+
+        def crossing(*args: object, **kwargs: object) -> bool:
+            result = original_busy(*args, **kwargs)
+            events.append("busy:" + str(result))
+            widget.gold_balance_running = True
+            return result
+
+        widget._merchant_rules_has_pending_or_active_work = crossing
+        widget._get_inventory_signature = lambda: events.append("read") or ((67, 5),)
+
+        def submit(*args: object, **kwargs: object) -> None:
+            events.append("submit")
+            for item in args:
+                _cp14a_call(item, "close")
+
+        target = {
+            "identify": "_queue_identify_now",
+            "salvage": "_queue_salvage_now",
+            "auto_cleanup": "_queue_cleanup_now",
+            "auto_gold": "_queue_merchant_rules_owned_work",
+            "instant_destroy": "_queue_merchant_rules_owned_work",
+        }[channel]
+        setattr(widget, target, submit)
+        _cp14a_update(widget, channel)
+        _cp14_observe(channel, (events[:], _cp14a_fields(widget)))
+        expected = ["busy:False"]
+        if channel in ("salvage", "instant_destroy"):
+            expected += ["read", "submit"]
+        if channel == "auto_cleanup":
+            expected.append("submit")
+        _cp14a_equal(events, expected, channel + " secondary Gold mask")
+
+
+_CP14_A_CASES: tuple[tuple[str, Callable[[types.ModuleType], None]], ...] = (
+    ("cp14_raw_timer_construction", _cp14a_raw),
+    ("cp14_cold_trigger_owner", _cp14a_cold),
+    ("cp14_cold_fresh_interpreter", _cp14a_cold_fresh),
+    ("cp14_canonical_trigger_facades", _cp14a_owner),
+    ("cp14_inventory_late_bindings", partial(_cp14a_replacements, entries=False)),
+    ("cp14_timer_replaced_while_reading", _cp14a_timer_swap),
+    ("cp14_inventory_failure_prefixes", _cp14a_inventory_faults),
+    ("cp14_identify_admission", partial(_cp14a_admission, channel="identify")),
+    ("cp14_salvage_admission", partial(_cp14a_admission, channel="salvage")),
+    ("cp14_destroy_admission", partial(_cp14a_admission, channel="instant_destroy")),
+    ("cp14_entry_late_bindings", partial(_cp14a_replacements, entries=True)),
+    ("cp14_frame_shared", partial(_cp14a_frame, contended=False)),
+    ("cp14_frame_contended", partial(_cp14a_frame, contended=True)),
+    ("cp14_frame_late_fault", partial(_cp14a_frame, contended=False, late_fault=True)),
+    ("cp14_provider_nesting", _cp14a_provider),
+    ("cp14_cleanup_admission", partial(_cp14a_admission, channel="auto_cleanup")),
+    ("cp14_gold_exception_boundary", _cp14a_gold_errors),
+    ("cp14_secondary_running_masks", _cp14a_masks),
+)
+
+# Common proof on the frozen CP13 widget and on the proposed final widget.
+_CP14_FIXTURE_CASES = (
+    "frame-shared",
+    "frame-contended",
+    "frame-late-fault",
+    "reset-cp12",
+    "reset-reload",
+    "reset-restore",
+    "publication",
+)
+
+
+@contextmanager
+def _cp14_isolated_fixture(module: types.ModuleType, case: str) -> Iterator[Path]:
+    """Bind private copies of the harness fake stores and root all document paths in this case."""
+    from copy import deepcopy
+
+    if case not in _CP14_FIXTURE_CASES:
+        raise AssertionError("Unknown CP14 persistence fixture " + case)
+    host = SCRIPT_DIR / "_merchant_rules_regression_tmp"
+    console = module.PySystem.Console
+    if Path(console.get_projects_path()) != host or not host.is_dir():
+        raise AssertionError("The CP14 persistence fixture needs the current harness-owned scratch")
+    root = host / ("cp14-" + case)
+    root.mkdir(exist_ok=False)
+
+    fake: object = getattr(module, "JsonFactory")
+    core = sys.modules["Py4GWCoreLib"]
+    if (
+        not isinstance(fake, type)
+        or fake.__qualname__ != "_install_stub_modules.<locals>.DummyJsonFactory"
+        or getattr(core, "JsonFactory") is not fake
+    ):
+        raise AssertionError("CP14 requires the original harness fake JsonFactory")
+    dict_names = (
+        "_documents",
+        "_persisted_documents",
+        "_account_documents",
+        "_save_calls",
+        "_save_results",
+        "_reload_overrides",
+        "_reload_results",
+    )
+    list_names = ("_operation_log", "_apply_calls")
+    names = (*dict_names, *list_names)
+    before = {name: getattr(fake, name) for name in names}
+    before_values = deepcopy(before)
+    if {
+        name for name, value in vars(fake).items() if not name.startswith("__") and isinstance(value, (dict, list))
+    } != set(names):
+        raise AssertionError("CP14 fake persistence store inventory changed")
+    state: dict[str, object] = {name: {} for name in dict_names}
+    state.update({name: [] for name in list_names})
+
+    def local_path(doc: object) -> Path:
+        name = getattr(doc, "name")
+        scope = getattr(doc, "scope")
+        if not isinstance(name, str) or scope not in ("account", "global"):
+            raise AssertionError("CP14 invalid fake document identity")
+        name = name.replace("\\", "/")
+        parts = name.split("/")
+        if not parts or any(part in ("", ".", "..") or ":" in part for part in parts):
+            raise AssertionError("CP14 invalid relative document path")
+        account = "merchant.rules@example.com"
+        if scope == "account" and name == "Widgets/MerchantRules/CharacterProfileState.json":
+            if module.Player.GetAccountEmail() != account:
+                raise AssertionError("Unexpected synthetic character account")
+        return root.joinpath("json", "global" if scope == "global" else account, *parts)
+
+    def document_path(doc: object) -> str:
+        return str(local_path(doc))
+
+    def initial_reset(cls: type[object]) -> None:
+        # The retained CP13 setup calls reset once before seeding its brand-new fixture.
+        # Reaching it on populated storage is an ordering error. It has no shared deletion path.
+        if any(getattr(cls, name) for name in names) or any(root.iterdir()):
+            raise AssertionError("CP14 fake reset reached a populated case")
+
+    isolated = type(
+        "CP14PrivateJsonFactory",
+        (fake,),
+        {
+            **state,
+            "_standalone_physical_path": local_path,
+            "_character_profile_state_physical_path": local_path,
+            "path": document_path,
+            "reset": classmethod(initial_reset),
+        },
+    )
+    # Inherited save/reload resolve their storage paths on self; resolved_path calls self.path().
+    # SavedProfileSession and LiveProfileSession resolve the current widget-module factory.
+    restore = _CP8Restoration()
+
+    def class_namespace(owner: type[object]) -> Mapping[str, object]:
+        return vars(owner)
+
+    previous_getter = class_namespace(console)["get_projects_path"]
+    try:
+        restore.binding(module, "JsonFactory", isolated)
+        restore.binding(core, "JsonFactory", isolated)
+        restore.binding(console, "get_projects_path", staticmethod(lambda: str(root)))
+        _expect(Path(console.get_projects_path()) == root, "CP14 private project root")
+        for name in names:
+            _expect(getattr(isolated, name) is state[name] and state[name] is not before[name], name)
+        yield root
+    finally:
+        restore.restore()
+        _expect(module.JsonFactory is fake and getattr(core, "JsonFactory") is fake, "CP14 fake aliases restored")
+        _expect(vars(console)["get_projects_path"] is previous_getter, "CP14 original getter descriptor restored")
+        _expect(Path(console.get_projects_path()) == host, "CP14 original project root restored")
+        for name in names:
+            _expect(getattr(fake, name) is before[name] and before[name] == before_values[name], name)
+
+
+def _cp14_b_equal(key: str, actual: object, expected: object) -> None:
+    _cp14_observe(key, actual)
+    _expect(actual == expected, f"{key}: observed {actual!r}, expected {expected!r}")
+
+
+def _cp14_b_fields(widget: object, *names: str) -> tuple[object, ...]:
+    return tuple(getattr(widget, name) for name in names)
+
+
+_CP14_B_REQUESTS = ("identify_rescan_requested", "salvage_rescan_requested", "instant_destroy_rescan_requested")
+_CP14_B_SIGNATURES = ("identify_last_signature", "salvage_last_signature", "instant_destroy_last_signature")
+_CP14_B_ZONE = (
+    "auto_cleanup_zone_attempted",
+    "auto_cleanup_zone_token",
+    "gold_entry_attempted",
+    "gold_entry_zone_token",
+)
+
+
+@contextmanager
+def _cp14_b_world(module: types.ModuleType) -> Iterator[tuple[list[object], list[int], _CP8Restoration]]:
+    restore = _CP8Restoration()
+    coroutines: list[object] = [object()]
+    map_id = [100]
+    try:
+        # Only stub the shared test-host inputs; instance state is private to each example.
+        restore.binding(module.GLOBAL_CACHE, "Coroutines", coroutines)
+        restore.binding(module.Map, "IsMapReady", lambda: True)
+        restore.binding(module.Map, "GetMapID", lambda: map_id[0])
+        restore.binding(module.Map, "GetInstanceUptime", lambda: 5000)
+        restore.binding(module.Map, "IsOutpost", lambda: True)
+        restore.binding(module.Map, "IsGuildHall", lambda: False)
+        restore.binding(module.Routines.Checks.Map, "MapValid", lambda: True)
+        restore.binding(module.Player, "IsPlayerLoaded", lambda: True)
+        restore.binding(module.Player, "GetAgentID", lambda: 1)
+        restore.binding(module.Player, "GetInstanceUptime", lambda: 4000)
+        restore.binding(module.Player, "GetAccountEmail", lambda: "merchant.rules@example.com")
+        restore.binding(module.Player, "GetName", lambda: "Merchant Rules Tester")
+        restore.binding(module.Player, "GetPlayerUUID", lambda: (1, 2, 3, 4))
+        yield coroutines, map_id, restore
+    finally:
+        try:
+            for owned in coroutines[1:]:
+                _cp13_call(owned, "close")
+        finally:
+            restore.restore()
+
+
+def _cp14_b_tap_release(widget: object, tag: str, calls: list[str]) -> None:
+    method = "_release_merchant_rules_owned_" + tag
+    original = _cp12_bound(widget, method)
+
+    def release() -> None:
+        calls.append(tag)
+        original()
+
+    setattr(widget, method, release)
+
+
+def _cp14_b_expect_stopped(work: object) -> None:
+    try:
+        _cp13_call(work, "__next__")
+    except StopIteration:
+        return
+    raise AssertionError("Expected stale automatic work to stop before touching its body")
+
+
+def _cp14_b_enable_inventory(module: types.ModuleType, widget: object) -> None:
+    setattr(widget, "identify_settings", _identify_settings(module, rarities=["blue"], on_inventory_change=True))
+    setattr(widget, "salvage_settings", _salvage_settings(module, model_ids=[222], on_inventory_change=True))
+    setattr(widget, "destroy_auto_enabled", True)
+
+
+def _cp14_b_retries(module: types.ModuleType, *, name: str) -> None:
+    flag = name + "_rescan_requested"
+    for reason, expected in (("close", True), ("account", True), ("profile", False), ("map", False)):
+        with _cp14_b_world(module) as (queue, map_id, _restore):
+            widget: object = _prime_initialized_widget(module, _make_widget(module))
+            _cp14_b_enable_inventory(module, widget)
+            sentinel = queue[0]
+            releases: list[str] = []
+            _cp14_b_tap_release(widget, "work", releases)
+            setattr(widget, "_get_inventory_signature", lambda: ((111, 3),))
+            setattr(widget, flag, True)
+            generation = getattr(widget, "merchant_rules_profile_generation")
+            _cp13_call(widget, "_update_" + name + "_runtime")
+            key = name + "-" + reason
+            _cp14_b_equal(
+                key + "-admit",
+                (len(queue), getattr(widget, flag), getattr(widget, "merchant_rules_owned_work_count")),
+                (2, False, 1),
+            )
+            work = queue[1]
+            if reason == "close":
+                _cp13_call(work, "close")
+            else:
+                if reason == "account":
+                    setattr(widget, "_get_account_key", lambda: "successor@example.com")
+                elif reason == "profile":
+                    setattr(widget, "merchant_rules_profile_generation", generation + 1)
+                else:
+                    map_id[0] = 200
+                    _cp13_call(widget, "_refresh_merchant_rules_lifecycle_state")
+                _cp14_b_expect_stopped(work)
+            _cp13_call(work, "close")
+            _cp14_b_equal(
+                key + "-release",
+                (
+                    getattr(widget, flag),
+                    tuple(releases),
+                    getattr(widget, "merchant_rules_owned_work_count"),
+                    getattr(widget, "merchant_rules_profile_generation") == generation,
+                    queue == [sentinel, work],
+                    getattr(widget, name + "_running"),
+                ),
+                (expected, ("work",), 0, reason != "profile", True, False),
+            )
+
+
+def _cp14_b_successor(module: types.ModuleType, *, mode: str) -> None:
+    for claimed in (False, True):
+        with _cp14_b_world(module) as (queue, map_id, _restore):
+            widget: object = _prime_initialized_widget(module, _make_widget(module))
+            sentinel = queue[0]
+            releases: list[str] = []
+            _cp14_b_tap_release(widget, "work", releases)
+            setattr(widget, "auto_cleanup_on_outpost_entry", True)
+            setattr(widget, "_has_cleanup_sources", lambda: True)
+            setattr(widget, "auto_cleanup_zone_token", "A-token")
+            _cp13_call(widget, "_update_auto_cleanup_runtime")
+            _cp14_b_equal(
+                "cleanup-A",
+                (len(queue), getattr(widget, "auto_cleanup_running"), _cp14_b_fields(widget, *_CP14_B_ZONE)),
+                (2, True, (True, "A-token", False, "")),
+            )
+            work = queue[1]
+            map_id[0] = 200
+            _cp13_call(widget, "_refresh_merchant_rules_lifecycle_state")
+            _cp14_b_equal("cleanup-B", _cp14_b_fields(widget, *_CP14_B_ZONE), (False, "200:5000", False, "200:5000"))
+            # Put both successor latches in use. Restitution must affect only Cleanup.
+            if claimed:
+                setattr(widget, "auto_cleanup_zone_attempted", True)
+                setattr(widget, "gold_entry_attempted", True)
+            if mode == "next":
+                _cp14_b_expect_stopped(work)
+            else:
+                _cp13_call(work, "close")
+            _cp13_call(work, "close")
+            _cp14_b_equal(
+                "cleanup-" + mode,
+                (
+                    _cp14_b_fields(widget, *_CP14_B_ZONE),
+                    tuple(releases),
+                    getattr(widget, "auto_cleanup_running"),
+                    getattr(widget, "merchant_rules_owned_work_count"),
+                    queue == [sentinel, work],
+                ),
+                ((False, "", claimed, "200:5000"), ("work",), False, 0, True),
+            )
+
+
+def _cp14_b_gold_consumed(module: types.ModuleType) -> None:
+    with _cp14_b_world(module) as (queue, _map_id, _restore):
+        widget: object = _prime_initialized_widget(module, _make_widget(module))
+        sentinel = queue[0]
+        releases: list[str] = []
+        _cp14_b_tap_release(widget, "work", releases)
+        setattr(widget, "gold_balance_enabled", True)
+        setattr(widget, "gold_balance_on_outpost_entry", True)
+        setattr(widget, "gold_entry_zone_token", "visit")
+        _cp13_call(widget, "_update_auto_gold_runtime")
+        _cp14_b_equal(
+            "gold-admission",
+            (len(queue), _cp14_b_fields(widget, *_CP14_B_ZONE), getattr(widget, "merchant_rules_owned_work_count")),
+            (2, (False, "", True, "visit"), 1),
+        )
+        work = queue[1]
+        _cp13_call(work, "close")
+        _cp13_call(work, "close")
+        _cp13_call(widget, "_update_auto_gold_runtime")
+        _cp14_b_equal(
+            "gold-close",
+            (
+                _cp14_b_fields(widget, *_CP14_B_ZONE),
+                tuple(releases),
+                getattr(widget, "merchant_rules_owned_work_count"),
+                queue == [sentinel, work],
+            ),
+            ((False, "", True, "visit"), ("work",), 0, True),
+        )
+
+
+def _cp14_b_is_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
+    return isinstance(value, tuple)
+
+
+def _cp14_b_captured_identify(module: types.ModuleType) -> None:
+    for cause in ("account", "profile", "map"):
+        with _cp14_b_world(module) as (queue, map_id, restore):
+            widget: object = _prime_initialized_widget(module, _make_widget(module))
+            sentinel = queue[0]
+            setattr(
+                widget, "identify_settings", _identify_settings(module, rarities=["blue"], on_inventory_change=True)
+            )
+            setattr(widget, "identify_rescan_requested", True)
+            setattr(widget, "auto_cleanup_on_outpost_entry", False)
+            setattr(widget, "gold_balance_on_outpost_entry", False)
+            for name in (
+                "_ensure_initialized",
+                "_advance_character_profile_resolution",
+                "_update_service_resolution_lifecycle",
+                "_apply_pending_multibox_profile_reload_if_idle",
+                "_advance_multibox_batch",
+                "_update_manual_gold_session_runtime",
+                "_update_manual_vendor_runtime",
+            ):
+                setattr(widget, name, lambda: None)
+
+            def sentinel_provider() -> tuple[tuple[int, int], ...]:
+                return ((800, 80),)
+
+            setattr(widget, "_runtime_inventory_signature_provider", sentinel_provider)
+            events: list[str] = []
+            releases: list[str] = []
+            effects: list[tuple[int, int]] = []
+            sentinels = {name: object() for name in ("ACTION", "IDENTIFY", "SALVAGE", "LOOT")}
+            actions = {name: [value] for name, value in sentinels.items()}
+            item = types.SimpleNamespace(item_id=202, quantity=2, rarity="blue", identified=False, name="fixture")
+            items = [item]
+            setattr(widget, "_collect_inventory_items", lambda: items)
+
+            def build_item_info(_item_id: int) -> types.SimpleNamespace:
+                return item
+
+            setattr(widget, "_build_inventory_item_info", build_item_info)
+            setattr(widget, "_get_id_kit_id", lambda: 19)
+            setattr(widget, "_pause_inventory_plus", lambda: None)
+
+            def signature(collected: object = None) -> tuple[tuple[int, int], ...]:
+                if collected is not None:
+                    _expect(collected is items, "CP14 pass uses the collected inventory list")
+                    events.append("collected")
+                    return ((202, 2),)
+                if getattr(widget, "_runtime_inventory_signature_provider") is sentinel_provider:
+                    events.append("final-raw")
+                    return ((303, 3),)
+                events.append("frame-raw")
+                return ((101, 1),)
+
+            def reset() -> None:
+                events.append("reset")
+
+            def add(queue_name: str, callback: object, *args: object) -> None:
+                actions[queue_name].append((callback, args))
+
+            def delayed(*args: object, **kwargs: object) -> None:
+                raise AssertionError("Identify should use immediate submission")
+
+            def pause(queue_name: str, *, timeout_ms: int, step_ms: int) -> Generator[object, None, bool]:
+                _expect((queue_name, timeout_ms, step_ms) == ("IDENTIFY", 5000, 50), "CP14 actual item queue wait")
+                yield "identify-awaits-queue"
+                return False
+
+            def identify(item_id: int, kit_id: int) -> None:
+                effects.append((item_id, kit_id))
+
+            manager = types.SimpleNamespace(AddAction=add, AddActionWithDelay=delayed)
+            inventory = types.ModuleType("Py4GWCoreLib.Inventory")
+            setattr(inventory, "Inventory", types.SimpleNamespace(IdentifyItem=identify))
+            restore.binding(module, "ActionQueueManager", lambda: manager)
+            setattr(widget, "_get_inventory_signature", signature)
+            setattr(widget, "_wait_for_action_queue_empty", pause)
+            setattr(widget, "identify_poll_timer", types.SimpleNamespace(Reset=reset, IsExpired=lambda: False))
+            _cp14_b_tap_release(widget, "work", releases)
+            _cp14_b_tap_release(widget, "action", releases)
+            with _cp14a_changes() as module_changes:
+                module_changes.mapping(sys.modules)
+                sys.modules["Py4GWCoreLib.Inventory"] = inventory
+                _cp13_call(widget, "_tick_runtime")
+                key = "captured-" + cause
+                _cp14_b_equal(
+                    key + "-frame",
+                    (
+                        list(events),
+                        len(queue),
+                        getattr(widget, "_runtime_inventory_signature_provider") is sentinel_provider,
+                    ),
+                    (["frame-raw", "reset"], 2, True),
+                )
+                work = queue[1]
+                _cp14_b_equal(
+                    key + "-advance",
+                    (
+                        _cp13_call(work, "__next__"),
+                        list(events),
+                        getattr(widget, "identify_last_signature"),
+                        _cp14_b_fields(widget, "merchant_rules_owned_work_count", "merchant_rules_owned_action_count"),
+                        manager.AddAction is add,
+                        manager.AddActionWithDelay is delayed,
+                    ),
+                    ("identify-awaits-queue", ["frame-raw", "reset", "collected"], ((202, 2),), (1, 1), True, True),
+                )
+                _expect(len(actions["IDENTIFY"]) == 2, "CP14 captured one real Inventory.IdentifyItem submission")
+                entry = actions["IDENTIFY"][1]
+                if not _cp14_b_is_tuple(entry) or len(entry) != 2:
+                    raise AssertionError("CP14 captured callback shape")
+                callback: object = entry[0]
+                _cp14_b_equal(key + "-args", entry[1], (202, 19))
+                _cp13_call(widget, "_request_identify_rescan")
+                generation = getattr(widget, "merchant_rules_profile_generation")
+                if cause == "account":
+                    setattr(widget, "_get_account_key", lambda: "other@example.com")
+                elif cause == "profile":
+                    setattr(widget, "merchant_rules_profile_generation", generation + 1)
+                else:
+                    map_id[0] = 200
+                _cp14_b_expect_stopped(work)
+                _cp13_call(work, "close")
+                _cp14_b_equal(
+                    key + "-final",
+                    (
+                        list(events),
+                        _cp14_b_fields(
+                            widget,
+                            "identify_last_signature",
+                            "identify_rescan_requested",
+                            "identify_running",
+                            "merchant_rules_owned_work_count",
+                            "merchant_rules_owned_action_count",
+                        ),
+                        list(releases),
+                        manager.AddAction is add,
+                        manager.AddActionWithDelay is delayed,
+                        _cp14_b_fields(
+                            widget, "_merchant_rules_active_generation", "_merchant_rules_active_lifecycle_generation"
+                        ),
+                        getattr(widget, "merchant_rules_profile_generation") == generation,
+                    ),
+                    (
+                        ["frame-raw", "reset", "collected", "reset", "final-raw"],
+                        (((303, 3),), True, False, 0, 1),
+                        ["work"],
+                        True,
+                        True,
+                        (None, None),
+                        cause != "profile",
+                    ),
+                )
+                actions["IDENTIFY"].pop(1)
+                _cp13_call(callback, "__call__", 202, 19)
+                _cp13_call(callback, "release")
+                _cp14_b_equal(
+                    key + "-delivery",
+                    (
+                        list(effects),
+                        list(releases),
+                        _cp14_b_fields(widget, "merchant_rules_owned_work_count", "merchant_rules_owned_action_count"),
+                        all(actions[name] == [original] for name, original in sentinels.items()),
+                        queue == [sentinel, work],
+                        manager.AddAction is add,
+                        manager.AddActionWithDelay is delayed,
+                    ),
+                    (list[tuple[int, int]](), ["work", "action"], (0, 0), True, True, True, True),
+                )
+
+
+def _cp14_b_reset(module: types.ModuleType, *, route: str) -> None:
+    import inspect
+
+    with (
+        _cp14_isolated_fixture(module, "reset-" + route),
+        _cp14_b_world(module) as (_queue, map_id, _restore),
+        _cp13_clock(module),
+    ):
+        if route == "cp12":
+            widget: object = _cp12_fixture(module)
+            _cp12_seed_preview(widget)
+            payload: dict[str, object] = {}
+            selected: object = None
+        else:
+            widget, payload, selected = _cp13_fixture(module, route)
+        names = (*_CP14_B_ZONE, *_CP14_B_REQUESTS, *_CP14_B_SIGNATURES)
+        first, second, third = ((11, 1),), ((22, 2),), ((33, 3),)
+        full = (True, "cleanup", True, "gold", True, True, True, first, second, third)
+        prefix = (False, "", False, "", True, True, False, first, second, third)
+        for name, value in zip(names, full, strict=True):
+            setattr(widget, name, value)
+        _cp14_b_equal(route + "-initial", _cp14_b_fields(widget, *names), full)
+        timer_calls: list[str] = []
+
+        def timer(tag: str) -> types.SimpleNamespace:
+            def reset() -> None:
+                timer_calls.append(tag)
+                _cp14_observe(route + "-timer-" + tag, _cp14_b_fields(widget, *names))
+
+            return types.SimpleNamespace(Reset=reset, IsExpired=lambda: False)
+
+        for tag in ("identify", "salvage", "instant_destroy"):
+            setattr(widget, tag + "_poll_timer", timer(tag))
+        original_clear = _cp12_bound(widget, "_clear_inventory_monitor_signatures")
+        marker = RuntimeError("CP14 at historical " + route + " signature reset")
+        hits: list[tuple[object, ...]] = []
+
+        def stop() -> None:
+            hits.append(_cp14_b_fields(widget, *names))
+            _cp14_observe(route + "-interception", hits[-1])
+            raise marker
+
+        if route == "cp12":
+            setattr(widget, "_clear_inventory_monitor_signatures", stop)
+            _cp9_same_exception(lambda: _CP12WidgetAccess.profile_reset(widget, log_profile_load_summary=False), marker)
+            delattr(widget, "_clear_inventory_monitor_signatures")
+        else:
+            row = next(row for row in _CP13_FAULT_ROWS if row[0] == route + "_reset")
+            _cp14_b_equal(
+                route + "-historical-marker",
+                row[3:],
+                ("_reset_runtime_after_profile_load", "self._clear_inventory_monitor_signatures()", 1),
+            )
+            target, method = _cp13_method(widget, row[3])
+            lines, start = inspect.getsourcelines(method.__func__)
+            positions = [start + i for i, line in enumerate(lines) if row[4] in _cp13_source_line(line)]
+            _expect(len(positions) == 1, "CP14 exact CP13 fault marker multiplicity")
+
+            def trace(frame: types.FrameType, event: str, arg: object) -> _CP7Trace | None:
+                if (
+                    event == "line"
+                    and frame.f_code is method.__func__.__code__
+                    and frame.f_locals.get("self") is target
+                    and frame.f_lineno == positions[0]
+                ):
+                    stop()
+                return trace
+
+            old = sys.gettrace()
+            try:
+                sys.settrace(trace)
+                if route == "restore":
+                    _expect(_cp13_act(widget, route, payload, selected) is False, "CP13 Restore handles reset fault")
+                    _expect(str(marker) in getattr(widget, "profile_warning"), "CP13 Restore retains primary fault")
+                else:
+                    _cp9_same_exception(lambda: _cp13_act(widget, route, payload, selected), marker)
+            finally:
+                sys.settrace(old)
+        _cp14_b_equal(
+            route + "-prefix",
+            (hits, _cp14_b_fields(widget, *names), list(timer_calls)),
+            ([prefix], prefix, list[str]()),
+        )
+        if route != "cp12":
+            return
+
+        # A successful reset and map transition differ at this very same interception.
+        for name, value in zip(names, full, strict=True):
+            setattr(widget, name, value)
+        clears: list[tuple[object, ...]] = []
+
+        def clear() -> None:
+            clears.append(_cp14_b_fields(widget, *names))
+            original_clear()
+
+        setattr(widget, "_clear_inventory_monitor_signatures", clear)
+        timer_prefixes: list[tuple[str, tuple[object, ...]]] = []
+
+        def watched(tag: str) -> types.SimpleNamespace:
+            def reset() -> None:
+                timer_prefixes.append((tag, _cp14_b_fields(widget, *_CP14_B_REQUESTS, *_CP14_B_SIGNATURES)))
+
+            return types.SimpleNamespace(Reset=reset)
+
+        for tag in ("identify", "salvage", "instant_destroy"):
+            setattr(widget, tag + "_poll_timer", watched(tag))
+        _CP12WidgetAccess.profile_reset(widget, log_profile_load_summary=False)
+        _cp14_b_equal(
+            "completed-profile-reset",
+            (clears, timer_prefixes, _cp14_b_fields(widget, *names)),
+            (
+                [prefix],
+                [
+                    ("instant_destroy", (True, True, False, (), (), ())),
+                    ("identify", (False, True, False, (), (), ())),
+                    ("salvage", (False, False, False, (), (), ())),
+                ],
+                (False, "", False, "", False, False, False, (), (), ()),
+            ),
+        )
+        for name, value in zip(names, full, strict=True):
+            setattr(widget, name, value)
+        map_id[0] = 200
+        _cp13_call(widget, "_refresh_merchant_rules_lifecycle_state")
+        _cp14_b_equal(
+            "map-reset",
+            (clears[-1], len(clears), len(timer_prefixes), _cp14_b_fields(widget, *names)),
+            (full, 2, 3, (False, "200:5000", False, "200:5000", True, True, True, (), (), ())),
+        )
+
+
+def _cp14_b_publication(module: types.ModuleType) -> None:
+    with (
+        _cp14_isolated_fixture(module, "publication"),
+        _cp14_b_world(module) as (_queue, map_id, _restore),
+        _cp13_clock(module),
+    ):
+        widget, _payload, _selected = _cp13_fixture(module, "blank")
+        live: object = getattr(widget, "_live_profile_session")
+        runtime: object = getattr(live, "_runtime")
+        publish = _cp12_bound(runtime, "publish_configuration_rescans")
+        if not isinstance(publish, types.MethodType):
+            raise AssertionError("CP14 expected CP13 publication method")
+        changes: list[tuple[object, ...]] = []
+        starts: list[tuple[object, ...]] = []
+        pending = "This character has no saved profile assigned; using safe blank settings."
+
+        def record_publish() -> None:
+            starts.append(
+                _cp14_b_fields(
+                    widget,
+                    "_character_profile_ready",
+                    "_character_profile_resolved_identity",
+                    "_character_profile_resolved_observation",
+                    "status_message",
+                    "_character_profile_pending_message",
+                )
+            )
+            _cp14_observe("resolved-before-publication", starts[-1])
+            # Prove which bit supplies Destroy in the presence of a conflicting session override.
+            setattr(widget, "destroy_instant_enabled", True)
+            _expect(not getattr(widget, "destroy_auto_enabled"), "CP14 safe blank has persisted Destroy off")
+            for name in _CP14_B_REQUESTS:
+                setattr(widget, name, True)
+            old = sys.gettrace()
+
+            def trace(frame: types.FrameType, event: str, arg: object) -> _CP7Trace | None:
+                if frame.f_code is publish.__func__.__code__ and frame.f_locals.get("self") is runtime:
+                    if event in ("line", "return"):
+                        state = _cp14_b_fields(widget, *_CP14_B_REQUESTS)
+                        if not changes or changes[-1] != state:
+                            changes.append(state)
+                            _cp14_observe("publish-prefix-" + str(len(changes)), state)
+                return trace
+
+            try:
+                sys.settrace(trace)
+                publish()
+            finally:
+                sys.settrace(old)
+
+        setattr(runtime, "publish_configuration_rescans", record_publish)
+        try:
+            _cp13_call(widget, "_advance_character_profile_resolution")
+            uuid = "uuid-00000001-00000002-00000003-00000004"
+            _cp14_b_equal(
+                "newly-resolved",
+                (
+                    starts,
+                    changes,
+                    _cp14_b_fields(
+                        widget,
+                        "_character_profile_pending_message",
+                        "_character_profile_resolution_target",
+                        "destroy_instant_enabled",
+                        "destroy_auto_enabled",
+                    ),
+                ),
+                (
+                    [(True, ("merchant.rules@example.com", uuid), (uuid, "Merchant Rules Tester"), pending, pending)],
+                    [(True, True, True), (False, True, True), (False, False, True), (False, False, False)],
+                    ("", None, True, False),
+                ),
+            )
+            # Same character after a new instance: reconfirm without republishing any request.
+            for name, flag in zip(_CP14_B_REQUESTS, (False, True, True), strict=True):
+                setattr(widget, name, flag)
+            generation = getattr(widget, "merchant_rules_profile_generation")
+            map_id[0] = 200
+            _cp13_call(widget, "_refresh_merchant_rules_lifecycle_state")
+            _cp13_call(widget, "_advance_character_profile_resolution")
+            _cp14_b_equal("reconfirm-first", getattr(widget, "_character_profile_ready"), False)
+            _cp13_call(widget, "_advance_character_profile_resolution")
+            _cp14_b_equal(
+                "reconfirm-second",
+                (
+                    getattr(widget, "_character_profile_ready"),
+                    len(starts),
+                    _cp14_b_fields(widget, *_CP14_B_REQUESTS),
+                    generation == getattr(widget, "merchant_rules_profile_generation"),
+                ),
+                (True, 1, (False, True, True), True),
+            )
+        finally:
+            delattr(runtime, "publish_configuration_rescans")
+
+
+def _cp14_b_render(
+    module: types.ModuleType, widget: object, method: str, control: str, value: bool
+) -> list[tuple[object, ...]]:
+    saves: list[tuple[object, ...]] = []
+    clicks: list[bool] = []
+    restore = _CP8Restoration()
+
+    def noop(*args: object, **kwargs: object) -> None:
+        return None
+
+    def no_click(*args: object, **kwargs: object) -> bool:
+        return False
+
+    def cleanup_display(*args: object) -> tuple[list[object], list[object], list[object]]:
+        return [], [], []
+
+    def addable_targets(*args: object) -> list[object]:
+        return []
+
+    def deposit_search(*args: object) -> tuple[None, list[object]]:
+        return None, []
+
+    def checkbox(label: str, original: bool) -> bool:
+        if label.partition("##")[2] == control:
+            clicks.append(original)
+            return value
+        return original
+
+    def save() -> bool:
+        saves.append(_cp14_b_fields(widget, *_CP14_B_REQUESTS))
+        return True
+
+    def echo(_label: str, current: object) -> object:
+        return current
+
+    try:
+        for name in (
+            "_draw_section_heading",
+            "_draw_subsection_heading",
+            "_draw_secondary_text",
+            "_draw_warning_text",
+            "_draw_helper_tooltip",
+            "_draw_hover_tooltip",
+            "_draw_cleanup_status_badges",
+            "_draw_cleanup_item_type_filter_controls",
+            "_mark_preview_dirty",
+        ):
+            restore.binding(widget, name, noop)
+        for name in (
+            "_draw_identify_rarity_toggles",
+            "_draw_salvage_rule_editor",
+            "_draw_add_filtered_targets_button",
+            "_draw_add_all_matches_button",
+        ):
+            restore.binding(widget, name, no_click)
+        for name in ("_draw_identify_status_badges", "_draw_salvage_status_badges", "_get_id_kit_id"):
+
+            def one(*args: object) -> int:
+                return 1
+
+            restore.binding(widget, name, one)
+        for name in ("_get_action_block_reason", "_format_identify_filter_summary", "_format_salvage_filter_summary"):
+
+            def blank(*args: object) -> str:
+                return ""
+
+            restore.binding(widget, name, blank)
+        restore.binding(widget, "_get_inventory_plus_widget", noop)
+        restore.binding(widget, "_inventory_plus_can_be_paused", no_click)
+        restore.binding(widget, "_get_cleanup_target_display_state", cleanup_display)
+        restore.binding(widget, "_get_addable_cleanup_deposit_filter_targets", addable_targets)
+        restore.binding(widget, "_draw_cleanup_deposit_search_results", deposit_search)
+        restore.binding(widget, "_save_profile", save)
+        imgui = getattr(module, "PyImGui")
+        for name in (
+            "separator",
+            "same_line",
+            "spacing",
+            "begin_disabled",
+            "end_disabled",
+            "text_colored",
+            "push_item_width",
+            "pop_item_width",
+        ):
+            restore.binding(imgui, name, noop)
+        for name in ("button", "small_button"):
+            restore.binding(imgui, name, no_click)
+        for name in ("input_text", "input_int"):
+            restore.binding(imgui, name, echo)
+        restore.binding(imgui, "checkbox", checkbox)
+        _cp13_call(widget, method)
+    finally:
+        restore.restore()
+    _cp14_b_equal(control + "-render-" + str(value), clicks, [not value])
+    return saves
+
+
+def _cp14_b_render_inventory(module: types.ModuleType) -> None:
+    for domain, control, method, observer, request in (
+        (
+            "identify",
+            "merchant_rules_identify_on_inventory_change",
+            "_draw_identify_workspace",
+            "_update_identify_runtime",
+            "identify_rescan_requested",
+        ),
+        (
+            "salvage",
+            "merchant_rules_salvage_on_inventory_change",
+            "_draw_salvage_workspace",
+            "_update_salvage_runtime",
+            "salvage_rescan_requested",
+        ),
+        (
+            "persisted",
+            "merchant_rules_destroy_auto_enabled",
+            "_draw_destroy_runtime_controls",
+            "_update_instant_destroy_runtime",
+            "instant_destroy_rescan_requested",
+        ),
+        (
+            "session",
+            "merchant_rules_destroy_instant",
+            "_draw_destroy_runtime_controls",
+            "_update_instant_destroy_runtime",
+            "instant_destroy_rescan_requested",
+        ),
+    ):
+        with _cp14_b_world(module) as (queue, _map_id, _restore):
+            widget: object = _prime_initialized_widget(module, _make_widget(module))
+            setattr(widget, "identify_settings", _identify_settings(module, rarities=["blue"]))
+            setattr(widget, "salvage_settings", _salvage_settings(module, model_ids=[222]))
+            setattr(widget, "destroy_auto_enabled", False)
+            setattr(widget, "destroy_instant_enabled", False)
+            setattr(widget, "_get_inventory_signature", lambda: ((9, 1),))
+            saves = _cp14_b_render(module, widget, method, control, True)
+            if domain == "identify":
+                expected_saves = [(True, False, False)]
+            elif domain == "salvage":
+                expected_saves = [(False, True, False)]
+            elif domain == "persisted":
+                expected_saves = [(False, False, False)]
+            else:
+                expected_saves = []
+            _cp14_b_equal(
+                domain + "-enabled",
+                (
+                    saves,
+                    getattr(widget, request),
+                    _cp14_b_fields(widget, "destroy_auto_enabled", "destroy_instant_enabled"),
+                ),
+                (expected_saves, True, (domain == "persisted", domain == "session")),
+            )
+            _cp13_call(widget, observer)
+            _cp14_b_equal(
+                domain + "-accepted",
+                (len(queue), getattr(widget, request), getattr(widget, "merchant_rules_owned_work_count")),
+                (2, False, 1),
+            )
+            _cp13_call(queue[1], "close")
+            _expect(getattr(widget, request) is True, "CP14 rendered admission prestart retry")
+            saves = _cp14_b_render(module, widget, method, control, False)
+            if domain == "persisted":
+                expected_saves = [(False, False, True)]
+            elif domain == "session":
+                expected_saves = []
+            else:
+                expected_saves = [(False, False, False)]
+            _cp14_b_equal(
+                domain + "-disabled-tail",
+                (saves, getattr(widget, request), getattr(widget, "instant_destroy_rescan_requested")),
+                (expected_saves, domain == "salvage", False),
+            )
+            _cp13_call(widget, observer)
+            _cp14_b_equal(
+                domain + "-disabled-poll",
+                (
+                    len(queue),
+                    _cp14_b_fields(widget, *_CP14_B_REQUESTS),
+                    getattr(widget, "merchant_rules_owned_work_count"),
+                ),
+                (2, (False, False, False), 0),
+            )
+
+    # Disable Salvage with the session-only Destroy switch active. The write before save
+    # and unconditional request after save are both observable before the next real poll.
+    with _cp14_b_world(module) as (queue, _map_id, _restore):
+        widget = _prime_initialized_widget(module, _make_widget(module))
+        setattr(widget, "salvage_settings", _salvage_settings(module, model_ids=[222], on_inventory_change=True))
+        setattr(widget, "salvage_rescan_requested", True)
+        setattr(widget, "destroy_auto_enabled", False)
+        setattr(widget, "destroy_instant_enabled", True)
+        setattr(widget, "_get_inventory_signature", lambda: ((10, 1),))
+        saves = _cp14_b_render(
+            module, widget, "_draw_salvage_workspace", "merchant_rules_salvage_on_inventory_change", False
+        )
+        _cp14_b_equal(
+            "salvage-disable-with-destroy",
+            (saves, _cp14_b_fields(widget, *_CP14_B_REQUESTS)),
+            ([(False, False, False)], (False, True, True)),
+        )
+        _cp13_call(widget, "_update_salvage_runtime")
+        _cp14_b_equal(
+            "salvage-clears-own", (_cp14_b_fields(widget, *_CP14_B_REQUESTS), len(queue)), ((False, False, True), 1)
+        )
+        _cp13_call(widget, "_update_instant_destroy_runtime")
+        _cp14_b_equal(
+            "destroy-consumes-secondary",
+            (_cp14_b_fields(widget, *_CP14_B_REQUESTS), len(queue), getattr(widget, "merchant_rules_owned_work_count")),
+            ((False, False, False), 2, 1),
+        )
+
+
+def _cp14_b_render_entry(module: types.ModuleType) -> None:
+    for domain, control, field, observer, latch in (
+        (
+            "cleanup",
+            "merchant_rules_auto_cleanup_on_entry",
+            "auto_cleanup_on_outpost_entry",
+            "_update_auto_cleanup_runtime",
+            "auto_cleanup_zone_attempted",
+        ),
+        (
+            "gold-master",
+            "merchant_rules_gold_balance_enabled",
+            "gold_balance_enabled",
+            "_update_auto_gold_runtime",
+            "gold_entry_attempted",
+        ),
+        (
+            "gold-entry",
+            "merchant_rules_gold_balance_on_outpost_entry",
+            "gold_balance_on_outpost_entry",
+            "_update_auto_gold_runtime",
+            "gold_entry_attempted",
+        ),
+    ):
+        with _cp14_b_world(module) as (queue, map_id, _restore):
+            widget: object = _prime_initialized_widget(module, _make_widget(module))
+            setattr(widget, "_has_cleanup_sources", lambda: True)
+            setattr(widget, "gold_balance_enabled", True)
+            setattr(widget, "gold_balance_on_outpost_entry", True)
+            setattr(widget, field, True)
+            setattr(widget, latch, True)
+            setattr(widget, "auto_cleanup_zone_token", "cleanup-visit")
+            setattr(widget, "gold_entry_zone_token", "gold-visit")
+            for enabled in (False, True):
+                saves = _cp14_b_render(module, widget, "_draw_cleanup_workspace", control, enabled)
+                _cp13_call(widget, observer)
+                _cp14_b_equal(
+                    domain + "-existing-" + str(enabled),
+                    (
+                        len(queue),
+                        getattr(widget, field),
+                        getattr(widget, latch),
+                        _cp14_b_fields(widget, "auto_cleanup_zone_token", "gold_entry_zone_token"),
+                        saves,
+                    ),
+                    (1, enabled, True, ("cleanup-visit", "gold-visit"), [(False, False, False)]),
+                )
+            map_id[0] = 200
+            _cp13_call(widget, "_refresh_merchant_rules_lifecycle_state")
+            _cp14_b_equal(
+                domain + "-new-visit", _cp14_b_fields(widget, *_CP14_B_ZONE), (False, "200:5000", False, "200:5000")
+            )
+            _cp13_call(widget, observer)
+            _cp14_b_equal(
+                domain + "-submitted",
+                (len(queue), getattr(widget, latch), getattr(widget, "merchant_rules_owned_work_count")),
+                (2, True, 1),
+            )
+
+
+_CP14_B_CASES = (
+    ("cp14_reset_cp12", partial(_cp14_b_reset, route="cp12")),
+    ("cp14_reset_reload", partial(_cp14_b_reset, route="reload")),
+    ("cp14_reset_restore", partial(_cp14_b_reset, route="restore")),
+    ("cp14_resolver_publication", _cp14_b_publication),
+    ("cp14_retry_identify", partial(_cp14_b_retries, name="identify")),
+    ("cp14_retry_salvage", partial(_cp14_b_retries, name="salvage")),
+    ("cp14_retry_destroy", partial(_cp14_b_retries, name="instant_destroy")),
+    ("cp14_captured_identify", _cp14_b_captured_identify),
+    ("cp14_rendered_inventory", _cp14_b_render_inventory),
+    ("cp14_cleanup_successor_next", partial(_cp14_b_successor, mode="next")),
+    ("cp14_cleanup_successor_close", partial(_cp14_b_successor, mode="close")),
+    ("cp14_gold_consumed", _cp14_b_gold_consumed),
+    ("cp14_rendered_entry", _cp14_b_render_entry),
+)
 
 
 def main() -> int:
@@ -70146,6 +72586,17 @@ def main() -> int:
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP12_CASES)
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in _CP13_CASES)
 
+        cp14_cases = (*_CP14_A_CASES, *_CP14_B_CASES)
+        cp14_names = tuple(name for name, _operation in cp14_cases)
+        _expect(len(set(cp14_names)) == len(cp14_names), "CP14 unique new registrations")
+        historical_names = {name for name, _operation in tests}
+        _expect(historical_names.isdisjoint(cp14_names), "CP14 additive registrations")
+        _expect(set(cp14_names) == set(_CP14_COMMON_CASES) | set(_CP14_CANDIDATE_ONLY), "CP14 comparison membership")
+        tests.extend(
+            (name, lambda name=name, operation=operation: _cp14_registered(module, name, operation))
+            for name, operation in cp14_cases
+        )
+
         catalog_contract_tests = [
             (
                 "catalog_loader_indexes_typed_common_salvage_separately",
@@ -70249,6 +72700,28 @@ def main() -> int:
             _expect(set(names_cp13) <= registered_cp13, "CP13 every selected case is registered")
             tests = [test for test in tests if test[0] in names_cp13]
 
+        requested_cp14 = os.environ.get("MERCHANT_RULES_CP14_CASES", "")
+        if requested_cp14:
+            names_cp14 = requested_cp14.split(",")
+            _expect(len(names_cp14) == len(set(names_cp14)) and all(names_cp14), "CP14 unique selection")
+            _expect(
+                not any(
+                    os.environ.get(k)
+                    for k in (
+                        "MERCHANT_RULES_CP10_CASES",
+                        "MERCHANT_RULES_CP11_CASES",
+                        "MERCHANT_RULES_CP12_CASES",
+                        "MERCHANT_RULES_CP13_CASES",
+                        "MERCHANT_RULES_CATALOG_ONLY",
+                        "MERCHANT_RULES_SALVAGE_KIT_ONLY",
+                    )
+                ),
+                "CP14 dedicated selector",
+            )
+            _expect(set(names_cp14) <= {name for name, _operation in tests}, "CP14 registered selection")
+            tests = [test for test in tests if test[0] in names_cp14]
+        _cp14_observations.clear()
+
         failures: list[tuple[str, str]] = []
         for name, test_fn in tests:
             try:
@@ -70272,6 +72745,17 @@ def main() -> int:
         print(f"PASS: {len(tests)} Merchant Rules regression checks passed.")
         return 0
     finally:
+        if os.environ.get("MERCHANT_RULES_CP14_OBSERVATIONS") == "1":
+            active_failure = sys.exception()
+            try:
+                print(
+                    "CP14_OBSERVATIONS:" + json.dumps(_cp14_observations, ensure_ascii=True, allow_nan=False),
+                    flush=True,
+                )
+            except BaseException as capture_error:
+                if active_failure is None:
+                    raise
+                active_failure.add_note("CP14 partial observation output failed: " + repr(capture_error))
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
