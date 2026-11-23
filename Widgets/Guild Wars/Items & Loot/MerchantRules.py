@@ -18096,6 +18096,9 @@ class MerchantRulesWidget:
                     )
                     break
                 buy_price = int(GLOBAL_CACHE.Item.Properties.GetValue(matched_item_id)) * 2
+                if buy_price <= 0:
+                    outcome.quote_failures += 1
+                    break
                 gold_result = yield from self._ensure_gold_for_purchase(
                     buy_price,
                     purpose=f"merchant stock {model_id}",
