@@ -56,6 +56,7 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import SUPPO
 
 from Sources.icefox.MerchantRules import automatic_triggers as _automatic_triggers
 from Sources.icefox.MerchantRules import configuration as _configuration
+from Sources.icefox.MerchantRules import gold_transactions as _gold_transactions
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
 from Sources.icefox.MerchantRules import owned_work as _owned_work
@@ -581,19 +582,19 @@ MATERIAL_STORAGE_BAG_NAME = "MaterialStorage"
 MATERIAL_STORAGE_MAX_STACK_SIZE = 250
 MAX_CHARACTER_GOLD = _configuration.MAX_CHARACTER_GOLD
 DEFAULT_TARGET_CARRIED_GOLD = _configuration.DEFAULT_TARGET_CARRIED_GOLD
-GOLD_TOP_UP_TIMEOUT_MS = 2000
-GOLD_TOP_UP_STEP_MS = 50
-GOLD_BALANCE_SERVICE_TIMEOUT_MS = 3000
-GOLD_BALANCE_VERIFY_TIMEOUT_MS = 2000
-GOLD_BALANCE_STEP_MS = 50
+GOLD_TOP_UP_TIMEOUT_MS = _gold_transactions.GOLD_TOP_UP_TIMEOUT_MS
+GOLD_TOP_UP_STEP_MS = _gold_transactions.GOLD_TOP_UP_STEP_MS
+GOLD_BALANCE_SERVICE_TIMEOUT_MS = _gold_transactions.GOLD_BALANCE_SERVICE_TIMEOUT_MS
+GOLD_BALANCE_VERIFY_TIMEOUT_MS = _gold_transactions.GOLD_BALANCE_VERIFY_TIMEOUT_MS
+GOLD_BALANCE_STEP_MS = _gold_transactions.GOLD_BALANCE_STEP_MS
 GOLD_SESSION_SETTLE_MS = 150
-GOLD_BALANCE_STATUS_DISABLED = "disabled"
-GOLD_BALANCE_STATUS_TARGET_MET = "target_met"
-GOLD_BALANCE_STATUS_EXACT = "exact"
-GOLD_BALANCE_STATUS_PARTIAL = "partial"
-GOLD_BALANCE_STATUS_NO_PROGRESS = "no_progress"
-GOLD_BALANCE_STATUS_UNAVAILABLE = "unavailable"
-GOLD_BALANCE_STATUS_INVALID = "invalid"
+GOLD_BALANCE_STATUS_DISABLED = _gold_transactions.GOLD_BALANCE_STATUS_DISABLED
+GOLD_BALANCE_STATUS_TARGET_MET = _gold_transactions.GOLD_BALANCE_STATUS_TARGET_MET
+GOLD_BALANCE_STATUS_EXACT = _gold_transactions.GOLD_BALANCE_STATUS_EXACT
+GOLD_BALANCE_STATUS_PARTIAL = _gold_transactions.GOLD_BALANCE_STATUS_PARTIAL
+GOLD_BALANCE_STATUS_NO_PROGRESS = _gold_transactions.GOLD_BALANCE_STATUS_NO_PROGRESS
+GOLD_BALANCE_STATUS_UNAVAILABLE = _gold_transactions.GOLD_BALANCE_STATUS_UNAVAILABLE
+GOLD_BALANCE_STATUS_INVALID = _gold_transactions.GOLD_BALANCE_STATUS_INVALID
 GOLD_BALANCE_UNAVAILABLE_MESSAGE = "Gold balancing is unavailable right now."
 GOLD_BALANCE_XUNLAI_UNAVAILABLE_MESSAGE = "Gold balancing is unavailable because Xunlai could not be found nearby."
 GOLD_BALANCE_NO_PROGRESS_MESSAGE = "Gold could not be moved."
@@ -3650,32 +3651,17 @@ class ExecutionPhaseOutcome:
     dispatched: int = 0
 
 
-@dataclass
-class GoldTopUpResult:
-    """Report whether a purchase can proceed after an optional bounded storage withdrawal."""
-
-    ready: bool
-    carried_gold: int = 0
-    storage_gold: int = 0
-    withdrawn: int = 0
-    opened_storage: bool = False
-    reason: str = ""
+GoldTopUpResult = _gold_transactions.GoldTopUpResult
+GoldBalanceResult = _gold_transactions.GoldBalanceResult
 
 
-@dataclass
-class GoldBalanceResult:
-    """Report one bounded carried-gold balancing attempt."""
+def _get_gold_inventory() -> object | None:
+    return getattr(GLOBAL_CACHE, "Inventory", None)
 
-    status: str
-    trigger: str = ""
-    target_gold: int = 0
-    carried_before: int = 0
-    storage_before: int = 0
-    carried_after: int = 0
-    storage_after: int = 0
-    requested: int = 0
-    moved: int = 0
-    reason: str = ""
+
+def _wait_for_gold_step(step_ms: int) -> Generator[object, None, None]:
+    # The live widget waits yield None. Transaction fixtures may forward other markers.
+    return cast(Generator[object, None, None], Routines.Yield.wait(step_ms))
 
 
 _default_rarity_flags = _configuration.default_rarity_flags
@@ -17009,13 +16995,6 @@ class MerchantRulesWidget:
             self._inventory_plus_optional_widgets_paused,
         )
 
-    def _read_gold_snapshot(self) -> tuple[int, int] | None:
-        carried_gold = self._read_gold_amount("GetGoldOnCharacter")
-        storage_gold = self._read_gold_amount("GetGoldInStorage")
-        if carried_gold is None or storage_gold is None:
-            return None
-        return max(0, int(carried_gold)), max(0, int(storage_gold))
-
     def _format_gold_target(self, gold_amount: int) -> str:
         safe_amount = _normalize_gold_target(gold_amount)
         if safe_amount % 1000 == 0:
@@ -17061,144 +17040,7 @@ class MerchantRulesWidget:
         else:
             self._debug_log(f"Gold balance result: {summary}")
 
-    def _wait_for_gold_balance_service(self):
-        if self._has_local_storage_access():
-            return True
-
-        waited_ms = 0
-        while waited_ms < GOLD_BALANCE_SERVICE_TIMEOUT_MS:
-            yield from Routines.Yield.wait(GOLD_BALANCE_STEP_MS)
-            waited_ms += GOLD_BALANCE_STEP_MS
-            if self._has_local_storage_access():
-                return True
-        return bool(self._has_local_storage_access())
-
-    def _classify_gold_balance_snapshot(
-        self,
-        *,
-        trigger: str,
-        target_gold: int,
-        direction: str,
-        requested: int,
-        before: tuple[int, int],
-        after: tuple[int, int],
-    ) -> GoldBalanceResult:
-        carried_before, storage_before = before
-        carried_after, storage_after = after
-        if carried_before + storage_before != carried_after + storage_after:
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_INVALID,
-                trigger=trigger,
-                target_gold=target_gold,
-                carried_before=carried_before,
-                storage_before=storage_before,
-                carried_after=carried_after,
-                storage_after=storage_after,
-                requested=requested,
-                reason="combined gold changed unexpectedly",
-            )
-
-        carried_delta = carried_after - carried_before
-        if direction == "deposit":
-            if carried_delta > 0 or carried_after < target_gold:
-                return GoldBalanceResult(
-                    status=GOLD_BALANCE_STATUS_INVALID,
-                    trigger=trigger,
-                    target_gold=target_gold,
-                    carried_before=carried_before,
-                    storage_before=storage_before,
-                    carried_after=carried_after,
-                    storage_after=storage_after,
-                    requested=requested,
-                    moved=max(0, -carried_delta),
-                    reason="deposit moved beyond the requested target",
-                )
-            moved = max(0, -carried_delta)
-        else:
-            if carried_delta < 0 or carried_after > target_gold:
-                return GoldBalanceResult(
-                    status=GOLD_BALANCE_STATUS_INVALID,
-                    trigger=trigger,
-                    target_gold=target_gold,
-                    carried_before=carried_before,
-                    storage_before=storage_before,
-                    carried_after=carried_after,
-                    storage_after=storage_after,
-                    requested=requested,
-                    moved=max(0, carried_delta),
-                    reason="withdrawal moved beyond the requested target",
-                )
-            moved = max(0, carried_delta)
-
-        if carried_after == target_gold:
-            status = GOLD_BALANCE_STATUS_EXACT
-        elif moved > 0:
-            status = GOLD_BALANCE_STATUS_PARTIAL
-        else:
-            status = GOLD_BALANCE_STATUS_NO_PROGRESS
-        return GoldBalanceResult(
-            status=status,
-            trigger=trigger,
-            target_gold=target_gold,
-            carried_before=carried_before,
-            storage_before=storage_before,
-            carried_after=carried_after,
-            storage_after=storage_after,
-            requested=requested,
-            moved=moved,
-        )
-
-    def _wait_for_gold_balance_readback(
-        self,
-        *,
-        trigger: str,
-        target_gold: int,
-        direction: str,
-        requested: int,
-        before: tuple[int, int],
-    ):
-        waited_ms = 0
-        last_result: GoldBalanceResult | None = None
-        while waited_ms <= GOLD_BALANCE_VERIFY_TIMEOUT_MS:
-            after = self._read_gold_snapshot()
-            if after is None:
-                return GoldBalanceResult(
-                    status=GOLD_BALANCE_STATUS_INVALID,
-                    trigger=trigger,
-                    target_gold=target_gold,
-                    carried_before=before[0],
-                    storage_before=before[1],
-                    requested=requested,
-                    reason="gold read-back was unavailable",
-                )
-            last_result = self._classify_gold_balance_snapshot(
-                trigger=trigger,
-                target_gold=target_gold,
-                direction=direction,
-                requested=requested,
-                before=before,
-                after=after,
-            )
-            if last_result.status in {
-                GOLD_BALANCE_STATUS_EXACT,
-                GOLD_BALANCE_STATUS_INVALID,
-            }:
-                return last_result
-            if waited_ms >= GOLD_BALANCE_VERIFY_TIMEOUT_MS:
-                break
-            yield from Routines.Yield.wait(GOLD_BALANCE_STEP_MS)
-            waited_ms += GOLD_BALANCE_STEP_MS
-        return last_result or GoldBalanceResult(
-            status=GOLD_BALANCE_STATUS_INVALID,
-            trigger=trigger,
-            target_gold=target_gold,
-            carried_before=before[0],
-            storage_before=before[1],
-            requested=requested,
-            reason="gold read-back did not produce a result",
-        )
-
-    def _balance_carried_gold(self, trigger: str):
+    def _balance_carried_gold(self, trigger: str) -> Generator[None, None, GoldBalanceResult]:
         lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
         if lifecycle_generation is None:
             return GoldBalanceResult(
@@ -17207,130 +17049,18 @@ class MerchantRulesWidget:
                 target_gold=_normalize_gold_target(self.target_carried_gold),
                 reason="Merchant Rules lifecycle was not ready",
             )
-        target_gold = _normalize_gold_target(self.target_carried_gold)
-        before = self._read_gold_snapshot()
-        if before is None:
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
-                trigger=trigger,
-                target_gold=target_gold,
-                reason="gold balances unavailable",
-            )
-
-        carried_gold, storage_gold = before
-        if carried_gold == target_gold:
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_TARGET_MET,
-                trigger=trigger,
-                target_gold=target_gold,
-                carried_before=carried_gold,
-                storage_before=storage_gold,
-                carried_after=carried_gold,
-                storage_after=storage_gold,
-            )
-
-        service_ready = yield from self._wait_for_gold_balance_service()
-        if not service_ready:
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
-                trigger=trigger,
-                target_gold=target_gold,
-                carried_before=carried_gold,
-                storage_before=storage_gold,
-                reason="Xunlai service was not found nearby",
-            )
-
-        live_before = self._read_gold_snapshot()
-        if live_before is None:
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_INVALID,
-                trigger=trigger,
-                target_gold=target_gold,
-                reason="gold read-back was unavailable before the transfer",
-            )
-        carried_gold, storage_gold = live_before
-        if carried_gold == target_gold:
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_TARGET_MET,
-                trigger=trigger,
-                target_gold=target_gold,
-                carried_before=carried_gold,
-                storage_before=storage_gold,
-                carried_after=carried_gold,
-                storage_after=storage_gold,
-            )
-
-        if carried_gold > target_gold:
-            direction = "deposit"
-            requested = carried_gold - target_gold
-            method_name = "DepositGold"
-        else:
-            direction = "withdraw"
-            requested = min(
-                target_gold - carried_gold,
-                max(0, storage_gold),
-                max(0, MAX_CHARACTER_GOLD - carried_gold),
-            )
-            method_name = "WithdrawGold"
-
-        if requested <= 0:
-            reason = (
-                "storage does not contain enough gold"
-                if direction == "withdraw"
-                else "the carried-gold difference was zero"
-            )
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_NO_PROGRESS,
-                trigger=trigger,
-                target_gold=target_gold,
-                carried_before=carried_gold,
-                storage_before=storage_gold,
-                carried_after=carried_gold,
-                storage_after=storage_gold,
-                reason=reason,
-            )
-
-        transfer = self._get_inventory_api_method(method_name)
-        if transfer is None:
-            self._debug_log(f"Gold balance transfer method unavailable: {method_name}")
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
-                trigger=trigger,
-                target_gold=target_gold,
-                carried_before=carried_gold,
-                storage_before=storage_gold,
-                requested=requested,
-                reason=f"gold {direction} unavailable",
-            )
-
-        try:
-            transfer(int(requested))
-        except Exception as exc:
-            self._debug_log(f"Gold balance transfer failed using {method_name}: {exc}")
-            return GoldBalanceResult(
-                status=GOLD_BALANCE_STATUS_UNAVAILABLE,
-                trigger=trigger,
-                target_gold=target_gold,
-                carried_before=carried_gold,
-                storage_before=storage_gold,
-                requested=requested,
-                reason=f"gold {direction} failed",
-            )
-
-        yield from self._wait_for_action_queue_empty(
-            "ACTION",
-            timeout_ms=GOLD_BALANCE_VERIFY_TIMEOUT_MS,
-            step_ms=GOLD_BALANCE_STEP_MS,
+        operation = _gold_transactions.balance_to_target(
+            _normalize_gold_target(self.target_carried_gold),
+            trigger,
+            get_inventory=_get_gold_inventory,
+            wait=_wait_for_gold_step,
+            drain_action_queue=self._drain_gold_action_queue,
+            has_local_storage_access=lambda: self._has_local_storage_access(),
+            debug_log=lambda message: self._debug_log(message),
         )
-        return (yield from self._wait_for_gold_balance_readback(
-            trigger=trigger,
-            target_gold=target_gold,
-            direction=direction,
-            requested=requested,
-            before=live_before,
-        ))
+        return (yield from cast(Generator[None, None, GoldBalanceResult], operation))
 
-    def _run_gold_balance_trigger(self, trigger: str):
+    def _run_gold_balance_trigger(self, trigger: str) -> Generator[None, None, GoldBalanceResult]:
         lifecycle_generation = yield from self._wait_for_merchant_rules_lifecycle(require_service=True)
         if lifecycle_generation is None:
             result = GoldBalanceResult(
@@ -17455,173 +17185,37 @@ class MerchantRulesWidget:
         self._debug_log(f"Failed to open Xunlai for {purpose} after {timeout_ms} ms.")
         return False
 
-    def _get_inventory_api_method(self, method_name: str):
-        inventory_api = getattr(GLOBAL_CACHE, "Inventory", None)
-        if inventory_api is None:
-            return None
-        method = getattr(inventory_api, str(method_name), None)
-        return method if callable(method) else None
+    def _drain_gold_action_queue(self, timeout_ms: int, step_ms: int) -> Generator[object, None, bool]:
+        return cast(
+            Generator[object, None, bool],
+            self._wait_for_action_queue_empty("ACTION", timeout_ms=timeout_ms, step_ms=step_ms),
+        )
 
     def _read_gold_amount(self, method_name: str) -> int | None:
-        method = self._get_inventory_api_method(method_name)
-        if method is None:
-            return None
-        try:
-            return max(0, int(method() or 0))
-        except Exception as exc:
-            self._debug_log(f"Gold API {method_name} failed: {exc}")
-            return None
-
-    def _wait_for_character_gold_at_least(
-        self,
-        target_gold: int,
-        *,
-        timeout_ms: int = GOLD_TOP_UP_TIMEOUT_MS,
-        step_ms: int = GOLD_TOP_UP_STEP_MS,
-    ):
-        safe_target = max(0, int(target_gold))
-        waited_ms = 0
-        current_gold = self._read_gold_amount("GetGoldOnCharacter")
-        while waited_ms <= max(0, int(timeout_ms)):
-            if current_gold is not None and int(current_gold) >= safe_target:
-                return max(0, int(current_gold))
-            if waited_ms >= max(0, int(timeout_ms)):
-                break
-            waited_ms += max(1, int(step_ms))
-            yield from Routines.Yield.wait(max(1, int(step_ms)))
-            current_gold = self._read_gold_amount("GetGoldOnCharacter")
-        return max(0, int(current_gold or 0))
+        return _gold_transactions.read_gold_amount(
+            method_name, get_inventory=_get_gold_inventory, debug_log=lambda message: self._debug_log(message)
+        )
 
     def _ensure_gold_for_purchase(
         self,
         required_gold: int,
         *,
         purpose: str = "merchant purchase",
-    ):
-        """Yield while topping up only the verified gold shortfall required for a purchase.
-
-        Storage is opened only when character plus storage gold can cover the target. The
-        generator reports failure when balances or withdrawal progress cannot be verified.
-        """
-
-        safe_required_gold = max(0, int(required_gold))
-        character_gold = self._read_gold_amount("GetGoldOnCharacter")
-        if character_gold is None:
-            return GoldTopUpResult(False, reason="carried gold API unavailable")
-        if safe_required_gold <= 0 or character_gold >= safe_required_gold:
-            return GoldTopUpResult(True, carried_gold=character_gold)
-
-        storage_gold = self._read_gold_amount("GetGoldInStorage")
-        withdraw_gold = self._get_inventory_api_method("WithdrawGold")
-        if storage_gold is None or withdraw_gold is None:
-            return GoldTopUpResult(
-                False,
-                carried_gold=character_gold,
-                reason="Xunlai gold API unavailable",
-            )
-
-        if character_gold + storage_gold < safe_required_gold:
-            return GoldTopUpResult(
-                False,
-                carried_gold=character_gold,
-                storage_gold=storage_gold,
-                reason="not enough total gold",
-            )
-
-        opened_storage = False
-        if not self._is_storage_open():
-            if not self._can_use_local_storage_actions():
-                return GoldTopUpResult(
-                    False,
-                    carried_gold=character_gold,
-                    storage_gold=storage_gold,
-                    reason="Xunlai not available here",
-                )
-            opened_storage = bool((yield from self._ensure_storage_open(purpose=f"{purpose} gold top-up")))
-            if not opened_storage:
-                return GoldTopUpResult(
-                    False,
-                    carried_gold=character_gold,
-                    storage_gold=storage_gold,
-                    reason="could not open Xunlai",
-                )
-            yield from Routines.Yield.wait(100)
-            character_gold = self._read_gold_amount("GetGoldOnCharacter")
-            storage_gold = self._read_gold_amount("GetGoldInStorage")
-            if character_gold is None or storage_gold is None:
-                return GoldTopUpResult(
-                    False,
-                    opened_storage=opened_storage,
-                    reason="gold API unavailable after opening Xunlai",
-                )
-            if character_gold >= safe_required_gold:
-                return GoldTopUpResult(
-                    True,
-                    carried_gold=character_gold,
-                    storage_gold=storage_gold,
-                    opened_storage=opened_storage,
-                )
-            if character_gold + storage_gold < safe_required_gold:
-                return GoldTopUpResult(
-                    False,
-                    carried_gold=character_gold,
-                    storage_gold=storage_gold,
-                    opened_storage=opened_storage,
-                    reason="not enough total gold",
-                )
-            return GoldTopUpResult(
-                False,
-                carried_gold=character_gold,
-                storage_gold=storage_gold,
-                opened_storage=opened_storage,
-                reason="Xunlai opened; revalidate purchase before withdrawal",
-            )
-
-        missing_gold = max(0, safe_required_gold - character_gold)
-        character_gold_room = max(0, MAX_CHARACTER_GOLD - character_gold)
-        withdraw_amount = min(missing_gold, max(0, int(storage_gold)), character_gold_room)
-        if withdraw_amount <= 0:
-            return GoldTopUpResult(
-                False,
-                carried_gold=character_gold,
-                storage_gold=storage_gold,
-                opened_storage=opened_storage,
-                reason="character gold cap prevents withdrawal",
-            )
-
-        self._debug_log(
-            f"Withdrawing {withdraw_amount} gold for {purpose}: "
-            f"carried={character_gold} storage={storage_gold} required={safe_required_gold}."
+    ) -> Generator[None, None, GoldTopUpResult]:
+        operation = _gold_transactions.fund_purchase(
+            required_gold,
+            purpose=purpose,
+            get_inventory=_get_gold_inventory,
+            wait=_wait_for_gold_step,
+            drain_action_queue=self._drain_gold_action_queue,
+            is_storage_open=lambda: self._is_storage_open(),
+            can_use_local_storage_actions=lambda: self._can_use_local_storage_actions(),
+            ensure_storage_open=lambda storage_purpose: cast(
+                Generator[object, None, bool], self._ensure_storage_open(purpose=storage_purpose)
+            ),
+            debug_log=lambda message: self._debug_log(message),
         )
-        try:
-            withdraw_gold(int(withdraw_amount))
-        except Exception as exc:
-            return GoldTopUpResult(
-                False,
-                carried_gold=character_gold,
-                storage_gold=storage_gold,
-                opened_storage=opened_storage,
-                reason=f"withdraw failed: {exc}",
-            )
-
-        queue_cleared = yield from self._wait_for_action_queue_empty("ACTION", timeout_ms=1000, step_ms=50)
-        wait_timeout_ms = GOLD_TOP_UP_TIMEOUT_MS if queue_cleared else 1000
-        character_gold = yield from self._wait_for_character_gold_at_least(
-            safe_required_gold,
-            timeout_ms=wait_timeout_ms,
-            step_ms=GOLD_TOP_UP_STEP_MS,
-        )
-        storage_gold_after = self._read_gold_amount("GetGoldInStorage")
-        ready = character_gold >= safe_required_gold
-        reason = "" if ready else "withdrawal did not reach required carried gold"
-        return GoldTopUpResult(
-            ready,
-            carried_gold=character_gold,
-            storage_gold=max(0, int(storage_gold_after or 0)),
-            withdrawn=withdraw_amount,
-            opened_storage=opened_storage,
-            reason=reason,
-        )
+        return (yield from cast(Generator[None, None, GoldTopUpResult], operation))
 
     def _get_inventory_stack_quantities(self, item_ids: list[int]) -> dict[int, int]:
         tracked_ids = {int(item_id) for item_id in item_ids if int(item_id) > 0}

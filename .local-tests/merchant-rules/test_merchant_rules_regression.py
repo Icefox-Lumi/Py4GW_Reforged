@@ -4134,21 +4134,25 @@ def _test_gold_post_execution_has_one_outer_hook(module) -> None:
 
 
 def _test_gold_balance_has_no_snapshot_deduplication(module) -> None:
-    source = MERCHANT_RULES_PATH.read_text(encoding="utf-8")
-    _expect(
-        "carried, storage, target" not in source.lower(),
-        "Carried-gold balancing should not add snapshot-value deduplication state.",
-    )
+    owner_path = REPO_ROOT / "Sources" / "icefox" / "MerchantRules" / "gold_transactions.py"
+    for path in (MERCHANT_RULES_PATH, owner_path):
+        source = path.read_text(encoding="utf-8")
+        _expect(
+            "carried, storage, target" not in source.lower(),
+            f"Carried-gold balancing should not add snapshot-value deduplication state in {path.name}.",
+        )
 
 
 def _test_gold_top_up_skips_when_total_gold_is_insufficient(module) -> None:
     widget = _make_widget(module)
     gold = {"character": 100, "storage": 200}
     withdrawals: list[int] = []
+    storage_checks: list[str] = []
     original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
     try:
         module.GLOBAL_CACHE.Inventory = types.SimpleNamespace(
-            IsStorageOpen=lambda: True,
+            IsStorageOpen=lambda: storage_checks.append("is open") or False,
+            OpenXunlaiWindow=lambda: storage_checks.append("open"),
             GetGoldOnCharacter=lambda: gold["character"],
             GetGoldInStorage=lambda: gold["storage"],
             WithdrawGold=lambda amount: withdrawals.append(int(amount)),
@@ -4159,8 +4163,495 @@ def _test_gold_top_up_skips_when_total_gold_is_insufficient(module) -> None:
         _expect(not result.ready, "Gold top-up should fail when character plus Xunlai gold cannot cover the purchase.")
         _expect(result.reason == "not enough total gold", "Gold top-up should report total gold insufficiency.")
         _expect(withdrawals == [], "Gold top-up should not withdraw when total gold is insufficient.")
+        _expect(
+            not storage_checks, f"Insufficient total gold should skip Xunlai window checks, got {storage_checks!r}."
+        )
     finally:
         module.GLOBAL_CACHE.Inventory = original_inventory
+
+
+def _cp16_equal(label: str, actual: object, expected: object) -> None:
+    _expect(actual == expected, f"CP16 {label}, expected {expected!r}, observed {actual!r}")
+
+
+def _test_cp16_gold_lifecycle(module: types.ModuleType) -> None:
+    owner: object = module._gold_transactions
+    _cp16_equal(
+        "widget result aliases are canonical",
+        (
+            module.GoldBalanceResult is getattr(owner, "GoldBalanceResult"),
+            module.GoldTopUpResult is getattr(owner, "GoldTopUpResult"),
+        ),
+        (True, True),
+    )
+
+    with _cp14_b_world(module) as (_queued, _map, restore):
+        widget = _cp15_widget(module)
+        widget.gold_balance_enabled = True
+        widget.target_carried_gold = 200
+        events: list[tuple[str, bool]] = []
+        original_publish: Callable[[object], None] = widget._publish_gold_balance_result
+
+        def wait_for_lifecycle(*, require_service: bool) -> Generator[str, None, int]:
+            events.append(("lifecycle", bool(widget.gold_balance_running)))
+            _cp16_equal("lifecycle service requirement", require_service, True)
+            yield "lifecycle"
+            return int(widget.merchant_rules_lifecycle_generation)
+
+        def carried() -> int:
+            events.append(("carried", bool(widget.gold_balance_running)))
+            return 500
+
+        def stored() -> int:
+            events.append(("stored", bool(widget.gold_balance_running)))
+            return 100
+
+        def local_service() -> bool:
+            events.append(("unexpected service", bool(widget.gold_balance_running)))
+            return False
+
+        def publish(result: object) -> None:
+            events.append(("publish", bool(widget.gold_balance_running)))
+            original_publish(result)
+
+        widget._wait_for_merchant_rules_lifecycle = wait_for_lifecycle
+        widget._has_local_storage_access = local_service
+        widget._publish_gold_balance_result = publish
+        restore.binding(
+            module.GLOBAL_CACHE,
+            "Inventory",
+            types.SimpleNamespace(GetGoldOnCharacter=carried, GetGoldInStorage=stored),
+        )
+
+        _cp16_equal(
+            "manual-compatible carried read",
+            (widget._read_gold_amount("GetGoldOnCharacter"), events),
+            (500, [("carried", False)]),
+        )
+        events.clear()
+        drain = cast(Callable[[Iterator[object]], object], _drain_generator_return)
+        operation: Generator[object, None, object] = widget._run_gold_balance_trigger("stepped")
+        try:
+            _cp16_equal("outer lifecycle pause", (next(operation), events), ("lifecycle", [("lifecycle", False)]))
+            widget.target_carried_gold = 300
+            _cp16_equal(
+                "inner lifecycle pause",
+                (next(operation), events),
+                ("lifecycle", [("lifecycle", False), ("lifecycle", True)]),
+            )
+            widget.target_carried_gold = 500
+            _cp16_equal(
+                "sample after inner wait",
+                drain(operation),
+                module.GoldBalanceResult("target_met", "stepped", 500, 500, 100, 500, 100),
+            )
+            _cp16_equal(
+                "read and publish order",
+                events,
+                [("lifecycle", False), ("lifecycle", True), ("carried", True), ("stored", True), ("publish", False)],
+            )
+        finally:
+            operation.close()
+
+        events.clear()
+        before_status: object = widget.last_gold_balance_summary
+        owned = widget._track_merchant_rules_owned_work(widget._run_gold_balance_trigger("stale"))
+        try:
+            _cp16_equal("owned outer pause", next(owned), "lifecycle")
+            _cp16_equal("owned inner pause", next(owned), "lifecycle")
+            widget.merchant_rules_profile_generation += 1
+            _cp16_equal("stale work returns no result", drain(owned), None)
+            _cp16_equal(
+                "stale work closes without reading or publishing",
+                (events, widget.gold_balance_running, widget.last_gold_balance_summary, _cp15_counts(widget)),
+                ([("lifecycle", False), ("lifecycle", True)], False, before_status, (0, 0, 0)),
+            )
+        finally:
+            owned.close()
+
+
+def _test_cp16_gold_balance_readback(module: types.ModuleType) -> None:
+    widget = _cp15_widget(module)
+    widget.gold_balance_enabled = True
+    widget.target_carried_gold = 500
+    restore = _CP8Restoration()
+    drain = cast(Callable[[Iterator[object]], object], _drain_generator_return)
+    cache: object = module.GLOBAL_CACHE
+    error = RuntimeError("CP16 test fault")
+    state = {"character": 900, "storage": 100}
+    calls: list[int] = []
+    events: list[str] = []
+
+    def observe(label: str, amount: int) -> int:
+        events.append(f"{label} {amount}")
+        return amount
+
+    def fail() -> int:
+        raise error
+
+    def deposit(amount: int) -> None:
+        events.append(f"deposit {amount}")
+        calls.append(amount)
+        state["character"] -= amount
+        state["storage"] += amount
+
+    def carried() -> int:
+        return observe("live carried", state["character"])
+
+    initial_inventory = types.SimpleNamespace(
+        GetGoldOnCharacter=lambda: observe("initial carried", 800),
+        GetGoldInStorage=lambda: observe("initial storage", 100),
+    )
+    inventory = types.SimpleNamespace(
+        GetGoldOnCharacter=carried,
+        GetGoldInStorage=lambda: observe("live storage", state["storage"]),
+        DepositGold=deposit,
+    )
+
+    def replace_inventory() -> bool:
+        events.append("replace inventory")
+        setattr(cache, "Inventory", inventory)
+        return True
+
+    try:
+        widget._has_local_storage_access = replace_inventory
+        expected = module.GoldBalanceResult("exact", "repeat", 500, 900, 100, 500, 500, 400, 400)
+        for attempt in (1, 2):
+            restore.binding(cache, "Inventory", initial_inventory)
+            state.update(character=900, storage=100)
+            first_event = len(events)
+            first_call = len(calls)
+            _cp16_equal(
+                "fresh snapshot and identical attempt", drain(widget._run_gold_balance_trigger("repeat")), expected
+            )
+            observed = events[first_event:]
+            _cp16_equal(
+                f"attempt {attempt} inventory and transfer order",
+                observed,
+                [
+                    "initial carried 800",
+                    "initial storage 100",
+                    "replace inventory",
+                    "live carried 900",
+                    "live storage 100",
+                    "deposit 400",
+                    "live carried 500",
+                    "live storage 500",
+                ],
+            )
+            _cp16_equal(f"attempt {attempt} transfer calls", calls[first_call:], [400])
+            print(f"CP16 repeat attempt {attempt}: {', '.join(observed)}")
+        _cp16_equal("both repetitions transfer", calls, [400, 400])
+
+        widget._has_local_storage_access = lambda: True
+        state.update(character=900, storage=100)
+
+        def invalidate_total(amount: int) -> None:
+            deposit(amount)
+            state["storage"] += 1
+
+        inventory.DepositGold = invalidate_total
+        _cp16_equal(
+            "invalid readback despite reaching carried target",
+            drain(widget._run_gold_balance_trigger("invalid")),
+            module.GoldBalanceResult(
+                "invalid", "invalid", 500, 900, 100, 500, 501, 400, reason="combined gold changed unexpectedly"
+            ),
+        )
+
+        def lose_readback(amount: int) -> None:
+            deposit(amount)
+            inventory.GetGoldOnCharacter = fail
+
+        state.update(character=900, storage=100)
+        inventory.DepositGold = lose_readback
+        _cp16_equal(
+            "missing readback remains invalid after submission",
+            drain(widget._run_gold_balance_trigger("missing readback")),
+            module.GoldBalanceResult(
+                "invalid", "missing readback", 500, 900, 100, requested=400, reason="gold read-back was unavailable"
+            ),
+        )
+
+        def fail_transfer(_amount: int) -> None:
+            raise error
+
+        state.update(character=900, storage=100)
+        inventory.GetGoldOnCharacter = carried
+        inventory.DepositGold = fail_transfer
+        _cp16_equal(
+            "invoked transfer failure is classified",
+            drain(widget._run_gold_balance_trigger("failed transfer")),
+            module.GoldBalanceResult(
+                "unavailable", "failed transfer", 500, 900, 100, requested=400, reason="gold deposit failed"
+            ),
+        )
+        inventory.GetGoldOnCharacter = fail
+        _cp16_equal(
+            "invoked getter failure is unavailable",
+            drain(widget._run_gold_balance_trigger("failed getter")),
+            module.GoldBalanceResult("unavailable", "failed getter", 500, reason="gold balances unavailable"),
+        )
+
+        class FailingLookup:
+            @property
+            def GetGoldOnCharacter(self) -> Callable[[], int]:
+                raise error
+
+        setattr(cache, "Inventory", FailingLookup())
+        _cp16_equal(
+            "lookup failure reaches trigger exception boundary",
+            drain(widget._run_gold_balance_trigger("failed lookup")),
+            module.GoldBalanceResult("unavailable", "failed lookup", 500, reason="unexpected balance error"),
+        )
+        _cp14a_fault(error, lambda: drain(widget._ensure_gold_for_purchase(500)), "CP16 funding lookup escapes")
+        _cp16_equal("all caught failures release the flag", widget.gold_balance_running, False)
+    finally:
+        restore.restore()
+
+
+def _test_cp16_gold_funding(module: types.ModuleType) -> None:
+    widget = _cp15_widget(module)
+    restore = _CP8Restoration()
+    drain = cast(Callable[[Iterator[object]], object], _drain_generator_return)
+    events: list[tuple[str, int]] = []
+    cap = int(module.MAX_CHARACTER_GOLD)
+    carried = 500
+    stored = 1000
+    storage_open = False
+
+    def read_carried() -> int:
+        events.append(("carried", carried))
+        return carried
+
+    def read_stored() -> int:
+        events.append(("stored", stored))
+        return stored
+
+    def is_open() -> bool:
+        events.append(("is open", int(storage_open)))
+        return storage_open
+
+    def open_storage() -> None:
+        nonlocal storage_open, carried
+        events.append(("open", 0))
+        storage_open = True
+        carried = 500
+
+    def withdraw(amount: int) -> None:
+        events.append(("withdraw", amount))
+
+    def wait(delay_ms: int) -> Generator[object, None, None]:
+        events.append(("wait", delay_ms))
+        yield delay_ms
+
+    inventory = types.SimpleNamespace(
+        GetGoldOnCharacter=read_carried,
+        GetGoldInStorage=read_stored,
+        IsStorageOpen=is_open,
+        OpenXunlaiWindow=open_storage,
+        WithdrawGold=withdraw,
+    )
+    try:
+        restore.binding(module.GLOBAL_CACHE, "Inventory", inventory)
+        restore.binding(module.Routines.Yield, "wait", wait)
+        for required in (0, 500):
+            events.clear()
+            _cp16_equal(
+                "carried-first funding result",
+                drain(widget._ensure_gold_for_purchase(required)),
+                module.GoldTopUpResult(True, 500),
+            )
+            _cp16_equal("carried-first funding does not see storage", events, [("carried", 500)])
+
+        events.clear()
+        carried = 100
+        operation: Generator[object, None, object] = widget._ensure_gold_for_purchase(500)
+        try:
+            _cp16_equal("open settle delay", next(operation), 100)
+            _cp16_equal("no funding readback or withdraw before settle", events[-1], ("wait", 100))
+            _cp16_equal(
+                "fresh carried funds preserve open history",
+                drain(operation),
+                module.GoldTopUpResult(True, 500, 1000, opened_storage=True),
+            )
+            _cp16_equal("readback without withdrawal", events[-2:], [("carried", 500), ("stored", 1000)])
+            _cp16_equal(
+                "opened once without withdrawal",
+                [event for event in events if event[0] in {"open", "withdraw"}],
+                [("open", 0)],
+            )
+        finally:
+            operation.close()
+
+        events.clear()
+        carried = cap - 75
+        _cp16_equal(
+            "funding withdraw is capped and no progress remains blocked",
+            drain(widget._ensure_gold_for_purchase(cap + 50)),
+            module.GoldTopUpResult(False, carried, stored, 75, reason="withdrawal did not reach required carried gold"),
+        )
+        _cp16_equal("single capped request", [event for event in events if event[0] == "withdraw"], [("withdraw", 75)])
+        _cp16_equal("bounded funding polls", [event for event in events if event[0] == "wait"], [("wait", 50)] * 40)
+    finally:
+        restore.restore()
+
+
+def _test_cp16_gold_buyer_revalidation(module: types.ModuleType) -> None:
+    material_model = int(module.ModelID.Wood_Plank.value)
+    scroll_model = min(cast(frozenset[int], module.SCROLL_TRADER_STOCK_MODEL_IDS))
+    craft_model = int(module.ModelID.Essence_Of_Celerity.value)
+    models = {"merchant": 555, "material": material_model, "rune": 0, "scroll": scroll_model, "crafter": craft_model}
+    expected = {
+        "merchant": ["price 701", "open", "offers 702", "price 702", "withdraw 100", "buy 702 at 600"],
+        "material": ["quote 701", "open", "offers 702", "quote 702"],
+        "rune": ["quote 701", "open", "offers 702"],
+        "scroll": ["quote 701", "open", "offers 702", "quote 702"],
+        "crafter": ["crafter 701", "open", "crafter 702", "ingredients"],
+    }
+    drain = cast(Callable[[Iterator[object]], object], _drain_generator_return)
+    for buyer, model in models.items():
+        widget = _cp15_widget(module)
+        restore = _CP8Restoration()
+        events: list[str] = []
+        stock = 0
+        carried = 100
+        stored = 500
+        storage_open = buyer == "crafter"
+        xunlai_opened = False
+
+        def open_storage() -> None:
+            nonlocal carried, stored, storage_open, xunlai_opened
+            events.append("open")
+            stored -= 500 - carried
+            carried = 500
+            storage_open = xunlai_opened = True
+
+        def withdraw(amount: int) -> None:
+            nonlocal carried, stored
+            events.append(f"withdraw {amount}")
+            stored -= amount
+            carried += amount
+
+        def offers() -> list[int]:
+            if xunlai_opened:
+                events.append("offers 702")
+                return [702]
+            return [701]
+
+        def price(item_id: int) -> int:
+            events.append(f"price {item_id}")
+            return 250 if item_id == 701 else 300
+
+        def request_quote(item_id: int) -> None:
+            events.append(f"quote {item_id}")
+
+        def quote(request: Callable[[int], None], item_id: int, **_kwargs: object) -> Generator[None, None, int]:
+            request(item_id)
+            yield from ()
+            if item_id == 701:
+                return 500
+            return 0 if buyer == "material" else 700
+
+        def buy(item_id: int, cost: int, *_args: object) -> None:
+            nonlocal stock, carried
+            events.append(f"buy {item_id} at {cost}")
+            stock += 1
+            carried -= cost
+
+        def open_crafter(_coords: tuple[float, float], _vendor_name: str) -> Generator[None, None, list[int]]:
+            nonlocal storage_open
+            item_id = 702 if xunlai_opened else 701
+            events.append(f"crafter {item_id}")
+            storage_open = False
+            yield from ()
+            return [item_id]
+
+        def ingredients(_recipe: object) -> tuple[list[int], list[int], list[str]]:
+            events.append("ingredients")
+            return [], [], ["CP16 missing carried material"]
+
+        def count_stock(_model_id: int) -> int:
+            return stock
+
+        def read_model(_item_id: int) -> int:
+            return model
+
+        def read_offer_quantity(_item_id: int) -> int:
+            return int(module.MATERIAL_BATCH_SIZE)
+
+        def rune_identifiers(item_id: int) -> tuple[str, ...]:
+            return ("rune_test",) if item_id == 701 else ()
+
+        def prepare_crafter(_crafts: object, *, vendor_name: str) -> Generator[None, None, bool]:
+            yield from ()
+            return vendor_name == "Kwat"
+
+        try:
+            restore.binding(
+                module.GLOBAL_CACHE,
+                "Inventory",
+                types.SimpleNamespace(
+                    GetGoldOnCharacter=lambda: carried,
+                    GetGoldInStorage=lambda: stored,
+                    WithdrawGold=withdraw,
+                    IsStorageOpen=lambda: storage_open,
+                    OpenXunlaiWindow=open_storage,
+                    GetModelCount=count_stock,
+                ),
+            )
+            restore.binding(
+                module.GLOBAL_CACHE,
+                "Item",
+                types.SimpleNamespace(
+                    GetModelID=read_model,
+                    Properties=types.SimpleNamespace(GetValue=price, GetQuantity=read_offer_quantity),
+                ),
+            )
+            restore.binding(
+                module.GLOBAL_CACHE,
+                "Trading",
+                types.SimpleNamespace(
+                    Merchant=types.SimpleNamespace(GetOfferedItems=offers, BuyItem=buy),
+                    Trader=types.SimpleNamespace(GetOfferedItems=offers, RequestQuote=request_quote, BuyItem=buy),
+                    Crafter=types.SimpleNamespace(CraftItem=buy),
+                ),
+            )
+            restore.binding(module.Routines.Yield, "Merchant", types.SimpleNamespace(_wait_for_quote=quote))
+            coords = (1.0, 2.0)
+            if buyer == "merchant":
+                result = drain(widget._buy_merchant_model(model, 1, offered_items=[701]))
+                _cp16_equal("merchant verified replacement purchase", getattr(result, "completed"), 1)
+            elif buyer == "material":
+                planned = module.PlannedMaterialBuy(
+                    merchant_type=module.MERCHANT_TYPE_MATERIALS,
+                    model_id=model,
+                    quantity=module.MATERIAL_BATCH_SIZE,
+                    label="Wood Plank",
+                    batch_size=module.MATERIAL_BATCH_SIZE,
+                )
+                result = drain(widget._buy_planned_materials(coords, [planned], trader_items=[701]))
+                _cp16_equal("material stale quote rejected", getattr(result, "quote_failures"), 1)
+            elif buyer == "rune":
+                widget._get_standalone_rune_identifiers_for_item_id = rune_identifiers
+                planned = module.PlannedTraderBuy("rune_test", 1, "Test Rune")
+                result = drain(widget._buy_planned_rune_trader_items(coords, [planned], trader_items=[701]))
+                _cp16_equal("rune refreshed identity rejected", getattr(result, "unavailable"), 1)
+            elif buyer == "scroll":
+                planned = module.PlannedScrollTraderBuy(model, 1, "Test Scroll")
+                result = drain(widget._buy_planned_scroll_trader_items(coords, [planned], trader_items=[701]))
+                _cp16_equal("scroll fresh quote must be funded", getattr(result, "gold_blocked"), 1)
+            else:
+                restore.binding(module.Player, "GetSkillPointData", lambda: (5, 100))
+                widget._prepare_consumable_crafting_materials = prepare_crafter
+                widget._open_consumable_crafter = open_crafter
+                widget._collect_crafting_ingredients_from_inventory = ingredients
+                planned = module.PlannedConsumableCraft(model, 1, "Essence of Celerity", "kwat", "Kwat", coords)
+                result = drain(widget._craft_planned_consumables([planned]))
+                _cp16_equal("crafter reopens and respects fresh ingredient blockers", getattr(result, "depleted"), 1)
+            _cp16_equal(f"{buyer} revalidation effects", events, expected[buyer])
+        finally:
+            restore.restore()
 
 
 def _test_merchant_stock_buy_withdraws_xunlai_gold_exact_shortfall(module) -> None:
@@ -4366,6 +4857,7 @@ def _test_material_buy_opens_xunlai_revalidates_and_withdraws_gold(module) -> No
     quotes: list[int] = []
     withdrawals: list[int] = []
     buys: list[tuple[int, int]] = []
+    events: list[tuple[str, int]] = []
     original_inventory = getattr(module.GLOBAL_CACHE, "Inventory", None)
     original_item = getattr(module.GLOBAL_CACHE, "Item", None)
     original_trading = getattr(module.GLOBAL_CACHE, "Trading", None)
@@ -4373,17 +4865,20 @@ def _test_material_buy_opens_xunlai_revalidates_and_withdraws_gold(module) -> No
     try:
         def _open_xunlai_window() -> None:
             open_calls.append("open")
+            events.append(("open", 0))
             storage_open["value"] = True
 
         def _withdraw_gold(amount: int) -> None:
             safe_amount = int(amount)
             withdrawals.append(safe_amount)
+            events.append(("withdraw", safe_amount))
             _expect(safe_amount <= gold["storage"], "Material buy should not overdraw Xunlai gold.")
             gold["storage"] -= safe_amount
             gold["character"] += safe_amount
 
         def _request_quote(item_id: int) -> None:
             quotes.append(int(item_id))
+            events.append(("quote", int(item_id)))
 
         def _wait_for_quote(request_quote, item_id: int, **_kwargs):
             request_quote(item_id)
@@ -4393,6 +4888,7 @@ def _test_material_buy_opens_xunlai_revalidates_and_withdraws_gold(module) -> No
 
         def _buy_item(item_id: int, cost: int) -> None:
             buys.append((int(item_id), int(cost)))
+            events.append(("buy", int(cost)))
             _expect(gold["character"] >= int(cost), "Material buy should top up gold before buying.")
             gold["character"] -= int(cost)
             material_count["value"] += module.MATERIAL_BATCH_SIZE
@@ -4453,6 +4949,11 @@ def _test_material_buy_opens_xunlai_revalidates_and_withdraws_gold(module) -> No
         _expect(quotes == [trader_item_id, trader_item_id], "Material buy should requote after Xunlai opens.")
         _expect(withdrawals == [400], "Material buy should withdraw only the exact carried-gold shortfall.")
         _expect(buys == [(trader_item_id, 500)], "Material buy should send the validated buy request.")
+        _expect(
+            events
+            == [("quote", trader_item_id), ("open", 0), ("quote", trader_item_id), ("withdraw", 400), ("buy", 500)],
+            f"Material withdrawal must follow the fresh quote and precede the purchase, observed {events!r}.",
+        )
     finally:
         module.GLOBAL_CACHE.Inventory = original_inventory
         module.GLOBAL_CACHE.Item = original_item
@@ -72779,6 +73280,10 @@ def main() -> int:
                 "gold_balance_has_no_snapshot_deduplication",
                 lambda: _test_gold_balance_has_no_snapshot_deduplication(module),
             ),
+            ("cp16_gold_lifecycle", lambda: _test_cp16_gold_lifecycle(module)),
+            ("cp16_gold_balance_readback", lambda: _test_cp16_gold_balance_readback(module)),
+            ("cp16_gold_funding", lambda: _test_cp16_gold_funding(module)),
+            ("cp16_gold_buyer_revalidation", lambda: _test_cp16_gold_buyer_revalidation(module)),
             (
                 "merchant_stock_buy_withdraws_xunlai_gold_exact_shortfall",
                 lambda: _test_merchant_stock_buy_withdraws_xunlai_gold_exact_shortfall(module),
