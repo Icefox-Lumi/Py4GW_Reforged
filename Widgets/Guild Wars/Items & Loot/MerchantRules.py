@@ -22,7 +22,6 @@ from copy import deepcopy
 from functools import partial
 from hashlib import md5
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any
 from typing import cast
 
 import PyImGui
@@ -59,6 +58,7 @@ from Sources.icefox.MerchantRules import automatic_triggers as _automatic_trigge
 from Sources.icefox.MerchantRules import configuration as _configuration
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
+from Sources.icefox.MerchantRules import owned_work as _owned_work
 from Sources.icefox.MerchantRules import planning as _planning
 from Sources.icefox.MerchantRules import preview as _preview
 from Sources.icefox.MerchantRules import profiles as _profiles
@@ -236,7 +236,7 @@ INVENTORY_SHORTCUT_LIVE_ACTION_SALVAGE_KIT_PREFIX = "salvage_kit"
 PROFILE_VERSION = _configuration.PROFILE_VERSION
 CHARACTER_PROFILE_CONFIRMATION_TICKS = 2
 CHARACTER_PROFILE_RETRY_INTERVAL_SECONDS = 1.0
-MERCHANT_RULES_OWNED_ACTION_QUEUES = frozenset({"ACTION", "IDENTIFY", "SALVAGE"})
+MERCHANT_RULES_OWNED_ACTION_QUEUES = _owned_work.OWNED_ACTION_QUEUES
 # Live configuration remains account-scoped. Saved profiles use one standalone
 # JsonFactory document per filename, while the legacy documents remain migration input.
 DATA_DIR = os.path.join(PySystem.Console.get_projects_path(), "Widgets", "Data")
@@ -686,289 +686,8 @@ ARMOR_UPGRADE_SOURCE_KIND = "armor"
 WEAPON_UPGRADE_SOURCE_KIND = "weapon"
 
 
-class _MerchantRulesOwnedQueueCallback:
-    """Track one Merchant Rules callback until it runs or is discarded."""
-
-    __slots__ = (
-        "_callback",
-        "_pending",
-        "_release",
-        "_generation",
-        "_is_generation_current",
-        "_lifecycle_generation",
-        "_is_lifecycle_current",
-        "__name__",
-    )
-
-    def __init__(
-        self,
-        callback: Callable,
-        release: Callable[[], None],
-        *,
-        generation: int | None = None,
-        is_generation_current: Callable[[int], bool] | None = None,
-        lifecycle_generation: int | None = None,
-        is_lifecycle_current: Callable[[int], bool] | None = None,
-    ):
-        self._callback = callback
-        self._release = release
-        self._pending = True
-        self._generation = generation
-        self._is_generation_current = is_generation_current
-        self._lifecycle_generation = lifecycle_generation
-        self._is_lifecycle_current = is_lifecycle_current
-        self.__name__ = str(getattr(callback, "__name__", callback.__class__.__name__))
-
-    def release(self) -> None:
-        if not self._pending:
-            return
-        self._pending = False
-        release = self._release
-        self._release = None
-        if callable(release):
-            release()
-
-    def __call__(self, *args, **kwargs):
-        if (
-            self._generation is not None
-            and callable(self._is_generation_current)
-            and not self._is_generation_current(self._generation)
-        ):
-            self.release()
-            return None
-        if (
-            self._lifecycle_generation is not None
-            and callable(self._is_lifecycle_current)
-            and not self._is_lifecycle_current(self._lifecycle_generation)
-        ):
-            self.release()
-            return None
-        try:
-            return self._callback(*args, **kwargs)
-        finally:
-            self.release()
-
-    def __del__(self):
-        try:
-            self.release()
-        except Exception:
-            pass
-
-
-class _MerchantRulesOwnedGenerator:
-    """Iterator with explicit close-time release for one Merchant Rules operation."""
-
-    __slots__ = (
-        "_owner",
-        "_generator",
-        "_generation",
-        "_release",
-        "_capture_actions",
-        "_reset_flags",
-        "_reset_values_before_start",
-        "_lifecycle_generation",
-        "_lifecycle_wait_generator",
-        "_allow_initial_lifecycle_transition",
-        "_pending_initial_lifecycle_transition_generation",
-        "_started",
-        "_finished",
-    )
-
-    def __init__(
-        self,
-        owner: Any,
-        generator,
-        generation: int,
-        release: Callable[[], None],
-        *,
-        capture_actions: bool,
-        lifecycle_generation: int | None = None,
-        allow_initial_lifecycle_transition: bool = False,
-        reset_flags: tuple[str, ...] = (),
-        reset_values_before_start: tuple[tuple[str, object], ...] = (),
-    ):
-        self._owner = owner
-        self._generator = generator
-        self._generation = int(generation)
-        self._release = release
-        self._capture_actions = bool(capture_actions)
-        self._lifecycle_generation = (
-            int(lifecycle_generation) if lifecycle_generation is not None else None
-        )
-        self._lifecycle_wait_generator = None
-        self._allow_initial_lifecycle_transition = bool(allow_initial_lifecycle_transition)
-        self._pending_initial_lifecycle_transition_generation: int | None = None
-        self._reset_flags = tuple(str(flag_name) for flag_name in reset_flags if str(flag_name))
-        self._reset_values_before_start = tuple(
-            (str(field_name), value)
-            for field_name, value in reset_values_before_start
-            if str(field_name)
-        )
-        self._started = False
-        self._finished = False
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self._finished:
-            raise StopIteration
-        if not self._owner._merchant_rules_is_generation_current(self._generation):
-            self.close()
-            raise StopIteration
-
-        if self._lifecycle_generation is not None:
-            while not self._owner._merchant_rules_planned_travel_active:
-                lifecycle_state = self._owner._merchant_rules_owned_work_lifecycle_state(
-                    self._lifecycle_generation,
-                )
-                if lifecycle_state == "stale":
-                    if (
-                        self._allow_initial_lifecycle_transition
-                        and self._pending_initial_lifecycle_transition_generation is None
-                    ):
-                        lifecycle_wait_generator = self._lifecycle_wait_generator
-                        self._lifecycle_wait_generator = None
-                        if lifecycle_wait_generator is not None:
-                            close_wait = getattr(lifecycle_wait_generator, "close", None)
-                            if callable(close_wait):
-                                close_wait()
-                        self._lifecycle_generation = int(self._owner.merchant_rules_lifecycle_generation)
-                        self._pending_initial_lifecycle_transition_generation = self._lifecycle_generation
-                        continue
-                    self.close()
-                    raise StopIteration
-                if lifecycle_state == "ready":
-                    self._allow_initial_lifecycle_transition = False
-                    self._pending_initial_lifecycle_transition_generation = None
-                    break
-                if self._lifecycle_wait_generator is None:
-                    self._lifecycle_wait_generator = self._owner._wait_for_merchant_rules_lifecycle(
-                        expected_generation=self._lifecycle_generation,
-                    )
-                try:
-                    return next(self._lifecycle_wait_generator)
-                except StopIteration as stop:
-                    self._lifecycle_wait_generator = None
-                    if stop.value is None:
-                        self.close()
-                        raise StopIteration
-                    self._lifecycle_generation = int(stop.value)
-
-        self._started = True
-        previous_lifecycle_generation = self._owner._merchant_rules_active_lifecycle_generation
-        self._owner._merchant_rules_active_lifecycle_generation = self._lifecycle_generation
-        try:
-            if self._capture_actions:
-                yielded_value = self._owner._advance_merchant_rules_owned_generator(
-                    self._generator,
-                    self._generation,
-                    lifecycle_generation=self._lifecycle_generation,
-                )
-            else:
-                previous_generation = self._owner._merchant_rules_active_generation
-                self._owner._merchant_rules_active_generation = self._generation
-                try:
-                    yielded_value = next(self._generator)
-                finally:
-                    self._owner._merchant_rules_active_generation = previous_generation
-        except StopIteration as stop:
-            self._finish()
-            raise stop
-        except BaseException:
-            self.close()
-            raise
-        finally:
-            self._owner._merchant_rules_active_lifecycle_generation = previous_lifecycle_generation
-
-        if not self._owner._merchant_rules_is_generation_current(self._generation):
-            self.close()
-            raise StopIteration
-        accepted_lifecycle_generation = self._owner._merchant_rules_planned_lifecycle_generation
-        if accepted_lifecycle_generation is not None:
-            self._lifecycle_generation = int(accepted_lifecycle_generation)
-            self._owner._merchant_rules_planned_lifecycle_generation = None
-        if (
-            self._lifecycle_generation is not None
-            and not self._owner._merchant_rules_planned_travel_active
-            and not self._owner._merchant_rules_lifecycle_is_current(self._lifecycle_generation)
-        ):
-            self.close()
-            raise StopIteration
-        return yielded_value
-
-    def close(self) -> None:
-        if self._finished:
-            return
-        try:
-            if self._started:
-                self._owner._close_merchant_rules_generator(
-                    self._generator,
-                    self._generation,
-                    capture_actions=self._capture_actions,
-                    lifecycle_generation=self._lifecycle_generation,
-                )
-            else:
-                close = getattr(self._generator, "close", None)
-                if callable(close):
-                    close()
-        finally:
-            self._finish()
-
-    def _finish(self) -> None:
-        if self._finished:
-            return
-        self._finished = True
-        release = self._release
-        self._release = None
-        try:
-            if callable(release):
-                release()
-        finally:
-            owner = self._owner
-            reset_flags = self._reset_flags
-            self._reset_flags = ()
-            for flag_name in reset_flags:
-                try:
-                    setattr(owner, flag_name, False)
-                except Exception:
-                    pass
-            reset_values = self._reset_values_before_start
-            self._reset_values_before_start = ()
-            if not self._started and reset_values:
-                rescan_fields = {
-                    "identify_rescan_requested",
-                    "salvage_rescan_requested",
-                    "instant_destroy_rescan_requested",
-                }
-                should_restore_rescan = True
-                if any(field_name in rescan_fields for field_name, _value in reset_values):
-                    try:
-                        should_restore_rescan = (
-                            int(owner.merchant_rules_profile_generation) == self._generation
-                        )
-                        if should_restore_rescan and self._lifecycle_generation is not None:
-                            lifecycle_generation = int(owner.merchant_rules_lifecycle_generation)
-                            if lifecycle_generation != self._lifecycle_generation:
-                                should_restore_rescan = bool(
-                                    self._allow_initial_lifecycle_transition
-                                    and self._pending_initial_lifecycle_transition_generation is None
-                                )
-                    except Exception:
-                        should_restore_rescan = False
-                for field_name, value in reset_values:
-                    if field_name in rescan_fields and not should_restore_rescan:
-                        continue
-                    try:
-                        setattr(owner, field_name, value)
-                    except Exception:
-                        pass
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+_MerchantRulesOwnedQueueCallback = _owned_work.OwnedQueueCallback
+_MerchantRulesOwnedGenerator = _owned_work.OwnedGenerator
 
 
 @dataclass(frozen=True)
@@ -4880,6 +4599,175 @@ def _has_explicit_equippable_hard_protection(rule: SellRule) -> bool:
 
 class MerchantRulesWidget:
 
+    class _WorkRuntime:
+        def __init__(self, widget: "MerchantRulesWidget") -> None:
+            self._widget = widget
+
+        @property
+        def profile_generation(self) -> int:
+            return self._widget.merchant_rules_profile_generation
+
+        @property
+        def lifecycle_generation(self) -> int:
+            return self._widget.merchant_rules_lifecycle_generation
+
+        @property
+        def initialized(self) -> bool:
+            return self._widget.initialized
+
+        @property
+        def accepted_account(self) -> str:
+            return self._widget.account_key
+
+        @property
+        def owned_queues(self) -> frozenset[str]:
+            return MERCHANT_RULES_OWNED_ACTION_QUEUES
+
+        @property
+        def generator_class(self) -> type[_owned_work.OwnedGenerator]:
+            return _MerchantRulesOwnedGenerator
+
+        @property
+        def callback_class(self) -> type[_owned_work.OwnedQueueCallback]:
+            return _MerchantRulesOwnedQueueCallback
+
+        @property
+        def work_release(self) -> Callable[[], None]:
+            return self._widget._release_merchant_rules_owned_work
+
+        @property
+        def action_release(self) -> Callable[[], None]:
+            return self._widget._release_merchant_rules_owned_action
+
+        @property
+        def dispatch_release(self) -> Callable[[], None]:
+            return self._widget._release_merchant_rules_remote_dispatch
+
+        @property
+        def profile_validity(self) -> _owned_work.Validity:
+            return self._widget._merchant_rules_is_generation_current
+
+        @property
+        def lifecycle_validity(self) -> _owned_work.Validity:
+            return self._widget._merchant_rules_lifecycle_is_current
+
+        def observe_account(self) -> str:
+            return self._widget._get_account_key()
+
+        def refresh_lifecycle(self) -> int:
+            return self._widget._refresh_merchant_rules_lifecycle_state(sync_runtime_snapshots=False)
+
+        def readiness_reason(self) -> str:
+            return self._widget._merchant_rules_lifecycle_block_reason()
+
+        def wait_for_lifecycle(self, expected: int) -> Generator[object, None, int | None]:
+            return cast(
+                Generator[object, None, int | None],
+                self._widget._wait_for_merchant_rules_lifecycle(expected_generation=expected),
+            )
+
+        def queue_manager(self) -> object:
+            return ActionQueueManager()
+
+        def mark_action_source(self) -> None:
+            widget = self._widget
+            if widget.merchant_session_open and (widget.execution_running or widget.manual_vendor_running):
+                widget._mark_current_merchant_session_mr_owned()
+
+        def publish_completion(self, field: _owned_work.CompletionField, value: object) -> None:
+            self._widget._publish_work_completion(field, value)
+
+    def _publish_work_completion(self, field: _owned_work.CompletionField, value: object) -> None:
+        match field:
+            case _owned_work.CompletionField.ICON_XUNLAI_OPEN_RUNNING:
+                self.icon_xunlai_open_running = cast(bool, value)
+            case _owned_work.CompletionField.INVENTORY_SHORTCUTS_LIVE_ACTION_RUNNING:
+                self.inventory_shortcuts_live_action_running = cast(bool, value)
+            case _owned_work.CompletionField.IDENTIFY_RUNNING:
+                self.identify_running = cast(bool, value)
+            case _owned_work.CompletionField.INSTANT_DESTROY_RUNNING:
+                self.instant_destroy_running = cast(bool, value)
+            case _owned_work.CompletionField.SALVAGE_RUNNING:
+                self.salvage_running = cast(bool, value)
+            case _owned_work.CompletionField.EXECUTION_RUNNING:
+                self.execution_running = cast(bool, value)
+            case _owned_work.CompletionField.STORAGE_SCAN_RUNNING:
+                self.storage_scan_running = cast(bool, value)
+            case _owned_work.CompletionField.AUTO_CLEANUP_RUNNING:
+                self.auto_cleanup_running = cast(bool, value)
+            case _owned_work.CompletionField.GOLD_BALANCE_RUNNING:
+                self.gold_balance_running = cast(bool, value)
+            case _owned_work.CompletionField.MANUAL_VENDOR_RUNNING:
+                self.manual_vendor_running = cast(bool, value)
+            case _owned_work.CompletionField.IDENTIFY_RESCAN_REQUESTED:
+                self.identify_rescan_requested = cast(bool, value)
+            case _owned_work.CompletionField.SALVAGE_RESCAN_REQUESTED:
+                self.salvage_rescan_requested = cast(bool, value)
+            case _owned_work.CompletionField.INSTANT_DESTROY_RESCAN_REQUESTED:
+                self.instant_destroy_rescan_requested = cast(bool, value)
+            case _owned_work.CompletionField.AUTO_CLEANUP_ZONE_ATTEMPTED:
+                self.auto_cleanup_zone_attempted = cast(bool, value)
+            case _owned_work.CompletionField.AUTO_CLEANUP_ZONE_TOKEN:
+                self.auto_cleanup_zone_token = cast(str, value)
+            case _owned_work.CompletionField.MANUAL_VENDOR_HANDLED_SIGNATURE:
+                self.manual_vendor_handled_signature = cast(str, value)
+
+    @property
+    def merchant_rules_owned_work_count(self) -> int:
+        return self._owned_work_session.work_count
+
+    @merchant_rules_owned_work_count.setter
+    def merchant_rules_owned_work_count(self, value: int) -> None:
+        self._owned_work_session.work_count = value
+
+    @property
+    def merchant_rules_owned_action_count(self) -> int:
+        return self._owned_work_session.action_count
+
+    @merchant_rules_owned_action_count.setter
+    def merchant_rules_owned_action_count(self, value: int) -> None:
+        self._owned_work_session.action_count = value
+
+    @property
+    def merchant_rules_remote_dispatch_count(self) -> int:
+        return self._owned_work_session.dispatch_count
+
+    @merchant_rules_remote_dispatch_count.setter
+    def merchant_rules_remote_dispatch_count(self, value: int) -> None:
+        self._owned_work_session.dispatch_count = value
+
+    @property
+    def _merchant_rules_active_generation(self) -> int | None:
+        return self._owned_work_session.active_generation
+
+    @_merchant_rules_active_generation.setter
+    def _merchant_rules_active_generation(self, value: int | None) -> None:
+        self._owned_work_session.active_generation = value
+
+    @property
+    def _merchant_rules_active_lifecycle_generation(self) -> int | None:
+        return self._owned_work_session.active_lifecycle_generation
+
+    @_merchant_rules_active_lifecycle_generation.setter
+    def _merchant_rules_active_lifecycle_generation(self, value: int | None) -> None:
+        self._owned_work_session.active_lifecycle_generation = value
+
+    @property
+    def _merchant_rules_planned_travel_active(self) -> bool:
+        return self._owned_work_session.planned_travel_active
+
+    @_merchant_rules_planned_travel_active.setter
+    def _merchant_rules_planned_travel_active(self, value: bool) -> None:
+        self._owned_work_session.planned_travel_active = value
+
+    @property
+    def _merchant_rules_planned_lifecycle_generation(self) -> int | None:
+        return self._owned_work_session.planned_lifecycle_generation
+
+    @_merchant_rules_planned_lifecycle_generation.setter
+    def _merchant_rules_planned_lifecycle_generation(self, value: int | None) -> None:
+        self._owned_work_session.planned_lifecycle_generation = value
+
     class _AutomaticTriggerRuntime:
         def __init__(self, widget: "MerchantRulesWidget") -> None:
             self._widget = widget
@@ -6326,19 +6214,13 @@ class MerchantRulesWidget:
         self.auto_cleanup_running = False
         self.gold_balance_running = False
         self.manual_vendor_running = False
-        self.merchant_rules_owned_work_count = 0
-        self.merchant_rules_owned_action_count = 0
-        self.merchant_rules_remote_dispatch_count = 0
+        self._owned_work_session = _owned_work.OwnedWorkSession(self._WorkRuntime(self))
         self.merchant_rules_profile_generation = 0
         self._merchant_rules_generation_account_key = ""
-        self._merchant_rules_active_generation: int | None = None
-        self._merchant_rules_active_lifecycle_generation: int | None = None
         self.merchant_rules_lifecycle_generation = 0
         self._merchant_rules_lifecycle_map_snapshot = 0
         self._merchant_rules_lifecycle_map_ready_snapshot = False
         self._merchant_rules_lifecycle_uptime_snapshot_ms = 0
-        self._merchant_rules_planned_travel_active = False
-        self._merchant_rules_planned_lifecycle_generation: int | None = None
         self.pending_multibox_profile_reload: tuple[str, str, str] | None = None
         self._pending_multibox_profile_reload_payload: dict[str, object] | None = None
         self._merchant_rules_staged_multibox_reload_requests: set[tuple[str, str, str]] = set()
@@ -10173,18 +10055,7 @@ class MerchantRulesWidget:
         self._set_main_window_visible(False, expand_on_show=True)
 
     def _merchant_rules_is_generation_current(self, generation: int | None = None) -> bool:
-        if generation is None:
-            generation = self._merchant_rules_active_generation
-        if generation is not None and int(generation) != int(self.merchant_rules_profile_generation):
-            return False
-        if self.initialized and str(self.account_key or "").strip():
-            try:
-                current_account = self._get_account_key()
-                if current_account and current_account != self.account_key:
-                    return False
-            except Exception:
-                return False
-        return True
+        return self._owned_work_session.profile_is_current(generation)
 
     def _refresh_merchant_rules_lifecycle_state(self, *, sync_runtime_snapshots: bool = True) -> int:
         try:
@@ -10487,16 +10358,10 @@ class MerchantRulesWidget:
         return ""
 
     def _merchant_rules_lifecycle_is_current(self, generation: int | None = None) -> bool:
-        current_generation = self._refresh_merchant_rules_lifecycle_state(sync_runtime_snapshots=False)
-        if generation is not None and int(generation) != current_generation:
-            return False
-        return not self._merchant_rules_lifecycle_block_reason()
+        return self._owned_work_session.lifecycle_is_current(generation)
 
     def _merchant_rules_owned_work_lifecycle_state(self, generation: int) -> str:
-        current_generation = self._refresh_merchant_rules_lifecycle_state(sync_runtime_snapshots=False)
-        if int(generation) != current_generation:
-            return "stale"
-        return "ready" if not self._merchant_rules_lifecycle_block_reason() else "waiting"
+        return self._owned_work_session.lifecycle_state(generation)
 
     def _yield_merchant_rules_lifecycle_wait(self, step_ms: int):
         waiter = Routines.Yield.wait(max(1, int(step_ms)))
@@ -10567,16 +10432,10 @@ class MerchantRulesWidget:
             self._merchant_rules_planned_travel_active = False
 
     def _merchant_rules_operation_generation(self) -> int:
-        active_generation = self._merchant_rules_active_generation
-        if active_generation is not None:
-            return int(active_generation)
-        return int(self.merchant_rules_profile_generation)
+        return self._owned_work_session.operation_generation()
 
     def _merchant_rules_operation_lifecycle_generation(self) -> int:
-        active_generation = self._merchant_rules_active_lifecycle_generation
-        if active_generation is not None:
-            return int(active_generation)
-        return int(self.merchant_rules_lifecycle_generation)
+        return self._owned_work_session.operation_lifecycle_generation()
 
     def _capture_merchant_rules_work_lifecycle_baseline(self) -> bool:
         if (
@@ -10625,163 +10484,48 @@ class MerchantRulesWidget:
         return lifecycle_generation, not has_current_map_identity
 
     def _release_merchant_rules_owned_work(self) -> None:
-        self.merchant_rules_owned_work_count = max(0, int(self.merchant_rules_owned_work_count) - 1)
+        self._owned_work_session.release_work()
 
     def _release_merchant_rules_owned_action(self) -> None:
-        self.merchant_rules_owned_action_count = max(0, int(self.merchant_rules_owned_action_count) - 1)
+        self._owned_work_session.release_action()
 
     def _track_merchant_rules_owned_action(
         self,
-        callback: Callable,
+        callback: _owned_work.Action,
         *,
         generation: int | None = None,
         lifecycle_generation: int | None = None,
     ) -> _MerchantRulesOwnedQueueCallback:
-        if self.merchant_session_open and (self.execution_running or self.manual_vendor_running):
-            self._mark_current_merchant_session_mr_owned()
-        self.merchant_rules_owned_action_count = max(0, int(self.merchant_rules_owned_action_count)) + 1
-        try:
-            captured_generation = self._merchant_rules_operation_generation() if generation is None else int(generation)
-            captured_lifecycle_generation = (
-                self._merchant_rules_operation_lifecycle_generation()
-                if lifecycle_generation is None
-                else int(lifecycle_generation)
-            )
-            return _MerchantRulesOwnedQueueCallback(
-                callback,
-                self._release_merchant_rules_owned_action,
-                generation=captured_generation,
-                is_generation_current=self._merchant_rules_is_generation_current,
-                lifecycle_generation=captured_lifecycle_generation,
-                is_lifecycle_current=self._merchant_rules_lifecycle_is_current,
-            )
-        except BaseException:
-            self._release_merchant_rules_owned_action()
-            raise
+        return self._owned_work_session.track_action(
+            callback, generation=generation, lifecycle_generation=lifecycle_generation
+        )
 
-    def _begin_merchant_rules_action_capture(self, generation: int | None = None):
-        """Capture only Merchant Rules action submissions made during one generator tick."""
+    def _begin_merchant_rules_action_capture(self, generation: int | None = None) -> _owned_work.Capture | None:
+        return self._owned_work_session.begin_capture(generation)
 
-        try:
-            manager = ActionQueueManager()
-        except Exception:
-            return None
-
-        captures: list[tuple[str, bool, object]] = []
-        manager_attributes = getattr(manager, "__dict__", {})
-
-        def install_capture(method_name: str, *, delayed: bool = False):
-            original = getattr(manager, method_name, None)
-            if not callable(original):
-                return
-            had_instance_override = bool(method_name in manager_attributes)
-            previous_instance_value = manager_attributes.get(method_name)
-
-            if delayed:
-
-                def captured_delayed(queue_name, delay, callback, *args, **kwargs):
-                    if str(queue_name or "").upper() not in MERCHANT_RULES_OWNED_ACTION_QUEUES:
-                        return original(queue_name, delay, callback, *args, **kwargs)
-                    owned_callback = self._track_merchant_rules_owned_action(
-                        callback,
-                        generation=generation,
-                        lifecycle_generation=self._merchant_rules_operation_lifecycle_generation(),
-                    )
-                    try:
-                        return original(queue_name, delay, owned_callback, *args, **kwargs)
-                    except BaseException:
-                        owned_callback.release()
-                        raise
-
-                captured = captured_delayed
-            else:
-
-                def captured_immediate(queue_name, callback, *args, **kwargs):
-                    if str(queue_name or "").upper() not in MERCHANT_RULES_OWNED_ACTION_QUEUES:
-                        return original(queue_name, callback, *args, **kwargs)
-                    owned_callback = self._track_merchant_rules_owned_action(
-                        callback,
-                        generation=generation,
-                        lifecycle_generation=self._merchant_rules_operation_lifecycle_generation(),
-                    )
-                    try:
-                        return original(queue_name, owned_callback, *args, **kwargs)
-                    except BaseException:
-                        owned_callback.release()
-                        raise
-
-                captured = captured_immediate
-
-            try:
-                setattr(manager, method_name, captured)
-            except Exception:
-                return
-            captures.append((method_name, had_instance_override, previous_instance_value))
-
-        install_capture("AddAction")
-        install_capture("AddActionWithDelay", delayed=True)
-        return manager, captures
-
-    def _end_merchant_rules_action_capture(self, capture) -> None:
-        if capture is None:
-            return
-        manager, captures = capture
-        for method_name, had_instance_override, previous_instance_value in reversed(captures):
-            try:
-                if had_instance_override:
-                    setattr(manager, method_name, previous_instance_value)
-                else:
-                    delattr(manager, method_name)
-            except Exception:
-                pass
+    def _end_merchant_rules_action_capture(self, capture: _owned_work.Capture | None) -> None:
+        self._owned_work_session.end_capture(capture)
 
     def _close_merchant_rules_generator(
         self,
-        generator,
+        generator: _owned_work.Producer,
         generation: int | None = None,
         *,
         capture_actions: bool = True,
         lifecycle_generation: int | None = None,
     ) -> None:
-        close = getattr(generator, "close", None)
-        if not callable(close):
-            return
-        previous_generation = self._merchant_rules_active_generation
-        previous_lifecycle_generation = self._merchant_rules_active_lifecycle_generation
-        self._merchant_rules_active_generation = generation
-        self._merchant_rules_active_lifecycle_generation = lifecycle_generation
-        capture = self._begin_merchant_rules_action_capture(generation) if capture_actions else None
-        try:
-            close()
-        except RuntimeError:
-            pass
-        finally:
-            self._end_merchant_rules_action_capture(capture)
-            self._merchant_rules_active_generation = previous_generation
-            self._merchant_rules_active_lifecycle_generation = previous_lifecycle_generation
+        self._owned_work_session.close_started(
+            generator, generation, capture_actions=capture_actions, lifecycle_generation=lifecycle_generation
+        )
 
     def _advance_merchant_rules_owned_generator(
-        self,
-        generator,
-        generation: int,
-        *,
-        lifecycle_generation: int | None = None,
-    ):
-        previous_generation = self._merchant_rules_active_generation
-        previous_lifecycle_generation = self._merchant_rules_active_lifecycle_generation
-        self._merchant_rules_active_generation = generation
-        self._merchant_rules_active_lifecycle_generation = lifecycle_generation
-        capture = self._begin_merchant_rules_action_capture(generation)
-        try:
-            return next(generator)
-        finally:
-            self._end_merchant_rules_action_capture(capture)
-            self._merchant_rules_active_generation = previous_generation
-            self._merchant_rules_active_lifecycle_generation = previous_lifecycle_generation
+        self, generator: _owned_work.Producer, generation: int, *, lifecycle_generation: int | None = None
+    ) -> object:
+        return self._owned_work_session.advance(generator, generation, lifecycle_generation=lifecycle_generation)
 
     def _track_merchant_rules_owned_work(
         self,
-        generator,
+        generator: _owned_work.Producer,
         *,
         reset_flags: tuple[str, ...] = (),
         reset_values_before_start: tuple[tuple[str, object], ...] = (),
@@ -10789,28 +10533,17 @@ class MerchantRulesWidget:
         generation = self._merchant_rules_operation_generation()
         lifecycle_baseline_available = self._capture_merchant_rules_work_lifecycle_baseline()
         lifecycle_generation = self._merchant_rules_operation_lifecycle_generation()
-        self.merchant_rules_owned_work_count = max(0, int(self.merchant_rules_owned_work_count)) + 1
-        try:
-            return _MerchantRulesOwnedGenerator(
-                self,
-                generator,
-                generation,
-                self._release_merchant_rules_owned_work,
-                capture_actions=True,
-                lifecycle_generation=lifecycle_generation,
-                allow_initial_lifecycle_transition=not lifecycle_baseline_available,
-                reset_flags=reset_flags,
-                reset_values_before_start=reset_values_before_start,
+
+        def completion() -> _owned_work.Completion:
+            field = _owned_work.CompletionField
+            return _owned_work.Completion(
+                tuple(field(str(flag_name)) for flag_name in reset_flags if str(flag_name)),
+                tuple((field(str(name)), value) for name, value in reset_values_before_start if str(name)),
             )
-        except BaseException:
-            close = getattr(generator, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except BaseException:
-                    pass
-            self._release_merchant_rules_owned_work()
-            raise
+
+        return self._owned_work_session.track_work(
+            generator, generation, lifecycle_generation, not lifecycle_baseline_available, completion
+        )
 
     def _queue_merchant_rules_owned_work(
         self,
@@ -10829,7 +10562,7 @@ class MerchantRulesWidget:
                 except BaseException:
                     pass
             for flag_name in reset_flags:
-                setattr(self, flag_name, False)
+                self._publish_work_completion(_owned_work.CompletionField(flag_name), False)
             return None
         try:
             owned_generator = self._track_merchant_rules_owned_work(
@@ -10839,9 +10572,9 @@ class MerchantRulesWidget:
             )
         except BaseException:
             for flag_name in reset_flags:
-                setattr(self, flag_name, False)
+                self._publish_work_completion(_owned_work.CompletionField(flag_name), False)
             for field_name, value in reset_values_before_start:
-                setattr(self, field_name, value)
+                self._publish_work_completion(_owned_work.CompletionField(field_name), value)
             raise
         try:
             GLOBAL_CACHE.Coroutines.append(cast(Generator[object, None, None], owned_generator))
@@ -10852,14 +10585,14 @@ class MerchantRulesWidget:
                 pass
             finally:
                 for flag_name in reset_flags:
-                    setattr(self, flag_name, False)
+                    self._publish_work_completion(_owned_work.CompletionField(flag_name), False)
                 for field_name, value in reset_values_before_start:
-                    setattr(self, field_name, value)
+                    self._publish_work_completion(_owned_work.CompletionField(field_name), value)
             raise
         return owned_generator
 
     def _release_merchant_rules_remote_dispatch(self) -> None:
-        self.merchant_rules_remote_dispatch_count = max(0, int(self.merchant_rules_remote_dispatch_count) - 1)
+        self._owned_work_session.release_dispatch()
 
     def _get_staged_multibox_reload_request_key(self, message) -> tuple[str, str, str]:
         extra0, _extra1, _extra2, _extra3 = self._extract_multibox_message_extra_data(message)
@@ -10929,7 +10662,7 @@ class MerchantRulesWidget:
         if was_staged and self.pending_multibox_profile_reload == normalized_key:
             self._clear_pending_multibox_profile_reload()
 
-    def track_merchant_rules_remote_dispatch(self, message, generator):
+    def track_merchant_rules_remote_dispatch(self, message, generator: _owned_work.Producer):
         opcode = self._get_multibox_message_opcode(message)
         if opcode == MERCHANT_RULES_OPCODE_RELOAD_PROFILE:
             if not self.initialized:
@@ -10937,23 +10670,9 @@ class MerchantRulesWidget:
             request_key = self._get_staged_multibox_reload_request_key(message)
             self._stage_multibox_profile_reload(request_key)
             generation = self._merchant_rules_operation_generation()
-            try:
-                return _MerchantRulesOwnedGenerator(
-                    self,
-                    generator,
-                    generation,
-                    lambda: self._release_staged_multibox_profile_reload(request_key),
-                    capture_actions=False,
-                )
-            except BaseException:
-                self._release_staged_multibox_profile_reload(request_key)
-                close = getattr(generator, "close", None)
-                if callable(close):
-                    try:
-                        close()
-                    except BaseException:
-                        pass
-                raise
+            return self._owned_work_session.track_reload(
+                generator, generation, lambda: self._release_staged_multibox_profile_reload(request_key)
+            )
         if opcode not in (MERCHANT_RULES_OPCODE_PREVIEW, MERCHANT_RULES_OPCODE_EXECUTE):
             return generator
         if not self.initialized:
@@ -10962,26 +10681,9 @@ class MerchantRulesWidget:
         lifecycle_generation, allow_initial_lifecycle_transition = (
             self._capture_merchant_rules_remote_dispatch_lifecycle()
         )
-        self.merchant_rules_remote_dispatch_count = max(0, int(self.merchant_rules_remote_dispatch_count)) + 1
-        try:
-            return _MerchantRulesOwnedGenerator(
-                self,
-                generator,
-                generation,
-                self._release_merchant_rules_remote_dispatch,
-                capture_actions=False,
-                lifecycle_generation=lifecycle_generation,
-                allow_initial_lifecycle_transition=allow_initial_lifecycle_transition,
-            )
-        except BaseException:
-            close = getattr(generator, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except BaseException:
-                    pass
-            self._release_merchant_rules_remote_dispatch()
-            raise
+        return self._owned_work_session.track_dispatch(
+            generator, generation, lifecycle_generation, allow_initial_lifecycle_transition
+        )
 
     def _merchant_rules_has_pending_or_active_work(
         self,

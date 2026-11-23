@@ -33179,6 +33179,953 @@ def _test_owned_action_leases_survive_parent_generator_and_preserve_unrelated_wo
         module.ActionQueueManager = original_action_queue_manager
 
 
+def _cp15_messaging_source(
+    module: types.ModuleType, widget: object, *, core_restore: _CP8Restoration | None = None
+) -> types.ModuleType:
+    """Bind the selected caller's real source to the harness widget and transport."""
+    import stat
+    from hashlib import sha256
+
+    core_receipt = core_restore is not None
+    live = Path(r"C:\Users\O_o\Desktop\Py4GW_Reforged-main EDITS")
+    private = live / ".local-tests" / "merchant-rules" / "test_merchant_rules_regression.py"
+    direct = REPO_ROOT == live and SCRIPT_DIR == private.parent and Path(__file__).absolute() == private
+    base = REPO_ROOT
+    if core_receipt:
+        base = live.with_name("Py4GW_Reforged-main CORE") if direct else SCRIPT_DIR / "cp15-core"
+    path = base / "Widgets" / "System" / "Messaging.py"
+    for target in (private, path) if direct else (path,):
+        for part in (*reversed(target.parents), target):
+            if part.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise AssertionError("CP15 unexpected reparse point " + str(part))
+    _expect(path == path.resolve(strict=True), "CP15 concrete Messaging origin")
+    raw = path.read_bytes()
+    digest = (
+        "78d7c78113570e821e3cbf0aa600ea7af144df41722e51a9b5893a05589c1c58"
+        if core_receipt
+        else "acc94e57d7ed0d5178a426597bcebddef5796e742d714ccb96581742107b3257"
+    )
+    _expect(sha256(raw).hexdigest() == digest, "CP15 Messaging variant, expected " + digest + " at " + str(path))
+    names = (
+        (
+            "_get_merchant_rules_widget",
+            "_merchant_rules_message_fingerprint",
+            "_MerchantRulesDispatchReceipt",
+            "MerchantRules",
+            "_queue_merchant_rules_message",
+            "_merchant_rules_message_body",
+        )
+        if core_receipt
+        else ("_get_merchant_rules_widget", "MerchantRules", "_queue_merchant_rules_message")
+    )
+    definitions: list[ast.stmt] = []
+    found: list[str] = []
+    initialized: list[str] = []
+    for row in ast.parse(raw, filename=str(path)).body:
+        if isinstance(row, (ast.FunctionDef, ast.ClassDef)) and row.name in names:
+            definitions.append(row)
+            found.append(row.name)
+        elif isinstance(row, ast.AnnAssign) and isinstance(row.target, ast.Name):
+            if row.target.id == "_merchant_busy" or (core_receipt and row.target.id == "_merchant_rules_dispatches"):
+                definitions.append(row)
+                initialized.append(row.target.id)
+    _expect(tuple(found) == names, "CP15 pinned Messaging definitions " + str(found))
+    state = ["_merchant_busy", "_merchant_rules_dispatches"] if core_receipt else ["_merchant_busy"]
+    _expect(initialized == state, "CP15 actual Messaging state owners")
+    info = types.SimpleNamespace(module=types.SimpleNamespace(WIDGET_INSTANCE=widget))
+
+    def lookup(name: str) -> object:
+        return info if name == "MerchantRules" else None
+
+    messaging = types.ModuleType("cp15_core_messaging" if core_receipt else "cp15_edits_messaging")
+    messaging.__file__ = str(path)
+    vars(messaging).update(
+        Generator=Generator,
+        Iterator=Iterator,
+        Any=Any,
+        cast=cast,
+        GLOBAL_CACHE=module.GLOBAL_CACHE,
+        get_widget_handler=lambda: types.SimpleNamespace(get_widget_info=lookup),
+        MERCHANT_RULES_WIDGET_NAME="Merchant Rules",
+        MODULE_NAME="Messaging",
+        ConsoleLog=module.ConsoleLog,
+        Console=module.Console,
+    )
+    if core_restore is None:
+        setattr(messaging, "SharedMessageStruct", object)
+    else:
+        import weakref
+
+        _expect(
+            {"ctypes", "weakref", "SharedMessageStruct"}.isdisjoint(vars(messaging)),
+            "CP15 new private CORE namespace",
+        )
+        core_restore.binding(messaging, "weakref", weakref)
+        core_restore.binding(messaging, "SharedMessageStruct", _CP15WireRow)
+        core_restore.binding(messaging, "ctypes", _CP15BufferAccess)
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(path), "exec"), vars(messaging))
+    for name in names:
+        method = getattr(messaging, name)
+        if isinstance(method, type):
+            method = vars(method)["_finalize"]
+        _expect(
+            isinstance(method, types.FunctionType)
+            and method.__globals__ is vars(messaging)
+            and Path(method.__code__.co_filename) == path,
+            "CP15 concrete caller definition " + name,
+        )
+    _expect(_cp13_call(messaging, "_get_merchant_rules_widget") is widget, "CP15 actual recipient identity")
+    return messaging
+
+
+# Packed Windows SharedMessageStruct, two-byte WCHAR and byte offsets from the pinned CORE layout.
+_CP15_CORE_PENDING = (
+    "leader@example.com".encode("utf-16-le").ljust(128, b"\x00")
+    + "merchant.rules@example.com".encode("utf-16-le").ljust(128, b"\x00")
+    + bytes.fromhex("39000000 00004040 00000080 00000000 00000000")
+    + "exec-15".encode("utf-16-le").ljust(128, b"\x00")
+    + "stock:222:2".encode("utf-16-le").ljust(128, b"\x00")
+    + "1".encode("utf-16-le").ljust(128, b"\x00") * 2
+    + bytes.fromhex("01 00 0b000000")
+)
+
+
+class _CP15WireRow:
+    """Private in-memory transport storage. Each from_buffer_copy owns a fresh full-size image."""
+
+    def __init__(self, payload: bytes) -> None:
+        if len(payload) != 794:
+            raise ValueError("CP15 expected a complete 794-byte row")
+        self.image = bytearray(payload)
+
+    @classmethod
+    def from_buffer_copy(cls, payload: bytes) -> "_CP15WireRow":
+        return cls(payload)
+
+    def _wide(self, offset: int) -> str:
+        return self.image[offset : offset + 128].decode("utf-16-le").partition("\x00")[0]
+
+    @property
+    def SenderEmail(self) -> str:
+        return self._wide(0)
+
+    @property
+    def ReceiverEmail(self) -> str:
+        return self._wide(128)
+
+    @property
+    def Params(self) -> tuple[float, float, float, float]:
+        fields = memoryview(self.image)[260:276].cast("f")
+        return float(fields[0]), float(fields[1]), float(fields[2]), float(fields[3])
+
+    @property
+    def ExtraData(self) -> tuple[str, str, str, str]:
+        return self._wide(276), self._wide(404), self._wide(532), self._wide(660)
+
+    @property
+    def Active(self) -> bool:
+        return bool(self.image[788])
+
+    @Active.setter
+    def Active(self, value: bool) -> None:
+        self.image[788] = int(value)
+
+    @property
+    def Running(self) -> bool:
+        return bool(self.image[789])
+
+    @Running.setter
+    def Running(self, value: bool) -> None:
+        self.image[789] = int(value)
+
+    @property
+    def Timestamp(self) -> int:
+        return int.from_bytes(self.image[790:794], "little")
+
+    @Timestamp.setter
+    def Timestamp(self, value: int) -> None:
+        self.image[790:794] = value.to_bytes(4, "little")
+
+
+class _CP15BufferAccess:
+    """Three buffer operations consumed by the pinned CORE fingerprint function."""
+
+    @staticmethod
+    def addressof(row: _CP15WireRow) -> memoryview:
+        return memoryview(row.image).toreadonly()
+
+    @staticmethod
+    def sizeof(row: _CP15WireRow) -> int:
+        return len(row.image)
+
+    @staticmethod
+    def string_at(address: memoryview, size: int) -> bytes:
+        if address.format != "B" or not address.readonly or size != address.nbytes:
+            raise ValueError("CP15 fingerprint must cover the entire addressed byte buffer")
+        return address.tobytes()
+
+
+def _cp15_wire_digest(blob: object) -> str:
+    from hashlib import sha256
+
+    if not isinstance(blob, bytes):
+        raise AssertionError("CP15 fingerprint must return bytes")
+    return sha256(blob).hexdigest()
+
+
+def _cp15_wire_contract(messaging: types.ModuleType, row: _CP15WireRow) -> None:
+    fingerprint = _cp12_bound(messaging, "_merchant_rules_message_fingerprint")
+    pending = fingerprint(row)
+    if not isinstance(pending, bytes):
+        raise AssertionError("CP15 real CORE fingerprint must return bytes")
+    twin = _CP15WireRow.from_buffer_copy(pending)
+    twin.image[267] = 0  # Change float 1 from -0 to +0, preserving its numeric value.
+    _cp15_equal(
+        "CORE packed wire fingerprint and copy independence",
+        (
+            len(pending),
+            pending == _CP15_CORE_PENDING,
+            _cp15_wire_digest(pending),
+            twin.Params == row.Params,
+            twin.image is not row.image,
+            _cp15_wire_digest(fingerprint(twin)),
+            fingerprint(row) == pending,
+            vars(messaging)["ctypes"] is _CP15BufferAccess,
+            vars(messaging)["SharedMessageStruct"] is _CP15WireRow,
+        ),
+        (
+            794,
+            True,
+            "7ebcf0b9aa5a9ac7ecb4de7d44eda73c03d36e036e7b5bc60b5f33de4f4fc2cb",
+            True,
+            True,
+            "bef3dd1f5085dede8983f2d65054a4e9df98ce83c86bb02dd95121408ad39e73",
+            True,
+            True,
+            True,
+        ),
+    )
+
+
+def _cp15_message(request: str, opcode: int) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        Params=(float(opcode), 0.0, 0.0, 0.0),
+        ExtraData=(request, "stock:222:2" if opcode == 3 else "", "1", "1"),
+        ReceiverEmail="merchant.rules@example.com",
+        SenderEmail="leader@example.com",
+    )
+
+
+def _cp15_lease_counts(widget: object) -> tuple[object, ...]:
+    return _cp14_b_fields(
+        widget,
+        "merchant_rules_remote_dispatch_count",
+        "merchant_rules_owned_work_count",
+        "merchant_rules_owned_action_count",
+    )
+
+
+def _test_cp15_messaging_execute_lifetime(module: types.ModuleType) -> None:
+    _cp15_execute_lifetime(module, core_receipt=False)
+
+
+def _test_cp15_core_receipt_execute(module: types.ModuleType) -> None:
+    _cp15_execute_lifetime(module, core_receipt=True)
+
+
+def _cp15_execute_lifetime(module: types.ModuleType, *, core_receipt: bool) -> None:
+    with _cp14_b_world(module) as (queue, _map_id, restore):
+        widget: object = _prime_initialized_widget(module, _make_widget(module))
+        setattr(widget, "profile_entries_loaded", {"account": True, "shared": True})
+        setattr(widget, "destroy_include_protected_items", False)
+        setattr(widget, "destroy_instant_enabled", False)
+        setattr(widget, "preview_ready", True)
+        message = _CP15WireRow(_CP15_CORE_PENDING) if core_receipt else _cp15_message("exec-15", 3)
+        messaging = _cp15_messaging_source(module, widget, core_restore=restore if core_receipt else None)
+        if isinstance(message, _CP15WireRow):
+            _cp15_wire_contract(messaging, message)
+        else:
+            _expect("ctypes" not in vars(messaging), "CP15 EDITS Messaging has no byte-storage dependency")
+        inbox = [None] * 17 + [message]
+        events: list[tuple[object, ...]] = []
+        packets: list[tuple[object, ...]] = []
+        effects: list[int] = []
+        callbacks: list[tuple[Callable[[int], object], int]] = []
+        sleeps: list[int] = []
+        hero = types.SimpleNamespace(Following=True, Avoidance=False, Looting=True, Targeting=False, Combat=True)
+        hero_fields = ("Following", "Avoidance", "Looting", "Targeting", "Combat")
+        initial = (True, False, True, False, True)
+        disabled = (False, False, False, False, False)
+        account = "merchant.rules@example.com"
+        receiver_calls: list[tuple[str, int]] = []
+        party_gap = [False]
+
+        def note(stage: str) -> None:
+            events.append((stage, getattr(messaging, "_merchant_busy"), _cp15_lease_counts(widget)))
+
+        class Sink(list[object]):
+            def append(self, routine: object) -> None:
+                note("append")
+                super().append(routine)
+                queue.append(routine)
+
+        def mark_running(email: str, index: int) -> None:
+            _expect("AddAction" not in vars(manager), "CP15 outer dispatch has no action capture")
+            receiver_calls.append((email, index))
+            if core_receipt:
+                setattr(message, "Running", True)
+                setattr(message, "Timestamp", 12)
+            note("running")
+
+        def mark_finished(email: str, index: int) -> None:
+            _expect("AddAction" not in vars(manager), "CP15 inner capture restored before message finish")
+            receiver_calls.append((email, index))
+            if core_receipt:
+                setattr(message, "Active", False)
+                setattr(message, "Running", False)
+            note("finish")
+
+        def send(sender: str, target: str, command: int, params: tuple[float, ...], extra: tuple[str, ...]) -> int:
+            packets.append((sender, target, command, params, extra))
+            party_gap[0] = True
+            return 1
+
+        def party_ready() -> bool:
+            if party_gap[0]:
+                party_gap[0] = False
+                return False
+            return True
+
+        class Manager:
+            def AddAction(self, queue_name: str, callback: Callable[[int], object], item_id: int) -> None:
+                _expect(queue_name == "ACTION", "CP15 synthetic host submission lane")
+                callbacks.append((callback, item_id))
+
+        manager = Manager()
+
+        def wait(ms: int) -> Iterator[tuple[int, int]]:
+            sleeps.append(ms)
+            if packets:
+                # The real Execute coroutine is suspended in its canonical readiness wait.
+                # Inject a queued host effect while that inner tick owns capture.
+                _expect("AddAction" in vars(manager), "CP15 ordinary inner tick installed capture")
+                manager.AddAction("ACTION", effects.append, 311)
+            yield len(sleeps), ms
+
+        restore.binding(module.GLOBAL_CACHE, "Coroutines", Sink(queue))
+
+        def hero_options(email: str) -> types.SimpleNamespace | None:
+            return hero if email == account else None
+
+        transport = types.SimpleNamespace(
+            MarkMessageAsRunning=mark_running,
+            MarkMessageAsFinished=mark_finished,
+            SendMessage=send,
+            GetAllAccounts=lambda: types.SimpleNamespace(Inbox=inbox),
+            GetHeroAIOptionsFromEmail=hero_options,
+        )
+        restore.binding(module.GLOBAL_CACHE, "ShMem", transport)
+        restore.binding(module, "ActionQueueManager", lambda: manager)
+        restore.binding(module.Routines.Checks.Map, "MapValid", party_ready)
+        restore.binding(module.Routines.Yield, "wait", wait)
+        busy = _cp12_bound(widget, "_merchant_rules_has_pending_or_active_work")
+
+        def observed_busy(**kw: object) -> object:
+            result = busy(**kw)
+            if kw.get("include_remote_dispatch") is False:
+                note("idle-excluding-outer")
+                _expect(result is False, "CP15 outer alone cannot self-block")
+            return result
+
+        restore.binding(widget, "_merchant_rules_has_pending_or_active_work", observed_busy)
+        old_restore = _cp12_bound(widget, "_restore_multibox_hero_ai_options")
+
+        def restore_hero(email: str, snapshot: dict[str, bool] | None) -> None:
+            _expect(_cp14_b_fields(hero, *hero_fields) == disabled, "CP15 HeroAI disabled before restoration")
+            old_restore(email, snapshot)
+            _cp15_equal(
+                "remote-hero-restored-first",
+                (
+                    _cp14_b_fields(hero, *hero_fields),
+                    _cp14_b_fields(widget, "destroy_include_protected_items", "destroy_instant_enabled"),
+                ),
+                (initial, (True, True)),
+            )
+            note("handler-finally")
+
+        restore.binding(widget, "_restore_multibox_hero_ai_options", restore_hero)
+        inner_release = _cp12_bound(widget, "_release_merchant_rules_owned_work")
+        outer_release = _cp12_bound(widget, "_release_merchant_rules_remote_dispatch")
+
+        def inner() -> None:
+            note("inner-release")
+            _cp15_equal(
+                "remote-handler-restored",
+                _cp14_b_fields(widget, "destroy_include_protected_items", "destroy_instant_enabled", "preview_ready"),
+                (False, False, False),
+            )
+            inner_release()
+
+        def outer() -> None:
+            note("outer-release")
+            outer_release()
+
+        restore.binding(widget, "_release_merchant_rules_owned_work", inner)
+        restore.binding(widget, "_release_merchant_rules_remote_dispatch", outer)
+        producer = _cp12_bound(widget, "_execute_now")
+        handler = _cp12_bound(widget, "_handle_shared_multibox_message")
+        if not isinstance(producer, types.MethodType) or not isinstance(handler, types.MethodType):
+            raise AssertionError("CP15 requires the actual bound follower algorithms")
+        for operation in (producer, handler):
+            _expect(
+                operation.__self__ is widget
+                and operation.__func__.__globals__ is vars(module)
+                and Path(operation.__func__.__code__.co_filename).resolve(strict=True) == MERCHANT_RULES_PATH,
+                "CP15 actual widget producer and message handler must come from this operand",
+            )
+        producer_code, handler_code = producer.__func__.__code__, handler.__func__.__code__
+        reached: list[str] = []
+
+        def observe(frame: types.FrameType, event: str, _arg: object) -> None:
+            if event == "call" and frame.f_locals.get("self") is widget:
+                if frame.f_code is handler_code and "handler" not in reached:
+                    reached.append("handler")
+                    note("handler-entry")
+                if frame.f_code is producer_code and "producer" not in reached:
+                    reached.append("producer")
+
+        prior = sys.getprofile()
+        try:
+            sys.setprofile(observe)
+            _cp13_call(messaging, "_queue_merchant_rules_message", 17, message)
+            _cp15_equal(
+                "remote-before-first-tick",
+                (len(queue), reached, _cp15_lease_counts(widget)),
+                (2, list[str](), (1, 0, 0)),
+            )
+            work = queue[1]
+            _cp15_equal("remote-first-yield", _cp13_call(work, "__next__"), (1, 100))
+            options = _cp14_b_fields(widget, "destroy_include_protected_items", "destroy_instant_enabled")
+            active = (_cp14_b_fields(hero, *hero_fields), options)
+            _cp15_equal("remote-active-options", active, (disabled, (True, True)))
+            _cp15_equal("remote-execute-wait", _cp13_call(work, "__next__"), (2, 100))
+            note("paused-execute")
+            _cp13_call(work, "close")
+            _cp13_call(work, "close")
+        finally:
+            sys.setprofile(prior)
+        extra = ("exec-15", "Starting", "Remote execute is starting.", "")
+        starting = (account, "leader@example.com", 1, (100.0, 0.0, 0.0, 0.0), extra)
+        _cp15_equal(
+            "remote-dispatch-route",
+            (reached, sleeps, packets, receiver_calls),
+            (["handler", "producer"], [100, 100], [starting], [(account, 17), (account, 17)]),
+        )
+        _cp15_equal(
+            "remote-finalizers",
+            events,
+            [
+                ("append", False, (1, 0, 0)),
+                ("running", False, (1, 0, 0)),
+                ("idle-excluding-outer", False, (1, 0, 0)),
+                ("handler-entry", True, (1, 1, 0)),
+                ("paused-execute", True, (1, 1, 1)),
+                ("handler-finally", True, (1, 1, 1)),
+                ("inner-release", True, (1, 1, 1)),
+                *(
+                    [("outer-release", False, (1, 0, 1)), ("finish", False, (0, 0, 1))]
+                    if core_receipt
+                    else [("finish", False, (1, 0, 1)), ("outer-release", False, (1, 0, 1))]
+                ),
+            ],
+        )
+        if core_receipt:
+            _cp15_equal(
+                "core-retirement",
+                (
+                    getattr(message, "Active"),
+                    getattr(message, "Running"),
+                    getattr(message, "Timestamp"),
+                    type(work) is getattr(messaging, "_MerchantRulesDispatchReceipt"),
+                    getattr(work, "terminal"),
+                    len(getattr(messaging, "_merchant_rules_dispatches")),
+                    getattr(work, "_message") is not message,
+                    _cp15_wire_digest(getattr(work, "_pending_fingerprint")),
+                    _cp15_wire_digest(getattr(work, "_running_fingerprint")),
+                    _cp15_wire_digest(_cp13_call(messaging, "_merchant_rules_message_fingerprint", message)),
+                ),
+                (
+                    False,
+                    False,
+                    12,
+                    True,
+                    True,
+                    0,
+                    True,
+                    "7ebcf0b9aa5a9ac7ecb4de7d44eda73c03d36e036e7b5bc60b5f33de4f4fc2cb",
+                    "02a2ecfc6c2c8e461cd7290a2d89cfc44cbea7b1d270344d9f461ca0c8b765dc",
+                    "3f5836c96e211d907f9dce99bcc82c1db43472a5f98f0ee4d28b0e61c7a5173a",
+                ),
+            )
+        tail = (_cp15_lease_counts(widget), effects, len(callbacks))
+        _cp15_equal("remote-surviving-action", tail, ((0, 0, 1), list[int](), 1))
+        callback, item_id = callbacks[0]
+        callback(item_id)
+        _cp15_equal("remote-action-delivered", (_cp15_lease_counts(widget), effects), ((0, 0, 0), [311]))
+    if core_receipt:
+        _expect(
+            {"ctypes", "SharedMessageStruct", "weakref"}.isdisjoint(vars(messaging)),
+            "CP15 CORE transport bindings restored after receipt close",
+        )
+
+
+def _test_cp15_reload_append_successor(module: types.ModuleType) -> None:
+    from inspect import GEN_CREATED
+    from inspect import getgeneratorstate
+
+    with (
+        _cp14_isolated_fixture(module, "cp15-reload"),
+        _cp14_b_world(module) as (queue, _map_id, restore),
+        _cp13_clock(module),
+    ):
+        widget: object = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+        setattr(widget, "profile_entries_loaded", {"account": True, "shared": True})
+        messaging = _cp15_messaging_source(module, widget)
+        doc = _cp13_call(widget, "_live_config_doc")
+        follower = "merchant.rules@example.com"
+        sender = "leader@example.com"
+        calls: list[tuple[str, str, int]] = []
+
+        def mark_running(email: str, i: int) -> None:
+            calls.append(("running", email, i))
+
+        def mark_finished(email: str, i: int) -> None:
+            calls.append(("finish", email, i))
+
+        transport = types.SimpleNamespace(MarkMessageAsRunning=mark_running, MarkMessageAsFinished=mark_finished)
+        restore.binding(module.GLOBAL_CACHE, "ShMem", transport)
+
+        def write_favorite(value: int) -> None:
+            payload = _minimal_profile_payload(module, favorite_outpost_ids=[value])
+            _cp13_call(doc, "set_json", "", payload)
+            _expect(_cp13_call(doc, "save") is True, "CP15 valid synthetic follower document")
+
+        def pending() -> tuple[object, ...]:
+            key: object = getattr(widget, "pending_multibox_profile_reload")
+            payload: object = getattr(widget, "_pending_multibox_profile_reload_payload")
+            values = _cp13_dict(payload).get("favorite_outpost_ids") if payload is not None else None
+            staged: set[tuple[str, str, str]] = getattr(widget, "_merchant_rules_staged_multibox_reload_requests")
+            return key, values, sorted(staged), _cp15_lease_counts(widget)
+
+        def key(name: str) -> tuple[str, str, str]:
+            return (name, sender, follower)
+
+        write_favorite(1)
+        empty = (None, None, list[tuple[str, str, str]](), (0, 0, 0))
+        for opcode, name in ((1, "constructor-reload"), (3, "constructor-execute")):
+            failure = RuntimeError("CP15 " + name)
+            observed: list[tuple[str, tuple[object, ...]]] = []
+            bodies: list[object] = []
+            sentinel = queue[0]
+            outer = getattr(messaging, "MerchantRules")
+            if not isinstance(outer, types.FunctionType):
+                raise AssertionError("CP15 requires the real EDITS Messaging generator function")
+            release_stage_before = _cp12_bound(widget, "_release_staged_multibox_profile_reload")
+            release_dispatch_before = _cp12_bound(widget, "_release_merchant_rules_remote_dispatch")
+
+            def fail_constructor(*args: object, **_kw: object) -> object:
+                body = args[1]
+                if not isinstance(body, types.GeneratorType):
+                    raise AssertionError(f"CP15 {name} expected real Messaging body, observed {body!r}")
+                body = cast("types.GeneratorType[object, None, None]", body)
+                _expect(
+                    body.gi_code is outer.__code__
+                    and body.gi_frame is not None
+                    and body.gi_frame.f_globals is vars(messaging)
+                    and getgeneratorstate(body) == GEN_CREATED,
+                    "CP15 exact unadvanced Messaging body " + name,
+                )
+                bodies.append(body)
+                observed.append(("constructor", pending()))
+                raise failure
+
+            def release_stage_now(request_key: tuple[str, str, str]) -> None:
+                _expect(request_key == key(name), f"CP15 {name} released {request_key!r}")
+                observed.append(("release", pending()))
+                release_stage_before(request_key)
+
+            def release_dispatch_now() -> None:
+                observed.append(("release", pending()))
+                release_dispatch_before()
+
+            def observe_close(_frame: types.FrameType, event: str, operation: object) -> None:
+                if (
+                    event == "c_call"
+                    and bodies
+                    and getattr(operation, "__name__", None) == "close"
+                    and getattr(operation, "__self__", None) is bodies[0]
+                ):
+                    observed.append(("raw-close", pending()))
+
+            previous_profile = sys.getprofile()
+            with _cp14a_changes() as inner:
+                inner.binding(module, "_MerchantRulesOwnedGenerator", fail_constructor)
+                inner.binding(widget, "_release_staged_multibox_profile_reload", release_stage_now)
+                inner.binding(widget, "_release_merchant_rules_remote_dispatch", release_dispatch_now)
+                try:
+                    sys.setprofile(observe_close)
+                    message = _cp15_message(name, opcode)
+                    _cp9_same_exception(
+                        lambda: _cp13_call(messaging, "_queue_merchant_rules_message", 13, message),
+                        failure,
+                    )
+                finally:
+                    sys.setprofile(previous_profile)
+            prefix = (
+                (key(name), [1], [key(name)], (0, 0, 0))
+                if opcode == 1
+                else (None, None, list[tuple[str, str, str]](), (1, 0, 0))
+            )
+            unwind = (
+                [("release", prefix), ("raw-close", empty)]
+                if opcode == 1
+                else [("raw-close", prefix), ("release", prefix)]
+            )
+            wanted = [("constructor", prefix), *unwind, ("raw-close", empty)]
+            actual = (
+                observed,
+                pending(),
+                queue == [sentinel],
+                calls,
+                len(bodies),
+                all(getattr(body, "gi_frame") is None for body in bodies),
+                sys.getprofile() is previous_profile,
+            )
+            _cp15_equal(name, actual, (wanted, empty, True, list[tuple[str, str, int]](), 1, True, True))
+
+        append_error = RuntimeError("CP15 append after valid stage")
+        seen: list[tuple[object, ...]] = []
+        releases: list[tuple[str, str, str]] = []
+        release_stage = _cp12_bound(widget, "_release_staged_multibox_profile_reload")
+
+        def releasing(request_key: tuple[str, str, str]) -> None:
+            releases.append(request_key)
+            release_stage(request_key)
+
+        restore.binding(widget, "_release_staged_multibox_profile_reload", releasing)
+        phase = ["lone"]
+        accepted: list[object] = []
+
+        def submit(name: str, index: int) -> None:
+            _cp13_call(messaging, "_queue_merchant_rules_message", index, _cp15_message(name, 1))
+
+        class Sink:
+            def append(self, routine: object) -> None:
+                seen.append(pending())
+                if phase[0] == "old":
+                    phase[0] = "new"
+                    write_favorite(2)
+                    submit("new", 19)
+                    raise append_error
+                if phase[0] == "lone":
+                    raise append_error
+                accepted.append(routine)
+                queue.append(routine)
+
+        restore.binding(module.GLOBAL_CACHE, "Coroutines", Sink())
+        _cp9_same_exception(lambda: submit("lone", 16), append_error)
+        _cp15_equal(
+            "reload-lone-append",
+            (seen, pending(), calls, releases),
+            ([(key("lone"), [1], [key("lone")], (0, 0, 0))], empty, list[tuple[str, str, int]](), [key("lone")]),
+        )
+        seen.clear()
+        phase[0] = "old"
+        _cp9_same_exception(lambda: submit("old", 18), append_error)
+        old_stage = (key("old"), [1], [key("old")], (0, 0, 0))
+        both = (key("new"), [2], [key("new"), key("old")], (0, 0, 0))
+        new_stage = (key("new"), [2], [key("new")], (0, 0, 0))
+        _cp15_equal(
+            "reload-reentrant-append",
+            (seen, pending(), len(queue), len(accepted), calls, releases),
+            ([old_stage, both], new_stage, 2, 1, list[tuple[str, str, int]](), [key("lone"), key("old")]),
+        )
+        _expect(accepted[0] is queue[1], "CP15 successor is the wrapper actually accepted by Messaging")
+        staged: object = getattr(widget, "_pending_multibox_profile_reload_payload")
+        tail = _cp13_call(widget, "_track_merchant_rules_owned_action", lambda: None)
+        try:
+            write_favorite(1)
+            _cp14_b_expect_stopped(accepted[0])
+            deferred: object = getattr(widget, "_pending_multibox_profile_reload_payload")
+            waiting = (key("new"), [2], list[tuple[str, str, str]](), (0, 0, 1))
+            delivered = [("running", follower, 19), ("finish", follower, 19)]
+            _cp15_equal(
+                "reload-successor-consumed",
+                (pending(), calls, deferred is staged, releases),
+                (waiting, delivered, False, [key("lone"), key("old"), key("new")]),
+            )
+            operation_log: list[tuple[str, str]] = getattr(module.JsonFactory, "_operation_log")
+            before = list(operation_log)
+            acquisitions: list[str] = []
+            live_doc = _cp13_fixture_get(widget, "_live_config_doc")
+
+            def counted_doc() -> object:
+                acquisitions.append("document")
+                return live_doc()
+
+            with _cp14a_changes() as watch:
+                watch.binding(
+                    _cp13_fixture_target(widget, "_live_config_doc"),
+                    _cp13_member_name(widget, "_live_config_doc"),
+                    counted_doc,
+                )
+                refused = _cp13_call(widget, "_apply_pending_multibox_profile_reload_if_idle")
+            _cp15_equal(
+                "reload-tail-refusal",
+                (refused, operation_log == before, acquisitions, pending()),
+                (False, True, list[str](), (key("new"), [2], list[tuple[str, str, str]](), (0, 0, 1))),
+            )
+        finally:
+            _cp13_call(tail, "release")
+        apply_reload = _cp12_bound(widget, "_apply_multibox_profile_reload")
+        applications: list[tuple[object, ...]] = []
+
+        def observed_apply(*, preserve_workspace_state: bool, profile_payload: dict[str, object]) -> object:
+            favorites = profile_payload.get("favorite_outpost_ids")
+            aliases_favorites = favorites is _cp13_dict(deferred).get("favorite_outpost_ids")
+            aliases_payload = profile_payload is deferred
+            applications.append((pending(), preserve_workspace_state, aliases_payload, aliases_favorites, favorites))
+            return apply_reload(preserve_workspace_state=preserve_workspace_state, profile_payload=profile_payload)
+
+        restore.binding(widget, "_apply_multibox_profile_reload", observed_apply)
+        applied = _cp13_call(widget, "_apply_pending_multibox_profile_reload_if_idle")
+        _expect(_cp13_call(doc, "reload") is True, "CP15 re-open actually persisted successor")
+        persisted = _cp13_dict(_cp13_call(doc, "get_json", "", None))
+        second = _cp13_call(widget, "_apply_pending_multibox_profile_reload_if_idle")
+        _cp15_equal(
+            "reload-final-publication",
+            (
+                applications,
+                applied,
+                pending(),
+                getattr(widget, "favorite_outpost_ids"),
+                persisted.get("favorite_outpost_ids"),
+                second,
+            ),
+            ([(empty, True, False, False, [2])], True, empty, [2], [2], False),
+        )
+
+    _cp15_reload_lifetime(module, stale_profile=False)
+    _cp15_reload_lifetime(module, stale_profile=True)
+
+
+def _cp15_reload_lifetime(module: types.ModuleType, *, stale_profile: bool) -> None:
+    from copy import deepcopy
+
+    scenario = "cp15-reload-profile" if stale_profile else "cp15-reload-map"
+    with (
+        _cp14_isolated_fixture(module, scenario),
+        _cp14_b_world(module) as (queue, map_id, restore),
+        _cp13_clock(module),
+    ):
+        widget = _prime_initialized_widget(module, _make_widget(module, use_json_factory=True))
+        widget.profile_entries_loaded = {"account": True, "shared": True}
+        widget.favorite_outpost_ids = [1]
+        doc = _cp13_call(widget, "_live_config_doc")
+        messaging = _cp15_messaging_source(module, widget)
+        sender, follower = "leader@example.com", "merchant.rules@example.com"
+        key_a, key_b = ("reload-A", sender, follower), ("reload-B", sender, follower)
+        idle = (0, 0, 0)
+        empty = (None, None, (), idle)
+        a = (key_a, [2], (key_a,), idle)
+        b = (key_b, [1], (key_b,), idle)
+        both = (key_b, [1], (key_a, key_b), idle)
+        deferred = (key_a, [2], (), idle)
+        transport_calls: list[tuple[str, str, int]] = []
+        handler_calls: list[tuple[bool, tuple[object, ...]]] = []
+        release_calls: list[tuple[tuple[str, str, str], tuple[object, ...], tuple[object, ...]]] = []
+
+        def mark_running(email: str, i: int) -> None:
+            transport_calls.append(("running", email, i))
+
+        def mark_finished(email: str, i: int) -> None:
+            transport_calls.append(("finish", email, i))
+
+        restore.binding(
+            module.GLOBAL_CACHE,
+            "ShMem",
+            types.SimpleNamespace(MarkMessageAsRunning=mark_running, MarkMessageAsFinished=mark_finished),
+        )
+
+        def state() -> tuple[object, ...]:
+            capture: object = widget._pending_multibox_profile_reload_payload
+            favorites = deepcopy(_cp13_dict(capture).get("favorite_outpost_ids")) if capture is not None else None
+            return (
+                widget.pending_multibox_profile_reload,
+                favorites,
+                tuple(sorted(widget._merchant_rules_staged_multibox_reload_requests)),
+                _cp15_lease_counts(widget),
+            )
+
+        def save_favorite(value: int) -> None:
+            _cp13_call(doc, "set_json", "", _minimal_profile_payload(module, favorite_outpost_ids=[value]))
+            _expect(_cp13_call(doc, "save") is True, "CP15 valid Reload lifetime input")
+
+        release = _cp12_bound(widget, "_release_staged_multibox_profile_reload")
+
+        def observe_release(request_key: tuple[str, str, str]) -> None:
+            before = state()
+            release(request_key)
+            release_calls.append((request_key, before, state()))
+
+        restore.binding(widget, "_release_staged_multibox_profile_reload", observe_release)
+        message_a = _cp15_message(key_a[0], 1)
+        handler = _cp12_bound(widget, "_handle_shared_multibox_message")
+        if not isinstance(handler, types.MethodType):
+            raise AssertionError("CP15 Reload requires the real bound handler")
+        function = handler.__func__
+        _expect(
+            handler.__self__ is widget
+            and function.__globals__ is vars(module)
+            and Path(function.__code__.co_filename).resolve(strict=True) == MERCHANT_RULES_PATH,
+            "CP15 Reload uses the actual widget source on this side",
+        )
+
+        def observe_handler(frame: types.FrameType, event: str, _arg: object) -> None:
+            if event == "call" and frame.f_code is function.__code__ and frame.f_locals.get("self") is widget:
+                handler_calls.append((frame.f_locals.get("message") is message_a, state()))
+
+        save_favorite(2)
+        profile = widget.merchant_rules_profile_generation
+        lifecycle = widget.merchant_rules_lifecycle_generation
+        _cp13_call(messaging, "_queue_merchant_rules_message", 31, message_a)
+        first_state = state()
+        first = queue[1]
+        save_favorite(1)
+        if stale_profile:
+            # The real replacement publisher advances the profile stamp while the old wrapper is queued.
+            widget._reset_runtime_after_profile_load(log_profile_load_summary=False)
+            _cp13_call(messaging, "_queue_merchant_rules_message", 32, _cp15_message(key_b[0], 1))
+        else:
+            map_id[0] = 200
+            widget._refresh_merchant_rules_lifecycle_state()
+
+        deltas = (
+            widget.merchant_rules_profile_generation - profile,
+            widget.merchant_rules_lifecycle_generation - lifecycle,
+        )
+        _cp15_equal(
+            scenario + "/before-first-tick",
+            (
+                first_state,
+                type(first) is module._MerchantRulesOwnedGenerator,
+                len(queue),
+                deltas,
+                state(),
+                widget._character_profile_gate_block_reason(),
+                transport_calls,
+                handler_calls,
+                release_calls,
+            ),
+            (
+                a,
+                True,
+                3 if stale_profile else 2,
+                (1, 0) if stale_profile else (0, 1),
+                both if stale_profile else a,
+                "",
+                list[tuple[str, str, int]](),
+                list[tuple[bool, tuple[object, ...]]](),
+                list[tuple[tuple[str, str, str], tuple[object, ...], tuple[object, ...]]](),
+            ),
+        )
+        original_slot = widget._pending_multibox_profile_reload_payload
+        factory = module.JsonFactory
+        operations = list(factory._operation_log)
+        persisted = deepcopy(factory._persisted_documents)
+        after_a: tuple[object, ...] = ()
+        same_b_payload = False
+        previous_profile = sys.getprofile()
+        try:
+            sys.setprofile(observe_handler)
+            _cp14_b_expect_stopped(first)
+            _cp13_call(first, "close")
+            if stale_profile:
+                after_a = state()
+                same_b_payload = widget._pending_multibox_profile_reload_payload is original_slot
+                _cp13_call(queue[2], "close")
+        finally:
+            sys.setprofile(previous_profile)
+
+        if stale_profile:
+            _cp15_equal(
+                scenario + "/cancel-and-release",
+                (
+                    after_a,
+                    same_b_payload,
+                    state(),
+                    release_calls,
+                    transport_calls,
+                    handler_calls,
+                    factory._operation_log == operations,
+                    factory._persisted_documents == persisted,
+                    widget.favorite_outpost_ids,
+                    widget.merchant_rules_profile_generation - profile,
+                ),
+                (
+                    b,
+                    True,
+                    empty,
+                    [(key_a, both, b), (key_b, b, empty)],
+                    list[tuple[str, str, int]](),
+                    list[tuple[bool, tuple[object, ...]]](),
+                    True,
+                    True,
+                    [1],
+                    1,
+                ),
+            )
+        else:
+            after_handler = state()
+            read_only_tick = factory._operation_log == operations and factory._persisted_documents == persisted
+            copied = widget._pending_multibox_profile_reload_payload is not original_slot
+            applied = widget._apply_pending_multibox_profile_reload_if_idle()
+            saved = ("save", module.LIVE_CONFIG_DOC_NAME) in factory._operation_log[len(operations) :]
+            _expect(_cp13_call(doc, "reload") is True, "CP15 re-read map-surviving Reload from fake persistence")
+            saved_favorites = _cp13_dict(_cp13_call(doc, "get_json", "", None)).get("favorite_outpost_ids")
+            _cp15_equal(
+                scenario + "/advance-and-persist",
+                (
+                    after_handler,
+                    copied,
+                    read_only_tick,
+                    transport_calls,
+                    handler_calls,
+                    release_calls,
+                    applied,
+                    saved,
+                    saved_favorites,
+                    widget.favorite_outpost_ids,
+                    state(),
+                    widget.merchant_rules_profile_generation - profile,
+                ),
+                (
+                    deferred,
+                    True,
+                    True,
+                    [("running", follower, 31), ("finish", follower, 31)],
+                    [(True, a)],
+                    [(key_a, deferred, deferred)],
+                    True,
+                    True,
+                    [2],
+                    [2],
+                    empty,
+                    1,
+                ),
+            )
+
+
 def _test_remote_dispatch_is_owned_before_system_message_first_tick(module) -> None:
     widget = _prime_initialized_widget(module, _make_widget(module))
     events: list[str] = []
@@ -69897,6 +70844,9 @@ _CP14_FIXTURE_CASES = (
     "reset-reload",
     "reset-restore",
     "publication",
+    "cp15-reload",
+    "cp15-reload-map",
+    "cp15-reload-profile",
 )
 
 
@@ -70198,7 +71148,10 @@ def _cp14_b_is_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
     return isinstance(value, tuple)
 
 
-def _cp14_b_captured_identify(module: types.ModuleType) -> None:
+def _cp14_b_captured_identify(
+    module: types.ModuleType,
+    observe_tail: Callable[[object, str], None] | None = None,
+) -> None:
     for cause in ("account", "profile", "map"):
         with _cp14_b_world(module) as (queue, map_id, restore):
             widget: object = _prime_initialized_widget(module, _make_widget(module))
@@ -70350,6 +71303,8 @@ def _cp14_b_captured_identify(module: types.ModuleType) -> None:
                         cause != "profile",
                     ),
                 )
+                if observe_tail is not None:
+                    observe_tail(widget, cause)
                 actions["IDENTIFY"].pop(1)
                 _cp13_call(callback, "__call__", 202, 19)
                 _cp13_call(callback, "release")
@@ -70868,6 +71823,114 @@ def _cp14_b_render_entry(module: types.ModuleType) -> None:
             )
 
 
+def _test_cp15_identify_completion(module: types.ModuleType) -> None:
+    def refusal(widget: object, cause: str) -> None:
+        original_gate = _cp12_bound(widget, "_get_profile_application_block_message")
+        gate_calls: list[tuple[str, str]] = []
+
+        def gate(action: str, **options: object) -> str:
+            reason = str(original_gate(action, **options))
+            gate_calls.append((action, reason))
+            return reason
+
+        with _cp14a_changes() as change:
+            change.binding(widget, "_get_profile_application_block_message", gate)
+            before = _snapshot_profile_refusal_state(widget)
+            loaded = _cp13_call(widget, "_load_selected_profile", module.PROFILE_SCOPE_ACCOUNT)
+            restored = _cp13_call(widget, "_restore_profile_from_backup")
+            _cp15_equal(
+                "Identify callback tail refuses both CP13 applications/" + cause,
+                (_cp15_counts(widget), loaded, restored, _snapshot_profile_refusal_state(widget) == before, gate_calls),
+                (
+                    (0, 1, 0),
+                    False,
+                    False,
+                    True,
+                    [
+                        (
+                            "loading another profile",
+                            "Wait for Merchant Rules to finish its current work before loading another profile.",
+                        ),
+                        (
+                            "restoring the backup",
+                            "Wait for Merchant Rules to finish its current work before restoring the backup.",
+                        ),
+                    ],
+                ),
+            )
+
+    _cp14_b_captured_identify(module, refusal)
+    with _cp14_b_world(module) as (coroutines, _map, restore):
+        widget = _cp15_widget(module)
+        widget.identify_rescan_requested = False
+        widget.identify_running = False
+        owner_type = type(cast(object, widget))
+        original_write = getattr(owner_type, "__setattr__")
+        previous = dict(vars(owner_type))
+        sentinel = coroutines[0]
+        seen: list[types.GeneratorType[object, None, object]] = []
+        events: list[tuple[object, ...]] = []
+        fault = RuntimeError("CP15 Identify physical append fault")
+        original_release = _cp12_bound(widget, "_release_merchant_rules_owned_work")
+        producer_code = getattr(type(cast(object, widget)), "_run_identify_pass").__code__
+
+        def write(instance: object, name: str, value: object) -> None:
+            original_write(instance, name, value)
+            if instance is widget and seen and name in ("identify_running", "identify_rescan_requested"):
+                events.append((name, value, _cp15_counts(widget)))
+
+        def release() -> None:
+            events.append(("release", seen[0].gi_frame is None, _cp15_counts(widget)))
+            original_release()
+
+        class Sink:
+            def append(self, wrapper: object) -> None:
+                raw = getattr(wrapper, "_generator")
+                _expect(isinstance(raw, types.GeneratorType), "CP15 real Identify iterator")
+                seen.append(raw)
+                events.append(
+                    (
+                        "append",
+                        type(wrapper) is module._MerchantRulesOwnedGenerator,
+                        raw.gi_code is producer_code,
+                        raw.gi_frame is not None,
+                        widget.identify_running,
+                        widget.identify_rescan_requested,
+                        _cp15_counts(widget),
+                    )
+                )
+                raise fault
+
+        restore.binding(module.GLOBAL_CACHE, "Coroutines", Sink())
+        with _cp14a_changes() as change:
+            change.binding(owner_type, "__setattr__", write)
+            change.binding(widget, "_release_merchant_rules_owned_work", release)
+            _cp14a_fault(fault, lambda: widget._queue_identify_now(auto_triggered=True), "CP15 actual Identify append")
+        _cp15_equal(
+            "Identify failed append closes raw then wrapper restores before unconditional retry",
+            (
+                events,
+                _cp15_counts(widget),
+                coroutines == [sentinel],
+                ("__setattr__" in vars(owner_type)) == ("__setattr__" in previous)
+                and vars(owner_type).get("__setattr__") is previous.get("__setattr__"),
+            ),
+            (
+                [
+                    ("append", True, True, True, True, False, (1, 0, 0)),
+                    ("release", True, (1, 0, 0)),
+                    ("identify_running", False, (0, 0, 0)),
+                    ("identify_rescan_requested", True, (0, 0, 0)),
+                    ("identify_running", False, (0, 0, 0)),
+                    ("identify_rescan_requested", True, (0, 0, 0)),
+                ],
+                (0, 0, 0),
+                True,
+                True,
+            ),
+        )
+
+
 _CP14_B_CASES = (
     ("cp14_reset_cp12", partial(_cp14_b_reset, route="cp12")),
     ("cp14_reset_reload", partial(_cp14_b_reset, route="reload")),
@@ -70882,6 +71945,521 @@ _CP14_B_CASES = (
     ("cp14_cleanup_successor_close", partial(_cp14_b_successor, mode="close")),
     ("cp14_gold_consumed", _cp14_b_gold_consumed),
     ("cp14_rendered_entry", _cp14_b_render_entry),
+)
+
+
+def _cp15_equal(key: str, actual: object, expected: object) -> None:
+    if os.environ.get("MERCHANT_RULES_CP15_CASES") == "common":
+        print("CP15_OBS:" + json.dumps([key, actual], ensure_ascii=True, allow_nan=False), flush=True)
+    _expect(actual == expected, f"CP15 {key}, expected {expected!r}, observed {actual!r}")
+
+
+def _cp15_counts(widget: object) -> tuple[int, int, int]:
+    return (
+        int(getattr(widget, "merchant_rules_owned_work_count")),
+        int(getattr(widget, "merchant_rules_owned_action_count")),
+        int(getattr(widget, "merchant_rules_remote_dispatch_count")),
+    )
+
+
+def _cp15_widget(module: types.ModuleType) -> Any:
+    return _prime_initialized_widget(module, _make_widget(module))
+
+
+class _CP15Manager:
+    """An inspectable physical sink for the two real capture slots."""
+
+    def __init__(self) -> None:
+        self.entries: list[tuple[str, int, Callable[..., object], tuple[object, ...], dict[str, object]]] = []
+        self.mutations: list[str] = []
+        self.refuse_delayed_slot = False
+        self.fail_after_store: BaseException | None = None
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in ("AddAction", "AddActionWithDelay"):
+            self.mutations.append("set " + name)
+            if name == "AddActionWithDelay" and self.refuse_delayed_slot:
+                raise AttributeError("delayed slot cannot shadow")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name in ("AddAction", "AddActionWithDelay"):
+            self.mutations.append("del " + name)
+        object.__delattr__(self, name)
+
+    def AddAction(self, queue: str, callback: Callable[..., object], *args: object, **kwargs: object) -> str:
+        self.entries.append((queue, 0, callback, args, kwargs))
+        return "immediate"
+
+    def AddActionWithDelay(
+        self, queue: str, delay: int, callback: Callable[..., object], *args: object, **kwargs: object
+    ) -> str:
+        self.entries.append((queue, delay, callback, args, kwargs))
+        if self.fail_after_store is not None:
+            raise self.fail_after_store
+        return "deferred"
+
+
+def _cp15_deliver(manager: _CP15Manager, index: int = 0) -> object:
+    _queue, _delay, callback, args, kwargs = manager.entries[index]
+    return callback(*args, **kwargs)
+
+
+def _test_cp15_nested_capture(module: types.ModuleType) -> None:
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        first = _cp15_widget(module)
+        second = _cp15_widget(module)
+        manager = _CP15Manager()
+        delayed = manager.AddActionWithDelay
+        setattr(manager, "AddActionWithDelay", delayed)
+        manager.mutations.clear()
+        lookups: list[str] = []
+        delivered: list[str] = []
+
+        def lookup() -> _CP15Manager:
+            lookups.append("manager")
+            return manager
+
+        restore.binding(module, "ActionQueueManager", lookup)
+
+        def payload(value: int, *, tag: str) -> int:
+            delivered.append(tag)
+            return value + 1
+
+        def inner_body() -> Generator[str, None, None]:
+            _cp15_equal(
+                "inner forwards delayed result",
+                manager.AddActionWithDelay("salvage", 37, payload, 8, tag="p"),
+                "deferred",
+            )
+            _cp15_equal(
+                "nested capture owns both wrappers",
+                (_cp15_counts(first), _cp15_counts(second)),
+                ((1, 1, 0), (1, 1, 0)),
+            )
+            yield "inner"
+
+        inner = second._track_merchant_rules_owned_work(inner_body())
+        outer_slots: list[object] = []
+
+        def outer_body() -> Generator[str, None, int]:
+            outer_slots.extend((vars(manager)["AddAction"], vars(manager)["AddActionWithDelay"]))
+            _cp15_equal("inner yield", next(inner), "inner")
+            _cp15_equal(
+                "parent slots reinstated",
+                (vars(manager)["AddAction"] is outer_slots[0], vars(manager)["AddActionWithDelay"] is outer_slots[1]),
+                (True, True),
+            )
+            _cp15_equal("unrelated forwarded", manager.AddAction("LOOT", payload, 12, tag="loot"), "immediate")
+            yield "outer"
+            return 41
+
+        outer = first._track_merchant_rules_owned_work(outer_body())
+        try:
+            _cp15_equal("outer yield", next(outer), "outer")
+            _cp15_equal(
+                "nested installation and exact reverse restoration",
+                manager.mutations,
+                ["set AddAction", "set AddActionWithDelay"] * 2
+                + ["set AddActionWithDelay", "set AddAction", "set AddActionWithDelay", "del AddAction"],
+            )
+            _cp15_equal(
+                "after nested tick",
+                (
+                    "AddAction" in vars(manager),
+                    vars(manager)["AddActionWithDelay"] is delayed,
+                    manager.entries[0][:2],
+                    manager.entries[0][3:],
+                    manager.entries[1][2] is payload,
+                ),
+                (False, True, ("salvage", 37), ((8,), {"tag": "p"}), True),
+            )
+            _cp15_equal("StopIteration.value", _drain_generator_return(outer), 41)
+            inner.close()
+            _cp15_equal(
+                "two independent callback tails",
+                (_cp15_counts(first), _cp15_counts(second)),
+                ((0, 1, 0), (0, 1, 0)),
+            )
+            _cp15_equal(
+                "current delivery releases but stays callable",
+                (
+                    _cp15_deliver(manager),
+                    _cp15_counts(first),
+                    _cp15_counts(second),
+                    _cp15_deliver(manager),
+                    _cp15_deliver(manager, 1),
+                    delivered,
+                    lookups,
+                ),
+                (9, (0, 0, 0), (0, 0, 0), 9, 13, ["p", "p", "loot"], ["manager"] * 4),
+            )
+        finally:
+            outer.close()
+            inner.close()
+
+
+def _test_cp15_binding_times(module: types.ModuleType) -> None:
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        widget = _cp15_widget(module)
+        generator_cls = getattr(module, "_MerchantRulesOwnedGenerator")
+        callback_cls = getattr(module, "_MerchantRulesOwnedQueueCallback")
+        work_release = widget._release_merchant_rules_owned_work
+        action_release = widget._release_merchant_rules_owned_action
+        events: list[str] = []
+
+        def traced(label: str, operation: Callable[..., object]) -> Callable[..., object]:
+            def call(*args: object, **kwargs: object) -> object:
+                events.append(label)
+                return operation(*args, **kwargs)
+
+            return call
+
+        def install(tag: str, valid: bool) -> None:
+            restore.binding(module, "_MerchantRulesOwnedGenerator", traced("G" + tag, generator_cls))
+            restore.binding(module, "_MerchantRulesOwnedQueueCallback", traced("C" + tag, callback_cls))
+            restore.binding(widget, "_release_merchant_rules_owned_work", traced("W" + tag, work_release))
+            restore.binding(widget, "_release_merchant_rules_owned_action", traced("A" + tag, action_release))
+
+            def profile_valid(_g: int) -> bool:
+                return valid
+
+            restore.binding(widget, "_merchant_rules_is_generation_current", traced("P" + tag, profile_valid))
+
+            def lifecycle_valid(_g: int) -> bool:
+                return valid
+
+            restore.binding(widget, "_merchant_rules_lifecycle_is_current", traced("L" + tag, lifecycle_valid))
+
+        install("1", True)
+        one = widget._track_merchant_rules_owned_work(i for i in (9,))
+        a = widget._track_merchant_rules_owned_action(traced("body", lambda: 5))
+        install("2", False)
+        two = widget._track_merchant_rules_owned_work(i for i in (8,))
+        b = widget._track_merchant_rules_owned_action(traced("never", lambda: 7))
+        try:
+            one.close()
+            two.close()
+            _cp15_equal("captured validity and release", (a(), a(), b()), (5, 5, None))
+            _cp15_equal(
+                "construction and bound callbacks",
+                events,
+                ["G1", "C1", "G2", "C2", "W1", "W2", "P1", "L1", "body", "A1", "P1", "L1", "body", "P2", "A2"],
+            )
+            _cp15_equal("binding counts", _cp15_counts(widget), (0, 0, 0))
+        finally:
+            one.close()
+            two.close()
+            a.release()
+            b.release()
+
+
+def _test_cp15_partial_capture(module: types.ModuleType) -> None:
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        widget = _cp15_widget(module)
+        first, second = _CP15Manager(), _CP15Manager()
+        first.refuse_delayed_slot = True
+        current = [first]
+        restore.binding(module, "ActionQueueManager", lambda: current[0])
+        captured: list[str] = []
+
+        def payload(label: str) -> None:
+            captured.append(label)
+
+        def work() -> Generator[str, None, None]:
+            try:
+                first.AddActionWithDelay("ACTION", 21, payload, "raw")
+                first.AddAction("IDENTIFY", payload, "owned")
+                yield "before close"
+            finally:
+                second.AddAction("SALVAGE", payload, "finalizer")
+
+        owned = widget._track_merchant_rules_owned_work(work())
+        try:
+            _cp15_equal("partial tick", next(owned), "before close")
+            _cp15_equal(
+                "partial installation restores first slot",
+                (first.mutations, first.entries[0][2] is payload, _cp15_counts(widget)),
+                (["set AddAction", "set AddActionWithDelay", "del AddAction"], True, (1, 1, 0)),
+            )
+            current[0] = second
+            owned.close()
+            _cp15_equal(
+                "close resolves replacement manager and captures finalizer",
+                (_cp15_counts(widget), second.mutations, second.entries[0][2] is payload),
+                (
+                    (0, 2, 0),
+                    ["set AddAction", "set AddActionWithDelay", "del AddActionWithDelay", "del AddAction"],
+                    False,
+                ),
+            )
+            _cp15_deliver(first)
+            _cp15_equal("uncaptured delayed work", (captured, _cp15_counts(widget)), (["raw"], (0, 2, 0)))
+            _cp15_deliver(first, 1)
+            second.entries.clear()
+            _cp15_equal(
+                "discard releases finalizer tail",
+                (captured, _cp15_counts(widget)),
+                (["raw", "owned"], (0, 0, 0)),
+            )
+            orphan = widget._track_merchant_rules_owned_work(item for item in (3,))
+            _cp15_equal(
+                "unstarted orphan held",
+                (type(orphan) is module._MerchantRulesOwnedGenerator, _cp15_counts(widget)),
+                (True, (1, 0, 0)),
+            )
+            del orphan
+            _cp15_equal("last generator reference released", _cp15_counts(widget), (0, 0, 0))
+        finally:
+            owned.close()
+
+
+def _test_cp15_tail_failure(module: types.ModuleType) -> None:
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        widget = _cp15_widget(module)
+        manager = _CP15Manager()
+        error = ValueError("physical sink stored the delayed callback")
+        manager.fail_after_store = error
+        restore.binding(module, "ActionQueueManager", lambda: manager)
+        effects: list[int] = []
+
+        def producer() -> Generator[str, None, None]:
+            yield "first"
+            try:
+                manager.AddActionWithDelay("ACTION", 17, effects.append, 23)
+            finally:
+                manager.AddAction("IDENTIFY", effects.append, 42)
+
+        work = widget._track_merchant_rules_owned_work(producer())
+        try:
+            _cp15_equal("before failed resumption", next(work), "first")
+            _cp14a_fault(error, lambda: next(work), "CP15 physical failure escapes")
+            _cp15_equal(
+                "distinct partial effects",
+                (
+                    [(q, d) for q, d, *_rest in manager.entries],
+                    _cp15_counts(widget),
+                    getattr(widget, "_merchant_rules_active_generation"),
+                    getattr(widget, "_merchant_rules_active_lifecycle_generation"),
+                    set(vars(manager)) & {"AddAction", "AddActionWithDelay"} == set(),
+                ),
+                ([("ACTION", 17), ("IDENTIFY", 0)], (0, 1, 0), None, None, True),
+            )
+            _cp15_deliver(manager)
+            _cp15_deliver(manager)
+            _cp15_deliver(manager, 1)
+            _cp15_equal(
+                "delivered released physical record",
+                (effects, _cp15_counts(widget)),
+                ([23, 23, 42], (0, 0, 0)),
+            )
+        finally:
+            work.close()
+
+
+def _test_cp15_destination_handoff(module: types.ModuleType) -> None:
+    for stale in (False, True):
+        with _cp14_b_world(module) as (_queue, map_id, restore):
+            widget = _cp15_widget(module)
+            start = int(widget.merchant_rules_lifecycle_generation)
+            manager = _CP15Manager()
+            restore.binding(module, "ActionQueueManager", lambda: manager)
+            effects: list[int] = []
+
+            def travel(_target: int) -> Generator[str, None, bool]:
+                yield "travelling"
+                map_id[0] = 202
+                return True
+
+            restore.binding(widget, "_travel_to_target_outpost", travel)
+            widget._merchant_rules_planned_lifecycle_generation = start - 1
+
+            def producer() -> Generator[object, None, None]:
+                ok = yield from cast(
+                    Generator[object, None, bool], widget._travel_to_target_outpost_with_lifecycle(202)
+                )
+                _cp15_equal(
+                    "destination published before same-tick submit",
+                    (
+                        ok,
+                        widget._merchant_rules_active_lifecycle_generation,
+                        widget._merchant_rules_planned_lifecycle_generation,
+                    ),
+                    (True, start + 1, start + 1),
+                )
+                manager.AddAction("ACTION", effects.append, 52)
+                if stale:
+                    widget.merchant_rules_profile_generation += 1
+                yield "arrived"
+
+            work = widget._track_merchant_rules_owned_work(producer())
+            try:
+                _cp15_equal(
+                    "travel entry cleared old slot",
+                    (
+                        next(work),
+                        widget._merchant_rules_planned_travel_active,
+                        widget._merchant_rules_planned_lifecycle_generation,
+                    ),
+                    ("travelling", True, None),
+                )
+                if stale:
+                    _cp14_b_expect_stopped(work)
+                else:
+                    _cp15_equal("arrived yield", next(work), "arrived")
+                _cp15_equal(
+                    "post-yield profile validity precedes handoff",
+                    (
+                        widget._merchant_rules_planned_travel_active,
+                        widget._merchant_rules_planned_lifecycle_generation,
+                        widget._merchant_rules_active_lifecycle_generation,
+                        _cp15_counts(widget),
+                    ),
+                    (False, start + 1 if stale else None, None, (0 if stale else 1, 1, 0)),
+                )
+                _cp15_deliver(manager)
+                _cp15_equal("same-tick destination callback", effects, [] if stale else [52])
+            finally:
+                work.close()
+
+
+_CP15_COLD_PROGRAM = _CP14_COLD_PROGRAM.split('name = "Sources.icefox.MerchantRules.automatic_triggers"\n', 1)[0] + r'''
+name = "Sources.icefox.MerchantRules.owned_work"
+actual = importlib.import_module(name)
+origins = {}
+for part, relative in (
+    ("Sources.icefox", "Sources/icefox/__init__.py"),
+    ("Sources.icefox.MerchantRules", "Sources/icefox/MerchantRules/__init__.py"),
+    (name, "Sources/icefox/MerchantRules/owned_work.py"),
+):
+    imported = sys.modules[part]
+    if Path(imported.__file__).resolve(strict=True) != root / relative or Path(imported.__spec__.origin) != root / relative:
+        raise AssertionError("wrong module or spec " + part)
+    origins[part] = relative
+namespace = sys.modules["Sources"]
+if (root / "Sources/__init__.py").exists() or namespace.__spec__.origin is not None or getattr(namespace, "__file__", None) is not None:
+    raise AssertionError("Sources must be an implicit namespace")
+if tuple(map(Path, namespace.__spec__.submodule_search_locations)) != (root / "Sources",):
+    raise AssertionError("unexpected Sources lookup roots")
+trap = Trap()
+owner = actual.OwnedWorkSession(trap)
+values = dict(vars(owner))
+if values.pop("runtime") is not trap or any(getattr(actual, n).__module__ != name for n in (
+    "OwnedWorkSession", "_MerchantRulesOwnedGenerator", "_MerchantRulesOwnedQueueCallback"
+)):
+    raise AssertionError("construction or class identity")
+expected = dict(work_count=0, action_count=0, dispatch_count=0, active_generation=None,
+                active_lifecycle_generation=None, planned_travel_active=False, planned_lifecycle_generation=None)
+if values.keys() != expected.keys() or any(type(values[k]) is not type(v) or values[k] != v for k, v in expected.items()):
+    raise AssertionError("unexpected default owner state")
+if blocked or {n for n in sys.modules if project(n)} != {"Sources", *origins}:
+    raise AssertionError("unexpected project/native import: " + repr(blocked))
+print("CP15_COLD:owned-work namespace=Sources state=passive origins=3 blocked=0")
+'''
+
+
+def _test_cp15_cold_owner(_module: types.ModuleType) -> None:
+    capture = _CP13Capture()
+    location = SCRIPT_DIR / "cp15-cold-owner"
+    environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR") if key in os.environ}
+    command = [sys.executable, "-I", "-B", "-S", "-c", _CP15_COLD_PROGRAM, str(REPO_ROOT)]
+    launch: dict[str, object] = {"status": "not-started", "exit": None}
+    path: Path | None = None
+    primary: BaseException | None = None
+    try:
+        capture.mkdir(location)
+        path = location / "final.json"
+        completed = _cp13_run_process(command, location, environment, location, launch, timeout=120, capture=capture)
+        _cp15_equal("cold stderr", completed.stderr, b"")
+        _cp15_equal(
+            "cold stdout",
+            completed.stdout.decode("ascii").splitlines(),
+            ["CP15_COLD:owned-work namespace=Sources state=passive origins=3 blocked=0"],
+        )
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            capture.report(path, {"operation": "cp15_cold_owner", "launch": launch}, primary)
+        except BaseException as evidence_error:
+            if primary is None:
+                raise
+            capture.note(primary, capture.describe(evidence_error))
+
+
+def _test_cp15_owner_route(module: types.ModuleType) -> None:
+    defining = sys.modules["Sources.icefox.MerchantRules.owned_work"]
+    cls = getattr(defining, "OwnedWorkSession")
+    path = (REPO_ROOT / "Sources/icefox/MerchantRules/owned_work.py").resolve(strict=True)
+    generator_alias = "_MerchantRulesOwnedGenerator"
+    callback_alias = "_MerchantRulesOwnedQueueCallback"
+    _cp15_equal(
+        "canonical wrapper exports",
+        (
+            Path(str(defining.__file__)).resolve() == path,
+            type(module.WIDGET_INSTANCE._owned_work_session) is cls,
+            getattr(module, generator_alias) is getattr(defining, generator_alias),
+            getattr(module, callback_alias) is getattr(defining, callback_alias),
+        ),
+        (True, True, True, True),
+    )
+    calls: dict[str, list[object]] = {}
+    originals: dict[str, object] = {}
+
+    def tap(label: str, implementation: Callable[..., object]) -> Callable[..., object]:
+        def wrapped(session: object, *args: object, **kwargs: object) -> object:
+            calls[label].append(session)
+            return implementation(session, *args, **kwargs)
+
+        return wrapped
+
+    with _cp14a_changes() as change:
+        for name in ("track_work", "track_action", "advance", "close_started", "release_work", "release_action"):
+            method = cast(Mapping[str, object], vars(cls))[name]
+            _expect(
+                isinstance(method, types.FunctionType)
+                and method.__globals__ is vars(defining)
+                and Path(method.__code__.co_filename).resolve() == path,
+                "CP15 exact defining code for " + name,
+            )
+            originals[name] = method
+            calls[name] = []
+            change.binding(cls, name, tap(name, cast(types.FunctionType, method)))
+        # Each of CP14's three stale causes constructs an independent widget and runs the
+        # real frame, Identify pass, native-queue boundary, started close and stale delivery.
+        _cp14_b_captured_identify(module)
+    tracked = calls["track_work"]
+    _cp15_equal(
+        "three independent owners reached end-to-end",
+        (
+            len(tracked),
+            len({id(item) for item in tracked}),
+            all(type(item) is cls for item in tracked),
+            all(
+                len(calls[key]) == 3 and all(actual is expected for actual, expected in zip(calls[key], tracked))
+                for key in ("track_action", "advance", "close_started", "release_work", "release_action")
+            ),
+            all(vars(cls)[name] is before for name, before in originals.items()),
+        ),
+        (3, 3, True, True, True),
+    )
+
+
+_CP15_COMMON: tuple[tuple[str, Callable[[types.ModuleType], None]], ...] = (
+    ("cp15_nested_capture", _test_cp15_nested_capture),
+    ("cp15_binding_times", _test_cp15_binding_times),
+    ("cp15_partial_capture", _test_cp15_partial_capture),
+    ("cp15_tail_failure", _test_cp15_tail_failure),
+    ("cp15_destination_handoff", _test_cp15_destination_handoff),
+    ("cp15_messaging_execute_lifetime", _test_cp15_messaging_execute_lifetime),
+    ("cp15_reload_append_successor", _test_cp15_reload_append_successor),
+    ("cp15_identify_completion", _test_cp15_identify_completion),
+    ("cp15_core_receipt_execute", _test_cp15_core_receipt_execute),
+)
+_CP15_OWNER: tuple[tuple[str, Callable[[types.ModuleType], None]], ...] = (
+    ("cp15_cold_owner", _test_cp15_cold_owner),
+    ("cp15_owner_route", _test_cp15_owner_route),
 )
 
 
@@ -72597,6 +74175,11 @@ def main() -> int:
             for name, operation in cp14_cases
         )
 
+        cp15_cases = (*_CP15_COMMON, *_CP15_OWNER)
+        cp15_names = tuple(name for name, _ in cp15_cases)
+        _expect(len(cp15_names) == len(set(cp15_names)) == 11, "CP15 exact new registrations")
+        _expect({name for name, _ in tests}.isdisjoint(cp15_names), "CP15 additive registrations")
+        tests.extend((name, lambda operation=operation: operation(module)) for name, operation in cp15_cases)
         catalog_contract_tests = [
             (
                 "catalog_loader_indexes_typed_common_salvage_separately",
@@ -72720,6 +74303,30 @@ def main() -> int:
             )
             _expect(set(names_cp14) <= {name for name, _operation in tests}, "CP14 registered selection")
             tests = [test for test in tests if test[0] in names_cp14]
+        cp15_mode = os.environ.get("MERCHANT_RULES_CP15_CASES", "")
+        if cp15_mode:
+            _expect(cp15_mode in ("common", "owner"), "CP15 exact selection")
+            _expect(
+                not any(
+                    os.environ.get(key)
+                    for key in (
+                        "MERCHANT_RULES_CP10_CASES",
+                        "MERCHANT_RULES_CP11_CASES",
+                        "MERCHANT_RULES_CP12_CASES",
+                        "MERCHANT_RULES_CP13_CASES",
+                        "MERCHANT_RULES_CP14_CASES",
+                        "MERCHANT_RULES_CP14_OBSERVATIONS",
+                        "MERCHANT_RULES_CATALOG_CONTRACTS",
+                        "MERCHANT_RULES_CATALOG_ONLY",
+                        "MERCHANT_RULES_SALVAGE_KIT_ONLY",
+                    )
+                ),
+                "CP15 dedicated common or owner selection",
+            )
+            cases = _CP15_COMMON if cp15_mode == "common" else _CP15_OWNER
+            selected_names = tuple(name for name, _ in cases)
+            tests = [test for test in tests if test[0] in selected_names]
+            _expect(tuple(name for name, _ in tests) == selected_names, "CP15 actual selected registrations")
         _cp14_observations.clear()
 
         failures: list[tuple[str, str]] = []
