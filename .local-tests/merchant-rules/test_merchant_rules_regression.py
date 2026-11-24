@@ -72964,6 +72964,1113 @@ _CP15_OWNER: tuple[tuple[str, Callable[[types.ModuleType], None]], ...] = (
 )
 
 
+class _TraderSaleSteps:
+    """Single-step the real widget entries against an inspectable inventory and ACTION sink."""
+
+    def __init__(self, module: types.ModuleType, restore: _CP8Restoration) -> None:
+        self.module = module
+        self.widget = _cp15_widget(module)
+        self.restore = restore
+        self.trace: list[tuple[object, ...]] = []
+        self.created: list[object] = []
+        self.items: dict[int, object] = {}
+        self.manager = _CP15Manager()
+        self.immediate = True
+        self.price = 83
+        self.on_ids: Callable[[], None] = lambda: None
+        self.on_item: Callable[[int], None] = lambda _item_id: None
+        self.on_submit: Callable[[int], None] = lambda _item_id: None
+        self.on_native: Callable[[int], None] = self.decrement
+        self.current: tuple[Generator[object, None, object], ...] = ()
+        self.error = RuntimeError("trader sale fixture fault")
+        outcome: Callable[..., object] = module.ExecutionPhaseOutcome
+
+        def construct(*args: object, **kwargs: object) -> object:
+            result = outcome(*args, **kwargs)
+            self.created.append(result)
+            self.row("outcome", self.counts())
+            return result
+
+        def warning(_source: object, message: str, level: object) -> None:
+            self.row("warning", message, level == module.Console.MessageType.Warning, self.counts())
+
+        def debug(message: str) -> None:
+            self.row("debug", message, self.counts())
+
+        self.widget._debug_log = debug
+        restore.binding(module, "ExecutionPhaseOutcome", construct)
+        restore.binding(module, "ConsoleLog", warning)
+        restore.binding(module, "ActionQueueManager", lambda: self.manager)
+        self.widget._inventory_evidence = self.provider("first")
+        self.install_runtime("first")
+        restore.binding(module.Routines.Yield, "wait", self.wait)
+
+    def row(self, *cells: object) -> None:
+        self.trace.append(cells)
+
+    def rows(self, tag: str) -> list[tuple[object, ...]]:
+        return [entry[1:] for entry in self.trace if entry[0] == tag]
+
+    def equal(self, label: str, observed: object, expected: object) -> None:
+        _expect(
+            observed == expected, f"Trader sale {label}, expected {expected!r}, observed {observed!r}: {self.trace!r}"
+        )
+
+    def counts(self) -> tuple[object, ...]:
+        return tuple(
+            getattr(self.created[-1], key)
+            for key in (
+                "measure_label",
+                "attempted",
+                "completed",
+                "unavailable",
+                "quote_failures",
+                "timeout_failures",
+                "load_failures",
+            )
+        )
+
+    def install_runtime(self, name: str) -> None:
+        host = self
+
+        class Trader:
+            @property
+            def RequestSellQuote(self) -> Callable[[int], None]:
+                host.row("lookup request", name)
+
+                def request(item_id: int) -> None:
+                    host.row("request", name, item_id)
+
+                return request
+
+            @property
+            def SellItem(self) -> Callable[[int, int], None]:
+                host.row("lookup sell", name)
+
+                def submit(item_id: int, price: int) -> None:
+                    host.row("submit", name, item_id, price)
+                    host.on_submit(item_id)
+                    host.manager.AddAction("ACTION", host.native, item_id)
+                    host.row("enqueued", item_id, _cp15_counts(host.widget))
+                    if host.immediate:
+                        _cp15_deliver(host.manager, len(host.manager.entries) - 1)
+
+                return submit
+
+        class Merchant:
+            @property
+            def _wait_for_quote(self) -> Callable[..., Generator[str, None, int]]:
+                host.row("lookup waiter", name)
+
+                def quote(
+                    request: Callable[[int], None], item_id: int, *, timeout_ms: int, step_ms: int
+                ) -> Generator[str, None, int]:
+                    host.row("quote", name, item_id, timeout_ms, step_ms)
+                    request(item_id)
+                    yield "quote"
+                    return host.price
+
+                return quote
+
+            def _interact_with_trader_xy(
+                self, x: float, y: float, *, inventory_timeout_ms: int, inventory_step_ms: int
+            ) -> Generator[str, None, list[int]]:
+                host.row("open", x, y, inventory_timeout_ms, inventory_step_ms)
+                yield "open"
+                return [91]
+
+        self.restore.binding(self.module.Routines.Yield, "Merchant", Merchant())
+        self.restore.binding(self.module.GLOBAL_CACHE, "Trading", types.SimpleNamespace(Trader=Trader()))
+
+    def provider(self, name: str) -> object:
+        def ids() -> list[int]:
+            self.row("ids", name, tuple(self.items))
+            self.on_ids()
+            return list(self.items)
+
+        def item(item_id: int, *, include_runtime_name: bool = True) -> object:
+            self.row("item", name, item_id, include_runtime_name)
+            self.on_item(item_id)
+            return self.items.get(item_id)
+
+        return types.SimpleNamespace(get_inventory_item_ids=ids, build_inventory_item_info=item)
+
+    def wait(self, milliseconds: int) -> Generator[str, None, None]:
+        self.row("wait", milliseconds, self.counts())
+        yield f"wait:{milliseconds}"
+
+    def decrement(self, item_id: int) -> None:
+        item = self.items[item_id]
+        quantity = int(getattr(item, "quantity")) - (10 if getattr(item, "is_material") else 1)
+        if quantity <= 0:
+            del self.items[item_id]
+        else:
+            setattr(item, "quantity", quantity)
+
+    def native(self, item_id: int) -> None:
+        self.row("native", item_id)
+        self.on_native(item_id)
+
+    def material(self, item_id: int, batches: int, quantity: int) -> PlannedMaterialSale:
+        self.item(item_id, quantity, material=True)
+        return self.module.PlannedMaterialSale(
+            self.module.MERCHANT_TYPE_MATERIALS, item_id, 925, "Cloth", batches, batches * 10, 10
+        )
+
+    def rune(self, item_id: int, quantity: int = 1) -> PlannedTraderSale:
+        self.item(item_id, quantity, material=False)
+        return self.module.PlannedTraderSale(item_id, 19131, "Radiant", ("Radiant",))
+
+    def item(self, item_id: int, quantity: int, *, material: bool) -> None:
+        self.items[item_id] = self.module.InventoryItemInfo(
+            item_id=item_id,
+            model_id=925 if material else 19131,
+            name="Cloth" if material else "Radiant",
+            quantity=quantity,
+            value=1,
+            item_type_id=0,
+            item_type_name="",
+            rarity="White",
+            identified=True,
+            salvageable=False,
+            is_customized=False,
+            is_inscribable=False,
+            is_material=material,
+            is_rare_material=False,
+            is_weapon_like=False,
+            is_armor_piece=False,
+            standalone_kind="" if material else self.module.RUNE_STANDALONE_KIND,
+            rune_identifiers=[] if material else ["Radiant"],
+        )
+
+    def start(
+        self,
+        sales: list[PlannedMaterialSale] | list[PlannedTraderSale],
+        *,
+        material: bool = True,
+        trader_items: list[int] | None = None,
+        owned: bool = False,
+    ) -> None:
+        sell = self.widget._sell_planned_materials if material else self.widget._sell_planned_trader_items
+        work: Generator[object, None, object] = sell(
+            (1.5, 2.5), sales, phase_label="Stepped", trader_items=trader_items
+        )
+        if owned:
+            work = self.widget._queue_merchant_rules_owned_work(work)
+            self.equal("physical coroutine append", self.module.GLOBAL_CACHE.Coroutines[-1] is work, True)
+        self.current = (work,)
+        self.row("created generator", len(self.created))
+
+    def advance(self) -> object:
+        try:
+            token = next(self.current[0])
+        except StopIteration as stop:
+            self.row("returned", stop.value is self.created[-1], self.counts())
+            return "done"
+        self.row("yield", token, self.counts(), _cp15_counts(self.widget))
+        return token
+
+    def drain(self) -> None:
+        for _ in range(100):
+            if self.advance() == "done":
+                self.equal("same returned outcome", self.rows("returned")[-1][0], True)
+                return
+        raise AssertionError(f"Trader sale did not finish: {self.trace!r}")
+
+    def close(self) -> None:
+        self.current[0].close()
+        self.row("closed", self.counts(), _cp15_counts(self.widget))
+
+
+def _trader_sale_gate(s: _TraderSaleSteps, material: bool, gate: str) -> None:
+    sales: list[PlannedMaterialSale] | list[PlannedTraderSale]
+    if material:
+        sales = [] if gate == "empty plan" else [s.material(10, 1, 10)]
+    else:
+        sales = [] if gate == "empty plan" else [s.rune(20)]
+    ids: list[int] = [] if gate == "no inventory" else [91]
+    if gate == "supplied":
+        ids.clear()
+    s.start(sales, material=material, trader_items=None if gate == "coordinates" else ids)
+    s.equal("passive generator", s.trace, [("created generator", 0)])
+    if gate == "supplied":
+        ids.append(91)
+    s.drain()
+    sold = gate in ("coordinates", "supplied")
+    s.equal("one outcome", len(s.created), 1)
+    s.equal(
+        "gate counters",
+        s.counts(),
+        ("trades" if material else "items", int(gate != "empty plan"), int(sold), 0, 0, 0, int(gate == "no inventory")),
+    )
+    s.equal("coordinate gate", s.rows("open"), [(1.5, 2.5, 2500, 10)] if gate == "coordinates" else [])
+    s.equal("gate warning count", len(s.rows("warning")), int(gate == "no inventory"))
+    summaries = [r for r in s.rows("debug") if "completed=" in str(r[0])]
+    s.equal("final summary sees outcome", [r[-1] for r in summaries], [s.counts()] if sold else [])
+
+
+def _trader_sale_late(s: _TraderSaleSteps) -> None:
+    sale = s.material(10, 2, 32)
+    original: Callable[[PlannedMaterialSale, int], object] = s.widget._validate_planned_material_sale_identity
+
+    def install_check(name: str) -> None:
+        def validate(row: PlannedMaterialSale, required: int) -> object:
+            s.row("validate", name, required)
+            return original(row, required)
+
+        s.widget._validate_planned_material_sale_identity = validate
+
+    def item_id(_sale: object) -> int:
+        s.row("row id")
+        return 10
+
+    def switch_provider() -> None:
+        s.widget._inventory_evidence = s.provider("second")
+        s.on_ids = lambda: None
+
+    def change_size(_id: int) -> None:
+        sale.batch_size = 4
+        s.on_ids = switch_readback_provider
+
+    def switch_readback_provider() -> None:
+        s.widget._inventory_evidence = s.provider("readback")
+        s.on_ids = lambda: None
+
+    def native(item_id: int) -> None:
+        item = s.items[item_id]
+        setattr(item, "quantity", int(getattr(item, "quantity")) - sale.batch_size)
+
+    install_check("first")
+    s.on_ids = switch_provider
+    s.restore.binding(type(sale), "item_id", property(item_id))
+    s.start([sale], trader_items=[91])
+    s.equal("first quote pause", s.advance(), "quote")
+    s.equal(
+        "same advance evidence swap", (s.rows("ids"), s.rows("item")), ([("first", (10,))], [("second", 10, False)])
+    )
+    install_check("second")
+    s.install_runtime("second")
+    sale.batch_size = 7
+    setattr(s.items[10], "quantity", 29)
+    s.on_submit = change_size
+    s.on_native = native
+    s.drain()
+    s.equal(
+        "current all-remaining validation",
+        s.rows("validate"),
+        [("first", 20), ("second", 20), ("second", 4), ("second", 4)],
+    )
+    s.equal("request used by selected waiter", s.rows("request"), [("first", 10), ("second", 10)])
+    s.equal("late submission", s.rows("submit"), [("second", 10, 83), ("second", 10, 83)])
+    s.equal("same advance readback swap", (s.rows("ids")[2][0], s.rows("item")[2][0]), ("second", "readback"))
+    tags = [r[0] for r in s.trace]
+    for offset, tag in enumerate(tags):
+        if tag == "lookup waiter":
+            s.equal(
+                "waiter/request/argument",
+                tags[offset : offset + 4],
+                ["lookup waiter", "lookup request", "row id", "quote"],
+            )
+        if tag == "lookup sell":
+            s.equal("submission/argument", tags[offset : offset + 3], ["lookup sell", "row id", "submit"])
+    s.equal(
+        "remainder from second quantity and post-dispatch size",
+        (s.counts(), getattr(s.items[10], "quantity")),
+        (("trades", 2, 2, 0, 0, 0, 0), 21),
+    )
+
+
+def _trader_sale_account(s: _TraderSaleSteps, issue: str) -> None:
+    material = issue != "rune"
+    sales: list[PlannedMaterialSale] | list[PlannedTraderSale]
+    if material:
+        sales = [s.material(10, 2, 19 if issue == "short before quote" else 20), s.material(11, 1, 10)]
+    else:
+        sales = [s.rune(10), s.rune(11)]
+        setattr(s.items[10], "rune_identifiers", ["Unexpected"])
+    s.start(sales, material=material, trader_items=[91])
+    s.equal("first available quote", s.advance(), "quote")
+    if issue == "short after quote":
+        setattr(s.items[10], "quantity", 19)
+    elif issue == "quote failure":
+        s.price = 0
+    elif issue == "same ID new model":
+        s.on_native = lambda item_id: (
+            setattr(s.items[item_id], "model_id", 0) if item_id == 10 else s.decrement(item_id)
+        )
+    elif issue == "positive remainder missing":
+
+        def disappear(item_id: int) -> None:
+            if item_id == 10:
+                del s.items[item_id]
+            else:
+                s.decrement(item_id)
+
+        s.on_native = disappear
+    if issue == "quote failure":
+        s.equal("later quote", s.advance(), "quote")
+        s.price = 83
+    s.drain()
+    lost = 2 if issue in ("short before quote", "short after quote", "same ID new model") else int(not material)
+    expected = (
+        "trades" if material else "items",
+        3 if material else 2,
+        1,
+        lost,
+        int(issue == "quote failure"),
+        int(issue == "positive remainder missing"),
+        0,
+    )
+    s.equal(issue, s.counts(), expected)
+    s.equal(
+        "only authorized submissions",
+        [r[1] for r in s.rows("submit")],
+        [10, 11] if issue in ("same ID new model", "positive remainder missing") else [11],
+    )
+    s.equal(
+        "authorized quotes",
+        [r[1] for r in s.rows("request")],
+        [11] if issue in ("short before quote", "rune") else [10, 11],
+    )
+    s.equal(
+        "timeout wait bound",
+        len([r for r in s.rows("wait") if r[0] == 10]),
+        35 if issue == "positive remainder missing" else 0,
+    )
+
+
+def _trader_sale_close(s: _TraderSaleSteps, boundary: str) -> None:
+    s.immediate = boundary == "success wait"
+    s.start([s.material(10, 1, 10)], trader_items=[91], owned=True)
+    s.equal("pre-sale suspension", s.advance(), "quote")
+    if boundary != "before submission":
+        token = s.advance()
+        s.equal("first readback or success wait", token, "wait:40" if s.immediate else "wait:10")
+        s.equal("readback in submitting advance", len(s.rows("ids")), 3)
+        s.equal("pending ACTION", _cp15_counts(s.widget), (1, int(not s.immediate), 0))
+    s.close()
+    if boundary in ("current callback", "stale callback"):
+        s.equal("action survives close", _cp15_counts(s.widget), (0, 1, 0))
+        if boundary == "stale callback":
+            s.widget.merchant_rules_profile_generation += 1
+        _cp15_deliver(s.manager)
+        s.row("delivered after close", _cp15_counts(s.widget))
+    s.equal(
+        "captured ACTIONs", [e[0] for e in s.manager.entries], [] if boundary == "before submission" else ["ACTION"]
+    )
+    s.equal(
+        "generation controls delivery",
+        s.rows("native"),
+        [(10,)] if boundary in ("success wait", "current callback") else [],
+    )
+    s.equal("released leases", _cp15_counts(s.widget), (0, 0, 0))
+    s.equal("completed at close", s.counts(), ("trades", 1, int(boundary == "success wait"), 0, 0, 0, 0))
+    s.equal(
+        "no returned outcome or summary",
+        (len(s.rows("returned")), any("completed=" in str(r[0]) for r in s.rows("debug"))),
+        (0, False),
+    )
+
+
+def _trader_sale_fault(s: _TraderSaleSteps, boundary: str) -> None:
+    def fail() -> None:
+        s.row("fault", boundary)
+        raise s.error
+
+    def arm(item_id: int) -> None:
+        if item_id == 11:
+            if boundary == "dispatch":
+                fail()
+            elif boundary == "item read":
+                s.on_item = lambda _id: fail()
+            elif boundary == "membership":
+                s.on_ids = fail
+
+    s.on_submit = arm
+    s.start([s.material(10, 1, 10), s.material(11, 1, 20)], trader_items=[91], owned=True)
+    try:
+        s.equal("earlier quote", s.advance(), "quote")
+        s.equal("earlier success", s.advance(), "wait:40")
+        s.equal("second quote", s.advance(), "quote")
+        if boundary == "membership":
+            s.drain()
+            s.equal("caught membership reads", (len(s.rows("fault")), s.counts()), (36, ("trades", 2, 1, 0, 0, 1, 0)))
+            s.equal(
+                "caught reason", any("current inventory could not be read" in str(r[0]) for r in s.rows("debug")), True
+            )
+        else:
+            try:
+                s.advance()
+            except RuntimeError as exc:
+                s.row("escaped", exc is s.error, s.counts(), _cp15_counts(s.widget))
+            else:
+                raise AssertionError(f"Trader sale fault did not escape: {s.trace!r}")
+            s.equal(
+                "exception identity and counter prefix",
+                s.rows("escaped"),
+                [(True, ("trades", 2, 1, 0, 0, 0, 0), (0, 0, 0))],
+            )
+            s.equal("one opening log only", len(s.rows("debug")), 1)
+            s.equal("no final return", s.rows("returned"), [])
+        ids = [10] if boundary == "dispatch" else [10, 11]
+        s.equal("exact submitted prefix", s.rows("submit"), [("first", 10, 83), ("first", 11, 83)])
+        s.equal("physical ACTION prefix", [e[3] for e in s.manager.entries], [(i,) for i in ids])
+        s.equal("delivered prefix", s.rows("native"), [(i,) for i in ids])
+    finally:
+        s.current[0].close()
+
+
+def _trader_sales_steps(module: types.ModuleType, case: str) -> dict[str, list[tuple[object, ...]]]:
+    result: dict[str, list[tuple[object, ...]]] = {}
+    scenarios: dict[str, Callable[[_TraderSaleSteps], None]] = {}
+    if case == "trader_sales_owner_contract":
+        for material in (True, False):
+            for gate in ("empty plan", "coordinates", "no inventory", "supplied"):
+                scenarios[f"{'material' if material else 'rune'} {gate}"] = partial(
+                    _trader_sale_gate, material=material, gate=gate
+                )
+    elif case == "trader_sales_late_lookup":
+        scenarios["binding replacement"] = _trader_sale_late
+    elif case == "trader_sales_accounting":
+        for issue in (
+            "short before quote",
+            "short after quote",
+            "quote failure",
+            "same ID new model",
+            "positive remainder missing",
+            "rune",
+        ):
+            scenarios[issue] = partial(_trader_sale_account, issue=issue)
+    elif case == "trader_sales_suspension":
+        for boundary in ("before submission", "current callback", "stale callback", "success wait"):
+            scenarios[boundary] = partial(_trader_sale_close, boundary=boundary)
+    elif case == "trader_sales_exception_prefix":
+        for fault in ("dispatch", "item read", "membership"):
+            scenarios[fault] = partial(_trader_sale_fault, boundary=fault)
+    else:
+        raise ValueError(f"Unknown trader sale case {case!r}")
+    for name, scenario in scenarios.items():
+        with _cp14_b_world(module) as (_queue, _map, restore):
+            steps = _TraderSaleSteps(module, restore)
+            try:
+                scenario(steps)
+                result[name] = steps.trace
+            finally:
+                for operation in steps.current:
+                    operation.close()
+    return result
+
+
+def _trader_sales_defining_owner(module: types.ModuleType) -> None:
+    owner = sys.modules["Sources.icefox.MerchantRules.trader_sales"]
+    planning = sys.modules["Sources.icefox.MerchantRules.planning"]
+    evidence = sys.modules["Sources.icefox.MerchantRules.inventory_evidence"]
+    _expect(
+        owner is module._trader_sales
+        and planning.PlannedMaterialSale is module.PlannedMaterialSale
+        and planning.PlannedTraderSale is module.PlannedTraderSale
+        and evidence.InventoryItemInfo is module.InventoryItemInfo,
+        "Trader sale bindings must resolve to the canonical defining modules.",
+    )
+    cold = """import importlib, sys
+sys.path.insert(0, sys.argv[1])
+owner = 'Sources.icefox.MerchantRules.trader_sales'
+allowed = {'Sources', 'Sources.icefox', 'Sources.icefox.MerchantRules', owner}
+class RejectRuntime:
+    def find_spec(self, fullname, path, target=None):
+        if (fullname.startswith('Sources.') and fullname not in allowed) or fullname.startswith(('Py4GW', 'PyImGui', 'PyInventory', 'PyMerchant', 'PyAgent', 'PyPlayer', 'Widgets.')):
+            raise AssertionError(f'unexpected trader sale runtime import: {fullname}')
+sys.meta_path.insert(0, RejectRuntime())
+importlib.import_module(owner)
+"""
+    imported = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", "-c", cold, str(REPO_ROOT)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _expect(
+        imported.returncode == 0 and not imported.stdout and not imported.stderr,
+        f"Trader sale cold import: {imported!r}",
+    )
+
+    class Unavailable:
+        def __getattribute__(self, name: str) -> object:
+            raise AssertionError(f"Binding construction accessed {name!r}")
+
+    def forbidden() -> object:
+        raise AssertionError("Binding construction invoked a supplier")
+
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        for binding in ("GLOBAL_CACHE", "Routines"):
+            restore.binding(module, binding, Unavailable())
+        host = module.MerchantRulesWidget
+        host._trader_sale_loop_ops(Unavailable(), forbidden)
+        host._trader_sale_evidence_reads(Unavailable())
+        host._trader_sale_rune_identity(Unavailable())
+
+    for material in (True, False):
+        with _cp14_b_world(module) as (_queue, _map, restore):
+            s = _TraderSaleSteps(module, restore)
+            sales: list[PlannedMaterialSale] | list[PlannedTraderSale]
+            sales = [s.material(10, 1, 20)] if material else [s.rune(20, 2)]
+            suffix = "material" if material else "rune"
+            wrapper = "_sell_planned_materials" if material else "_sell_planned_trader_items"
+            loop = "execute_" + suffix + "_sales"
+            delegate = "_validate_planned_" + ("material" if material else "trader") + "_sale_identity"
+            validator = "validate_" + suffix
+            acquire = "_reacquire_planned_sale_item"
+            confirm = "_wait_for_planned_sale_completion"
+            names = {wrapper, loop, delegate, validator, acquire, "reacquire_item", confirm, "confirm_quantity"}
+            codes: dict[types.CodeType, str] = {}
+            for name in names:
+                target = getattr(module.MerchantRulesWidget if name.startswith("_") else owner, name)
+                _expect(
+                    target.__globals__ is vars(module if name.startswith("_") else owner),
+                    f"Trader sale defining globals for {name}",
+                )
+                codes[target.__code__] = name
+            edges: set[tuple[str, str]] = set()
+            borrowed: list[bool] = []
+
+            def profile(frame: types.FrameType, event: str, _arg: object) -> None:
+                if event != "call" or frame.f_code not in codes or frame.f_back is None:
+                    return
+                called = codes[frame.f_code]
+                caller = codes.get(frame.f_back.f_code)
+                if caller is not None:
+                    edges.add((caller, called))
+                if called == loop:
+                    borrowed.append(frame.f_locals["counts"] is s.created[0] and frame.f_locals["sales"] is sales)
+
+            original = sys.getprofile()
+            try:
+                sys.setprofile(profile)
+                s.start(sales, material=material, trader_items=[91])
+                s.drain()
+            finally:
+                sys.setprofile(original)
+            s.equal(
+                "real algorithm call directions",
+                edges,
+                {
+                    (wrapper, loop),
+                    (loop, delegate),
+                    (delegate, validator),
+                    (validator, acquire),
+                    (acquire, "reacquire_item"),
+                    (loop, confirm),
+                    (confirm, "confirm_quantity"),
+                },
+            )
+            s.equal("original list and outcome on every owner advance", bool(borrowed) and all(borrowed), True)
+
+
+def _test_trader_sales_owner_contract(module: types.ModuleType) -> None:
+    _trader_sales_steps(module, "trader_sales_owner_contract")
+    _trader_sales_defining_owner(module)
+
+
+def _test_trader_sales_late_lookup(module: types.ModuleType) -> None:
+    _trader_sales_steps(module, "trader_sales_late_lookup")
+
+
+def _test_trader_sales_accounting(module: types.ModuleType) -> None:
+    _trader_sales_steps(module, "trader_sales_accounting")
+
+
+def _test_trader_sales_suspension(module: types.ModuleType) -> None:
+    _trader_sales_steps(module, "trader_sales_suspension")
+
+
+def _test_trader_sales_exception_prefix(module: types.ModuleType) -> None:
+    _trader_sales_steps(module, "trader_sales_exception_prefix")
+
+
+def _trader_sales_route_trace(module: types.ModuleType, route: str) -> list[str]:
+    """Step a real caller over deterministic inventory, trader and transport endpoints."""
+
+    trace: list[str] = []
+    requests: list[int] = []
+    submitted: list[int] = []
+    remote = route.startswith("remote-")
+    manual = route.startswith("manual-")
+    xunlai = route.startswith("xunlai-")
+    with _cp14_b_world(module) as (_queue, _map, restore), _cp13_clock(module):
+        widget = _cp15_widget(module)
+        common: str = module.MERCHANT_TYPE_MATERIALS
+        rare: str = module.MERCHANT_TYPE_RARE_MATERIALS
+        rune: str = module.MERCHANT_TYPE_RUNE_TRADER
+        merchant: str = module.MERCHANT_TYPE_MERCHANT
+        coords = {common: (2.0, 2.0), rare: (3.0, 3.0), merchant: (4.0, 4.0), rune: (5.0, 5.0)}
+        items: dict[int, InventoryItemInfo] = {}
+        storage: dict[int, InventoryItemInfo] = {}
+
+        def material(i: int, model_id: int) -> InventoryItemInfo:
+            return _cp8_item(
+                module,
+                item_id=i,
+                model_id=model_id,
+                name=f"Stack {i}",
+                quantity=10,
+                is_weapon_like=False,
+                is_material=True,
+                is_rare_material=model_id == 930,
+                item_type_name="Material",
+            )
+
+        items[11] = material(11, 921)
+        if route == "execute" or manual:
+            items[12] = material(12, 930)
+            items[13] = _cp8_item(
+                module,
+                item_id=13,
+                model_id=9001,
+                name="Rune",
+                is_weapon_like=False,
+                standalone_kind=module.RUNE_STANDALONE_KIND,
+                rune_identifiers=["rune_attunement"],
+            )
+        if remote and route != "remote-unmet":
+            items[20] = _cp8_item(module, item_id=20, model_id=222, quantity=2)
+        if xunlai:
+            storage.update({14: material(14, 921), 15: material(15, 921), 16: material(16, 925)})
+            widget.protected_item_model_ids = [925]
+            widget.sell_rules = [
+                module._normalize_sell_rule(
+                    module.SellRule(
+                        rule_id="withdraw-cloth",
+                        enabled=True,
+                        kind=module.SELL_KIND_COMMON_MATERIALS,
+                        sell_from_xunlai=True,
+                        include_material_storage=False,
+                        whitelist_targets=[module.WhitelistTarget(model_id=n, keep_count=0) for n in (921, 925)],
+                    )
+                )
+            ]
+        config_names = (
+            "buy_rules",
+            "sell_rules",
+            "destroy_rules",
+            "identify_settings",
+            "cleanup_targets",
+            "cleanup_blacklist_model_ids",
+            "cleanup_protection_sources",
+        )
+        original_config = tuple(getattr(widget, name) for name in config_names)
+
+        def same_config() -> tuple[bool, ...]:
+            return tuple(getattr(widget, n) is old for n, old in zip(config_names, original_config))
+
+        builds: list[tuple[bool, bool]] = []
+        original_build: Callable[..., object] = widget._build_plan
+        request_contexts: list[object] = []
+
+        def build(**kwargs: object) -> object:
+            subplan = xunlai and "execution_context" not in kwargs
+            context = kwargs.get("execution_context")
+            if remote:
+                _expect(context is not None, f"{route} lost request context at plan construction")
+                targets = [(t.model_id, t.target_count) for t in getattr(context, "merchant_stock_targets")]
+                _expect(targets == [(222, 2)], f"{route} received stock targets {targets}")
+                request_contexts.append(context)
+            builds.append((subplan, bool(kwargs.get("ignore_travel_target"))))
+            trace.append(f"build:{len(builds)}:{builds[-1]}:{same_config()}")
+            if subplan:
+                _expect(
+                    same_config() == (False,) * 7
+                    and kwargs
+                    == {
+                        "ignore_travel_target": True,
+                        "allow_consumable_multi_stop": False,
+                        "exclude_consumable_crafter": True,
+                    },
+                    f"{route} invalid temporary sale configuration {same_config()}, arguments {kwargs}",
+                )
+                return original_build(**kwargs)
+            sale_coords = coords.copy()
+            sale_coords[merchant] = (float(len(builds) + 3), 4.0)
+            material_sales: list[object] = []
+            rune_sales: list[object] = []
+            for i, item in items.items():
+                if item.is_material:
+                    material_sales.append(
+                        module.PlannedMaterialSale(
+                            merchant_type=(rare if i == 12 else common),
+                            item_id=i,
+                            model_id=item.model_id,
+                            label=item.name,
+                            batches_to_sell=1,
+                            quantity_to_sell=10,
+                            batch_size=10,
+                        )
+                    )
+                elif i == 13:
+                    rune_sales.append(
+                        module.PlannedTraderSale(
+                            item_id=i,
+                            model_id=item.model_id,
+                            label=item.name,
+                            expected_rune_identifiers=("rune_attunement",),
+                        )
+                    )
+            return module.PlanResult(
+                supported_map=True,
+                coords=sale_coords,
+                has_actions=True,
+                material_sales=material_sales,
+                rune_trader_sales=rune_sales,
+                merchant_sell_item_ids=[19] if route == "execute" else [],
+                entries=[module.ExecutionPlanEntry("sell", common, "Wood", 10, module.PLAN_STATE_WILL_EXECUTE)],
+            )
+
+        def inventory() -> list[InventoryItemInfo]:
+            trace.append(f"bags:{list(items)}")
+            return list(items.values())
+
+        def stored() -> list[InventoryItemInfo]:
+            trace.append(f"storage:{list(storage)}")
+            return list(storage.values())
+
+        def read_ids() -> list[int]:
+            trace.append(f"ids:{list(items)}")
+            return list(items)
+
+        def read_item(i: int, *, include_runtime_name: bool) -> InventoryItemInfo | None:
+            trace.append(f"item:{i}:{include_runtime_name}")
+            return items.get(i)
+
+        def request(i: int) -> None:
+            requests.append(i)
+            trace.append(f"request:{i}")
+
+        def quote(fn: Callable[[int], None], i: int, *, timeout_ms: int, step_ms: int) -> Generator[str, None, int]:
+            _expect(fn is request, f"{route} received the wrong quote request for {i}")
+            fn(i)
+            trace.append(f"quote:{i}:{timeout_ms}:{step_ms}")
+            yield f"quote:{i}"
+            return 100 + i
+
+        def dispatch(i: int, price: int) -> None:
+            trace.append(f"sell:{i}:{price}")
+            _expect(all(same_config()), f"{route} sold {i} before restoring configuration {same_config()}")
+            if route in ("remote-failure", "manual-failure"):
+                raise RuntimeError("route dispatch fault")
+            submitted.append(i)
+            if route != "remote-close":
+                del items[i]
+
+        def interact(x: float, y: float, **options: int) -> Generator[str, None, list[int]]:
+            trace.append(f"open:{x}:{y}:{options}")
+            yield "opening"
+            return [99]
+
+        def wait(ms: int) -> Iterator[str]:
+            yield f"wait:{ms}"
+
+        def gold(reason: str) -> Iterator[str]:
+            trace.append(f"gold:{reason}")
+            widget.last_gold_balance_summary = "Gold fixture complete."
+            yield "gold"
+
+        def resume() -> bool:
+            trace.append("resume")
+            return True
+
+        def ordinary(position: tuple[float, float], ids: list[int]) -> Generator[str, None, object]:
+            trace.append(f"ordinary:{position}:{ids}")
+            yield "merchant"
+            return module.ExecutionPhaseOutcome(
+                label="Merchant sells",
+                measure_label="items",
+                attempted=len(ids),
+                completed=len(ids),
+            )
+
+        def transfers(rows: list[PlannedStorageTransfer], *, phase_label: str) -> Generator[str, None, object]:
+            ids = [row.item_id for row in rows]
+            trace.append(f"transfer:{phase_label}:{ids}")
+            _expect(16 in storage and 16 not in ids, f"{route} selected protected storage ID in {ids}")
+            moves = ids
+            if phase_label == "Xunlai sell pre-pull":
+                moves = ids[: {"xunlai-success": 2, "xunlai-mixed": 1, "xunlai-timeout": 0}[route]]
+            for i in moves:
+                items[i] = storage.pop(i)
+            yield f"transfer:{len(moves)}:{len(ids) - len(moves)}"
+            return module.ExecutionPhaseOutcome(
+                label=phase_label,
+                measure_label="items",
+                attempted=len(ids),
+                completed=len(moves),
+                timeout_failures=len(ids) - len(moves),
+            )
+
+        widget._build_plan = build
+        widget._collect_inventory_items = inventory
+        widget._collect_storage_items = stored
+        widget._is_storage_open = lambda: True
+
+        def services(**_kw: object) -> tuple[bool, str, dict[str, tuple[float, float]]]:
+            return True, "Ready", coords
+
+        def destination(model: int) -> str:
+            return rare if model == 930 else common
+
+        widget._get_supported_context = services
+        widget._get_material_merchant_type_by_model = destination
+        widget._inventory_evidence.get_inventory_item_ids = read_ids
+        widget._inventory_evidence.build_inventory_item_info = read_item
+        widget._run_gold_balance_trigger = gold
+        widget.gold_balance_enabled = True
+        widget.gold_balance_after_mr_trading = True
+        widget._pause_inventory_plus = lambda: types.SimpleNamespace(resume=resume)
+        widget._execute_merchant_sell_phase = ordinary
+        widget._execute_storage_transfers = transfers
+        widget.destroy_include_protected_items = False
+        widget.destroy_instant_enabled = False
+        widget.preview_ready = True
+        restore.binding(module.Routines.Yield, "wait", wait)
+        restore.binding(module.Routines.Yield.Merchant, "_interact_with_trader_xy", interact)
+        restore.binding(module.Routines.Yield.Merchant, "_wait_for_quote", quote)
+        restore.binding(
+            module.GLOBAL_CACHE,
+            "Trading",
+            types.SimpleNamespace(
+                Trader=types.SimpleNamespace(RequestSellQuote=request, SellItem=dispatch),
+            ),
+        )
+        labels: list[str] = []
+        hero = types.SimpleNamespace(Following=True, Avoidance=False, Looting=True, Targeting=False, Combat=True)
+        original_restore: Callable[..., None] = widget._restore_multibox_hero_ai_options
+        original_clear: Callable[[], None] = widget._clear_preview_projection_state
+
+        def restore_hero(email: str, snapshot: dict[str, bool]) -> None:
+            trace.append(f"restore-hero:{hero.Following}:{widget.destroy_include_protected_items}")
+            original_restore(email, snapshot)
+
+        def clear_preview() -> None:
+            trace.append(f"clear:{hero.Following}:{widget.destroy_include_protected_items}:{widget.preview_ready}")
+            original_clear()
+
+        def send(sender: str, receiver: str, command: int, params: tuple[float, ...], extra: tuple[str, ...]) -> int:
+            labels.append(extra[1])
+            trace.append(f"send:{sender}:{receiver}:{command}:{params}:{extra}")
+            return 1
+
+        def hero_options(email: str) -> types.SimpleNamespace | None:
+            return hero if email == "merchant.rules@example.com" else None
+
+        if remote:
+            widget._restore_multibox_hero_ai_options = restore_hero
+            widget._clear_preview_projection_state = clear_preview
+            original_unmet: Callable[..., object] = widget._get_unmet_request_stock_targets
+
+            def unmet(context: object) -> object:
+                _expect(bool(request_contexts) and context is request_contexts[0], f"{route} changed request identity")
+                return original_unmet(context)
+
+            widget._get_unmet_request_stock_targets = unmet
+            restore.binding(
+                module.GLOBAL_CACHE,
+                "ShMem",
+                types.SimpleNamespace(
+                    SendMessage=send,
+                    GetHeroAIOptionsFromEmail=hero_options,
+                ),
+            )
+            operation = widget.handle_shared_multibox_message(_cp15_message("sale-route", 3))
+            _expect(_cp15_lease_counts(widget) == (0, 1, 0), f"{route} did not track handler before first advance")
+        elif manual:
+            widget.auto_sell_on_manual_vendor_interaction = True
+            captured = module.ManualVendorContext(signature="old", merchant_types={merchant}, trader_item_ids=[])
+
+            class Offers(list[int]):
+                def __iter__(self) -> Iterator[int]:
+                    trace.append("captured-offers")
+                    return super().__iter__()
+
+            def log_manual(message: str) -> None:
+                if ": coords=" in message:
+                    trace.append(f"manual-phase:{message}")
+
+            widget._debug_log = log_manual
+            refreshed = module.ManualVendorContext(
+                signature="fresh",
+                merchant_types={common, rare, rune},
+                trader_item_ids=Offers([777]),
+            )
+
+            def context_now() -> object:
+                trace.append("manual-context")
+                return refreshed
+
+            widget._get_current_manual_vendor_context = context_now
+            widget._is_merchant_window_open = lambda: not (route == "manual-failure" and bool(widget.last_error))
+            operation = widget._run_manual_vendor_pass(captured)
+        else:
+            operation = widget._execute_now()
+        result: object = None
+        try:
+            for _ in range(180):
+                try:
+                    token = next(operation)
+                except StopIteration as stop:
+                    result = stop.value
+                    trace.append("return")
+                    break
+                trace.append(f"yield:{token}")
+                if remote and token == "wait:100":
+                    _expect(
+                        not hero.Following
+                        and widget.destroy_include_protected_items
+                        and widget.destroy_instant_enabled,
+                        f"{route} missed active follower overrides",
+                    )
+                if route == "remote-close" and token == "wait:10" and submitted:
+                    trace.append("close")
+                    operation.close()
+                    break
+            else:
+                raise AssertionError(f"{route} exceeded step budget, tail {trace[-10:]}")
+        finally:
+            operation.close()
+
+        trace.append(f"terminal:{widget.status_message}:{widget.last_error}")
+        if remote:
+            expected = {
+                "remote-success": "Executed",
+                "remote-failure": "Execute Failed",
+                "remote-unmet": "Stock Unmet",
+                "remote-close": "Error",
+            }[route]
+            _expect(labels == ["Starting", expected], f"{route} result sequence {labels}, trace {trace}")
+            finalizers = [event for event in trace if event.startswith(("restore-hero:", "clear:"))]
+            _expect(
+                finalizers[-2:] == ["restore-hero:False:True", "clear:True:False:False"],
+                f"{route} restoration sequence {finalizers}",
+            )
+            _expect(
+                _cp15_lease_counts(widget) == (0, 0, 0)
+                and hero.Following
+                and hero.Looting
+                and hero.Combat
+                and not hero.Avoidance
+                and not hero.Targeting
+                and not widget.destroy_instant_enabled
+                and not widget.preview_plan.has_actions
+                and not widget.preview_ready,
+                f"{route} left follower state active",
+            )
+            if route != "remote-close":
+                final_yield = trace.index("yield:None")
+                _expect(
+                    trace[final_yield - 1] == "resume" and trace[final_yield + 1].startswith(("send:", "bags:")),
+                    f"{route} producer publication timing {trace[final_yield - 1:final_yield + 4]}",
+                )
+            _expect(requests == [11] and "sell:11:111" in trace, f"{route} missed real trader dispatch {trace}")
+        elif manual:
+            failed = route == "manual-failure"
+            ids = [11] if failed else [11, 12, 13]
+            _expect(
+                requests == ids and not any(e.startswith("open:") for e in trace), f"{route} open-window route {trace}"
+            )
+            openings = [e for e in trace if e.startswith("manual-phase:")]
+            _expect(
+                len(openings) == len(ids)
+                and all("coords=(0.0, 0.0)" in e for e in openings)
+                and trace.count("captured-offers") == len(ids),
+                f"{route} failed to use the refreshed open trader offers at origin, trace {trace}",
+            )
+            _expect(
+                trace.index("yield:wait:120") < trace.index("manual-context") < trace.index("request:11"),
+                f"{route} failed to refresh after the admission wait",
+            )
+            _expect(
+                not widget.manual_vendor_running
+                and widget.manual_vendor_handled_signature == ("" if failed else "fresh")
+                and widget.manual_vendor_cooldown_until_ms == 1000000 + module.MANUAL_VENDOR_COOLDOWN_MS
+                and trace[-4:-1] == ["resume", "yield:None", "return"],
+                f"{route} Manual cleanup or cooldown, trace {trace}",
+            )
+            _expect(
+                (widget.last_error, getattr(result, "completed", None))
+                == (("route dispatch fault", None) if failed else ("", 1))
+                and (
+                    failed
+                    or (not widget.preview_ready and "Gold fixture complete." in widget.last_manual_vendor_summary)
+                ),
+                f"{route} publication {widget.last_error!r}, {widget.last_manual_vendor_summary!r}",
+            )
+            trace.append(f"manual-summary:{widget.last_manual_vendor_summary}")
+        else:
+            trace.append(f"execute-summary:{widget.last_execution_summary}")
+            _expect(
+                widget.execution_completed_successfully
+                and widget.execution_currency_changing_work_completed
+                and not widget.execution_running
+                and not widget.preview_ready
+                and not widget.last_error
+                and "Gold fixture complete." in widget.last_execution_summary
+                and trace[-5:-2] == ["resume", "yield:None", "return"],
+                f"{route} Execute publication {trace}",
+            )
+            if xunlai:
+                pre_completed = route != "xunlai-timeout"
+                fallback = route != "xunlai-success"
+                expected_builds = [(False, False)] * (1 + int(pre_completed)) + [(True, True)] * int(fallback)
+                _expect(builds == expected_builds, f"{route} wrong refresh/fallback predicates {builds}")
+                _expect(
+                    submitted == [11, 14, 15] and list(storage) == [16] and all(same_config()),
+                    f"{route} did not sell rebuilt plan or preserve protected item, trace {trace}",
+                )
+                ordinary_events = [e for e in trace if e.startswith("ordinary:")]
+                first_coords = (5.0, 4.0) if pre_completed else (4.0, 4.0)
+                _expect(
+                    ordinary_events[0] == f"ordinary:{first_coords}:[]", f"{route} stale coordinates {ordinary_events}"
+                )
+                if fallback:
+                    _expect(
+                        len(ordinary_events) == 2 and trace.count("yield:wait:150") >= 1 + int(pre_completed),
+                        f"{route} missed post-transfer wait or sale dispatcher {trace}",
+                    )
+            else:
+                stages = [e for e in trace if e.startswith(("sell:", "ordinary:", "gold:"))]
+                _expect(
+                    stages
+                    == [
+                        "sell:11:111",
+                        "sell:12:112",
+                        "ordinary:(4.0, 4.0):[19]",
+                        "sell:13:113",
+                        "gold:after Merchant Rules trading",
+                    ],
+                    f"Execute trader, ordinary merchant and gold order {stages}",
+                )
+        return trace
+
+
+def _trader_sales_local_routes(module: types.ModuleType) -> dict[str, list[str]]:
+    return {
+        route: _trader_sales_route_trace(module, route)
+        for route in ("execute", "manual-success", "manual-failure", "xunlai-success", "xunlai-timeout", "xunlai-mixed")
+    }
+
+
+def _trader_sales_remote_unwind(module: types.ModuleType) -> dict[str, list[str]]:
+    return {
+        route: _trader_sales_route_trace(module, route)
+        for route in ("remote-success", "remote-unmet", "remote-failure", "remote-close")
+    }
+
+
+def _test_trader_sales_local_routes(module: types.ModuleType) -> None:
+    _trader_sales_local_routes(module)
+
+
+def _test_trader_sales_remote_unwind(module: types.ModuleType) -> None:
+    _trader_sales_remote_unwind(module)
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -74685,6 +75792,17 @@ def main() -> int:
         _expect(len(cp15_names) == len(set(cp15_names)) == 11, "CP15 exact new registrations")
         _expect({name for name, _ in tests}.isdisjoint(cp15_names), "CP15 additive registrations")
         tests.extend((name, lambda operation=operation: operation(module)) for name, operation in cp15_cases)
+        tests.extend(
+            [
+                ("trader_sales_owner_contract", lambda: _test_trader_sales_owner_contract(module)),
+                ("trader_sales_late_lookup", lambda: _test_trader_sales_late_lookup(module)),
+                ("trader_sales_accounting", lambda: _test_trader_sales_accounting(module)),
+                ("trader_sales_suspension", lambda: _test_trader_sales_suspension(module)),
+                ("trader_sales_exception_prefix", lambda: _test_trader_sales_exception_prefix(module)),
+                ("trader_sales_local_routes", lambda: _test_trader_sales_local_routes(module)),
+                ("trader_sales_remote_unwind", lambda: _test_trader_sales_remote_unwind(module)),
+            ]
+        )
         catalog_contract_tests = [
             (
                 "catalog_loader_indexes_typed_common_salvage_separately",

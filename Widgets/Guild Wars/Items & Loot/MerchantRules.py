@@ -63,6 +63,7 @@ from Sources.icefox.MerchantRules import owned_work as _owned_work
 from Sources.icefox.MerchantRules import planning as _planning
 from Sources.icefox.MerchantRules import preview as _preview
 from Sources.icefox.MerchantRules import profiles as _profiles
+from Sources.icefox.MerchantRules import trader_sales as _trader_sales
 from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME as ACCOUNT_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_DOC_NAME
@@ -18513,71 +18514,61 @@ class MerchantRulesWidget:
         )
         return outcome
 
+    def _trader_sale_loop_ops[V](self, get_validate: Callable[[], V]) -> _trader_sales.LoopOps[V]:
+        return _trader_sales.LoopOps(
+            get_validate=get_validate,
+            get_confirm=lambda: self._wait_for_planned_sale_completion,
+            get_quote_waiter=lambda: cast(_trader_sales.QuoteWaiter, Routines.Yield.Merchant._wait_for_quote),
+            get_request_sell_quote=lambda: cast(Callable[[int], None], GLOBAL_CACHE.Trading.Trader.RequestSellQuote),
+            get_sell_item=lambda: cast(Callable[[int, int], None], GLOBAL_CACHE.Trading.Trader.SellItem),
+            get_wait=lambda: Routines.Yield.wait,
+            get_abort=lambda: self._report_sale_identity_abort,
+            get_debug=lambda: self._debug_log,
+        )
+
+    def _trader_sale_evidence_reads(self) -> _trader_sales.EvidenceReads:
+        return _trader_sales.EvidenceReads(
+            get_inventory_ids=lambda: self._get_inventory_item_ids,
+            get_item_reader=lambda: self._build_inventory_item_info,
+        )
+
+    def _trader_sale_rune_identity(self) -> _trader_sales.RuneIdentity:
+        return _trader_sales.RuneIdentity(
+            get_standalone_kind=lambda: RUNE_STANDALONE_KIND,
+            get_normalize=lambda: _normalize_rune_identifier_tuple,
+        )
+
     def _reacquire_planned_sale_item(
         self,
         planned_item_id: int,
     ) -> tuple[InventoryItemInfo | None, str]:
-        safe_item_id = max(0, _safe_int(planned_item_id, 0))
-        if safe_item_id <= 0:
-            return None, "the planned item ID is invalid"
-        try:
-            inventory_item_ids = {int(item_id) for item_id in self._get_inventory_item_ids()}
-        except Exception:
-            return None, "the current inventory could not be read"
-        if safe_item_id not in inventory_item_ids:
-            return None, "the planned item is no longer in the inventory"
-
-        item = self._build_inventory_item_info(safe_item_id, include_runtime_name=False)
-        if item is None:
-            return None, "the planned item could not be read"
-        if int(item.item_id) != safe_item_id:
-            return None, "the current item ID no longer matches the planned item"
-        return item, ""
+        return _trader_sales.reacquire_item(
+            planned_item_id, reads=self._trader_sale_evidence_reads(), safe_int=lambda: _safe_int
+        )
 
     def _validate_planned_material_sale_identity(
         self,
         sale: PlannedMaterialSale,
         required_quantity: int,
     ) -> tuple[InventoryItemInfo | None, str]:
-        item, reason = self._reacquire_planned_sale_item(sale.item_id)
-        if item is None:
-            return None, reason
-
-        planned_model_id = max(0, _safe_int(sale.model_id, 0))
-        if planned_model_id <= 0 or int(item.model_id) != planned_model_id:
-            return None, "the current model ID no longer matches the planned material"
-        if int(item.quantity) < max(1, int(required_quantity)):
-            return None, "the current stack quantity is no longer sufficient for the planned sale"
-        if not bool(item.is_material):
-            return None, "the current item is no longer classified as a material"
-        current_merchant_type = self._get_material_merchant_type_by_model(int(item.model_id))
-        if current_merchant_type != str(sale.merchant_type or ""):
-            return None, "the current material trader destination no longer matches the plan"
-        return item, ""
+        return _trader_sales.validate_material(
+            sale,
+            required_quantity,
+            reacquire=lambda: self._reacquire_planned_sale_item,
+            destination=lambda: self._get_material_merchant_type_by_model,
+            safe_int=lambda: _safe_int,
+        )
 
     def _validate_planned_trader_sale_identity(
         self,
         sale: PlannedTraderSale,
     ) -> tuple[InventoryItemInfo | None, str]:
-        item, reason = self._reacquire_planned_sale_item(sale.item_id)
-        if item is None:
-            return None, reason
-
-        planned_model_id = max(0, _safe_int(sale.model_id, 0))
-        if planned_model_id <= 0 or int(item.model_id) != planned_model_id:
-            return None, "the current model ID no longer matches the planned rune or insignia"
-        if int(item.quantity) < 1:
-            return None, "the rune or insignia is no longer available"
-        if str(item.standalone_kind or "") != RUNE_STANDALONE_KIND:
-            return None, "the current item is no longer a standalone rune or insignia"
-
-        expected_identifiers = _normalize_rune_identifier_tuple(sale.expected_rune_identifiers)
-        if not expected_identifiers:
-            return None, "the plan has no exact rune or insignia modifier identity"
-        current_identifiers = _normalize_rune_identifier_tuple(item.rune_identifiers)
-        if current_identifiers != expected_identifiers:
-            return None, "the exact rune or insignia modifier identity changed after Preview"
-        return item, ""
+        return _trader_sales.validate_rune(
+            sale,
+            reacquire=lambda: self._reacquire_planned_sale_item,
+            rune=self._trader_sale_rune_identity(),
+            safe_int=lambda: _safe_int,
+        )
 
     def _wait_for_planned_sale_completion(
         self,
@@ -18586,73 +18577,23 @@ class MerchantRulesWidget:
         *,
         timeout_ms: int = 350,
         step_ms: int = 10,
-    ):
+    ) -> _trader_sales.Steps[_trader_sales.Confirmed]:
         """Confirm one sale from fresh inventory membership, identity, and exact quantity."""
 
-        safe_item_id = max(0, _safe_int(sale.item_id, 0))
-        safe_model_id = max(0, _safe_int(sale.model_id, 0))
-        safe_expected_quantity = max(0, _safe_int(expected_quantity, 0))
-        safe_timeout_ms = max(0, _safe_int(timeout_ms, 0))
-        safe_step_ms = max(1, _safe_int(step_ms, 1))
-        elapsed_ms = 0
-        last_quantity: int | None = None
-        last_reason = "the expected inventory quantity was not observed"
-        if safe_item_id <= 0 or safe_model_id <= 0:
-            return False, True, "the planned sale identity is invalid"
-
-        while True:
-            try:
-                inventory_item_ids = {int(item_id) for item_id in self._get_inventory_item_ids()}
-            except Exception:
-                inventory_item_ids = None
-                last_reason = "the current inventory could not be read"
-
-            if inventory_item_ids is not None:
-                if safe_item_id not in inventory_item_ids:
-                    if safe_expected_quantity == 0:
-                        return True, False, ""
-                    last_reason = (
-                        f"the planned item disappeared while {safe_expected_quantity} unit(s) "
-                        "were expected to remain"
-                    )
-                else:
-                    item = self._build_inventory_item_info(safe_item_id, include_runtime_name=False)
-                    if item is None:
-                        return False, True, "the current item could not be read after the sale"
-                    if int(item.item_id) != safe_item_id:
-                        return False, True, "the current item ID no longer matches the planned item"
-                    if safe_model_id <= 0 or int(item.model_id) != safe_model_id:
-                        return False, True, "the current model ID no longer matches the planned item"
-
-                    if isinstance(sale, PlannedMaterialSale):
-                        if not bool(item.is_material):
-                            return False, True, "the current item is no longer classified as a material"
-                        current_merchant_type = self._get_material_merchant_type_by_model(int(item.model_id))
-                        if current_merchant_type != str(sale.merchant_type or ""):
-                            return False, True, "the current material trader destination no longer matches the plan"
-                    else:
-                        if str(item.standalone_kind or "") != RUNE_STANDALONE_KIND:
-                            return False, True, "the current item is no longer a standalone rune or insignia"
-                        expected_identifiers = _normalize_rune_identifier_tuple(sale.expected_rune_identifiers)
-                        current_identifiers = _normalize_rune_identifier_tuple(item.rune_identifiers)
-                        if not expected_identifiers or current_identifiers != expected_identifiers:
-                            return False, True, "the exact rune or insignia modifier identity changed after the sale"
-
-                    last_quantity = max(0, int(item.quantity))
-                    if last_quantity == safe_expected_quantity:
-                        return True, False, ""
-                    last_reason = (
-                        f"expected {safe_expected_quantity} unit(s) after the sale, "
-                        f"but observed {last_quantity}"
-                    )
-
-            if elapsed_ms >= safe_timeout_ms:
-                return False, False, last_reason
-            wait_ms = min(safe_step_ms, safe_timeout_ms - elapsed_ms)
-            if wait_ms <= 0:
-                return False, False, last_reason
-            yield from Routines.Yield.wait(wait_ms)
-            elapsed_ms += wait_ms
+        return (
+            yield from _trader_sales.confirm_quantity(
+                sale,
+                expected_quantity,
+                timeout_ms=timeout_ms,
+                step_ms=step_ms,
+                reads=self._trader_sale_evidence_reads(),
+                destination=lambda: self._get_material_merchant_type_by_model,
+                material_type=lambda: PlannedMaterialSale,
+                rune=self._trader_sale_rune_identity(),
+                safe_int=lambda: _safe_int,
+                wait=lambda: Routines.Yield.wait,
+            )
+        )
 
     def _report_sale_identity_abort(
         self,
@@ -18709,79 +18650,12 @@ class MerchantRulesWidget:
             self._debug_log(f"{phase_label}: trader inventory failed to load at {self._format_debug_coords(coords)}.")
             return outcome
 
-        for sale in material_sales:
-            planned_batches = max(0, int(sale.batches_to_sell))
-            for batch_index in range(planned_batches):
-                remaining_batches = planned_batches - batch_index
-                required_quantity = remaining_batches * max(1, int(sale.batch_size))
-                live_item, identity_failure = self._validate_planned_material_sale_identity(
-                    sale,
-                    required_quantity,
-                )
-                if live_item is None:
-                    outcome.unavailable += remaining_batches
-                    self._report_sale_identity_abort(
-                        phase_label,
-                        sale.item_id,
-                        sale.model_id,
-                        identity_failure,
-                    )
-                    break
-
-                quoted_value = yield from Routines.Yield.Merchant._wait_for_quote(  # pylint: disable=protected-access
-                    GLOBAL_CACHE.Trading.Trader.RequestSellQuote,
-                    sale.item_id,
-                    timeout_ms=350,
-                    step_ms=10,
-                )
-                if quoted_value <= 0:
-                    outcome.quote_failures += 1
-                    break
-
-                live_item, identity_failure = self._validate_planned_material_sale_identity(
-                    sale,
-                    required_quantity,
-                )
-                if live_item is None:
-                    outcome.unavailable += remaining_batches
-                    self._report_sale_identity_abort(
-                        phase_label,
-                        sale.item_id,
-                        sale.model_id,
-                        identity_failure,
-                    )
-                    break
-                previous_quantity = int(live_item.quantity)
-                GLOBAL_CACHE.Trading.Trader.SellItem(sale.item_id, quoted_value)
-                expected_quantity = max(0, previous_quantity - max(1, int(sale.batch_size)))
-                (
-                    completed,
-                    post_sale_identity_failure,
-                    completion_reason,
-                ) = yield from self._wait_for_planned_sale_completion(
-                    sale,
-                    expected_quantity,
-                    timeout_ms=350,
-                    step_ms=10,
-                )
-                if post_sale_identity_failure:
-                    outcome.unavailable += remaining_batches
-                    self._report_sale_identity_abort(
-                        phase_label,
-                        sale.item_id,
-                        sale.model_id,
-                        completion_reason,
-                    )
-                    break
-                if not completed:
-                    outcome.timeout_failures += 1
-                    self._debug_log(
-                        f"{phase_label} completion check failed: item_id={sale.item_id} "
-                        f"expected_quantity={expected_quantity} reason={completion_reason}."
-                    )
-                    break
-                outcome.completed += 1
-                yield from Routines.Yield.wait(40)
+        yield from _trader_sales.execute_material_sales(
+            material_sales,
+            phase_label=phase_label,
+            counts=outcome,
+            ops=self._trader_sale_loop_ops(lambda: self._validate_planned_material_sale_identity),
+        )
         self._debug_log(
             f"{phase_label}: completed={outcome.completed}/{outcome.attempted} quote_failures={outcome.quote_failures} "
             f"quantity_failures={outcome.timeout_failures} depleted={outcome.depleted} "
@@ -18824,69 +18698,12 @@ class MerchantRulesWidget:
             self._debug_log(f"{phase_label}: trader inventory failed to load at {self._format_debug_coords(coords)}.")
             return outcome
 
-        for sale in trader_sales:
-            live_item, identity_failure = self._validate_planned_trader_sale_identity(sale)
-            if live_item is None:
-                outcome.unavailable += 1
-                self._report_sale_identity_abort(
-                    phase_label,
-                    sale.item_id,
-                    sale.model_id,
-                    identity_failure,
-                )
-                continue
-
-            quoted_value = yield from Routines.Yield.Merchant._wait_for_quote(  # pylint: disable=protected-access
-                GLOBAL_CACHE.Trading.Trader.RequestSellQuote,
-                sale.item_id,
-                timeout_ms=350,
-                step_ms=10,
-            )
-            if quoted_value <= 0:
-                outcome.quote_failures += 1
-                continue
-
-            live_item, identity_failure = self._validate_planned_trader_sale_identity(sale)
-            if live_item is None:
-                outcome.unavailable += 1
-                self._report_sale_identity_abort(
-                    phase_label,
-                    sale.item_id,
-                    sale.model_id,
-                    identity_failure,
-                )
-                continue
-            previous_quantity = int(live_item.quantity)
-            GLOBAL_CACHE.Trading.Trader.SellItem(sale.item_id, quoted_value)
-            expected_quantity = max(0, previous_quantity - 1)
-            (
-                completed,
-                post_sale_identity_failure,
-                completion_reason,
-            ) = yield from self._wait_for_planned_sale_completion(
-                sale,
-                expected_quantity,
-                timeout_ms=350,
-                step_ms=10,
-            )
-            if post_sale_identity_failure:
-                outcome.unavailable += 1
-                self._report_sale_identity_abort(
-                    phase_label,
-                    sale.item_id,
-                    sale.model_id,
-                    completion_reason,
-                )
-                continue
-            if not completed:
-                outcome.timeout_failures += 1
-                self._debug_log(
-                    f"{phase_label} completion check failed: item_id={sale.item_id} "
-                    f"expected_quantity={expected_quantity} reason={completion_reason}."
-                )
-                continue
-            outcome.completed += 1
-            yield from Routines.Yield.wait(40)
+        yield from _trader_sales.execute_rune_sales(
+            trader_sales,
+            phase_label=phase_label,
+            counts=outcome,
+            ops=self._trader_sale_loop_ops(lambda: self._validate_planned_trader_sale_identity),
+        )
         self._debug_log(
             f"{phase_label}: completed={outcome.completed}/{outcome.attempted} quote_failures={outcome.quote_failures} "
             f"quantity_failures={outcome.timeout_failures} depleted={outcome.depleted} "
