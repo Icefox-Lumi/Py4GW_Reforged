@@ -74071,6 +74071,1077 @@ def _test_trader_sales_remote_unwind(module: types.ModuleType) -> None:
     _trader_sales_remote_unwind(module)
 
 
+class _StorageTransferTrace:
+    """Single-step either widget entry with one observable source and inert move endpoints."""
+
+    def __init__(self, module: types.ModuleType, restore: _CP8Restoration) -> None:
+        self.module = module
+        self.restore = restore
+        self.widget = _cp15_widget(module)
+        self.trace: list[tuple[object, ...]] = []
+        self.phase: Any = None
+        self.material: Any = None
+        self.work: Generator[object, None, object] | None = None
+        self.expected_return = "phase"
+        self.error = RuntimeError("storage transfer fixture fault")
+        self.source = 5
+        self.live_model = 925
+        self.model_count = 10
+        self.known = True
+        self.space = 5
+        self.material_delta = 2
+        self.regular_delta = 1
+        self.model_delta = 1
+        self.regular_return = True
+        self.drained = True
+        self.generation: int | None = 4
+        self.scope = "present"
+        self.fault = ""
+        self.debug_hook: Callable[[str], None] = lambda _message: None
+        self.after_yield: Callable[[str], None] = lambda _token: None
+        self.on_remainder: Callable[[], None] = lambda: None
+        self.material_observed = False
+        self.plan: PlannedStorageTransfer = module.PlannedStorageTransfer(
+            module.STORAGE_TRANSFER_DEPOSIT, "", "Source", 73, 5, 925, "fixture"
+        )
+        self.records = [self.plan]
+        phase_type: Callable[..., object] = module.ExecutionPhaseOutcome
+        material_type: Callable[..., object] = module.MaterialStorageDepositResult
+
+        def phase(**kwargs: object) -> object:
+            self.phase = phase_type(**kwargs)
+            self.row("created phase", self.phase.label, self.phase.measure_label, self.counts())
+            return self.phase
+
+        def progress(**kwargs: object) -> object:
+            self.material = material_type(**kwargs)
+            self.row("created material", self.progress())
+            return self.material
+
+        host = self
+
+        class Inventory:
+            current_move: Callable[[int, int, int, int], object]
+
+            def __init__(self) -> None:
+                self.current_move = host.move_item
+
+            @property
+            def MoveItem(self) -> Callable[[int, int, int, int], object]:
+                host.row("lookup MoveItem")
+                host.raise_at("move lookup")
+                return self.current_move
+
+            def GetModelCount(self, model: int, /) -> int:
+                host.row("model count", model, host.model_count)
+                return host.model_count
+
+            def DepositItemToStorage(self, item_id: int, /, *, ammount: int) -> bool:
+                return host.regular("deposit", item_id, ammount)
+
+            def WithdrawItemFromStorage(self, item_id: int, /, *, ammount: int) -> bool:
+                return host.regular("withdraw", item_id, ammount)
+
+        self.inventory = Inventory()
+        restore.binding(module, "ExecutionPhaseOutcome", phase)
+        restore.binding(module, "MaterialStorageDepositResult", progress)
+        restore.binding(module.GLOBAL_CACHE, "Inventory", self.inventory)
+        restore.binding(
+            module.GLOBAL_CACHE,
+            "Item",
+            types.SimpleNamespace(
+                GetModelID=self.model, Properties=types.SimpleNamespace(GetQuantity=self.global_quantity)
+            ),
+        )
+        restore.binding(module.Routines.Yield, "wait", self.delay)
+        self.widget._get_inventory_stack_quantities = self.scoped
+        self.widget._is_live_material_item = self.classify
+        self.widget._get_material_storage_quantity_and_slot = self.scan
+        self.widget._wait_for_merchant_rules_lifecycle = self.lifecycle
+        self.widget._wait_for_action_queue_empty = self.action
+        self.widget._wait_for_inventory_source_stack_quantity_target = partial(self.target, "scoped")
+        self.widget._wait_for_stack_quantity_target = partial(self.target, "global")
+        self.widget._wait_for_inventory_model_count_at_least = partial(self.target, "model")
+        self.widget._clear_inventory_shortcut_material_storage_count_cache = self.clear
+        self.widget._debug_log = self.debug
+
+    def row(self, *cells: object) -> None:
+        self.trace.append(cells)
+
+    def rows(self, tag: str) -> list[tuple[object, ...]]:
+        return [row[1:] for row in self.trace if row[0] == tag]
+
+    def equal(self, name: str, actual: object, expected: object) -> None:
+        _expect(actual == expected, f"Storage {name}, expected {expected!r}, observed {actual!r}: {self.trace!r}")
+
+    def counts(self) -> tuple[int, ...]:
+        if self.phase is None:
+            return ()
+        return (self.phase.attempted, self.phase.completed, self.phase.timeout_failures, self.phase.depleted)
+
+    def progress(self) -> tuple[object, ...]:
+        if self.material is None:
+            return ()
+        return (
+            self.material.attempted,
+            self.material.moved_quantity,
+            self.material.remaining_quantity,
+            self.material.abort_regular_fallback,
+        )
+
+    def raise_at(self, point: str) -> None:
+        if self.fault == point:
+            self.row("fault site", point, self.counts(), self.progress())
+            raise self.error
+
+    def scoped(self, ids: list[int]) -> dict[int, int]:
+        self.row("scoped", tuple(ids), self.scope, self.source)
+        if self.material_observed:
+            self.material_observed = False
+            self.on_remainder()
+        if self.scope == "raise":
+            raise self.error
+        return {} if self.scope == "absent" else {item_id: self.source for item_id in ids}
+
+    def global_quantity(self, item_id: int, /) -> int:
+        self.row("global", item_id, self.source)
+        self.raise_at("global")
+        return self.source
+
+    def model(self, item_id: int, /) -> int:
+        self.row("live model", item_id, self.live_model)
+        return self.live_model
+
+    def classify(self, item_id: int, /, *, model_id: int) -> bool:
+        self.row("classify", item_id, model_id, self.known)
+        return self.known
+
+    def scan(self, model_id: int, /) -> tuple[int, int, int]:
+        self.row("scan", model_id, self.space)
+        return self.module.MATERIAL_STORAGE_MAX_STACK_SIZE - self.space, 0, 8
+
+    def clear(self, reason: str) -> None:
+        self.row("invalidate", reason)
+
+    def debug(self, message: str) -> None:
+        self.row("log", message, self.counts(), self.progress())
+        self.debug_hook(message)
+        if message.startswith("Material storage deposit attempt:"):
+            self.raise_at("attempt log")
+        if message.startswith("Material storage deposit:"):
+            self.material_observed = True
+            self.raise_at("success log")
+
+    def move_item(self, item_id: int, bag: int, slot: int, quantity: int, /) -> bool:
+        self.source -= self.material_delta
+        self.row("material move", item_id, bag, slot, quantity, self.source)
+        self.raise_at("move call")
+        return False
+
+    def regular(self, direction: str, item_id: int, quantity: int) -> bool:
+        self.row("regular issue", direction, item_id, quantity, self.counts())
+        self.raise_at("regular")
+        if self.regular_return:
+            self.source -= self.regular_delta
+            if direction == "withdraw":
+                self.model_count += self.model_delta
+        self.row("regular effect", self.regular_return, self.source, self.model_count)
+        return self.regular_return
+
+    def pause(self, token: str) -> Generator[str, None, None]:
+        try:
+            yield token
+            self.after_yield(token)
+        finally:
+            self.row("unwind", token, self.counts(), self.progress())
+
+    def lifecycle(self, *, require_service: bool) -> Generator[str, None, int | None]:
+        self.row("lifecycle", require_service)
+        yield from self.pause("lifecycle")
+        self.row("child return", "lifecycle", self.generation)
+        return self.generation
+
+    def action(self, queue: str, /, *, timeout_ms: int, step_ms: int) -> Generator[str, None, bool]:
+        self.row("ACTION", queue, timeout_ms, step_ms)
+        yield from self.pause("ACTION")
+        self.row("child return", "ACTION", self.drained)
+        return self.drained
+
+    def target(
+        self, kind: str, item_id: int, quantity: int, /, *, timeout_ms: int, step_ms: int
+    ) -> Generator[str, None, int]:
+        self.row("target", kind, item_id, quantity, timeout_ms, step_ms)
+        yield from self.pause(kind + " target")
+        observed = self.model_count if kind == "model" else self.source
+        self.row("child return", kind + " target", observed)
+        return observed
+
+    def delay(self, ms: int, /) -> Generator[str, None, None]:
+        self.row("delay", ms)
+        yield from self.pause("pace")
+        self.row("child return", "pace", None)
+
+    def start(self, *, material: bool = False, current: object = None, item_id: int = 73) -> None:
+        if material:
+            self.expected_return = "material"
+            self.work = self.widget._deposit_material_to_storage_first(
+                item_id, self.plan.quantity, current_quantity=current, planned_model_id=self.plan.model_id
+            )
+        else:
+            self.work = self.widget._execute_storage_transfers(self.records, phase_label="Warehouse")
+        self.equal("passive construction", self.trace, [])
+        self.row("constructed", self.expected_return)
+
+    def advance(self) -> object:
+        assert self.work is not None
+        try:
+            token = next(self.work)
+        except StopIteration as stop:
+            obj = self.material if self.expected_return == "material" else self.phase
+            self.equal("original return", stop.value is obj and obj is not None, True)
+            self.row("returned", self.expected_return, True, self.counts(), self.progress())
+            return None
+        self.row("yield", token, self.counts(), self.progress())
+        return token
+
+    def drain(self) -> None:
+        for _ in range(30):
+            if self.advance() is None:
+                return
+        raise AssertionError(f"Storage fixture did not terminate: {self.trace!r}")
+
+    def entry_case(self, name: str) -> None:
+        if name == "empty":
+            self.plan.item_id = 0
+            self.start()
+            self.drain()
+            self.equal("empty calls", [row[0] for row in self.trace], ["constructed", "created phase", "returned"])
+            self.equal("empty counters", self.counts(), (0, 0, 0, 0))
+        elif name == "blocked":
+            self.generation = None
+            self.start()
+            self.drain()
+            self.equal("blocked", self.counts(), (5, 0, 5, 0))
+            self.equal("blocked logs", self.rows("log"), [])
+        elif name == "invalid material":
+            self.start(material=True, item_id=0)
+            self.drain()
+            self.equal("guard", self.progress(), (False, 0, 5, False))
+            self.equal("no acquisition", self.rows("live model"), [])
+        elif name == "delegation lookup":
+            self.start()
+            self.equal("first suspension", self.advance(), "lifecycle")
+            self.plan.quantity = 4
+            self.plan.label = "Fresh"
+            self.plan.model_id = 925
+            self.records.clear()
+            original: Callable[..., Generator[object, None, object]] = self.widget._deposit_material_to_storage_first
+
+            def lookup(_instance: object) -> Callable[..., Generator[object, None, object]]:
+                self.row("lookup current delegate", self.plan.model_id)
+                self.plan.model_id = -77
+
+                def delegate(
+                    item_id: int, requested: int, /, *, current_quantity: int, planned_model_id: int
+                ) -> Generator[object, None, object]:
+                    self.row("delegate arguments", item_id, requested, current_quantity, planned_model_id)
+                    return original(
+                        item_id, requested, current_quantity=current_quantity, planned_model_id=planned_model_id
+                    )
+
+                return delegate
+
+            self.restore.binding(
+                self.module.MerchantRulesWidget, "_deposit_material_to_storage_first", property(lookup)
+            )
+            self.drain()
+            self.equal("late arguments", self.rows("delegate arguments"), [(73, 4, 5, -77)])
+            self.equal("original normalized model", self.rows("lookup current delegate"), [(925,)])
+            ordered = [row[0] for row in self.trace if row[0] in ("invalidate", "log")]
+            self.equal("cache before logs", ordered[:2], ["invalidate", "log"])
+            self.equal("new planned units", self.rows("log")[0][0], "Warehouse: transfers=1 planned_items=4")
+            self.equal("retained record label", "label=Fresh model=925" in str(self.rows("log")[1][0]), True)
+            self.equal("attempted independent of late plan", self.counts(), (5, 3, 1, 0))
+        else:
+            host = self
+            self.space = 0
+
+            class Quantity:
+                def __int__(self) -> int:
+                    host.row("coerce source")
+                    return 5
+
+            def unexpected(*_args: int) -> object:
+                raise AssertionError("MoveItem was reacquired after the attempt log")
+
+            def replace_move(message: str) -> None:
+                if message.startswith("Material storage deposit attempt:"):
+                    self.inventory.current_move = unexpected
+                    self.restore.binding(self.module, "MATERIAL_STORAGE_BAG_ID", 5555)
+                    self.row("replace MoveItem and bag")
+
+            self.debug_hook = replace_move
+            self.start(material=True, current=Quantity())
+            self.drain()
+            self.equal("captured call", self.rows("material move"), [(73, 5555, 0, 5, 3)])
+            self.equal("false material return", self.progress(), (True, 2, 3, False))
+            order = [
+                row[0]
+                for row in self.trace
+                if row[0]
+                in ("scan", "log", "coerce source", "lookup MoveItem", "replace MoveItem and bag", "material move")
+            ]
+            self.equal(
+                "reported full, source conversion, capture and issue",
+                order,
+                [
+                    "scan",
+                    "log",
+                    "coerce source",
+                    "lookup MoveItem",
+                    "log",
+                    "replace MoveItem and bag",
+                    "material move",
+                    "log",
+                ],
+            )
+
+    def fallback_case(self, name: str) -> None:
+        self.plan.quantity = 7
+        expected = (7, 3, 2, 2)
+        regular = [3]
+        material_progress = (True, 2, 3, False)
+        if name == "entire material request":
+            self.material_delta = 5
+            expected, regular = (7, 5, 0, 2), []
+            material_progress = (True, 5, 0, False)
+        elif name == "capped material":
+            self.space = 2
+            self.material_delta = 5
+            expected, regular = (7, 2, 0, 5), []
+        elif name in ("full zero", "room zero", "undrained zero"):
+            self.material_delta = 0
+            self.space = 5 if name == "room zero" else 0
+            self.drained = name != "undrained zero"
+            abort = name != "full zero"
+            material_progress = (True, 0, 5, abort)
+            expected = (7, 0, 5, 2) if abort else (7, 1, 4, 2)
+            regular = [] if abort else [5]
+        elif name == "undrained positive":
+            self.drained = False
+        elif name in ("fresh cap", "vanished"):
+
+            def change_source() -> None:
+                self.source = 1 if name == "fresh cap" else 0
+                self.row("fresh source", self.source, self.counts())
+
+            self.on_remainder = change_source
+            expected = (7, 3, 0, 4) if name == "fresh cap" else (7, 2, 0, 5)
+            regular = [1] if name == "fresh cap" else []
+        elif name == "after effect exception":
+            self.fault = "move call"
+            material_progress = (False, 0, 5, False)
+            # Regular verification keeps the original source sample after the caught fault.
+            expected, regular = (7, 3, 2, 2), [5]
+        self.start()
+        self.drain()
+        self.equal(name + " counters", self.counts(), expected)
+        self.equal(name + " material disposition", self.progress(), material_progress)
+        self.equal(name + " regular caps", [row[2] for row in self.rows("regular issue")], regular)
+        self.equal(name + " pacing", self.rows("delay"), [(60,)])
+        if name in ("fresh cap", "vanished"):
+            self.equal("credit before remainder read", self.rows("fresh source")[0][1], (7, 2, 0, 0))
+        if name == "after effect exception":
+            self.equal("no reread before regular issue", [row[0] for row in self.trace].count("scoped"), 2)
+            self.equal("effect before caught exception", len(self.rows("material move")), 1)
+        if not self.drained:
+            self.equal("no target wait after undrained material", self.rows("target"), [])
+
+    def accounting_case(self, name: str) -> None:
+        self.known = False
+        self.plan.quantity = 3
+        self.plan.model_id = 0
+        expected = (3, 1, 2, 0)
+        targets: list[tuple[object, ...]] = []
+        waits = [(60,)]
+        if name in ("absent", "scope failure", "both reads fail"):
+            self.scope = "absent" if name == "absent" else "raise"
+            if name == "scope failure":
+                targets = [("scoped", 73, 2, 2000, 50)]
+            else:
+                if name == "both reads fail":
+                    self.fault = "global"
+                expected, waits = (3, 0, 0, 3), []
+        elif name in ("global target", "direction changes"):
+            self.plan.direction = self.module.STORAGE_TRANSFER_WITHDRAW
+            targets = [("global", 73, 2, 2000, 50)]
+            if name == "direction changes":
+                self.plan.model_id = 925
+
+                def change_direction(token: str) -> None:
+                    if token == "ACTION":
+                        self.plan.direction = "unmatched after suspension"
+                        self.row("changed direction", self.plan.direction)
+
+                self.after_yield = change_direction
+        elif name.startswith("model "):
+            self.plan.direction = self.module.STORAGE_TRANSFER_WITHDRAW
+            self.plan.model_id = 555
+            self.drained = name != "model undrained"
+            self.model_delta = 0 if name == "model no gain" else 6
+            targets = [("model", 555, 13, 2000 if self.drained else 1000, 50)]
+            expected = (3, 1, 2, 0) if self.model_delta == 0 else (3, 6, 0, 0)
+        elif name == "ordinary undrained":
+            self.drained = False
+            self.regular_delta = 5
+            expected = (3, 5, 0, 0)
+        elif name in ("false regular", "unknown direction"):
+            self.regular_return = False
+            if name == "unknown direction":
+                self.plan.direction = "unknown"
+            expected, waits = (3, 0, 3, 0), []
+        else:
+
+            def zero_quantity(token: str) -> None:
+                if token == "lifecycle":
+                    self.plan.quantity = 0
+
+            self.after_yield = zero_quantity
+            expected, waits = (3, 0, 0, 0), []
+        self.start()
+        self.drain()
+        self.equal(name + " counters", self.counts(), expected)
+        self.equal(name + " targets", self.rows("target"), targets)
+        self.equal(name + " pacing", self.rows("delay"), waits)
+        if name in ("absent", "both reads fail", "scope failure"):
+            self.equal(
+                "global fallback reads",
+                len(self.rows("global")),
+                {"absent": 0, "both reads fail": 1, "scope failure": 2}[name],
+            )
+        if name.startswith("model "):
+            self.equal("immediate source before model target", self.rows("global"), [(73, 5), (73, 4)])
+        if name in ("unknown direction", "false regular"):
+            self.equal("no ACTION after no-op", self.rows("ACTION"), [])
+
+    def fault_case(self, name: str) -> None:
+        if name.startswith("close "):
+            token = {
+                "close lifecycle": "lifecycle",
+                "close ACTION": "ACTION",
+                "close material target": "scoped target",
+                "close regular target": "global target",
+                "close pace": "pace",
+            }[name]
+            if name == "close regular target":
+                self.plan.direction = self.module.STORAGE_TRANSFER_WITHDRAW
+                self.plan.model_id = 0
+            self.start()
+            for _ in range(12):
+                if self.advance() == token:
+                    break
+            else:
+                raise AssertionError(f"Storage did not reach {token!r}: {self.trace!r}")
+            effects = (len(self.rows("material move")), len(self.rows("regular issue")))
+            self.equal(
+                "observable effects before close",
+                effects,
+                {"close lifecycle": (0, 0), "close regular target": (0, 1), "close pace": (1, 1)}.get(name, (1, 0)),
+            )
+            prefix = len(self.trace)
+            self.close()
+            self.equal(
+                "only active child unwinds", self.trace[prefix:], [("unwind", token, self.counts(), self.progress())]
+            )
+            self.equal("no final result", self.rows("returned"), [])
+            assert self.work is not None
+            self.equal("closed generator", next(self.work, "closed"), "closed")
+            self.row("closed", token, effects, self.counts(), self.progress())
+            return
+        self.fault = name
+        if name == "remainder fault":
+            reader: Callable[[int], int] = self.widget._get_inventory_source_stack_quantity
+
+            def reread(item_id: int) -> int:
+                if self.material_observed:
+                    self.raise_at("remainder fault")
+                return reader(item_id)
+
+            self.widget._get_inventory_source_stack_quantity = reread
+        elif name in ("partial regular fault", "ordinary dispatch fault"):
+            self.fault = "regular"
+            if name == "ordinary dispatch fault":
+                self.plan.direction = self.module.STORAGE_TRANSFER_WITHDRAW
+        self.start()
+        try:
+            self.drain()
+        except RuntimeError as exc:
+            self.equal("original exception", exc is self.error, True)
+            self.row("escaped", name, exc is self.error, self.counts(), self.progress())
+        else:
+            raise AssertionError(f"Storage expected {name!r}: {self.trace!r}")
+        self.equal("no terminal result", self.rows("returned"), [])
+        self.equal("no trailing delay", self.rows("delay"), [])
+        credited = 2 if name in ("remainder fault", "partial regular fault") else 0
+        self.equal("published phase prefix", self.counts(), (5, credited, 0, 0))
+        if name in ("success log", "remainder fault", "partial regular fault"):
+            self.equal("published material prefix", self.progress(), (True, 2, 3, False))
+        elif name in ("move lookup", "attempt log"):
+            self.equal("pre-issue faults", self.rows("material move"), [])
+        self.equal("last effect at fault", [r[0] for r in self.trace[-2:]], ["fault site", "escaped"])
+
+    def close(self) -> None:
+        if self.work is not None:
+            self.work.close()
+
+
+def _storage_transfer_steps(module: types.ModuleType, case: str) -> dict[str, list[tuple[object, ...]]]:
+    groups = {
+        "storage_transfers_entry_lookup": (
+            "empty",
+            "blocked",
+            "invalid material",
+            "delegation lookup",
+            "capture and late quantity",
+        ),
+        "storage_transfers_material_fallback": (
+            "verified partial",
+            "entire material request",
+            "capped material",
+            "full zero",
+            "room zero",
+            "undrained zero",
+            "undrained positive",
+            "fresh cap",
+            "vanished",
+            "after effect exception",
+        ),
+        "storage_transfers_regular_accounting": (
+            "absent",
+            "scope failure",
+            "both reads fail",
+            "global target",
+            "direction changes",
+            "model gain",
+            "model undrained",
+            "model no gain",
+            "ordinary undrained",
+            "false regular",
+            "unknown direction",
+            "zero after admission",
+        ),
+        "storage_transfers_faults_and_close": (
+            "move lookup",
+            "attempt log",
+            "success log",
+            "remainder fault",
+            "partial regular fault",
+            "ordinary dispatch fault",
+            "close lifecycle",
+            "close ACTION",
+            "close material target",
+            "close regular target",
+            "close pace",
+        ),
+    }
+    result: dict[str, list[tuple[object, ...]]] = {}
+    for name in groups[case]:
+        with _cp14_b_world(module) as (_queue, _map, restore):
+            s = _StorageTransferTrace(module, restore)
+            try:
+                if case == "storage_transfers_entry_lookup":
+                    s.entry_case(name)
+                elif case == "storage_transfers_material_fallback":
+                    s.fallback_case(name)
+                elif case == "storage_transfers_regular_accounting":
+                    s.accounting_case(name)
+                else:
+                    s.fault_case(name)
+                result[name] = s.trace
+            finally:
+                s.close()
+    return result
+
+
+def _test_storage_transfers_owner_contract(module: types.ModuleType) -> None:
+    owner = sys.modules["Sources.icefox.MerchantRules.storage_transfers"]
+    planning = sys.modules["Sources.icefox.MerchantRules.planning"]
+    _expect(owner is module._storage_transfers, "The widget must bind the canonical storage transfer owner")
+    _expect(module.PlannedStorageTransfer is planning.PlannedStorageTransfer, "The planner owns admitted records")
+    _expect(
+        (REPO_ROOT / "Sources/icefox/MerchantRules/__init__.py").read_bytes() == b"",
+        "The Merchant Rules package initializer remains empty",
+    )
+    cold = """import importlib, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root))
+owner = 'Sources.icefox.MerchantRules.storage_transfers'
+allowed = {'Sources', 'Sources.icefox', 'Sources.icefox.MerchantRules', owner}
+class StandardLibraryOnly:
+    def find_spec(self, fullname, path, target=None):
+        if fullname not in allowed and fullname.split('.')[0] not in sys.stdlib_module_names:
+            raise AssertionError(f'unexpected cold import: {fullname}')
+sys.meta_path.insert(0, StandardLibraryOnly())
+loaded = importlib.import_module(owner)
+assert pathlib.Path(loaded.__file__).resolve() == root / 'Sources/icefox/MerchantRules/storage_transfers.py'
+assert 'Sources.icefox.MerchantRules.planning' not in sys.modules
+"""
+    imported = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", cold, str(REPO_ROOT)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _expect(
+        imported.returncode == 0 and not imported.stdout and not imported.stderr, f"Storage cold import: {imported!r}"
+    )
+    outer = "_execute_storage_transfers"
+    loop = "execute_transfers"
+    entry = "_deposit_material_to_storage_first"
+    leaf = "attempt_material_slot"
+    codes: dict[types.CodeType, str] = {}
+    for name in (outer, loop, entry, leaf):
+        target = getattr(module.MerchantRulesWidget if name.startswith("_") else owner, name)
+        _expect(
+            target.__globals__ is vars(module if name.startswith("_") else owner), f"Storage defining owner: {name}"
+        )
+        codes[target.__code__] = name
+    for view, fields in (
+        (owner.TransferCounts, {"completed": "int", "timeout_failures": "int", "depleted": "int"}),
+        (
+            owner.MaterialProgress,
+            {
+                "attempted": "bool",
+                "moved_quantity": "int",
+                "remaining_quantity": "int",
+                "abort_regular_fallback": "bool",
+            },
+        ),
+    ):
+        _expect(view.__annotations__ == fields, f"Wrong writable storage fields: {view!r}")
+    for binding in (owner.TransferIO, owner.MaterialSlotIO):
+        _expect(
+            binding.__dataclass_params__.frozen,
+            f"Storage bindings must be invocation-local frozen records: {binding!r}",
+        )
+    file = Path(str(module.__file__))
+    tree = ast.parse(file.read_bytes(), filename=str(file))
+    for wrapper, binding_name in ((outer, "TransferIO"), (entry, "MaterialSlotIO")):
+        method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == wrapper)
+        calls = [
+            node
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == binding_name
+        ]
+        _expect(
+            len(calls) == 1 and not calls[0].args and all(isinstance(kw.value, ast.Lambda) for kw in calls[0].keywords),
+            f"{wrapper} must form a passive inline {binding_name} record",
+        )
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        phase_type = module.ExecutionPhaseOutcome
+        material_type = module.MaterialStorageDepositResult
+        s = _StorageTransferTrace(module, restore)
+        edges: set[tuple[str, str]] = set()
+        borrowed: list[bool] = []
+        reached: list[str] = []
+
+        def profile(frame: types.FrameType, event: str, _arg: object) -> None:
+            if event != "call" or frame.f_code not in codes or frame.f_back is None:
+                return
+            called = codes[frame.f_code]
+            caller = codes.get(frame.f_back.f_code)
+            if caller is not None:
+                edges.add((caller, called))
+            if called == loop:
+                rows = frame.f_locals["transfers"]
+                borrowed.append(
+                    rows is not s.records
+                    and len(rows) == 1
+                    and rows[0] is s.plan
+                    and frame.f_locals["counts"] is s.phase
+                    and type(s.phase) is phase_type
+                )
+                reached.append(called)
+            elif called == leaf:
+                borrowed.append(frame.f_locals["result"] is s.material and type(s.material) is material_type)
+                reached.append(called)
+
+        original = sys.getprofile()
+        try:
+            sys.setprofile(profile)
+            s.start()
+            s.drain()
+        finally:
+            sys.setprofile(original)
+            s.close()
+        s.equal("real directed calls", edges, {(outer, loop), (loop, entry), (entry, leaf)})
+        s.equal("borrowed records, counts and material result", set(reached) == {loop, leaf} and all(borrowed), True)
+
+
+def _test_storage_transfers_entry_lookup(module: types.ModuleType) -> None:
+    _storage_transfer_steps(module, "storage_transfers_entry_lookup")
+
+
+def _test_storage_transfers_material_fallback(module: types.ModuleType) -> None:
+    _storage_transfer_steps(module, "storage_transfers_material_fallback")
+
+
+def _test_storage_transfers_regular_accounting(module: types.ModuleType) -> None:
+    _storage_transfer_steps(module, "storage_transfers_regular_accounting")
+
+
+def _test_storage_transfers_faults_and_close(module: types.ModuleType) -> None:
+    _storage_transfer_steps(module, "storage_transfers_faults_and_close")
+
+
+def _storage_transfer_route(module: types.ModuleType, route: str) -> list[str]:
+    trace: list[str] = []
+    remote = route == "remote-stock-unmet"
+    _expect(remote or route == "local-cleanup", f"Unknown storage route {route}")
+    with _cp14_b_world(module) as (queue, _map, restore), _cp13_clock(module):
+        widget = _cp15_widget(module)
+        model = 555 if remote else 921
+        quantities = {900: 2, 901: 0} if remote else {700: 4}
+        opened = remote
+        plans: list[list[tuple[int, int]]] = []
+        outcomes: list[tuple[int, int, int, int]] = []
+        material_moves: list[tuple[int, int, int, int]] = []
+        withdrawals: list[tuple[int, int]] = []
+        request_id = "cp18-storage"
+        hero = types.SimpleNamespace(Following=True, Avoidance=False, Looting=True, Targeting=False, Combat=True)
+        wire: list[tuple[str, str, tuple[float, ...], tuple[str, ...]]] = []
+
+        def item(i: int) -> InventoryItemInfo:
+            return _cp8_item(
+                module,
+                item_id=i,
+                model_id=model,
+                name="Identification Kit" if remote else "Bone",
+                quantity=quantities[i],
+                is_weapon_like=False,
+                is_material=not remote,
+                item_type_name="Kit" if remote else "Material",
+            )
+
+        def bags() -> list[InventoryItemInfo]:
+            ids = [i for i in quantities if i != 900 and quantities[i] > 0]
+            trace.append(f"bags:{[(i, quantities[i]) for i in ids]}")
+            return [item(i) for i in ids]
+
+        def storage() -> tuple[list[InventoryItemInfo], bool]:
+            trace.append(f"storage:{quantities.get(900, 0)}")
+            return ([item(900)] if quantities.get(900, 0) > 0 else []), True
+
+        def open_storage() -> None:
+            nonlocal opened
+            _expect(not remote and not opened and 700 in quantities, f"{route} unexpected open {quantities}")
+            opened = True
+            quantities[701] = quantities.pop(700)
+            trace.append("open:700->701")
+
+        def quantity(i: int) -> int:
+            trace.append(f"quantity:{i}:{quantities[i]}")
+            return quantities[i]
+
+        def count(model_id: int) -> int:
+            _expect(remote and model_id == 555, f"{route} native model count {model_id}")
+            trace.append(f"model-count:{quantities[901]}")
+            return quantities[901]
+
+        def move(i: int, bag: int, slot: int, units: int, /) -> None:
+            material_moves.append((i, bag, slot, units))
+            trace.append(f"move:{i}:{bag}:{slot}:{units}")
+            _expect(
+                (i, bag, slot, units) == (701, module.MATERIAL_STORAGE_BAG_ID, 0, 3), f"{route} move {material_moves}"
+            )
+            quantities[i] -= units
+
+        def withdraw(i: int, /, *, ammount: int) -> bool:
+            withdrawals.append((i, ammount))
+            _expect((i, ammount) == (900, 2), f"{route} unexpected withdrawal {withdrawals}")
+            quantities[i] -= 1
+            quantities[901] += 1
+            trace.append(f"withdraw:{i}:{ammount}:{quantities}")
+            return True
+
+        def services(**_options: object) -> tuple[bool, str, dict[str, tuple[float, float]]]:
+            return True, "Ready", {module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)}
+
+        def resume() -> bool:
+            trace.append(f"resume:{widget.auto_cleanup_running}:{widget.preview_ready}:{widget.status_message}")
+            return True
+
+        def wait(ms: int) -> Iterator[str]:
+            yield f"wait:{ms}"
+
+        def scan(model_id: int) -> tuple[int, int, int]:
+            trace.append(f"material-slot:{model_id}")
+            return 0, 0, 1
+
+        def get_model(i: int) -> int:
+            trace.append(f"model:{i}")
+            return model
+
+        def material_type(i: int) -> bool:
+            trace.append(f"is-material:{i}")
+            return not remote
+
+        def bag_ids() -> list[int]:
+            return [row.item_id for row in bags()]
+
+        saved_build: Callable[..., PlanResult] = widget._build_plan
+
+        def build(**options: Any) -> PlanResult:
+            if remote:
+                context = options["execution_context"]
+                _expect(
+                    [(t.model_id, t.target_count) for t in context.merchant_stock_targets] == [(555, 3)],
+                    f"{route} missing request overlay",
+                )
+            plan = saved_build(**options)
+            rows = plan.storage_transfers if remote else plan.cleanup_transfers
+            plans.append([(row.item_id, row.quantity) for row in rows])
+            trace.append(f"plan:{opened}:{plans[-1]}")
+            if remote:
+                _expect(
+                    bool(plan.coords.get(module.MERCHANT_TYPE_MERCHANT)) and plan.xunlai_first_storage_scan_reliable,
+                    f"{route} lacks merchant or reliable storage scan",
+                )
+                _expect(all(row.xunlai_first_merchant_stock for row in rows), f"{route} lost opt-in on {rows}")
+            return plan
+
+        saved_summary: Callable[[Any], str] = widget._format_execution_phase_summary
+
+        def summary(phase: Any) -> str:
+            result = saved_summary(phase)
+            if phase.label == ("Storage withdraws" if remote else "Xunlai Deposits"):
+                counters = (phase.attempted, phase.completed, phase.timeout_failures, phase.depleted)
+                outcomes.append(counters)
+                trace.append(f"summary:{counters}:{result}")
+            return result
+
+        restore.binding(
+            module.GLOBAL_CACHE,
+            "Inventory",
+            types.SimpleNamespace(
+                OpenXunlaiWindow=open_storage,
+                IsStorageOpen=lambda: opened,
+                MoveItem=move,
+                WithdrawItemFromStorage=withdraw,
+                GetModelCount=count,
+            ),
+        )
+        restore.binding(
+            module.GLOBAL_CACHE,
+            "Item",
+            types.SimpleNamespace(
+                GetModelID=get_model,
+                Properties=types.SimpleNamespace(GetQuantity=quantity),
+                Type=types.SimpleNamespace(IsMaterial=material_type),
+            ),
+        )
+        restore.binding(module.Routines.Yield, "wait", wait)
+        widget._collect_inventory_items = bags
+        widget._collect_storage_items_with_reliability = storage
+        widget._get_inventory_item_ids = bag_ids
+        widget._get_supported_context = services
+        widget._get_material_storage_quantity_and_slot = scan
+        widget._build_plan = build
+        widget._format_execution_phase_summary = summary
+        widget._pause_inventory_plus = lambda: types.SimpleNamespace(resume=resume)
+        widget.preview_ready = True
+
+        filters: list[tuple[list[int], list[tuple[int, int, bool]], list[tuple[int, int, bool]]]] = []
+        unmet_rows: list[tuple[int, int, int]] = []
+        original_plan: object = None
+        saved_rules: object = None
+
+        if remote:
+            widget.catalog_merchant_essentials = [{"model_id": model, "name": "Identification Kit", "item_type": "kit"}]
+            widget.buy_rules = [
+                module.BuyRule(
+                    enabled=True,
+                    kind=module.BUY_KIND_MERCHANT_STOCK,
+                    merchant_stock_targets=[
+                        module.MerchantStockTarget(
+                            model_id=model, target_count=3, max_per_run=3, check_xunlai_first=True
+                        )
+                    ],
+                )
+            ]
+            saved_rules = widget.buy_rules
+            widget.destroy_include_protected_items = False
+            widget.destroy_instant_enabled = False
+            saved_filter: Callable[[PlanResult, set[int]], None] = widget._filter_blocked_early_kit_xunlai_actions
+
+            def purchases(plan: PlanResult) -> list[tuple[int, int, bool]]:
+                return [(b.model_id, b.quantity, b.check_xunlai_first) for b in plan.merchant_stock_buys]
+
+            def filter_purchases(plan: PlanResult, blocked: set[int]) -> None:
+                before = purchases(plan)
+                saved_filter(plan, blocked)
+                filters.append((sorted(blocked), before, purchases(plan)))
+                trace.append(f"filter:{filters[-1]}")
+
+            def unexpected_purchase(*_args: object, **_kwargs: object) -> None:
+                trace.append("unexpected-purchase")
+                raise AssertionError("A blocked merchant purchase reached the external purchase boundary")
+
+            saved_unmet: Callable[[Any], list[tuple[Any, int]]] = widget._get_unmet_request_stock_targets
+
+            def unmet(context: Any) -> list[tuple[Any, int]]:
+                nonlocal original_plan
+                original_plan = widget.preview_plan
+                rows = saved_unmet(context)
+                unmet_rows.extend((t.model_id, n, t.target_count) for t, n in rows)
+                trace.append(f"unmet:{unmet_rows}")
+                return rows
+
+            def send(
+                sender: str, receiver: str, command: int, params: tuple[float, ...], extra: tuple[str, ...]
+            ) -> int:
+                _expect(command == module.SharedCommandType.MerchantRules, f"{route} unexpected transport {command}")
+                _expect(
+                    not hero.Following and widget.destroy_include_protected_items and widget.destroy_instant_enabled,
+                    f"{route} restored overrides before publishing {extra[1]}",
+                )
+                wire.append((sender, receiver, params, extra))
+                trace.append(f"send:{sender}:{receiver}:{params}:{extra}")
+                return 1
+
+            def hero_options(email: str) -> types.SimpleNamespace | None:
+                return hero if email == "merchant.rules@example.com" else None
+
+            restore.binding(
+                module.GLOBAL_CACHE,
+                "ShMem",
+                types.SimpleNamespace(SendMessage=send, GetHeroAIOptionsFromEmail=hero_options),
+            )
+            widget._filter_blocked_early_kit_xunlai_actions = filter_purchases
+            widget._buy_merchant_model = unexpected_purchase
+            widget._get_unmet_request_stock_targets = unmet
+            message = _cp15_message(request_id, module.MERCHANT_RULES_OPCODE_EXECUTE)
+            message.ExtraData = (request_id, "stock:555:3", "1", "1")
+            work = widget.handle_shared_multibox_message(message)
+        else:
+            widget.cleanup_targets = [
+                module.CleanupTarget(
+                    model_id=model, keep_on_character=1, scope=module.CLEANUP_TARGET_SCOPE_COMMON_MATERIAL
+                )
+            ]
+            widget._queue_cleanup_now()
+            _expect(len(queue) == 2 and widget.auto_cleanup_running, f"{route} actual admission, queue={len(queue)}")
+            work = queue[1]
+        trace.append(f"admitted:{_cp15_lease_counts(widget)}")
+        _expect(_cp15_lease_counts(widget) == (0, 1, 0), f"{route} missing owned work {trace}")
+        operation = cast(Generator[object, None, object], work)
+        tokens: list[object] = []
+        try:
+            for _ in range(240):
+                try:
+                    token = next(operation)
+                except StopIteration as stop:
+                    trace.append(f"return:{stop.value}")
+                    _expect(stop.value is None, f"{route} unexpected return {stop.value}")
+                    break
+                tokens.append(token)
+                trace.append(f"yield:{token}")
+                if remote and len(tokens) == 1:
+                    _expect(
+                        token == "wait:100"
+                        and not hero.Following
+                        and not hero.Looting
+                        and not hero.Combat
+                        and widget.destroy_include_protected_items
+                        and widget.destroy_instant_enabled,
+                        f"{route} first suspension lost follower overrides: {trace}",
+                    )
+                    trace.append("follower-overrides-active")
+            else:
+                raise AssertionError(f"{route} did not finish, tail={trace[-8:]}")
+        finally:
+            operation.close()
+        trace.append(f"released:{_cp15_lease_counts(widget)}")
+        _expect(
+            _cp15_lease_counts(widget) == (0, 0, 0) and not widget.last_error, f"{route}: {widget.last_error!r} {trace}"
+        )
+        if remote:
+            _expect(
+                plans == [[(900, 2)], [(900, 1)]]
+                and outcomes == [(2, 1, 1, 0)]
+                and withdrawals == [(900, 2)]
+                and quantities == {900: 1, 901: 1}
+                and not material_moves,
+                f"{route} incorrect withdrawal, plans={plans}, outcomes={outcomes}, ledger={quantities}, trace={trace}",
+            )
+            _expect(
+                tokens.count("wait:50") == 41
+                and trace.count("model-count:0") == 1
+                and trace.count("model-count:1") == 42,
+                f"{route} missing actual model verification: {trace}",
+            )
+            _expect(
+                filters == [([], [(555, 1, True)], [(555, 1, True)]), ([555], [(555, 1, True)], [])]
+                and "unexpected-purchase" not in trace,
+                f"{route} purchase block {filters}, trace={trace}",
+            )
+            _expect(unmet_rows == [(555, 1, 3)], f"{route} fresh request stock {unmet_rows}")
+            _expect(
+                [extra[1] for _, _, _, extra in wire] == ["Starting", "Stock Unmet"]
+                and all(
+                    (sender, receiver, extra[0]) == ("merchant.rules@example.com", "leader@example.com", request_id)
+                    for sender, receiver, _, extra in wire
+                )
+                and wire[-1][2][0] == 199
+                and wire[-1][2][3] == 0
+                and "1/3" in wire[-1][3][3],
+                f"{route} correlated wire results {wire}",
+            )
+            _expect(
+                hero.Following
+                and hero.Looting
+                and hero.Combat
+                and not hero.Avoidance
+                and not hero.Targeting
+                and not widget.destroy_include_protected_items
+                and not widget.destroy_instant_enabled
+                and widget.buy_rules is saved_rules
+                and widget.preview_plan is not original_plan
+                and not widget.preview_plan.has_actions
+                and not widget.preview_ready,
+                f"{route} follower overrides, saved targets or request preview leaked: {trace}",
+            )
+            trace.append("restored:hero:destroy:saved-rules:cleared-request-preview")
+        else:
+            expected_summary = "Xunlai Deposits: 3/3 items."
+            resume_event = f"resume:False:False:{expected_summary}"
+            _expect(
+                plans == [[(700, 3)], [(701, 3)]]
+                and outcomes == [(3, 3, 0, 0)]
+                and material_moves == [(701, module.MATERIAL_STORAGE_BAG_ID, 0, 3)]
+                and not withdrawals
+                and quantities == {701: 1},
+                f"{route} stale plan or wrong material movement: {trace}",
+            )
+            _expect(
+                not widget.auto_cleanup_running
+                and not widget.preview_ready
+                and widget.last_cleanup_summary == widget.status_message == expected_summary
+                and resume_event in trace
+                and trace[-4:] == [resume_event, "yield:None", "return:None", "released:(0, 0, 0)"],
+                f"{route} publication/flag/resume/trailing yield order: {trace}",
+            )
+        return trace
+
+
+def _test_storage_transfers_local_cleanup(module: types.ModuleType) -> None:
+    _storage_transfer_route(module, "local-cleanup")
+
+
+def _test_storage_transfers_remote_stock_unmet(module: types.ModuleType) -> None:
+    _storage_transfer_route(module, "remote-stock-unmet")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -75801,6 +76872,17 @@ def main() -> int:
                 ("trader_sales_exception_prefix", lambda: _test_trader_sales_exception_prefix(module)),
                 ("trader_sales_local_routes", lambda: _test_trader_sales_local_routes(module)),
                 ("trader_sales_remote_unwind", lambda: _test_trader_sales_remote_unwind(module)),
+            ]
+        )
+        tests.extend(
+            [
+                ("storage_transfers_owner_contract", lambda: _test_storage_transfers_owner_contract(module)),
+                ("storage_transfers_entry_lookup", lambda: _test_storage_transfers_entry_lookup(module)),
+                ("storage_transfers_material_fallback", lambda: _test_storage_transfers_material_fallback(module)),
+                ("storage_transfers_regular_accounting", lambda: _test_storage_transfers_regular_accounting(module)),
+                ("storage_transfers_faults_and_close", lambda: _test_storage_transfers_faults_and_close(module)),
+                ("storage_transfers_local_cleanup", lambda: _test_storage_transfers_local_cleanup(module)),
+                ("storage_transfers_remote_stock_unmet", lambda: _test_storage_transfers_remote_stock_unmet(module)),
             ]
         )
         catalog_contract_tests = [

@@ -63,6 +63,7 @@ from Sources.icefox.MerchantRules import owned_work as _owned_work
 from Sources.icefox.MerchantRules import planning as _planning
 from Sources.icefox.MerchantRules import preview as _preview
 from Sources.icefox.MerchantRules import profiles as _profiles
+from Sources.icefox.MerchantRules import storage_transfers as _storage_transfers
 from Sources.icefox.MerchantRules import trader_sales as _trader_sales
 from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME as ACCOUNT_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
@@ -17408,7 +17409,7 @@ class MerchantRulesWidget:
         *,
         current_quantity: int | None = None,
         planned_model_id: int = 0,
-    ) -> MaterialStorageDepositResult:
+    ) -> Generator[object, None, MaterialStorageDepositResult]:
         """Deposit a bounded quantity into material storage before considering regular storage.
 
         Reported success is based on live quantity change. Ambiguous moves set
@@ -17421,110 +17422,31 @@ class MerchantRulesWidget:
         if safe_item_id <= 0 or safe_requested_quantity <= 0:
             return result
 
-        safe_planned_model_id = max(0, int(planned_model_id))
-        try:
-            live_model_id = max(0, int(GLOBAL_CACHE.Item.GetModelID(safe_item_id)))
-        except Exception:
-            live_model_id = 0
-        model_id = live_model_id if live_model_id > 0 else safe_planned_model_id
-        if model_id <= 0:
-            return result
-        if not self._is_live_material_item(safe_item_id, model_id=model_id):
-            if model_id in ALL_CRAFTING_MATERIAL_MODEL_IDS:
-                self._debug_log(
-                    f"Material storage skipped: item_id={safe_item_id} model={model_id} was not classified as a live material."
-                )
-            return result
-
-        current_storage_quantity, resolved_slot, storage_bag_size = self._get_material_storage_quantity_and_slot(model_id)
-        target_slot = resolved_slot
-        if target_slot is None:
-            target_slot = MATERIAL_STORAGE_SLOT_BY_MODEL_ID.get(model_id)
-        if target_slot is None:
-            self._debug_log(
-                f"Material storage slot unresolved for item_id={safe_item_id} model={model_id}; falling back to regular storage panes."
-            )
-            return result
-        if storage_bag_size > 0 and not (0 <= int(target_slot) < storage_bag_size):
-            self._debug_log(
-                f"Material storage slot invalid for item_id={safe_item_id} model={model_id}: "
-                f"slot={int(target_slot)} bag_size={storage_bag_size}; falling back to regular storage panes."
-            )
-            return result
-
-        available_capacity = max(0, MATERIAL_STORAGE_MAX_STACK_SIZE - max(0, int(current_storage_quantity)))
-        reported_full = available_capacity <= 0
-        if reported_full:
-            self._debug_log(
-                f"Material storage reported full for model={model_id}; probing known slot={int(target_slot)} before regular fallback."
-            )
-
-        source_before = (
-            max(0, int(current_quantity))
-            if current_quantity is not None
-            else self._get_inventory_source_stack_quantity(safe_item_id)
-        )
-        if source_before <= 0:
-            return result
-
-        material_move_quantity = min(
+        yield from _storage_transfers.attempt_material_slot(
+            safe_item_id,
             safe_requested_quantity,
-            source_before,
-            available_capacity if not reported_full else safe_requested_quantity,
+            current_quantity=current_quantity,
+            planned_model_id=planned_model_id,
+            result=result,
+            io=_storage_transfers.MaterialSlotIO(
+                get_live_model=lambda: GLOBAL_CACHE.Item.GetModelID,
+                get_classify=lambda: self._is_live_material_item,
+                is_known_material=lambda model_id: model_id in ALL_CRAFTING_MATERIAL_MODEL_IDS,
+                get_slot_scan=lambda: self._get_material_storage_quantity_and_slot,
+                get_slot_lookup=lambda: MATERIAL_STORAGE_SLOT_BY_MODEL_ID.get,
+                max_stack=lambda: MATERIAL_STORAGE_MAX_STACK_SIZE,
+                get_move_item=lambda: (
+                    move_item
+                    if callable(move_item := getattr(getattr(GLOBAL_CACHE, "Inventory", None), "MoveItem", None))
+                    else None
+                ),
+                bag_id=lambda: MATERIAL_STORAGE_BAG_ID,
+                get_scoped_quantity=lambda: self._get_inventory_source_stack_quantity,
+                get_action_drain=lambda: self._wait_for_action_queue_empty,
+                get_scoped_target=lambda: self._wait_for_inventory_source_stack_quantity_target,
+                get_debug=lambda: self._debug_log,
+            ),
         )
-        if material_move_quantity <= 0:
-            return result
-
-        move_item = getattr(getattr(GLOBAL_CACHE, "Inventory", None), "MoveItem", None)
-        if not callable(move_item):
-            return result
-
-        self._debug_log(
-            f"Material storage deposit attempt: item_id={safe_item_id} model={model_id} "
-            f"source={source_before} storage={current_storage_quantity} "
-            f"slot={int(target_slot)} move={material_move_quantity}"
-        )
-        try:
-            move_item(safe_item_id, MATERIAL_STORAGE_BAG_ID, int(target_slot), int(material_move_quantity))
-        except Exception as exc:
-            self._debug_log(
-                f"Material storage deposit fallback: item_id={safe_item_id} model={model_id} "
-                f"move failed before queueing: {exc}"
-            )
-            return result
-
-        result.attempted = True
-        queue_cleared = yield from self._wait_for_action_queue_empty("ACTION", timeout_ms=2000, step_ms=50)
-        final_quantity = self._get_inventory_source_stack_quantity(safe_item_id)
-        if queue_cleared:
-            expected_quantity = max(0, source_before - material_move_quantity)
-            final_quantity = yield from self._wait_for_inventory_source_stack_quantity_target(
-                safe_item_id,
-                expected_quantity,
-                timeout_ms=2000,
-                step_ms=50,
-            )
-
-        moved_quantity = min(material_move_quantity, max(0, source_before - max(0, int(final_quantity))))
-        result.moved_quantity = moved_quantity
-        result.remaining_quantity = max(0, safe_requested_quantity - moved_quantity)
-        if moved_quantity <= 0:
-            if reported_full and queue_cleared:
-                self._debug_log(
-                    f"Material storage reported-full probe moved nothing: item_id={safe_item_id} model={model_id} "
-                    f"requested={material_move_quantity}; falling back to regular storage panes."
-                )
-            else:
-                result.abort_regular_fallback = True
-                self._debug_log(
-                    f"Material storage deposit unverified: item_id={safe_item_id} model={model_id} "
-                    f"requested={material_move_quantity}; regular storage fallback skipped for this pass."
-                )
-        else:
-            self._debug_log(
-                f"Material storage deposit: item_id={safe_item_id} model={model_id} "
-                f"moved={moved_quantity} remaining={result.remaining_quantity}"
-            )
         return result
 
     def _execute_destroy_phase(self, destroy_actions: list[PlannedDestroyAction] | list[int]) -> ExecutionPhaseOutcome:
@@ -18716,7 +18638,7 @@ class MerchantRulesWidget:
         storage_transfers: list[PlannedStorageTransfer],
         *,
         phase_label: str = "Storage transfers",
-    ) -> ExecutionPhaseOutcome:
+    ) -> Generator[object, None, ExecutionPhaseOutcome]:
         """Execute bounded deposits or withdrawals after reacquiring each live source.
 
         Material deposits prefer material storage and use regular storage only after a verified
@@ -18751,147 +18673,27 @@ class MerchantRulesWidget:
             f"{phase_label}: transfers={len(normalized_transfers)} "
             f"planned_items={sum(max(0, int(transfer.quantity)) for transfer in normalized_transfers)}"
         )
-        for transfer in normalized_transfers:
-            item_id = int(transfer.item_id)
-            quantity = max(0, int(transfer.quantity))
-            transfer_label = str(transfer.label or f"Item {item_id}")
-            transfer_model_id = max(0, int(getattr(transfer, "model_id", 0)))
-            transfer_reason = str(getattr(transfer, "reason", "") or "")
-            if quantity <= 0:
-                continue
-
-            current_quantity = (
-                self._get_inventory_source_stack_quantity(item_id)
-                if transfer.direction == STORAGE_TRANSFER_DEPOSIT
-                else max(0, int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id)))
-            )
-            if current_quantity <= 0:
-                self._debug_log(
-                    f"{phase_label} transfer skipped: direction={transfer.direction} label={transfer_label} "
-                    f"model={transfer_model_id} item_id={item_id} planned={quantity} current=0"
-                    + (f" reason={transfer_reason}" if transfer_reason else "")
-                )
-                outcome.depleted += quantity
-                continue
-            requested_quantity = min(current_quantity, quantity)
-            depleted_quantity = max(0, quantity - current_quantity)
-            if requested_quantity <= 0:
-                self._debug_log(
-                    f"{phase_label} transfer skipped: direction={transfer.direction} label={transfer_label} "
-                    f"model={transfer_model_id} item_id={item_id} planned={quantity} move=0"
-                    + (f" reason={transfer_reason}" if transfer_reason else "")
-                )
-                outcome.depleted += quantity
-                continue
-
-            self._debug_log(
-                f"{phase_label} transfer: direction={transfer.direction} label={transfer_label} "
-                f"model={transfer_model_id} item_id={item_id} planned={quantity} current={current_quantity} move={requested_quantity}"
-                + (f" reason={transfer_reason}" if transfer_reason else "")
-            )
-
-            moved = False
-            before_inventory_model_count = 0
-            if transfer.direction == STORAGE_TRANSFER_WITHDRAW:
-                if transfer_model_id > 0:
-                    try:
-                        before_inventory_model_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(transfer_model_id)))
-                    except Exception:
-                        before_inventory_model_count = 0
-                moved = bool(GLOBAL_CACHE.Inventory.WithdrawItemFromStorage(item_id, ammount=requested_quantity))
-            elif transfer.direction == STORAGE_TRANSFER_DEPOSIT:
-                material_storage_result = yield from self._deposit_material_to_storage_first(
-                    item_id,
-                    requested_quantity,
-                    current_quantity=current_quantity,
-                    planned_model_id=transfer.model_id,
-                )
-                if material_storage_result.attempted:
-                    if material_storage_result.moved_quantity > 0:
-                        outcome.completed += int(material_storage_result.moved_quantity)
-                    if material_storage_result.abort_regular_fallback:
-                        outcome.timeout_failures += max(
-                            0,
-                            requested_quantity - max(0, int(material_storage_result.moved_quantity)),
-                        )
-                        outcome.depleted += depleted_quantity
-                        yield from Routines.Yield.wait(60)
-                        continue
-
-                    requested_quantity = max(0, int(material_storage_result.remaining_quantity))
-                    if requested_quantity <= 0:
-                        outcome.depleted += depleted_quantity
-                        yield from Routines.Yield.wait(60)
-                        continue
-
-                    current_quantity = self._get_inventory_source_stack_quantity(item_id)
-                    post_material_depleted_quantity = max(0, requested_quantity - current_quantity)
-                    requested_quantity = min(requested_quantity, current_quantity)
-                    if requested_quantity <= 0:
-                        outcome.depleted += depleted_quantity + post_material_depleted_quantity
-                        yield from Routines.Yield.wait(60)
-                        continue
-                    depleted_quantity += post_material_depleted_quantity
-
-                moved = bool(GLOBAL_CACHE.Inventory.DepositItemToStorage(item_id, ammount=requested_quantity))
-
-            if not moved:
-                self._debug_log(
-                    f"{phase_label} transfer queued-noop: direction={transfer.direction} label={transfer_label} "
-                    f"model={transfer_model_id} item_id={item_id} requested={requested_quantity}"
-                    + (f" reason={transfer_reason}" if transfer_reason else "")
-                )
-                outcome.timeout_failures += requested_quantity
-                outcome.depleted += depleted_quantity
-                continue
-
-            queue_cleared = yield from self._wait_for_action_queue_empty("ACTION", timeout_ms=2000, step_ms=50)
-            final_quantity = (
-                self._get_inventory_source_stack_quantity(item_id)
-                if transfer.direction == STORAGE_TRANSFER_DEPOSIT
-                else max(0, int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id)))
-            )
-            moved_quantity = 0
-            if transfer.direction == STORAGE_TRANSFER_WITHDRAW and transfer_model_id > 0:
-                final_inventory_model_count = yield from self._wait_for_inventory_model_count_at_least(
-                    transfer_model_id,
-                    before_inventory_model_count + requested_quantity,
-                    timeout_ms=2000 if queue_cleared else 1000,
-                    step_ms=50,
-                )
-                moved_quantity = max(0, int(final_inventory_model_count) - before_inventory_model_count)
-            elif transfer.direction == STORAGE_TRANSFER_DEPOSIT and queue_cleared:
-                expected_quantity = max(0, current_quantity - requested_quantity)
-                final_quantity = yield from self._wait_for_inventory_source_stack_quantity_target(
-                    item_id,
-                    expected_quantity,
-                    timeout_ms=2000,
-                    step_ms=50,
-                )
-            elif queue_cleared:
-                expected_quantity = max(0, current_quantity - requested_quantity)
-                final_quantity = yield from self._wait_for_stack_quantity_target(
-                    item_id,
-                    expected_quantity,
-                    timeout_ms=2000,
-                    step_ms=50,
-                )
-
-            if moved_quantity <= 0:
-                moved_quantity = max(0, current_quantity - max(0, int(final_quantity)))
-            if moved_quantity > 0:
-                outcome.completed += moved_quantity
-            shortfall = max(0, requested_quantity - moved_quantity)
-            if shortfall > 0:
-                outcome.timeout_failures += shortfall
-            outcome.depleted += depleted_quantity
-            self._debug_log(
-                f"{phase_label} transfer result: direction={transfer.direction} label={transfer_label} "
-                f"model={transfer_model_id} item_id={item_id} moved={moved_quantity} shortfall={shortfall} "
-                f"final={max(0, int(final_quantity))}"
-                + (f" reason={transfer_reason}" if transfer_reason else "")
-            )
-            yield from Routines.Yield.wait(60)
+        yield from _storage_transfers.execute_transfers(
+            normalized_transfers,
+            phase_label=phase_label,
+            counts=outcome,
+            get_material_step=lambda: self._deposit_material_to_storage_first,
+            io=_storage_transfers.TransferIO(
+                deposit_direction=lambda: STORAGE_TRANSFER_DEPOSIT,
+                withdraw_direction=lambda: STORAGE_TRANSFER_WITHDRAW,
+                get_scoped_quantity=lambda: self._get_inventory_source_stack_quantity,
+                get_global_quantity=lambda: GLOBAL_CACHE.Item.Properties.GetQuantity,
+                get_model_count=lambda: GLOBAL_CACHE.Inventory.GetModelCount,
+                get_regular_deposit=lambda: GLOBAL_CACHE.Inventory.DepositItemToStorage,
+                get_regular_withdraw=lambda: GLOBAL_CACHE.Inventory.WithdrawItemFromStorage,
+                get_action_drain=lambda: self._wait_for_action_queue_empty,
+                get_scoped_target=lambda: self._wait_for_inventory_source_stack_quantity_target,
+                get_global_target=lambda: self._wait_for_stack_quantity_target,
+                get_model_target=lambda: self._wait_for_inventory_model_count_at_least,
+                get_delay=lambda: Routines.Yield.wait,
+                get_debug=lambda: self._debug_log,
+            ),
+        )
 
         self._debug_log(
             f"{phase_label}: completed={outcome.completed}/{outcome.attempted} "
