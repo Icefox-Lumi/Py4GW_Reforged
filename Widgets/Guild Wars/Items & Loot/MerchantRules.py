@@ -56,6 +56,7 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.botting_inventory import SUPPO
 
 from Sources.icefox.MerchantRules import automatic_triggers as _automatic_triggers
 from Sources.icefox.MerchantRules import configuration as _configuration
+from Sources.icefox.MerchantRules import destroy_execution as _destroy_execution
 from Sources.icefox.MerchantRules import gold_transactions as _gold_transactions
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
@@ -17449,11 +17450,13 @@ class MerchantRulesWidget:
         )
         return result
 
-    def _execute_destroy_phase(self, destroy_actions: list[PlannedDestroyAction] | list[int]) -> ExecutionPhaseOutcome:
-        """Yield through planned destruction after reacquiring items and preserving keep quantities.
+    def _execute_destroy_phase(
+        self, destroy_actions: list[PlannedDestroyAction] | list[int]
+    ) -> Generator[object, None, ExecutionPhaseOutcome]:
+        """Yield through planned destruction, moving the kept quantity when a split is required.
 
-        Split-dependent actions stop safely when source quantity, destination capacity, or live
-        protection state no longer matches the plan.
+        Destroy the source only when its observed quantity matches the planned destroy
+        quantity. After a split, also require the expected post-move source quantity.
         """
 
         raw_destroy_actions = list(destroy_actions or [])
@@ -17475,104 +17478,24 @@ class MerchantRulesWidget:
             outcome.timeout_failures += len(tracked_item_ids)
             return outcome
 
-        pre_destroy_quantities = self._get_inventory_stack_quantities(tracked_item_ids)
-        normalized_actions: list[PlannedDestroyAction] = []
-        for raw_action in raw_destroy_actions:
-            if isinstance(raw_action, PlannedDestroyAction):
-                normalized_actions.append(raw_action)
-                continue
-            safe_item_id = int(raw_action)
-            previous_quantity = max(0, int(pre_destroy_quantities.get(safe_item_id, 0)))
-            normalized_actions.append(
-                PlannedDestroyAction(
-                    item_id=safe_item_id,
-                    model_id=0,
-                    label=f"Item {safe_item_id}",
-                    quantity_to_destroy=previous_quantity,
-                    source_quantity=previous_quantity,
-                )
-            )
-
-        destroy_queue = sorted(
-            normalized_actions,
-            key=lambda action: (
-                1 if bool(action.requires_split) else 0,
-                str(action.label or "").lower(),
-                int(action.item_id),
+        yield from _destroy_execution.execute_destroy_actions(
+            raw_destroy_actions,
+            tracked_item_ids,
+            counts=outcome,
+            io=_destroy_execution.DestroyIO(
+                read_action_type=lambda: PlannedDestroyAction,
+                get_stack_quantities=lambda: self._get_inventory_stack_quantities,
+                get_quantity=lambda: GLOBAL_CACHE.Item.Properties.GetQuantity,
+                get_empty_slot=lambda: self._find_inventory_empty_slot,
+                get_move=lambda: GLOBAL_CACHE.Inventory.MoveItem,
+                get_target_wait=lambda: self._wait_for_stack_quantity_target,
+                get_destroy=lambda: GLOBAL_CACHE.Inventory.DestroyItem,
+                get_confirmation=lambda: self._wait_for_merchant_sell_confirmation,
+                get_wait=lambda: Routines.Yield.wait,
+                get_debug=lambda: self._debug_log,
+                read_timeout_ms=lambda: DESTROY_CONFIRM_TIMEOUT_MS,
             ),
         )
-
-        missing_item_count = max(0, len(tracked_item_ids) - len(pre_destroy_quantities))
-        if missing_item_count > 0:
-            outcome.depleted += missing_item_count
-
-        self._debug_log(
-            f"Destroy phase: planned_items={len(tracked_item_ids)} present_items={len(pre_destroy_quantities)}"
-        )
-        for action in destroy_queue:
-            item_id = int(action.item_id)
-            previous_quantity = max(0, int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id)))
-            if previous_quantity <= 0:
-                previous_quantity = max(0, int(pre_destroy_quantities.get(item_id, 0)))
-            if previous_quantity <= 0:
-                continue
-
-            planned_destroy_quantity = max(0, int(action.quantity_to_destroy))
-            planned_keep_quantity = max(0, int(action.keep_quantity))
-            if planned_destroy_quantity <= 0:
-                continue
-
-            if bool(action.requires_split):
-                split_destination = self._find_inventory_empty_slot()
-                if split_destination is None:
-                    outcome.timeout_failures += 1
-                    self._debug_log(
-                        f"Destroy split skipped: item_id={item_id} keep={planned_keep_quantity} destroy={planned_destroy_quantity} "
-                        "no empty slot was available at execution time."
-                    )
-                    continue
-
-                expected_source_quantity = max(0, previous_quantity - planned_keep_quantity)
-                GLOBAL_CACHE.Inventory.MoveItem(
-                    item_id,
-                    int(split_destination.bag_id),
-                    int(split_destination.slot),
-                    planned_keep_quantity,
-                )
-                updated_quantity = yield from self._wait_for_stack_quantity_target(
-                    item_id,
-                    expected_source_quantity,
-                    timeout_ms=DESTROY_CONFIRM_TIMEOUT_MS,
-                    step_ms=50,
-                )
-                if updated_quantity != expected_source_quantity or updated_quantity != planned_destroy_quantity:
-                    outcome.timeout_failures += 1
-                    self._debug_log(
-                        f"Destroy split verification failed: item_id={item_id} expected={planned_destroy_quantity} "
-                        f"observed={updated_quantity} keep={planned_keep_quantity}"
-                    )
-                    continue
-                previous_quantity = updated_quantity
-
-            if previous_quantity != planned_destroy_quantity:
-                outcome.timeout_failures += 1
-                self._debug_log(
-                    f"Destroy quantity mismatch: item_id={item_id} planned={planned_destroy_quantity} current={previous_quantity}"
-                )
-                continue
-
-            GLOBAL_CACHE.Inventory.DestroyItem(int(item_id))
-            confirmed_item_ids, pending_item_ids = yield from self._wait_for_merchant_sell_confirmation(
-                {int(item_id): previous_quantity},
-                timeout_ms=DESTROY_CONFIRM_TIMEOUT_MS,
-                step_ms=50,
-            )
-            if confirmed_item_ids:
-                outcome.completed += 1
-            else:
-                outcome.timeout_failures += len(pending_item_ids) or 1
-            yield from Routines.Yield.wait(40)
-
         self._debug_log(
             f"Destroy phase completed: completed={outcome.completed}/{outcome.attempted} "
             f"timeouts={outcome.timeout_failures} depleted={outcome.depleted}"

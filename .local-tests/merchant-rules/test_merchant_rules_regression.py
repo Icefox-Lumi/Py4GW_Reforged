@@ -75142,6 +75142,1421 @@ def _test_storage_transfers_remote_stock_unmet(module: types.ModuleType) -> None
     _storage_transfer_route(module, "remote-stock-unmet")
 
 
+def _test_destroy_execution_owner_contract(module: types.ModuleType) -> None:
+    owner = sys.modules["Sources.icefox.MerchantRules.destroy_execution"]
+    planning = sys.modules["Sources.icefox.MerchantRules.planning"]
+    _expect(module._destroy_execution is owner, "Widget must import the canonical destroy execution owner")
+    _expect(module.PlannedDestroyAction is planning.PlannedDestroyAction, "Destroy actions retain planner identity")
+    _expect(owner.execute_destroy_actions.__globals__ is vars(owner), "The admitted loop belongs to the destroy owner")
+    _expect(owner.DestroyIO.__dataclass_params__.frozen, "An invocation's destroy suppliers must be frozen")
+    _expect(
+        owner.DestroyCounts.__annotations__ == {"completed": "int", "timeout_failures": "int", "depleted": "int"},
+        "Destroy execution may update only the three admitted counters",
+    )
+    for name in ("bag_id", "slot"):
+        view = getattr(owner.SplitDestinationView, name)
+        _expect(isinstance(view, property) and view.fset is None, f"Split destination must borrow read-only {name}")
+
+    cold = """import importlib, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root))
+name = 'Sources.icefox.MerchantRules.destroy_execution'
+allowed = {'Sources', 'Sources.icefox', 'Sources.icefox.MerchantRules', name}
+class ColdImports:
+    def find_spec(self, fullname, path, target=None):
+        if fullname not in allowed and fullname.split('.')[0] not in sys.stdlib_module_names:
+            raise AssertionError(f'destroy owner attempted to import {fullname}')
+sys.meta_path.insert(0, ColdImports())
+owner = importlib.import_module(name)
+assert pathlib.Path(owner.__file__).resolve() == root / 'Sources/icefox/MerchantRules/destroy_execution.py'
+assert 'Sources.icefox.MerchantRules.planning' not in sys.modules
+"""
+    imported = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", cold, str(REPO_ROOT)], capture_output=True, text=True, check=False
+    )
+    _expect(
+        imported.returncode == 0 and not imported.stdout and not imported.stderr, f"Destroy cold import: {imported}"
+    )
+    tree = ast.parse(MERCHANT_RULES_PATH.read_bytes())
+    method = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_execute_destroy_phase")
+    uses = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "_destroy_execution"]
+    within = set(ast.walk(method))
+    _expect(len(uses) == 2 and all(n in within for n in uses), "Only the admitted phase uses the destroy owner")
+    bindings = [
+        n
+        for n in within
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "DestroyIO"
+    ]
+    delegates = [
+        n.value
+        for n in within
+        if isinstance(n, ast.YieldFrom)
+        and isinstance(n.value, ast.Call)
+        and isinstance(n.value.func, ast.Attribute)
+        and n.value.func.attr == "execute_destroy_actions"
+    ]
+    _expect(
+        len(delegates) == len(bindings) == 1
+        and any(kw.arg == "io" and kw.value is bindings[0] for kw in delegates[0].keywords)
+        and len(bindings[0].keywords) == 11
+        and all(isinstance(kw.value, ast.Lambda) and not kw.value.args.args for kw in bindings[0].keywords),
+        "Expected one directed yield-through with eleven passive inline suppliers",
+    )
+
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        widget = _cp15_widget(module)
+        generation: int | None = None
+        created: list[object] = []
+        bindings_seen: list[object] = []
+        borrowed: list[object] = []
+        actions: list[object] = []
+        outcome_type = module.ExecutionPhaseOutcome
+        binding_type = owner.DestroyIO
+        real_loop = owner.execute_destroy_actions
+
+        def lifecycle() -> Generator[str, None, int | None]:
+            yield "admission"
+            return generation
+
+        def outcome_factory(**fields: object) -> object:
+            actual = outcome_type(**fields)
+            created.append(actual)
+            return actual
+
+        def bind(**suppliers: object) -> object:
+            result = binding_type(**suppliers)
+            bindings_seen.append(result)
+            return result
+
+        def loop(raw: list[object], tracked: list[int], *, counts: object, io: object) -> Generator[object, None, None]:
+            _expect(counts is created[-1] and type(counts) is outcome_type, "Delegate must borrow the actual outcome")
+            _expect(io is bindings_seen[-1] and raw[0] is actions[0] and tracked == [17], "Delegate lost phase inputs")
+            borrowed.append(counts)
+            yield from real_loop(raw, tracked, counts=counts, io=io)
+
+        def finish(gen: Generator[object, None, object]) -> object:
+            try:
+                token = next(gen)
+            except StopIteration as stop:
+                return stop.value
+            raise AssertionError(f"Unexpected destroy yield {token!r}")
+
+        def snapshot(_ids: list[int]) -> dict[int, int]:
+            return {}
+
+        def quantity(_item: int) -> int:
+            return 0
+
+        def debug(_message: str) -> None:
+            pass
+
+        restore.binding(module, "ExecutionPhaseOutcome", outcome_factory)
+        restore.binding(owner, "DestroyIO", bind)
+        restore.binding(owner, "execute_destroy_actions", loop)
+        restore.binding(widget, "_wait_for_merchant_rules_lifecycle", lifecycle)
+        restore.binding(widget, "_get_inventory_stack_quantities", snapshot)
+        restore.binding(
+            module.GLOBAL_CACHE, "Item", types.SimpleNamespace(Properties=types.SimpleNamespace(GetQuantity=quantity))
+        )
+        restore.binding(widget, "_debug_log", debug)
+        empty = widget._execute_destroy_phase([])
+        _expect(not created and not bindings_seen, "Creating a phase must stay passive")
+        _expect(finish(empty) is created[0] and not bindings_seen, "Empty phase must return its own unbound result")
+        actions.append(
+            planning.PlannedDestroyAction(item_id=17, model_id=1, label="a", quantity_to_destroy=1, source_quantity=1)
+        )
+        denied = widget._execute_destroy_phase(actions)
+        _expect(next(denied) == "admission" and not bindings_seen, "Suppliers were bound before admission")
+        _expect(finish(denied) is created[1] and not bindings_seen, "Denied phase bound suppliers")
+        generation = 0
+        for index in range(2):
+            admitted = widget._execute_destroy_phase(actions)
+            _expect(next(admitted) == "admission" and len(bindings_seen) == index, "Premature destroy binding")
+            result = finish(admitted)
+            _expect(
+                result is created[-1] and result is borrowed[-1] and getattr(result, "depleted") == 1,
+                "Real owner must mutate and return through the original phase outcome",
+            )
+        _expect(len(bindings_seen) == 2 and bindings_seen[0] is not bindings_seen[1], "Destroy binding reused")
+
+
+def _destroy_execution_trace(module: types.ModuleType, family: str) -> list[dict[str, object]]:
+    if family == "callers":
+
+        def caller(route: str) -> dict[str, object]:
+            auto = route.startswith("auto")
+            manual = route.startswith("manual")
+            shortcut = route.startswith("shortcut")
+            local = route.startswith("execute_here")
+            remote = route.startswith("remote")
+            closing = route.endswith("_close")
+            protected_override = route.endswith("_override") or local or closing
+            with _cp14_b_world(module) as (queue, _map, restore), _cp13_clock(module):
+                widget = _cp15_widget(module)
+                events: list[str] = []
+                tokens: list[object] = []
+                dispatches: list[int] = []
+                outcomes: list[dict[str, object]] = []
+                allocated: list[object] = []
+                plan_actions: list[list[int]] = []
+                plan_reasons: list[list[str]] = []
+                phase_actions: list[list[dict[str, object]]] = []
+                wire: list[tuple[tuple[float, ...], tuple[str, ...]]] = []
+                ledger = {503: 3}
+                model = 222
+                reserved = (manual or auto) and route.endswith("_override")
+                if reserved:
+                    ledger[40] = 1
+                    restore.value(module, "MOD_DB")
+                    _install_weapon_mod_catalog_fixture(module)
+                    widget.salvage_settings = _salvage_settings(
+                        module, rules=[_make_specific_suffix_salvage_rule(module, module.SALVAGE_OPTION_AUTO_UPGRADE)]
+                    )
+                hero = types.SimpleNamespace(
+                    Following=True, Avoidance=False, Looting=True, Targeting=False, Combat=True
+                )
+                widget.protected_item_model_ids = [222]
+                widget.destroy_auto_enabled = auto
+                widget.destroy_include_protected_items = protected_override
+                widget.destroy_instant_enabled = False
+                widget.destroy_rules = [
+                    module.DestroyRule(
+                        enabled=True,
+                        kind=module.DESTROY_KIND_EXPLICIT_MODELS,
+                        whitelist_targets=[
+                            module.WhitelistTarget(model_id=m, keep_count=0)
+                            for m in ((222, 4040) if reserved else (222,))
+                        ],
+                    )
+                ]
+                widget.preview_ready = True
+                widget.instant_destroy_rescan_requested = auto
+                fault = RuntimeError("cp19 destroy issue failed")
+
+                def call_count(name: str) -> int:
+                    return sum(event.startswith(name + ":") for event in events)
+
+                resumes: list[tuple[bool, bool, bool]] = []
+                logs: list[str] = []
+                summary_rows: list[str] = []
+
+                def item(i: int) -> InventoryItemInfo:
+                    if i == 40:
+                        return _make_specific_suffix_item(module)
+                    return _cp8_item(
+                        module,
+                        item_id=i,
+                        model_id=model,
+                        name="Bone",
+                        quantity=ledger[i],
+                        is_stackable=True,
+                        is_weapon_like=False,
+                        rarity="White",
+                        item_type_name="Trophy",
+                    )
+
+                def bags() -> list[InventoryItemInfo]:
+                    events.append(f"bags:{sorted(ledger.items())}")
+                    return [item(i) for i in ledger]
+
+                def quantity(i: int) -> int:
+                    value = ledger.get(i, 0)
+                    events.append(f"quantity:{i}:{value}")
+                    return value
+
+                def issue(i: int) -> bool:
+                    dispatches.append(i)
+                    events.append(f"destroy:{i}:{sorted(ledger.items())}")
+                    if route == "remote_fault":
+                        raise fault
+                    if not remote and not closing:
+                        del ledger[i]
+                    events.append(f"after-destroy:{sorted(ledger.items())}")
+                    return False
+
+                def wait(ms: int) -> Iterator[str]:
+                    events.append(f"wait:{ms}")
+                    yield f"wait:{ms}"
+
+                def reset() -> None:
+                    events.append(f"reset:{widget.instant_destroy_running}")
+
+                def resume() -> bool:
+                    entry = (
+                        widget.instant_destroy_running,
+                        widget.execution_running,
+                        widget.execute_reservation_scope_active,
+                    )
+                    resumes.append(entry)
+                    events.append(f"resume:{entry}")
+                    return True
+
+                def pause() -> types.SimpleNamespace:
+                    events.append("pause")
+                    return types.SimpleNamespace(resume=resume)
+
+                def services(**_options: object) -> tuple[bool, str, dict[str, tuple[float, float]]]:
+                    return True, "Ready", {module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)}
+
+                def ids(_bags: object) -> list[int]:
+                    events.append(f"ids:{sorted(ledger)}")
+                    return list(ledger)
+
+                def raw(_bags: object) -> list[InventoryItemInfo]:
+                    return bags()
+
+                def bag_list(*bag_ids: int) -> tuple[int, ...]:
+                    return bag_ids
+
+                restore.binding(
+                    module.GLOBAL_CACHE,
+                    "Inventory",
+                    types.SimpleNamespace(DestroyItem=issue, IsStorageOpen=lambda: False),
+                )
+                restore.binding(
+                    module.GLOBAL_CACHE,
+                    "Item",
+                    types.SimpleNamespace(Properties=types.SimpleNamespace(GetQuantity=quantity)),
+                )
+                restore.binding(
+                    module.GLOBAL_CACHE,
+                    "ItemArray",
+                    types.SimpleNamespace(CreateBagList=bag_list, GetItemArray=ids, GetRawItemArray=raw),
+                )
+                restore.binding(module.Routines.Yield, "wait", wait)
+                restore.binding(module, "DESTROY_CONFIRM_TIMEOUT_MS", 50)
+                widget._collect_inventory_items = bags
+                widget._build_inventory_item_info = item
+                widget._get_supported_context = services
+                widget._pause_inventory_plus = pause
+                widget.instant_destroy_poll_timer = types.SimpleNamespace(IsExpired=lambda: False, Reset=reset)
+                original_log: Callable[[str], None] = widget._debug_log
+
+                def log(message: str) -> None:
+                    logs.append(message)
+                    events.append("log:" + message)
+                    original_log(message)
+
+                widget._debug_log = log
+                original_release: Callable[[], None] = widget._release_merchant_rules_owned_work
+
+                def release() -> None:
+                    original_release()
+                    events.append(f"release:{_cp15_lease_counts(widget)}")
+
+                widget._release_merchant_rules_owned_work = release
+                original_end: Callable[[bool], None] = widget._end_execute_reservation_scope
+
+                def end(scope: bool) -> None:
+                    events.append(f"end:{scope}:{widget.execution_running}:{widget.execute_reservation_scope_active}")
+                    original_end(scope)
+
+                widget._end_execute_reservation_scope = end
+                original_plan: Callable[..., None] = widget._plan_destroy_actions
+
+                def plan_destroy(plan: PlanResult, *args: object, **options: object) -> None:
+                    original_plan(plan, *args, **options)
+                    actions = [a.item_id for a in plan.destroy_actions]
+                    reasons = [e.reason for e in plan.entries if e.action_type == "destroy"]
+                    plan_actions.append(actions)
+                    plan_reasons.append(reasons)
+                    events.append(
+                        f"plan:{widget.destroy_include_protected_items}:{widget.destroy_instant_enabled}:{actions}:{reasons}"
+                    )
+
+                widget._plan_destroy_actions = plan_destroy
+                original_build: Callable[..., PlanResult] = widget._build_plan
+
+                def build(**opts: object) -> PlanResult:
+                    events.append(
+                        f"build:{bool(opts.get('projected_preview'))}:{bool(opts.get('ignore_travel_target'))}:{widget.destroy_include_protected_items}:{widget.destroy_instant_enabled}"
+                    )
+                    plan = original_build(**opts)
+                    events.append(
+                        f"built:{[a.item_id for a in plan.destroy_actions]}:{widget._get_multibox_plan_counts(plan)}"
+                    )
+                    return plan
+
+                widget._build_plan = build
+                original_close: Callable[..., None] = widget._owned_work_session.close_started
+
+                def close_started(*args: object, **kwargs: object) -> None:
+                    events.append("close-started")
+                    original_close(*args, **kwargs)
+                    events.append("close-finished")
+
+                widget._owned_work_session.close_started = close_started
+                original_factory: Callable[..., object] = module.ExecutionPhaseOutcome
+
+                def create_outcome(*args: object, **kwargs: object) -> object:
+                    outcome = original_factory(*args, **kwargs)
+                    if getattr(outcome, "label", None) == "Destroy":
+                        allocated.append(outcome)
+                        events.append("create-outcome:Destroy")
+                    return outcome
+
+                original_phase: Callable[..., Generator[object, None, object]] = widget._execute_destroy_phase
+
+                def phase(actions: list[PlannedDestroyAction]) -> Generator[object, None, object]:
+                    rows: list[dict[str, object]] = [module.asdict(a) for a in actions]
+                    phase_actions.append(rows)
+                    events.append(f"phase:{rows}")
+                    phase_bindings = _CP8Restoration()
+                    phase_bindings.binding(module, "ExecutionPhaseOutcome", create_outcome)
+                    try:
+                        outcome = yield from original_phase(actions)
+                    except RuntimeError as exc:
+                        _expect(route == "remote_fault" and exc is fault, f"{route} phase exception identity {exc}")
+                        events.append("phase-fault:same-object")
+                        raise
+                    finally:
+                        phase_bindings.restore()
+                    _expect(len(allocated) == 1 and outcome is allocated[0], f"{route} canonical result identity")
+                    outcomes.append(module.asdict(outcome))
+                    events.append(f"outcome:{outcomes[-1]}")
+                    return outcome
+
+                widget._execute_destroy_phase = phase
+                original_summary: Callable[..., str] = widget._format_execution_phase_summary
+
+                def summary(outcome: object) -> str:
+                    result = original_summary(outcome)
+                    if getattr(outcome, "label", None) == "Destroy":
+                        events.append("summary:" + result)
+                        summary_rows.append(result)
+                    return result
+
+                widget._format_execution_phase_summary = summary
+                if manual:
+                    widget._queue_destroy_now()
+                elif auto:
+                    widget._update_instant_destroy_runtime()
+                    _expect(
+                        not widget.instant_destroy_rescan_requested and call_count("reset") == 1,
+                        f"{route} automatic rescan consumption {events}",
+                    )
+                    events.append("automatic-trigger-consumed")
+                elif shortcut:
+                    target = item(503)
+                    accepted = widget._handle_inventory_shortcut_live_destroy_click(target)
+                    warning = "Click 'Confirm Destroy Protected Stack' to destroy only this stack."
+                    _expect(
+                        not accepted and len(queue) == 1 and widget.status_message == warning,
+                        f"{route} first click {widget.status_message!r} {queue}",
+                    )
+                    events.append("first-click:" + widget.status_message)
+                    _expect(widget._handle_inventory_shortcut_live_destroy_click(target), f"{route} confirmed click")
+                    if route == "shortcut_bag":
+                        del ledger[503]
+                    elif route == "shortcut_model":
+                        model = 333
+                    elif route == "shortcut_quantity":
+                        ledger[503] = 2
+                elif local:
+                    widget._request_execute_here()
+                    _expect(
+                        len(queue) == 1 and "did not capture an inventory snapshot" in widget.status_message,
+                        f"{route} missing preview gate: {widget.status_message}",
+                    )
+                    events.append("missing:" + widget.status_message)
+                    widget._scan_preview()
+                    _expect(
+                        widget.preview_ready and widget.preview_plan.inventory_snapshot_captured,
+                        f"{route} initial preview",
+                    )
+                    ledger[503] = 4
+                    widget._request_execute_here()
+                    _expect(
+                        len(queue) == 1
+                        and widget.execute_drift_requires_confirmation
+                        and widget.status_message == "Inventory changed since Preview. Re-Preview before Execute Here.",
+                        f"{route} drift gate: {widget.status_message}",
+                    )
+                    events.append(f"drift:{widget.preview_inventory_diff_rows}")
+                    widget._scan_preview()
+                    _expect(
+                        widget.preview_ready and widget.preview_plan.inventory_snapshot_captured,
+                        f"{route} refreshed preview",
+                    )
+                    widget._request_execute_here()
+                    _expect(
+                        not widget.execute_drift_requires_confirmation, f"{route} matching preview remained blocked"
+                    )
+                elif remote:
+
+                    def send(
+                        sender: str, receiver: str, command: int, params: tuple[float, ...], extra: tuple[str, ...]
+                    ) -> int:
+                        _expect(
+                            (sender, receiver, command, extra[0])
+                            == (
+                                "merchant.rules@example.com",
+                                "leader@example.com",
+                                module.SharedCommandType.MerchantRules,
+                                "cp19-destroy",
+                            ),
+                            f"{route} publication identity {sender} {receiver} {command} {extra}",
+                        )
+                        _expect(
+                            not hero.Following
+                            and not hero.Looting
+                            and not hero.Combat
+                            and widget.destroy_include_protected_items
+                            and widget.destroy_instant_enabled,
+                            f"{route} publication restoration too early",
+                        )
+                        wire.append((params, extra))
+                        events.append(f"send:{params}:{extra}")
+                        return 1
+
+                    def hero_options(email: str) -> types.SimpleNamespace | None:
+                        return hero if email == "merchant.rules@example.com" else None
+
+                    restore.binding(
+                        module.GLOBAL_CACHE,
+                        "ShMem",
+                        types.SimpleNamespace(SendMessage=send, GetHeroAIOptionsFromEmail=hero_options),
+                    )
+                else:
+                    raise AssertionError(f"Unknown CP19 caller route {route}")
+
+                if remote:
+                    message = _cp15_message("cp19-destroy", 3)
+                    message.ExtraData = ("cp19-destroy", "", "1", "1")
+                    work = widget.handle_shared_multibox_message(message)
+                else:
+                    _expect(len(queue) == 2, f"{route} queue admission {len(queue)}")
+                    work = queue[1]
+                _expect(_cp15_lease_counts(widget) == (0, 1, 0), f"{route} missing owned lease")
+                events.append("admitted")
+
+                def is_owned_iterator(value: object) -> TypeGuard[_CP10OwnedWork]:
+                    return isinstance(value, module._owned_work._MerchantRulesOwnedGenerator)
+
+                if not is_owned_iterator(work):
+                    raise AssertionError(f"{route} expected an owned iterator, got {type(work)}")
+                operation = work
+                try:
+                    for _ in range(80):
+                        try:
+                            token = next(operation)
+                        except StopIteration as stop:
+                            _expect(stop.value is None, f"{route} worker return {stop.value}")
+                            events.append("return:None")
+                            break
+                        tokens.append(token)
+                        events.append(f"yield:{token}")
+                        if remote and len(tokens) == 1:
+                            _expect(
+                                token == "wait:100"
+                                and not any(vars(hero).values())
+                                and widget.destroy_include_protected_items
+                                and widget.destroy_instant_enabled,
+                                f"{route} remote options during wait {vars(hero)} {events}",
+                            )
+                        if closing and token == "wait:50":
+                            _expect(
+                                dispatches == [503] and not outcomes and call_count("release") == 0,
+                                f"{route} close cut {events}",
+                            )
+                            operation.close()
+                            operation.close()
+                            events.append("closed-twice")
+                            break
+                    else:
+                        raise AssertionError(f"{route} worker did not finish: {events[-10:]}")
+                finally:
+                    operation.close()
+
+                def require(condition: bool, label: str) -> None:
+                    _expect(
+                        condition,
+                        f"{route} {label}; summary={widget.last_execution_summary!r}, status={widget.status_message!r}, error={widget.last_error!r}, rows={plan_reasons}, events={events}",
+                    )
+
+                require(call_count("release") == 1 and _cp15_lease_counts(widget) == (0, 0, 0), "single lease release")
+                require(
+                    not widget.instant_destroy_running
+                    and not widget.execution_running
+                    and not widget.execute_reservation_scope_active
+                    and not widget.inventory_shortcuts_live_action_running,
+                    "flags",
+                )
+                if closing:
+                    require(
+                        events.count("close-started") == events.count("close-finished") == 1
+                        and events.index("close-started")
+                        < events.index("close-finished")
+                        < events.index("release:(0, 0, 0)")
+                        and not any(message.startswith("Destroy phase completed:") for message in logs),
+                        "started close ordering",
+                    )
+                if not closing:
+                    require(
+                        tokens[-1:] == [None] and events[-2:] == ["release:(0, 0, 0)", "return:None"],
+                        "worker final yield and release",
+                    )
+                if manual or auto:
+                    subject = "Auto Destroy" if auto else "Run Destroy Now"
+                    require(
+                        call_count("reset") == 1 + int(auto)
+                        and widget.instant_destroy_last_signature == tuple(sorted(ledger.items())),
+                        "poll and signature",
+                    )
+                    if protected_override:
+                        require(
+                            dispatches == [503] and resumes == [(True, False, False)],
+                            "destroy pass resume before clear",
+                        )
+                        if closing:
+                            require(
+                                not outcomes and ledger == {503: 3} and "closed-twice" in events, "owned close prefix"
+                            )
+                        else:
+                            require(
+                                ledger == {40: 1}
+                                and widget.last_instant_destroy_summary == f"{subject} removed 1 item(s)."
+                                and not widget.preview_ready
+                                and "Preview again" in widget.status_message,
+                                "override summary",
+                            )
+                            require(
+                                any("salvage wins over destroy" in s for reasons in plan_reasons for s in reasons),
+                                "specific upgrade reservation",
+                            )
+                    else:
+                        require(
+                            not dispatches
+                            and not outcomes
+                            and not resumes
+                            and ledger == {503: 3}
+                            and widget.last_instant_destroy_summary == f"{subject} skipped 1 protected item(s)."
+                            and widget.preview_ready,
+                            "default protection",
+                        )
+                if shortcut:
+                    require(not widget.destroy_include_protected_items, "shortcut preserves inclusion")
+                    reasons = {
+                        "shortcut_bag": "The clicked item is no longer in your bags.",
+                        "shortcut_model": "The clicked item changed before the shortcut could run.",
+                        "shortcut_quantity": "Could not destroy Bone x3 because its stack count changed.",
+                    }
+                    if route in reasons:
+                        require(
+                            not dispatches and not phase_actions and widget.status_message == reasons[route],
+                            "shortcut drift rejection",
+                        )
+                    else:
+                        require(
+                            dispatches == [503]
+                            and not ledger
+                            and not widget.preview_ready
+                            and phase_actions[0][0]["quantity_to_destroy"] == 3
+                            and phase_actions[0][0]["source_quantity"] == 3
+                            and widget.status_message == "Destroyed Bone x3. Preview again before execution.",
+                            "confirmed protected stack",
+                        )
+                if local or remote:
+                    require(
+                        dispatches == [503]
+                        and resumes == [(False, False, False)]
+                        and events.index("end:True:False:True") < events.index("resume:(False, False, False)"),
+                        "execute end then resume",
+                    )
+                if local:
+                    require(
+                        "build:False:True:True:False" in events and phase_actions[0][0]["quantity_to_destroy"] == 4,
+                        "matching preview rebuilt for local execution",
+                    )
+                    if closing:
+                        require(
+                            not outcomes and ledger == {503: 4} and "closed-twice" in events, "execute close prefix"
+                        )
+                    else:
+                        require(
+                            summary_rows == ["Destroy: 1/1 items."]
+                            and not ledger
+                            and not widget.preview_ready
+                            and widget.status_message
+                            == "Execute Here finished. Preview again to refresh the post-run state."
+                            and widget.last_execution_summary
+                            == "Execute Here: 1 local action(s) | 0 skipped / unavailable. Destroy: 1/1 items.",
+                            "local result",
+                        )
+                if remote:
+                    require(
+                        tokens[0] == "wait:100" and "build:False:False:True:True" in events and len(wire) == 2,
+                        "remote options in plan",
+                    )
+                    require(
+                        wire[0][0] == (100, 0, 0, 0) and wire[0][1][1:3] == ("Starting", "Remote execute is starting."),
+                        "starting",
+                    )
+                    require(
+                        ledger == {503: 3}
+                        and hero.Following
+                        and hero.Looting
+                        and hero.Combat
+                        and not hero.Avoidance
+                        and not hero.Targeting
+                        and not widget.destroy_include_protected_items
+                        and not widget.destroy_instant_enabled,
+                        "remote restoration",
+                    )
+                    if route == "remote_fault":
+                        require(
+                            wire[-1][0] == (199, 0, 1, 0)
+                            and wire[-1][1][1] == "Execute Failed"
+                            and wire[-1][1][3] == str(fault)
+                            and widget.last_error == str(fault)
+                            and not outcomes
+                            and "phase-fault:same-object" in events
+                            and widget.preview_ready
+                            and not widget.last_execution_summary
+                            and widget.status_message == "Execution failed. See the console log for details.",
+                            "remote fault",
+                        )
+                    else:
+                        require(
+                            wire[-1][0] == (102, 1, 0, 1)
+                            and wire[-1][1][1] == "Executed"
+                            and widget._get_multibox_plan_counts(widget.preview_plan) == (1, 0)
+                            and not widget.preview_ready
+                            and widget.last_execution_summary == "Destroy: 0/1 items, 1 timeout(s)."
+                            and widget.status_message
+                            == "Travel + Execute finished. Preview again to refresh the post-run state."
+                            and summary_rows == ["Destroy: 0/1 items, 1 timeout(s)."]
+                            and tokens.count("wait:50") == 2,
+                            "preview-derived terminal counts",
+                        )
+                if allocated:
+                    expected = dict(
+                        label="Destroy",
+                        measure_label="items",
+                        attempted=1,
+                        completed=int(not remote and not closing),
+                        unavailable=0,
+                        quote_failures=0,
+                        timeout_failures=int(route == "remote_timeout"),
+                        load_failures=0,
+                        gold_blocked=0,
+                        depleted=0,
+                        dispatched=0,
+                    )
+                    require([module.asdict(value) for value in allocated] == [expected], "all canonical outcome fields")
+                require(len(allocated) == len(dispatches), "outcome factory reachability")
+                require(
+                    bool(outcomes) == bool(dispatches and not closing and route != "remote_fault"),
+                    "completed phase reachability",
+                )
+                return dict(
+                    scenario=route,
+                    events=events,
+                    tokens=tokens,
+                    logs=logs,
+                    ledger=sorted(ledger.items()),
+                    phase_actions=phase_actions,
+                    plans=plan_actions,
+                    reasons=plan_reasons,
+                    outcomes=outcomes,
+                    allocated=[module.asdict(value) for value in allocated],
+                    wire=wire,
+                    resumes=resumes,
+                    release_count=call_count("release"),
+                    status=widget.status_message,
+                    summary=widget.last_execution_summary,
+                    destroy_summary=widget.last_instant_destroy_summary,
+                    preview_ready=widget.preview_ready,
+                    signature=widget.instant_destroy_last_signature,
+                    resets=call_count("reset"),
+                    error=widget.last_error,
+                )
+
+        return [
+            caller(route)
+            for route in (
+                "manual_default",
+                "manual_override",
+                "auto_default",
+                "auto_override",
+                "shortcut_confirm",
+                "shortcut_bag",
+                "shortcut_model",
+                "shortcut_quantity",
+                "execute_here",
+                "remote_timeout",
+                "remote_fault",
+                "manual_close",
+                "execute_here_close",
+            )
+        ]
+    if family not in ("steps", "interruptions"):
+        raise ValueError(f"Unexpected destroy fixture family {family!r}")
+
+    records: list[dict[str, object]] = []
+    action_class: type[PlannedDestroyAction] = module.PlannedDestroyAction
+    outcome_class: Callable[..., object] = module.ExecutionPhaseOutcome
+
+    class Phase:
+        def __init__(self, name: str, ledger: dict[int, int], change: _CP8Restoration) -> None:
+            self.name = name
+            self.ledger = dict(ledger)
+            self.events: list[tuple[object, ...]] = []
+            self.widget = _cp15_widget(module)
+            self.created: list[object] = []
+            self.ready = True
+            self.has_slot = True
+            self.move_observation: Callable[[int, int], None] = self.split
+            self.destroy_observation: Callable[[int], None] = self.remove
+            self.on_bag: Callable[[], None] = lambda: None
+            self.after_snapshot: Callable[[dict[int, int]], dict[int, int]] = lambda values: values
+            self.on_debug: Callable[[str], None] = lambda _message: None
+            self.slot_bag = 2
+            self.next_move = "original"
+            self.work: Generator[object, None, object] | None = None
+            self.original_target: Callable[..., Generator[object, None, int]] = (
+                self.widget._wait_for_stack_quantity_target
+            )
+            self.original_confirm: Callable[..., Generator[object, None, tuple[set[int], set[int]]]] = (
+                self.widget._wait_for_merchant_sell_confirmation
+            )
+            self.error = RuntimeError("CP19 issue sentinel")
+            self.widget.merchant_rules_lifecycle_generation = 0
+            original_snapshot: Callable[[list[int]], dict[int, int]] = self.widget._get_inventory_stack_quantities
+            original_lifecycle: Callable[[], Generator[object, None, int | None]] = (
+                self.widget._wait_for_merchant_rules_lifecycle
+            )
+            original_log: Callable[[str], None] = self.widget._debug_log
+            host = self
+
+            def create(**kwargs: object) -> object:
+                actual = outcome_class(**kwargs)
+                self.created.append(actual)
+                self.row("create", dict(kwargs), self.fields())
+                return actual
+
+            def snapshot(ids: list[int]) -> dict[int, int]:
+                result = original_snapshot(ids)
+                self.row("snapshot", tuple(ids), dict(result))
+                return self.after_snapshot(result)
+
+            def lifecycle() -> Generator[object, None, int | None]:
+                self.row("lifecycle")
+                generation = yield from original_lifecycle()
+                self.row("generation", generation)
+                return generation
+
+            def debug(message: str) -> None:
+                original_log(message)
+                self.row("log", message, self.fields())
+                self.on_debug(message)
+
+            class Coordinate:
+                def __init__(self, label: str, value: int) -> None:
+                    self.label = label
+                    self.value = value
+
+                def __int__(self) -> int:
+                    host.row("destination", self.label, self.value)
+                    if self.label == "bag":
+                        host.on_bag()
+                    return self.value
+
+            def destination() -> object | None:
+                self.row("slot", self.has_slot)
+                if not self.has_slot:
+                    return None
+                return types.SimpleNamespace(bag_id=Coordinate("bag", self.slot_bag), slot=Coordinate("slot", 3))
+
+            class Inventory:
+                @property
+                def MoveItem(self) -> Callable[[int, int, int, int], bool]:
+                    binding = host.next_move
+                    host.row("lookup move", binding)
+
+                    def move(item: int, bag: int, slot: int, keep: int, /) -> bool:
+                        host.row("move", binding, item, bag, slot, keep)
+                        host.move_observation(item, keep)
+                        host.row("move result", False, dict(host.ledger))
+                        return False
+
+                    return move
+
+                @property
+                def DestroyItem(self) -> Callable[[int], bool]:
+                    host.row("lookup destroy")
+
+                    def destroy(item: int, /) -> bool:
+                        host.row("destroy", item)
+                        host.destroy_observation(item)
+                        host.row("destroy result", False, dict(host.ledger))
+                        return False
+
+                    return destroy
+
+            def quantity(item: int, /) -> int:
+                result = self.ledger.get(item, 0)
+                self.row("quantity", item, result)
+                return result
+
+            self.widget._get_inventory_item_ids = lambda: list(self.ledger)
+            self.widget._get_inventory_stack_quantities = snapshot
+            self.widget._wait_for_merchant_rules_lifecycle = lifecycle
+            self.widget._wait_for_stack_quantity_target = partial(self.target, "original")
+            self.widget._wait_for_merchant_sell_confirmation = partial(self.confirm, "original")
+            self.widget._find_inventory_empty_slot = destination
+            self.widget._debug_log = debug
+            change.binding(module, "ExecutionPhaseOutcome", create)
+            change.binding(module, "DESTROY_CONFIRM_TIMEOUT_MS", 0)
+            change.binding(module.Routines.Checks.Map, "MapValid", lambda: self.ready)
+            change.binding(module.Routines.Yield, "wait", self.wait)
+            change.binding(module.GLOBAL_CACHE, "Inventory", Inventory())
+            change.binding(
+                module.GLOBAL_CACHE,
+                "Item",
+                types.SimpleNamespace(Properties=types.SimpleNamespace(GetQuantity=quantity)),
+            )
+
+        def row(self, *cells: object) -> None:
+            self.events.append(cells)
+
+        def rows(self, label: str) -> list[tuple[object, ...]]:
+            return [event[1:] for event in self.events if event[0] == label]
+
+        def equal(self, label: str, actual: object, expected: object) -> None:
+            _expect(
+                actual == expected,
+                f"Destroy {self.name} {label}: expected {expected!r}, got {actual!r}; {self.events!r}",
+            )
+
+        def fields(self) -> dict[str, object]:
+            return dict(vars(self.created[-1])) if self.created else {}
+
+        def counts(self, attempted: int, completed: int = 0, timeouts: int = 0, depleted: int = 0) -> None:
+            self.equal(
+                "all outcome fields",
+                self.fields(),
+                dict(
+                    label="Destroy",
+                    measure_label="items",
+                    attempted=attempted,
+                    completed=completed,
+                    unavailable=0,
+                    quote_failures=0,
+                    timeout_failures=timeouts,
+                    load_failures=0,
+                    gold_blocked=0,
+                    depleted=depleted,
+                    dispatched=0,
+                ),
+            )
+
+        def split(self, item: int, keep: int) -> None:
+            self.ledger[item] -= keep
+
+        def remove(self, item: int) -> None:
+            self.ledger.pop(item, None)
+
+        def wait(self, delay: int, /) -> Generator[int, None, None]:
+            self.row("wait", delay, self.fields(), dict(self.ledger))
+            yield delay
+
+        def target(
+            self, binding: str, item: int, expected: int, /, *, timeout_ms: int, step_ms: int
+        ) -> Generator[object, None, int]:
+            self.row("target", binding, item, expected, timeout_ms, step_ms)
+            result: int = yield from self.original_target(item, expected, timeout_ms=timeout_ms, step_ms=step_ms)
+            self.row("target return", result)
+            return result
+
+        def confirm(
+            self, binding: str, previous: dict[int, int], /, *, timeout_ms: int, step_ms: int
+        ) -> Generator[object, None, tuple[set[int], set[int]]]:
+            self.row("confirm", binding, dict(previous), timeout_ms, step_ms)
+            result: tuple[set[int], set[int]] = yield from self.original_confirm(
+                previous, timeout_ms=timeout_ms, step_ms=step_ms
+            )
+            self.row("confirm return", sorted(result[0]), sorted(result[1]))
+            return result
+
+        def start(self, actions: Sequence[object]) -> Generator[object, None, object]:
+            self.work = self.widget._execute_destroy_phase(actions)
+            assert self.work is not None
+            self.equal("passive creation", self.events, [])
+            return self.work
+
+        def advance(self, work: Generator[object, None, object], expected: int) -> None:
+            token = next(work)
+            self.row("yield", token)
+            self.equal("suspension", token, expected)
+
+        def finish(self, work: Generator[object, None, object]) -> None:
+            for _ in range(256):
+                try:
+                    self.row("yield", next(work))
+                except StopIteration as stop:
+                    self.equal("outcome construction count", len(self.created), 1)
+                    self.equal("returned canonical outcome identity", stop.value is self.created[0], True)
+                    self.row("return same outcome", self.fields())
+                    return
+            raise AssertionError(f"{self.name} failed to terminate: {self.events!r}")
+
+        def fault(self, operation: Callable[[], object]) -> None:
+            try:
+                operation()
+            except RuntimeError as observed:
+                self.equal("escaping exception identity", observed is self.error, True)
+                self.row("escaping same exception", str(observed))
+            else:
+                raise AssertionError(f"{self.name} did not propagate the sentinel: {self.events!r}")
+
+        def interrupted(self) -> None:
+            self.equal(
+                "no final log",
+                any(str(row[0]).startswith("Destroy phase completed:") for row in self.rows("log")),
+                False,
+            )
+            self.equal("no phase return", self.rows("return same outcome"), [])
+
+    @contextmanager
+    def scenario(name: str, ledger: dict[int, int]) -> Iterator[Phase]:
+        with _cp14a_changes() as change:
+            phase = Phase(name, ledger, change)
+            try:
+                yield phase
+                records.append(
+                    dict(scenario=name, events=phase.events, outcome=phase.fields(), ledger=dict(phase.ledger))
+                )
+            finally:
+                if phase.work is not None:
+                    phase.work.close()
+
+    def action(item: int, destroy: int, keep: int = 0, *, label: str = "stack") -> PlannedDestroyAction:
+        return action_class(item, 999, label, destroy, destroy + keep, keep, bool(keep))
+
+    if family == "interruptions":
+        for cut in ("lifecycle", "target", "confirmation", "pacing"):
+            for method in ("throw", "close"):
+                with scenario(cut + "_" + method, {7: 10}) as p:
+                    p.ready = cut != "lifecycle"
+                    if cut == "target":
+
+                        def observe_destination(_item: int, keep: int) -> None:
+                            p.ledger[70] = keep
+
+                        p.move_observation = observe_destination
+                    if cut == "confirmation":
+                        p.destroy_observation = lambda _item: None
+                    work = p.start([action(7, 6, 4)])
+                    p.advance(work, {"lifecycle": 100, "target": 50, "confirmation": 50, "pacing": 40}[cut])
+                    p.counts(1, int(cut == "pacing"))
+                    p.equal("moves", p.rows("move"), [] if cut == "lifecycle" else [("original", 7, 2, 3, 4)])
+                    p.equal("destroys", p.rows("destroy"), [(7,)] if cut in ("confirmation", "pacing") else [])
+                    inventory_at_cut = {
+                        "lifecycle": {7: 10},
+                        "target": {7: 10, 70: 4},
+                        "confirmation": {7: 6},
+                        "pacing": {},
+                    }
+                    p.equal("inventory", p.ledger, inventory_at_cut[cut])
+                    prefix = list(p.events)
+                    if method == "throw":
+                        p.fault(lambda: work.throw(p.error))
+                    else:
+                        work.close()
+                        p.row("closed")
+                    p.equal("no later work", p.events[:-1], prefix)
+                    p.equal("inventory after interruption", p.ledger, inventory_at_cut[cut])
+                    p.interrupted()
+        for site in ("move", "destroy"):
+            with scenario("issue_fault_" + site, {7: 10}) as p:
+
+                def fail(*_args: int) -> None:
+                    raise p.error
+
+                if site == "move":
+                    p.move_observation = fail
+                else:
+                    p.destroy_observation = fail
+                work = p.start([action(7, 6, 4)])
+                p.fault(lambda: next(work))
+                p.counts(1)
+                p.equal("issued move", p.rows("move"), [("original", 7, 2, 3, 4)])
+                p.equal("issued destroy", p.rows("destroy"), [] if site == "move" else [(7,)])
+                p.equal("surviving inventory", p.ledger, {7: 10 if site == "move" else 6})
+                p.equal("no confirmation or pacing", (len(p.rows("confirm")), len(p.rows("wait"))), (0, 0))
+                p.interrupted()
+        return records
+
+    with scenario("empty", {}) as p:
+        p.finish(p.start([]))
+        p.counts(0)
+        p.equal("no lifecycle", p.rows("lifecycle"), [])
+
+    class Conversion:
+        def __init__(self, convert: Callable[[], int]) -> None:
+            self.convert = convert
+
+        def __int__(self) -> int:
+            return self.convert()
+
+    for label, values in (("value_zero", [13, 0, 13]), ("filter_zero", [0]), ("value_fault", [13])):
+        with scenario(label, {13: 5}) as p:
+            conversions = iter(values)
+
+            def convert() -> int:
+                result = next(conversions, None)
+                p.row("convert", result)
+                if result is None:
+                    raise p.error
+                return result
+
+            work = p.start([Conversion(convert)])
+            if label == "value_fault":
+                p.fault(lambda: next(work))
+                p.equal("before construction or admission", (len(p.created), len(p.rows("lifecycle"))), (0, 0))
+                p.equal("two conversions", p.rows("convert"), [(13,), (None,)])
+            else:
+                p.finish(work)
+                p.equal("independent conversions", p.rows("convert"), [(value,) for value in values])
+                if label == "value_zero":
+                    p.equal("tracked second value", p.rows("snapshot")[0], ((0,), dict[int, int]()))
+                    p.counts(1, depleted=1)
+                else:
+                    p.equal("never admitted", p.rows("lifecycle"), [])
+                    p.counts(0)
+
+    with scenario("filter_alias", {23: 2}) as p, _cp14a_changes() as change:
+
+        class Reclassified:
+            item_id = 23
+            requires_split = False
+            quantity_to_destroy = 2
+            keep_quantity = 0
+            label = "alias"
+
+            def __int__(self) -> int:
+                change.binding(module, "PlannedDestroyAction", Reclassified)
+                p.row("filter switched alias", 13)
+                return 13
+
+        p.finish(p.start([Reclassified()]))
+        p.equal("classified again", p.rows("snapshot")[0], ((23,), {23: 2}))
+        p.equal("one conversion", p.rows("filter switched alias"), [(13,)])
+        p.counts(1, 1)
+
+    with scenario("denied", {7: 2}) as p:
+        p.ready = False
+        work = p.start([7, 7])
+        p.advance(work, 100)
+        p.widget.merchant_rules_lifecycle_generation += 1
+        p.finish(work)
+        p.equal("denied", p.rows("generation"), [(None,)])
+        p.equal("no snapshot", p.rows("snapshot"), [])
+        p.counts(2, timeouts=2)
+
+    with scenario("lazy_membership_and_borrowed_action", {7: 2, 8: 3, 9: 1}) as p:
+        retained = action(7, 1)
+        actions: list[object] = [retained, -1]
+        p.ready = False
+        work = p.start(actions)
+        actions.append(8)
+        p.advance(work, 100)
+        actions.append(9)
+        retained.quantity_to_destroy = 2
+        p.ready = True
+        p.finish(work)
+        p.equal("generation zero", p.rows("generation"), [(0,)])
+        p.equal("captured membership", p.rows("snapshot")[0], ((7, 8), {7: 2, 8: 3}))
+        p.equal("normalized negative legacy turn", (-1, 0) in p.rows("quantity"), True)
+        p.equal("borrowed action visible", p.rows("destroy"), [(8,), (7,)])
+        p.counts(2, 2)
+    with scenario("fresh_legacy_constructor", {7: 5, 8: 2}) as p, _cp14a_changes() as change:
+
+        class Classification(type):
+            def __instancecheck__(cls, instance: object) -> bool:
+                p.row("classify A", type(instance).__name__)
+                return False
+
+        class A(metaclass=Classification):
+            pass
+
+        class B:
+            pass
+
+        class C:
+            keep_quantity = 0
+
+            @property
+            def requires_split(self) -> bool:
+                if self.item_id == 8:
+                    p.equal("retained C identity", self is retained_c, True)
+                    p.row("retained C identity", self is retained_c)
+                return False
+
+            def __init__(
+                self, *, item_id: int, model_id: int, label: str, quantity_to_destroy: int, source_quantity: int
+            ) -> None:
+                self.item_id = item_id
+                self.model_id = model_id
+                self.label = label
+                self.quantity_to_destroy = quantity_to_destroy
+                self.source_quantity = source_quantity
+                p.row("C constructed", item_id, model_id, label, quantity_to_destroy, source_quantity)
+
+            def __int__(self) -> int:
+                return self.item_id
+
+        class SnapshotQuantity(int):
+            def __int__(self) -> int:
+                p.equal("B after conversion", module.PlannedDestroyAction is B, True)
+                change.binding(module, "PlannedDestroyAction", C)
+                p.row("snapshot value changed alias", "C")
+                return super().__int__()
+
+        def classify_after_snapshot(snapshot: dict[int, int]) -> dict[int, int]:
+            p.after_snapshot = lambda ordinary: ordinary
+            change.binding(module, "PlannedDestroyAction", A)
+            return {**snapshot, 7: SnapshotQuantity(snapshot[7])}
+
+        def legacy_id() -> int:
+            if module.PlannedDestroyAction is A:
+                p.row("normalization changed alias", "B")
+                change.binding(module, "PlannedDestroyAction", B)
+            return 7
+
+        retained_c = C(item_id=8, model_id=123, label="z", quantity_to_destroy=1, source_quantity=2)
+        p.events.clear()
+        p.after_snapshot = classify_after_snapshot
+        work = p.start([Conversion(legacy_id), retained_c])
+        p.advance(work, 40)
+        retained_c.quantity_to_destroy = 2
+        p.row("mutate retained C", retained_c.item_id, retained_c.quantity_to_destroy)
+        p.finish(work)
+        p.equal("A classification", p.rows("classify A"), [("Conversion",)])
+        p.equal("fresh constructor and keyword values", p.rows("C constructed"), [(7, 0, "Item 7", 5, 5)])
+        p.equal(
+            "alias change site order",
+            [
+                row[0]
+                for row in p.events
+                if row[0]
+                in ("classify A", "normalization changed alias", "snapshot value changed alias", "C constructed")
+            ],
+            ["classify A", "normalization changed alias", "snapshot value changed alias", "C constructed"],
+        )
+        p.equal("retained instance used after its mutation", p.rows("destroy"), [(7,), (8,)])
+        p.equal("retained C at sort and turn", p.rows("retained C identity"), [(True,), (True,)])
+        p.counts(2, 2)
+
+    with scenario("stable_ties_late_fields", {1: 2, 50: 4, 52: 8}) as p:
+        first = action(50, 4, label="q")
+        second = action(50, 4, label="Q")
+        work = p.start([first, second, action(1, 2, label="a")])
+        p.advance(work, 40)
+        second.item_id, second.label, second.requires_split = 52, "0", True
+        second.quantity_to_destroy, second.keep_quantity = 7, 1
+        p.finish(work)
+        p.equal("captured stable order", p.rows("destroy"), [(1,), (50,), (52,)])
+        p.equal("late split", p.rows("move"), [("original", 52, 2, 3, 1)])
+        p.counts(3, 3, depleted=1)
+
+    with scenario("numeric_id_and_whole_before_split", {50: 1, 9: 2, 3: 4}) as p:
+        p.finish(p.start([action(3, 3, 1, label="a"), action(50, 1, label="q"), action(9, 2, label="Q")]))
+        p.equal("whole then lower-case label then numeric ID", p.rows("destroy"), [(9,), (50,), (3,)])
+        p.counts(3, 3)
+
+    with scenario("duplicates_and_zero_key", {7: 5, 8: 0}) as p:
+
+        def initial_counts(message: str) -> None:
+            if message.startswith("Destroy phase:"):
+                p.counts(4, depleted=2)
+                p.equal("before issue", p.rows("destroy"), [])
+
+        p.on_debug = initial_counts
+        p.finish(p.start([7, 7, 8, 9]))
+        p.equal("duplicate requests and zero key", p.rows("snapshot")[0], ((7, 7, 8, 9), {7: 5, 8: 0}))
+        p.equal("duplicate falls back to captured snapshot", p.rows("destroy"), [(7,), (7,)])
+        p.counts(4, 2, depleted=2)
+
+    with scenario("nonpositive_live_snapshot_fallback", {7: 6}) as p:
+
+        def drop_live(message: str) -> None:
+            if message.startswith("Destroy phase:"):
+                p.ledger[7] = -2
+
+        p.on_debug = drop_live
+        p.finish(p.start([action(7, 6)]))
+        p.equal("negative live read", (7, -2) in p.rows("quantity"), True)
+        p.equal("snapshot used", p.rows("confirm"), [("original", {7: 6}, 0, 50)])
+        p.counts(1, 1)
+
+    with scenario("quantity_mismatch", {7: 10}) as p:
+        p.finish(p.start([action(7, 6)]))
+        p.equal("mismatch skips dispatch and pacing", (len(p.rows("destroy")), len(p.rows("wait"))), (0, 0))
+        p.equal("diagnostic", p.rows("log")[1][0], "Destroy quantity mismatch: item_id=7 planned=6 current=10")
+        p.counts(1, timeouts=1)
+
+    with scenario("nonpositive_destroy_reads_keep", {7: 2}) as p:
+
+        def observed_quantity(label: str, value: int) -> int:
+            p.row("field conversion", label, value)
+            return value
+
+        record = module.PlannedDestroyAction(
+            item_id=7,
+            model_id=99,
+            label="skip",
+            source_quantity=2,
+            quantity_to_destroy=Conversion(partial(observed_quantity, "destroy", -1)),
+            keep_quantity=Conversion(partial(observed_quantity, "keep", 3)),
+            requires_split=True,
+        )
+        p.finish(p.start([record]))
+        p.equal("quantity read order", p.rows("field conversion"), [("destroy", -1), ("keep", 3)])
+        p.equal("skip precedes slot and pacing", (len(p.rows("slot")), len(p.rows("wait"))), (0, 0))
+        p.counts(1)
+
+    for remainder in (5, 6, None):
+        with scenario("split_equality_" + str(remainder), {7: 10}) as p:
+            p.has_slot = remainder is not None
+            if remainder is not None:
+
+                def observe_move(item: int, _keep: int, *, observed: int = remainder) -> None:
+                    p.ledger[item] = observed
+
+                p.move_observation = observe_move
+            p.finish(p.start([action(7, 5, 4)]))
+            p.equal("move kept quantity", p.rows("move"), [] if remainder is None else [("original", 7, 2, 3, 4)])
+            p.equal("genuine waiter result", p.rows("target return"), [] if remainder is None else [(remainder,)])
+            p.equal("no destroy or pacing", (len(p.rows("destroy")), len(p.rows("wait"))), (0, 0))
+            p.counts(1, timeouts=1)
+
+    with scenario("late_split_bindings_and_captured_quantities", {7: 10, 8: 10}) as p, _cp14a_changes() as change:
+        first_split = action(7, 6, 4)
+
+        def bag_replaces_move() -> None:
+            p.next_move = "replacement"
+
+        def move_after_lookup(item: int, keep: int) -> None:
+            if item != 7:
+                p.split(item, keep)
+
+        def target_lookup(_widget: object) -> Callable[..., Generator[object, None, int]]:
+            binding = "replacement" if p.rows("target") else "first"
+            timeout = 57 if binding == "first" else 67
+            change.binding(module, "DESTROY_CONFIRM_TIMEOUT_MS", timeout)
+            p.row("lookup target", binding, timeout)
+            return partial(p.target, binding)
+
+        def confirm_lookup(_widget: object) -> Callable[..., Generator[object, None, tuple[set[int], set[int]]]]:
+            binding = "replacement" if p.rows("confirm") else "first"
+            timeout = 83 if binding == "first" else 93
+            change.binding(module, "DESTROY_CONFIRM_TIMEOUT_MS", timeout)
+            p.row("lookup confirmation", binding, timeout)
+            return partial(p.confirm, binding)
+
+        change.binding(module.MerchantRulesWidget, "_wait_for_stack_quantity_target", property(target_lookup))
+        change.binding(module.MerchantRulesWidget, "_wait_for_merchant_sell_confirmation", property(confirm_lookup))
+        p.move_observation = move_after_lookup
+        p.on_bag = bag_replaces_move
+        work = p.start([first_split, action(8, 6, 4)])
+        p.advance(work, 50)
+        first_split.quantity_to_destroy, first_split.keep_quantity = 9, 1
+        p.ledger[7] = 6
+        p.row("mutation at target", 9, 1, dict(p.ledger))
+        p.finish(work)
+        lookup_order = [event for event in p.events if event[0] in ("lookup move", "destination", "move")]
+        p.equal(
+            "callable before both argument conversions",
+            lookup_order,
+            [
+                ("lookup move", "original"),
+                ("destination", "bag", 2),
+                ("destination", "slot", 3),
+                ("move", "original", 7, 2, 3, 4),
+                ("lookup move", "replacement"),
+                ("destination", "bag", 2),
+                ("destination", "slot", 3),
+                ("move", "replacement", 8, 2, 3, 4),
+            ],
+        )
+        p.equal(
+            "target lookup and fresh timeout",
+            p.rows("target"),
+            [("first", 7, 6, 57, 50), ("replacement", 8, 6, 67, 50)],
+        )
+        p.equal(
+            "confirmation lookup and fresh timeout",
+            p.rows("confirm"),
+            [("first", {7: 6}, 83, 50), ("replacement", {8: 6}, 93, 50)],
+        )
+        p.equal("captured quantities survived suspension", p.rows("destroy"), [(7,), (8,)])
+        p.equal(
+            "false returns ignored", [row[0] for row in p.rows("move result") + p.rows("destroy result")], [False] * 4
+        )
+        p.counts(2, 2)
+
+    for observation in ("decrease", "disappear", "timeout"):
+        with scenario("genuine_confirmation_" + observation, {7: 6}) as p, _cp14a_changes() as change:
+            p.destroy_observation = lambda _item: None
+            change.binding(module, "DESTROY_CONFIRM_TIMEOUT_MS", 50 if observation != "timeout" else 0)
+            work = p.start([action(7, 6)])
+            p.advance(work, 50)
+            p.counts(1)
+            if observation == "decrease":
+                p.ledger[7] = 5
+            elif observation == "disappear":
+                p.ledger.clear()
+            p.row("inventory observation", observation, dict(p.ledger))
+            p.advance(work, 40)
+            confirmed = observation != "timeout"
+            p.counts(1, int(confirmed), int(not confirmed))
+            expected_sets: list[tuple[list[int], list[int]]] = [([7], [])] if confirmed else [([], [7])]
+            p.equal("genuine sets", p.rows("confirm return"), expected_sets)
+            p.finish(work)
+            p.equal(
+                "final log",
+                p.rows("log")[-1][0],
+                f"Destroy phase completed: completed={int(confirmed)}/1 timeouts={int(not confirmed)} depleted=0",
+            )
+
+    with scenario("synthetic_confirmation_accounting", {7: 6}) as p:
+        synthetic_returns: list[tuple[set[int], set[int]]] = [(set(), set()), ({7}, {8}), (set(), {7, 8, 9})]
+        results = iter(synthetic_returns)
+
+        def synthetic(
+            previous: dict[int, int], /, *, timeout_ms: int, step_ms: int
+        ) -> Generator[object, None, tuple[set[int], set[int]]]:
+            result = next(results)
+            p.row("synthetic confirmation", dict(previous), timeout_ms, step_ms, sorted(result[0]), sorted(result[1]))
+            yield from ()
+            return result
+
+        p.widget._wait_for_merchant_sell_confirmation = synthetic
+        p.destroy_observation = lambda _item: None
+        work = p.start([7, 7, 7])
+        for completions, failures in ((0, 1), (1, 1), (1, 4)):
+            p.advance(work, 40)
+            p.counts(3, completions, failures, depleted=2)
+        p.finish(work)
+    return records
+
+
+def _test_destroy_execution_steps(module: types.ModuleType) -> None:
+    rows = _destroy_execution_trace(module, "steps")
+    _expect(len(rows) == 22, f"Destroy step witness count: {len(rows)}")
+
+
+def _test_destroy_execution_interruptions(module: types.ModuleType) -> None:
+    rows = _destroy_execution_trace(module, "interruptions")
+    _expect(len(rows) == 10, f"Destroy interruption prefix count: {len(rows)}")
+
+
+def _test_destroy_execution_callers(module: types.ModuleType) -> None:
+    _destroy_execution_trace(module, "callers")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -76883,6 +78298,14 @@ def main() -> int:
                 ("storage_transfers_faults_and_close", lambda: _test_storage_transfers_faults_and_close(module)),
                 ("storage_transfers_local_cleanup", lambda: _test_storage_transfers_local_cleanup(module)),
                 ("storage_transfers_remote_stock_unmet", lambda: _test_storage_transfers_remote_stock_unmet(module)),
+            ]
+        )
+        tests.extend(
+            [
+                ("destroy_execution_owner_contract", lambda: _test_destroy_execution_owner_contract(module)),
+                ("destroy_execution_steps", lambda: _test_destroy_execution_steps(module)),
+                ("destroy_execution_interruptions", lambda: _test_destroy_execution_interruptions(module)),
+                ("destroy_execution_callers", lambda: _test_destroy_execution_callers(module)),
             ]
         )
         catalog_contract_tests = [
