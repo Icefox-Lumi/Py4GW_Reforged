@@ -76557,6 +76557,1896 @@ def _test_destroy_execution_callers(module: types.ModuleType) -> None:
     _destroy_execution_trace(module, "callers")
 
 
+def _test_merchant_sales_owner_contract(module: types.ModuleType) -> None:
+    from hashlib import sha256
+
+    package = "Sources.icefox.MerchantRules"
+    owner = sys.modules[f"{package}.merchant_sales"]
+    evidence = sys.modules[f"{package}.inventory_evidence"]
+    _expect(module._merchant_sales is owner and module._inventory_evidence is evidence, "Canonical module bindings")
+    _expect(
+        owner.PlannedSaleIO.__dataclass_params__.frozen and owner.OpenSaleIO.__dataclass_params__.frozen,
+        "Frozen sale bindings",
+    )
+    _expect(
+        set(owner.MerchantSaleCounts.__annotations__) == {"completed", "depleted", "timeout_failures"},
+        "Borrowed counters",
+    )
+    for view, names in (
+        (owner.ManualSaleView, ("item_id", "label", "quantity_to_sell")),
+        (owner.SplitSlotView, ("bag_id", "slot")),
+    ):
+        for name in names:
+            field = getattr(view, name)
+            _expect(isinstance(field, property) and field.fset is None, f"Read-only {view.__name__}.{name}")
+
+    cold = """import importlib, importlib.util, pathlib, sys
+root, harness, mode = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+sys.path.insert(0, str(root))
+package = 'Sources.icefox.MerchantRules'
+if mode == 'inventory_evidence':
+    spec = importlib.util.spec_from_file_location('cp20_cold_harness', harness)
+    h = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = h
+    spec.loader.exec_module(h)
+    h._install_stub_modules(h.SCRIPT_DIR / '_merchant_rules_regression_tmp')
+allowed = {'Sources', 'Sources.icefox', package, package + '.' + mode}
+if mode == 'inventory_evidence':
+    allowed.update(package + '.' + n for n in ('item_values', 'salvage_options', 'weapon_mod_normalization', 'catalog', 'catalog_search', 'configuration'))
+class Guard:
+    def find_spec(self, fullname, path, target=None):
+        if fullname not in allowed and fullname.split('.')[0] not in sys.stdlib_module_names:
+            raise AssertionError(f'unexpected {mode} import: {fullname}')
+sys.meta_path.insert(0, Guard())
+loaded = importlib.import_module(package + '.' + mode)
+assert pathlib.Path(loaded.__file__).resolve() == root / 'Sources/icefox/MerchantRules' / (mode + '.py')
+if mode == 'inventory_evidence':
+    assert loaded.GLOBAL_CACHE is sys.modules['Py4GWCoreLib'].GLOBAL_CACHE
+    assert package + '.merchant_sales' not in sys.modules
+else:
+    assert not any(n.startswith(('Py4GW', 'PyImGui', 'PySystem')) for n in sys.modules)
+"""
+    for name in ("merchant_sales", "inventory_evidence"):
+        check = subprocess.run(
+            [sys.executable, "-I", "-B", "-S", "-X", "utf8", "-c", cold, str(REPO_ROOT), __file__, name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        _expect(check.returncode == 0 and not check.stdout and not check.stderr, f"{name} cold import: {check}")
+
+    routes = {
+        "_get_inventory_stack_quantities": ("_inventory_evidence", "inventory_stack_quantities"),
+        "_wait_for_merchant_sell_confirmation": ("_inventory_evidence", "confirm_merchant_sales"),
+        "_execute_merchant_sell_phase": ("_merchant_sales", "execute_planned_merchant_sales"),
+        "_execute_open_merchant_sell_phase": ("_merchant_sales", "execute_open_merchant_sales"),
+    }
+    widget_bytes = MERCHANT_RULES_PATH.read_bytes()
+    tree = ast.parse(widget_bytes)
+    methods = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in routes]
+    _expect(len(methods) == 4, "Expected four unique widget sale/evidence routes")
+    widget_lines = widget_bytes.splitlines(True)
+    for method in sorted(methods, key=lambda n: -n.lineno):
+        alias, symbol = routes[method.name]
+        _expect(
+            getattr(getattr(module, alias), symbol).__globals__ is vars(getattr(module, alias)), f"Owner of {symbol}"
+        )
+        matching = [
+            n
+            for n in ast.walk(method)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == alias
+            and n.func.attr == symbol
+        ]
+        _expect(len(matching) == 1, f"Expected a single direct {symbol} delegation")
+        if method.name != "_get_inventory_stack_quantities":
+            _expect(
+                any(isinstance(n, ast.YieldFrom) and n.value is matching[0] for n in ast.walk(method)),
+                f"Yield through {symbol}",
+            )
+        del widget_lines[method.lineno - 1 : method.end_lineno]
+    import_line = b"from Sources.icefox.MerchantRules import merchant_sales as _merchant_sales\r\n"
+    widget_lines.remove(import_line)
+    _expect(
+        sha256(b"".join(widget_lines)).hexdigest()
+        == "603e3aa6ef31abdddc44b149a8bbdd6a57eb6e413bfe6eeae2bdfc898cabd5cc",
+        "Widget bytes outside four methods and import drifted",
+    )
+    evidence_path = REPO_ROOT / "Sources/icefox/MerchantRules/inventory_evidence.py"
+    evidence_bytes = evidence_path.read_bytes()
+    for addition in (b"from collections.abc import Callable\r\n", b"from collections.abc import Generator\r\n"):
+        evidence_bytes = evidence_bytes.replace(addition, b"", 1)
+    evidence_bytes = (
+        evidence_bytes[: evidence_bytes.index(b"def inventory_stack_quantities(")]
+        + evidence_bytes[evidence_bytes.index(b"class ModifierParser(") :]
+    )
+    _expect(
+        sha256(evidence_bytes).hexdigest() == "0d0b09b55724cced591b5c9a474bd858310876d58d5bb4c35bddb28558f1771f",
+        "Inventory owner prior bytes changed",
+    )
+    _expect(evidence_path.with_name("__init__.py").read_bytes() == b"", "Package initializer changed")
+    harness = Path(__file__).read_bytes()
+    anchor = b"\r\ndef _test_merchant_sales_owner_contract("
+    harness = harness[: harness.index(anchor)] + harness[harness.index(b"\r\ndef main() -> int:") :]
+    end = harness.index(b"        catalog_contract_tests = [")
+    start = harness.rindex(b"        tests.extend(", 0, end)
+    _expect(
+        sha256(harness[:start] + harness[end:]).hexdigest()
+        == "9e0aad21a5b94b669f79a4520838641f5198a5e591da46d25f0c48fdf43ec991",
+        "CP19 harness byte reconstruction",
+    )
+
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        widget = _cp15_widget(module)
+        _expect(
+            widget._wait_for_merchant_sell_confirmation.__kwdefaults__ == {"timeout_ms": 1500, "step_ms": 50},
+            "Bound confirmation defaults",
+        )
+        original_outcome = module.ExecutionPhaseOutcome
+        created: list[object] = []
+        seen_io: list[object] = []
+        rows = [module.PlannedManualMerchantSale(item_id=7, model_id=4, label="borrowed")]
+        record = rows[0]
+        ids = [7]
+
+        def make_outcome(**fields: object) -> object:
+            result = original_outcome(**fields)
+            created.append(result)
+            return result
+
+        def service(*_args: object, **_kwargs: object) -> Generator[str, None, list[int]]:
+            yield "service"
+            return [7]
+
+        def lifecycle(*, require_service: bool) -> Generator[str, None, int]:
+            _expect(require_service, "Manual gate must require service")
+            yield "service"
+            return 0
+
+        planned = owner.execute_planned_merchant_sales
+        opened = owner.execute_open_merchant_sales
+
+        def borrowed(items: list[Any], *, counts: object, io: object) -> Generator[object, None, None]:
+            _expect(counts is created[-1] and type(counts) is original_outcome, "Borrowed original canonical outcome")
+            _expect(all(io is not prev for prev in seen_io), "Sale bindings unexpectedly reused")
+            seen_io.append(io)
+            if isinstance(io, owner.OpenSaleIO):
+                _expect(items is rows and items[0] is record, "Manual sale list or canonical record copied")
+                yield from opened(items, counts=counts, io=io)
+            else:
+                _expect(items is ids, "Planned ID list copied")
+                yield from planned(items, counts=counts, io=io)
+
+        def no_ids() -> list[int]:
+            return []
+
+        def zero_quantity(_item: int) -> int:
+            return 0
+
+        def quiet(_message: str) -> None:
+            pass
+
+        restore.binding(module, "ExecutionPhaseOutcome", make_outcome)
+        restore.binding(owner, "execute_open_merchant_sales", borrowed)
+        restore.binding(owner, "execute_planned_merchant_sales", borrowed)
+        restore.binding(widget, "_debug_log", quiet)
+        restore.binding(widget, "_open_merchant", service)
+        restore.binding(widget, "_wait_for_merchant_rules_lifecycle", lifecycle)
+        restore.binding(widget, "_get_inventory_item_ids", no_ids)
+        restore.binding(
+            module.GLOBAL_CACHE,
+            "Item",
+            types.SimpleNamespace(Properties=types.SimpleNamespace(GetQuantity=zero_quantity)),
+        )
+        before = set(cast(dict[str, object], vars(widget)))
+        for index, manual in enumerate((False, True, False, True)):
+            gen = (
+                widget._execute_open_merchant_sell_phase(rows)
+                if manual
+                else widget._execute_merchant_sell_phase((1, 2), ids)
+            )
+            _expect(len(created) == len(seen_io) == index, "Phase construction had effects")
+            _expect(
+                next(gen) == "service" and len(seen_io) == index and len(created) == index + 1,
+                "First advance/admission ownership",
+            )
+            try:
+                yielded = next(gen)
+            except StopIteration as stop:
+                _expect(stop.value is created[-1] and stop.value.depleted == 1, "Canonical borrowed result")
+            else:
+                raise AssertionError(f"Unexpected admitted phase yield {yielded!r}")
+        _expect(
+            set(cast(dict[str, object], vars(widget))) == before and len(seen_io) == 4, "Per-widget sale state changed"
+        )
+
+
+def _merchant_sales_trace(module: types.ModuleType, family: str) -> dict[str, Any]:
+    def evidence_cases() -> dict[str, list[str]]:
+        rows: dict[str, list[str]] = {}
+        events: list[str] = []
+
+        class Number:
+            def __init__(self, label: str, *values: int | Exception) -> None:
+                self.label = label
+                self.values = iter(values)
+
+            def __int__(self) -> int:
+                value = next(self.values)
+                events.append(f"{self.label}={value}")
+                if isinstance(value, Exception):
+                    raise value
+                return value
+
+        def done(operation: Generator[object, None, Any]) -> Any:
+            try:
+                yielded = next(operation)
+            except StopIteration as stop:
+                return stop.value
+            raise AssertionError(f"Expected confirmation return, observed {yielded!r} after {events!r}")
+
+        def capture_fault(name: str) -> None:
+            destination = os.environ.get("MERCHANT_RULES_CP20_FAULTS")
+            if destination:
+                with Path(destination).open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(dict(scenario=name, traceback=traceback.format_exc())) + "\n")
+
+        def record(name: str, expected: list[str]) -> None:
+            _expect(events == expected, f"{name}: expected {expected!r}, observed {events!r}")
+            rows[name] = events.copy()
+            events.clear()
+
+        with _cp14_b_world(module) as (_queue, _map, restore):
+            widget = _cp15_widget(module)
+            props = types.SimpleNamespace()
+            restore.binding(module.GLOBAL_CACHE, "Item", types.SimpleNamespace(Properties=props))
+
+            def members() -> list[int]:
+                events.append("bags")
+                return [2, 1, 1]
+
+            def second(item: int) -> int:
+                events.append(f"replacement:{item}")
+                return -2
+
+            def first(item: int) -> int:
+                events.append(f"original:{item}")
+                props.GetQuantity = second
+                return 4
+
+            props.GetQuantity = first
+            restore.binding(widget, "_get_inventory_item_ids", members)
+            _expect(widget._get_inventory_stack_quantities([Number("skip", 0), -4]) == {}, "Empty snapshot read a bag")
+            record("snapshot-empty", ["skip=0"])
+            ids = [Number("double", 9, 1), 1, 2, 3]
+            actual = widget._get_inventory_stack_quantities(ids)
+            _expect(list(actual.items()) == [(1, 4), (2, 0)], f"Presence, order and quantities: {actual!r}")
+            record(
+                "snapshot-conversions-and-rebinding", ["double=9", "double=1", "bags", "original:1", "replacement:2"]
+            )
+
+            for target in ("snapshot", "confirmation"):
+                for fault_at in (1, 2):
+                    fault = ValueError("conversion fault")
+                    values: list[int | Exception] = [fault] if fault_at == 1 else [1, fault]
+                    key = Number("key", *values)
+                    try:
+                        if target == "snapshot":
+                            widget._get_inventory_stack_quantities([key])
+                        else:
+                            operation = widget._wait_for_merchant_sell_confirmation({key: 3})
+                            _expect(not events, "Constructing confirmation converted its keys")
+                            next(operation)
+                    except ValueError as exc:
+                        capture_fault(f"{target}-conversion-fault-{fault_at}")
+                        _expect(exc is fault, f"Changed {target} conversion exception")
+                    else:
+                        raise AssertionError(f"{target} missed conversion fault {fault_at}")
+                    record(
+                        f"{target}-conversion-fault-{fault_at}", ["key=1"] * (fault_at - 1) + ["key=conversion fault"]
+                    )
+
+            empty = widget._wait_for_merchant_sell_confirmation(
+                {Number("filtered", -1): 2}, timeout_ms=Number("unused")
+            )
+            _expect(done(empty) == (set(), set()), "Empty pending must finish before timeout coercion")
+            record("confirmation-empty", ["filtered=-1"])
+
+            stock = {1: 4, 2: 3, 3: 0, 5: 5}
+            raw_step = Number("step", 0, -2)
+            timeout = Number("timeout", 1, 1, 1)
+
+            def bag_ids() -> list[int]:
+                events.append("snapshot")
+                return list(stock)
+
+            def quantity(item: int) -> int:
+                events.append(f"quantity:{item}")
+                return stock[item]
+
+            def wait(step: object) -> Generator[str, None, None]:
+                _expect(step is raw_step, "Wait must receive the original step object")
+                events.append("wait(raw)")
+                yield "poll"
+
+            props.GetQuantity = quantity
+            restore.binding(widget, "_get_inventory_item_ids", bag_ids)
+            restore.binding(module.Routines.Yield, "wait", wait)
+            actual_snapshot = widget._get_inventory_stack_quantities
+
+            class Current:
+                def __init__(self, values: dict[int, int]) -> None:
+                    self.values = values
+
+                def get(self, item: int, default: int) -> int:
+                    events.append(f"current:{item}")
+                    return self.values.get(item, default)
+
+            def observed_snapshot(items: list[int]) -> Current:
+                events.append(f"requested:{items}")
+                return Current(actual_snapshot(items))
+
+            restore.binding(widget, "_get_inventory_stack_quantities", observed_snapshot)
+            # The custom key converts to 1, whose prior value is stored under the ordinary key.
+            changing_key = Number("pending", 8, 1)
+            previous: dict[object, object] = {
+                changing_key: 42,
+                1: Number("prior1", 4),
+                2: Number("prior2", 2),
+                3: Number("prior3", 7),
+                4: Number("prior4", 7),
+            }
+            operation = widget._wait_for_merchant_sell_confirmation(previous, timeout_ms=timeout, step_ms=raw_step)
+            previous[5] = Number("prior5", 6)
+            _expect(not events and next(operation) == "poll", "First poll or construction changed")
+            prefix = [
+                "pending=8",
+                "pending=1",
+                "timeout=1",
+                "requested:[1, 2, 3, 4, 5]",
+                "snapshot",
+                "quantity:1",
+                "quantity:2",
+                "quantity:3",
+                "quantity:5",
+                "prior1=4",
+                "current:1",
+                "prior2=2",
+                "current:2",
+                "prior3=7",
+                "current:3",
+                "prior4=7",
+                "current:4",
+                "prior5=6",
+                "current:5",
+                "step=0",
+                "wait(raw)",
+            ]
+            _expect(events == prefix, f"First suspended poll: {events!r}")
+            previous[1] = Number("new1", 7)
+            previous[2] = Number("new2", 3)
+            previous[6] = Number("excluded")
+            _expect(next(operation) == "poll", "Inclusive final poll did not wait")
+            last = [
+                "timeout=1",
+                "requested:[1, 2]",
+                "snapshot",
+                "quantity:1",
+                "quantity:2",
+                "new1=7",
+                "current:1",
+                "new2=3",
+                "current:2",
+                "step=-2",
+                "wait(raw)",
+            ]
+            _expect(events == prefix + last, f"Final unsuccessful wait: {events!r}")
+            result = done(operation)
+            _expect(result == ({1, 3, 4, 5}, {2}), f"Mutable prior, mixed confirmation: {result!r}")
+            record("confirmation-live-prior-inclusive-final-wait", prefix + last + ["timeout=1"])
+
+            restore.binding(widget, "_get_inventory_stack_quantities", actual_snapshot)
+            failure = RuntimeError("direct read fault")
+
+            def broken_members() -> list[int]:
+                events.append("bags-fault")
+                raise failure
+
+            def direct(item: int) -> int:
+                events.append(f"direct:{item}")
+                return 12
+
+            restore.binding(widget, "_get_inventory_item_ids", broken_members)
+            props.GetQuantity = direct
+            for entry in ("reader", "waiter"):
+                try:
+                    if entry == "reader":
+                        widget._get_inventory_stack_quantities([17])
+                    else:
+                        next(widget._wait_for_merchant_sell_confirmation({17: 4}))
+                except RuntimeError as exc:
+                    capture_fault(f"{entry}-bag-fault")
+                    _expect(exc is failure, "Direct reader fault identity changed")
+                else:
+                    raise AssertionError(f"{entry} swallowed bag read fault")
+                record(f"{entry}-bag-fault", ["bags-fault"])
+            _expect(widget._get_inventory_source_stack_quantity(17) == 12, "Storage exception fallback lost quantity")
+            record("storage-fallback", ["bags-fault", "direct:17"])
+
+            def bad_quantity(item: int) -> int:
+                events.append(f"quantity-fault:{item}")
+                raise failure
+
+            props.GetQuantity = bad_quantity
+            _expect(widget._get_inventory_source_stack_quantity(17) == 0, "Storage fallback fault must return zero")
+            record("storage-fallback-fault", ["bags-fault", "quantity-fault:17"])
+            restore.binding(widget, "_get_inventory_item_ids", members)
+            _expect(widget._get_inventory_source_stack_quantity(17) == 0, "Absent membership must bypass fallback")
+            record("storage-absent", ["bags"])
+            try:
+                widget._get_inventory_stack_quantities([1])
+            except RuntimeError as exc:
+                capture_fault("snapshot-present-quantity-fault")
+                _expect(exc is failure, "Quantity fault identity changed")
+            else:
+                raise AssertionError("Quantity fault did not escape")
+            record("snapshot-present-quantity-fault", ["bags", "quantity-fault:1"])
+        return rows
+
+    def bind_bulk(
+        restore: _CP8Restoration, wait: Callable[[int], Iterator[object]], manager: Callable[[], object]
+    ) -> Callable[[list[int]], Generator[object, None, None]]:
+        import builtins
+        import hashlib
+
+        relative = "Py4GWCoreLib/routines_src/yield_src/merchant.py"
+        path = REPO_ROOT / relative
+        source = path.read_bytes()
+        _expect(
+            hashlib.sha256(source).hexdigest() == "a395851b437e21ab7b7fbfcd2f9c7c9ee10453a0d624fc3855ce8fde38aa4f9d",
+            f"Unexpected real merchant primitive at {path}",
+        )
+        imports = {
+            (3, "GlobalCache"): types.SimpleNamespace(GLOBAL_CACHE=module.GLOBAL_CACHE),
+            (3, "enums_src.Model_enums"): types.SimpleNamespace(ModelID=module.ModelID),
+            (1, "movement"): types.SimpleNamespace(Movement=module.Routines.Yield.Movement),
+            (1, "agents"): types.SimpleNamespace(Agents=module.Routines.Yield.Agents),
+            (1, "helpers"): types.SimpleNamespace(wait=wait),
+            (3, "Py4GWcorelib"): types.SimpleNamespace(
+                ActionQueueManager=manager, ConsoleLog=module.ConsoleLog, Console=module.Console
+            ),
+        }
+
+        def offline_import(
+            name: str, globals_: object = None, locals_: object = None, fromlist: Sequence[str] = (), level: int = 0
+        ) -> object:
+            if (level, name) == (0, "__future__"):
+                return __import__(name, fromlist=fromlist)
+            return imports[(level, name)]
+
+        primitive = types.ModuleType("Py4GWCoreLib.routines_src.yield_src.merchant")
+        primitive.__file__ = str(path)
+        primitive.__dict__["__builtins__"] = dict(vars(builtins), __import__=offline_import)
+        exec(compile(source, str(path), "exec"), vars(primitive))
+        sell = primitive.Merchant.SellItems
+        _expect(
+            sell.__qualname__ == "Merchant.SellItems" and Path(sell.__code__.co_filename) == path,
+            f"Bulk provenance at {path}",
+        )
+        restore.binding(module.Routines.Yield.Merchant, "SellItems", sell)
+        _expect(module.Routines.Yield.Merchant.SellItems is sell, "Real bulk callable was not installed")
+        return sell
+
+    def phase_cases(family: str) -> dict[str, list[tuple[object, ...]]]:
+        results: dict[str, list[tuple[object, ...]]] = {}
+        outcome_class: Callable[..., Any] = module.ExecutionPhaseOutcome
+
+        class Host:
+            def __init__(self, name: str, stock: dict[int, int], restore: _CP8Restoration) -> None:
+                self.name = name
+                self.stock = dict(stock)
+                self.events: list[tuple[object, ...]] = []
+                self.widget = _cp15_widget(module)
+                self.created: list[object] = []
+                self.gen: Generator[object, None, object] | None = None
+                self.product_value = 3
+                self.seed = 0
+                self.slot = True
+                self.ready = True
+                self.generation = 0
+                self.interact_ok = True
+                self.hold_queue = False
+                self.hold_stock = False
+                self.move_delta: int | None = None
+                self.issue_fault = ""
+                self.error = RuntimeError("CP20 merchant operation sentinel")
+                self.bindings = False
+                self.send_name = "original"
+                self.move_name = "original"
+                self.lane = "service"
+                self.synthetic: tuple[set[int], set[int]] | None = None
+                self.last_pending: set[int] | None = None
+                self.bulk_inputs: list[int] | None = None
+                self.pending_seed = 0
+                self.original_target: Callable[..., Generator[object, None, int]] = (
+                    self.widget._wait_for_stack_quantity_target
+                )
+                self.original_drain: Callable[..., Generator[object, None, bool]] = (
+                    self.widget._wait_for_action_queue_empty
+                )
+                self.original_confirm: Callable[..., Generator[object, None, tuple[set[int], set[int]]]] = (
+                    self.widget._wait_for_merchant_sell_confirmation
+                )
+                original_snapshot: Callable[[list[int]], dict[int, int]] = self.widget._get_inventory_stack_quantities
+                original_lifecycle: Callable[..., Generator[object, None, int | None]] = (
+                    self.widget._wait_for_merchant_rules_lifecycle
+                )
+                host = self
+
+                def outcome(**fields: object) -> object:
+                    actual = outcome_class(**fields)
+                    actual.completed = self.seed
+                    actual.timeout_failures = self.pending_seed
+                    self.created.append(actual)
+                    self.row("allocated", self.fields())
+                    return actual
+
+                def snapshot(ids: list[int]) -> dict[int, int]:
+                    values = original_snapshot(ids)
+                    self.row("snapshot", list(ids), dict(values), ids is self.bulk_inputs)
+                    return values
+
+                def lifecycle(**options: object) -> Generator[object, None, int | None]:
+                    self.row("lifecycle", dict(options))
+                    result = yield from original_lifecycle(**options)
+                    self.row("generation", result)
+                    return result
+
+                def follow(path: list[tuple[float, float]]) -> Generator[object, None, None]:
+                    self.row("follow", list(path))
+                    yield from ()
+
+                def interact(x: float, y: float) -> Generator[object, None, bool]:
+                    self.row("interact", x, y, self.interact_ok)
+                    yield from ()
+                    return self.interact_ok
+
+                class Slot:
+                    @property
+                    def bag_id(self) -> int:
+                        host.row("bag")
+                        if host.bindings:
+                            host.move_name = "replacement"
+                        return 2
+
+                    @property
+                    def slot(self) -> int:
+                        host.row("slot")
+                        return 4
+
+                class Inventory:
+                    @property
+                    def MoveItem(self) -> Callable[[int, int, int, int], bool]:
+                        tag = host.move_name
+                        host.row("lookup move", tag)
+
+                        def move(item: int, bag: int, slot: int, keep: int, /) -> bool:
+                            host.row("move", tag, item, bag, slot, keep)
+                            host.stock[99] = keep
+                            if host.issue_fault == "move":
+                                raise host.error
+                            host.stock[item] -= keep if host.move_delta is None else host.move_delta
+                            return False
+
+                        return move
+
+                class Merchant:
+                    @staticmethod
+                    def GetOfferedItems() -> list[int]:
+                        host.row("offered")
+                        return [81]
+
+                    @property
+                    def SellItem(self) -> Callable[[int, int], bool]:
+                        tag = host.send_name
+                        host.row("lookup send", tag)
+
+                        def send(item: int, cost: int, /) -> bool:
+                            host.row("send", tag, item, cost)
+                            if host.issue_fault == "send":
+                                raise host.error
+                            if not host.hold_stock:
+                                host.stock.pop(item, None)
+                            return False
+
+                        return send
+
+                def quantity(item: int) -> int:
+                    value = self.stock.get(item, 0)
+                    self.row("quantity", item, value)
+                    return value
+
+                def price(item: int) -> int:
+                    self.row("price", item, self.product_value)
+                    return self.product_value
+
+                def bags() -> list[int]:
+                    self.row("bags", list(self.stock))
+                    return list(self.stock)
+
+                def warn(sender: str, message: str, level: object) -> None:
+                    self.row("warning", sender, message, level)
+
+                def slot() -> object | None:
+                    self.row("empty slot", self.slot)
+                    return Slot() if self.slot else None
+
+                def debug(message: str) -> None:
+                    self.row("debug", message)
+
+                def generation(*, sync_runtime_snapshots: bool) -> int:
+                    return self.generation
+
+                restore.binding(module, "ExecutionPhaseOutcome", outcome)
+                restore.binding(module, "MERCHANT_SELL_CONFIRM_TIMEOUT_MS", 9)
+                restore.binding(module, "ConsoleLog", warn)
+                restore.binding(module, "ActionQueueManager", lambda: self)
+                restore.binding(module.Routines.Checks.Map, "MapValid", lambda: self.ready)
+                restore.binding(module.Routines.Yield, "wait", self.wait)
+                restore.binding(module.Routines.Yield.Movement, "FollowPath", follow)
+                restore.binding(module.Routines.Yield.Agents, "InteractWithAgentXY", interact)
+                restore.binding(module.GLOBAL_CACHE, "Inventory", Inventory())
+                restore.binding(module.GLOBAL_CACHE, "Trading", types.SimpleNamespace(Merchant=Merchant()))
+                restore.binding(
+                    module.GLOBAL_CACHE,
+                    "Item",
+                    types.SimpleNamespace(Properties=types.SimpleNamespace(GetQuantity=quantity, GetValue=price)),
+                )
+                self.bulk = bind_bulk(restore, self.bulk_wait, lambda: self)
+                self.widget._refresh_merchant_rules_lifecycle_state = generation
+                self.widget._wait_for_merchant_rules_lifecycle = lifecycle
+                self.widget._get_inventory_item_ids = bags
+                self.widget._get_inventory_stack_quantities = snapshot
+                self.widget._wait_for_stack_quantity_target = self.target
+                self.widget._wait_for_action_queue_empty = self.drain
+                self.widget._wait_for_merchant_sell_confirmation = self.confirm
+                self.widget._find_inventory_empty_slot = slot
+                self.widget._debug_log = debug
+
+            def row(self, *cells: object) -> None:
+                self.events.append(cells)
+
+            def rows(self, tag: str) -> list[tuple[object, ...]]:
+                return [event[1:] for event in self.events if event[0] == tag]
+
+            def eq(self, label: str, observed: object, expected: object) -> None:
+                _expect(
+                    observed == expected,
+                    f"{self.name} {label}: expected {expected!r}, got {observed!r}; {self.events!r}",
+                )
+
+            def fields(self) -> dict[str, object]:
+                return dict(vars(self.created[-1])) if self.created else {}
+
+            def counts(
+                self, attempted: int, completed: int = 0, timeouts: int = 0, depleted: int = 0, loads: int = 0
+            ) -> None:
+                self.eq("allocated outcomes", len(self.created), 1)
+                self.eq(
+                    "all canonical fields",
+                    self.fields(),
+                    dict(
+                        label="Merchant sells",
+                        measure_label="items",
+                        attempted=attempted,
+                        completed=completed,
+                        unavailable=0,
+                        quote_failures=0,
+                        timeout_failures=timeouts,
+                        load_failures=loads,
+                        gold_blocked=0,
+                        depleted=depleted,
+                        dispatched=0,
+                    ),
+                )
+
+            def wait(self, ms: int) -> Generator[str, None, None]:
+                marker = f"{self.lane}:{ms}" if ms != 40 else "pace:40"
+                self.row("wait", marker, self.fields(), dict(self.stock))
+                yield marker
+
+            def bulk_wait(self, ms: int) -> Generator[str, None, None]:
+                self.row("bulk wait", ms)
+                yield f"bulk:{ms}"
+
+            def IsEmpty(self, name: str) -> bool:
+                self.row("queue", name, not self.hold_queue)
+                return not self.hold_queue
+
+            def ResetQueue(self, name: str) -> None:
+                raise AssertionError(f"Unexpected empty SellItems({name})")
+
+            def target(self, item: int, n: int, /, *, timeout_ms: int, step_ms: int) -> Generator[object, None, object]:
+                self.lane = "target"
+                self.row("target", item, n, timeout_ms, step_ms)
+                observed = yield from self.original_target(item, n, timeout_ms=timeout_ms, step_ms=step_ms)
+                self.row("target result", observed)
+                if not self.bindings:
+                    return observed
+                self.product_value = 7
+                setattr(module, "MERCHANT_SELL_CONFIRM_TIMEOUT_MS", 19)
+                host = self
+
+                class Remainder:
+                    calls = 0
+
+                    def __int__(self) -> int:
+                        self.calls += 1
+                        host.row("raw int", self.calls)
+                        if self.calls == 2:
+                            host.send_name = "replacement"
+                        if self.calls == 3:
+                            host.widget._wait_for_merchant_sell_confirmation = host.wrong_binding
+                        return observed
+
+                return Remainder()
+
+            def wrong_binding(self, *args: object, **options: object) -> object:
+                raise AssertionError(f"Late callable resolved after its argument: {args}, {options}")
+
+            def drain(self, queue: str, /, *, timeout_ms: int, step_ms: int) -> Generator[object, None, bool]:
+                self.lane = "drain"
+                self.row("drain", queue, timeout_ms, step_ms)
+                observed = yield from self.original_drain(queue, timeout_ms=timeout_ms, step_ms=step_ms)
+                self.row("drain result", observed)
+                if self.bindings:
+                    setattr(module, "MERCHANT_SELL_CONFIRM_TIMEOUT_MS", 29)
+                return observed
+
+            def confirm(
+                self, previous: dict[int, int], /, **options: int
+            ) -> Generator[object, None, tuple[set[int], set[int]]]:
+                self.lane = "confirm"
+                self.row("confirm", dict(previous), dict(options))
+                if self.synthetic is None:
+                    result = yield from self.original_confirm(previous, **options)
+                else:
+                    result = self.synthetic
+                self.row("confirm result", sorted(result[0]), sorted(result[1]))
+                self.last_pending = result[1]
+                return result
+
+            def bulk_phase(
+                self, ids: list[int], coords: tuple[float, float] | None = (1.0, 2.0)
+            ) -> Generator[object, None, object]:
+                self.bulk_inputs = ids
+                self.gen = self.widget._execute_merchant_sell_phase(coords, ids)
+                assert self.gen is not None
+                self.eq("passive bulk construction", self.events, [])
+                return self.gen
+
+            def manual_phase(self, sales: list[Any]) -> Generator[object, None, object]:
+                self.gen = self.widget._execute_open_merchant_sell_phase(sales)
+                assert self.gen is not None
+                self.eq("passive manual construction", self.events, [])
+                return self.gen
+
+            def step(self, gen: Generator[object, None, object], marker: str) -> None:
+                token = next(gen)
+                self.row("yield", token)
+                self.eq("suspension", token, marker)
+
+            def finish(self, gen: Generator[object, None, object]) -> None:
+                for _ in range(300):
+                    try:
+                        self.row("yield", next(gen))
+                    except StopIteration as stop:
+                        self.eq(
+                            "borrowed outcome return", len(self.created) == 1 and stop.value is self.created[0], True
+                        )
+                        self.row("return same outcome", self.fields())
+                        return
+                raise AssertionError(f"Unbounded sale generator in {self.name}: {self.events!r}")
+
+            def fault(self, call: Callable[[], object]) -> None:
+                try:
+                    call()
+                except RuntimeError as observed:
+                    self.eq("escaping identity", observed is self.error, True)
+                    self.row("same error", str(observed))
+                    destination = os.environ.get("MERCHANT_RULES_CP20_FAULTS")
+                    if destination:
+                        with Path(destination).open("a", encoding="utf-8") as stream:
+                            stream.write(json.dumps(dict(scenario=self.name, traceback=traceback.format_exc())) + "\n")
+                else:
+                    raise AssertionError(f"Missing escaping exception in {self.name}")
+
+        @contextmanager
+        def scenario(name: str, stock: dict[int, int]) -> Iterator[Host]:
+            with _cp14_b_world(module) as (_, _, restore), _cp13_clock(module):
+                fixture = Host(name, stock, restore)
+                try:
+                    yield fixture
+                    results[name] = fixture.events
+                finally:
+                    if fixture.gen is not None:
+                        fixture.gen.close()
+
+        def sale(item: int, n: int) -> Any:
+            return module.PlannedManualMerchantSale(
+                item_id=item, model_id=300 + item, label=f"row-{item}", quantity_to_sell=n
+            )
+
+        if family == "interruptions":
+            for route in ("bulk", "manual"):
+                with scenario(route + "_unstarted_close", {7: 10}) as p:
+                    gen = p.bulk_phase([7]) if route == "bulk" else p.manual_phase([sale(7, 0)])
+                    gen.close()
+                    p.eq("no effects on unstarted close", p.events, [])
+                    p.row("unstarted close")
+            cuts = (
+                ("bulk_service", "service:100"),
+                ("bulk_queue", "bulk:50"),
+                ("bulk_confirm", "confirm:50"),
+                ("manual_service", "service:100"),
+                ("manual_target", "target:50"),
+                ("manual_drain", "drain:50"),
+                ("manual_confirm", "confirm:50"),
+                ("manual_pace", "pace:40"),
+            )
+            for cut, token in cuts:
+                for method in ("throw", "close"):
+                    with scenario(f"{cut}_{method}", {7: 10}) as p:
+                        p.ready = not cut.endswith("_service")
+                        p.hold_queue = cut in ("bulk_queue", "manual_drain")
+                        p.hold_stock = cut in ("bulk_queue", "bulk_confirm", "manual_confirm")
+                        p.move_delta = 0 if cut == "manual_target" else None
+                        if cut.startswith("bulk"):
+                            gen = p.bulk_phase([7])
+                            if cut != "bulk_service":
+                                p.step(gen, "service:100")
+                                p.step(gen, "service:700")
+                        else:
+                            gen = p.manual_phase([sale(7, 6)])
+                        p.step(gen, token)
+                        has_move = cut.startswith("manual") and cut != "manual_service"
+                        has_send = cut not in ("bulk_service", "manual_service", "manual_target")
+                        price = 30 if cut.startswith("bulk") else 18
+                        p.eq("issued move prefix", p.rows("move"), [("original", 7, 2, 4, 4)] if has_move else [])
+                        p.eq("issued send prefix", p.rows("send"), [("original", 7, price)] if has_send else [])
+                        p.eq("phase confirmation reached", bool(p.rows("confirm")), cut.endswith(("_confirm", "_pace")))
+                        if cut == "bulk_queue":
+                            p.eq(
+                                "real SellItems ordered prefix",
+                                p.events[-7:],
+                                [
+                                    ("quantity", 7, 10),
+                                    ("price", 7, 3),
+                                    ("lookup send", "original"),
+                                    ("send", "original", 7, 30),
+                                    ("queue", "MERCHANT", False),
+                                    ("bulk wait", 50),
+                                    ("yield", "bulk:50"),
+                                ],
+                            )
+                            p.row("primitive", "Py4GWCoreLib/routines_src/yield_src/merchant.py", p.bulk.__qualname__)
+                        p.counts(1, int(cut == "manual_pace"))
+                        prefix = p.events[:]
+                        stock = dict(p.stock)
+                        if method == "throw":
+                            p.fault(lambda: gen.throw(p.error))
+                        else:
+                            gen.close()
+                            p.row("closed")
+                        gen.close()
+                        p.eq("exact prefix retained", p.events[:-1], prefix)
+                        p.eq("stock retained", p.stock, stock)
+                        p.eq("no normal terminal result", p.rows("return same outcome"), [])
+                        p.eq(
+                            "no terminal log",
+                            any(" completed:" in str(msg) or ": completed=" in str(msg) for (msg,) in p.rows("debug")),
+                            False,
+                        )
+            for route, site in (("bulk", "send"), ("manual", "move"), ("manual", "send")):
+                with scenario(f"{route}_{site}_fault", {7: 10}) as p:
+                    p.issue_fault = site
+                    if route == "bulk":
+                        gen = p.bulk_phase([7])
+                        p.step(gen, "service:100")
+                        p.step(gen, "service:700")
+                    else:
+                        gen = p.manual_phase([sale(7, 6)])
+                    p.fault(lambda: next(gen))
+                    p.counts(1)
+                    p.eq("move partial effect", p.rows("move"), [] if route == "bulk" else [("original", 7, 2, 4, 4)])
+                    p.eq(
+                        "send partial effect",
+                        p.rows("send"),
+                        [] if site == "move" else [("original", 7, 30 if route == "bulk" else 18)],
+                    )
+                    p.eq(
+                        "surviving stock",
+                        p.stock,
+                        {7: 10} if route == "bulk" else {7: 10 if site == "move" else 6, 99: 4},
+                    )
+                    p.eq("no confirmation", p.rows("confirm"), [])
+                    p.eq("no result", p.rows("return same outcome"), [])
+            return results
+
+        if family not in ("phase_steps", "steps"):
+            raise ValueError(f"Unexpected merchant sale phase family {family!r}")
+
+        for route in ("bulk_empty", "bulk_no_coords", "manual_empty"):
+            with scenario(route, {7: 1}) as p:
+                if route == "bulk_no_coords":
+                    gen = p.bulk_phase([7], None)
+                else:
+                    gen = p.bulk_phase([]) if route == "bulk_empty" else p.manual_phase([])
+                p.finish(gen)
+                p.counts(int(route == "bulk_no_coords"))
+                p.eq("guard prefix", [event[0] for event in p.events], ["allocated", "return same outcome"])
+
+        with scenario("bulk_failed_open", {7: 4}) as p:
+            p.interact_ok = False
+            p.finish(p.bulk_phase([7, 8]))
+            p.counts(2, loads=1)
+            p.eq(
+                "open failure",
+                p.rows("warning"),
+                [
+                    (
+                        module.MODULE_NAME,
+                        "Merchant inventory did not load for merchant-sell actions.",
+                        module.Console.MessageType.Warning,
+                    )
+                ],
+            )
+            p.eq("no snapshot", p.rows("snapshot"), [])
+
+        for route in ("bulk", "manual"):
+            with scenario(route + "_factory_before_length", {}) as p:
+
+                class RebindingList(list[Any]):
+                    def __len__(self) -> int:
+                        p.row("length")
+                        setattr(module, "ExecutionPhaseOutcome", p.wrong_binding)
+                        return super().__len__()
+
+                work = RebindingList()
+                gen = p.bulk_phase(work) if route == "bulk" else p.manual_phase(work)
+                p.finish(gen)
+                p.counts(0)
+                p.eq("lookup before len at first advance", p.events[0][0], "length")
+
+        with scenario("manual_denied_lifecycle", {7: 4}) as p:
+            p.ready = False
+            gen = p.manual_phase([sale(7, 0), sale(8, 0)])
+            p.step(gen, "service:100")
+            p.generation = 1
+            p.finish(gen)
+            p.counts(2, timeouts=2)
+            p.eq("lifecycle refusal", p.rows("generation"), [(None,)])
+            p.eq("no stock read", p.rows("quantity"), [])
+
+        with scenario("bulk_all_missing", {}) as p:
+
+            def forbidden_sell(ids: list[int], /) -> Generator[object, None, None]:
+                raise AssertionError(f"All-missing bulk called SellItems({ids})")
+
+            with _cp14a_changes() as change:
+                change.binding(module.Routines.Yield.Merchant, "SellItems", forbidden_sell)
+                p.finish(p.bulk_phase([6, 7]))
+            p.counts(2, depleted=2)
+            p.eq(
+                "skip log",
+                p.rows("debug")[-1],
+                ("Merchant sell phase skipped send because planned item ids were no longer in inventory.",),
+            )
+            p.eq("no confirmation", p.rows("confirm"), [])
+
+        with scenario("bulk_live_list_assignment_real_partial", {1: 4, 2: 0, 3: 2}) as p:
+            ids = [1, 2, 3]
+            p.seed = 6
+            p.pending_seed = 5
+            p.hold_queue = p.hold_stock = True
+            gen = p.bulk_phase(ids)
+            p.step(gen, "service:100")
+            ids.extend((1, 77))
+            p.step(gen, "service:700")
+            p.step(gen, "bulk:50")
+            p.eq("admitted live list", p.rows("snapshot")[0], ([1, 2, 3, 1, 77], {1: 4, 2: 0, 3: 2}, True))
+            p.eq(
+                "including present zero", p.rows("send"), [("original", 1, 12), ("original", 2, 0), ("original", 3, 6)]
+            )
+            p.counts(3, 6, 5, 2)
+            p.stock[1] = 3
+            p.hold_queue = False
+            setattr(module, "MERCHANT_SELL_CONFIRM_TIMEOUT_MS", 0)
+            p.finish(gen)
+            p.counts(3, 2, 6, 2)
+            p.eq("bound defaults and inclusive polls", p.rows("yield").count(("confirm:50",)), 31)
+            p.eq("omitted confirmation keywords", p.rows("confirm"), [({1: 4, 2: 0, 3: 2}, dict[str, int]())])
+            p.eq("real mixed confirmation", p.rows("confirm result"), [([1, 2], [3])])
+            p.eq(
+                "pending warning",
+                p.rows("warning"),
+                [
+                    (
+                        module.MODULE_NAME,
+                        "Merchant sell verification timed out for 1 item(s) after SellItems.",
+                        module.Console.MessageType.Warning,
+                    )
+                ],
+            )
+            p.eq(
+                "completion log",
+                p.rows("debug")[-1],
+                ("Merchant sell phase completed: confirmed=2 pending=1 missing_before_send=2",),
+            )
+
+        with scenario("bulk_call_shape", {8: 2}) as p:
+
+            def positional_only(ids: list[int], /) -> Generator[object, None, None]:
+                p.row("bulk positional", list(ids))
+                return p.bulk(ids)
+
+            with _cp14a_changes() as change:
+                change.binding(module.Routines.Yield.Merchant, "SellItems", positional_only)
+                p.finish(p.bulk_phase([8]))
+            p.counts(1, 1)
+            p.eq("only one bulk positional argument", p.rows("bulk positional"), [([8],)])
+
+        with scenario("bulk_warning_resolution", {5: 2}) as p, _cp14a_changes() as change:
+            original_name = str(module.MODULE_NAME)
+            original_warning = module.Console.MessageType.Warning
+            p.hold_stock = True
+            changed = False
+
+            def warning_length(value: Any) -> int:
+                nonlocal changed
+                if not changed and value is p.last_pending and p.created and p.fields()["timeout_failures"] == 1:
+                    p.row("warning formats original pending", sorted(cast(set[int], value)))
+                    changed = True
+                    change.binding(module, "ConsoleLog", p.wrong_binding)
+                    change.binding(module, "MODULE_NAME", "name rebound by formatting")
+                    change.binding(
+                        module,
+                        "Console",
+                        types.SimpleNamespace(MessageType=types.SimpleNamespace(Warning="new warning")),
+                    )
+                return len(value)
+
+            change.binding(module, "len", warning_length)
+            p.finish(p.bulk_phase([5]))
+            p.counts(1, timeouts=1)
+            p.eq("actual pending set formatted", p.rows("warning formats original pending"), [([5],)])
+            p.eq("different original warning level", original_warning == "new warning", False)
+            p.eq(
+                "sink and name before formatting and level afterwards",
+                p.rows("warning"),
+                [(original_name, "Merchant sell verification timed out for 1 item(s) after SellItems.", "new warning")],
+            )
+
+        with scenario("manual_live_list_and_generation_zero", {1: 4, 2: 2, 3: 0}) as p:
+            p.seed = 9
+            p.ready = False
+            rows = [sale(1, 1)]
+            gen = p.manual_phase(rows)
+            p.step(gen, "service:100")
+            rows[0].quantity_to_sell = -1
+            rows.extend((sale(2, 200), sale(3, 0)))
+            p.ready = True
+            p.finish(gen)
+            p.counts(1, 11, depleted=1)
+            p.eq("generation zero admitted", p.rows("generation"), [(0,)])
+            p.eq("mutated full and clamped sends", p.rows("send"), [("original", 1, 12), ("original", 2, 6)])
+            p.eq("no splits", p.rows("move"), [])
+            p.eq("sent rows alone pace", p.rows("yield"), [("service:100",), ("pace:40",), ("pace:40",)])
+            p.eq("final normal log", p.rows("debug")[-1], ("Merchant sells: completed=11/1 timeouts=0 depleted=1",))
+
+        for case in ("no_slot", "lower_remainder"):
+            with scenario("manual_" + case, {7: 10}) as p:
+                p.slot = case != "no_slot"
+                p.move_delta = 5
+                p.finish(p.manual_phase([sale(7, 6)]))
+                p.counts(1, timeouts=1)
+                p.eq("no sale", p.rows("send"), [])
+                p.eq("skipped row no pacing", p.rows("yield"), [])
+                p.eq("observed target", p.rows("target result"), [] if case == "no_slot" else [(5,)])
+                msg = (
+                    "Manual merchant sale skipped row-7: no empty slot to split 6/10."
+                    if case == "no_slot"
+                    else "Manual merchant sale split verification failed for row-7: expected 6, observed 5."
+                )
+                p.eq("skip reason", p.rows("debug")[0], (msg,))
+
+        with scenario("manual_exact_split_late_callable_raw_remainder", {7: 10}) as p:
+            p.bindings = p.hold_queue = True
+            gen = p.manual_phase([sale(7, 6)])
+            p.step(gen, "drain:50")
+            p.counts(1)
+            p.step(gen, "pace:40")
+            p.counts(1, 1)
+            p.finish(gen)
+            p.eq("lookup before destination evaluation", p.rows("move"), [("original", 7, 2, 4, 4)])
+            p.eq("send captured before cost conversion", p.rows("send"), [("original", 7, 42)])
+            p.eq("three raw remainder conversions", p.rows("raw int"), [(1,), (2,), (3,)])
+            p.eq("live price after split", p.rows("price"), [(7, 7)])
+            p.eq("split timeout", p.rows("target"), [(7, 6, 9, 50)])
+            p.eq("drain timeout", p.rows("drain"), [("MERCHANT", 19, 50)])
+            p.eq("ignored real false drain", p.rows("drain result"), [(False,)])
+            p.eq(
+                "confirmation looked up before conversion",
+                p.rows("confirm"),
+                [({7: 6}, {"timeout_ms": 29, "step_ms": 50})],
+            )
+
+        with scenario("manual_debug_before_label_format", {7: 10}) as p:
+            p.slot = False
+
+            class Label:
+                def __format__(self, _format: str) -> str:
+                    def replacement(message: str) -> None:
+                        p.row("replacement debug", message)
+
+                    p.widget._debug_log = replacement
+                    return "before-rebind"
+
+            manual = sale(7, 6)
+            manual.label = Label()
+            p.finish(p.manual_phase([manual]))
+            p.counts(1, timeouts=1)
+            p.eq(
+                "original skip sink",
+                p.rows("debug"),
+                [("Manual merchant sale skipped before-rebind: no empty slot to split 6/10.",)],
+            )
+            p.eq(
+                "later normal sink",
+                p.rows("replacement debug"),
+                [("Merchant sells: completed=0/1 timeouts=1 depleted=0",)],
+            )
+
+        with scenario("manual_timeout_before_pace", {7: 10}) as p:
+            p.hold_stock = True
+            gen = p.manual_phase([sale(7, 0)])
+            p.step(gen, "confirm:50")
+            p.counts(1)
+            p.step(gen, "pace:40")
+            p.counts(1, timeouts=1)
+            p.finish(gen)
+
+        pairs: tuple[tuple[set[int], set[int]], ...] = (({7}, {8}), (set(), set()), (set(), {7}), ({7}, set()))
+        for confirmed, pending in pairs:
+            with scenario(f"synthetic_manual_accounting_{bool(confirmed)}_{bool(pending)}", {7: 1}) as p:
+                p.seed = 5
+                p.pending_seed = 4
+                p.synthetic = (confirmed, pending)
+                gen = p.manual_phase([sale(7, 0)])
+                p.step(gen, "pace:40")
+                success = bool(confirmed) and not pending
+                p.counts(1, 5 + int(success), 4 + int(not success))
+                p.finish(gen)
+        return results
+
+    def caller_cases() -> dict[str, list[str]]:
+        def run(route: str) -> list[str]:
+            remote = route.startswith("remote_")
+            manual = route.startswith("manual_")
+            closing = route.endswith("_close")
+            xunlai = route == "xunlai"
+            with _cp14_b_world(module) as (queue, maps, restore), _cp13_clock(module):
+                widget = _cp15_widget(module)
+                events: list[str] = []
+                stock = {501: 3}
+                vault: dict[int, int] = {}
+                sent: list[int] = []
+                withdrawn: list[int] = []
+                cleared: list[object] = []
+                wire: list[tuple[tuple[float, ...], tuple[str, ...]]] = []
+                published_plans: list[PlanResult] = []
+                messaging: types.ModuleType | None = None
+                plans: list[tuple[int, list[int]]] = []
+                quantities_seen: list[tuple[int, int]] = []
+                confirmations: list[tuple[list[int], list[int]]] = []
+                scopes: list[tuple[bool, bool]] = []
+                summaries: list[str] = []
+                opened = True
+                fault = RuntimeError("CP20 merchant send fault")
+                original_flags = (False, False)
+                hero = types.SimpleNamespace(
+                    Following=True, Avoidance=False, Looting=True, Targeting=False, Combat=True
+                )
+                request = "cp20-sale"
+                account = "merchant.rules@example.com"
+                widget.preview_ready = True
+                widget.destroy_include_protected_items, widget.destroy_instant_enabled = original_flags
+                widget.sell_rules = [
+                    _cp8_rule(
+                        module, sell_from_xunlai=xunlai, all_weapons_min_requirement=0, all_weapons_max_requirement=0
+                    )
+                ]
+                if remote:
+                    stock[2220] = 2
+                if xunlai:
+                    vault[750] = 1
+                if route == "execute_here":
+                    stock[502] = 1
+                    widget.destroy_rules = [
+                        module.DestroyRule(
+                            enabled=True,
+                            kind=module.DESTROY_KIND_EXPLICIT_MODELS,
+                            whitelist_targets=[module.WhitelistTarget(model_id=5020, keep_count=0)],
+                        )
+                    ]
+
+                def check(condition: bool, label: str) -> None:
+                    _expect(condition, f"CP20 {route} {label}; error={widget.last_error!r}, events={events!r}")
+
+                def record_traceback() -> None:
+                    destination = os.environ.get("MERCHANT_RULES_CP20_FAULTS")
+                    if destination:
+                        with Path(destination).open("a", encoding="utf-8") as stream:
+                            stream.write(json.dumps(dict(scenario=route, traceback=traceback.format_exc())) + "\n")
+
+                def model(item: int) -> int:
+                    return {2220: 222, 502: 5020, 503: 946}.get(item, 970)
+
+                def record(i: int) -> InventoryItemInfo:
+                    weapon = i not in (2220, 502, 503)
+                    return _cp8_item(
+                        module,
+                        item_id=i,
+                        model_id=model(i),
+                        name=f"Item {i}",
+                        quantity=stock.get(i, vault.get(i, 0)),
+                        is_weapon_like=weapon,
+                        item_type_name="Axe" if weapon else "Trophy",
+                        item_type_id=int(module.ItemType.Axe) if weapon else 0,
+                        rarity="Gold" if weapon else "White",
+                    )
+
+                def quantity(i: int) -> int:
+                    value = stock.get(i, vault.get(i, 0))
+                    events.append(f"quantity:{i}:{value}")
+                    return value
+
+                def model_count(m: int) -> int:
+                    count = sum(n for i, n in stock.items() if model(i) == m)
+                    events.append(f"model-count:{m}:{count}")
+                    return count
+
+                def sell(i: int, price: int) -> bool:
+                    events.append(f"sell:{i}:{price}")
+                    sent.append(i)
+                    if route == "remote_fault":
+                        raise fault
+                    if route != "remote_timeout" and not closing:
+                        del stock[i]
+                    return False
+
+                def destroy(i: int) -> bool:
+                    events.append(f"destroy:{i}")
+                    del stock[i]
+                    return False
+
+                def withdraw(i: int, *, ammount: int) -> bool:
+                    withdrawn.append(i)
+                    events.append(f"withdraw:{i}:{ammount}")
+                    # The accepted first move has no observed effect. The recovery move materializes a new bag stack.
+                    if len(withdrawn) == 2:
+                        stock[751] = vault.pop(i)
+                    return True
+
+                def deposit(i: int, *, ammount: int) -> bool:
+                    events.append(f"deposit:{i}:{ammount}")
+                    vault[i] = stock.pop(i)
+                    return True
+
+                def wait(ms: int) -> Generator[int, None, None]:
+                    events.append(f"wait:{ms}")
+                    yield ms
+
+                def interact(x: float, y: float) -> Generator[object, None, bool]:
+                    events.append(f"interact:{x}:{y}")
+                    yield from ()
+                    return True
+
+                def services(**_opts: object) -> tuple[bool, str, dict[str, tuple[float, float]]]:
+                    return True, "Ready", {module.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)}
+
+                def resume() -> bool:
+                    scopes.append((widget.execution_running, widget.execute_reservation_scope_active))
+                    events.append(f"resume:{scopes[-1]}:{widget.manual_vendor_running}")
+                    return True
+
+                def pause() -> types.SimpleNamespace:
+                    events.append("pause")
+                    return types.SimpleNamespace(resume=resume)
+
+                def ids() -> list[int]:
+                    events.append(f"bag-ids:{list(stock)}")
+                    return list(stock)
+
+                def is_empty(name: str) -> bool:
+                    events.append(f"queue-empty:{name}")
+                    return True
+
+                manager = types.SimpleNamespace(IsEmpty=is_empty)
+                restore.binding(module, "ActionQueueManager", lambda: manager)
+                restore.binding(module.Routines.Yield, "wait", wait)
+                restore.binding(module.Routines.Yield.Agents, "InteractWithAgentXY", interact)
+                restore.binding(
+                    module.GLOBAL_CACHE,
+                    "Inventory",
+                    types.SimpleNamespace(
+                        IsStorageOpen=lambda: xunlai,
+                        GetModelCount=model_count,
+                        WithdrawItemFromStorage=withdraw,
+                        DepositItemToStorage=deposit,
+                        DestroyItem=destroy,
+                    ),
+                )
+
+                def nonmaterial(_item_id: int) -> bool:
+                    return False
+
+                def item_value(_item_id: int) -> int:
+                    return 7
+
+                restore.binding(
+                    module.GLOBAL_CACHE,
+                    "Item",
+                    types.SimpleNamespace(
+                        GetModelID=model,
+                        Type=types.SimpleNamespace(IsMaterial=nonmaterial),
+                        Properties=types.SimpleNamespace(GetQuantity=quantity, GetValue=item_value),
+                    ),
+                )
+                restore.binding(
+                    module.GLOBAL_CACHE,
+                    "Trading",
+                    types.SimpleNamespace(
+                        Merchant=types.SimpleNamespace(SellItem=sell, GetOfferedItems=lambda: [700]),
+                    ),
+                )
+                bind_bulk(restore, wait, lambda: manager)
+                widget._get_inventory_item_ids = ids
+                widget._collect_inventory_items = lambda: [record(i) for i in stock]
+                widget._collect_storage_items = lambda: [record(i) for i in vault]
+                widget._collect_storage_items_with_reliability = lambda: ([record(i) for i in vault], True)
+                widget._build_inventory_item_info = record
+                widget._get_supported_context = services
+                widget._pause_inventory_plus = pause
+                original_build: Callable[..., PlanResult] = widget._build_plan
+                original_summary: Callable[[Any], str] = widget._format_execution_phase_summary
+                original_confirm: Callable[..., Generator[object, None, tuple[set[int], set[int]]]] = (
+                    widget._wait_for_merchant_sell_confirmation
+                )
+                original_quantity: Callable[[int], int] = widget._get_inventory_source_stack_quantity
+                original_release: Callable[[], None] = widget._release_merchant_rules_owned_work
+                original_end: Callable[[bool], None] = widget._end_execute_reservation_scope
+                original_clear: Callable[[], None] = widget._clear_preview_projection_state
+
+                def build(**options: Any) -> PlanResult:
+                    plan = original_build(**options)
+                    plans.append((plan.travel_to_outpost_id, list(plan.merchant_sell_item_ids)))
+                    events.append(f"plan:{plans[-1]}:{[(e.action_type, e.label, e.reason) for e in plan.entries]}")
+                    return plan
+
+                def summary(outcome: Any) -> str:
+                    message = original_summary(outcome)
+                    events.append(
+                        f"summary:{outcome.label}:{outcome.attempted}:{outcome.completed}:{outcome.timeout_failures}"
+                    )
+                    if message:
+                        summaries.append(message)
+                    return message
+
+                def confirm(
+                    previous: dict[int, int], /, **options: int
+                ) -> Generator[object, None, tuple[set[int], set[int]]]:
+                    events.append(f"confirm:{previous}:{options}")
+                    answer = yield from original_confirm(previous, **options)
+                    confirmations.append((sorted(answer[0]), sorted(answer[1])))
+                    events.append(f"sets:{confirmations[-1]}")
+                    return answer
+
+                def scoped(i: int) -> int:
+                    n = original_quantity(i)
+                    quantities_seen.append((i, n))
+                    events.append(f"scoped:{i}:{n}")
+                    return n
+
+                def release() -> None:
+                    original_release()
+                    events.append(f"release:{_cp15_lease_counts(widget)}")
+
+                def end(active: bool) -> None:
+                    events.append(f"end:{active}:{widget.execution_running}:{widget.execute_reservation_scope_active}")
+                    original_end(active)
+
+                def clear() -> None:
+                    original_clear()
+                    cleared.append(widget.preview_plan)
+                    events.append(
+                        f"clear:{(widget.preview_requires_execute_travel, widget.preview_execute_travel_target_outpost_id, widget.preview_execute_travel_target_outpost_name)}"
+                    )
+
+                widget._build_plan = build
+                widget._format_execution_phase_summary = summary
+                widget._wait_for_merchant_sell_confirmation = confirm
+                widget._get_inventory_source_stack_quantity = scoped
+                widget._release_merchant_rules_owned_work = release
+                widget._end_execute_reservation_scope = end
+                widget._clear_preview_projection_state = clear
+                if xunlai:
+                    original_debug: Callable[[str], None] = widget._debug_log
+
+                    def observe_recovery(message: str) -> None:
+                        if message.startswith(("Xunlai sell pass", "Xunlai sell withdraws: completed")):
+                            events.append(message)
+                        original_debug(message)
+
+                    widget._debug_log = observe_recovery
+
+                if route == "deposit":
+                    transfer = module.PlannedStorageTransfer(
+                        direction=module.STORAGE_TRANSFER_DEPOSIT,
+                        key="item:501",
+                        label="Axe",
+                        item_id=501,
+                        quantity=3,
+                        model_id=model(501),
+                    )
+                    outcome = _drain_generator_return(
+                        widget._execute_storage_transfers([transfer], phase_label="Deposit")
+                    )
+                    events.append(f"result:{outcome.completed}:{outcome.timeout_failures}")
+                    check(outcome.completed == 3 and outcome.timeout_failures == 0 and 501 not in stock, "CP18 deposit")
+                    check(
+                        quantities_seen == [(501, 3), (501, 0), (501, 0)] and quantity(501) == 3,
+                        "stored source visible only globally",
+                    )
+                    return events
+
+                if route == "execute_here":
+                    widget._scan_preview()
+                    check(widget.preview_plan.inventory_snapshot_captured and plans[-1][1] == [501], "first preview")
+                    stock[501] = 4
+                    widget._request_execute_here()
+                    events.append(f"drift:{widget.status_message}:{widget.preview_inventory_diff_rows}")
+                    check(
+                        len(queue) == 1
+                        and widget.execute_drift_requires_confirmation
+                        and "Re-Preview" in widget.status_message,
+                        "reject inventory drift",
+                    )
+                    widget._scan_preview()
+                    widget._request_execute_here()
+                    check(not widget.execute_drift_requires_confirmation, "accept refreshed inventory")
+                elif route == "travel":
+                    widget.auto_travel_enabled = True
+                    widget.target_outpost_id = 200
+
+                    def destination(_target: int) -> str:
+                        return "Destination"
+
+                    widget._get_outpost_name = destination
+
+                    def travel(target: int, *, log: bool, timeout: int) -> Generator[object, None, bool]:
+                        events.append(f"travel:{maps[0]}:{target}:{log}:{timeout}")
+                        yield "travel"
+                        maps[0] = target
+                        stock[601] = stock.pop(501)
+                        return True
+
+                    restore.binding(module.Routines.Yield.Map, "TravelToOutpost", travel)
+                    widget._scan_preview()
+                    widget._request_execute_now()
+                elif route == "xunlai" or route == "owned_close":
+                    widget._queue_execute_now()
+                elif manual:
+                    context = module.ManualVendorContext(
+                        signature="cp20-vendor", merchant_types={module.MERCHANT_TYPE_MERCHANT}
+                    )
+                    widget.auto_sell_on_manual_vendor_interaction = route != "manual_fallback"
+                    widget.auto_sell_to_any_merchant = route in ("manual_overlap", "manual_fallback")
+                    widget.auto_sell_any_merchant_normal_items = route != "manual_fallback"
+                    widget.auto_sell_any_merchant_materials = True
+                    widget._is_merchant_window_open = lambda: opened
+                    widget._get_current_manual_vendor_context = lambda: context
+                    stock[503] = 10
+                    plan = module.PlanResult(
+                        supported_map=True,
+                        has_actions=True,
+                        merchant_sell_item_ids=[501, 503],
+                        entries=[
+                            module.ExecutionPlanEntry(
+                                action_type="sell",
+                                merchant_type=module.MERCHANT_TYPE_MERCHANT,
+                                label="Wood",
+                                quantity=1,
+                                state=module.PLAN_STATE_WILL_EXECUTE,
+                                reason="merchant fallback",
+                                model_id=946,
+                            )
+                        ],
+                        material_sales=[
+                            module.PlannedMaterialSale(
+                                merchant_type=module.MERCHANT_TYPE_MATERIALS,
+                                item_id=503,
+                                model_id=946,
+                                label="Wood",
+                                batches_to_sell=1,
+                                quantity_to_sell=4,
+                            )
+                        ],
+                    )
+
+                    def manual_plan(**opts: object) -> Any:
+                        events.append(
+                            f"manual-plan:{bool(opts['bypass_xunlai_first'])}:{bool(opts['sell_action_rule_kinds'])}"
+                        )
+                        return plan
+
+                    original_add: Callable[[dict[int, Any], Any], None] = widget._add_manual_merchant_sale
+
+                    def add(table: dict[int, Any], sale: Any) -> None:
+                        old = table.get(sale.item_id)
+                        original_add(table, sale)
+                        events.append(
+                            f"manual-add:{sale.item_id}:{sale.quantity_to_sell}:{table[sale.item_id].quantity_to_sell}:{table[sale.item_id] is old}"
+                        )
+
+                    widget._build_plan = manual_plan
+                    widget._add_manual_merchant_sale = add
+                    widget._update_manual_vendor_runtime()
+                    check(
+                        widget.manual_vendor_running and widget.manual_vendor_handled_signature == "cp20-vendor",
+                        "manual admitted",
+                    )
+                    if route == "manual_stale":
+                        widget._get_account_key = lambda: "successor@example.com"
+                elif remote:
+                    widget.profile_entries_loaded = {"account": True, "shared": True}
+                    if route == "remote_fault":
+                        original_console: Callable[..., Any] = module.ConsoleLog
+
+                        def observe_error(name: str, message: str, *args: object, **kwargs: object) -> Any:
+                            if message == f"Execution error: {fault}":
+                                check(sys.exception() is fault, "execution caught the original failed send")
+                                events.append("same-send-exception")
+                                record_traceback()
+                            return original_console(name, message, *args, **kwargs)
+
+                        restore.binding(module, "ConsoleLog", observe_error)
+                    messaging = _cp15_messaging_source(module, widget)
+                    original_outer: Callable[[], None] = widget._release_merchant_rules_remote_dispatch
+
+                    def outer_release() -> None:
+                        original_outer()
+                        events.append(f"outer-release:{_cp15_lease_counts(widget)}")
+
+                    widget._release_merchant_rules_remote_dispatch = outer_release
+
+                    def send(
+                        sender: str, receiver: str, command: int, params: tuple[float, ...], extra: tuple[str, ...]
+                    ) -> int:
+                        check(
+                            (sender, receiver, command, extra[0])
+                            == (account, "leader@example.com", module.SharedCommandType.MerchantRules, request),
+                            "wire correlation",
+                        )
+                        check(
+                            messaging._merchant_busy
+                            and not any(vars(hero).values())
+                            and widget.destroy_include_protected_items
+                            and widget.destroy_instant_enabled,
+                            "active lock and overrides",
+                        )
+                        wire.append((params, extra))
+                        if len(wire) == 2:
+                            published_plans.append(widget.preview_plan)
+                        events.append(
+                            f"packet:{params}:{extra}:{widget._get_multibox_plan_counts(widget.preview_plan)}"
+                        )
+                        return 1
+
+                    def mark(verb: str, email: str, index: int) -> None:
+                        check((email, index) == (account, 17), "message index")
+                        assert messaging is not None
+                        events.append(f"message-{verb}:{messaging._merchant_busy}:{_cp15_lease_counts(widget)}")
+
+                    def hero_options(email: str) -> types.SimpleNamespace | None:
+                        return hero if email == account else None
+
+                    restore.binding(
+                        module.GLOBAL_CACHE,
+                        "ShMem",
+                        types.SimpleNamespace(
+                            MarkMessageAsRunning=partial(mark, "running"),
+                            MarkMessageAsFinished=partial(mark, "finished"),
+                            SendMessage=send,
+                            GetHeroAIOptionsFromEmail=hero_options,
+                        ),
+                    )
+                    original_unmet: Callable[[Any], list[tuple[Any, int]]] = widget._get_unmet_request_stock_targets
+
+                    def unmet(ctx: Any) -> list[tuple[Any, int]]:
+                        targets = [(t.model_id, t.target_count) for t in ctx.merchant_stock_targets]
+                        actual = original_unmet(ctx)
+                        check(targets == [(222, 2)] and model_count(222) == 2 and actual == [], "independent stock")
+                        events.append("stock:222:2:satisfied")
+                        return actual
+
+                    widget._get_unmet_request_stock_targets = unmet
+                    _cp13_call(messaging, "_queue_merchant_rules_message", 17, _cp15_message(request, 3))
+                else:
+                    check(route == "raw_close", "known route")
+
+                if route == "raw_close":
+                    operation = cast(Generator[object, None, object], widget._execute_now())
+                else:
+                    check(len(queue) == 2, "one queued operation")
+                    operation = cast(Generator[object, None, object], queue[1])
+                    check(_cp15_lease_counts(widget) == ((1, 0, 0) if remote else (0, 1, 0)), "lease admission")
+                events.append(f"admitted:{_cp15_lease_counts(widget)}")
+                tokens: list[object] = []
+                try:
+                    for _ in range(240):
+                        try:
+                            value = next(operation)
+                        except StopIteration as stopped:
+                            events.append(f"return:{stopped.value}")
+                            break
+                        tokens.append(value)
+                        events.append(f"yield:{value}")
+                        if closing and value == 50 and sent:
+                            check(
+                                stock[501] == 3 and not confirmations and not scopes,
+                                "positive stock and real confirmation wait at close",
+                            )
+                            try:
+                                operation.close()
+                            except RuntimeError as exc:
+                                check(
+                                    route == "raw_close" and str(exc) == "generator ignored GeneratorExit",
+                                    "raw finally yield",
+                                )
+                                events.append(f"raw-close:{exc}")
+                                record_traceback()
+                            else:
+                                check(route == "owned_close", "owned close absorbs raw finally yield")
+                                events.append("owned-close")
+                            operation.close()
+                            events.append("second-close")
+                            break
+                        if manual and value == 40 and len(sent) == (2 if route == "manual_overlap" else 1):
+                            opened = False
+                    else:
+                        raise AssertionError(f"CP20 {route} exceeded 240 advancements: {events}")
+                finally:
+                    operation.close()
+                events.append(
+                    f"final:{widget.last_execution_summary}:{widget.last_manual_vendor_summary}:{widget.status_message}:{widget.preview_ready}:{widget.last_error}"
+                )
+                check(_cp15_lease_counts(widget) == (0, 0, 0), "all leases released")
+                if route != "raw_close":
+                    check(sum(e.startswith("release:") for e in events) == 1, "single inner lease release")
+                if route == "manual_stale":
+                    check(
+                        not tokens and not sent and not scopes and not widget.manual_vendor_running,
+                        "stale lease before first send",
+                    )
+                    return events
+                if manual:
+                    expected = {"manual_matching": [501], "manual_fallback": [503], "manual_overlap": [501, 503]}[route]
+                    check(
+                        sent == expected and confirmations == [([i], []) for i in expected], "admitted manual records"
+                    )
+                    check(
+                        scopes == [(False, False)]
+                        and not widget.manual_vendor_running
+                        and widget.manual_vendor_cooldown_until_ms > 1000000
+                        and widget.manual_vendor_handled_signature == ""
+                        and not widget.preview_ready,
+                        "manual cleanup and preview",
+                    )
+                    check(
+                        widget.last_manual_vendor_summary == f"Merchant sells: {len(expected)}/{len(expected)} items.",
+                        "manual summary",
+                    )
+                    if route == "manual_overlap":
+                        check(
+                            "manual-add:501:0:0:True" in events
+                            and "manual-add:503:0:0:True" in events
+                            and "sell:503:70" in events,
+                            "overlap preserved first row and whole-stack zero",
+                        )
+                    elif route == "manual_fallback":
+                        check(
+                            "manual-add:503:0:0:True" in events and 501 in stock, "explicit materials permission only"
+                        )
+                    else:
+                        check("sell:501:21" in events and 503 in stock, "matching excludes fallback and trader rows")
+                    return events
+
+                check(
+                    scopes == [(False, False)]
+                    and events.index("end:True:False:True") < events.index("resume:(False, False):False"),
+                    "reservation then Inventory Plus",
+                )
+                check(not widget.execution_running and not widget.execute_reservation_scope_active, "execute flags")
+                if closing:
+                    check(
+                        sent == [501]
+                        and confirmations == []
+                        and "second-close" in events
+                        and not widget.last_execution_summary,
+                        "close leaves issued effect",
+                    )
+                    return events
+                currency_changed = widget.execution_currency_changing_work_completed
+                events.append(f"currency:{currency_changed}")
+                check(currency_changed == (route not in ("remote_fault", "remote_timeout")), "currency-changing work")
+                if route == "execute_here":
+                    check(
+                        sent == [501] and confirmations == [([502], []), ([501], [])],
+                        "CP19 and merchant share genuine evidence",
+                    )
+                    check(events.index("destroy:502") < events.index("sell:501:28"), "destroy precedes refreshed sale")
+                    expected_order = [
+                        "Destroy",
+                        "Xunlai sell pre-pull",
+                        "Material sales",
+                        "Rare material sales",
+                        "Merchant sells",
+                        "Rune trader sales",
+                    ]
+                    check(
+                        [e.split(":")[1] for e in events if e.startswith("summary:")][:6] == expected_order,
+                        "ordinary phase order",
+                    )
+                    check(
+                        "Destroy: 1/1 items." in summaries
+                        and "Merchant sells: 1/1 items." in summaries
+                        and not widget.preview_ready,
+                        "merged local summary",
+                    )
+                elif route == "travel":
+                    check(
+                        plans == [(0, [501]), (200, []), (0, [601])] and sent == [601] and "travel" in tokens,
+                        "real travel rebuild and distinct dispatched sale",
+                    )
+                elif xunlai:
+                    check(
+                        withdrawn == [750, 750] and sent == [501, 751] and vault == {} and stock == {},
+                        "prepull and recovery",
+                    )
+                    check(
+                        "summary:Xunlai sell pre-pull:1:0:1" in events
+                        and "summary:Xunlai sells:1:1:0" in events
+                        and plans[-1] == (0, [751]),
+                        "real pre-pull timeout, rebuilt recovery sale",
+                    )
+                    check(
+                        "Xunlai sell withdraws: completed=1/1 timeouts=0 depleted=0" in events
+                        and any(
+                            e.startswith("Xunlai sell pass 2: no withdrawable matching storage stacks") for e in events
+                        )
+                        and tokens.count(50) >= 41
+                        and len(tokens) < 100,
+                        "genuine transfer timeout and bounded termination",
+                    )
+                elif remote:
+                    check(
+                        sent == [501] and stock.get(2220) == 2 and len(wire) == 2, "sale dispatch and stock preserved"
+                    )
+                    check(
+                        wire[0][0] == (100, 0, 0, 0) and wire[0][1][1:3] == ("Starting", "Remote execute is starting."),
+                        "Starting packet",
+                    )
+                    assert messaging is not None
+                    check(
+                        not messaging._merchant_busy
+                        and (widget.destroy_include_protected_items, widget.destroy_instant_enabled) == original_flags
+                        and list(vars(hero).values()) == [True, False, True, False, True],
+                        "lock, flags and HeroAI restored",
+                    )
+                    check(
+                        len(published_plans) == 1
+                        and widget.preview_plan is not published_plans[0]
+                        and cleared[-1] is widget.preview_plan
+                        and not widget.preview_ready
+                        and not widget.preview_plan.entries
+                        and widget.preview_execute_travel_target_outpost_id == 0,
+                        "request projection cleared after publication",
+                    )
+                    check(
+                        events.index("release:(1, 0, 0)")
+                        < events.index("message-finished:False:(1, 0, 0)")
+                        < events.index("outer-release:(0, 0, 0)"),
+                        "messaging release sequence",
+                    )
+                    if route == "remote_fault":
+                        check(
+                            wire[-1][0] == (199, 0, 1, 0)
+                            and wire[-1][1][1] == "Execute Failed"
+                            and wire[-1][1][3] == widget.last_error == str(fault)
+                            and "same-send-exception" in events
+                            and not confirmations,
+                            "fault publication",
+                        )
+                    else:
+                        timeout = route == "remote_timeout"
+                        expected_sets: list[tuple[list[int], list[int]]] = [([], [501])] if timeout else [([501], [])]
+                        check(
+                            confirmations == expected_sets and (tokens.count(50) == (31 if timeout else 0)),
+                            "genuine confirmation",
+                        )
+                        check(
+                            wire[-1][0] == (102, 1, 1, 1)
+                            and wire[-1][1][1] == "Executed"
+                            and "stock:222:2:satisfied" in events
+                            and widget._get_multibox_plan_counts(published_plans[0]) == (1, 1),
+                            "preview-derived normal publication",
+                        )
+                        check(
+                            widget.last_execution_summary
+                            == (
+                                "Merchant sells: 0/1 items, 1 timeout(s)." if timeout else "Merchant sells: 1/1 items."
+                            ),
+                            "execution summary",
+                        )
+                return events
+
+        return {
+            route: run(route)
+            for route in (
+                "deposit",
+                "execute_here",
+                "travel",
+                "xunlai",
+                "manual_matching",
+                "manual_fallback",
+                "manual_overlap",
+                "manual_stale",
+                "raw_close",
+                "owned_close",
+                "remote_success",
+                "remote_timeout",
+                "remote_fault",
+            )
+        }
+
+    if family == "evidence":
+        return evidence_cases()
+    if family in ("phase_steps", "interruptions"):
+        return phase_cases(family)
+    if family == "callers":
+        return caller_cases()
+    raise ValueError(f"Unknown merchant sale family {family!r}")
+
+
+def _test_merchant_sales_evidence(module: types.ModuleType) -> None:
+    _merchant_sales_trace(module, "evidence")
+
+
+def _test_merchant_sales_phase_steps(module: types.ModuleType) -> None:
+    _merchant_sales_trace(module, "phase_steps")
+
+
+def _test_merchant_sales_interruptions(module: types.ModuleType) -> None:
+    _merchant_sales_trace(module, "interruptions")
+
+
+def _test_merchant_sales_callers(module: types.ModuleType) -> None:
+    _merchant_sales_trace(module, "callers")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -78306,6 +80196,15 @@ def main() -> int:
                 ("destroy_execution_steps", lambda: _test_destroy_execution_steps(module)),
                 ("destroy_execution_interruptions", lambda: _test_destroy_execution_interruptions(module)),
                 ("destroy_execution_callers", lambda: _test_destroy_execution_callers(module)),
+            ]
+        )
+        tests.extend(
+            [
+                ("merchant_sales_owner_contract", lambda: _test_merchant_sales_owner_contract(module)),
+                ("merchant_sales_evidence", lambda: _test_merchant_sales_evidence(module)),
+                ("merchant_sales_phase_steps", lambda: _test_merchant_sales_phase_steps(module)),
+                ("merchant_sales_interruptions", lambda: _test_merchant_sales_interruptions(module)),
+                ("merchant_sales_callers", lambda: _test_merchant_sales_callers(module)),
             ]
         )
         catalog_contract_tests = [

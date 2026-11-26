@@ -60,6 +60,7 @@ from Sources.icefox.MerchantRules import destroy_execution as _destroy_execution
 from Sources.icefox.MerchantRules import gold_transactions as _gold_transactions
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
+from Sources.icefox.MerchantRules import merchant_sales as _merchant_sales
 from Sources.icefox.MerchantRules import owned_work as _owned_work
 from Sources.icefox.MerchantRules import planning as _planning
 from Sources.icefox.MerchantRules import preview as _preview
@@ -17221,15 +17222,11 @@ class MerchantRulesWidget:
         return (yield from cast(Generator[None, None, GoldTopUpResult], operation))
 
     def _get_inventory_stack_quantities(self, item_ids: list[int]) -> dict[int, int]:
-        tracked_ids = {int(item_id) for item_id in item_ids if int(item_id) > 0}
-        if not tracked_ids:
-            return {}
-        present_ids = set(self._get_inventory_item_ids())
-        return {
-            item_id: max(0, int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id)))
-            for item_id in tracked_ids
-            if item_id in present_ids
-        }
+        return _inventory_evidence.inventory_stack_quantities(
+            item_ids,
+            get_inventory_item_ids=lambda: self._get_inventory_item_ids,
+            get_quantity=lambda: GLOBAL_CACHE.Item.Properties.GetQuantity,
+        )
 
     def _wait_for_merchant_sell_confirmation(
         self,
@@ -17237,23 +17234,16 @@ class MerchantRulesWidget:
         *,
         timeout_ms: int = MERCHANT_SELL_CONFIRM_TIMEOUT_MS,
         step_ms: int = 50,
-    ):
-        pending_item_ids = {int(item_id) for item_id in previous_quantities.keys() if int(item_id) > 0}
-        confirmed_item_ids: set[int] = set()
-        waited_ms = 0
-        while pending_item_ids and waited_ms <= max(0, int(timeout_ms)):
-            current_quantities = self._get_inventory_stack_quantities(list(pending_item_ids))
-            for item_id in list(pending_item_ids):
-                previous_quantity = max(0, int(previous_quantities.get(item_id, 0)))
-                current_quantity = max(0, int(current_quantities.get(item_id, 0)))
-                if current_quantity <= 0 or current_quantity < previous_quantity:
-                    confirmed_item_ids.add(item_id)
-                    pending_item_ids.discard(item_id)
-            if not pending_item_ids:
-                break
-            waited_ms += max(1, int(step_ms))
-            yield from Routines.Yield.wait(step_ms)
-        return confirmed_item_ids, pending_item_ids
+    ) -> Generator[None, None, tuple[set[int], set[int]]]:
+        return (
+            yield from _inventory_evidence.confirm_merchant_sales(
+                previous_quantities,
+                timeout_ms=timeout_ms,
+                step_ms=step_ms,
+                get_stack_quantities=lambda: self._get_inventory_stack_quantities,
+                get_wait=lambda: Routines.Yield.wait,
+            )
+        )
 
     def _wait_for_stack_quantity_target(
         self,
@@ -19486,7 +19476,7 @@ class MerchantRulesWidget:
         self,
         merchant_coords: tuple[float, float] | None,
         merchant_sell_item_ids: list[int],
-    ) -> ExecutionPhaseOutcome:
+    ) -> Generator[object, None, ExecutionPhaseOutcome]:
         outcome = ExecutionPhaseOutcome(
             label="Merchant sells",
             measure_label="items",
@@ -19506,28 +19496,20 @@ class MerchantRulesWidget:
             self._debug_log("Merchant sell phase: inventory did not load.")
             return outcome
 
-        pre_sell_quantities = self._get_inventory_stack_quantities(merchant_sell_item_ids)
-        sell_item_ids = list(pre_sell_quantities.keys())
-        missing_item_count = max(0, len(merchant_sell_item_ids) - len(sell_item_ids))
-        if missing_item_count > 0:
-            outcome.depleted += missing_item_count
-        if not sell_item_ids:
-            self._debug_log("Merchant sell phase skipped send because planned item ids were no longer in inventory.")
-            return outcome
-
-        yield from Routines.Yield.Merchant.SellItems(sell_item_ids)
-        confirmed_ids, pending_ids = yield from self._wait_for_merchant_sell_confirmation(pre_sell_quantities)
-        outcome.completed = len(confirmed_ids)
-        outcome.timeout_failures += len(pending_ids)
-        if pending_ids:
-            ConsoleLog(
-                MODULE_NAME,
-                f"Merchant sell verification timed out for {len(pending_ids)} item(s) after SellItems.",
-                Console.MessageType.Warning,
-            )
-        self._debug_log(
-            f"Merchant sell phase completed: confirmed={len(confirmed_ids)} pending={len(pending_ids)} "
-            f"missing_before_send={missing_item_count}"
+        yield from _merchant_sales.execute_planned_merchant_sales(
+            merchant_sell_item_ids,
+            counts=outcome,
+            io=_merchant_sales.PlannedSaleIO(
+                get_stack_quantities=lambda: self._get_inventory_stack_quantities,
+                get_sell_items=lambda: Routines.Yield.Merchant.SellItems,
+                get_confirmation=lambda: self._wait_for_merchant_sell_confirmation,
+                get_debug=lambda: self._debug_log,
+                warn_pending=lambda pending_ids: ConsoleLog(
+                    MODULE_NAME,
+                    f"Merchant sell verification timed out for {len(pending_ids)} item(s) after SellItems.",
+                    Console.MessageType.Warning,
+                ),
+            ),
         )
         return outcome
 
@@ -19999,7 +19981,7 @@ class MerchantRulesWidget:
         manual_sales: list[PlannedManualMerchantSale],
         *,
         phase_label: str = "Merchant sells",
-    ) -> ExecutionPhaseOutcome:
+    ) -> Generator[object, None, ExecutionPhaseOutcome]:
         outcome = ExecutionPhaseOutcome(
             label=phase_label,
             measure_label="items",
@@ -20013,64 +19995,23 @@ class MerchantRulesWidget:
             outcome.timeout_failures += outcome.attempted
             return outcome
 
-        for sale in manual_sales:
-            item_id = int(sale.item_id)
-            current_quantity = max(0, int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id)))
-            if current_quantity <= 0:
-                outcome.depleted += 1
-                continue
-
-            requested_quantity = max(0, int(sale.quantity_to_sell))
-            if requested_quantity <= 0:
-                requested_quantity = current_quantity
-            requested_quantity = min(requested_quantity, current_quantity)
-            if requested_quantity <= 0:
-                outcome.depleted += 1
-                continue
-
-            if requested_quantity < current_quantity:
-                split_destination = self._find_inventory_empty_slot()
-                if split_destination is None:
-                    outcome.timeout_failures += 1
-                    self._debug_log(
-                        f"Manual merchant sale skipped {sale.label}: no empty slot to split {requested_quantity}/{current_quantity}."
-                    )
-                    continue
-                keep_quantity = current_quantity - requested_quantity
-                GLOBAL_CACHE.Inventory.MoveItem(
-                    item_id,
-                    int(split_destination.bag_id),
-                    int(split_destination.slot),
-                    keep_quantity,
-                )
-                updated_quantity = yield from self._wait_for_stack_quantity_target(
-                    item_id,
-                    requested_quantity,
-                    timeout_ms=MERCHANT_SELL_CONFIRM_TIMEOUT_MS,
-                    step_ms=50,
-                )
-                if int(updated_quantity) != requested_quantity:
-                    outcome.timeout_failures += 1
-                    self._debug_log(
-                        f"Manual merchant sale split verification failed for {sale.label}: "
-                        f"expected {requested_quantity}, observed {updated_quantity}."
-                    )
-                    continue
-                current_quantity = updated_quantity
-
-            value = max(0, int(GLOBAL_CACHE.Item.Properties.GetValue(item_id)))
-            GLOBAL_CACHE.Trading.Merchant.SellItem(item_id, int(current_quantity) * value)
-            yield from self._wait_for_action_queue_empty("MERCHANT", timeout_ms=MERCHANT_SELL_CONFIRM_TIMEOUT_MS, step_ms=50)
-            confirmed_ids, pending_ids = yield from self._wait_for_merchant_sell_confirmation(
-                {item_id: int(current_quantity)},
-                timeout_ms=MERCHANT_SELL_CONFIRM_TIMEOUT_MS,
-                step_ms=50,
-            )
-            if confirmed_ids and not pending_ids:
-                outcome.completed += 1
-            else:
-                outcome.timeout_failures += 1
-            yield from Routines.Yield.wait(40)
+        yield from _merchant_sales.execute_open_merchant_sales(
+            manual_sales,
+            counts=outcome,
+            io=_merchant_sales.OpenSaleIO(
+                get_quantity=lambda: GLOBAL_CACHE.Item.Properties.GetQuantity,
+                get_empty_slot=lambda: self._find_inventory_empty_slot,
+                get_move=lambda: GLOBAL_CACHE.Inventory.MoveItem,
+                get_target_wait=lambda: self._wait_for_stack_quantity_target,
+                get_value=lambda: GLOBAL_CACHE.Item.Properties.GetValue,
+                get_sell=lambda: cast(Callable[[int, int], None], GLOBAL_CACHE.Trading.Merchant.SellItem),
+                get_drain=lambda: self._wait_for_action_queue_empty,
+                get_confirmation=lambda: self._wait_for_merchant_sell_confirmation,
+                get_wait=lambda: Routines.Yield.wait,
+                get_debug=lambda: self._debug_log,
+                read_timeout_ms=lambda: MERCHANT_SELL_CONFIRM_TIMEOUT_MS,
+            ),
+        )
 
         self._debug_log(
             f"{phase_label}: completed={outcome.completed}/{outcome.attempted} "

@@ -8,6 +8,8 @@ and retains its remaining runtime responsibilities and bounded delegate methods.
 import re
 import time
 from collections import Counter
+from collections.abc import Callable
+from collections.abc import Generator
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
@@ -32,6 +34,45 @@ from Sources.icefox.MerchantRules.weapon_mod_normalization import build_parsed_w
 if TYPE_CHECKING:
     from Sources.marks_sources.mods_parser import ModDatabase
     from Sources.marks_sources.mods_parser import ParsedModifierResult
+
+
+def inventory_stack_quantities(
+    item_ids: list[int],
+    *,
+    get_inventory_item_ids: Callable[[], Callable[[], list[int]]],
+    get_quantity: Callable[[], Callable[[int], int]],
+) -> dict[int, int]:
+    tracked_ids = {int(item_id) for item_id in item_ids if int(item_id) > 0}
+    if not tracked_ids:
+        return {}
+    present_ids = set(get_inventory_item_ids()())
+    return {item_id: max(0, int(get_quantity()(item_id))) for item_id in tracked_ids if item_id in present_ids}
+
+
+def confirm_merchant_sales(
+    previous_quantities: dict[int, int],
+    *,
+    timeout_ms: int,
+    step_ms: int,
+    get_stack_quantities: Callable[[], Callable[[list[int]], dict[int, int]]],
+    get_wait: Callable[[], Callable[[int], Generator[None, None, None]]],
+) -> Generator[None, None, tuple[set[int], set[int]]]:
+    pending_item_ids = {int(item_id) for item_id in previous_quantities.keys() if int(item_id) > 0}
+    confirmed_item_ids: set[int] = set()
+    waited_ms = 0
+    while pending_item_ids and waited_ms <= max(0, int(timeout_ms)):
+        current_quantities = get_stack_quantities()(list(pending_item_ids))
+        for item_id in list(pending_item_ids):
+            previous_quantity = max(0, int(previous_quantities.get(item_id, 0)))
+            current_quantity = max(0, int(current_quantities.get(item_id, 0)))
+            if current_quantity <= 0 or current_quantity < previous_quantity:
+                confirmed_item_ids.add(item_id)
+                pending_item_ids.discard(item_id)
+        if not pending_item_ids:
+            break
+        waited_ms += max(1, int(step_ms))
+        yield from get_wait()(step_ms)
+    return confirmed_item_ids, pending_item_ids
 
 
 class ModifierParser(Protocol):
