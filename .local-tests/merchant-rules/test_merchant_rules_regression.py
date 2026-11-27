@@ -76625,6 +76625,12 @@ else:
     from base64 import b85decode
     from zlib import decompress
 
+    widget_bytes = _crafting_widget_inverse(widget_bytes)
+    _expect(
+        sha256(widget_bytes).hexdigest() == "e195b7a6d9edcc21729bf7314590e6e839b7f4d5973e1c8707a79591ce58a2c7",
+        "Exact CP21 widget before inherited projections",
+    )
+
     # CP20 owns the assertions below. Reconstruct its exact widget before obtaining their AST positions.
     cp21_import = b"from Sources.icefox.MerchantRules import xunlai_sales as _xunlai_sales\r\n"
     _expect(widget_bytes.count(cp21_import) == 1, "CP21 widget import count")
@@ -78604,12 +78610,14 @@ assert not any(n.startswith(('Py4GW', 'PyImGui', 'PySystem')) for n in sys.modul
     _expect(lines.count(imported) == 1, "One passive CP21 import")
     lines.remove(imported)
     residual = b"".join(lines)
+    residual = _crafting_widget_inverse(residual)
     _expect(
         len(residual) == 1612626
         and sha256(residual).hexdigest() == "ab4e97f80beec23dcabac53c3c21d75da537ffa9bf526b84bea13f1869db4a95",
         "Unprojected widget outside the entire CP21 scope",
     )
     harness = Path(__file__).read_bytes()
+    harness = _crafting_remove_registrations(harness)
     projection_start = b"    widget_bytes = MERCHANT_RULES_PATH.read_bytes()\r\n" + b"    from base64 import b85decode"
     projection_end = b"    tree = ast.parse(widget_bytes)\r\n"
     _expect(harness.count(projection_start) == harness.count(projection_end) == 1, "Unique CP20 projection anchors")
@@ -80330,6 +80338,1718 @@ def _test_xunlai_sales_interruptions(module: types.ModuleType) -> None:
 
 def _test_xunlai_sales_callers(module: types.ModuleType) -> None:
     _xunlai_sales_trace(module, "callers")
+
+
+def _crafting_widget_inverse(raw: bytes) -> bytes:
+    from base64 import b85decode
+    from hashlib import sha256
+    from zlib import decompress
+
+    import_line = b"from Sources.icefox.MerchantRules import consumable_crafting as _consumable_crafting\r\n"
+    _expect(raw.count(import_line) == 1, "Exact CP22 widget import")
+    raw = raw.replace(import_line, b"")
+    # Each tuple binds the candidate method bytes to the exact CP21 method, including its final CRLF.
+    spans = (
+        (
+            '_withdraw_model_to_inventory_for_crafting',
+            "d6d68a51128427241e120ba2f6d2085f617765897f6a38724dd693ee0334afde",
+            b"c-oCsQE!_t5Pq-J|6uhAt2AN{lcs1)>Y}!r)M=YKX^)lz2eAfrYE088%75PhCV&I9eh88M-Q9QJozH|25<^1RPMA%s`Htl(hKw1-"
+            b"gnR*Ml-{#MX%=ao7$H-yfGqJzgA(zQ2x)vG0b+>RbIGL<W?%2p<>dvjtKbQ+)`o;6=dWJiS17ODrL==<$hnXhZ3uOu^euArf+t29"
+            b"o}o?99qcwD11J6$5)dxqUKrfzv8@@aQb)jqfgDW=bXq08U?~_@pej5)IkXT*rhY^^^eqx1m2pEj1gf>x!2b=mZK4}duq`htUiUmJ"
+            b"U<g7cj(61W9r29bkL>p3Xr&+4<>B$?*V{+7x?O#{TYN|Ni(gu8K^p<Z;sMNWYvm0YP)g5(!D|FtL+<L2Q1ab;f^#71?BYI$XO(VO"
+            b"q!1!YI6u|!TtZ=>?pz@~$En{n(nvyUz-qvpVC_Atr20{H%u1CA8g|f_R+!&fscg#KUwfsiirj0JKQ(RZRKX`a&#QppDNRZzB*NYX"
+            b"jj8MfWHCw5r@a+BE==A3-Oy;5N0n#B4a<NR#v6BgHX;0JoR#ysE6NPmh#XXDSYCu5J_W%H5*=+T*vBal9p6r|?%+(cS|v(uEY}H3"
+            b"ES@!<>B*W}t#AzMGG&=cXEdy@{?*EkAf$vm1P;V@wv!kKK{a`BtVA1fs@0NQz2)@Ku)uuKtF2SU*Z5m(ly;l-*i|Pyoc<oIAmO3;"
+            b"9-Dp&5B2A`m?1%@kEXA!`z~CER`GG@$fMJ3-B?pP8>Tmv|L7@7BSYOj2#%Mx9|R4i)Uu!C<;8z?ha>3",
+        ),
+        (
+            '_prepare_consumable_crafting_materials',
+            "5aedf6edaa903aa472b57d556b05d21d3e535b1b8105241770fb20afbda235ae",
+            b"c-p;H-D}%05PvW9e>n1FcbUodm^Fni>$*YGj?pnjDMG2wslb+8Np2TH{`a0@JN|C>G(8wuce>x*?>+<o5Ml%@)tGXP>|RNeC43dr"
+            b"R`bXTxn>Ess0ELWcYFlJG8jkW>NkzKlo;lB%oJi_?Cp>IaDFg3chbAswUgTZ31z4>lRUvG7^@4B5AV-lrBpnvR5d<kLKEC-!x9x@"
+            b"JcUr)+gl;+80d2cGuZAb{YYupdq%>xtCd!6`Cg<**Ij%8TchnTf|})8jLhcn-d+&w_e_L-)24_@v%<iYlGws@i$I9#44aa@S@xK5"
+            b"650)UmGHmbWFKMyS<3t_X6y3l3?}~!><FXG6U73hWo2OF`r*Mcahk^$R8rFe)ybO6m)8U1yZm*u14@QBbYlz?AKro2MRlu2TTcMK"
+            b"4<{|Qx@L&q>X6u#%J!6DyO?aICERF7Z|8PiVZtzDmF8<?Dn;q}z-73XdmDjq2$5Dvp^H?A)S?ajG}EavIEzNxS_AE%Y+fjv7oLTE"
+            b"2sMA^@yPf4J^e~O-f)%2F%>%xUG3#zyjdX!QkwPAPNuM!7_aSzkQ4-kw;3q<%f<EQ^97rq&%a#+-%I7-67AAiovTa^*NES4l0+Ee"
+            b"=375jClH!MJq~souVePCxAPM9RA*@hoqU%WD?+e}Rq$^1lsSH-E84#JT|b=1O;`H;b*tv$Pn8iin&6K+3!b^K-iMEq7C<B<kN-<D"
+            b"DU24_=|CELVyoAA(FAQ3_ll_)7iv8)WR}-oel0H8)%o&b+^-Rh=JfPXYZs3#ywS4sj!MK3ww)MuFdBl`=CwohL1qfRV!ooUc~JTl"
+            b"LU*62sWTcr+a`}Y*T9Fu3q}LM75oHCG=`?r&4%8C-&{+=8uyOV*6cZ?;P~hT8zP(G",
+        ),
+        (
+            '_collect_crafting_ingredients_from_inventory',
+            "277956ae67ca6a6d0e82d129beec7e121bcf15c87cf92527f3cbdcc38ad0a828",
+            b"c-oCq+iK%L41F*3A4H#Q)-`#~ZVKH{+J&;W*AUFamfIoY8Luoa4JH4+vSZhmPQwoPsw3&>NCE)JFoz^{#$d`xN-Ae<pAxwUGmVz3"
+            b"BqvwMkH7Na=nzzB@(2i1UE&hf&Q^7yb_UmtFVgSU5W@8ha9tYQ7+vv3Ti!-6f329d+vVj2bZ5w#XhunzRm;H%R<PN6!GCIHS+mA7"
+            b"@SSn#9;rt(sb`4X(Ku+~GBiRVf-d|av4|OF0_w_-M>37dXbxeav=zG~Db!1_h{TP9S*S3adUbt}94lB%O)a~VC=G$83vu#<JandK"
+            b"+$k3{`8@T6;f!i4W<Fy4MUs0kt%`(d|K7xO_`soJmG1in9j0R3KmPc7`<Se6*AI8`H=!N>Bv&Fejg0S+e|26#S5i2at2y|RV##pV"
+            b"KD4v{%VXgcVFo*+MCt@$YxIbr_Bg3n+h7_u8pQTg<k^B)l_lEj)Y4vzv!26BjD086d=Z8L{Ir@D@*X=3%=KC9WVUX+g7(YVbIq^5"
+            b"%YMM?Y+a7<dYXG#hC=ltZPZTg)w3i1c;=6vWrJ!fG2co&##bW+2)QQf6F>6n8ojZ;y!Z#aPMIV",
+        ),
+        (
+            '_craft_planned_consumables',
+            "092d74faf64116f4dd25cd196b48dc4fa9fa4b73979d4aa0d9936f8e2ab692c2",
+            b"c-qBTTW{Mo6n-zz|3GLDl~z@A9{Q5i1-dlo3M6f@br^;qAZUs5w8)Z5QfUms|9yudB~cg3vYT#siA^4!`{g5z5JC}+5e^xN1ujyO"
+            b"Wi-NJp7C-+Rw?D~(<ey(ahk?{`?VpKNBKEQ6E1E(sl|(i!G+wtHIDsgviO^Dic_+p={e$pp(S$Kqp0Fc8F%y%550JeE+1%EiX_iI"
+            b"$-^H@5#}3u-tu%Dr;=IghYVv-#SbxhPtqhJBFWZBBqF6g+7Q@DNXmV*&eO<8B#Y3BtWih`5+-6B0OO}mS~<Cr3@VRmWcW?~RW>dS"
+            b"d;RYIh7w*fy|;9fPn{kS5rS?CL8B!Y<Zj4=yYNwx3AZ8-zLX>bYqp+;;+!e(!FDfDp25^>KPEBCa?uZJS3aYnWLa&w=?r~ZW=Mb&"
+            b"j=9JgSyP-BG;_VmmvZ0TCNzyu%<_$<rCDWmhrTFTk#h=O7^FfICd5OMIiA<kP^%WCIf-ygk`$P8^n8iV=3265d0Bu1R$F{evnXfh"
+            b"C`v+c1KH_MruZ#n!fxL(ng~Hp>4C_AQvp>;%2c=@SBF>a;XAtZd~|c`1*8CPMQYbGZIGgIOYS56SxJ}r3`Hi8THNjXGfo&6>KvHY"
+            b"VRN&%?b7NT7{<6@v>*`VHk^tDR3C22&h0R7RL;nTE)6XLV|@^PGXo-8q!da;2LGsP>FD7N1%MTxdD%&tN-zWiJX-k?d^PZb+#k4r"
+            b"GS@UN%ySlj@iv1;9c~JqaLAw}QYf|g#&%f7F=Z-yHhDzTUgp;+Sd&T3a1u%99?(^=?a1nw$Qv2RcUK>Od2@v?-dy~88N3Ic!8<Ch"
+            b"<@WoxZcn=B$pV$9`Wr)m^dY2$fW9vOL0`A%WXlA5I*l-5G)xLPMO2oosTfHTtf(+>R_5y*u0D_3!04Bfa#8mjT&Fuonka>_4A`hb"
+            b"s)W~_U@;`ThdPdv!*r`O5AT4C!NkimIq{t#5u~<uOv2HJJfpU>(8*n9<Q`JH8Wqo#g=fCi2i~E0+On_C<ZdF>IT=9kT)ClCZ=>U*"
+            b"#h7cs$Ufs&;IjY1R5`rzlwRd)_xj`8KdvtEhd0-k(0H7kN{I@G?9o@kRgY16qSY4d25o5{IDXABxTc)LB>%hx2mDD`22I{Ou6&va"
+            b"Cd-GBY)xIOb+*bZ8KarN{4PmTT;vcG=&D%cf~1{Ah$M{jEoHKE{4O^>$@RBH5Z9tMM6Ifv5fL7Gg^c)jwk(?3M%I~~d{{u0AfyC2"
+            b"69?hM-I%v45CWhVSaQG|W7A9Hw2Dd=IAF9;f?3xt&hSKaEX=v^d^>#&`<fgyQ%pD1PIfvLX7<1tMh1EmY2-N-o)ZVVonsGK)nkAD"
+            b"0mCyBr@V>S%z_T5AnU`~T0{9H12e$;Tju}=m9|#J4ug?z2PX4C%9vX95YRK@ILI<zOoNO1a_6I-6A;k6>G^%9=xNjR+omddF@}r0"
+            b"Q!Am;``fDE@!R()E&Ng2_;f3m?aOTE;GSqZW5`x#bSRD<wDRyooRqI4x+>Q=1!#4kp%0$AYKanNNm1we*{F-jWDu6S(a`LXb4X@L"
+            b"7z32P+?mePi&cK?ksgU%lKO>4ksK7GeAZ>5*7nXx6KfK@0LX;8Pb41Gwa<NXQP*ukVOjZ@$x-ee3T2q5DGf#YT+#C6Se6%VhL{e9"
+            b"cPu2S)%l+Iuz6&eaJ~ITa6vLzY$KI>j&{$`v)~^9o^EZ2w?FAJa4^Ix3VlnyA(ffv-eJ2VwT?$KS1;s=(ShRG#z}|cXGS8>JGfBI"
+            b"TK$)k+nqh>{Ko^yW0^jS+9-jeQnZ<K-Ldi;BxRCO9{eTOAkcE2WFo*{Ng}EdBjD=BNhr~Si_j0K*rs5td`;!D<1Gu83#cs`y&z!-"
+            b"d1ALhBpV9i@P;qXUM?0B_QI$xB-zWwaYm{~mO8fv)3dRusdf#osuP$9oI<UMd3T`}&rDQ;ne5Neng4$}2bxry1c07RXT9#II-`fR"
+            b"oTi)D*t6602~hJS%`9(Mc40K-bcUsMU}oNxhF#kzAPKJF{s(;=zMOKyH)CiR`Fd%Gxbiof5x-0vu{cH55Gjgui&cbb^oc{Lo2)GK"
+            b"Go=3JYt&;*8qZ?WLPGp8!(JV$B%>RW$obUHmPY~qDx8>?ahyB=@7OUx-mV+<z0)FsCKF`3jlPlgrnWsR%y~X>F;+jDf?~T7^Y%aO"
+            b"Z2s7HLBY>x*En<E`gPawgnTkQh(*TWgS~Zif2X#?aJZKkKf?lsX{=rD23-owuGg9$U-!tkEVgHi#Q{E!9o-FhOW*Ggdt_csS~_!e"
+            b"gmDcD+XMB=9(CSoT7u593CE2b?*BmgFQozMUj",
+        ),
+    )
+    lines = raw.splitlines(keepends=True)
+    nodes = [n for n in ast.walk(ast.parse(raw)) if isinstance(n, ast.FunctionDef)]
+    for name, digest, preimage in spans:
+        matches = [n for n in nodes if n.name == name]
+        _expect(len(matches) == 1, f"Unique crafting facade {name}")
+        node = matches[0]
+        assert node.end_lineno is not None
+        current = b"".join(lines[node.lineno - 1 : node.end_lineno])
+        _expect(sha256(current).hexdigest() == digest and raw.count(current) == 1, f"Exact candidate {name}")
+        raw = raw.replace(current, decompress(b85decode(preimage)), 1)
+    return raw
+
+
+def _crafting_remove_registrations(raw: bytes) -> bytes:
+    for family in (
+        "owner_contract",
+        "material_supply",
+        "ingredient_selection",
+        "vendor_transactions",
+        "interruptions",
+        "local_routes",
+        "remote_route",
+    ):
+        name = "crafting_" + family
+        row = f'                ("{name}", lambda: _test_{name}(module)),\r\n'.encode("ascii")
+        _expect(raw.count(row) == 1, f"One CP22 registration for {name}")
+        raw = raw.replace(row, b"")
+    return raw
+
+
+def _test_crafting_owner_contract(module: types.ModuleType) -> None:
+    from hashlib import sha256
+
+    package = "Sources.icefox.MerchantRules"
+    owner = sys.modules[package + ".consumable_crafting"]
+    _expect(module._consumable_crafting is owner, "Widget binds the candidate crafting module")
+    _expect(
+        isinstance(owner.__file__, str)
+        and Path(owner.__file__).resolve() == REPO_ROOT / "Sources/icefox/MerchantRules/consumable_crafting.py",
+        "Candidate defining file",
+    )
+    _expect((REPO_ROOT / "Sources/icefox/MerchantRules/__init__.py").read_bytes() == b"", "Empty initializer")
+    routes = {
+        "_withdraw_model_to_inventory_for_crafting": ("withdraw_material", "WithdrawIO"),
+        "_prepare_consumable_crafting_materials": ("prepare_materials", "PrepareIO"),
+        "_collect_crafting_ingredients_from_inventory": ("collect_ingredients", "IngredientIO"),
+        "_craft_planned_consumables": ("execute_vendor_crafts", "VendorIO"),
+    }
+    expected_fields = {
+        "WithdrawIO": "get_sources get_quantity get_count get_withdraw get_count_wait get_debug get_label",
+        "PrepareIO": (
+            "get_recipe get_is_open get_ensure_open get_count get_material_withdraw get_wait get_label "
+            "get_console read_module read_warning"
+        ),
+        "IngredientIO": "get_inventory_ids get_quantity get_label",
+        "VendorIO": (
+            "get_prepare get_open get_model_id get_recipe get_skill_points get_fund get_collect get_count "
+            "get_craft get_transaction_wait get_count_wait get_cleanup get_debug get_console read_module read_warning"
+        ),
+    }
+    raw = MERCHANT_RULES_PATH.read_bytes()
+    for name, (algorithm, record) in routes.items():
+        methods = [n for n in ast.walk(ast.parse(raw)) if isinstance(n, ast.FunctionDef) and n.name == name]
+        _expect(len(methods) == 1, f"Unique unprojected method {name}")
+        method = methods[0]
+        calls = [
+            n
+            for n in ast.walk(method)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "_consumable_crafting"
+        ]
+        _expect(len(calls) == 2, f"Only the delegate and binding constructor in {name}")
+        delegate, bindings = calls
+        _expect(isinstance(delegate.func, ast.Attribute) and delegate.func.attr == algorithm, f"Route {name}")
+        _expect(isinstance(bindings.func, ast.Attribute) and bindings.func.attr == record, f"Binding {record}")
+        _expect(any(kw.arg == "io" and kw.value is bindings for kw in delegate.keywords), "Invocation-local binding")
+        _expect(all(isinstance(kw.value, ast.Lambda) and not kw.value.args.args for kw in bindings.keywords), record)
+        _expect([kw.arg for kw in bindings.keywords] == expected_fields[record].split(), f"Suppliers in {name}")
+        binding_type = getattr(owner, record)
+        _expect(list(binding_type.__dataclass_fields__) == expected_fields[record].split(), record)
+        _expect(binding_type.__dataclass_params__.frozen, f"Frozen {record}")
+        _expect(getattr(owner, algorithm).__globals__ is vars(owner), f"Defining owner of {algorithm}")
+        synchronous = algorithm == "collect_ingredients"
+        _expect(
+            any(isinstance(n, ast.YieldFrom) and n.value is delegate for n in ast.walk(method)) != synchronous,
+            f"Delegation mode {algorithm}",
+        )
+        if synchronous:
+            _expect(any(isinstance(n, ast.Return) and n.value is delegate for n in ast.walk(method)), name)
+    _expect(
+        sha256(_crafting_widget_inverse(raw)).hexdigest()
+        == "e195b7a6d9edcc21729bf7314590e6e839b7f4d5973e1c8707a79591ce58a2c7",
+        "Exact full CP21 widget preimage",
+    )
+    harness = _crafting_remove_registrations(Path(__file__).read_bytes())
+    begin = b"\r\ndef " + b"_crafting_widget_inverse("
+    main = b"\r\ndef " + b"main() -> int:\r\n"
+    _expect(harness.count(begin) == harness.count(main) == 1, "Unique CP22 block bounds")
+    start, end = harness.index(begin) + 2, harness.index(main) + 2
+    additions = harness[start:end]
+    block_pin = "c730fd1097cf6585b46871bcf2325a2940b92ecf572372fc4d58ff92f1ee3a34"
+    literal = block_pin.encode("ascii")
+    _expect(additions.count(literal) == 1, "One embedded definition-block digest")
+    _expect(sha256(additions.replace(literal, b"0" * 64)).hexdigest() == block_pin, "Exact CP22 definition block")
+    harness = harness[:start] + harness[end:]
+    cp20_adapter = (
+        b"\r\n    widget_bytes = "
+        + b"_crafting_widget_inverse(widget_bytes)\r\n"
+        + b"    _expect(\r\n"
+        + b"        sha256(widget_bytes).hexdigest() == "
+        + b'"e195b7a6d9edcc21729bf7314590e6e839b7f4d5973e1c8707a79591ce58a2c7",\r\n'
+        + b'        "Exact CP21 widget before inherited projections",\r\n'
+        + b"    )\r\n"
+    )
+    for insertion in (
+        cp20_adapter,
+        b"    residual = " + b"_crafting_widget_inverse(residual)\r\n",
+        b"    harness = " + b"_crafting_remove_registrations(harness)\r\n",
+    ):
+        _expect(harness.count(insertion) == 1, "Unique CP22 adapter")
+        harness = harness.replace(insertion, b"")
+    _expect(
+        sha256(harness).hexdigest() == "23c9e36b909e881799f21a896d0210802b1681d2c533c2dc7a0c3b00df3fab82",
+        "Exact full CP21 harness preimage",
+    )
+    cold = """import importlib, os, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root))
+pkg = 'Sources.icefox.MerchantRules'
+allowed = {'Sources', 'Sources.icefox', pkg, pkg+'.consumable_crafting'}
+class Guard:
+    def find_spec(self, fullname, path, target=None):
+        if fullname not in allowed and fullname.split('.')[0] not in sys.stdlib_module_names:
+            raise AssertionError(fullname)
+sys.meta_path.insert(0, Guard())
+assert 'MERCHANT_RULES_CP20_FAULTS' not in os.environ
+owner = importlib.import_module(pkg+'.consumable_crafting')
+assert pathlib.Path(owner.__file__).resolve() == root/'Sources/icefox/MerchantRules/consumable_crafting.py'
+assert all(getattr(owner, n).__globals__ is vars(owner) for n in ('withdraw_material','prepare_materials','collect_ingredients','execute_vendor_crafts'))
+assert not any(n.startswith(('Py4GW', 'PySystem', 'PyImGui')) for n in sys.modules)
+"""
+    env = os.environ.copy()
+    env.pop("MERCHANT_RULES_CP20_FAULTS", None)
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", "-X", "utf8", "-c", cold, str(REPO_ROOT)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    _expect(result.returncode == 0 and not result.stdout and not result.stderr, f"Cold crafting owner: {result}")
+
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        widget: Any = _cp15_widget(module)
+        outcome_class = module.ExecutionPhaseOutcome
+        created: list[Any] = []
+        received: list[Any] = []
+        bindings_seen: list[Any] = []
+        rows = [module.PlannedConsumableCraft(1, 2, "test", "kwat", "Kwat", (1.0, 2.0))]
+        recipe = object()
+        returned = ([1], [2], ["test blocker"])
+        debug: list[str] = []
+
+        def outcome(**kwargs: Any) -> Any:
+            result = outcome_class(**kwargs)
+            created.append(result)
+            return result
+
+        def opening(*, purpose: str) -> Generator[str, None, bool]:
+            _expect(purpose == "consumable crafter material scan", "Initial admission purpose")
+            yield "admission"
+            return False
+
+        def admitted(original: Any, *, counts: Any, io: Any) -> Generator[str, None, None]:
+            _expect(original is rows and counts is created[-1] and counts.attempted == 2, "Borrowed phase state")
+            received.append(original[0])
+            bindings_seen.append(io)
+            yield "admitted"
+
+        def prepare(original: Any, *, vendor_name: str, io: Any) -> Generator[str, None, bool]:
+            _expect(original is rows and vendor_name == "Kwat", "Original preparation list")
+            bindings_seen.append(io)
+            yield "preparing"
+            return True
+
+        def collect(original: Any, *, io: Any) -> tuple[list[int], list[int], list[str]]:
+            _expect(original is recipe, "Original concrete recipe")
+            bindings_seen.append(io)
+            return returned
+
+        def withdraw(model_id: int, quantity: int, *, io: Any) -> Generator[str, None, int]:
+            _expect((model_id, quantity) == (3, 4), "Withdrawal arguments")
+            bindings_seen.append(io)
+            yield "withdrawing"
+            return 7
+
+        restore.binding(module, "ExecutionPhaseOutcome", outcome)
+        restore.binding(owner, "execute_vendor_crafts", admitted)
+        restore.binding(owner, "prepare_materials", prepare)
+        restore.binding(owner, "collect_ingredients", collect)
+        restore.binding(owner, "withdraw_material", withdraw)
+        restore.binding(widget, "_debug_log", debug.append)
+        restore.binding(widget, "_is_storage_open", lambda: False)
+        restore.binding(widget, "_ensure_storage_open", opening)
+        empty = widget._craft_planned_consumables([])
+        denied = widget._craft_planned_consumables(rows)
+        _expect(not created and not bindings_seen, "Creating facades must be passive")
+        _expect(_drain_generator_return(empty) is created[-1] and not debug, "Canonical empty return")
+        _expect(next(denied) == "admission" and not bindings_seen, "Admission precedes owner construction")
+        _expect(_drain_generator_return(denied) is created[-1] and created[-1].load_failures == 1, "Denied return")
+        restore.binding(widget, "_is_storage_open", lambda: True)
+        for _ in range(2):
+            phase = widget._craft_planned_consumables(rows)
+            _expect(next(phase) == "admitted" and received[-1] is rows[0], "Canonical row at owner entry")
+            _expect(_drain_generator_return(phase) is created[-1], "Widget returns its canonical result")
+            op = widget._prepare_consumable_crafting_materials(rows, vendor_name="Kwat")
+            _expect(next(op) == "preparing" and _drain_generator_return(op) is True, "Preparation delegation")
+            _expect(widget._collect_crafting_ingredients_from_inventory(recipe) is returned, "Selection list identity")
+            op = widget._withdraw_model_to_inventory_for_crafting(3, 4)
+            _expect(next(op) == "withdrawing" and _drain_generator_return(op) == 7, "Withdrawal return")
+        _expect(len(bindings_seen) == len({id(io) for io in bindings_seen}) == 8, "Fresh IO per invocation")
+
+
+def _crafting_trace(module: types.ModuleType, family: str) -> dict[str, list[Any]]:
+    from hashlib import sha256
+    from inspect import currentframe
+
+    traces: dict[str, list[Any]] = {}
+
+    def provider(relative: str, pin: str, name: str, namespace: dict[str, Any]) -> Any:
+        path = REPO_ROOT / relative
+        raw = path.read_bytes()
+        _expect(sha256(raw).hexdigest() == pin, f"CP22 provider identity {relative}")
+        classes = [n for n in ast.parse(raw).body if isinstance(n, ast.ClassDef) and n.name == name]
+        _expect(len(classes) == 1, f"Unique provider class {relative}:{name}")
+        namespace["__name__"] = "cp22_inert_" + name
+        # The complete defining class uses these operand-local globals in place of native imports.
+        exec(compile(ast.Module(body=list(classes), type_ignores=[]), str(path), "exec"), namespace)
+        return namespace[name]
+
+    class CraftWorld:
+        def __init__(self, widget: Any, restore: _CP8Restoration, events: list[Any]) -> None:
+            self.widget = widget
+            self.events = events
+            self.recipe = next(r for r in module.CONSUMABLE_CRAFTER_RECIPES if r.vendor_key == "kwat")
+            self.output_model = int(self.recipe.model_id)
+            self.first, self.second = (int(i) for i, _ in self.recipe.ingredients)
+            self.items: dict[int, Any] = {}
+            self.add(101, self.first, 50, 1, 0)
+            self.add(102, self.second, 50, 1, 1)
+            self.bad_quantities: set[int] = set()
+            self.carried, self.stored = 500, 500
+            self.storage_open = True
+            self.allow_open = True
+            self.funded_on_open = False
+            self.close_first_window = False
+            self.fresh, self.opens = False, 0
+            self.skill = 5
+            self.offers: list[Any] = [701]
+            self.refreshed: list[Any] = [702]
+            self.offer_empty_reads = 0
+            self.signal = True
+            self.growth = True
+            self.moves_visible = True
+            self.move_bonus = 0
+            self.craft_calls = 0
+            self.unpublished = 0
+            self.pending_moves: list[tuple[int, int, int, int]] = []
+            self.pending_gold = 0
+            self.last_lists: tuple[list[int], list[int]] | None = None
+            self.targets: list[Any] = []
+            self.cleanups: list[tuple[Any, str, bool]] = []
+            self.saves = 0
+            self.funding_results: list[tuple[bool, bool]] = []
+            self.recipe_reads: list[Any] = []
+            outer = self
+
+            class Manager(_CP15Manager):
+                def AddAction(
+                    self, queue: str, callback: Callable[..., object], *args: object, **kwargs: object
+                ) -> str:
+                    _expect(queue == "ACTION", "CP22 physical ACTION lane")
+                    outer.events.append(("enqueue", queue, list(args)))
+                    return super().AddAction(queue, callback, *args, **kwargs)
+
+                def IsEmpty(self, lane: str) -> bool:
+                    empty = not any(entry[0] == lane for entry in self.entries)
+                    outer.events.append(("empty", lane, empty))
+                    return empty
+
+            self.manager = Manager()
+            bags = types.SimpleNamespace()
+            bag_enums = types.SimpleNamespace()
+            for index, (name, raw_name) in enumerate(
+                (("Backpack", "Backpack"), ("BeltPouch", "Belt_Pouch"), ("Bag1", "Bag_1"), ("Bag2", "Bag_2")), 1
+            ):
+                value = types.SimpleNamespace(name=name, value=index)
+                setattr(bags, name, value)
+                setattr(bag_enums, raw_name, value)
+            native_inventory = types.SimpleNamespace(
+                MoveItem=self.move,
+                WithdrawGold=self.withdraw_gold,
+                OpenXunlaiWindow=self.open_storage,
+                GetIsStorageOpen=lambda: self.storage_open,
+                GetGoldAmount=lambda: self.read_gold(False),
+                GetGoldAmountInStorage=lambda: self.read_gold(True),
+            )
+
+            def stackable(_item_id: int) -> bool:
+                return True
+
+            def get_bags(ids: list[int]) -> list[Any]:
+                return [self.bag(index) for index in ids]
+
+            def get_title(_title: int) -> Any:
+                return types.SimpleNamespace(current_points=999999)
+
+            def format_model(model: int) -> str:
+                return f"model-{model}"
+
+            def debug(message: str) -> None:
+                events.append(("debug", message))
+
+            item = types.SimpleNamespace(
+                GetModelID=self.model,
+                Properties=types.SimpleNamespace(GetQuantity=self.quantity, IsStackable=stackable),
+            )
+            inv_type = provider(
+                "Py4GWCoreLib/GlobalCache/InventoryCache.py",
+                "e624de55b5cb9d1b122e498df6c546cdcc2bc1cd21b6112b4e83130d4d118c33",
+                "InventoryCache",
+                dict(
+                    Bags=bags,
+                    Bag_enum=bag_enums,
+                    ModelID=module.ModelID,
+                    PyInventory=types.SimpleNamespace(PyInventory=lambda: native_inventory, Bag=self.bag),
+                ),
+            )
+            raw_cache = types.SimpleNamespace(get_bags=get_bags)
+            self.inventory = inv_type(self.manager, raw_cache, item)
+            native_trading = types.SimpleNamespace(
+                get_merchant_item_list=self.read_offers,
+                crafter_buy_item=self.craft,
+                is_transaction_complete=self.transaction,
+            )
+            trading_type = provider(
+                "Py4GWCoreLib/GlobalCache/MerchantCache.py",
+                "6b03321468dfd64a3e7a4a1ba260cced0aec8020e5f551b42ff5c3c957fe614f",
+                "TradingCache",
+                {"PyMerchant": types.SimpleNamespace(PyMerchant=lambda: native_trading)},
+            )
+            merchant = provider(
+                "Py4GWCoreLib/routines_src/yield_src/merchant.py",
+                "a395851b437e21ab7b7fbfcd2f9c7c9ee10453a0d624fc3855ce8fde38aa4f9d",
+                "Merchant",
+                dict(GLOBAL_CACHE=module.GLOBAL_CACHE, wait=self.wait),
+            )
+            self.trading = trading_type(self.manager)
+            restore.binding(module.GLOBAL_CACHE, "Inventory", self.inventory)
+            restore.binding(module.GLOBAL_CACHE, "Trading", self.trading)
+            restore.binding(module.GLOBAL_CACHE, "Item", item)
+            restore.binding(module, "ActionQueueManager", lambda: self.manager)
+            restore.binding(module.Routines.Yield, "wait", self.wait)
+            restore.binding(module.Routines.Yield, "Merchant", merchant)
+            restore.binding(module.Routines.Yield.Movement, "FollowPath", self.walk)
+            restore.binding(module.Routines.Yield.Agents, "InteractWithAgentXY", self.interact)
+            restore.binding(module.Player, "GetSkillPointData", self.skills)
+            restore.binding(module.Player, "GetTitle", get_title)
+            restore.binding(module, "ConsoleLog", self.console)
+            widget._get_bag_item_ids = self.ids
+            widget._format_model_label_short = format_model
+            widget._debug_log = debug
+            widget._is_storage_open = lambda: self.storage_open
+            widget._can_use_local_storage_actions = lambda: True
+            widget._save_profile = self.save
+            original_recipe = widget._get_consumable_crafter_recipe_for_model
+            original_fund = widget._ensure_gold_for_purchase
+            original_collect = widget._collect_crafting_ingredients_from_inventory
+            original_cleanup = widget._apply_after_purchase_cleanup
+            original_count = self.inventory.GetModelCount
+
+            def recipe_for(model: int) -> Any:
+                value = original_recipe(model)
+                self.recipe_reads.append(value)
+                events.append(("recipe", model, getattr(value, "model_id", None)))
+                return value
+
+            def count(model: int) -> int:
+                value = int(original_count(model))
+                events.append(("count", model, value))
+                return value
+
+            def fund(cost: int, *, purpose: str) -> Generator[Any, None, Any]:
+                events.append(("fund", cost, purpose))
+                operation: Generator[Any, None, Any] = original_fund(cost, purpose=purpose)
+                value: Any = yield from operation
+                self.funding_results.append((value.opened_storage, value.ready))
+                events.append(("fund-result", value.opened_storage, value.ready, value.withdrawn, value.reason))
+                return value
+
+            def collect(recipe: Any) -> Any:
+                value = original_collect(recipe)
+                self.last_lists = (value[0], value[1])
+                events.append(("collect", list(value[0]), list(value[1]), list(value[2])))
+                return value
+
+            def cleanup(record: Any, *, label: str) -> bool:
+                applied = bool(original_cleanup(record, label=label))
+                self.cleanups.append((record, label, applied))
+                events.append(("cleanup", label, applied))
+                return applied
+
+            self.inventory.GetModelCount = count
+            widget._get_consumable_crafter_recipe_for_model = recipe_for
+            widget._ensure_gold_for_purchase = fund
+            widget._collect_crafting_ingredients_from_inventory = collect
+            widget._apply_after_purchase_cleanup = cleanup
+
+        def row(self, quantity: int = 1) -> Any:
+            return module.PlannedConsumableCraft(
+                model_id=self.output_model,
+                quantity=quantity,
+                label="Essence of Celerity",
+                vendor_key=self.recipe.vendor_key,
+                vendor_name=self.recipe.vendor_name,
+                coords=self.recipe.coords,
+            )
+
+        def add(self, item: int, model: int, quantity: int, bag: int, slot: int) -> None:
+            self.items[item] = types.SimpleNamespace(
+                item_id=item, model_id=model, quantity=quantity, bag=bag, slot=slot
+            )
+
+        def bag(self, index: int, _name: str = "") -> Any:
+            return types.SimpleNamespace(
+                GetItems=lambda: [r for r in self.items.values() if r.bag == index],
+                GetSize=lambda: 8,
+            )
+
+        def ids(self, bags: list[int]) -> list[int]:
+            result = [r.item_id for b in bags for r in self.bag(b).GetItems()]
+            self.events.append(("bag-ids", list(bags), list(result)))
+            return result
+
+        def model(self, item: Any) -> int:
+            key = item if isinstance(item, int) else item.key
+            self.events.append(("model", key))
+            return self.output_model if key in (701, 702, 703) else int(self.items[key].model_id)
+
+        def quantity(self, item: int) -> int:
+            if item in self.bad_quantities:
+                self.events.append(("unreadable", item))
+                raise ValueError(f"unreadable quantity {item}")
+            qty = int(self.items[item].quantity)
+            self.events.append(("quantity", item, qty))
+            return qty
+
+        def console(self, sender: str, message: str, level: Any, *extra: Any) -> None:
+            self.events.append(("console", sender, message, str(level), list(extra)))
+
+        def skills(self) -> tuple[int, int]:
+            self.events.append(("skill", self.skill))
+            return self.skill, 100
+
+        def read_gold(self, stored: bool) -> int:
+            value = self.stored if stored else self.carried
+            self.events.append(("gold", stored, value))
+            return value
+
+        def save(self) -> None:
+            self.saves += 1
+            self.events.append(("save", self.saves))
+
+        def walk(self, path: list[tuple[float, float]]) -> Generator[str, None, None]:
+            self.events.append(("walk", path))
+            yield "walk"
+
+        def interact(self, x: float, y: float) -> Generator[str, None, bool]:
+            self.opens += 1
+            self.events.append(("interact", x, y, self.opens))
+            if self.close_first_window and self.opens == 1:
+                self.storage_open = False
+            yield "interact"
+            return True
+
+        def read_offers(self) -> list[Any]:
+            result = self.refreshed if self.fresh else self.offers
+            if self.offer_empty_reads:
+                self.offer_empty_reads -= 1
+                result = []
+            self.events.append(("offers", [i if isinstance(i, int) else i.key for i in result]))
+            return result
+
+        def open_storage(self) -> None:
+            self.events.append(("storage-effect", self.allow_open))
+            if self.allow_open:
+                self.storage_open = self.fresh = True
+                if self.funded_on_open:
+                    self.carried = 250
+
+        def withdraw_gold(self, amount: int) -> None:
+            self.events.append(("gold-effect", amount))
+            self.pending_gold += amount
+
+        def move(self, item: int, bag: int, slot: int, quantity: int) -> None:
+            self.events.append(("move-effect", item, bag, slot, quantity))
+            self.pending_moves.append((item, bag, slot, quantity))
+
+        def craft(self, offer: int, cost: int, ids_: list[int], quantities: list[int]) -> None:
+            _expect(
+                self.last_lists is not None and self.last_lists[0] is ids_ and self.last_lists[1] is quantities,
+                "Craft callback must retain both original collector lists",
+            )
+            self.craft_calls += 1
+            self.unpublished += 1
+            self.events.append(("craft-effect", offer, cost, list(ids_), list(quantities)))
+
+        def transaction(self) -> bool:
+            value = bool(self.craft_calls and self.signal)
+            self.events.append(("transaction-read", value))
+            return value
+
+        def deliver(self) -> None:
+            while self.manager.entries:
+                lane, delay, callback, args, kwargs = self.manager.entries.pop(0)
+                self.events.append(("deliver", lane, delay, list(args)))
+                callback(*args, **kwargs)
+
+        def wait(self, ms: int) -> Generator[str, None, None]:
+            frame = currentframe()
+            assert frame is not None and frame.f_back is not None
+            caller = frame.f_back.f_code.co_name
+            del frame
+            label = {
+                "_wait_for_transaction": "transaction",
+                "_wait_for_inventory_model_count_at_least": "model",
+                "_wait_for_action_queue_empty": "drain",
+                "_ensure_storage_open": "storage",
+            }.get(caller, "wait")
+            self.events.append(("wait", label, ms))
+            yield f"{label}/{ms}"
+            self.deliver()
+            if self.pending_gold:
+                self.carried += self.pending_gold
+                self.stored -= self.pending_gold
+                self.events.append(("publish-gold", self.carried, self.stored))
+                self.pending_gold = 0
+            if label == "model" and self.pending_moves:
+                for item, bag, slot, quantity in self.pending_moves:
+                    if self.moves_visible:
+                        target = next((r for r in self.items.values() if (r.bag, r.slot) == (bag, slot)), None)
+                        self.items[item].quantity -= quantity
+                        if target is None:
+                            self.add(300 + slot, self.items[item].model_id, 0, bag, slot)
+                            target = self.items[300 + slot]
+                        target.quantity += quantity + self.move_bonus
+                        self.events.append(("publish-move", target.item_id, target.quantity))
+                self.pending_moves.clear()
+            if label == "model" and self.unpublished:
+                if self.growth:
+                    if 801 not in self.items:
+                        self.add(801, self.output_model, 0, 1, 7)
+                    self.items[801].quantity += self.unpublished
+                    self.events.append(("publish-craft", self.items[801].quantity))
+                self.unpublished = 0
+
+    @contextmanager
+    def example(name: str) -> Iterator[tuple[CraftWorld, list[Any]]]:
+        events: list[Any] = []
+        _expect(name not in traces, f"Unique crafting scenario {name}")
+        traces[name] = events
+        with _cp14_b_world(module) as (_work, _map, restore):
+            yield CraftWorld(_cp15_widget(module), restore, events), events
+
+    def drain(operation: Any, events: list[Any]) -> Any:
+        while True:
+            try:
+                step = next(operation)
+            except StopIteration as end:
+                return end.value
+            events.append(("yield", step))
+
+    def until(operation: Any, marker: str, events: list[Any]) -> None:
+        for step in operation:
+            events.append(("yield", step))
+            if step == marker:
+                return
+        raise AssertionError(f"Did not reach {marker}; prefix={events!r}")
+
+    def counters(outcome: Any) -> tuple[int, ...]:
+        return (
+            outcome.attempted,
+            outcome.completed,
+            outcome.depleted,
+            outcome.unavailable,
+            outcome.gold_blocked,
+            outcome.timeout_failures,
+            outcome.load_failures,
+            outcome.dispatched,
+        )
+
+    if family == "material_supply":
+        for mode in ("split", "over", "no-progress", "unreadable", "partial-rescan", "false"):
+            with example("withdraw-" + mode) as (world, events):
+                # Slots 0 and 1 are occupied; slot 2 is the only matching partial stack.
+                world.add(103, 6001, 249, 1, 2)
+                world.add(123, 6001, 3, 6, 0)
+                if mode == "over":
+                    world.move_bonus = 2
+                if mode == "no-progress":
+                    world.moves_visible = False
+                if mode == "unreadable":
+                    world.bad_quantities.add(123)
+                if mode == "partial-rescan":
+                    world.items[123].quantity = 1
+                    world.add(124, 6001, 2, 8, 0)
+                if mode == "false":
+
+                    def refuse(item_id: int, *, ammount: int) -> None:
+                        events.append(("refused", item_id, ammount))
+
+                    world.inventory.WithdrawItemFromStorage = refuse
+                operation = world.widget._withdraw_model_to_inventory_for_crafting(6001, 3)
+                _expect(not events, "Withdrawal construction is passive")
+                gained = drain(operation, events)
+                expected = {"split": 3, "over": 7, "no-progress": 0, "unreadable": 0, "partial-rescan": 3, "false": 0}
+                _expect(gained == expected[mode], f"Withdrawal gain {mode}: {gained}")
+                moves = [e for e in events if e[0] == "move-effect"]
+                scans = [e for e in events if e[0] == "bag-ids"]
+                _expect(scans[0][1] == [6, *range(8, 22)], f"Craft withdrawal source order {mode}")
+                if mode in ("split", "over", "no-progress"):
+                    exact = [("move-effect", 123, 1, 2, 1), ("move-effect", 123, 1, 3, 2)]
+                    _expect(moves == exact, f"Two physical moves with bounded slot layout: {moves}")
+                    _expect(
+                        [e[2] for e in events if e[0] == "enqueue"] == [[123, 1, 2, 1], [123, 1, 3, 2]],
+                        "Queued move arguments",
+                    )
+                    _expect(len(scans) == 1, "Stop after sufficient gain or fruitless pass")
+                if mode == "partial-rescan":
+                    _expect(len(scans) == 2 and [e[1] for e in moves] == [123, 124], "Rescan after partial success")
+                if mode == "no-progress":
+                    _expect(events.count(("wait", "model", 50)) == 37, "1800ms inclusive wait")
+                    _expect(events.count(("count", 6001, 249)) == 39, "Before plus 38 target model reads")
+                if mode in ("unreadable", "false"):
+                    _expect(not moves and not any(e[0] == "wait" for e in events), "No movement or wait")
+                events.append(("returned", gained))
+
+        for mode in ("empty", "denied", "aggregate", "shortage"):
+            with example("prepare-" + mode) as (world, events):
+                rows = [world.row(), world.row()]
+                if mode == "empty":
+                    rows[0].quantity = 0
+                    rows[1].model_id = -1
+                elif mode == "denied":
+                    world.storage_open = world.allow_open = False
+                elif mode == "aggregate":
+                    world.add(123, world.first, 50, 6, 0)
+                    world.add(124, world.second, 50, 8, 1)
+                result = drain(world.widget._prepare_consumable_crafting_materials(rows, vendor_name="Kwat"), events)
+                _expect(result is (mode in ("empty", "aggregate")), f"Prepared {mode}")
+                counts = [e for e in events if e[0] == "count"]
+                if mode in ("denied", "empty"):
+                    _expect(not counts, "No material counts before admission or for empty budget")
+                elif mode == "aggregate":
+                    _expect(events.count(("wait", "wait", 120)) == 2, "Pace both confirmed material gains")
+                    _expect([e[1] for e in events if e[0] == "move-effect"] == [123, 124], "Aggregated model order")
+                    _expect(counts[-1] == ("count", world.second, 100), "Final reread after gain")
+                else:
+                    _expect(
+                        [e[1] for e in counts] == [world.first, world.first, world.second, world.second],
+                        "Shortage rereads",
+                    )
+                    warnings = [e[2] for e in events if e[0] == "console"]
+                    _expect(
+                        warnings
+                        == [
+                            f"Cannot prepare Kwat crafting materials: need 100 model-{i}; found 50 in inventory."
+                            for i in (world.first, world.second)
+                        ],
+                        f"Both shortage warnings: {warnings}",
+                    )
+                events.append(("returned", result))
+        return traces
+
+    if family == "ingredient_selection":
+        with example("stack-selection") as (world, events):
+            world.items[101].quantity = 23
+            world.add(105, world.first, 0, 1, 2)
+            world.add(106, world.first, 11, 2, 0)
+            world.add(107, world.first, 22, 2, 1)
+            world.bad_quantities.add(106)
+            recipe = replace(world.recipe, ingredients=((world.first, 47), (world.first, 1), (world.second, 0)))
+            actual = world.widget._collect_crafting_ingredients_from_inventory(recipe)
+            expected = ([101, 107, 101], [23, 22, 1], [f"Need 47 model-{world.first}; found 45."])
+            _expect(actual == expected and len([e for e in events if e[0] == "bag-ids"]) == 3, f"Selected {actual}")
+            events.append(("selection", *actual))
+
+        with example("lookup-before-argument") as (world, events):
+
+            def replacement(_model: int) -> list[int]:
+                events.append(("replacement", _model))
+                return [102]
+
+            class Changing:
+                def __int__(self) -> int:
+                    world.widget._get_inventory_model_item_ids = replacement
+                    events.append(("convert", world.first))
+                    return world.first
+
+            recipe = replace(world.recipe, ingredients=((Changing(), 1), (world.second, 1)))
+            actual = world.widget._collect_crafting_ingredients_from_inventory(recipe)
+            _expect(actual == ([101, 102], [1, 1], []), f"Callable resolved before conversion {actual}")
+            _expect([e for e in events if e[0] == "replacement"] == [("replacement", world.second)], "Late replacement")
+
+        with example("replace-during-funding") as (world, events):
+            world.carried = 100
+            world.close_first_window = True
+            row = world.row()
+            operation = world.widget._craft_planned_consumables([row])
+            until(operation, "storage/100", events)
+            collect = world.widget._collect_crafting_ingredients_from_inventory
+
+            def later(recipe: Any) -> Any:
+                _expect(recipe is world.recipe_reads[-1], "Collector receives the captured recipe")
+                events.append(("later-collector", recipe.model_id))
+                return collect(recipe)
+
+            row.label = "changed label"
+            world.widget._collect_crafting_ingredients_from_inventory = later
+            outcome = drain(operation, events)
+            _expect(outcome.completed == 1 and world.cleanups[0][1] == "changed label", "Late mutable row")
+            _expect(("later-collector", world.output_model) in events, "Rebound collector called after funding")
+        return traces
+
+    if family == "vendor_transactions":
+        for mode in (
+            "funded",
+            "ready-on-open",
+            "transaction-only",
+            "count-only",
+            "neither",
+            "zero",
+            "skill",
+            "gold",
+            "materials",
+            "missing-recipe",
+            "missing-offer",
+            "lost-offer",
+            "empty-reopen",
+            "second-unready",
+            "partial",
+            "vendor-order",
+            "initial-load",
+            "prepare-fail",
+            "open-poll",
+        ):
+            with example("vendor-" + mode) as (world, events):
+                row = world.row()
+                rows = [row]
+                if mode in ("funded", "ready-on-open", "lost-offer", "empty-reopen", "second-unready"):
+                    world.carried = 100
+                    world.close_first_window = True
+                    world.funded_on_open = mode == "ready-on-open"
+                if mode == "open-poll":
+                    world.offer_empty_reads = 1
+                if mode == "zero":
+                    row.quantity = 0
+                if mode == "skill":
+                    world.skill = 0
+                if mode == "gold":
+                    world.stored = world.carried = 0
+                if mode == "missing-recipe":
+                    row.model_id = -1
+                if mode == "missing-offer":
+                    world.offers = [101]
+                if mode == "lost-offer":
+                    world.refreshed = [101]
+                if mode == "empty-reopen":
+                    world.refreshed = []
+                if mode == "initial-load":
+                    world.offers = []
+                    rows.append(world.row(0))
+                if mode == "prepare-fail":
+                    row.quantity = 3
+                if mode in ("materials", "second-unready"):
+                    old_offers = world.read_offers
+
+                    def changed_offers() -> list[Any]:
+                        offered = old_offers()
+                        if mode == "materials":
+                            world.items[101].quantity = 0
+                        elif world.fresh:
+                            world.stored = 0
+                        return offered
+
+                    world.trading._merchant_instance.get_merchant_item_list = changed_offers
+                if mode in ("transaction-only", "neither"):
+                    world.growth = False
+                if mode in ("count-only", "neither"):
+                    world.signal = False
+                restore_skill = module.Player.GetSkillPointData
+                if mode == "partial":
+                    row.quantity = 2
+                    world.items[101].quantity = world.items[102].quantity = 100
+                    skills = world.skills
+
+                    def limited_skill() -> tuple[int, int]:
+                        world.skill = 0 if world.craft_calls else 5
+                        return skills()
+
+                    # Scope the late replacement to this one changing attempt.
+                    module.Player.GetSkillPointData = limited_skill
+                if mode == "vendor-order":
+                    rows = [world.row(0), world.row(0), world.row(0)]
+                    rows[1].vendor_key, rows[1].vendor_name = "other", "Second"
+                    rows[0].label, rows[1].label, rows[2].label = "first", "second", "third"
+                if mode == "funded":
+
+                    class Offer:
+                        def __init__(self, key: int) -> None:
+                            self.key = key
+
+                        def __int__(self) -> int:
+                            events.append(("offer-int", self.key))
+                            return self.key
+
+                    world.offers = [Offer(703), Offer(999), Offer(701)]
+                    world.refreshed = [Offer(701), Offer(999), Offer(702)]
+                try:
+                    outcome = drain(world.widget._craft_planned_consumables(rows), events)
+                finally:
+                    if mode == "partial":
+                        module.Player.GetSkillPointData = restore_skill
+                expected_counts = {
+                    "funded": (1, 1, 0, 0, 0, 0, 0, 0),
+                    "ready-on-open": (1, 1, 0, 0, 0, 0, 0, 0),
+                    "transaction-only": (1, 1, 0, 0, 0, 0, 0, 0),
+                    "count-only": (1, 1, 0, 0, 0, 0, 0, 0),
+                    "open-poll": (1, 1, 0, 0, 0, 0, 0, 0),
+                    "neither": (1, 0, 0, 0, 0, 1, 0, 0),
+                    "zero": (0, 0, 0, 0, 0, 0, 0, 0),
+                    "skill": (1, 0, 1, 0, 0, 0, 0, 0),
+                    "gold": (1, 0, 0, 0, 1, 0, 0, 0),
+                    "materials": (1, 0, 1, 0, 0, 0, 0, 0),
+                    "missing-recipe": (1, 0, 0, 1, 0, 0, 0, 0),
+                    "missing-offer": (1, 0, 0, 1, 0, 0, 0, 0),
+                    "lost-offer": (1, 0, 0, 1, 0, 0, 0, 0),
+                    "empty-reopen": (1, 0, 0, 0, 0, 0, 1, 0),
+                    "second-unready": (1, 0, 0, 0, 1, 0, 0, 0),
+                    "partial": (2, 1, 1, 0, 0, 0, 0, 0),
+                    "vendor-order": (0, 0, 0, 0, 0, 0, 0, 0),
+                    "initial-load": (1, 0, 0, 0, 0, 0, 2, 0),
+                    "prepare-fail": (3, 0, 3, 0, 0, 0, 0, 0),
+                }[mode]
+                _expect(counters(outcome) == expected_counts, f"{mode} outcome {counters(outcome)}")
+                events.append(("outcome", *counters(outcome)))
+                cleanup_count = (
+                    3
+                    if mode == "vendor-order"
+                    else int(mode in ("funded", "ready-on-open", "count-only", "zero", "open-poll"))
+                )
+                _expect(len(world.cleanups) == cleanup_count, f"Verified cleanup eligibility {mode}")
+                if cleanup_count == 1:
+                    _expect(world.cleanups[0][0] is row.cleanup, "Original cleanup record")
+                if mode == "vendor-order":
+                    _expect([v[1] for v in world.cleanups] == ["first", "third", "second"], "Vendor grouping")
+                if mode == "open-poll":
+                    _expect(("wait", "wait", 10) in events, "Poll empty Merchant offered inventory")
+                if mode in ("transaction-only", "neither"):
+                    _expect(
+                        events.count(("wait", "model", 50)) == 31
+                        and events.count(("count", world.output_model, 0)) == 33,
+                        "Model waiter exhausts and rereads",
+                    )
+                if mode in ("count-only", "neither"):
+                    _expect(events.count(("transaction-read", False)) == 30, "Transaction waiter exhausts")
+                if mode in ("funded", "ready-on-open"):
+                    _expect(
+                        world.funding_results == [(True, mode == "ready-on-open"), (False, True)],
+                        "Revalidate independently of ready",
+                    )
+                    _expect(
+                        ("craft-effect", 702, 250, [101, 102], [50, 50]) in events, "Exact refreshed native callback"
+                    )
+                    _expect(world.craft_calls == 1 and world.opens == 2, "Exactly one purchase and two booth openings")
+                if mode == "funded":
+                    _expect(
+                        ("gold-effect", 150) in events and ("publish-gold", 250, 350) in events,
+                        "Exact funding callback and publication",
+                    )
+                    offer_reads = [e for e in events if e[0] == "offer-int" or e[0] == "model" and e[1] >= 700]
+                    expected_reads = [
+                        ("offer-int", 703),
+                        ("model", 703),
+                        ("offer-int", 999),
+                        ("model", 999),
+                        ("offer-int", 701),
+                        ("model", 701),
+                        ("model", 701),
+                        ("offer-int", 701),
+                        ("model", 999),
+                        ("model", 702),
+                        ("offer-int", 702),
+                    ]
+                    _expect(
+                        offer_reads == expected_reads, f"Initial and refreshed offer conversion orders {offer_reads}"
+                    )
+        for guarded in (False, True):
+            with example("cleanup-" + ("xunlai" if guarded else "reset")) as (world, events):
+                row = world.row()
+                action = module.AFTER_PURCHASE_RESET_QUANTITY
+                kind = module.BUY_KIND_CONSUMABLE_CRAFTER_TARGET
+                target = module.MerchantStockTarget(
+                    model_id=world.output_model, target_count=1, max_per_run=1, after_purchase=action
+                )
+                world.widget.buy_rules = [module.BuyRule(enabled=True, kind=kind, merchant_stock_targets=[target])]
+                row.cleanup = module.PurchaseTargetCleanup(
+                    rule_kind=kind,
+                    rule_index=0,
+                    target_key=str(world.output_model),
+                    target_count=1,
+                    max_per_run=1,
+                    after_purchase=action,
+                    completes_target=True,
+                    xunlai_involved=guarded,
+                )
+                world.widget.preview_ready = True
+                outcome = drain(world.widget._craft_planned_consumables([row]), events)
+                actual_target = world.widget.buy_rules[0].merchant_stock_targets[0].target_count
+                _expect(outcome.completed == 1 and world.saves == int(not guarded), "Verified cleanup save endpoint")
+                _expect(
+                    actual_target == int(guarded) and world.widget.preview_ready is guarded, "Guarded cleanup state"
+                )
+                events.append(("saved-state", actual_target, world.widget.preview_ready, world.saves))
+        return traces
+
+    if family == "interruptions":
+        for mode in (
+            "passive-close",
+            "vendor-close",
+            "after-move",
+            "during-funding",
+            "at-reopen",
+            "after-queue",
+            "after-transaction",
+            "throw",
+        ):
+            with example("cut-" + mode) as (world, events):
+                if mode == "after-move":
+                    world.items[101].quantity -= 1
+                    world.add(123, world.first, 1, 6, 0)
+                if mode in ("during-funding", "at-reopen"):
+                    world.carried = 100
+                    world.close_first_window = True
+                operation = world.widget._craft_planned_consumables([world.row()])
+                _expect(not events, "No provider effects on generator construction")
+                if mode != "passive-close":
+                    marker = {
+                        "vendor-close": "walk",
+                        "after-move": "model/50",
+                        "during-funding": "storage/100",
+                        "at-reopen": "walk",
+                        "after-queue": "transaction/50",
+                        "after-transaction": "model/50",
+                        "throw": "transaction/50",
+                    }[mode]
+                    if mode == "at-reopen":
+                        until(operation, "storage/100", events)
+                    until(operation, marker, events)
+                prefix = list(events)
+                if mode == "throw":
+                    injected = LookupError("CP22 injected at transaction suspension")
+                    try:
+                        operation.throw(injected)
+                    except LookupError as caught:
+                        _expect(caught is injected, "Raw throw preserves ordinary sentinel")
+                    else:
+                        raise AssertionError("CP22 raw throw disappeared")
+                else:
+                    operation.close()
+                _expect(
+                    events == prefix and not world.cleanups and world.saves == 0,
+                    f"Interrupted leaf side effects: {mode}",
+                )
+                outstanding = int(mode in ("after-move", "during-funding", "after-queue", "throw"))
+                _expect(len(world.manager.entries) == outstanding, f"Outstanding callbacks at {mode}")
+                _expect(world.craft_calls == int(mode == "after-transaction"), f"Delivered craft callbacks at {mode}")
+                _expect(
+                    not any(e[0] == "debug" and e[1].startswith("Consumable crafters: completed=") for e in events),
+                    "Leaf did not publish normal summary",
+                )
+                events.append(("cut", mode, len(prefix), outstanding, world.craft_calls))
+
+        for mode in ("ordinary", "stop", "exit", "sync-stop", "late-fault", "argument"):
+            with example("fault-" + mode) as (world, events):
+                sentinel: BaseException = ValueError("CP22 ordinary provider exception")
+                if mode in ("stop", "sync-stop"):
+                    sentinel = StopIteration("CP22 stop")
+                elif mode == "exit":
+                    sentinel = GeneratorExit("CP22 exit")
+                row = world.row()
+                original_outcome = module.ExecutionPhaseOutcome
+                outcomes: list[Any] = []
+
+                def observe_outcome(**kwargs: Any) -> Any:
+                    result = original_outcome(**kwargs)
+                    outcomes.append(result)
+                    return result
+
+                def fail(*_args: Any, **_kwargs: Any) -> Any:
+                    events.append(("provider-fault", type(sentinel).__name__))
+                    raise sentinel
+
+                if mode == "sync-stop":
+                    world.widget._get_inventory_model_item_ids = fail
+                    try:
+                        world.widget._collect_crafting_ingredients_from_inventory(world.recipe)
+                    except StopIteration as exc:
+                        _expect(exc is sentinel, "Synchronous collector keeps direct-call StopIteration")
+                    else:
+                        raise AssertionError("Missing synchronous StopIteration")
+                    continue
+                if mode == "argument":
+
+                    class BrokenQuantity:
+                        __int__ = fail
+
+                    row.quantity = BrokenQuantity()
+                elif mode == "late-fault":
+                    world.items[101].quantity = world.items[102].quantity = 100
+                    row.quantity = 2
+                    original = world.skills
+
+                    def after_credit() -> tuple[int, int]:
+                        if world.craft_calls:
+                            return fail()
+                        return original()
+
+                    module.Player.GetSkillPointData = after_credit
+                else:
+                    world.widget._get_consumable_crafter_recipe_for_model = fail
+                factories: Any = module
+                factories.ExecutionPhaseOutcome = observe_outcome
+                operation = world.widget._craft_planned_consumables([row])
+                try:
+                    drain(operation, events)
+                except BaseException as exc:
+                    if mode == "stop":
+                        _expect(
+                            isinstance(exc, RuntimeError) and exc.__cause__ is sentinel,
+                            "Generator boundary StopIteration",
+                        )
+                    else:
+                        _expect(exc is sentinel, f"Original escaping provider exception at {mode}: {exc}")
+                    events.append(("escaped", type(exc).__name__, exc is sentinel, exc.__cause__ is sentinel))
+                else:
+                    raise AssertionError(f"Missing provider exception in {mode}")
+                finally:
+                    factories.ExecutionPhaseOutcome = original_outcome
+                if mode == "argument":
+                    _expect(not outcomes, "Quantity evaluation failed before canonical construction")
+                else:
+                    _expect(
+                        len(outcomes) == 1 and outcomes[0].completed == int(mode == "late-fault"),
+                        "Partial credited outcome at fault",
+                    )
+                    events.append(("partial-counts", *counters(outcomes[0])))
+                _expect(world.craft_calls == int(mode == "late-fault") and not world.cleanups, "Partial prior effects")
+        return traces
+
+    def exercise_route(mode: str) -> list[Any]:
+        events: list[Any] = []
+        remote = mode.startswith("remote-")
+        multi = mode.startswith("multi-")
+        closing = mode == "remote-close"
+        failing = mode in ("execute-fault", "remote-fault")
+        account = "merchant.rules@example.com"
+        request = "cp22-" + mode
+        provider_fault = ValueError("CP22 craft provider fault")
+
+        def require(condition: object, reason: str) -> None:
+            _expect(bool(condition), f"CP22 {mode} {reason}; trace tail {events[-16:]!r}")
+
+        with _cp14_b_world(module) as (work, maps, restore), _cp13_clock(module):
+            maps[0] = 100 if multi else module.EMBARK_BEACH_MAP_ID
+            widget = _cp15_widget(module)
+            cleanup_policy = widget._apply_after_purchase_cleanup
+            world = CraftWorld(widget, restore, events)
+            row = world.row()
+            coords = {
+                module.MERCHANT_TYPE_CONSUMABLE_CRAFTER: (1.0, 2.0),
+                module.MERCHANT_TYPE_MATERIALS: (3.0, 4.0),
+            }
+            row.cleanup = module.PurchaseTargetCleanup(
+                rule_kind=module.BUY_KIND_CONSUMABLE_CRAFTER_TARGET,
+                rule_index=0,
+                target_key=str(world.output_model),
+                target_count=1,
+                max_per_run=1,
+                after_purchase=module.AFTER_PURCHASE_RESET_QUANTITY,
+                completes_target=True,
+            )
+            target = module.MerchantStockTarget(
+                model_id=world.output_model,
+                target_count=1,
+                max_per_run=1,
+                after_purchase=module.AFTER_PURCHASE_RESET_QUANTITY,
+            )
+            widget.buy_rules = [
+                module.BuyRule(kind=module.BUY_KIND_CONSUMABLE_CRAFTER_TARGET, merchant_stock_targets=[target])
+            ]
+            widget.gold_balance_enabled = False
+
+            def supported(**_options: Any) -> tuple[bool, str, dict[str, tuple[float, float]]]:
+                return True, "Ready", coords
+
+            def location(map_id: int) -> str:
+                return "Destination" if map_id == 179 else "Embark Beach"
+
+            widget._get_supported_context = supported
+            widget._has_local_storage_access = lambda: True
+            widget._should_use_consumable_crafter_multi_stop_route = lambda: multi
+            widget._get_consumable_crafter_multi_stop_target = lambda: (179, "Destination")
+            widget._get_outpost_name = location
+            widget.profile_entries_loaded = {"account": True, "shared": True}
+            widget.destroy_instant_enabled = False
+            widget.destroy_include_protected_items = False
+            widget._collect_inventory_items = lambda: (
+                [] if mode == "remote-unmet" else [types.SimpleNamespace(model_id=222, quantity=2, item_id=2220)]
+            )
+            material = module.PlannedMaterialBuy(module.MERCHANT_TYPE_MATERIALS, 946, 10, "Destination material", 10)
+            summaries: list[tuple[str, int, int, bool]] = []
+            cleanups: list[bool] = []
+            saved: list[bool] = []
+            resumes: list[tuple[bool, bool]] = []
+            releases: list[tuple[str, tuple[object, ...]]] = []
+            plans: list[tuple[bool, bool, bool, int, bool]] = []
+            last_plans: list[Any] = []
+            travel_ids: list[int] = []
+            destination_calls: list[str] = []
+            final_yields: list[bool] = []
+            wires: list[tuple[tuple[float, ...], tuple[str, ...]]] = []
+            receiver_plans: list[Any] = []
+            marks: list[str] = []
+            errors: list[tuple[str, str, bool]] = []
+            messages: list[str] = []
+            hero = types.SimpleNamespace(Following=True, Avoidance=False, Looting=True, Targeting=False, Combat=True)
+            before_hero = dict(vars(hero))
+            messaging: types.ModuleType | None = None
+            first_work = work[0]
+
+            def build(**opts: Any) -> Any:
+                projected = bool(opts.get("projected_preview"))
+                excluded = bool(opts.get("exclude_consumable_crafter"))
+                craft_only = bool(opts.get("consumable_crafter_only"))
+                context = opts.get("execution_context")
+                plans.append((projected, excluded, craft_only, maps[0], context is not None))
+                serve_material = bool(excluded and mode == "multi-destination")
+                active = not excluded or serve_material
+                plan = module.PlanResult(supported_map=True, storage_exact=True, coords=coords, has_actions=active)
+                plan.inventory_snapshot_captured = True
+                plan.inventory_model_counts = widget._get_inventory_model_counts(widget._collect_inventory_items())
+                if active:
+                    merchant_type = (
+                        module.MERCHANT_TYPE_MATERIALS if serve_material else module.MERCHANT_TYPE_CONSUMABLE_CRAFTER
+                    )
+                    plan.entries = [
+                        module.ExecutionPlanEntry(
+                            "buy", merchant_type, "CP22 available", 1, module.PLAN_STATE_WILL_EXECUTE
+                        ),
+                        module.ExecutionPlanEntry("buy", merchant_type, "CP22 skipped", 1, module.PLAN_STATE_SKIPPED),
+                    ]
+                    if serve_material:
+                        plan.material_buys = [material]
+                    else:
+                        plan.consumable_crafter_buys = [row]
+                last_plans.append(plan)
+                events.append(("plan", plans[-1]))
+                return plan
+
+            def cleanup(value: Any, *, label: str = "") -> bool:
+                require(value is row.cleanup and label == row.label, "canonical plan cleanup")
+                changed = bool(cleanup_policy(value, label=label))
+                cleanups.append(changed)
+                events.append(("cleanup-policy", changed))
+                return changed
+
+            def save() -> None:
+                saved.append(True)
+                events.append(("save-route",))
+
+            def resume() -> bool:
+                resumes.append((widget.execution_running, widget.execute_reservation_scope_active))
+                events.append(("resume", *resumes[-1]))
+                return True
+
+            def pause() -> Any:
+                events.append(("pause", widget.execution_running, widget.execute_reservation_scope_active))
+                return types.SimpleNamespace(resume=resume)
+
+            format_summary = widget._format_execution_phase_summary
+
+            def summary(value: Any) -> str:
+                text = str(format_summary(value))
+                if value.attempted:
+                    summaries.append(
+                        (
+                            value.label,
+                            value.completed,
+                            value.attempted,
+                            "consumable_crafters" in widget.last_execution_phase_durations_ms,
+                        )
+                    )
+                    events.append(("phase-publication", summaries[-1], text))
+                return text
+
+            def travel(map_id: int, *, log: bool, timeout: int) -> Generator[str, None, bool]:
+                travel_ids.append(map_id)
+                events.append(("travel", maps[0], map_id, log, timeout))
+                yield "route travel"
+                maps[0] = map_id
+                return True
+
+            def destination(position: object, buys: list[Any], *, phase_label: str) -> Generator[object, None, Any]:
+                require(position == (3.0, 4.0) and len(buys) == 1 and buys[0] is material, "nested destination work")
+                destination_calls.append(phase_label)
+                yield "destination buy"
+                return module.ExecutionPhaseOutcome(label=phase_label, measure_label="trades", completed=1, attempted=1)
+
+            def observe_release(name: str, original: Callable[[], None]) -> Callable[[], None]:
+                def observe() -> None:
+                    original()
+                    releases.append((name, _cp15_lease_counts(widget)))
+                    events.append(("release", *releases[-1]))
+
+                return observe
+
+            end_scope = widget._end_execute_reservation_scope
+
+            def end(owned: bool) -> None:
+                end_scope(owned)
+                events.append(("end-reservation", owned, widget.execute_reservation_scope_active))
+
+            def debug(message: str) -> None:
+                messages.append(message)
+                events.append(("route-debug", message))
+
+            widget._build_plan = build
+            widget._apply_after_purchase_cleanup = cleanup
+            widget._save_profile = save
+            widget._pause_inventory_plus = pause
+            widget._format_execution_phase_summary = summary
+            widget._buy_planned_materials = destination
+            widget._end_execute_reservation_scope = end
+            widget._debug_log = debug
+            for label, attr in (
+                ("work", "_release_merchant_rules_owned_work"),
+                ("dispatch", "_release_merchant_rules_remote_dispatch"),
+                ("action", "_release_merchant_rules_owned_action"),
+            ):
+                setattr(widget, attr, observe_release(label, getattr(widget, attr)))
+            restore.binding(module.Routines.Yield.Map, "TravelToOutpost", travel)
+            console = module.ConsoleLog
+
+            def log(name: str, message: str, *args: Any, **kwargs: Any) -> Any:
+                if message.startswith(("Execution error:", "Merchant Rules multibox error:")):
+                    error = sys.exception()
+                    errors.append((message, type(error).__name__, error is provider_fault))
+                    events.append(("caller-error", *errors[-1]))
+                if message.startswith("Traceback (most recent call last):"):
+                    events.append(("caller-traceback", name, message.rstrip().splitlines()[-1], str(args[0])))
+                    return None
+                return console(name, message, *args, **kwargs)
+
+            restore.binding(module, "ConsoleLog", log)
+            if failing:
+
+                def throw_skill_points() -> Any:
+                    raise provider_fault
+
+                restore.binding(module.Player, "GetSkillPointData", throw_skill_points)
+
+            if remote:
+                messaging = _cp15_messaging_source(module, widget)
+                source = Path(str(messaging.__file__))
+                command_path = REPO_ROOT / "Py4GWCoreLib" / "enums_src" / "Multiboxing_enums.py"
+                enum_raw = command_path.read_bytes()
+                require(
+                    sha256(enum_raw).hexdigest() == "64ddafaf87d8118e05505bd6e36748840291e9d181933227a9301a5dc999b031",
+                    "pinned wire enum",
+                )
+                enum_ns: dict[str, Any] = {"__name__": "cp22_wire_enum"}
+                exec(compile(enum_raw, str(command_path), "exec"), enum_ns)
+                command_type = enum_ns["SharedCommandType"]
+                restore.binding(module, "SharedCommandType", command_type)
+                msg = _cp15_message(request, 3)
+                msg.Command = command_type.MerchantRules
+
+                def receive(email: str) -> tuple[int, Any]:
+                    require(email == account, "inbox receiver")
+                    events.append(("receive", email, 17))
+                    return 17, msg
+
+                def received(value: Any) -> None:
+                    require(value is msg, "inbox message identity")
+                    events.append(("received", int(value.Command), value.Params, value.ExtraData))
+
+                def mark(verb: str, email: str, index: int) -> None:
+                    assert messaging is not None
+                    require((email, index) == (account, 17), "inbox marking")
+                    marks.append(verb)
+                    events.append(("mark", verb, messaging._merchant_busy, _cp15_lease_counts(widget)))
+                    if verb == "finished":
+                        require(
+                            not messaging._merchant_busy and vars(hero) == before_hero,
+                            "unlock and HeroAI before finish",
+                        )
+                        require(
+                            not widget.destroy_instant_enabled and not widget.destroy_include_protected_items,
+                            "flags at finish",
+                        )
+                        require(
+                            not widget.preview_plan.entries and not widget.preview_ready,
+                            "request preview cleared before finish",
+                        )
+
+                def send(
+                    sender: str, receiver: str, command: int, params: tuple[float, ...], extra: tuple[str, ...]
+                ) -> int:
+                    assert messaging is not None
+                    require(
+                        (sender, receiver, command, extra[0])
+                        == (account, "leader@example.com", command_type.MerchantRules, request),
+                        "correlated wire",
+                    )
+                    require(
+                        messaging._merchant_busy
+                        and widget.destroy_instant_enabled
+                        and widget.destroy_include_protected_items
+                        and not any(vars(hero).values()),
+                        "lock and session overrides during send",
+                    )
+                    wires.append((params, extra))
+                    if len(wires) > 1:
+                        receiver_plans.append(widget.preview_plan)
+                    events.append(("wire", params, extra))
+                    return 1
+
+                def hero_options(email: str) -> Any:
+                    return hero if email == account else None
+
+                restore.binding(
+                    module.GLOBAL_CACHE,
+                    "ShMem",
+                    types.SimpleNamespace(
+                        GetNextMessage=receive,
+                        MarkMessageAsRunning=partial(mark, "running"),
+                        MarkMessageAsFinished=partial(mark, "finished"),
+                        SendMessage=send,
+                        GetHeroAIOptionsFromEmail=hero_options,
+                        GetAllAccounts=lambda: types.SimpleNamespace(Inbox=[None] * 17 + [msg]),
+                    ),
+                )
+                definitions: list[ast.stmt] = [
+                    node
+                    for node in ast.parse(source.read_bytes(), filename=str(source)).body
+                    if isinstance(node, ast.FunctionDef) and node.name == "ProcessMessages"
+                ]
+                require(len(definitions) == 1, "pinned ProcessMessages definition")
+                vars(messaging).update(
+                    Player=module.Player, SharedCommandType=command_type, _record_received_message=received
+                )
+                exec(compile(ast.Module(body=definitions, type_ignores=[]), str(source), "exec"), vars(messaging))
+                require(Path(messaging.ProcessMessages.__code__.co_filename) == source, "dispatcher source")
+                messaging.ProcessMessages()
+            else:
+                widget._scan_preview()
+                require(
+                    widget.preview_ready and widget.preview_plan.inventory_snapshot_captured, "captured local preview"
+                )
+                if multi:
+                    widget._request_execute_now()
+                else:
+                    widget._request_execute_here()
+
+            require(
+                len(work) == 2
+                and work[0] is first_work
+                and module.GLOBAL_CACHE.Coroutines is work
+                and _cp15_lease_counts(widget) == ((1, 0, 0) if remote else (0, 1, 0)),
+                "physical queue and owned admission",
+            )
+            operation = cast(Generator[Any, None, Any], work[1])
+            reached_close = False
+            try:
+                for _ in range(1200):
+                    try:
+                        step = next(operation)
+                    except StopIteration as stop:
+                        events.append(("route-return", stop.value))
+                        break
+                    events.append(("route-yield", step))
+                    if step is None and not widget.execution_running:
+                        final_yields.append(widget.execute_reservation_scope_active)
+                    if closing and step == "transaction/50":
+                        require(
+                            module.ActionQueueManager() is world.manager
+                            and len(world.manager.entries) == 1
+                            and _cp15_lease_counts(widget) == (1, 1, 1),
+                            "tracked craft wait",
+                        )
+                        lane, delay, callback, args, kwargs = world.manager.entries[0]
+                        require(
+                            lane == "ACTION"
+                            and delay == 0
+                            and type(callback) is module._owned_work.OwnedQueueCallback
+                            and args == (701, 250, [101, 102], [50, 50])
+                            and not kwargs,
+                            "real captured queue submission",
+                        )
+                        require(
+                            widget.execution_running
+                            and widget.execute_reservation_scope_active
+                            and world.craft_calls == 0,
+                            "close prefix before action delivery",
+                        )
+                        operation.close()
+                        reached_close = True
+                        break
+                else:
+                    raise AssertionError(f"CP22 {mode} exceeded 1200 steps")
+            finally:
+                operation.close()
+
+            if closing:
+                require(
+                    reached_close
+                    and _cp15_lease_counts(widget) == (0, 0, 1)
+                    and not cleanups
+                    and not saved
+                    and not summaries
+                    and not widget.last_execution_summary
+                    and not widget.execution_completed_successfully
+                    and not widget.last_error,
+                    "interrupted leaf and retained queued action",
+                )
+                require(
+                    errors
+                    == [("Merchant Rules multibox error: generator ignored GeneratorExit", "RuntimeError", False)],
+                    "receiver sees yielding finalizer exception",
+                )
+                require(
+                    resumes == [(False, False)] and not widget.execute_reserved_item_ids,
+                    "release reservation and Inventory Plus",
+                )
+                end_at = events.index(("end-reservation", True, False))
+                resume_at = events.index(("resume", False, False))
+                error_at = events.index(("caller-error", *errors[0]))
+                require(end_at < resume_at < error_at, "finalizer before receiver error")
+                require(
+                    wires[-1]
+                    == (
+                        (199, 0, 1, 0),
+                        (request, "Error", "Merchant Rules remote handling failed.", "generator ignored GeneratorExit"),
+                    ),
+                    "exact receiver Error",
+                )
+                require(
+                    error_at
+                    < events.index(("wire", *wires[-1]))
+                    < next(i for i, e in enumerate(events) if e[:2] == ("mark", "finished")),
+                    "error publication before Messaging finish",
+                )
+                require(
+                    releases == [("work", (1, 0, 1)), ("dispatch", (0, 0, 1))]
+                    and ("mark", "finished", False, (1, 0, 1)) in events,
+                    "separate tracked iterator releases",
+                )
+                require(
+                    not any(message.startswith("Consumable crafters: completed=") for message in messages),
+                    "no interrupted leaf summary",
+                )
+                widget._get_account_key = lambda: "successor@example.com"
+                world.deliver()
+                require(
+                    world.craft_calls == 0 and releases[-1] == ("action", (0, 0, 0)),
+                    "stale pending action released without effect",
+                )
+            elif failing:
+                require(
+                    world.craft_calls == 0
+                    and not cleanups
+                    and not saved
+                    and not summaries
+                    and widget.last_error == str(provider_fault),
+                    "provider fault prefix",
+                )
+                require(
+                    errors == [("Execution error: CP22 craft provider fault", "ValueError", True)]
+                    and resumes == [(False, False)]
+                    and bool(final_yields),
+                    "ordinary failure finalizer and exception identity",
+                )
+            else:
+                require(
+                    ("craft-effect", 701, 250, [101, 102], [50, 50]) in events
+                    and world.craft_calls == 1
+                    and cleanups == [True]
+                    and len(saved) == 1,
+                    "one craft and applicable persisted cleanup",
+                )
+                require(
+                    summaries.count(("Consumable crafters", 1, 1, True)) == 1
+                    and "Consumable crafters: 1/1 crafts" in widget.last_execution_summary,
+                    "timed craft summary",
+                )
+                require(
+                    widget.execution_currency_changing_work_completed
+                    and widget.execution_completed_successfully
+                    and not widget.last_error
+                    and not errors
+                    and bool(final_yields),
+                    "final yield and currency accounting",
+                )
+                expected_resumes = [(True, True)] if multi else [(False, False)]
+                if mode == "multi-destination":
+                    expected_resumes.append((False, True))
+                require(resumes == expected_resumes, "Inventory Plus restoration per active stop")
+                if multi:
+                    require(
+                        travel_ids
+                        == (
+                            [module.EMBARK_BEACH_MAP_ID, 179]
+                            if mode == "multi-destination"
+                            else [module.EMBARK_BEACH_MAP_ID]
+                        ),
+                        "Embark then optional destination",
+                    )
+                    require(
+                        any(craft and map_id == module.EMBARK_BEACH_MAP_ID for _, _, craft, map_id, _ in plans)
+                        and any(projected and excluded for projected, excluded, _, _, _ in plans),
+                        "multi-stop projected exclusion",
+                    )
+                    require(
+                        destination_calls == (["Material buys"] if mode == "multi-destination" else []),
+                        "destination-only execution",
+                    )
+                elif not remote:
+                    require(
+                        widget.last_execution_summary.startswith(
+                            "Execute Here: 1 local action(s) | 1 skipped / unavailable."
+                        ),
+                        "local summary counts",
+                    )
+
+            if remote:
+                assert messaging is not None
+                require(
+                    marks == ["running", "finished"]
+                    and not messaging._merchant_busy
+                    and len(wires) == 2
+                    and wires[0][0] == (100, 0, 0, 0)
+                    and wires[0][1][1] == "Starting",
+                    "tracked start and finish",
+                )
+                require(
+                    len(receiver_plans) == 1
+                    and any(receiver_plans[0] is plan for plan in last_plans)
+                    and widget.preview_plan is not receiver_plans[0]
+                    and not widget.preview_plan.entries,
+                    "request stock projection restoration",
+                )
+                require(all(context for _, _, _, _, context in plans), "request context propagated")
+                params, extra = wires[1]
+                if failing:
+                    require(
+                        params == (199, 0, 1, 0)
+                        and extra[1:] == ("Execute Failed", "Merchant Rules execution failed.", str(provider_fault)),
+                        "receiver publishes execute failure",
+                    )
+                elif not closing:
+                    require(
+                        widget._get_multibox_plan_counts(receiver_plans[0]) == (1, 1),
+                        "actionable/skipped count independent of craft counters",
+                    )
+                    require(
+                        (params, extra[1])
+                        == (
+                            ((199, 1, 1, 0), "Stock Unmet") if mode == "remote-unmet" else ((102, 1, 1, 1), "Executed")
+                        ),
+                        "stock-dependent terminal publication",
+                    )
+            require(
+                work[0] is first_work
+                and work[1] is operation
+                and _cp15_lease_counts(widget) == (0, 0, 0)
+                and not widget.execution_running
+                and not widget.execute_reservation_scope_active,
+                "final caller and queue ownership",
+            )
+            events.append(("route-final", widget.last_execution_summary, widget.last_error, releases, resumes))
+        return events
+
+    if family == "local_routes":
+        return {
+            name: exercise_route(name) for name in ("execute-here", "execute-fault", "multi-only", "multi-destination")
+        }
+    if family == "remote_route":
+        return {
+            name: exercise_route(name) for name in ("remote-executed", "remote-unmet", "remote-fault", "remote-close")
+        }
+    raise AssertionError(f"Unknown CP22 crafting trace family {family!r}")
+
+
+def _test_crafting_material_supply(module: types.ModuleType) -> None:
+    _crafting_trace(module, "material_supply")
+
+
+def _test_crafting_ingredient_selection(module: types.ModuleType) -> None:
+    _crafting_trace(module, "ingredient_selection")
+
+
+def _test_crafting_vendor_transactions(module: types.ModuleType) -> None:
+    _crafting_trace(module, "vendor_transactions")
+
+
+def _test_crafting_interruptions(module: types.ModuleType) -> None:
+    _crafting_trace(module, "interruptions")
+
+
+def _test_crafting_local_routes(module: types.ModuleType) -> None:
+    _crafting_trace(module, "local_routes")
+
+
+def _test_crafting_remote_route(module: types.ModuleType) -> None:
+    _crafting_trace(module, "remote_route")
 
 
 def main() -> int:
@@ -82096,6 +83816,13 @@ def main() -> int:
                 ("xunlai_sales_dispatch", lambda: _test_xunlai_sales_dispatch(module)),
                 ("xunlai_sales_interruptions", lambda: _test_xunlai_sales_interruptions(module)),
                 ("xunlai_sales_callers", lambda: _test_xunlai_sales_callers(module)),
+                ("crafting_owner_contract", lambda: _test_crafting_owner_contract(module)),
+                ("crafting_material_supply", lambda: _test_crafting_material_supply(module)),
+                ("crafting_ingredient_selection", lambda: _test_crafting_ingredient_selection(module)),
+                ("crafting_vendor_transactions", lambda: _test_crafting_vendor_transactions(module)),
+                ("crafting_interruptions", lambda: _test_crafting_interruptions(module)),
+                ("crafting_local_routes", lambda: _test_crafting_local_routes(module)),
+                ("crafting_remote_route", lambda: _test_crafting_remote_route(module)),
             ]
         )
         catalog_contract_tests = [
