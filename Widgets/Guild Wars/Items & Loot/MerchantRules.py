@@ -67,6 +67,7 @@ from Sources.icefox.MerchantRules import preview as _preview
 from Sources.icefox.MerchantRules import profiles as _profiles
 from Sources.icefox.MerchantRules import storage_transfers as _storage_transfers
 from Sources.icefox.MerchantRules import trader_sales as _trader_sales
+from Sources.icefox.MerchantRules import xunlai_sales as _xunlai_sales
 from Sources.icefox.MerchantRules.profiles import ACCOUNT_PROFILES_DOC_NAME as ACCOUNT_PROFILES_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import BACKUP_DOC_NAME
 from Sources.icefox.MerchantRules.profiles import CHARACTER_PROFILE_STATE_DOC_NAME
@@ -19281,51 +19282,43 @@ class MerchantRulesWidget:
             protected_preview_entries=protected_preview_entries,
         )
 
+    def _xunlai_sale_io(self) -> _xunlai_sales.XunlaiSaleIO[ExecutionPhaseOutcome]:
+        return _xunlai_sales.XunlaiSaleIO[ExecutionPhaseOutcome](
+            get_inventory=lambda: self._collect_inventory_items,
+            get_regular_storage=lambda: self._collect_storage_items,
+            get_material_storage=lambda: self._collect_material_storage_items,
+            get_material_permission=lambda: _sell_rule_can_include_material_storage,
+            get_withdrawal_plan=lambda: self._plan_xunlai_sell_withdrawals,
+            get_transfers=lambda: self._execute_storage_transfers,
+            get_subplan=lambda: self._build_xunlai_sell_subplan,
+            get_resale=lambda: self._execute_sell_actions_for_plan,
+            get_material_sales=lambda: cast(
+                Callable[..., Generator[object, None, ExecutionPhaseOutcome]], self._sell_planned_materials
+            ),
+            get_merchant_sales=lambda: self._execute_merchant_sell_phase,
+            get_rune_sales=lambda: cast(
+                Callable[..., Generator[object, None, ExecutionPhaseOutcome]], self._sell_planned_trader_items
+            ),
+            get_merge=lambda: self._merge_phase_outcome,
+            get_debug=lambda: self._debug_log,
+            get_wait=lambda: Routines.Yield.wait,
+            materials_kind=lambda: MERCHANT_TYPE_MATERIALS,
+            rare_materials_kind=lambda: MERCHANT_TYPE_RARE_MATERIALS,
+            merchant_kind=lambda: MERCHANT_TYPE_MERCHANT,
+            rune_kind=lambda: MERCHANT_TYPE_RUNE_TRADER,
+        )
+
     def _execute_sell_actions_for_plan(
         self,
         plan: PlanResult,
         *,
         phase_label: str,
-    ) -> ExecutionPhaseOutcome:
+    ) -> Generator[object, None, ExecutionPhaseOutcome]:
         """Run the merchant and trader sale actions contained in one already validated plan."""
 
         outcome = ExecutionPhaseOutcome(label=phase_label, measure_label="sell action(s)")
 
-        material_coords = plan.coords.get(MERCHANT_TYPE_MATERIALS)
-        common_material_sales = [sale for sale in plan.material_sales if sale.merchant_type == MERCHANT_TYPE_MATERIALS]
-        if material_coords and common_material_sales:
-            material_outcome = yield from self._sell_planned_materials(
-                material_coords,
-                common_material_sales,
-                phase_label=f"{phase_label} material sales",
-            )
-            self._merge_phase_outcome(outcome, material_outcome)
-
-        rare_material_coords = plan.coords.get(MERCHANT_TYPE_RARE_MATERIALS)
-        rare_material_sales = [sale for sale in plan.material_sales if sale.merchant_type == MERCHANT_TYPE_RARE_MATERIALS]
-        if rare_material_coords and rare_material_sales:
-            rare_outcome = yield from self._sell_planned_materials(
-                rare_material_coords,
-                rare_material_sales,
-                phase_label=f"{phase_label} rare material sales",
-            )
-            self._merge_phase_outcome(outcome, rare_outcome)
-
-        merchant_outcome = yield from self._execute_merchant_sell_phase(
-            plan.coords.get(MERCHANT_TYPE_MERCHANT),
-            plan.merchant_sell_item_ids,
-        )
-        merchant_outcome.label = f"{phase_label} merchant sales"
-        self._merge_phase_outcome(outcome, merchant_outcome)
-
-        rune_trader_coords = plan.coords.get(MERCHANT_TYPE_RUNE_TRADER)
-        if rune_trader_coords and plan.rune_trader_sales:
-            rune_outcome = yield from self._sell_planned_trader_items(
-                rune_trader_coords,
-                plan.rune_trader_sales,
-                phase_label=f"{phase_label} rune trader sales",
-            )
-            self._merge_phase_outcome(outcome, rune_outcome)
+        yield from _xunlai_sales.sell_plan(plan, phase_label=phase_label, counts=outcome, io=self._xunlai_sale_io())
 
         return outcome
 
@@ -19335,7 +19328,7 @@ class MerchantRulesWidget:
         *,
         local_only: bool = False,
         storage_available_here: bool = False,
-    ) -> ExecutionPhaseOutcome:
+    ) -> Generator[object, None, ExecutionPhaseOutcome]:
         enabled_xunlai_rules = self._collect_enabled_xunlai_sell_rules()
         outcome = ExecutionPhaseOutcome(label="Xunlai sell pre-pull", measure_label="items")
         if not enabled_xunlai_rules:
@@ -19353,35 +19346,7 @@ class MerchantRulesWidget:
             ConsoleLog(MODULE_NAME, "Could not open Xunlai for Sell from Xunlai too.", Console.MessageType.Warning)
             return outcome
 
-        current_items = self._collect_inventory_items()
-        regular_storage_items = self._collect_storage_items()
-        include_material_storage = any(
-            bool(getattr(rule, "include_material_storage", False))
-            and _sell_rule_can_include_material_storage(rule)
-            for _rule_index, rule in enabled_xunlai_rules
-        )
-        material_storage_items = self._collect_material_storage_items() if include_material_storage else []
-        transfers, _adjusted_rules = self._plan_xunlai_sell_withdrawals(
-            enabled_xunlai_rules,
-            current_items,
-            regular_storage_items,
-            material_storage_items,
-            plan.coords,
-        )
-        self._debug_log(
-            f"Xunlai sell pre-pull: enabled_rules={len(enabled_xunlai_rules)} "
-            f"inventory_items={len(current_items)} regular_storage_items={len(regular_storage_items)} "
-            f"material_storage_items={len(material_storage_items)} include_material_storage={include_material_storage} "
-            f"transfers={len(transfers)} quantity={sum(max(0, int(transfer.quantity)) for transfer in transfers)}"
-        )
-        if not transfers:
-            return outcome
-
-        transfer_outcome = yield from self._execute_storage_transfers(
-            transfers,
-            phase_label="Xunlai sell pre-pull",
-        )
-        self._merge_phase_outcome(outcome, transfer_outcome)
+        yield from _xunlai_sales.pre_pull(plan, enabled_xunlai_rules, counts=outcome, io=self._xunlai_sale_io())
         return outcome
 
     def _execute_xunlai_sell_phase(
@@ -19390,7 +19355,7 @@ class MerchantRulesWidget:
         *,
         local_only: bool = False,
         storage_available_here: bool = False,
-    ) -> ExecutionPhaseOutcome:
+    ) -> Generator[object, None, ExecutionPhaseOutcome]:
         """Open Xunlai, rebuild the live withdrawal subplan, move candidates, and then sell them.
 
         The phase does not trust preview storage item IDs; it rescans storage and reapplies rule
@@ -19415,60 +19380,7 @@ class MerchantRulesWidget:
             ConsoleLog(MODULE_NAME, "Could not open Xunlai for Sell from Xunlai too.", Console.MessageType.Warning)
             return outcome
 
-        max_passes = 40
-        for pass_index in range(max_passes):
-            current_items = self._collect_inventory_items()
-            regular_storage_items = self._collect_storage_items()
-            include_material_storage = any(
-                bool(getattr(rule, "include_material_storage", False))
-                and _sell_rule_can_include_material_storage(rule)
-                for _rule_index, rule in enabled_xunlai_rules
-            )
-            material_storage_items = self._collect_material_storage_items() if include_material_storage else []
-            self._debug_log(
-                f"Xunlai sell pass {pass_index + 1}: enabled_rules={len(enabled_xunlai_rules)} "
-                f"inventory_items={len(current_items)} regular_storage_items={len(regular_storage_items)} "
-                f"material_storage_items={len(material_storage_items)} include_material_storage={include_material_storage}"
-            )
-            transfers, adjusted_rules = self._plan_xunlai_sell_withdrawals(
-                enabled_xunlai_rules,
-                current_items,
-                regular_storage_items,
-                material_storage_items,
-                plan.coords,
-            )
-            if not transfers or not adjusted_rules:
-                self._debug_log(
-                    f"Xunlai sell pass {pass_index + 1}: no withdrawable matching storage stacks "
-                    f"(transfers={len(transfers)} adjusted_rules={len(adjusted_rules)})."
-                )
-                break
-
-            self._debug_log(
-                f"Xunlai sell pass {pass_index + 1}: transfers={len(transfers)} "
-                f"quantity={sum(max(0, int(transfer.quantity)) for transfer in transfers)} "
-                f"rules={len(adjusted_rules)}"
-            )
-            transfer_outcome = yield from self._execute_storage_transfers(
-                transfers,
-                phase_label="Xunlai sell withdraws",
-            )
-            outcome.timeout_failures += max(0, int(transfer_outcome.timeout_failures))
-            outcome.load_failures += max(0, int(transfer_outcome.load_failures))
-            outcome.depleted += max(0, int(transfer_outcome.depleted))
-            if transfer_outcome.completed <= 0:
-                break
-
-            yield from Routines.Yield.wait(150)
-            sell_plan = self._build_xunlai_sell_subplan(adjusted_rules)
-            sell_outcome = yield from self._execute_sell_actions_for_plan(
-                sell_plan,
-                phase_label="Xunlai sells",
-            )
-            self._merge_phase_outcome(outcome, sell_outcome)
-            if sell_outcome.completed <= 0:
-                break
-            yield from Routines.Yield.wait(100)
+        yield from _xunlai_sales.recover(plan, enabled_xunlai_rules, counts=outcome, io=self._xunlai_sale_io())
 
         return outcome
 

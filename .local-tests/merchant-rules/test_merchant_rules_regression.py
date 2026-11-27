@@ -76622,6 +76622,82 @@ else:
         "_execute_open_merchant_sell_phase": ("_merchant_sales", "execute_open_merchant_sales"),
     }
     widget_bytes = MERCHANT_RULES_PATH.read_bytes()
+    from base64 import b85decode
+    from zlib import decompress
+
+    # CP20 owns the assertions below. Reconstruct its exact widget before obtaining their AST positions.
+    cp21_import = b"from Sources.icefox.MerchantRules import xunlai_sales as _xunlai_sales\r\n"
+    _expect(widget_bytes.count(cp21_import) == 1, "CP21 widget import count")
+    widget_bytes = widget_bytes.replace(cp21_import, b"")
+    helper_start = b"    def _xunlai_sale_io("
+    first_facade = b"    def _execute_sell_actions_for_plan("
+    _expect(widget_bytes.count(helper_start) == widget_bytes.count(first_facade) == 1, "CP21 helper anchors")
+    start_helper = widget_bytes.index(helper_start)
+    end_helper = widget_bytes.index(first_facade)
+    _expect(
+        sha256(widget_bytes[start_helper:end_helper]).hexdigest()
+        == "e28d5d0751f016389abae2ef9d87436985f6093bb4b72bf0687276df4cb4afd0",
+        "CP21 helper and its one separator",
+    )
+    widget_bytes = widget_bytes[:start_helper] + widget_bytes[end_helper:]
+    cp20_preimages = (
+        (
+            b"_execute_sell_actions_for_plan",
+            b"c-pm9!HU~35WNTT4}(v3aq|Iz6hha~h3+=E>7kS&RC~NJ$nqk|rJ?lSE6GkQ+1h5eWOHyBX7uLG(~|@MP+|oHe__!n"
+            b"BoY}Tv`}@+C8=6L9vS8Fask6n=c{xKO?C}C{moH!OgX7HZrOoKB#iz*wg#!hkV@d~JIHKj-EU`#K6R>S8(fcTqbSNd"
+            b"4(fo=pePQME1<jtC1{BPBxMK#VJKRzXw9*NnnTNVf(fMM5q?rumsIJ5VZ73q%f;BD?VG|TOeVI(H_i~Lrb1;WhHw)Z"
+            b"*#;J|Orpd^Z**T#Q$~um6{XZ&EQdZ?J)ny3vi$vr?fstYzwR<}x7}y??e^p6WW>-knwFC@l$qKfeY4~1ed=}4Q(Npw"
+            b"U0vDq>ZBi0$45Qw2A*jAeQd0kPWc=0gM6G#^X4AqJ=Vxds6^XXBdvP78OnOk&S*0BfdV3?^NJv)K%KLVn=1P4gn!Om"
+            b"tXwjhtWNx}pFnH+fTTwm291aRbS8o43qiGiUTThfn};3ZqrHkh{NBDvg2Nc61b9t+Vk@rUkr0RUQrZ95#2{SVE3ORw"
+            b"{c+lre`s{NzR$J2Xr|Lds0(+`5G83~l@DGkY)I`XoIFi>Wu?>9XGiXIr}r}YFU_UnHEH4>uZ|<>ABkrlt}pi)+2`Av"
+            b"EKhuQ&#{cREt;DP+S}xxYwrQaXd86+j7P}1K~^udxL)r*vDYxTBZR+Gs5-$<ukdp57ui9kp8",
+        ),
+        (
+            b"_execute_xunlai_sell_withdraw_phase",
+            b"c-oa#TWi}e6n-!CKL|hBn`^e$fCr=Np4zqS!Ukgq)jm!=WXaQ|jVb%@lYEyVmn;v7lk=VLeCH+wA%se(5QYO3S^++2"
+            b"MoEn&P>P>w^-v1(gxd!qAwEAt<I7m9bots+!glD+ynhC%saly{t)3|_2*sSyZintUrzl4s36-#dNW}%&11688rsSRi"
+            b"egFYMc!Dn8p{rhX&Dot*c&k;x8`v#;z${5QWhFEPX?U#u3>TbIC=~WUed;|jP8KFUa2w}f%-E;}nnyo+4jX`?R=`E8"
+            b"DUDLp0Fhb%9#OS|Mn)_4x<ZVrpxjk9_9Z}R!6rH9XAZ|wVMJKjQ*Kn$B^}u^%1MbU12kGCdYz-Urv{(G2q0xQSGbmV"
+            b"GVm5ye4Mf4=c)2JyBcVTD#4qP9#~&gCq%17%O&K|7u$j!JoZF!9{rzyQ_FJ6ndB6%`98k6{qXJj3V(WkbCsg#l50A&"
+            b"!D^d?R9v8ty37p9NR{1ylt$Lqu7&J75v*qW<kVgiS_ohY_fvK>?KOKeMlQO+zV3;Dy{1IW1q~B8R;Q(`pt=Oy5Cx(("
+            b"gE%4$17Th4%C{RG??DlzL~IA$lxvH?)TQ72#4CZF@nv0cK^Wem=tFq!whx16%}O|=$Ud7af@`?Au2}pi8x;$~;>6D2"
+            b"X3@YTjDG%Ff+<0mtU$;VVN(9qQW=TviDnPt;0bQ3=hZ)yW9mYjIZFNM3yg|~38(FWtmLfVT$F1|;@&kGF5zD9F*O_J"
+            b"^)Pti?&kFRyz*yiPKHp%$zK%tgx-P-&Q2|iS1|tp8Z?Chh3hkrgl&dpYhLo_ElVKsJW4~b`K#goqX|>B>hfo)8zbWo"
+            b"ze!C{HG{GVktF>FO~2d4SrJ9SW{!vMj63;qn>_Gx4<BC#<6oGmWOEd6W|l?rM$z8q_{EF-g$Zpyn3w~{C^8;D(<AxL"
+            b"q3h=S53B|SxB",
+        ),
+        (
+            b"_execute_xunlai_sell_phase",
+            b"c-pO3O>g5i5WO$3|AEj+>bimhv=_H7Q0%5aflag6ZqXJ+LD16JW<!xGNhL9Y{Pzy2Z;5gopgttBX81Vs=FN~MgpeHe"
+            b"gu)|al?D1(Nx?WZAOtOs%s~A14QW33a=+@omV(I*`GkKzgQ<ian7$f33zacJl@zB9*(oK+mi)wofq{#$O0xq{cF(wA"
+            b"I|1|v8iMW#`T7TP?Sth?esU4sRyI=wY<j#Xif&7g<PV?BifGtXT;#+afe3yN<bm5`uGs?<#8f+%$chvS4H=U;&zS|Y"
+            b"BKYW5NSC*8PeuCnO~1((1oI4$T!A4{Sz>i%EGaeIb9iX8BHThje*R#-!zT>I;2x$kx=l2&vJ@OabR}RwuvQi_m!}~+"
+            b"*emVaPlMpoQOd*MKsp-pwww;vAd{|wDb17+h)X9<zUJODPI@F&vx|#^tjAa{5ZkDx+EZmBBommaG|<NC8Du_{*d);a"
+            b"p6@+#p?C)cZPl0397}niLLK7amQ5kd9WP7BHwf7xl3$&9uT{~gfmo$H&n6wl;XWE{rDdD(kWP%Um$9#z3wlAeW6%aI"
+            b"6^i9_kB&%-A@8>2>e9{IZBQopsVgEkv^6NydOYWJv~Eh~1oOlJ`@_>z!-Mqo8*Ncmx>N?XQHay%bpc#T%X<{R67UfV"
+            b"eslZbw~yEKmmhDgS0s9`Dp8j~^{q~@NrDwmQIic+dIQE_SYJ*hq`xyQxjbAfgn~WNk{RQ>>6>+La2q=V<uZpy!X?p6"
+            b"9w6=)BohX*N^6joy74gYO)l@zsPw6}$Fm3zm0-H7PZ(rmokDP#i7E$L;Iz{mwcU=St(!9O*x7yDG>#8onYB809fVa_"
+            b"0zta{)J~E)j%%NO*iamYbP2|96M%4R*Q-6<E8ozL^w1m`FQ1@IcU)jH>=q|Z>Wf4I5<vd?`}`OSBsZRHC?4`Okk&hL"
+            b"^}Oj4^%-uT1h!`=_vD#Gp&cgjssTod#Fasj)viI)(q>`uYM`(Uk(OB9J}p_EqqCK^*pOxq+MVqAKX_2L>~+O<_khu1"
+            b"*q^i}P^S>ztGU~V)qp)nWxy}YRKU@tk!DKid}^IefPHgoX^0`%Rqn-@p3QuRmo<E`j`5`KSVlHome~;}a(6*8mSuM)"
+            b"B&>RmxC_4)RQDA%G)|<pkKZNFNg99-jGP^wVt2!%;D2o9Gbscc>fee<%k63VWU9g)G4XnZ4P(2NY3q?Bepa^c-H3b<"
+            b"{R~-`br|jMjPrX%^E;yzaTiU1yS`%sB6k-)I=_5&YQkIS*<jlXh~)*~^XLu|V3aQTC&`5un{%Ke=Ox4(N&#4mm%v)T"
+            b"WZv#GU;NX6e!nH_&4scbRP{3=afz4dKi#|ZfpHsOeY;L(eIopL?Pjh2K{gt;%@47u<^n*M$jkZFKR67<4)B}D!AVvJ"
+            b"_6mu;q^vrU0yN6I#%KbLoByj(8uKa*tru75HT7A$`t(bt*WLdB3sT-$",
+        ),
+    )
+    for facade_name, compressed in cp20_preimages:
+        anchor = b"    def " + facade_name + b"("
+        _expect(widget_bytes.count(anchor) == 1, f"Ambiguous CP21 facade {facade_name!r}")
+        start_facade = widget_bytes.index(anchor)
+        next_method = widget_bytes.index(b"\r\n    def ", start_facade)
+        end_facade = next_method
+        original_bytes = decompress(b85decode(compressed))
+        widget_bytes = widget_bytes[:start_facade] + original_bytes + widget_bytes[end_facade:]
+    _expect(
+        sha256(widget_bytes).hexdigest() == "a3b5d35229e426937127266baec16fe77edb7b3c106e6032f8273f97cdf7cfda",
+        "Complete CP20 widget reconstruction before the inherited sale contract",
+    )
     tree = ast.parse(widget_bytes)
     methods = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in routes]
     _expect(len(methods) == 4, "Expected four unique widget sale/evidence routes")
@@ -78447,6 +78523,1815 @@ def _test_merchant_sales_callers(module: types.ModuleType) -> None:
     _merchant_sales_trace(module, "callers")
 
 
+def _test_xunlai_sales_owner_contract(module: types.ModuleType) -> None:
+    from hashlib import sha256
+
+    package = "Sources.icefox.MerchantRules"
+    owner = sys.modules[package + ".xunlai_sales"]
+    _expect(owner is module._xunlai_sales, "Candidate owner module identity")
+    fields = (
+        "get_inventory get_regular_storage get_material_storage get_material_permission get_withdrawal_plan "
+        "get_transfers get_subplan get_resale get_material_sales get_merchant_sales get_rune_sales get_merge "
+        "get_debug get_wait materials_kind rare_materials_kind merchant_kind rune_kind"
+    ).split()
+    _expect(set(owner.XunlaiSaleIO.__dataclass_fields__) == set(fields), "Finite Xunlai bindings")
+    _expect(owner.XunlaiSaleIO.__dataclass_params__.frozen, "Frozen Xunlai bindings")
+    cold = """import importlib, os, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root))
+package = 'Sources.icefox.MerchantRules'
+allowed = {'Sources', 'Sources.icefox', package, package + '.xunlai_sales'}
+class Guard:
+    def find_spec(self, fullname, path, target=None):
+        if fullname not in allowed and fullname.split('.')[0] not in sys.stdlib_module_names:
+            raise AssertionError(fullname)
+sys.meta_path.insert(0, Guard())
+assert 'MERCHANT_RULES_CP20_FAULTS' not in os.environ
+loaded = importlib.import_module(package + '.xunlai_sales')
+assert pathlib.Path(loaded.__file__).resolve() == root / 'Sources/icefox/MerchantRules/xunlai_sales.py'
+assert not any(n.startswith(('Py4GW', 'PyImGui', 'PySystem')) for n in sys.modules)
+"""
+    env = os.environ.copy()
+    env.pop("MERCHANT_RULES_CP20_FAULTS", None)
+    check = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", "-X", "utf8", "-c", cold, str(REPO_ROOT)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _expect(check.returncode == 0 and not check.stdout and not check.stderr, f"CP21 cold import: {check}")
+    _expect((REPO_ROOT / "Sources/icefox/MerchantRules/__init__.py").read_bytes() == b"", "Empty initializer")
+    routes = {
+        "_execute_sell_actions_for_plan": "sell_plan",
+        "_execute_xunlai_sell_withdraw_phase": "pre_pull",
+        "_execute_xunlai_sell_phase": "recover",
+    }
+    raw = MERCHANT_RULES_PATH.read_bytes()
+    nodes = [
+        n
+        for n in ast.walk(ast.parse(raw))
+        if isinstance(n, ast.FunctionDef) and (n.name in routes or n.name == "_xunlai_sale_io")
+    ]
+    _expect(len(nodes) == len({n.name for n in nodes}) == 4, "Unique unprojected candidate methods")
+    lines = raw.splitlines(keepends=True)
+    for method in sorted(nodes, key=lambda node: -node.lineno):
+        assert method.end_lineno is not None
+        stop = method.end_lineno
+        if method.name == "_xunlai_sale_io":
+            _expect(lines[stop] == b"\r\n", "One attributable separator after the helper")
+            stop += 1
+        else:
+            symbol = routes[method.name]
+            _expect(getattr(owner, symbol).__globals__ is vars(owner), f"Defining owner for {symbol}")
+            calls = [
+                n
+                for n in ast.walk(method)
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "_xunlai_sales"
+            ]
+            _expect(
+                len(calls) == 1
+                and isinstance(calls[0].func, ast.Attribute)
+                and calls[0].func.attr == symbol
+                and any(isinstance(n, ast.YieldFrom) and n.value is calls[0] for n in ast.walk(method)),
+                f"Unprojected route {method.name} -> {symbol}",
+            )
+        del lines[method.lineno - 1 : stop]
+    imported = b"from Sources.icefox.MerchantRules import xunlai_sales as _xunlai_sales\r\n"
+    _expect(lines.count(imported) == 1, "One passive CP21 import")
+    lines.remove(imported)
+    residual = b"".join(lines)
+    _expect(
+        len(residual) == 1612626
+        and sha256(residual).hexdigest() == "ab4e97f80beec23dcabac53c3c21d75da537ffa9bf526b84bea13f1869db4a95",
+        "Unprojected widget outside the entire CP21 scope",
+    )
+    harness = Path(__file__).read_bytes()
+    projection_start = b"    widget_bytes = MERCHANT_RULES_PATH.read_bytes()\r\n" + b"    from base64 import b85decode"
+    projection_end = b"    tree = ast.parse(widget_bytes)\r\n"
+    _expect(harness.count(projection_start) == harness.count(projection_end) == 1, "Unique CP20 projection anchors")
+    left = harness.index(projection_start) + projection_start.index(b"    from base64")
+    right = harness.index(projection_end, left)
+    harness = harness[:left] + harness[right:]
+    first_case = b"\r\ndef " + b"_test_xunlai_sales_owner_contract("
+    main = b"\r\ndef main() -> int:\r\n"
+    _expect(harness.count(first_case) == harness.count(main) == 1, "Unique CP21 definition anchors")
+    harness = harness[: harness.index(first_case) + 2] + harness[harness.index(main) + 2 :]
+    for family in ("owner_contract", "pre_pull", "recovery", "dispatch", "interruptions", "callers"):
+        name = "xunlai_sales_" + family
+        row = f'                ("{name}", lambda: _test_{name}(module)),\r\n'.encode("ascii")
+        _expect(harness.count(row) == 1, f"One CP21 registration for {name}")
+        harness = harness.replace(row, b"")
+    _expect(
+        sha256(harness).hexdigest() == "101be279300fd1e51367ea39c0c1ddfc8d30bb1d1766531c42a287d87284531a",
+        "Independent complete CP20 harness inverse",
+    )
+
+    with _cp14_b_world(module) as (_queue, _map, restore):
+        widget = _cp15_widget(module)
+        created: list[Any] = []
+        bindings: list[Any] = []
+        constructed: list[Any] = []
+        plan = types.SimpleNamespace()
+        enabled = [(1, object())]
+
+        def outcome(**kwargs: Any) -> Any:
+            obj = original(**kwargs)
+            created.append(obj)
+            return obj
+
+        def opening(*, purpose: str) -> Generator[str, None, bool]:
+            _expect(purpose == "Sell from Xunlai too", "Storage admission purpose")
+            yield "storage-opening"
+            return True
+
+        def admitted(
+            original_plan: object, original_rules: object = None, *, counts: Any, io: Any, phase_label: str = ""
+        ) -> Generator[str, None, None]:
+            _expect(
+                original_plan is plan and counts is created[-1] and type(counts) is original, "Borrowed phase objects"
+            )
+            if original_rules is not None:
+                _expect(original_rules is enabled, "Original enabled-rule list")
+            else:
+                _expect(phase_label == "test", "Borrowed resale label")
+            _expect(all(io is not previous for previous in bindings), "Fresh invocation-local binding")
+            bindings.append(io)
+            yield "admitted"
+
+        original = module.ExecutionPhaseOutcome
+        build_io: Callable[[], Any] = widget._xunlai_sale_io
+
+        def binding_record() -> Any:
+            record = build_io()
+            constructed.append(record)
+            return record
+
+        restore.binding(module, "ExecutionPhaseOutcome", outcome)
+        restore.binding(widget, "_xunlai_sale_io", binding_record)
+        restore.binding(widget, "_collect_enabled_xunlai_sell_rules", lambda: enabled)
+        restore.binding(widget, "_is_storage_open", lambda: False)
+        restore.binding(widget, "_ensure_storage_open", opening)
+        for symbol in routes.values():
+            restore.binding(owner, symbol, admitted)
+        state = set(cast(dict[str, object], vars(widget)))
+        for index, (facade, symbol) in enumerate(routes.items()):
+            gen = (
+                getattr(widget, facade)(plan, phase_label="test")
+                if symbol == "sell_plan"
+                else getattr(widget, facade)(plan)
+            )
+            _expect(len(created) == len(bindings) == len(constructed) == index, "Passive generator construction")
+            if symbol != "sell_plan":
+                _expect(next(gen) == "storage-opening" and len(constructed) == index, "Admission precedes bindings")
+            _expect(
+                next(gen) == "admitted"
+                and len(bindings) == len(constructed) == index + 1
+                and bindings[-1] is constructed[-1],
+                "Direct owner reached with the fresh binding",
+            )
+            try:
+                next(gen)
+            except StopIteration as stop:
+                _expect(stop.value is created[-1], "Exact widget-created outcome returned")
+            else:
+                raise AssertionError(f"Unexpected final yield from {facade}")
+        _expect(set(cast(dict[str, object], vars(widget))) == state, "No CP21 per-widget state")
+        for facade in ("_execute_xunlai_sell_withdraw_phase", "_execute_xunlai_sell_phase"):
+            for denied in (True, False):
+                if not denied:
+                    enabled.clear()
+                gen = getattr(widget, facade)(plan, local_only=True, storage_available_here=False)
+                try:
+                    next(gen)
+                except StopIteration as stop:
+                    _expect(stop.value is created[-1] and len(constructed) == 3, "Early exit precedes binding")
+                else:
+                    raise AssertionError(f"Unexpected early-exit yield from {facade}")
+                if not denied:
+                    enabled.append((1, object()))
+
+
+def _xunlai_sales_trace(module: types.ModuleType, family: str) -> dict[str, list[Any]]:
+    traces: dict[str, list[Any]] = {}
+    counter_fields = "attempted completed unavailable quote_failures timeout_failures load_failures gold_blocked depleted dispatched".split()
+
+    def counters(value: Any) -> list[int]:
+        return [getattr(value, name) for name in counter_fields]
+
+    def drain(operation: Generator[Any, None, Any], log: list[Any]) -> Any:
+        while True:
+            try:
+                marker = next(operation)
+            except StopIteration as stop:
+                return stop.value
+            log.append(["yield", marker])
+
+    def admission(recovery: bool, mode: str, interrupt: str = "") -> None:
+        key = f"admission-{'recovery' if recovery else 'pre-pull'}-{mode}{interrupt}"
+        log: list[Any] = []
+        traces[key] = log
+        with _cp14_b_world(module) as (_queue, _map, restore):
+            widget = _cp15_widget(module)
+            polls: list[bool] = []
+
+            def opened() -> bool:
+                ready = mode == "open" or (mode == "opens" and len(polls) == 3)
+                polls.append(ready)
+                log.append(["storage", len(polls), ready])
+                return ready
+
+            def wait(ms: int) -> Generator[str, None, None]:
+                _expect(ms == 100, f"{key}: expected a storage poll, observed {ms}")
+                yield "storage poll"
+
+            def lifecycle(*, require_service: bool) -> Generator[str, None, int]:
+                _expect(require_service, "Storage should require service")
+                yield "lifecycle"
+                return 0
+
+            def enabled() -> list[tuple[int, Any]]:
+                log.append("enabled")
+                return [] if mode == "no-rules" else [(1, types.SimpleNamespace())]
+
+            def sale_warning(_name: str, message: str, level: object) -> None:
+                _expect(level == module.Console.MessageType.Warning, key)
+                log.append(["warning", message])
+
+            def empty_items() -> list[object]:
+                return []
+
+            def empty_plan(*_args: object) -> tuple[list[object], list[object]]:
+                return [], []
+
+            restore.binding(widget, "_collect_enabled_xunlai_sell_rules", enabled)
+            restore.binding(widget, "_is_storage_open", opened)
+            restore.binding(widget, "_wait_for_merchant_rules_lifecycle", lifecycle)
+            restore.binding(widget, "_debug_log", log.append)
+            restore.binding(module, "ConsoleLog", sale_warning)
+            restore.binding(module.Routines.Yield, "wait", wait)
+            restore.binding(
+                module.GLOBAL_CACHE, "Inventory", types.SimpleNamespace(OpenXunlaiWindow=lambda: log.append("open"))
+            )
+            restore.binding(widget, "_collect_inventory_items", empty_items)
+            restore.binding(widget, "_collect_storage_items", empty_items)
+            restore.binding(widget, "_plan_xunlai_sell_withdrawals", empty_plan)
+            function = widget._execute_xunlai_sell_phase if recovery else widget._execute_xunlai_sell_withdraw_phase
+            gen = function(types.SimpleNamespace(coords={}), local_only=mode == "denied")
+            _expect(not log, f"{key}: passive construction")
+            if interrupt:
+                _expect(next(gen) == "lifecycle" and next(gen) == "storage poll", f"{key}: actual storage-opening wait")
+                prefix = log.copy()
+                error = ValueError("opening")
+                if interrupt == "throw":
+                    try:
+                        gen.throw(error)
+                    except ValueError as caught:
+                        _expect(caught is error, f"{key}: first exception")
+                    else:
+                        raise AssertionError(key)
+                else:
+                    gen.close()
+                _expect(prefix == log and len(polls) == 3, f"{key}: cancellation changed storage effects")
+                log.append(["cut", "storage-opening", interrupt])
+                return
+            result = drain(gen, log)
+            log.append(["outcome", result.label, result.measure_label, counters(result)])
+            _expect(result.load_failures == int(mode in ("timeout", "denied")), key)
+            if mode == "no-rules":
+                _expect(not polls and len(log) == 2 + int(recovery), f"{key}: no-rules asymmetry")
+            elif mode == "denied":
+                _expect(not polls and len(log) == 2, key)
+            elif mode == "timeout":
+                _expect(
+                    log.count(["yield", "storage poll"]) == 31 and len(polls) == 33,
+                    f"{key}: inclusive 3000 ms boundary",
+                )
+                _expect(
+                    log[-3] == "Failed to open Xunlai for Sell from Xunlai too after 3000 ms."
+                    and log[-2] == ["warning", "Could not open Xunlai for Sell from Xunlai too."],
+                    f"{key}: failed-open warning order",
+                )
+            elif mode == "opens":
+                _expect(log.count(["yield", "storage poll"]) == 1 and len(polls) == 4, key)
+            else:
+                _expect(len(polls) == 1 and "open" not in log, key)
+
+    def scan(recovery: bool, mode: str) -> None:
+        key = f"scan-{'recovery' if recovery else 'pre-pull'}-{mode}"
+        log: list[Any] = []
+        traces[key] = log
+        with _cp14_b_world(module) as (_queue, _map, restore):
+            widget = _cp15_widget(module)
+            sentinel = ValueError(mode)
+            original = module.ExecutionPhaseOutcome
+            created: list[Any] = []
+            identities: list[list[Any]] = []
+            permission_checks: list[int] = []
+            plan = types.SimpleNamespace(coords={})
+            live_coords: dict[str, object] = {}
+            adjusted = [module.SellRule()]
+            argument_rules = [
+                (1, types.SimpleNamespace(include_material_storage=False, key=1)),
+                (2, types.SimpleNamespace(include_material_storage=True, key=2)),
+                (3, types.SimpleNamespace(include_material_storage=True, key=3)),
+                (4, types.SimpleNamespace(include_material_storage=True, key=4)),
+            ]
+            transfer = original(label="unit-transfer", **dict(zip(counter_fields, range(1, 10), strict=True)))
+            sale = original(label="interface-resale", attempted=3, completed=int(mode != "no-sales"), dispatched=2)
+            calls = 0
+            view: dict[str, list[Any]] = {}
+            submitted: list[Any] = []
+            overlay_names = (
+                "buy_rules",
+                "sell_rules",
+                "destroy_rules",
+                "identify_settings",
+                "cleanup_targets",
+                "cleanup_blacklist_model_ids",
+                "cleanup_protection_sources",
+            )
+            originals = [getattr(widget, name) for name in overlay_names]
+
+            class BadNumber:
+                def __int__(self) -> int:
+                    log.append("conversion failed")
+                    raise sentinel
+
+            def late_lookup(*_args: object) -> None:
+                raise AssertionError(f"{key}: resolved the provider after evaluating its arguments")
+
+            class ChangingPlan:
+                @property
+                def coords(self) -> dict[str, object]:
+                    log.append("evaluate coordinates")
+                    restore.binding(widget, "_plan_xunlai_sell_withdrawals", late_lookup)
+                    return live_coords
+
+            class ChangingQuantity:
+                def __int__(self) -> int:
+                    log.append("evaluate transfer quantity")
+                    restore.binding(widget, "_debug_log", late_lookup)
+                    return 13
+
+            if mode == "late-lookup":
+                plan = ChangingPlan()
+
+            if mode == "no-completion":
+                transfer.completed = 0
+            if mode == "merge-fault":
+                transfer.gold_blocked = BadNumber()
+            if mode == "partial-transfer-fault":
+                transfer.load_failures = BadNumber()
+
+            def new_outcome(**fields: Any) -> Any:
+                obj = original(**fields)
+                created.append(obj)
+                return obj
+
+            def permission(rule: Any) -> bool:
+                permission_checks.append(rule.key)
+                log.append(["permission", rule.key])
+                return rule.key == 3 and mode not in ("denied-material", "repeat-no-material")
+
+            def collect(source: str) -> list[Any]:
+                view[source] = [object()]
+                log.append(["collect", source])
+                return view[source]
+
+            def planner(
+                enabled: Any, bag: Any, regular: Any, materials: Any, coords: Any
+            ) -> tuple[list[Any], list[Any]]:
+                nonlocal calls, submitted
+                calls += 1
+                log.append(["planner", calls])
+                _expect(enabled is argument_rules and bag is view["bag"] and regular is view["regular"], key)
+                _expect(
+                    coords is (live_coords if mode == "late-lookup" else plan.coords), f"{key}: late original coords"
+                )
+                if mode in ("denied-material", "repeat-no-material"):
+                    _expect(not materials and all(previous is not materials for previous in identities), key)
+                    identities.append(materials)
+                else:
+                    _expect(materials is view["materials"], key)
+                submitted = (
+                    []
+                    if calls > 1 or mode == "no-transfers"
+                    else [
+                        types.SimpleNamespace(
+                            quantity=(
+                                BadNumber()
+                                if mode == "debug-fault"
+                                else ChangingQuantity() if mode == "late-lookup" else 13
+                            )
+                        )
+                    ]
+                )
+                return submitted, [] if mode == "no-adjusted" else adjusted
+
+            def transfers(rows: Any, *, phase_label: str) -> Generator[str, None, Any]:
+                _expect(rows is submitted, f"{key}: original transfer list")
+                log.append(["transfers", phase_label])
+                yield "interface transfer"
+                return transfer
+
+            def build(**kwargs: bool) -> Any:
+                _expect(widget.sell_rules is adjusted, f"{key}: adjusted rules overlay")
+                _expect(
+                    kwargs
+                    == {
+                        "ignore_travel_target": True,
+                        "allow_consumable_multi_stop": False,
+                        "exclude_consumable_crafter": True,
+                    },
+                    key,
+                )
+                _expect(all(getattr(widget, name) is not prev for name, prev in zip(overlay_names, originals)), key)
+                log.append("overlay")
+                if mode == "subplan-fault":
+                    raise sentinel
+                return plan
+
+            def resale(sell_plan: Any, *, phase_label: str) -> Generator[str, None, Any]:
+                _expect(sell_plan is plan and phase_label == "Xunlai sells", key)
+                log.append(["resale", phase_label])
+                yield "interface resale"
+                return sale
+
+            def wait(milliseconds: int) -> Generator[int, None, None]:
+                yield milliseconds
+
+            restore.binding(module, "ExecutionPhaseOutcome", new_outcome)
+            restore.binding(module, "_sell_rule_can_include_material_storage", permission)
+            restore.binding(module.Routines.Yield, "wait", wait)
+            restore.binding(widget, "_is_storage_open", lambda: True)
+            restore.binding(widget, "_debug_log", log.append)
+            restore.binding(widget, "_collect_enabled_xunlai_sell_rules", lambda: argument_rules)
+            restore.binding(widget, "_collect_inventory_items", partial(collect, "bag"))
+            restore.binding(widget, "_collect_storage_items", partial(collect, "regular"))
+            restore.binding(widget, "_collect_material_storage_items", partial(collect, "materials"))
+            restore.binding(widget, "_plan_xunlai_sell_withdrawals", planner)
+            restore.binding(widget, "_execute_storage_transfers", transfers)
+            restore.binding(widget, "_build_plan", build)
+            restore.binding(widget, "_execute_sell_actions_for_plan", resale)
+            function = widget._execute_xunlai_sell_phase if recovery else widget._execute_xunlai_sell_withdraw_phase
+            try:
+                result = drain(function(plan), log)
+            except ValueError as caught:
+                _expect(caught is sentinel and mode.endswith("-fault"), f"{key}: exception identity")
+                result = created[0]
+                if mode == "debug-fault":
+                    _expect(["yield", "interface transfer"] not in log, key)
+                    expected = [0] * 9
+                elif mode == "merge-fault":
+                    expected = [1, 2, 3, 4, 5, 6, 0, 0, 0]
+                elif mode == "partial-transfer-fault":
+                    expected = [0, 0, 0, 0, 5, 0, 0, 0, 0]
+                else:
+                    expected = [0, 0, 0, 0, 5, 6, 0, 8, 0]
+                log.append(["exception", mode])
+            else:
+                _expect(not mode.endswith("-fault"), f"{key}: missing sentinel")
+                if mode == "no-transfers" or (recovery and mode == "no-adjusted"):
+                    expected = [0] * 9
+                elif not recovery:
+                    expected = list(range(1, 10))
+                elif mode == "no-completion":
+                    expected = [0, 0, 0, 0, 5, 6, 0, 8, 0]
+                else:
+                    expected = [3, int(mode != "no-sales"), 0, 0, 5, 6, 0, 8, 2]
+            _expect(result is created[0] and counters(result) == expected, f"{key}: {counters(result)} vs {expected}")
+            log.append(["outcome", counters(result)])
+            _expect(
+                all(getattr(widget, name) is prev for name, prev in zip(overlay_names, originals)), f"{key}: restore"
+            )
+            should_repeat = recovery and mode in ("partial", "repeat-no-material")
+            _expect(calls == 1 + int(should_repeat), f"{key}: observed {calls} scans")
+            per_pass = [2, 3, 4] if mode in ("denied-material", "repeat-no-material") else [2, 3]
+            _expect(permission_checks == per_pass * calls, f"{key}: permission short-circuit")
+            _expect((["yield", 100] in log) == should_repeat, f"{key}: inter-pass wait")
+
+    if family in ("pre_pull", "recovery"):
+        is_recovery = family == "recovery"
+        for mode in ("no-rules", "denied", "open", "opens", "timeout"):
+            admission(is_recovery, mode)
+        modes = (
+            ("no-transfers", "no-adjusted", "no-completion", "no-sales", "partial", "repeat-no-material")
+            if is_recovery
+            else ("no-transfers", "no-adjusted", "denied-material", "late-lookup")
+        )
+        for mode in modes:
+            scan(is_recovery, mode)
+    if family == "interruptions":
+        for effect in ("throw", "close"):
+            for is_recovery in (False, True):
+                admission(is_recovery, "opens", effect)
+        for mode in ("debug-fault", "merge-fault"):
+            scan(False, mode)
+        for mode in ("debug-fault", "partial-transfer-fault", "subplan-fault"):
+            scan(True, mode)
+
+    def dispatch(mode: str) -> None:
+        key = "dispatch-" + mode
+        log: list[Any] = []
+        traces[key] = log
+        with _cp14_b_world(module) as (_queue, _map, restore):
+            originals = [
+                module.MERCHANT_TYPE_MATERIALS,
+                module.MERCHANT_TYPE_RARE_MATERIALS,
+                module.MERCHANT_TYPE_MERCHANT,
+                module.MERCHANT_TYPE_RUNE_TRADER,
+            ]
+            common_kind, rare_kind, merchant_kind, rune_kind = originals
+            restore.binding(module, "MERCHANT_TYPE_MATERIALS", common_kind)
+            restore.binding(module, "MERCHANT_TYPE_RARE_MATERIALS", rare_kind)
+            calls: list[str] = []
+            filtered: list[list[Any]] = []
+            inventory_ids = [701] if mode != "empty" else []
+            rune_rows = [object()] if mode != "empty" else []
+            pending_context = ""
+            merge_parts: list[Any] = []
+            suite = module.MerchantRulesWidget
+
+            class Row:
+                def __init__(self, kind: int, label: str) -> None:
+                    self.kind = kind
+                    self.label = label
+                    self.reads = 0
+
+                @property
+                def merchant_type(self) -> str:
+                    phase = self.reads
+                    self.reads += 1
+                    alias = f"{self.label}-comparison-{phase}"
+                    if phase == 0:
+                        setattr(module, "MERCHANT_TYPE_MATERIALS", alias)
+                    else:
+                        setattr(module, "MERCHANT_TYPE_RARE_MATERIALS", alias)
+                    log.append(["kind", self.label, phase, alias])
+                    return alias if self.kind == phase else "unmatched"
+
+            material_rows = [Row(0, "common"), Row(1, "rare")] if mode != "empty" else []
+            destinations = {common_kind: (1, 2), rare_kind: (3, 4), merchant_kind: (5, 6), rune_kind: (7, 8)}
+            missing = {
+                "no-common": common_kind,
+                "no-rare": rare_kind,
+                "no-merchant": merchant_kind,
+                "no-rune": rune_kind,
+            }
+
+            class Coordinates:
+                def get(self, kind: str) -> object:
+                    log.append(["coordinate", kind])
+                    return None if kind == missing.get(mode) else destinations[kind]
+
+            def obsolete(*_args: object, **_kwargs: object) -> None:
+                raise AssertionError(f"{key}: merchant callable was resolved after evaluating its arguments")
+
+            class Plan:
+                @property
+                def coords(self) -> Coordinates:
+                    log.append("coords")
+                    if pending_context == "merchant":
+                        methods["_execute_merchant_sell_phase"] = obsolete
+                    return Coordinates()
+
+                @property
+                def material_sales(self) -> list[Row]:
+                    log.append("material rows")
+                    return material_rows
+
+                @property
+                def merchant_sell_item_ids(self) -> list[int]:
+                    log.append("merchant ids")
+                    return inventory_ids
+
+                @property
+                def rune_trader_sales(self) -> list[object]:
+                    log.append("rune rows")
+                    return rune_rows
+
+            def materials(
+                version: str, coords: object, rows: list[Any], *, phase_label: str
+            ) -> Generator[str, None, Any]:
+                kind = "common" if "rare" not in phase_label else "rare"
+                index = int(kind == "rare")
+                expected_version = "late" if index and "common" in calls else "initial"
+                _expect(version == expected_version and coords == destinations[originals[index]], key)
+                _expect(
+                    rows is not material_rows
+                    and len(rows) == 1
+                    and rows[0] is material_rows[index]
+                    and all(rows is not previous for previous in filtered),
+                    f"{key}: material row/list identity",
+                )
+                filtered.append(rows)
+                calls.append(kind)
+                log.append(["material send", version, phase_label, rows[0].label])
+                yield phase_label
+                return module.ExecutionPhaseOutcome(label=phase_label, attempted=1, completed=1)
+
+            def merchant(coords: object, item_ids: list[int]) -> Generator[str, None, Any]:
+                _expect(item_ids is inventory_ids, f"{key}: original ID list")
+                _expect(coords == (None if mode == "no-merchant" else (5, 6)), key)
+                calls.append("merchant")
+                log.append(["merchant send", item_ids[:], coords])
+                yield "merchant"
+                return module.ExecutionPhaseOutcome(label="before relabel", attempted=1, completed=1)
+
+            def runes(coords: object, rows: list[object], *, phase_label: str) -> Generator[str, None, Any]:
+                _expect(rows is rune_rows and coords == (7, 8), f"{key}: original rune list")
+                calls.append("rune")
+                log.append(["rune send", phase_label])
+                yield "rune"
+                return module.ExecutionPhaseOutcome(label=phase_label, attempted=1, completed=1)
+
+            def merge(total: Any, part: Any) -> None:
+                _expect(part.label != "before relabel", f"{key}: late merchant relabel")
+                log.append(["merge", part.label])
+                merge_parts.append(part)
+                suite._merge_phase_outcome(proxy, total, part)
+
+            methods: dict[str, Any] = {
+                "_sell_planned_materials": partial(materials, "initial"),
+                "_execute_merchant_sell_phase": merchant,
+                "_sell_planned_trader_items": runes,
+                "_merge_phase_outcome": merge,
+            }
+
+            class Proxy:
+                def __getattr__(self, name: str) -> Any:
+                    nonlocal pending_context
+                    if name == "_xunlai_sale_io":
+                        return types.MethodType(suite._xunlai_sale_io, self)
+                    log.append(["lookup", name])
+                    pending_context = "merchant" if name == "_execute_merchant_sell_phase" else ""
+                    return methods[name]
+
+            proxy = Proxy()
+            gen = suite._execute_sell_actions_for_plan(proxy, Plan(), phase_label="dispatch")
+            while True:
+                try:
+                    marker = next(gen)
+                except StopIteration as stop:
+                    result = stop.value
+                    break
+                log.append(["yield", marker])
+                if marker == "dispatch material sales":
+                    methods["_sell_planned_materials"] = partial(materials, "late")
+            expected = ["common", "rare", "merchant", "rune"]
+            if mode == "empty":
+                expected = ["merchant"]
+            elif mode in ("no-common", "no-rare", "no-rune"):
+                expected.remove(mode.removeprefix("no-"))
+            _expect(
+                calls == expected and len(merge_parts) == len(expected), f"{key}: reached {calls}, expected {expected}"
+            )
+            _expect(result.completed == result.attempted == len(expected), key)
+            _expect(all(row.reads == 2 for row in material_rows), f"{key}: per-row reads in both comprehensions")
+            _expect(log.count("rune rows") == (0 if mode == "no-rune" else 1 if mode == "empty" else 2), key)
+            merchant_lookup = log.index(["lookup", "_execute_merchant_sell_phase"])
+            _expect(
+                log[merchant_lookup + 1 : merchant_lookup + 4]
+                == ["coords", ["coordinate", merchant_kind], "merchant ids"],
+                f"{key}: resolved merchant before its coordinate/ID arguments",
+            )
+            log.append(["outcome", result.label, counters(result)])
+
+    if family == "dispatch":
+        for mode in ("all", "empty", "no-common", "no-rare", "no-merchant", "no-rune"):
+            dispatch(mode)
+
+    def world(route: str, cut: str = "", intervention: str = "") -> list[Any]:
+        import builtins
+        from hashlib import sha256
+
+        history: list[Any] = []
+        cap = route == "cap"
+        remote = route.startswith("remote")
+        direct = route in ("cut", "cap")
+        with _cp14_b_world(module) as (work, maps, restore), _cp13_clock(module):
+            w = _cp15_widget(module)
+            common = module.MERCHANT_TYPE_MATERIALS
+            rare = module.MERCHANT_TYPE_RARE_MATERIALS
+            merchant = module.MERCHANT_TYPE_MERCHANT
+            rune = module.MERCHANT_TYPE_RUNE_TRADER
+            coords = {common: (1.0, 1.0), rare: (2.0, 2.0), merchant: (3.0, 3.0), rune: (4.0, 4.0)}
+            exact = ("rune_attunement", "rune_vigor")
+            vault: dict[int, InventoryItemInfo] = {}
+            bags: dict[int, InventoryItemInfo] = {}
+            expected = {(401, 10), (402, 1), (403, 1), (404, 1)}
+            failed: list[tuple[int, int]] = []
+            sales: list[int] = []
+            phase = ""
+            pending_move = 0
+            transfer_barrier = False
+            merchant_barrier = False
+            model_probed = False
+            confirmation_probed = False
+            post_submit = 0
+            quote_id = 0
+            forwarded = 0
+            quote_sent: list[int] = []
+            outcomes: list[Any] = []
+            plans: list[Any] = []
+            projected: list[Any] = []
+            published: list[str] = []
+            resumes: list[tuple[bool, bool]] = []
+            releases: list[tuple[object, ...]] = []
+            reached: list[str] = []
+            rune_checks: list[int] = []
+            scan_passes: list[str] = []
+            open_store = cut != "storage-open"
+            fault = RuntimeError("CP21 sale endpoint fault")
+            sentinel = RuntimeError("CP21 interrupted " + cut)
+            origin = _cp15_lease_counts(w)
+            assert origin == (0, 0, 0)
+
+            def check(ok: bool, label: str) -> None:
+                if not ok:
+                    raise AssertionError(
+                        f"CP21 {route}/{cut}/{intervention} {label}: {history[-45:]!r}; {w.last_error!r}"
+                    )
+
+            def row(i: int, model: int, qty: int) -> InventoryItemInfo:
+                mat = model in (921, 922)
+                return _cp8_item(
+                    module,
+                    item_id=i,
+                    model_id=model,
+                    quantity=qty,
+                    name=f"Model {model}",
+                    is_weapon_like=False,
+                    is_material=mat,
+                    is_rare_material=model == 922,
+                    item_type_id=0,
+                    item_type_name="Material" if mat else "Trophy",
+                    standalone_kind=module.RUNE_STANDALONE_KIND if model == 9001 else "",
+                    rune_identifiers=list(exact) if model == 9001 else [],
+                )
+
+            def targets(*ids: int) -> list[Any]:
+                return [module.WhitelistTarget(model_id=m, keep_count=0) for m in ids]
+
+            w.sell_rules = [
+                module._normalize_sell_rule(rule)
+                for rule in (
+                    module.SellRule(
+                        enabled=True,
+                        rule_id="materials",
+                        kind=module.SELL_KIND_COMMON_MATERIALS,
+                        whitelist_targets=targets(921, 922),
+                        sell_from_xunlai=True,
+                        include_material_storage=True,
+                    ),
+                    module.SellRule(
+                        enabled=True,
+                        rule_id="merchant",
+                        kind=module.SELL_KIND_EXPLICIT_MODELS,
+                        whitelist_targets=targets(5001, 5002),
+                        sell_from_xunlai=True,
+                    ),
+                    module.SellRule(
+                        enabled=True,
+                        rule_id="rune",
+                        kind=module.SELL_KIND_RUNE_TRADER_TARGET,
+                        rune_sell_targets=[module.RuneSellTarget(identifier=exact[0], keep_count=0)],
+                        sell_from_xunlai=True,
+                    ),
+                )
+            ]
+            w.protected_item_model_ids = [5002]
+            w.rune_names = dict.fromkeys(exact, "Rune")
+            if cap:
+                vault[1001] = row(1001, 5001, 1)
+            else:
+                for i, model, qty in ((401, 921, 10), (402, 922, 1), (403, 5001, 1), (404, 9001, 1)):
+                    vault[i] = row(i, model, qty)
+                if not direct:
+                    bags[510] = row(510, 5001, 1)
+            vault[405] = row(405, 5002, 1)
+            protected = vault[405]
+            if remote and route != "remote-unmet":
+                bags[2220] = row(2220, 222, 2)
+            w.preview_ready = True
+            w.destroy_include_protected_items = False
+            w.destroy_instant_enabled = False
+            w.gold_balance_enabled = True
+            w.gold_balance_after_mr_trading = True
+            cfg = (
+                "buy_rules",
+                "sell_rules",
+                "destroy_rules",
+                "identify_settings",
+                "cleanup_targets",
+                "cleanup_blacklist_model_ids",
+                "cleanup_protection_sources",
+            )
+            originals = tuple(getattr(w, name) for name in cfg)
+
+            def restored() -> bool:
+                return all(getattr(w, name) is old for name, old in zip(cfg, originals))
+
+            def item(i: int, *, include_runtime_name: bool = False) -> InventoryItemInfo | None:
+                nonlocal confirmation_probed
+                result = bags.get(i)
+                history.append(("item", i, tuple(result.rune_identifiers) if result else (), include_runtime_name))
+                if post_submit == i:
+                    confirmation_probed = True
+                return result
+
+            def model_count(model: int) -> int:
+                nonlocal model_probed
+                n = sum(info.quantity for info in bags.values() if info.model_id == model)
+                if pending_move and vault[pending_move].model_id == model and not transfer_barrier:
+                    model_probed = True
+                history.append(("model", model, n, model_probed))
+                return n
+
+            def quantity(i: int) -> int:
+                present = bags.get(i) or vault.get(i)
+                return present.quantity if present else 0
+
+            def withdraw(i: int, *, ammount: int) -> bool:
+                nonlocal pending_move, transfer_barrier, model_probed
+                history.append(("withdraw", phase, i, ammount))
+                check(vault[i].quantity == ammount and i != 405, "live eligible donor")
+                if phase == "Xunlai sell pre-pull":
+                    call = (i, ammount)
+                    check(call in expected and call not in failed, "unexpected pre-pull request")
+                    failed.append(call)
+                    check(all(k in vault and vault[k].quantity == n for k, n in expected), "four original donors")
+                    history.append(("no-effect", i, ammount, sorted(vault)))
+                    return False
+                check(phase == "Xunlai sell withdraws" and (cap or set(failed) == expected), "recovery admission")
+                check(not pending_move, "one outstanding withdrawal")
+                pending_move, transfer_barrier, model_probed = i, True, False
+                return True
+
+            actions: list[tuple[Callable[..., object], tuple[Any, ...]]] = []
+
+            class Manager:
+                def AddAction(self, lane: str, callback: Callable[..., object], *args: Any) -> None:
+                    nonlocal merchant_barrier
+                    check(lane == "ACTION", "physical enqueue lane")
+                    actions.append((callback, args))
+                    history.append(("enqueue", lane, args))
+                    if len(args) == 2 and (args[0] in (510, 511, 703) or cap):
+                        merchant_barrier = True
+
+                def IsEmpty(self, lane: str) -> bool:
+                    value = not transfer_barrier if lane == "ACTION" else not merchant_barrier
+                    history.append(("empty", lane, value))
+                    return value
+
+            manager = Manager()
+
+            def forward(i: int) -> None:
+                nonlocal forwarded
+                check(i in bags and i in (701, 702, 704), "quote callback forwarded fresh bag ID")
+                forwarded = i
+                quote_sent.append(i)
+                history.append(("forward", i))
+
+            def consume_id() -> int:
+                history.append(("consume-id", quote_id))
+                return quote_id
+
+            def consume_value() -> int:
+                history.append(("consume-price", quote_id, 100 + quote_id))
+                return 100 + quote_id
+
+            def sell_trader(i: int, price: int) -> None:
+                check(i == quote_id and price == 100 + i, "priced trader callback")
+                check(restored(), "configuration restored before dispatch")
+                sales.append(i)
+                history.append(("trader-effect", i, price))
+                del bags[i]
+
+            def sell_ordinary(i: int, price: int) -> None:
+                check(price == bags[i].quantity * 7, "priced ordinary callback")
+                history.append(("merchant-effect", i, price))
+                if route == "remote-fault" and i == 703:
+                    raise fault
+                sales.append(i)
+                del bags[i]
+
+            native = types.SimpleNamespace(
+                trader_request_sell_quote=forward,
+                get_quoted_item_id=consume_id,
+                get_quoted_value=consume_value,
+                trader_sell_item=sell_trader,
+                merchant_sell_item=sell_ordinary,
+                get_merchant_item_list=lambda: [90],
+                get_trader_item_list=lambda: [91],
+                get_trader_item_list2=lambda: [92],
+            )
+
+            def deliver() -> None:
+                check(len(actions) == 1, "exactly one outstanding callback")
+                callback, args = actions.pop(0)
+                history.append(("deliver", args))
+                callback(*args)
+
+            def wait(ms: int) -> Generator[str, None, None]:
+                nonlocal open_store, pending_move, transfer_barrier, merchant_barrier, quote_id, forwarded, post_submit
+                caller = traceback.extract_stack(limit=2)[0].name
+                label = {
+                    "_ensure_storage_open": "storage-open",
+                    "_wait_for_action_queue_empty": "action-drain",
+                    "_wait_for_inventory_model_count_at_least": "model-target",
+                    "execute_transfers": "post-account",
+                    "_wait_for_quote": "quote",
+                    "confirm_quantity": "trader-confirm",
+                    "SellItems": "merchant-drain",
+                }.get(caller, "wait")
+                if caller in ("_execute_xunlai_sell_phase", "recover"):
+                    label = "rebuild" if ms == 150 else "inter-pass"
+                if label == "action-drain":
+                    check(transfer_barrier and ms == 50, "nonempty transfer ACTION drain")
+                elif label == "model-target":
+                    check(
+                        pending_move in vault and model_probed and ms == 50, "first genuine model probe before update"
+                    )
+                elif label == "quote":
+                    check(len(actions) == 1 and len(actions[0][1]) == 1 and ms == 10, "actual sell quote enqueue")
+                elif label == "trader-confirm":
+                    check(confirmation_probed and post_submit in bags and ms == 10, "genuine trader confirmation probe")
+                elif label == "merchant-drain":
+                    check(merchant_barrier and len(actions) == 1 and ms == 50, "priced merchant queue wait")
+                reached.append(label)
+                history.append(("wait", label, ms))
+                yield f"{label}/{ms}"
+                if label == "storage-open":
+                    open_store = True
+                elif label == "action-drain":
+                    transfer_barrier = False
+                elif label == "model-target":
+                    dst = pending_move + (1000 if cap else 300)
+                    bags[dst] = replace(vault.pop(pending_move), item_id=dst)
+                    history.append(("move", pending_move, dst))
+                    pending_move = 0
+                elif label == "quote":
+                    wanted = actions[0][1][0]
+                    forwarded = 0
+                    deliver()
+                    check(forwarded == wanted, "matching quote callback executed before publication")
+                    quote_id = forwarded
+                    history.append(("publish", quote_id, 100 + quote_id))
+                elif label == "trader-confirm":
+                    deliver()
+                    post_submit = 0
+                elif label == "merchant-drain":
+                    deliver()
+                    merchant_barrier = False
+                elif cap and label == "inter-pass":
+                    donor = 1001 + len(sales)
+                    vault[donor] = row(donor, 5001, 1)
+                    history.append(("next-donor", donor))
+
+            def install_source(rel: str, pin: str, imports: dict[tuple[int, str], object]) -> Any:
+                path = REPO_ROOT / rel
+                raw = path.read_bytes()
+                check(sha256(raw).hexdigest() == pin, "source pin " + rel)
+
+                def offline(
+                    name: str,
+                    globals_: object = None,
+                    locals_: object = None,
+                    fromlist: Sequence[str] = (),
+                    level: int = 0,
+                ) -> object:
+                    if (level, name) == (0, "__future__"):
+                        return __import__(name, fromlist=fromlist)
+                    return imports[(level, name)]
+
+                ns = types.ModuleType(path.stem)
+                ns.__file__ = str(path)
+                ns.__dict__["__builtins__"] = dict(vars(builtins), __import__=offline)
+                exec(compile(raw, str(path), "exec", dont_inherit=True), vars(ns))
+                history.append(("source", rel, pin))
+                return ns
+
+            cache = install_source(
+                "Py4GWCoreLib/GlobalCache/MerchantCache.py",
+                "6b03321468dfd64a3e7a4a1ba260cced0aec8020e5f551b42ff5c3c957fe614f",
+                {
+                    (0, "PyMerchant"): types.SimpleNamespace(PyMerchant=lambda: native),
+                    (0, "Py4GWCoreLib.Py4GWcorelib"): types.SimpleNamespace(ActionQueueManager=Manager),
+                },
+            )
+            trading = cache.TradingCache(manager)
+            restore.binding(module.GLOBAL_CACHE, "Trading", trading)
+            restore.binding(module, "ActionQueueManager", lambda: manager)
+            restore.binding(module.Routines.Yield, "wait", wait)
+            primitive = install_source(
+                "Py4GWCoreLib/routines_src/yield_src/merchant.py",
+                "a395851b437e21ab7b7fbfcd2f9c7c9ee10453a0d624fc3855ce8fde38aa4f9d",
+                {
+                    (3, "GlobalCache"): types.SimpleNamespace(GLOBAL_CACHE=module.GLOBAL_CACHE),
+                    (3, "enums_src.Model_enums"): types.SimpleNamespace(ModelID=module.ModelID),
+                    (1, "movement"): types.SimpleNamespace(Movement=module.Routines.Yield.Movement),
+                    (1, "agents"): types.SimpleNamespace(Agents=module.Routines.Yield.Agents),
+                    (1, "helpers"): types.SimpleNamespace(wait=wait),
+                    (3, "Py4GWcorelib"): types.SimpleNamespace(
+                        ActionQueueManager=lambda: manager, ConsoleLog=module.ConsoleLog, Console=module.Console
+                    ),
+                },
+            )
+            restore.binding(module.Routines.Yield.Merchant, "_wait_for_quote", primitive.Merchant._wait_for_quote)
+            restore.binding(module.Routines.Yield.Merchant, "SellItems", primitive.Merchant.SellItems)
+            restore.binding(
+                module.GLOBAL_CACHE,
+                "Inventory",
+                types.SimpleNamespace(
+                    IsStorageOpen=lambda: open_store,
+                    OpenXunlaiWindow=lambda: history.append("open"),
+                    GetModelCount=model_count,
+                    WithdrawItemFromStorage=withdraw,
+                ),
+            )
+
+            def live_model(i: int) -> int:
+                return (bags.get(i) or vault[i]).model_id
+
+            def is_material(i: int) -> bool:
+                return (bags.get(i) or vault[i]).is_material
+
+            def value(_item_id: int) -> int:
+                return 7
+
+            restore.binding(
+                module.GLOBAL_CACHE,
+                "Item",
+                types.SimpleNamespace(
+                    GetModelID=live_model,
+                    Type=types.SimpleNamespace(IsMaterial=is_material),
+                    Properties=types.SimpleNamespace(GetQuantity=quantity, GetValue=value),
+                ),
+            )
+
+            def open_trader(x: float, y: float, **kwargs: int) -> Generator[object, None, list[int]]:
+                history.append(("trader-open", x, y, kwargs))
+                yield from ()
+                return [91]
+
+            def interact(x: float, y: float) -> Generator[object, None, bool]:
+                history.append(("merchant-open", x, y))
+                yield from ()
+                return True
+
+            restore.binding(module.Routines.Yield.Merchant, "_interact_with_trader_xy", open_trader)
+            restore.binding(module.Routines.Yield.Agents, "InteractWithAgentXY", interact)
+
+            def scan(data: dict[int, InventoryItemInfo], label: str) -> list[InventoryItemInfo]:
+                selected = [v for i, v in data.items() if label == "bags" or (i == 401) == (label == "material")]
+                history.append(("scan", label, [v.item_id for v in selected]))
+                return selected
+
+            w._get_inventory_item_ids = lambda: list(bags)
+            w._collect_inventory_items = lambda: scan(bags, "bags")
+            w._collect_storage_items = lambda: scan(vault, "regular")
+            w._collect_material_storage_items = lambda: scan(vault, "material")
+            w._collect_storage_items_with_reliability = lambda: (scan(vault, "regular"), True)
+            w._build_inventory_item_info = item
+
+            def services(**_opts: object) -> tuple[bool, str, dict[str, tuple[float, float]]]:
+                return True, "Ready", coords
+
+            w._get_supported_context = services
+            w._has_local_storage_access = lambda: open_store
+            original_build: Callable[..., Any] = w._build_plan
+            original_transfer: Callable[..., Generator[object, None, Any]] = w._execute_storage_transfers
+            original_confirm: Callable[..., Generator[object, None, Any]] = w._wait_for_planned_sale_completion
+            original_release: Callable[[], None] = w._release_merchant_rules_owned_work
+            original_summary: Callable[[Any], str] = w._format_execution_phase_summary
+
+            def build(**kwargs: Any) -> Any:
+                subplan = not restored()
+                if subplan:
+                    check(all(getattr(w, n) is not old for n, old in zip(cfg, originals)), "seven replaced references")
+                    check(
+                        kwargs
+                        == dict(
+                            ignore_travel_target=True,
+                            allow_consumable_multi_stop=False,
+                            exclude_consumable_crafter=True,
+                        ),
+                        "subplan arguments",
+                    )
+                    if cut == "subplan":
+                        raise sentinel
+                plan = original_build(**kwargs)
+                plans.append(plan)
+                history.append(
+                    (
+                        "plan",
+                        subplan,
+                        plan.travel_to_outpost_id,
+                        list(plan.merchant_sell_item_ids),
+                        [s.item_id for s in plan.material_sales],
+                        [s.item_id for s in plan.rune_trader_sales],
+                    )
+                )
+                return plan
+
+            def transfer(rows: list[PlannedStorageTransfer], *, phase_label: str) -> Generator[object, None, Any]:
+                nonlocal phase
+                phase = phase_label
+                history.append(("transfer", phase, [(r.item_id, r.quantity) for r in rows]))
+                result = yield from original_transfer(rows, phase_label=phase_label)
+                history.append(("transfer-return", phase, result.attempted, result.completed, result.timeout_failures))
+                if phase == "Xunlai sell pre-pull":
+                    check(
+                        set(failed) == expected
+                        and (result.attempted, result.completed, result.timeout_failures) == (13, 0, 13),
+                        "four failed withdrawals accounted as 13 units",
+                    )
+                return result
+
+            def confirm(sale: Any, n: int, **kwargs: int) -> Generator[object, None, Any]:
+                nonlocal post_submit, confirmation_probed
+                post_submit, confirmation_probed = sale.item_id, False
+                check(len(actions) == 1 and actions[0][1] == (post_submit, 100 + post_submit), "priced trader send")
+                return (yield from original_confirm(sale, n, **kwargs))
+
+            original_rune_check: Callable[[Any], tuple[Any, str]] = w._validate_planned_trader_sale_identity
+
+            def inspect_rune(sale: Any) -> tuple[Any, str]:
+                answer = original_rune_check(sale)
+                check(sale.item_id == 704 and sale.expected_rune_identifiers == exact, "complete planned rune identity")
+                check(
+                    answer[0] is bags[704] and tuple(answer[0].rune_identifiers) == exact and answer[1] == "",
+                    "complete live rune identity",
+                )
+                rune_checks.append(quote_id)
+                history.append(("rune-identity", sale.item_id, exact, quote_id))
+                return answer
+
+            w._validate_planned_trader_sale_identity = inspect_rune
+
+            def complete_sales() -> None:
+                check(sales[-4:] == [701, 702, 703, 704], "four confirmed fresh sale actions")
+                check(vault == {405: protected} and vault[405] is protected, "exact protected donor survives")
+                check(quote_sent == [701, 702, 704], "actual forwarded quotes for fresh trader IDs")
+                for fresh in quote_sent:
+                    price = 100 + fresh
+                    chain = [
+                        ("enqueue", "ACTION", (fresh,)),
+                        ("deliver", (fresh,)),
+                        ("forward", fresh),
+                        ("publish", fresh, price),
+                        ("consume-id", fresh),
+                        ("consume-price", fresh, price),
+                        ("enqueue", "ACTION", (fresh, price)),
+                        ("deliver", (fresh, price)),
+                        ("trader-effect", fresh, price),
+                    ]
+                    position = -1
+                    for event in chain:
+                        position = history.index(event, position + 1)
+                check(rune_checks == [702, 704], "complete rune validation before and after matching quote")
+                check(
+                    all(
+                        name in reached
+                        for name in (
+                            "action-drain",
+                            "model-target",
+                            "rebuild",
+                            "quote",
+                            "trader-confirm",
+                            "merchant-drain",
+                            "inter-pass",
+                        )
+                    ),
+                    "independent operation-labelled waits",
+                )
+                check(
+                    any(
+                        o.label == "Xunlai sells" and (o.attempted, o.completed, o.timeout_failures) == (4, 4, 0)
+                        for o in outcomes
+                    ),
+                    "four sale actions separate from thirteen transferred units",
+                )
+
+            def summary(outcome: Any) -> str:
+                history.append(
+                    ("summary", outcome.label, outcome.attempted, outcome.completed, outcome.timeout_failures)
+                )
+                return original_summary(outcome)
+
+            def resume() -> bool:
+                resumes.append((w.execution_running, w.execute_reservation_scope_active))
+                history.append(("resume", resumes[-1]))
+                return True
+
+            def release() -> None:
+                original_release()
+                releases.append(_cp15_lease_counts(w))
+                history.append(("release", releases[-1]))
+
+            def gold(reason: str) -> Generator[str, None, None]:
+                history.append(("gold", reason))
+                w.last_gold_balance_summary = "CP21 gold."
+                yield "gold"
+
+            old_init: Callable[..., None] = module.ExecutionPhaseOutcome.__init__
+
+            def track_init(self: Any, *args: Any, **kwargs: Any) -> None:
+                old_init(self, *args, **kwargs)
+                outcomes.append(self)
+
+            restore.binding(module.ExecutionPhaseOutcome, "__init__", track_init)
+            w._build_plan = build
+            w._execute_storage_transfers = transfer
+            w._wait_for_planned_sale_completion = confirm
+
+            def debug(msg: str) -> None:
+                if msg.startswith("Xunlai"):
+                    history.append(("debug", msg))
+                    if msg.startswith("Xunlai sell pass ") and "enabled_rules=" in msg:
+                        scan_passes.append(msg)
+
+            w._debug_log = debug
+            w._format_execution_phase_summary = summary
+            w._release_merchant_rules_owned_work = release
+            w._pause_inventory_plus = lambda: types.SimpleNamespace(resume=resume)
+            w._run_gold_balance_trigger = gold
+            if not direct:
+                outer = route.startswith("outer-")
+                close_early = route in ("owned-close", "raw-close")
+                old_summary: Callable[..., None] = w._log_plan_summary
+                refreshes: list[Any] = []
+                gate_returns: list[Any] = []
+                recovery_entries: list[Any] = []
+                wire: list[tuple[tuple[float, ...], tuple[str, ...]]] = []
+                marks: list[str] = []
+                released_remote: list[tuple[object, ...]] = []
+                transport_failures: list[BaseException] = []
+                hero = types.SimpleNamespace(
+                    Following=True, Avoidance=False, Looting=True, Targeting=False, Combat=True
+                )
+                initial_hero = dict(vars(hero))
+                completed = int(route in ("outer-completed", "outer-mixed"))
+                timeouts = int(route in ("outer-timeout", "outer-mixed"))
+                messaging: types.ModuleType | None = None
+                msg: object = None
+                fault_observed: list[bool] = []
+                first_work = work[0]
+                send_fault = RuntimeError("CP21 publication fault")
+
+                def log_summary(label: str, current: Any) -> None:
+                    if label == "Execution post-Xunlai pre-pull plan":
+                        refreshes.append(current)
+                        history.append(("pre-pull-refresh", len(plans)))
+                    old_summary(label, current)
+
+                w._log_plan_summary = log_summary
+                if outer:
+
+                    def gate_result(plan: Any, **kwargs: bool) -> Generator[object, None, Any]:
+                        result = module.ExecutionPhaseOutcome(
+                            label="Xunlai sell pre-pull",
+                            measure_label="items",
+                            attempted=2,
+                            completed=completed,
+                            timeout_failures=timeouts,
+                            load_failures=1,
+                            depleted=1,
+                        )
+                        gate_returns.append(result)
+                        history.append(("gate-input", completed, timeouts, kwargs))
+                        yield from ()
+                        return result
+
+                    def enter_recovery(plan: Any, **kwargs: bool) -> Generator[object, None, Any]:
+                        recovery_entries.append(plan)
+                        history.append(("gate-recovery", kwargs))
+                        yield from ()
+                        return module.ExecutionPhaseOutcome(label="Xunlai sells", measure_label="sell action(s)")
+
+                    w._execute_xunlai_sell_withdraw_phase = gate_result
+                    w._execute_xunlai_sell_phase = enter_recovery
+                if route == "execute-here":
+                    w._scan_preview()
+                    check(w.preview_plan.inventory_snapshot_captured and w.preview_plan.has_actions, "actual preview")
+                    bags[510] = replace(bags[510], quantity=2)
+                    w._request_execute_here()
+                    check(
+                        len(work) == 1 and w.execute_drift_requires_confirmation and "Re-Preview" in w.status_message,
+                        "drift rejected before enqueue",
+                    )
+                    history.append(("drift", list(w.preview_inventory_diff_rows)))
+                    w._scan_preview()
+                    availability = w._get_preview_here_availability()
+                    counts_here = w._get_locally_actionable_preview_counts(
+                        w.preview_plan, availability_here=availability
+                    )
+                    check(availability[module.MERCHANT_TYPE_STORAGE] and counts_here[0] > 0, "actionable local storage")
+                    w._request_execute_here()
+                    check(not w.execute_drift_requires_confirmation, "matching preview admitted")
+                elif route == "travel":
+                    w.auto_travel_enabled = True
+                    w.target_outpost_id = 200
+
+                    def location(_target: int) -> str:
+                        return "Destination"
+
+                    def travel(target: int, *, log: bool, timeout: int) -> Generator[str, None, bool]:
+                        history.append(("travel", maps[0], target, log, timeout))
+                        yield "travel"
+                        maps[0] = target
+                        bags[511] = replace(bags.pop(510), item_id=511)
+                        return True
+
+                    w._get_outpost_name = location
+                    restore.binding(module.Routines.Yield.Map, "TravelToOutpost", travel)
+                    w._scan_preview()
+                    w._request_execute_now()
+                elif remote:
+                    core_receipt = route in ("remote-receipt", "remote-send-fault")
+                    request = "exec-15" if core_receipt else "cp21-request"
+                    account = "merchant.rules@example.com"
+                    msg = _CP15WireRow(_CP15_CORE_PENDING) if core_receipt else _cp15_message(request, 3)
+                    messaging = _cp15_messaging_source(module, w, core_restore=restore if core_receipt else None)
+                    w.profile_entries_loaded = {"account": True, "shared": True}
+                    old_remote_release: Callable[[], None] = w._release_merchant_rules_remote_dispatch
+
+                    def remote_release() -> None:
+                        old_remote_release()
+                        released_remote.append(_cp15_lease_counts(w))
+                        history.append(("outer-release", released_remote[-1]))
+
+                    w._release_merchant_rules_remote_dispatch = remote_release
+                    console: Callable[..., Any] = module.ConsoleLog
+
+                    def observe_console(name: str, message: str, *args: Any, **kwargs: Any) -> Any:
+                        if message == f"Execution error: {fault}":
+                            fault_observed.append(sys.exception() is fault)
+                        if message == f"Merchant Rules multibox error: {send_fault}":
+                            fault_observed.append(sys.exception() is send_fault)
+                        return console(name, message, *args, **kwargs)
+
+                    restore.binding(module, "ConsoleLog", observe_console)
+
+                    def mark(verb: str, email: str, index: int) -> None:
+                        check((email, index) == (account, 17), "receiver and inbox index")
+                        assert messaging is not None
+                        marks.append(verb)
+                        history.append(("mark", verb, messaging._merchant_busy, _cp15_lease_counts(w)))
+                        if isinstance(msg, _CP15WireRow):
+                            msg.Running = verb == "running"
+                            if verb == "running":
+                                msg.Timestamp = 12
+                            else:
+                                msg.Active = False
+
+                    def send(
+                        sender: str, receiver: str, command: int, params: tuple[float, ...], extra: tuple[str, ...]
+                    ) -> int:
+                        check(
+                            (sender, receiver, command, extra[0])
+                            == (account, "leader@example.com", module.SharedCommandType.MerchantRules, request),
+                            "opcode and request correlation",
+                        )
+                        assert messaging is not None
+                        check(
+                            messaging._merchant_busy
+                            and w.destroy_instant_enabled
+                            and w.destroy_include_protected_items
+                            and not any(vars(hero).values()),
+                            "remote lock and active overrides",
+                        )
+                        wire.append((params, extra))
+                        history.append(("wire", params, extra))
+                        if len(wire) > 1:
+                            projected.append(w.preview_plan)
+                            published.append(extra[1])
+                        if route == "remote-send-fault" and extra[1] == "Executed":
+                            transport_failures.append(send_fault)
+                            raise send_fault
+                        return 1
+
+                    def hero_options(account_key: str) -> Any:
+                        return hero if account_key == account else None
+
+                    restore.binding(
+                        module.GLOBAL_CACHE,
+                        "ShMem",
+                        types.SimpleNamespace(
+                            MarkMessageAsRunning=partial(mark, "running"),
+                            MarkMessageAsFinished=partial(mark, "finished"),
+                            SendMessage=send,
+                            GetHeroAIOptionsFromEmail=hero_options,
+                            GetAllAccounts=lambda: types.SimpleNamespace(Inbox=[None] * 17 + [msg]),
+                        ),
+                    )
+                    _cp13_call(messaging, "_queue_merchant_rules_message", 17, msg)
+                elif route not in ("raw-close", "raw-cleanup-close"):
+                    w._queue_execute_now()
+
+                raw_outer = route in ("raw-close", "raw-cleanup-close")
+                if raw_outer:
+                    operation = cast(Generator[object, None, Any], w._execute_now())
+                else:
+                    check(
+                        len(work) == 2
+                        and work[0] is first_work
+                        and _cp15_lease_counts(w) == ((1, 0, 0) if remote else (0, 1, 0)),
+                        "owned admission",
+                    )
+                    operation = cast(Generator[object, None, Any], work[1])
+                    w._queue_execute_now()
+                    check(len(work) == 2 and work[1] is operation, "overlapping execute preserves queued work")
+
+                if route == "remote-stale":
+                    w._get_account_key = lambda: "successor@example.com"
+                    try:
+                        next(operation)
+                    except StopIteration:
+                        history.append(("stale-before-start", _cp15_lease_counts(w)))
+                    else:
+                        raise AssertionError("stale dispatch entered worker")
+                    operation.close()
+                    check(
+                        not marks
+                        and not wire
+                        and not sales
+                        and not releases
+                        and len(released_remote) == 1
+                        and _cp15_lease_counts(w) == (0, 0, 0),
+                        "stale outer release before Messaging body",
+                    )
+                    return history
+                try:
+                    for _ in range(1500):
+                        try:
+                            step = next(operation)
+                        except StopIteration as done:
+                            history.append(("caller-return", done.value))
+                            break
+                        history.append(("caller-yield", step))
+                        if route == "raw-cleanup-close" and step is None and resumes == [(False, False)]:
+                            check(
+                                not w.execution_running and w.execution_completed_successfully, "normal cleanup yield"
+                            )
+                            operation.close()
+                            history.append(("close-at-cleanup-yield", route))
+                            break
+                        if close_early and step == "merchant-drain/50" and 703 in bags and 701 in sales:
+                            try:
+                                operation.close()
+                            except RuntimeError as exc:
+                                check(
+                                    route == "raw-close" and str(exc) == "generator ignored GeneratorExit",
+                                    "raw outer cleanup yield",
+                                )
+                                history.append(("raw-close", str(exc)))
+                            else:
+                                check(route == "owned-close", "owned close consumes cleanup yield")
+                            before = len(releases)
+                            operation.close()
+                            check(len(releases) == before, "idempotent second close")
+                            history.append(("close-again", route, before))
+                            break
+                    else:
+                        raise AssertionError(f"CP21 {route} exceeded 1500 steps")
+                finally:
+                    operation.close()
+
+                if route == "owned-close":
+                    check(
+                        _cp15_lease_counts(w) == (0, 0, 1) and len(actions) == 1 and actions[0][1][0] == 703,
+                        "submitted action survives owned coroutine close",
+                    )
+                    w._get_account_key = lambda: "successor@example.com"
+                    deliver()
+                    check(703 in bags and 703 not in sales, "stale captured action releases without selling")
+                if route == "raw-cleanup-close":
+                    check(("close-at-cleanup-yield", route) in history, "normal cleanup suspension reached")
+                check(
+                    _cp15_lease_counts(w) == (0, 0, 0)
+                    and work[0] is first_work
+                    and module.GLOBAL_CACHE.Coroutines is work
+                    and (raw_outer or work[1] is operation),
+                    "physical queue and leases after exit",
+                )
+                check(
+                    len(releases) == int(not raw_outer)
+                    and resumes == [(False, False)]
+                    and not w.execution_running
+                    and not w.execute_reservation_scope_active,
+                    "once-only cleanup",
+                )
+                check(vault[405] is protected and restored(), "protected donor and rule overlay after caller")
+                if outer:
+                    check(
+                        len(gate_returns) == 1
+                        and len(refreshes) == completed
+                        and len(recovery_entries) == timeouts
+                        and not w.last_error,
+                        "independent outer predicates",
+                    )
+                    if refreshes:
+                        check(
+                            refreshes[0] is w.preview_plan and ("wait", "wait", 150) in history, "150 ms full refresh"
+                        )
+                    if recovery_entries:
+                        check(recovery_entries[0] is w.preview_plan, "latest actual outer plan admitted to recovery")
+                    return history
+                check(set(failed) == expected and len(failed) == 4, "actual outer pre-pull failures")
+                check(
+                    any((o.label, o.completed, o.timeout_failures) == ("Xunlai sell pre-pull", 0, 13) for o in outcomes)
+                    and not refreshes,
+                    "timeout admits recovery independently of completion",
+                )
+                if close_early:
+                    check(
+                        703 in bags and 703 not in sales and 704 not in sales and not w.last_execution_summary,
+                        "issued and pending work at close",
+                    )
+                    return history
+                if route != "remote-fault":
+                    complete_sales()
+                    check(
+                        not w.last_error and sales == [511 if route == "travel" else 510, 701, 702, 703, 704],
+                        "initial sale and four fresh recovery actions",
+                    )
+                    check(
+                        ("summary", "Xunlai sells", 4, 4, 0) in history
+                        and ("summary", "Xunlai sell pre-pull", 13, 0, 13) in history,
+                        "action and transfer summaries",
+                    )
+                    labels: list[str] = [
+                        cast(tuple[str, ...], e)[1] for e in history if isinstance(e, tuple) and e[0] == "summary"
+                    ]
+                    sequence = [
+                        "Xunlai sell pre-pull",
+                        "Material sales",
+                        "Rare material sales",
+                        "Merchant sells",
+                        "Rune trader sales",
+                        "Xunlai sells",
+                    ]
+                    start = labels.index(sequence[0])
+                    check(
+                        labels[start : start + len(sequence)] == sequence
+                        and all(
+                            k in w.last_execution_phase_durations_ms
+                            for k in (
+                                "xunlai_sell_prefetch",
+                                "material_sales",
+                                "rare_material_sales",
+                                "merchant_sells",
+                                "rune_sales",
+                                "xunlai_sells",
+                            )
+                        ),
+                        "separate timed sale phases and summaries",
+                    )
+                    check(
+                        w.execution_currency_changing_work_completed
+                        and ("gold", "after Merchant Rules trading") in history,
+                        "post-trade currency accounting",
+                    )
+                if route == "travel":
+                    check(
+                        510 in plans[0].merchant_sell_item_ids
+                        and any(511 in p.merchant_sell_item_ids for p in plans)
+                        and maps[0] == 200,
+                        "post-travel plan replaced preview ID",
+                    )
+                if remote:
+                    assert messaging is not None
+                    check(
+                        marks == ["running", "finished"]
+                        and not messaging._merchant_busy
+                        and len(released_remote) == 1
+                        and vars(hero) == initial_hero
+                        and not w.destroy_include_protected_items
+                        and not w.destroy_instant_enabled,
+                        "remote restoration",
+                    )
+                    check(
+                        bool(projected)
+                        and w.preview_plan is not projected[-1]
+                        and not w.preview_ready
+                        and not w.preview_plan.entries
+                        and not w.preview_requires_execute_travel
+                        and w.preview_execute_travel_target_outpost_id == 0,
+                        "request projection cleanup",
+                    )
+                    check(wire[0][0] == (100, 0, 0, 0) and wire[0][1][1] == "Starting", "Starting packet")
+                    if isinstance(msg, _CP15WireRow):
+                        check(
+                            type(operation) is getattr(messaging, "_MerchantRulesDispatchReceipt")
+                            and not msg.Active
+                            and not msg.Running
+                            and not messaging._merchant_rules_dispatches,
+                            "historical receipt retired",
+                        )
+                    if route == "remote-fault":
+                        check(
+                            wire[-1][0] == (199, 0, 1, 0)
+                            and published == ["Execute Failed"]
+                            and wire[-1][1][3] == w.last_error == str(fault)
+                            and 703 in bags
+                            and fault_observed == [True],
+                            "native sale error result",
+                        )
+                    else:
+                        counts = w._get_multibox_plan_counts(projected[0])
+                        packet = wire[1]
+                        if route == "remote-unmet":
+                            check(
+                                published == ["Stock Unmet"]
+                                and model_count(222) == 0
+                                and packet[0] == (199, *counts, 0),
+                                "unmet request with preview-derived counts",
+                            )
+                        else:
+                            check(
+                                packet[0] == (102, *counts, 1) and model_count(222) == 2 and 2220 in bags,
+                                "independent request stock and preview-derived counts",
+                            )
+                            if route == "remote-send-fault":
+                                check(
+                                    fault_observed == [True]
+                                    and transport_failures == [send_fault]
+                                    and published == ["Executed", "Error"]
+                                    and wire[-1][0] == (199, 0, 1, 0)
+                                    and wire[-1][1][3] == str(send_fault),
+                                    "publish fallback after exact send fault",
+                                )
+                            else:
+                                check(published == ["Executed"], "successful execute result")
+                history.append(("caller-final", w.last_execution_summary, w.last_error, list(sales), releases, resumes))
+                return history
+            plan = module.PlanResult(supported_map=True, coords=coords)
+            if not cap and cut != "storage-open":
+                pre = _drain_generator_return(w._execute_xunlai_sell_withdraw_phase(plan))
+                check((pre.attempted, pre.completed, pre.timeout_failures) == (13, 0, 13), "canonical pre-pull")
+            operation = w._execute_xunlai_sell_phase(plan)
+
+            def state() -> tuple[Any, ...]:
+                return (
+                    sorted(vault),
+                    sorted(bags),
+                    list(sales),
+                    list(quote_sent),
+                    pending_move,
+                    [args for _, args in actions],
+                    restored(),
+                    [
+                        (
+                            o.label,
+                            o.measure_label,
+                            o.attempted,
+                            o.completed,
+                            o.unavailable,
+                            o.quote_failures,
+                            o.timeout_failures,
+                            o.load_failures,
+                            o.gold_blocked,
+                            o.depleted,
+                            o.dispatched,
+                        )
+                        for o in outcomes
+                    ],
+                )
+
+            try:
+                for _ in range(1500):
+                    try:
+                        value = next(operation)
+                    except StopIteration as end:
+                        check(cap or not cut, "expected a reached interruption")
+                        result = end.value
+                        history.append(("return", result.attempted, result.completed, result.timeout_failures))
+                        break
+                    history.append(("yield", value))
+                    if cut and isinstance(value, str) and value.split("/")[0] == cut:
+                        before = state()
+                        if cut == "post-account":
+                            check(
+                                outcomes[-1].completed == 10 and outcomes[-2].completed == 0,
+                                "transfer item units booked while parent is suspended",
+                            )
+                        if cut == "rebuild":
+                            check(
+                                outcomes[-2].completed == 0 and outcomes[-1].completed == 13 and not plans,
+                                "transfer completion excluded before replanning",
+                            )
+                        if cut == "inter-pass":
+                            check(
+                                any(o.label == "Xunlai sells" and o.completed == 4 for o in outcomes),
+                                "sale actions merged before inter-pass suspension",
+                            )
+                        history.append(("interrupt", intervention, cut, before))
+                        effect_end = len(history)
+                        if intervention == "close":
+                            operation.close()
+                        else:
+                            try:
+                                operation.throw(sentinel)
+                            except RuntimeError as exc:
+                                check(exc is sentinel, "original thrown sentinel")
+                            else:
+                                raise AssertionError("CP21 throw swallowed")
+                        check(len(history) == effect_end, "no subsequent observations after interruption")
+                        check(state() == before, "no later phase, inventory, queue or accounting effects")
+                        try:
+                            next(operation)
+                        except StopIteration:
+                            pass
+                        else:
+                            raise AssertionError("CP21 interrupted generator remained live")
+                        break
+                else:
+                    raise AssertionError(f"CP21 {route} exceeded advancement limit")
+            except RuntimeError as exc:
+                check(cut == "subplan" and exc is sentinel and restored(), "subplan restores all seven references")
+                history.append(("subplan-exception", restored(), state()))
+            finally:
+                operation.close()
+            check(vault[405] is protected and restored(), "exact protected donor and configuration")
+            if cap:
+                check(sales == list(range(2001, 2041)) and set(vault) == {1041, 405}, "forty real confirmed sales")
+                check(reached.count("inter-pass") == 40 and reached[-1] == "inter-pass", "fortieth final 100 ms")
+                check(len(scan_passes) == 40 and len(plans) == 40, "forty scans and forty real subplans")
+                remaining, adjusted = w._plan_xunlai_sell_withdrawals(
+                    w._collect_enabled_xunlai_sell_rules(), list(bags.values()), list(vault.values()), [], coords
+                )
+                check([r.item_id for r in remaining] == [1041] and bool(adjusted), "donor 41 remains eligible")
+            if not cut and not cap:
+                complete_sales()
+            return history
+
+    if family == "recovery":
+        traces["four-destinations"] = world("cut")
+        traces["fortieth-pass"] = world("cap")
+    if family == "interruptions":
+        for boundary in (
+            "storage-open",
+            "action-drain",
+            "model-target",
+            "post-account",
+            "rebuild",
+            "quote",
+            "trader-confirm",
+            "merchant-drain",
+            "inter-pass",
+        ):
+            for method in ("throw", "close"):
+                traces[f"real-{boundary}-{method}"] = world("cut", boundary, method)
+        traces["subplan-exception"] = world("cut", "subplan", "exception")
+    if family == "callers":
+        for caller in (
+            "execute-here",
+            "travel",
+            "remote-success",
+            "remote-receipt",
+            "remote-unmet",
+            "remote-fault",
+            "remote-send-fault",
+            "remote-stale",
+            "raw-close",
+            "raw-cleanup-close",
+            "owned-close",
+            "outer-completed",
+            "outer-timeout",
+            "outer-mixed",
+            "outer-neither",
+        ):
+            traces["real-" + caller] = world(caller)
+
+    return traces
+
+
+def _test_xunlai_sales_pre_pull(module: types.ModuleType) -> None:
+    _xunlai_sales_trace(module, "pre_pull")
+
+
+def _test_xunlai_sales_recovery(module: types.ModuleType) -> None:
+    _xunlai_sales_trace(module, "recovery")
+
+
+def _test_xunlai_sales_dispatch(module: types.ModuleType) -> None:
+    _xunlai_sales_trace(module, "dispatch")
+
+
+def _test_xunlai_sales_interruptions(module: types.ModuleType) -> None:
+    _xunlai_sales_trace(module, "interruptions")
+
+
+def _test_xunlai_sales_callers(module: types.ModuleType) -> None:
+    _xunlai_sales_trace(module, "callers")
+
+
 def main() -> int:
     temp_root = SCRIPT_DIR / "_merchant_rules_regression_tmp"
     shutil.rmtree(temp_root, ignore_errors=True)
@@ -80205,6 +82090,12 @@ def main() -> int:
                 ("merchant_sales_phase_steps", lambda: _test_merchant_sales_phase_steps(module)),
                 ("merchant_sales_interruptions", lambda: _test_merchant_sales_interruptions(module)),
                 ("merchant_sales_callers", lambda: _test_merchant_sales_callers(module)),
+                ("xunlai_sales_owner_contract", lambda: _test_xunlai_sales_owner_contract(module)),
+                ("xunlai_sales_pre_pull", lambda: _test_xunlai_sales_pre_pull(module)),
+                ("xunlai_sales_recovery", lambda: _test_xunlai_sales_recovery(module)),
+                ("xunlai_sales_dispatch", lambda: _test_xunlai_sales_dispatch(module)),
+                ("xunlai_sales_interruptions", lambda: _test_xunlai_sales_interruptions(module)),
+                ("xunlai_sales_callers", lambda: _test_xunlai_sales_callers(module)),
             ]
         )
         catalog_contract_tests = [
