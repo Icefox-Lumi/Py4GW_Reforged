@@ -80345,6 +80345,7 @@ def _crafting_widget_inverse(raw: bytes) -> bytes:
     from hashlib import sha256
     from zlib import decompress
 
+    raw = _cp23_widget_inverse(raw)
     import_line = b"from Sources.icefox.MerchantRules import consumable_crafting as _consumable_crafting\r\n"
     _expect(raw.count(import_line) == 1, "Exact CP22 widget import")
     raw = raw.replace(import_line, b"")
@@ -80427,6 +80428,7 @@ def _crafting_widget_inverse(raw: bytes) -> bytes:
 
 
 def _crafting_remove_registrations(raw: bytes) -> bytes:
+    raw = _cp23_harness_inverse(raw)
     for family in (
         "owner_contract",
         "material_supply",
@@ -82050,6 +82052,1247 @@ def _test_crafting_local_routes(module: types.ModuleType) -> None:
 
 def _test_crafting_remote_route(module: types.ModuleType) -> None:
     _crafting_trace(module, "remote_route")
+
+
+def _cp23_widget_inverse(raw: bytes) -> bytes:
+    from base64 import b85decode
+    from hashlib import sha256
+    from zlib import decompress
+
+    forms: dict[str, tuple[tuple[int, ...], str]] = {
+        "8a28373fd7a21be09429153676e3fcf842c9ad40cc791f144949a0ea2df2fc0b": (
+            (3393, 190830, 1100269, 1123552, 1123976, 1124458),
+            "15e048cf2ecab0639ef901e60b4a49463377ce12ef4230610222f2933939cdcf",
+        ),
+        "26dd51baf879e5ac1ed729665736a159b4648448008f83214c8ea5c12c9504a6": (
+            (3393, 190758, 1095492, 1118775, 1119199, 1119681),
+            "4adde7180f5a1a2e53ee8c7d60aa6873bc2ecdc7798c63466fac0589a07b2bf7",
+        ),
+    }
+    raw_pin = sha256(raw).hexdigest()
+    _expect(raw_pin in forms, f"CP23 unrecognized widget input {raw_pin}")
+    offsets, target = forms[raw_pin]
+    # Each tuple binds one current span and its exact CP22 replacement, including line endings.
+    spans: tuple[tuple[int, str, bytes], ...] = (
+        (
+            72,
+            "41351909a9a5cb13464df139c2bd40d660e0502f57d4bac7b2407a0a64c93043",
+            b"c-jL100001",
+        ),
+        (
+            1307,
+            "1d8a6a1ccb502286b3364144c8d724931d7b85e92a9a4f4634177fb846238a1e",
+            b"c-jL100001",
+        ),
+        (
+            359,
+            "1c8ad2c0e28d524e339e4da0cbc63b46b10afffaf00c730d18cadb670db56f6b",
+            b"c-n1I%Wi`(5WH9FKaA1~C^Tx-8w&k|{s2Oj154$~*a#b`63xGNjY%MBeei2$c4v11prIC`wL>Sp7)DJ(nTEcFR?a7mben-cR81~N"
+            b"_$!t1RmRs&`J5q-0&f|D^1`sEFRFcoAADFtjE5t|^E;d$^2Y}(OUo1Ki-@6$sb#g|Yzng(-mfNB_!@#`?e1w}FUd?#vB&Fqcgs|5"
+            b"^a$l(tdG{DY4Cz$fsOVEO(vPS>0P$4>d|@I2_w5uS!mEfeA3do4HzSoYv3yV8;nhDB>!Z)t#O*KXG|N>eVwtX2if;znq+=$5)b6Z"
+            b"!7R3yq1U$SW$oj{qkNffG4Cw@1q5lNRR",
+        ),
+        (
+            422,
+            "36c022d65d048e458dadcbf7dd847dd2b8f5b7aa4ff2d1ef432c23acfedfbd3b",
+            b"c-rk&O>5gg5WNTTABLPHa7E}b)CD&&ZHViD;~a_!%i0>nOV%s1yK3r&{P)gkr9_rxH?bX>Lj?v)n$P!k-Ut97#st_cS~kuWOlJ~V"
+            b"`V+O}a~2DJt5Rdd!~_Oq62gbiAce6bWA)9+;Q<s^#qi|W0NOCRc{ZA%o=my2%-D2tmuDjDSWN6lDBJRW^zX(wK0H<&xkW9wWR`1J"
+            b"=gU2Hrm)G2s@vdYCOVZ{WJ^*FLdE#21)AUIj&u*GGHRWA$T5sclucLx&=*VgZD1<ZGcLt%d?F+$!-dNpBJobbKtELolwYMbe-@$Q"
+            b"V~KGshr1@JvO;Cp7%RG?4xrtJFV{cV#d-gXeeVuVzjgXUb~U^_y=aK%+V)tvZY$;22=_K7$kQ~x3md{0#S!3vw~A(IjFO2sgwJri"
+            b"#-s3J!myG~&12L>zC6TAybZC|oQueyrTO8Rv_VsaEt-HZ;`2GGILOaNxIPC;gMTTZX@+*L0p)t~JHzhaywhXD&fsfz_$v07r?%w1"
+            b"_H@6DH!8(j;xoAJciC{zIqMF#fXK^}KbK1=Rdj0;LPaMcMw;kEpxyw@iWF91Aw3LMg6#y%)#>1}*V`VNy=uqaRA65Uu)H%$+m_oN"
+            b"VuHqDVNz`|4jKnuSe%(4tXE2%N>o7+B!o}!@x}6A+2Ccd4Qw4f<SUFNjwkE!W0H>v#ixcJ-8!0a!h(Jn!*~I-$MR!hVA((a*vK(q"
+            b"ZmE`)x4dz?wk{tdIBKe?=Z3zBpDMWkgGfLm)_ukp;E8*UTuVCBWI$HgJSHEoQv@SsnWUQ-a)1e)OxdWGCwv88jSBS633L8j=WV<#"
+            b"Rl{j&u!wIgC%jYTY2Y(_QtwjNHnZ?7R82gr%3Z-h3+`~ymV7pjIq3BM1bm;~keoa^^k#HSgDcZ})c=yXT3r=+ejkHorUW>@rAKb$"
+            b"YSZQlFWB5Pbvw*klOn%>X&*8cW-j@Hxmb*hOV<Aj>y~_bHo!00-H6v{Gp(xd9UlAv1JHkS",
+        ),
+        (
+            480,
+            "41cb2b401fa6ebe1696fa7c15672c08e6a8b0e6aa10ed3038ead0f39cd9a7687",
+            b"c-qZZZHwDR5dI#>e;E9sNYpWH`t7I-CMU|#vmG3l6pUHc(#W@DrB!!Vy}WS$z561a);j61Nt;$54(mKKJ2THS&yE2AGR%P-Q4@un"
+            b"6IpX4;xCk(RwQHeSPG?Csv`4k9>c3&fHS3cO3VG#%NNi*f#FqW0CU*wJ0tv9ah5Vo3X!2d$yjGB)jL+|srNIV_SW&sL+4mfjgrwz"
+            b"Tx4BhS5WI?l6uDH9%&`Y*1?(Sy5i`MQs|4?_sgQP5b|uV&My}dSefC+DM)(n0+@HevMx}Xie1NNT@7*2Z(pKum;)(=EGTE6gL<Pj"
+            b"V0`Mra__|ytVD^ufc8m6saaX$6Tebu=R3oa9yn%~_&UE2rdF8G;azfjOMbgqU6bUGx3@QMZnk8(zD{o64Memp@?>F|?Tri6{zDBo"
+            b"jM2=rQ5&Aqn(N5m616ensR1RP(W=5SiyRugmLVT6;LUouT(8J-u}wBNi+`?yQ@;N@xo>`7C1kr<Tqhf{U2J|$wj<eVDvdbU+yka{"
+            b"<K@3rk@-WlmXSSf3X>-W6PIl~QnAU?+s#;phDA9;Ibu36-C>8!utiToeO;^GCyTf1)eyR&VzkktW~NO}euAC0Hd8|+l}vvkoF0%X"
+            b"*R0q)=jXE6EZ3WXOac-5x<pR(spZ<#DiupnSso}MHD=M^oH31sik{$X3gTEsO^_IVhSz5cNN~5br42B3^2OJfTaLClx$3%sd9cD~"
+            b"6&l?vS^~K~D>!v_ccAMYvDR(cQ*S))>+-`4CPNt|RB}VUM?re!5@}APoQu@VxgGZOj+IAnt%ICNrDwf(@%gCqwBvt{hxMn@<=-a$"
+            b"&0u*v(4S?BRp#aeEoo*)1P&G$JP(mhYKAcB%T)u)6h7dmIj6-Tqaelo6?9|jTztFCH@hE<dU0`&^1p<#mscRKCqP=0Zw8_}Y;2;q"
+            b"5DJ~iIEujzYxiK^1%iLptg0*x9(Umam7+)VT1l)j`#u=d>{i*-m5XPWz&?0>2h0U&v^wIL>-NQcb~?>0uqV4=cU(MjZ%cN(dkp1Y"
+            b"+F0!(;sflu1mJu4@oGPE@ivVxD`!LNll<Vj-XZbmO>bApCfGA~{4irLVs60T9%v6|adQ`<5%hC!e?$~a&tH$y77jw+nLeky&Txpr"
+            b"V?vpVqN1tx2{c`5kNe4vL&yA!uaQC8pF{b{d$;JA9WLB>;tPW;?2ck$1iMNQLZYr^83OzA#ou};aZ&",
+        ),
+        (
+            532,
+            "cea0bcd7875fdb2457668a20ddb010f72373fd95705421f466399b24ad3721e0",
+            b"c-rk)?Q7dO9R5Do|Df%|uptX<`!>iROUzwalN2Y%-4TLNZKV~J<sd2RdZYjQNwQ^Ieyf}7ZevVPXl(sn^*oOx0{}pb_W)jD31ciI"
+            b"PwyZ<QVi42m{W9sF+o=>6_P~46PWIO@cILwM98h0ynFxr8OTRv;`?#}n1JoBGAR#%zZ@uuh%~X({Fp>?OPCyGmg>KqHvM|vG)<7i"
+            b"oFICF=`BWwlvzVFT^<h<XXXNDDet<HMm$ORVC&L;pK?H0jK7QkN4Lg-`VBBUCYY;gOkc;<?hC)tSUrr*1VEPZ1X1!2b{5OCZhhB^"
+            b">;X%qF&<-vE-8*{e)Wh_CJ8&@hOM!?QJI6u1k8i=CS3guKb<Y-F!<}@{A_l%fs55VIA6Co)ioz+j433sF4p+64@8SWH#)|uwF;x?"
+            b"NTsJ*?O8AWNcGttqr(BS*fR~T)sJa!6^rR62+yWZpT7&yZ<ha`!SrIaY|Fk4@HUW_Ls4aw0nczhhX>?{6L|+Iy2Mm?22*N0Dy?a_"
+            b"ScN@FRcQ3za&j4F+d9%*BM}yQ*+j}Ej=c_G5s4Gw`E|0X>L_Mj?#2fnz?-&mO1-mXw4-AG@@rPpUXxeCEKyTUiG_PWgwYgi;Fc$B"
+            b"x-5WeZ{*oD3~B?L=O~*zX%UnAF$fT+1oN8Xh$4~z<utk`><XBEfIZ<tj$by5@gLvt8WVn~hHD>)o2+e`->L6HqUff-@owvFn4C66"
+            b"R816;Ekx^{=epLORMr$0?4z`6cPidBwkAD_Z7GJO6KA_B9(%=qe$$WHuv%OxZY)!Vfl63!Xl--s2A9ogd2h7p#RRN_^Ye%FvwK_A"
+            b"BR?9c0&8e5`u}Q>lC`DT5Zk;hdCabjXDBr?ddw?ed;sKI2WmTg$V!Nuyy-)|O;&&md<Iy9f|Y3Oh*W{03d3stqBJ?6NM_FRB&?rz"
+            b"nvJ$_!#^=t_*%s85e%#z8-Ee7O2Dp@!Y}$g4gC!Aeirui^6%7pRrTe`_p9pEQ|?)gy<v&=sw(mNE?uLJ%Zxubba6<t*BVVJT)U(+"
+            b"ZbDABg=v3h`YujoZvEn@*Wh%4d{7k~_w6FkDTfUWe6*%jy}J-7)v~ev<*V6hu~;qpF)&C}EedL<_yQoW1^}ciq(n!rs`lNee^6!p"
+            b"E}FW1_*T<cj7p1(1l~TS7+b1d9vv~(KRbwOU$yeIuybf?pL$i-?U*V9yBxL8Po}7LQ0kcZ-lxAc=9<}`O!1-Q;~zD-hMQ^lTd?WK"
+            b"#)+vvYHH?5#MPl@?5=tCP<OkCS=_y|cjCSo!+gnclhm41W*LOD->1tBTyIvhPopyZ^(<T|@!5pac@X9`_}`=m%%f|>Bos1@ZhA@?"
+            b"EMQJLKbtP8;symN*xC`G<mmq@N*Ai7ukEK2!aidrQ+}tZe0z-yhrxj&#<Wn~5+%V2QeaYlgQSXMdE~6RcF&*v3!(<uhy",
+        ),
+    )
+    for offset, (size, current_pin, previous) in reversed(list(zip(offsets, spans, strict=True))):
+        current = raw[offset : offset + size]
+        _expect(sha256(current).hexdigest() == current_pin and raw.count(current) == 1, f"CP23 widget span at {offset}")
+        raw = raw[:offset] + decompress(b85decode(previous)) + raw[offset + size :]
+    _expect(sha256(raw).hexdigest() == target, "CP23 exact CP22 widget projection")
+    return raw
+
+
+def _cp23_harness_inverse(raw: bytes) -> bytes:
+    from hashlib import sha256
+
+    first = b"\r\ndef " + b"_cp23_widget_inverse("
+    main = b"\r\ndef " + b"main() -> int:\r\n"
+    _expect(raw.count(first) == raw.count(main) == 1, "CP23 unique definition interval")
+    start, stop = raw.index(first) + 2, raw.index(main) + 2
+    block = raw[start:stop]
+    digest = "748a8257bbad84bcebb8c47452436fe9a0ad774643eb4a21c10c9f89730d264f"
+    literal = digest.encode("ascii")
+    _expect(block.count(literal) == 1, "CP23 unique self-pin")
+    _expect(sha256(block.replace(literal, b"0" * 64)).hexdigest() == digest, "CP23 definition block bytes")
+    raw = raw[:start] + raw[stop:]
+    rows = b"".join(
+        f'                ("{name}", lambda: _test_{name}(module)),\r\n'.encode("ascii")
+        for suffix in ("owner_route", "buy", "sell", "destroy", "late_caller")
+        for name in ("cp23_overlap_" + suffix,)
+    )
+    for addition in (
+        rows,
+        b"    raw = " + b"_cp23_widget_inverse(raw)\r\n",
+        b"    raw = " + b"_cp23_harness_inverse(raw)\r\n",
+    ):
+        _expect(raw.count(addition) == 1, f"CP23 exact unique harness addition {addition!r}")
+        raw = raw.replace(addition, b"", 1)
+    _expect(
+        sha256(raw).hexdigest() == "cd0428775073d76a4c1f806c67d9ac429b7040fbeda09dd30af6888e24092bc5",
+        "CP23 restores every byte of the CP22 harness",
+    )
+    return raw
+
+
+def _test_cp23_overlap_owner_route(module: types.ModuleType) -> None:
+    from hashlib import sha256
+
+    package = "Sources.icefox.MerchantRules"
+    owner = sys.modules[package + ".rule_overlap"]
+    _expect(module._rule_overlap is owner, "CP23 canonical live owner binding")
+    _expect(
+        Path(str(owner.__file__)).resolve() == REPO_ROOT / "Sources/icefox/MerchantRules/rule_overlap.py",
+        "CP23 candidate owner origin",
+    )
+    owner_raw = (REPO_ROOT / "Sources/icefox/MerchantRules/rule_overlap.py").read_bytes()
+    _expect(
+        sha256(owner_raw).hexdigest() == "4bfb3efff40530b27a12e340f4f58b26556679a8c5a1a1a3bcbaa16cdaaed7ba",
+        "CP23 bound owner bytes",
+    )
+    widget_raw = MERCHANT_RULES_PATH.read_bytes()
+    widget_tree = ast.parse(widget_raw)
+    widget_class = next(n for n in widget_tree.body if isinstance(n, ast.ClassDef) and n.name == "MerchantRulesWidget")
+    routes = {
+        "_get_buy_rule_overlap_diagnostics": "buy",
+        "_get_sell_rule_overlap_diagnostics": "sell",
+        "_get_destroy_rule_overlap_diagnostics": "destroy",
+        "_format_rule_index_list": "format_indices",
+    }
+    for facade, symbol in routes.items():
+        methods = [n for n in widget_class.body if isinstance(n, ast.FunctionDef) and n.name == facade]
+        _expect(len(methods) == 1, f"CP23 single actual facade {facade}")
+        body = methods[0].body
+        _expect(len(body) == 1, f"CP23 direct return body {facade}")
+        statement = body[0]
+        assert isinstance(statement, ast.Return) and isinstance(statement.value, ast.Call)
+        target = statement.value.func
+        _expect(
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "_rule_overlap"
+            and target.attr == symbol,
+            f"CP23 unprojected route {facade} -> {symbol}",
+        )
+        _expect(getattr(owner, symbol).__globals__ is vars(owner), f"CP23 defining globals for {symbol}")
+
+    callable_fields = {
+        "buy_rule": "_normalize_buy_rule",
+        "sell_rule": "_normalize_sell_rule",
+        "destroy_rule": "_normalize_destroy_rule",
+        "merchant_targets": "_normalize_merchant_stock_targets",
+        "material_targets": "_normalize_material_targets",
+        "rune_buy_targets": "_normalize_rune_trader_targets",
+        "rune_sell_targets": "_normalize_rune_sell_targets",
+        "is_scroll": "_is_scroll_trader_stock_model",
+    }
+    kind_fields = (
+        "BUY_KIND_MERCHANT_STOCK",
+        "BUY_KIND_MATERIAL_TARGET",
+        "BUY_KIND_RUNE_TRADER_TARGET",
+        "BUY_KIND_SCROLL_TRADER_TARGET",
+        "SELL_KIND_EXPLICIT_MODELS",
+        "SELL_KIND_COMMON_MATERIALS",
+        "SELL_KIND_RUNE_TRADER_TARGET",
+        "SELL_KIND_WEAPONS",
+        "SELL_KIND_ARMOR",
+        "DESTROY_KIND_EXPLICIT_MODELS",
+        "DESTROY_KIND_MATERIALS",
+        "DESTROY_KIND_WEAPONS",
+        "DESTROY_KIND_ARMOR",
+    )
+    bindings = {**callable_fields, **{name: name for name in kind_fields}}
+    assignments = [
+        n.value
+        for n in widget_tree.body
+        if isinstance(n, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(t, ast.Name) and t.id == "_OVERLAP_POLICY"
+            for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+        )
+    ]
+    _expect(len(assignments) == 1, "CP23 one actual policy construction")
+    construction = assignments[0]
+    assert isinstance(construction, ast.Call)
+    _expect({kw.arg for kw in construction.keywords} == set(bindings), "CP23 finite policy initializer")
+    for kw in construction.keywords:
+        thunk = kw.value
+        assert kw.arg is not None and isinstance(thunk, ast.Lambda)
+        _expect(
+            not (
+                thunk.args.args
+                or thunk.args.posonlyargs
+                or thunk.args.kwonlyargs
+                or thunk.args.vararg
+                or thunk.args.kwarg
+            )
+            and isinstance(thunk.body, ast.Name)
+            and thunk.body.id == bindings[kw.arg],
+            f"CP23 passive global lookup {kw.arg}",
+        )
+
+    class Kind(str):
+        pass
+
+    policy = module._OVERLAP_POLICY
+    _expect(type(policy) is owner.OverlapPolicy, "CP23 policy instance")
+    _expect(owner.OverlapPolicy.__dataclass_params__.frozen, "CP23 frozen policy")
+    _expect(set(owner.OverlapPolicy.__dataclass_fields__) == set(bindings), "CP23 finite policy fields")
+    for field, global_name in bindings.items():
+        resolver = getattr(policy, field)
+        original = getattr(module, global_name)
+
+        def replacement_function(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("CP23 policy resolver invoked its supplied callable")
+
+        replacement = replacement_function if field in callable_fields else Kind(field)
+        _expect(resolver() is original, f"CP23 original {field}")
+        try:
+            setattr(module, global_name, replacement)
+            _expect(module._OVERLAP_POLICY is policy and resolver() is replacement, f"CP23 live rebound {field}")
+        finally:
+            setattr(module, global_name, original)
+        _expect(resolver() is original, f"CP23 restored {field}")
+
+    class UnreadWidget:
+        def __getattribute__(self, name: str) -> Any:
+            raise AssertionError(f"CP23 facade eagerly evaluated {name}")
+
+    probe = UnreadWidget()
+    index_arg = [3, 5]
+    rules_arg = [object()]
+    for facade, symbol in routes.items():
+        sent = object()
+        observed: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def replacement_owner(*args: object, **kwargs: object) -> object:
+            observed.append((args, kwargs))
+            return sent
+
+        original_owner = getattr(owner, symbol)
+        setattr(owner, symbol, replacement_owner)
+        try:
+            method = getattr(module.MerchantRulesWidget, facade)
+            result = method(probe, index_arg, limit=7, rules=rules_arg) if symbol == "format_indices" else method(probe)
+        finally:
+            setattr(owner, symbol, original_owner)
+        _expect(result is sent and len(observed) == 1, f"CP23 synchronous passthrough {facade}")
+        args, kwargs = observed[0]
+        if symbol == "format_indices":
+            _expect(args[0] is index_arg, "CP23 borrowed indices")
+            _expect((args[1] if len(args) > 1 else kwargs["limit"]) == 7, "CP23 exact supplied limit")
+            _expect((args[2] if len(args) > 2 else kwargs["rules"]) is rules_arg, "CP23 borrowed rule list")
+        else:
+            _expect((args[0] if args else kwargs["policy"]) is policy, f"CP23 same policy in {facade}")
+
+    _expect(
+        sha256(_cp23_widget_inverse(widget_raw)).hexdigest()
+        == "15e048cf2ecab0639ef901e60b4a49463377ce12ef4230610222f2933939cdcf",
+        "CP23 whole widget inverse",
+    )
+    _cp23_harness_inverse(Path(__file__).read_bytes())
+
+    cold = """import importlib, os, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root))
+pkg = "Sources.icefox.MerchantRules"
+allowed = {"Sources", "Sources.icefox", pkg, pkg + ".rule_overlap"}
+class Guard:
+    def find_spec(self, fullname, path, target=None):
+        if fullname.split(".")[0] not in sys.stdlib_module_names and fullname not in allowed:
+            raise AssertionError(fullname)
+sys.meta_path.insert(0, Guard())
+assert not any(key.startswith("MERCHANT_RULES_") for key in os.environ)
+owner = importlib.import_module(pkg + ".rule_overlap")
+assert pathlib.Path(owner.__file__).resolve() == root / "Sources/icefox/MerchantRules/rule_overlap.py"
+assert all(getattr(owner, n).__globals__ is vars(owner) for n in ("buy", "sell", "destroy", "format_indices"))
+assert not any(n.startswith(("PySystem", "Py4GW", "PyImGui")) for n in sys.modules)
+"""
+    env = {key: val for key, val in os.environ.items() if not key.startswith("MERCHANT_RULES_")}
+    completed = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", "-X", "utf8", "-c", cold, str(REPO_ROOT)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    _expect(
+        completed.returncode == 0 and not completed.stdout and not completed.stderr,
+        f"CP23 cold owner import: exit={completed.returncode} stdout={completed.stdout!r} stderr={completed.stderr!r}",
+    )
+
+
+def _cp23_overlap_trace(module: Any, family: str) -> dict[str, list[object]]:
+    """Exercise the operand's real synchronous facades and retain portable observations."""
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    cfg = module._configuration
+    widget = _cp15_widget(module)
+    traces: dict[str, list[object]] = {}
+
+    def record(key: str, actual: list[Any], expected: list[Any]) -> None:
+        _expect(actual == expected, f"{family}/{key}: expected {expected!r}, observed {actual!r}")
+        traces[key] = actual
+
+    def stock(*ids: int, name: str = "", enabled: bool = True) -> Any:
+        return cfg.BuyRule(
+            enabled=enabled,
+            kind=cfg.BUY_KIND_MERCHANT_STOCK,
+            name=name,
+            merchant_stock_targets=[cfg.MerchantStockTarget(i) for i in ids],
+        )
+
+    def sell(*ids: int, kind: str | None = None, name: str = "") -> Any:
+        return cfg.SellRule(enabled=True, kind=kind or cfg.SELL_KIND_EXPLICIT_MODELS, model_ids=list(ids), name=name)
+
+    def destroy(*ids: int, kind: str | None = None, name: str = "") -> Any:
+        return cfg.DestroyRule(
+            enabled=True, kind=kind or cfg.DESTROY_KIND_EXPLICIT_MODELS, model_ids=list(ids), name=name
+        )
+
+    def equipment(cls: Any, kind: str, *colors: str) -> Any:
+        flags = {k: k in colors for k in ("white", "blue", "purple", "gold", "green")}
+        return cls(enabled=True, kind=kind, rarities=flags)
+
+    def stock_warning(model: int, indices: str) -> str:
+        return (
+            f"Model {model} is maintained by buy rules {indices}. "
+            "Later rules only see leftovers after earlier ones update the simulated stock count."
+        )
+
+    def buy() -> None:
+        first = stock(101, name="First")
+        disabled = stock(101, name="  Disabled  ", enabled=False)
+        third = stock(101, name="Third")
+        rejected = cfg.BuyRule(enabled=True, kind=cfg.LEGACY_BUY_KIND_ID_KITS, name="  Legacy  ", model_id=101)
+        rows = [first, disabled, third, rejected]
+        widget.buy_rules = rows
+        nested = (disabled.merchant_stock_targets, disabled.material_targets, disabled.rune_targets)
+        old_target = nested[0][0]
+        original = module._normalize_buy_rule
+        visits: list[Any] = []
+
+        def observe(raw: Any) -> Any:
+            result = original(raw)
+            pos = next(i for i, row in enumerate(rows) if raw is row)
+            visits.append([pos, result is raw, result is None])
+            return result
+
+        with patch.object(module, "_normalize_buy_rule", observe):
+            messages = widget._get_buy_rule_overlap_diagnostics()
+        record("disabled-stock", messages, [stock_warning(101, "#1 First, #3 Third")])
+        record("normalization", visits, [[0, True, False], [1, True, False], [2, True, False], [3, False, True]])
+        record(
+            "disabled-effects",
+            [
+                widget.buy_rules is rows,
+                widget.buy_rules[1] is disabled,
+                disabled.name,
+                disabled.merchant_stock_targets is not nested[0],
+                disabled.material_targets is not nested[1],
+                disabled.rune_targets is not nested[2],
+                disabled.merchant_stock_targets[0] is not old_target,
+                disabled.merchant_stock_targets[0].model_id,
+                rejected.name,
+            ],
+            [True, True, "Disabled", True, True, True, True, 101, "  Legacy  "],
+        )
+
+        shared = int(module.ModelID.Passage_Scroll_Deep.value)
+        lone = int(module.ModelID.Passage_Scroll_Urgoz.value)
+        _expect(lone != shared and 101 not in module.SCROLL_TRADER_STOCK_MODEL_IDS, "distinct scroll controls")
+        merchant = stock(102, shared, 101)
+        scroll = stock(lone, shared)
+        scroll.kind = cfg.BUY_KIND_SCROLL_TRADER_TARGET
+
+        def materials() -> Any:
+            return cfg.BuyRule(
+                enabled=True,
+                kind=cfg.BUY_KIND_MATERIAL_TARGET,
+                material_targets=[cfg.MaterialTarget(i) for i in (922, 921)],
+            )
+
+        def runes(*identifiers: str) -> Any:
+            return cfg.BuyRule(
+                enabled=True,
+                kind=cfg.BUY_KIND_RUNE_TRADER_TARGET,
+                rune_targets=[cfg.RuneTraderTarget(i) for i in identifiers],
+            )
+
+        widget.buy_rules = [
+            merchant,
+            stock(101, 102),
+            materials(),
+            materials(),
+            runes("second", "first", "solo"),
+            runes("first", "second"),
+            scroll,
+        ]
+        widget.rune_names = {"second": "Echo", "first": "ECHO", "solo": "Solo"}
+        saved_label = widget._get_rune_label
+        saved_key = widget._get_model_display_sort_key
+        keys: list[Any] = []
+
+        def rune_label(identifier: str) -> str:
+            result = saved_label(identifier)
+            keys.append(["rune", identifier, result])
+            return result
+
+        def scroll_key(model: int) -> Any:
+            result = saved_key(model)
+            keys.append(["scroll", model, list(result)])
+            return result
+
+        with (
+            patch.object(widget, "_get_rune_label", rune_label),
+            patch.object(widget, "_get_model_display_sort_key", scroll_key),
+        ):
+            grouped = widget._get_buy_rule_overlap_diagnostics()
+        record(
+            "group-order",
+            grouped,
+            [
+                stock_warning(101, "#1, #2"),
+                stock_warning(102, "#1, #2"),
+                "Model 921 appears in buy rules #3, #4. Those rules stack on the same material target.",
+                "Model 922 appears in buy rules #3, #4. Those rules stack on the same material target.",
+                "Echo is maintained by buy rules #5, #6. Later rules only see shortages left after earlier rune targets update the simulated stock.",
+                "ECHO is maintained by buy rules #5, #6. Later rules only see shortages left after earlier rune targets update the simulated stock.",
+                f"Model {shared} is maintained by buy rules #1, #7. Later rules only see shortages left after earlier scroll trader targets update the simulated stock.",
+            ],
+        )
+        record(
+            "sort-callbacks",
+            keys,
+            [
+                ["rune", "second", "Echo"],
+                ["rune", "first", "ECHO"],
+                ["rune", "solo", "Solo"],
+                ["rune", "second", "Echo"],
+                ["rune", "first", "ECHO"],
+                ["scroll", shared, [f"model {shared}", shared]],
+                ["scroll", lone, [f"model {lone}", lone]],
+            ],
+        )
+
+    def sell_family() -> None:
+        def weapon(*colors: str) -> Any:
+            return equipment(cfg.SellRule, cfg.SELL_KIND_WEAPONS, *colors)
+
+        def armor(*colors: str) -> Any:
+            return equipment(cfg.SellRule, cfg.SELL_KIND_ARMOR, *colors)
+
+        def rune() -> Any:
+            return cfg.SellRule(
+                enabled=True, kind=cfg.SELL_KIND_RUNE_TRADER_TARGET, rune_sell_targets=[cfg.RuneSellTarget("Rune")]
+            )
+
+        legacy = sell(101, kind=cfg.LEGACY_SELL_KIND_NONSALVAGEABLE_GOLDS, name="  Legacy  ")
+        explicit = sell(102, 101, 101, name="  Exact  ")
+        ids = explicit.model_ids
+        rows = [
+            weapon("blue", "gold"),
+            armor("blue", "green"),
+            weapon("blue", "gold"),
+            armor("green"),
+            explicit,
+            sell(101, 102),
+            sell(921, kind=cfg.SELL_KIND_COMMON_MATERIALS),
+            sell(921, kind=cfg.SELL_KIND_COMMON_MATERIALS),
+            rune(),
+            rune(),
+            weapon("blue"),
+            armor("blue"),
+            legacy,
+        ]
+        widget.sell_rules = rows
+        prior_names = widget.rune_names
+        try:
+            widget.rune_names = {}
+            observed = widget._get_sell_rule_overlap_diagnostics()
+        finally:
+            widget.rune_names = prior_names
+        record(
+            "sell-groups",
+            observed,
+            [
+                "Model 101 is listed in sell rules #5 Exact, #6. Earlier explicit-model rules allocate matching items first.",
+                "Model 102 is listed in sell rules #5 Exact, #6. Earlier explicit-model rules allocate matching items first.",
+                "Model 921 appears in material sell rules #7, #8. Earlier material rules consume tradable batches first.",
+                "Rune appears in rune sell rules #9, #10. Earlier rune rules allocate matching loose runes first.",
+                "Weapon rules #1, #3 both include Blue, Gold. Earlier rules allocate matching items first.",
+                "Weapon rules #1, #11 both include Blue. Earlier rules allocate matching items first.",
+                "Weapon rules #3, #11 both include Blue. Earlier rules allocate matching items first.",
+                "Armor rules #2, #12 both include Blue. Earlier rules allocate matching items first.",
+            ],
+        )
+        record(
+            "sell-mutation",
+            [
+                rows[4] is explicit,
+                explicit.name,
+                explicit.model_ids,
+                explicit.model_ids is not ids,
+                rows[-1] is legacy,
+                legacy.name,
+                rows[3].rarities["green"],
+                widget._get_enabled_rarity_labels(rows[3]),
+            ],
+            [True, "Exact", [102, 101], True, True, "  Legacy  ", True, []],
+        )
+        colors = ("white", "blue", "purple", "gold")
+        widget.sell_rules = [weapon(*colors), armor("green"), weapon(*colors)]
+        record(
+            "four-weapon-flags",
+            widget._get_sell_rule_overlap_diagnostics(),
+            [
+                "Weapon rules #1, #3 both include Blue, Gold, Purple +1 more. Earlier rules allocate matching items first."
+            ],
+        )
+
+    def destroy_family() -> None:
+        ds = [
+            destroy(101),
+            destroy(101),
+            equipment(cfg.DestroyRule, cfg.DESTROY_KIND_WEAPONS, "gold"),
+            equipment(cfg.DestroyRule, cfg.DESTROY_KIND_ARMOR, "blue"),
+            destroy(921, kind=cfg.DESTROY_KIND_MATERIALS),
+            destroy(921, kind=cfg.DESTROY_KIND_MATERIALS),
+        ]
+        ss = [
+            sell(101),
+            equipment(cfg.SellRule, cfg.SELL_KIND_ARMOR, "blue"),
+            equipment(cfg.SellRule, cfg.SELL_KIND_WEAPONS, "gold"),
+        ]
+        bs = [stock(101)]
+        widget.destroy_rules, widget.sell_rules, widget.buy_rules = ds, ss, bs
+        visits: list[Any] = []
+
+        def observed_normalizer(saved: Any, rows: list[Any], prefix: str) -> Callable[[Any], Any]:
+            def normalize(raw: Any) -> Any:
+                pos = next(i for i, row in enumerate(rows, 1) if raw is row)
+                result = saved(raw)
+                _expect(result is raw, f"{prefix}{pos} canonical result identity")
+                visits.append(f"{prefix}{pos}")
+                return result
+
+            return normalize
+
+        with ExitStack() as overrides:
+            for label, kind, rows in (("D", "destroy", ds), ("S", "sell", ss), ("B", "buy", bs)):
+                attr = f"_normalize_{kind}_rule"
+                overrides.enter_context(
+                    patch.object(module, attr, observed_normalizer(getattr(module, attr), rows, label))
+                )
+            actual = widget._get_destroy_rule_overlap_diagnostics()
+        record(
+            "destroy-groups",
+            actual,
+            [
+                "Model 101 is listed in destroy rules #1, #2. Earlier destroy rules claim matching items first.",
+                "Model 921 appears in material destroy rules #5, #6. Earlier destroy rules claim matching stacks first.",
+                "Destroy rule #3 overlaps weapon sell rule #3 on Gold. Destroy claims matching items first.",
+                "Destroy rule #4 overlaps armor sell rule #2 on Blue. Destroy claims matching items first.",
+                "Destroy rule #1 overlaps sell rule #1 on Model 101. Destroy claims matching items first.",
+                "Destroy rule #1 overlaps buy rule #1 on Model 101. Post-destroy inventory is what buy planning will maintain.",
+                "Destroy rule #2 overlaps sell rule #1 on Model 101. Destroy claims matching items first.",
+                "Destroy rule #2 overlaps buy rule #1 on Model 101. Post-destroy inventory is what buy planning will maintain.",
+            ],
+        )
+        record(
+            "same-object-scans",
+            visits,
+            (
+                "D1 D2 D3 D4 D5 D6 S1 S2 S3 S1 S2 S3 "
+                "D1 S1 S2 S3 B1 D2 S1 S2 S3 B1 D3 D4 D5 S1 S2 S3 B1 D6 S1 S2 S3 B1"
+            ).split(),
+        )
+        widget.destroy_rules, widget.sell_rules, widget.buy_rules = [destroy(103, 101, 102)], [sell(102, 103, 101)], []
+        saved_label = widget._format_model_label
+        labels: list[Any] = []
+
+        def visit_label(model: int) -> str:
+            result = saved_label(model)
+            labels.append([model, result])
+            return result
+
+        with patch.object(widget, "_format_model_label", visit_label):
+            three = widget._get_destroy_rule_overlap_diagnostics()
+        record("eager-three-labels", labels, [[101, "Model 101"], [102, "Model 102"], [103, "Model 103"]])
+        record(
+            "two-visible-labels",
+            three,
+            [
+                "Destroy rule #1 overlaps sell rule #1 on Model 101, Model 102 +1 more. Destroy claims matching items first."
+            ],
+        )
+
+    def late_recipe() -> None:
+        row = cfg.BuyRule(
+            enabled=False,
+            kind=cfg.BUY_KIND_CONSUMABLE_CRAFTER_TARGET,
+            model_id=123,
+            target_count=2,
+            max_per_run=3,
+            merchant_stock_targets=[],
+            material_targets=[],
+            rune_targets=[],
+        )
+        rows = [row]
+        widget.buy_rules = rows
+        events: list[Any] = []
+        retained: list[Any] = []
+        wrapper = module._normalize_buy_rule
+        canonical = cfg.RuleNormalizer.normalize_buy_rule
+        fields = ("model_id", "target_count", "max_per_run", "after_purchase", "check_xunlai_first")
+        initial_stock = row.merchant_stock_targets
+        original_get = cfg.BuyRule.__getattribute__
+
+        class RecipesB:
+            def __contains__(self, model: int) -> bool:
+                targets = row.merchant_stock_targets
+                (target,) = targets
+                _expect(
+                    type(target) is cfg.MerchantStockTarget and targets is not initial_stock,
+                    "B sees new canonical stock",
+                )
+                retained.extend([targets, target])
+                events.extend([["B.contains", model, [getattr(target, field) for field in fields]], ["B.return", True]])
+                return True
+
+        map_b = RecipesB()
+
+        class RecipesA:
+            def __contains__(self, model: int) -> bool:
+                events.append(["A.contains", model, list(row.merchant_stock_targets)])
+                module.CONSUMABLE_CRAFTER_RECIPES_BY_MODEL = map_b
+                events.extend(["install B", ["A.return", True]])
+                return True
+
+        def observe_get(obj: Any, attr: str) -> Any:
+            value = original_get(obj, attr)
+            if obj is row and attr == "enabled":
+                targets = row.merchant_stock_targets
+                _expect(len(retained) == 2 and len(targets) == 1, "filtered crafter row")
+                events.append(
+                    [
+                        "enabled",
+                        value,
+                        row.model_id,
+                        row.target_count,
+                        row.max_per_run,
+                        list(row.material_targets),
+                        list(row.rune_targets),
+                        targets is not retained[0],
+                        targets[0] is retained[1],
+                    ]
+                )
+            return value
+
+        def recorder(raw: Any) -> Any:
+            _expect(raw is row, "recorder received the very same row")
+            events.append("recorder(row)")
+            result = wrapper(raw)
+            _expect(result is row, "saved wrapper row identity")
+            events.append("recorder return(row)")
+            return result
+
+        functions = {wrapper.__code__: "wrapper", canonical.__code__: "canonical"}
+        after_enabled = {
+            f.__code__
+            for f in (
+                module._normalize_merchant_stock_targets,
+                module._normalize_material_targets,
+                module._normalize_rune_trader_targets,
+                widget._format_model_label,
+                widget._get_rune_label,
+                widget._format_rule_index_list,
+                widget._get_model_display_sort_key,
+                module._is_scroll_trader_stock_model,
+            )
+        }
+
+        def profile(frame: types.FrameType, event: str, arg: Any) -> None:
+            name = functions.get(frame.f_code)
+            if name and event in ("call", "return"):
+                _expect(frame.f_locals["rule"] is row, f"{name} exact input row")
+                if event == "return":
+                    _expect(arg is row, f"{name} returned exact row")
+                events.append(f"{name}(row)" if event == "call" else f"{name} return(row)")
+            if (
+                event == "call"
+                and frame.f_code in after_enabled
+                and events
+                and isinstance(events[-1], list)
+                and events[-1][0] == "enabled"
+            ):
+                events.append(["grouping after disabled", frame.f_code.co_name])
+
+        with (
+            patch.object(module, "_normalize_buy_rule", recorder),
+            patch.object(module, "CONSUMABLE_CRAFTER_RECIPES_BY_MODEL", RecipesA()),
+            patch.object(cfg.BuyRule, "__getattribute__", observe_get),
+        ):
+            previous = sys.getprofile()
+            try:
+                sys.setprofile(profile)
+                result = widget._get_buy_rule_overlap_diagnostics()
+            finally:
+                sys.setprofile(previous)
+        _expect(widget.buy_rules is rows and rows[0] is row, "diagnostic retained original row and container")
+        events.append(["result", result])
+        record(
+            "crafter-late-maps",
+            events,
+            [
+                "recorder(row)",
+                "wrapper(row)",
+                "canonical(row)",
+                ["A.contains", 123, []],
+                "install B",
+                ["A.return", True],
+                ["B.contains", 123, [123, 2, 3, "keep", False]],
+                ["B.return", True],
+                "canonical return(row)",
+                "wrapper return(row)",
+                "recorder return(row)",
+                ["enabled", False, 0, 0, 0, [], [], True, True],
+                ["result", []],
+            ],
+        )
+
+    def late_kind() -> None:
+        kind = cfg.SELL_KIND_COMMON_MATERIALS
+        rows = [sell(921, kind=kind), sell(921, kind=kind)]
+        widget.sell_rules = rows
+        a = widget._get_sell_rule_overlap_diagnostics()
+        b = widget._get_sell_rule_overlap_diagnostics()
+        with patch.object(module, "SELL_KIND_EXPLICIT_MODELS", kind):
+            swapped = widget._get_sell_rule_overlap_diagnostics()
+            fields = [[r.kind, list(r.model_ids)] for r in rows]
+        restored = widget._get_sell_rule_overlap_diagnostics()
+        standard = [
+            "Model 921 appears in material sell rules #1, #2. Earlier material rules consume tradable batches first."
+        ]
+        explicit = [
+            "Model 921 is listed in sell rules #1, #2. Earlier explicit-model rules allocate matching items first."
+        ]
+        record(
+            "late-kind-fresh-results",
+            [a, b, a is not b, swapped, fields, restored, widget.sell_rules is rows],
+            [standard, standard, True, explicit, [[kind, [921]], [kind, [921]]], standard, True],
+        )
+
+    def late_formatter() -> None:
+        x, y = stock(101), stock(102)
+        events: list[Any] = []
+
+        class Borrowed(list[Any]):
+            def __len__(self) -> int:
+                length = super().__len__()
+                _expect(self is rules, "formatter must use original list for len")
+                events.append(f"len(R)={length}")
+                return length
+
+            def __getitem__(self, key: Any) -> Any:
+                value = super().__getitem__(key)
+                _expect(self is rules and (value is x or value is y), "formatter must index original rules")
+                events.append(f"get(R,{key})={'X' if value is x else 'Y'}")
+                return value
+
+        rules = Borrowed([x, y])
+
+        def old(row: Any) -> str:
+            _expect(row is x, "old reader must receive X")
+            events.append("old(X)")
+            return "Old"
+
+        def new(row: Any) -> str:
+            _expect(row is y, "new reader must receive Y")
+            events.append("new(Y)")
+            return "New"
+
+        class Index:
+            def __init__(self, label: str, value: int) -> None:
+                self.label = label
+                self.value = value
+                self.calls = 0
+
+            def __int__(self) -> int:
+                self.calls += 1
+                token = f"{self.label}{self.calls}={self.value}"
+                if self.label == "a" and self.calls == 3:
+                    widget._get_rule_custom_name = new
+                    token += "/install-new"
+                events.append(token)
+                return self.value
+
+        original_get = cast(Any, type(widget)).__getattribute__
+
+        def observe_get(obj: Any, name: str) -> Any:
+            value = original_get(obj, name)
+            if obj is widget and name == "_get_rule_custom_name":
+                _expect(value is old or value is new, "actual name callable")
+                events.append("resolve(old)" if value is old else "resolve(new)")
+            return value
+
+        class Sentinel(str):
+            pass
+
+        sentinels = [Sentinel(s) for s in ("S1", "S2", "S3")]
+        calls = 0
+
+        def compact(labels: list[str], *, limit: int) -> str:
+            nonlocal calls
+            events.append(["compact", list(labels), limit])
+            value = sentinels[calls]
+            calls += 1
+            return value
+
+        with (
+            patch.object(widget, "_get_rule_custom_name", old),
+            patch.object(widget, "_format_compact_list", compact),
+            patch.object(type(widget), "__getattribute__", observe_get),
+        ):
+            first = widget._format_rule_index_list([Index("a", 0), Index("b", 1)], rules=rules)
+            _expect(first is sentinels[0], "S1 formatter passthrough")
+            events.append("return S1")
+            record(
+                "formatter-stateful",
+                events.copy(),
+                [
+                    "a1=0",
+                    "a2=0",
+                    "len(R)=2",
+                    "resolve(old)",
+                    "a3=0/install-new",
+                    "get(R,0)=X",
+                    "old(X)",
+                    "b1=1",
+                    "b2=1",
+                    "len(R)=2",
+                    "resolve(new)",
+                    "b3=1",
+                    "get(R,1)=Y",
+                    "new(Y)",
+                    ["compact", ["#1 Old", "#2 New"], 3],
+                    "return S1",
+                ],
+            )
+            events.clear()
+            empty = widget._format_rule_index_list([], rules=rules)
+            _expect(empty is sentinels[1], "S2 formatter passthrough")
+            events.append("return S2")
+            record("formatter-empty", events.copy(), [["compact", [], 3], "return S2"])
+            events.clear()
+            outside = widget._format_rule_index_list([Index("c", 2)], rules=rules, limit=1)
+            _expect(outside is sentinels[2], "S3 formatter passthrough")
+            events.append("return S3")
+            record(
+                "formatter-outside", events.copy(), ["c1=2", "c2=2", "len(R)=2", ["compact", ["#3"], 1], "return S3"]
+            )
+
+    def late_indices() -> None:
+        originals = [stock(101, 102, name="  Prior A  "), stock(101, 102, name="  Prior B  ")]
+        replacement = [stock(510, name="Current A"), stock(511, name="Current B")]
+        widget.buy_rules = originals
+        prop = cast(Any, type(widget)).buy_rules
+        formatter = widget._format_rule_index_list
+        normalizer = module._normalize_buy_rule
+        events: list[Any] = []
+
+        def new(indices: list[int], *, rules: list[Any]) -> str:
+            _expect(rules is replacement, "new formatter borrowed new list")
+            events.append(["new", list(indices)])
+            return formatter(indices, rules=rules)
+
+        def old(indices: list[int], *, rules: list[Any]) -> str:
+            _expect(rules is replacement, "old formatter borrowed new list")
+            events.append(["old", list(indices)])
+            return formatter(indices, rules=rules)
+
+        def read_rules(obj: Any) -> Any:
+            result = prop.fget(obj)
+            if not events:
+                _expect(result is originals, "old rule list furnished iterator")
+                events.append("read original")
+            elif result is replacement:
+                events.append("read replacement")
+                if events.count("read replacement") == 1:
+                    widget._format_rule_index_list = new
+                    events.append("install new formatter")
+            return result
+
+        def normalize(raw: Any) -> Any:
+            result = normalizer(raw)
+            _expect(result is raw, "old iterator canonical row")
+            if raw is originals[0]:
+                events.append(["normalize", raw.name])
+                widget.buy_rules = replacement
+                events.append("install list")
+            else:
+                _expect(raw is originals[1], "second row still from old iterator")
+                events.append(["normalize", raw.name])
+            return result
+
+        with (
+            patch.object(type(widget), "buy_rules", property(read_rules, prop.fset)),
+            patch.object(widget, "_format_rule_index_list", old),
+            patch.object(module, "_normalize_buy_rule", normalize),
+        ):
+            result = widget._get_buy_rule_overlap_diagnostics()
+        record(
+            "borrowed-iterator-late-index",
+            events,
+            [
+                "read original",
+                ["normalize", "Prior A"],
+                "install list",
+                ["normalize", "Prior B"],
+                "read replacement",
+                "install new formatter",
+                ["old", [0, 1]],
+                "read replacement",
+                ["new", [0, 1]],
+            ],
+        )
+        record(
+            "fresh-list-labels",
+            result,
+            [stock_warning(101, "#1 Current A, #2 Current B"), stock_warning(102, "#1 Current A, #2 Current B")],
+        )
+
+    def late_compact() -> None:
+        widget.destroy_rules, widget.sell_rules, widget.buy_rules = (
+            [destroy(103, 102, 101)],
+            [sell(103, 102, 101), sell(101, 102, 103)],
+            [],
+        )
+        saved_compact = widget._format_compact_list
+        saved_label = widget._format_model_label
+        events: list[Any] = []
+
+        def compact(name: str, labels: list[str], *, limit: int) -> str:
+            if labels and labels[0].startswith("Model"):
+                events.append([name, list(labels), limit])
+            return saved_compact(labels, limit=limit)
+
+        def label(model: int) -> str:
+            events.append(model)
+            if len(events) == 1:
+                widget._format_compact_list = partial(compact, "new")
+                events.append("install new")
+            return saved_label(model)
+
+        with (
+            patch.object(widget, "_format_compact_list", partial(compact, "old")),
+            patch.object(widget, "_format_model_label", label),
+        ):
+            result = widget._get_destroy_rule_overlap_diagnostics()
+        labels = ["Model 101", "Model 102", "Model 103"]
+        record(
+            "compact-before-labels",
+            events,
+            [101, "install new", 102, 103, ["old", labels, 2], 101, 102, 103, ["new", labels, 2]],
+        )
+        record(
+            "compact-results",
+            result,
+            [
+                "Destroy rule #1 overlaps sell rule #1 on Model 101, Model 102 +1 more. Destroy claims matching items first.",
+                "Destroy rule #1 overlaps sell rule #2 on Model 101, Model 102 +1 more. Destroy claims matching items first.",
+            ],
+        )
+
+    def workspaces() -> None:
+        buy_warning = "Potential overlap detected. Earlier Buy rules are applied first and can affect what later rules still need."
+        sell_warning = "Potential overlap detected. Protections apply first; otherwise earlier Sell rules handle matching items first."
+        destroy_warning = "Potential overlap detected. Protections and Salvage apply first; otherwise earlier Destroy rules handle matching items first."
+        tabs = ["Buy", "Sell", "Identify", "Xunlai Deposits", "Protections", "Salvage", "Destroy"]
+        tooltip_ids = ["buy", "sell", "identify", "cleanup", "protections", "salvage", "destroy"]
+        events: list[Any] = []
+
+        def navigation(active: str) -> list[Any]:
+            expected: list[Any] = []
+            for label, tip in zip(tabs, tooltip_ids):
+                expected.extend([["button", label, label == active], ["tooltip", "workspace_rules_" + tip]])
+                if tip != "destroy":
+                    expected.append(["same-line", 0, 8])
+            return [*expected, "separator"]
+
+        def push(tag: str, *args: Any) -> None:
+            events.append([tag, *args])
+
+        def button(label: str, *, active: bool, color: object) -> bool:
+            push("button", label, active)
+            return False
+
+        def secondary(message: str, *, wrapped: bool = True) -> None:
+            push("secondary", message, wrapped)
+
+        def facade(saved: Any, kind: str) -> Callable[[], Any]:
+            def call() -> Any:
+                events.append(f"diagnostic {kind}")
+                result = saved()
+                events.append(["diagnostic result", result])
+                return result
+
+            return call
+
+        def published(warning: str, messages: list[str]) -> list[Any]:
+            expected: list[Any] = [["heading", "Diagnostics"], ["warning", warning]]
+            expected.extend([["secondary", m, True] for m in messages[:6]])
+            if len(messages) == 7:
+                expected.append(["secondary", "...and 1 more overlap warning(s).", False])
+            return [*expected, "separator"]
+
+        def draw(key: str, tab: str, active: str, suffix: list[Any]) -> None:
+            events.clear()
+            widget.active_rules_workspace = tab
+            widget._draw_rules_workspace()
+            record(key, events.copy(), [*navigation(active), *suffix])
+
+        def inactive() -> bool:
+            return False
+
+        def separator() -> None:
+            events.append("separator")
+
+        with ExitStack() as ui:
+            ui.enter_context(
+                patch.object(
+                    module, "PyImGui", types.SimpleNamespace(same_line=partial(push, "same-line"), separator=separator)
+                )
+            )
+            for attr in ("_has_enabled_identify_settings", "_has_cleanup_sources", "_has_enabled_salvage_settings"):
+                ui.enter_context(patch.object(widget, attr, inactive))
+            for attr, callback in (
+                ("_draw_workspace_button", button),
+                ("_draw_helper_tooltip", partial(push, "tooltip")),
+                ("_draw_section_heading", partial(push, "heading")),
+                ("_draw_warning_text", partial(push, "warning")),
+                ("_draw_secondary_text", secondary),
+                ("_draw_guided_empty_state", partial(push, "guided")),
+                ("_draw_buy_rules_section", partial(push, "buy section")),
+                ("_draw_sell_rules_section", partial(push, "sell section")),
+                ("_draw_destroy_rules_section", partial(push, "destroy section")),
+                ("_draw_protections_section", partial(push, "protections section")),
+            ):
+                ui.enter_context(patch.object(widget, attr, callback))
+            for kind in ("buy", "sell", "destroy"):
+                attr = f"_get_{kind}_rule_overlap_diagnostics"
+                ui.enter_context(patch.object(widget, attr, facade(getattr(widget, attr), kind)))
+            widget.new_profile_session = True
+            widget.buy_rules, widget.sell_rules, widget.destroy_rules = [], [], []
+            draw("ui-guided", module.RULES_WORKSPACE_BUY, "Buy", [["guided"]])
+            widget.buy_rules = [stock(101)]
+            draw(
+                "ui-empty-diagnostics",
+                module.RULES_WORKSPACE_BUY,
+                "Buy",
+                ["diagnostic buy", ["diagnostic result", []], ["buy section"]],
+            )
+            for n in (6, 7):
+                ids = list(range(101, 101 + n))
+                widget.buy_rules = [stock(*ids), stock(*ids)]
+                warnings = [stock_warning(i, "#1, #2") for i in ids]
+                draw(
+                    f"ui-buy-{n}",
+                    module.RULES_WORKSPACE_BUY,
+                    "Buy",
+                    [
+                        "diagnostic buy",
+                        ["diagnostic result", warnings],
+                        *published(buy_warning, warnings),
+                        ["buy section"],
+                    ],
+                )
+            widget.buy_rules = []
+            widget.sell_rules = [sell(101), sell(101)]
+            sell_messages = [
+                "Model 101 is listed in sell rules #1, #2. Earlier explicit-model rules allocate matching items first."
+            ]
+            draw(
+                "ui-sell",
+                module.RULES_WORKSPACE_SELL,
+                "Sell",
+                [
+                    "diagnostic sell",
+                    ["diagnostic result", sell_messages],
+                    *published(sell_warning, sell_messages),
+                    ["sell section"],
+                ],
+            )
+            draw("ui-unrelated", module.RULES_WORKSPACE_PROTECTIONS, "Protections", [["protections section"]])
+            widget.sell_rules, widget.destroy_rules = [], [destroy(101), destroy(101)]
+            destroy_messages = [
+                "Model 101 is listed in destroy rules #1, #2. Earlier destroy rules claim matching items first."
+            ]
+            draw(
+                "ui-destroy-fallback",
+                "unrecognized",
+                "",
+                [
+                    "diagnostic destroy",
+                    ["diagnostic result", destroy_messages],
+                    *published(destroy_warning, destroy_messages),
+                    ["destroy section"],
+                ],
+            )
+
+            def fault(error: Exception) -> None:
+                ds, ss = destroy(103, 101, 102, name="  D  "), sell(102, 101, 103, name="  S  ")
+                ds_ids, ss_ids = ds.model_ids, ss.model_ids
+                original_ds, original_ss = module._normalize_destroy_rule, module._normalize_sell_rule
+                widget.destroy_rules, widget.sell_rules, widget.buy_rules = (
+                    [ds],
+                    [ss],
+                    [stock(101, name="  Unreached  ")],
+                )
+                widget.active_rules_workspace = module.RULES_WORKSPACE_DESTROY
+                saved_label = widget._format_model_label
+                labels: list[int] = []
+                events.clear()
+
+                def normalize(raw: Any, *, expected: Any, saved: Any, tag: str) -> Any:
+                    result = saved(raw)
+                    _expect(raw is expected and result is expected, f"{tag} row identity on failure path")
+                    push("normalized", tag, result.name)
+                    return result
+
+                def label(model: int) -> str:
+                    labels.append(model)
+                    if len(labels) == 3:
+                        push("raise at", model, type(error).__name__)
+                        raise error
+                    result = saved_label(model)
+                    push("label", model, result)
+                    return result
+
+                with (
+                    patch.object(widget, "_format_model_label", label),
+                    patch.object(
+                        module, "_normalize_destroy_rule", partial(normalize, expected=ds, saved=original_ds, tag="D")
+                    ),
+                    patch.object(
+                        module, "_normalize_sell_rule", partial(normalize, expected=ss, saved=original_ss, tag="S")
+                    ),
+                ):
+                    try:
+                        widget._draw_rules_workspace()
+                    except Exception as raised:
+                        _expect(raised is error, "workspace propagated original synchronous exception")
+                    else:
+                        raise AssertionError("workspace consumed the label exception")
+                push(
+                    "after",
+                    ds.name,
+                    ss.name,
+                    ds.model_ids is not ds_ids,
+                    ss.model_ids is not ss_ids,
+                    widget.buy_rules[0].name,
+                )
+                record(
+                    "ui-failure-" + type(error).__name__,
+                    events.copy(),
+                    [
+                        *navigation("Destroy"),
+                        "diagnostic destroy",
+                        ["normalized", "D", "D"],
+                        ["normalized", "D", "D"],
+                        ["normalized", "S", "S"],
+                        ["label", 101, "Model 101"],
+                        ["label", 102, "Model 102"],
+                        ["raise at", 103, type(error).__name__],
+                        ["after", "D", "S", True, True, "  Unreached  "],
+                    ],
+                )
+
+            fault(RuntimeError("third model label"))
+            fault(StopIteration("synchronous third label"))
+
+    def empty_catalog_name(model: int) -> str:
+        return ""
+
+    with patch.object(widget, "_get_model_name", empty_catalog_name):
+        if family == "buy":
+            buy()
+        elif family == "sell":
+            sell_family()
+        elif family == "destroy":
+            destroy_family()
+        elif family == "late_caller":
+            late_recipe()
+            late_kind()
+            late_formatter()
+            late_indices()
+            late_compact()
+            workspaces()
+        else:
+            raise ValueError(f"Unknown overlap fixture {family!r}")
+    return traces
+
+
+def _test_cp23_overlap_buy(module: types.ModuleType) -> None:
+    _cp23_overlap_trace(module, "buy")
+
+
+def _test_cp23_overlap_sell(module: types.ModuleType) -> None:
+    _cp23_overlap_trace(module, "sell")
+
+
+def _test_cp23_overlap_destroy(module: types.ModuleType) -> None:
+    _cp23_overlap_trace(module, "destroy")
+
+
+def _test_cp23_overlap_late_caller(module: types.ModuleType) -> None:
+    _cp23_overlap_trace(module, "late_caller")
 
 
 def main() -> int:
@@ -83823,6 +85066,11 @@ def main() -> int:
                 ("crafting_interruptions", lambda: _test_crafting_interruptions(module)),
                 ("crafting_local_routes", lambda: _test_crafting_local_routes(module)),
                 ("crafting_remote_route", lambda: _test_crafting_remote_route(module)),
+                ("cp23_overlap_owner_route", lambda: _test_cp23_overlap_owner_route(module)),
+                ("cp23_overlap_buy", lambda: _test_cp23_overlap_buy(module)),
+                ("cp23_overlap_sell", lambda: _test_cp23_overlap_sell(module)),
+                ("cp23_overlap_destroy", lambda: _test_cp23_overlap_destroy(module)),
+                ("cp23_overlap_late_caller", lambda: _test_cp23_overlap_late_caller(module)),
             ]
         )
         catalog_contract_tests = [

@@ -66,6 +66,7 @@ from Sources.icefox.MerchantRules import owned_work as _owned_work
 from Sources.icefox.MerchantRules import planning as _planning
 from Sources.icefox.MerchantRules import preview as _preview
 from Sources.icefox.MerchantRules import profiles as _profiles
+from Sources.icefox.MerchantRules import rule_overlap as _rule_overlap
 from Sources.icefox.MerchantRules import storage_transfers as _storage_transfers
 from Sources.icefox.MerchantRules import trader_sales as _trader_sales
 from Sources.icefox.MerchantRules import xunlai_sales as _xunlai_sales
@@ -4587,6 +4588,31 @@ def _has_explicit_equippable_hard_protection(rule: SellRule) -> bool:
         weapon_rule_kind=SELL_KIND_WEAPONS,
         armor_rule_kind=SELL_KIND_ARMOR,
     )
+
+
+_OVERLAP_POLICY = _rule_overlap.OverlapPolicy(
+    buy_rule=lambda: _normalize_buy_rule,
+    sell_rule=lambda: _normalize_sell_rule,
+    destroy_rule=lambda: _normalize_destroy_rule,
+    merchant_targets=lambda: _normalize_merchant_stock_targets,
+    material_targets=lambda: _normalize_material_targets,
+    rune_buy_targets=lambda: _normalize_rune_trader_targets,
+    rune_sell_targets=lambda: _normalize_rune_sell_targets,
+    is_scroll=lambda: _is_scroll_trader_stock_model,
+    BUY_KIND_MERCHANT_STOCK=lambda: BUY_KIND_MERCHANT_STOCK,
+    BUY_KIND_MATERIAL_TARGET=lambda: BUY_KIND_MATERIAL_TARGET,
+    BUY_KIND_RUNE_TRADER_TARGET=lambda: BUY_KIND_RUNE_TRADER_TARGET,
+    BUY_KIND_SCROLL_TRADER_TARGET=lambda: BUY_KIND_SCROLL_TRADER_TARGET,
+    SELL_KIND_EXPLICIT_MODELS=lambda: SELL_KIND_EXPLICIT_MODELS,
+    SELL_KIND_COMMON_MATERIALS=lambda: SELL_KIND_COMMON_MATERIALS,
+    SELL_KIND_RUNE_TRADER_TARGET=lambda: SELL_KIND_RUNE_TRADER_TARGET,
+    SELL_KIND_WEAPONS=lambda: SELL_KIND_WEAPONS,
+    SELL_KIND_ARMOR=lambda: SELL_KIND_ARMOR,
+    DESTROY_KIND_EXPLICIT_MODELS=lambda: DESTROY_KIND_EXPLICIT_MODELS,
+    DESTROY_KIND_MATERIALS=lambda: DESTROY_KIND_MATERIALS,
+    DESTROY_KIND_WEAPONS=lambda: DESTROY_KIND_WEAPONS,
+    DESTROY_KIND_ARMOR=lambda: DESTROY_KIND_ARMOR,
+)
 
 
 class MerchantRulesWidget:
@@ -23628,15 +23654,13 @@ class MerchantRulesWidget:
         )
 
     def _format_rule_index_list(self, indices: list[int], limit: int = 3, rules: list[object] | None = None) -> str:
-        labels: list[str] = []
-        for index in indices:
-            label = f"#{int(index) + 1}"
-            if rules is not None and 0 <= int(index) < len(rules):
-                custom_name = self._get_rule_custom_name(rules[int(index)])
-                if custom_name:
-                    label = f"{label} {custom_name}"
-            labels.append(label)
-        return self._format_compact_list(labels, limit=limit)
+        return _rule_overlap.format_indices(
+            indices,
+            limit=limit,
+            rules=rules,
+            name=lambda: self._get_rule_custom_name,
+            compact=lambda: self._format_compact_list,
+        )
 
     def _get_support_state(self, supported_map: bool, coords: dict[str, tuple[float, float] | None]) -> tuple[str, tuple[float, float, float, float]]:
         resolved_count = sum(1 for value in coords.values() if value is not None)
@@ -24039,223 +24063,37 @@ class MerchantRulesWidget:
         return "Needs Setup", UI_COLOR_WARNING
 
     def _get_buy_rule_overlap_diagnostics(self) -> list[str]:
-        diagnostics: list[str] = []
-        merchant_stock_rules: dict[int, list[int]] = {}
-        material_target_rules: dict[int, list[int]] = {}
-        rune_target_rules: dict[str, list[int]] = {}
-        scroll_target_rules: dict[int, list[int]] = {}
-        for index, raw_rule in enumerate(self.buy_rules):
-            rule = _normalize_buy_rule(raw_rule)
-            if rule is None or not rule.enabled:
-                continue
-            if rule.kind == BUY_KIND_MERCHANT_STOCK:
-                for target in _normalize_merchant_stock_targets(rule.merchant_stock_targets):
-                    if int(target.model_id) > 0:
-                        if _is_scroll_trader_stock_model(target.model_id):
-                            scroll_target_rules.setdefault(int(target.model_id), []).append(index)
-                        else:
-                            merchant_stock_rules.setdefault(int(target.model_id), []).append(index)
-            elif rule.kind == BUY_KIND_MATERIAL_TARGET:
-                for target in _normalize_material_targets(rule.material_targets):
-                    if int(target.model_id) > 0:
-                        material_target_rules.setdefault(int(target.model_id), []).append(index)
-            elif rule.kind == BUY_KIND_RUNE_TRADER_TARGET:
-                for target in _normalize_rune_trader_targets(rule.rune_targets):
-                    if target.identifier:
-                        rune_target_rules.setdefault(str(target.identifier), []).append(index)
-            elif rule.kind == BUY_KIND_SCROLL_TRADER_TARGET:
-                for target in _normalize_merchant_stock_targets(rule.merchant_stock_targets):
-                    if _is_scroll_trader_stock_model(target.model_id):
-                        scroll_target_rules.setdefault(int(target.model_id), []).append(index)
-
-        for model_id, indices in sorted(merchant_stock_rules.items()):
-            if len(indices) < 2:
-                continue
-            diagnostics.append(
-                f"{self._format_model_label(model_id)} is maintained by buy rules {self._format_rule_index_list(indices, rules=self.buy_rules)}. "
-                f"Later rules only see leftovers after earlier ones update the simulated stock count."
-            )
-        for model_id, indices in sorted(material_target_rules.items()):
-            if len(indices) < 2:
-                continue
-            diagnostics.append(
-                f"{self._format_model_label(model_id)} appears in buy rules {self._format_rule_index_list(indices, rules=self.buy_rules)}. "
-                f"Those rules stack on the same material target."
-            )
-        for identifier, indices in sorted(rune_target_rules.items(), key=lambda row: self._get_rune_label(row[0]).lower()):
-            if len(indices) < 2:
-                continue
-            diagnostics.append(
-                f"{self._get_rune_label(identifier)} is maintained by buy rules {self._format_rule_index_list(indices, rules=self.buy_rules)}. "
-                f"Later rules only see shortages left after earlier rune targets update the simulated stock."
-            )
-        for model_id, indices in sorted(scroll_target_rules.items(), key=lambda row: self._get_model_display_sort_key(row[0])):
-            if len(indices) < 2:
-                continue
-            diagnostics.append(
-                f"{self._format_model_label(model_id)} is maintained by buy rules {self._format_rule_index_list(indices, rules=self.buy_rules)}. "
-                f"Later rules only see shortages left after earlier scroll trader targets update the simulated stock."
-            )
-        return diagnostics
+        return _rule_overlap.buy(
+            _OVERLAP_POLICY,
+            buy_rows=lambda: self.buy_rules,
+            indices=lambda: self._format_rule_index_list,
+            model_label=lambda: self._format_model_label,
+            rune_label=lambda: self._get_rune_label,
+            model_key=lambda: self._get_model_display_sort_key,
+        )
 
     def _get_sell_rule_overlap_diagnostics(self) -> list[str]:
-        diagnostics: list[str] = []
-        explicit_model_rules: dict[int, list[int]] = {}
-        material_rules: dict[int, list[int]] = {}
-        rune_sell_rules: dict[str, list[int]] = {}
-        weapon_rules: list[tuple[int, set[str]]] = []
-        armor_rules: list[tuple[int, set[str]]] = []
-
-        for index, raw_rule in enumerate(self.sell_rules):
-            rule = _normalize_sell_rule(raw_rule)
-            if rule is None:
-                continue
-            if not rule.enabled:
-                continue
-            if rule.kind == SELL_KIND_EXPLICIT_MODELS:
-                for model_id in rule.model_ids:
-                    explicit_model_rules.setdefault(int(model_id), []).append(index)
-            elif rule.kind == SELL_KIND_COMMON_MATERIALS:
-                for model_id in rule.model_ids:
-                    material_rules.setdefault(int(model_id), []).append(index)
-            elif rule.kind == SELL_KIND_RUNE_TRADER_TARGET:
-                for target in _normalize_rune_sell_targets(getattr(rule, "rune_sell_targets", [])):
-                    if target.identifier:
-                        rune_sell_rules.setdefault(str(target.identifier), []).append(index)
-            elif rule.kind == SELL_KIND_WEAPONS:
-                weapon_rules.append((index, set(self._get_enabled_rarity_labels(rule))))
-            elif rule.kind == SELL_KIND_ARMOR:
-                armor_rules.append((index, set(self._get_enabled_rarity_labels(rule))))
-
-        for model_id, indices in sorted(explicit_model_rules.items()):
-            if len(indices) < 2:
-                continue
-            diagnostics.append(
-                f"{self._format_model_label(model_id)} is listed in sell rules {self._format_rule_index_list(indices, rules=self.sell_rules)}. "
-                f"Earlier explicit-model rules allocate matching items first."
-            )
-        for model_id, indices in sorted(material_rules.items()):
-            if len(indices) < 2:
-                continue
-            diagnostics.append(
-                f"{self._format_model_label(model_id)} appears in material sell rules {self._format_rule_index_list(indices, rules=self.sell_rules)}. "
-                f"Earlier material rules consume tradable batches first."
-            )
-        for identifier, indices in sorted(rune_sell_rules.items(), key=lambda row: self._get_rune_label(row[0]).lower()):
-            if len(indices) < 2:
-                continue
-            diagnostics.append(
-                f"{self._get_rune_label(identifier)} appears in rune sell rules {self._format_rule_index_list(indices, rules=self.sell_rules)}. "
-                f"Earlier rune rules allocate matching loose runes first."
-            )
-
-        def _append_equippable_overlap_messages(rule_kind_label: str, rule_infos: list[tuple[int, set[str]]]):
-            for info_index, (left_index, left_rarities) in enumerate(rule_infos):
-                for right_index, right_rarities in rule_infos[info_index + 1:]:
-                    overlap = sorted(left_rarities & right_rarities)
-                    if not overlap:
-                        continue
-                    diagnostics.append(
-                        f"{rule_kind_label} rules {self._format_rule_index_list([left_index, right_index], limit=2, rules=self.sell_rules)} both include "
-                        f"{self._format_compact_list(overlap, limit=3)}. Earlier rules allocate matching items first."
-                    )
-
-        _append_equippable_overlap_messages("Weapon", weapon_rules)
-        _append_equippable_overlap_messages("Armor", armor_rules)
-        return diagnostics
+        return _rule_overlap.sell(
+            _OVERLAP_POLICY,
+            sell_rows=lambda: self.sell_rules,
+            indices=lambda: self._format_rule_index_list,
+            model_label=lambda: self._format_model_label,
+            rune_label=lambda: self._get_rune_label,
+            rarities=lambda: self._get_enabled_rarity_labels,
+            compact=lambda: self._format_compact_list,
+        )
 
     def _get_destroy_rule_overlap_diagnostics(self) -> list[str]:
-        diagnostics: list[str] = []
-        destroy_explicit_rules: dict[int, list[int]] = {}
-        destroy_material_rules: dict[int, list[int]] = {}
-        destroy_weapon_rules: list[tuple[int, set[str]]] = []
-        destroy_armor_rules: list[tuple[int, set[str]]] = []
-
-        for index, raw_rule in enumerate(self.destroy_rules):
-            rule = _normalize_destroy_rule(raw_rule)
-            if not rule.enabled:
-                continue
-            if rule.kind == DESTROY_KIND_EXPLICIT_MODELS:
-                for model_id in rule.model_ids:
-                    destroy_explicit_rules.setdefault(int(model_id), []).append(index)
-            elif rule.kind == DESTROY_KIND_MATERIALS:
-                for model_id in rule.model_ids:
-                    destroy_material_rules.setdefault(int(model_id), []).append(index)
-            elif rule.kind == DESTROY_KIND_WEAPONS:
-                destroy_weapon_rules.append((index, set(self._get_enabled_rarity_labels(rule))))
-            elif rule.kind == DESTROY_KIND_ARMOR:
-                destroy_armor_rules.append((index, set(self._get_enabled_rarity_labels(rule))))
-
-        for model_id, indices in sorted(destroy_explicit_rules.items()):
-            if len(indices) > 1:
-                diagnostics.append(
-                    f"{self._format_model_label(model_id)} is listed in destroy rules {self._format_rule_index_list(indices, rules=self.destroy_rules)}. Earlier destroy rules claim matching items first."
-                )
-        for model_id, indices in sorted(destroy_material_rules.items()):
-            if len(indices) > 1:
-                diagnostics.append(
-                    f"{self._format_model_label(model_id)} appears in material destroy rules {self._format_rule_index_list(indices, rules=self.destroy_rules)}. Earlier destroy rules claim matching stacks first."
-                )
-
-        for destroy_index, destroy_rarities in destroy_weapon_rules:
-            for sell_index, sell_rule in enumerate(self.sell_rules):
-                normalized_sell_rule = _normalize_sell_rule(sell_rule)
-                if normalized_sell_rule is None or not normalized_sell_rule.enabled or normalized_sell_rule.kind != SELL_KIND_WEAPONS:
-                    continue
-                overlap = sorted(destroy_rarities & set(self._get_enabled_rarity_labels(normalized_sell_rule)))
-                if overlap:
-                    diagnostics.append(
-                        f"Destroy rule {self._format_rule_index_list([destroy_index], limit=1, rules=self.destroy_rules)} overlaps weapon sell rule {self._format_rule_index_list([sell_index], limit=1, rules=self.sell_rules)} on {self._format_compact_list(overlap, limit=3)}. Destroy claims matching items first."
-                    )
-        for destroy_index, destroy_rarities in destroy_armor_rules:
-            for sell_index, sell_rule in enumerate(self.sell_rules):
-                normalized_sell_rule = _normalize_sell_rule(sell_rule)
-                if normalized_sell_rule is None or not normalized_sell_rule.enabled or normalized_sell_rule.kind != SELL_KIND_ARMOR:
-                    continue
-                overlap = sorted(destroy_rarities & set(self._get_enabled_rarity_labels(normalized_sell_rule)))
-                if overlap:
-                    diagnostics.append(
-                        f"Destroy rule {self._format_rule_index_list([destroy_index], limit=1, rules=self.destroy_rules)} overlaps armor sell rule {self._format_rule_index_list([sell_index], limit=1, rules=self.sell_rules)} on {self._format_compact_list(overlap, limit=3)}. Destroy claims matching items first."
-                    )
-
-        for destroy_index, raw_rule in enumerate(self.destroy_rules):
-            destroy_rule = _normalize_destroy_rule(raw_rule)
-            if not destroy_rule.enabled:
-                continue
-            if destroy_rule.kind not in (DESTROY_KIND_EXPLICIT_MODELS, DESTROY_KIND_MATERIALS):
-                continue
-            destroy_model_ids = set(int(model_id) for model_id in destroy_rule.model_ids)
-            if not destroy_model_ids:
-                continue
-
-            for sell_index, raw_sell_rule in enumerate(self.sell_rules):
-                sell_rule = _normalize_sell_rule(raw_sell_rule)
-                if sell_rule is None or not sell_rule.enabled:
-                    continue
-                if sell_rule.kind not in (SELL_KIND_EXPLICIT_MODELS, SELL_KIND_COMMON_MATERIALS):
-                    continue
-                overlap_ids = sorted(destroy_model_ids & set(int(model_id) for model_id in sell_rule.model_ids))
-                if overlap_ids:
-                    diagnostics.append(
-                        f"Destroy rule {self._format_rule_index_list([destroy_index], limit=1, rules=self.destroy_rules)} overlaps sell rule {self._format_rule_index_list([sell_index], limit=1, rules=self.sell_rules)} on {self._format_compact_list([self._format_model_label(model_id) for model_id in overlap_ids], limit=2)}. Destroy claims matching items first."
-                    )
-
-            for buy_index, raw_buy_rule in enumerate(self.buy_rules):
-                buy_rule = _normalize_buy_rule(raw_buy_rule)
-                if buy_rule is None or not buy_rule.enabled:
-                    continue
-                buy_model_ids: set[int] = set()
-                if buy_rule.kind == BUY_KIND_MATERIAL_TARGET:
-                    buy_model_ids = {int(target.model_id) for target in buy_rule.material_targets}
-                elif buy_rule.kind in (BUY_KIND_MERCHANT_STOCK, BUY_KIND_SCROLL_TRADER_TARGET):
-                    buy_model_ids = {int(target.model_id) for target in buy_rule.merchant_stock_targets}
-                overlap_ids = sorted(destroy_model_ids & buy_model_ids)
-                if overlap_ids:
-                    diagnostics.append(
-                        f"Destroy rule {self._format_rule_index_list([destroy_index], limit=1, rules=self.destroy_rules)} overlaps buy rule {self._format_rule_index_list([buy_index], limit=1, rules=self.buy_rules)} on {self._format_compact_list([self._format_model_label(model_id) for model_id in overlap_ids], limit=2)}. Post-destroy inventory is what buy planning will maintain."
-                    )
-
-        return diagnostics
+        return _rule_overlap.destroy(
+            _OVERLAP_POLICY,
+            destroy_rows=lambda: self.destroy_rules,
+            sell_rows=lambda: self.sell_rules,
+            buy_rows=lambda: self.buy_rules,
+            indices=lambda: self._format_rule_index_list,
+            model_label=lambda: self._format_model_label,
+            rarities=lambda: self._get_enabled_rarity_labels,
+            compact=lambda: self._format_compact_list,
+        )
 
     def _draw_rule_overlap_diagnostics(self, messages: list[str], warning_text: str):
         if not messages:
