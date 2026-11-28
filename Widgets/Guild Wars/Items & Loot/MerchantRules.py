@@ -58,6 +58,7 @@ from Sources.icefox.MerchantRules import automatic_triggers as _automatic_trigge
 from Sources.icefox.MerchantRules import configuration as _configuration
 from Sources.icefox.MerchantRules import consumable_crafting as _consumable_crafting
 from Sources.icefox.MerchantRules import destroy_execution as _destroy_execution
+from Sources.icefox.MerchantRules import early_kit_authorization as _early_kit_authorization
 from Sources.icefox.MerchantRules import gold_transactions as _gold_transactions
 from Sources.icefox.MerchantRules import inventory_evidence as _inventory_evidence
 from Sources.icefox.MerchantRules import item_values as _item_values
@@ -4612,6 +4613,18 @@ _OVERLAP_POLICY = _rule_overlap.OverlapPolicy(
     DESTROY_KIND_MATERIALS=lambda: DESTROY_KIND_MATERIALS,
     DESTROY_KIND_WEAPONS=lambda: DESTROY_KIND_WEAPONS,
     DESTROY_KIND_ARMOR=lambda: DESTROY_KIND_ARMOR,
+)
+
+_EARLY_KIT_POLICY = _early_kit_authorization.EarlyKitPolicy(
+    buy_rule=lambda: _normalize_buy_rule,
+    merchant_targets=lambda: _normalize_merchant_stock_targets,
+    after_purchase=lambda: _normalize_after_purchase_action,
+    safe_int=lambda: _safe_int,
+    replace_buy=lambda: replace,
+    model_count=lambda: GLOBAL_CACHE.Inventory.GetModelCount,
+    merchant_kind=lambda: BUY_KIND_MERCHANT_STOCK,
+    keep=lambda: AFTER_PURCHASE_KEEP,
+    withdraw=lambda: STORAGE_TRANSFER_WITHDRAW,
 )
 
 
@@ -16098,10 +16111,7 @@ class MerchantRulesWidget:
 
     @staticmethod
     def _early_kit_purchase_target_key(cleanup: PurchaseTargetCleanup) -> tuple[int, str]:
-        return (
-            int(getattr(cleanup, "rule_index", -1)),
-            str(getattr(cleanup, "target_key", "") or ""),
-        )
+        return _early_kit_authorization.target_key(cleanup)
 
     @staticmethod
     def _early_kit_model_ids(category: str) -> tuple[int, ...]:
@@ -16131,94 +16141,39 @@ class MerchantRulesWidget:
         plan: PlanResult,
         state: EarlyKitExecutionState,
     ) -> None:
-        """Capture each compatible target's first complete, storage-aware authorization."""
-
-        planned_quantity_by_target: dict[tuple[int, str], int] = {}
-        for merchant_buy in plan.merchant_stock_buys:
-            cleanup = merchant_buy.cleanup
-            if str(getattr(cleanup, "rule_kind", "")) != BUY_KIND_MERCHANT_STOCK:
-                continue
-            if not self._is_early_kit_model_id(merchant_buy.model_id):
-                continue
-            target_key = self._early_kit_purchase_target_key(cleanup)
-            planned_quantity_by_target[target_key] = (
-                max(0, int(planned_quantity_by_target.get(target_key, 0)))
-                + max(0, int(merchant_buy.quantity))
-            )
-
-        # Request-scoped Merchant Stock targets have no persisted target entry, but their
-        # PlannedMerchantBuy cleanup still carries the -1 owner identity.
-        for target_key, quantity in planned_quantity_by_target.items():
-            if target_key in state.purchase_budget_ready:
-                continue
-            state.purchase_budget_by_target[target_key] = max(0, int(quantity))
-            state.purchase_budget_ready.add(target_key)
-
-        for rule_index, raw_buy_rule in enumerate(self.buy_rules):
-            buy_rule = _normalize_buy_rule(raw_buy_rule)
-            if buy_rule is None or not buy_rule.enabled or buy_rule.kind != BUY_KIND_MERCHANT_STOCK:
-                continue
-            for target in _normalize_merchant_stock_targets(buy_rule.merchant_stock_targets):
-                model_id = max(0, int(target.model_id))
-                if not self._is_early_kit_model_id(model_id):
-                    continue
-                if (
-                    bool(target.check_xunlai_first)
-                    and self._merchant_stock_target_supports_xunlai_first(model_id)
-                    and not bool(plan.storage_exact)
-                ):
-                    # The target's first complete authorization is not knowable until the
-                    # existing exact Xunlai scan has run.
-                    continue
-                target_key = (int(rule_index), str(model_id))
-                if target_key in state.purchase_budget_ready:
-                    continue
-                state.purchase_budget_by_target[target_key] = max(
-                    0,
-                    int(planned_quantity_by_target.get(target_key, 0)),
-                )
-                state.purchase_budget_ready.add(target_key)
+        return _early_kit_authorization.capture(
+            plan,
+            state,
+            policy=_EARLY_KIT_POLICY,
+            rules=lambda: self.buy_rules,
+            is_kit=lambda: self._is_early_kit_model_id,
+            key=lambda: self._early_kit_purchase_target_key,
+            supports=lambda: self._merchant_stock_target_supports_xunlai_first,
+        )
 
     def _clamp_early_kit_merchant_buys(
         self,
         plan: PlanResult,
         state: EarlyKitExecutionState,
     ) -> None:
-        """Prevent rebuilt compatible Merchant Stock plans from recreating spent authorization."""
-
-        clamped_buys: list[PlannedMerchantBuy] = []
-        for merchant_buy in plan.merchant_stock_buys:
-            cleanup = merchant_buy.cleanup
-            target_key = self._early_kit_purchase_target_key(cleanup)
-            if (
-                str(getattr(cleanup, "rule_kind", "")) != BUY_KIND_MERCHANT_STOCK
-                or target_key not in state.purchase_budget_ready
-            ):
-                clamped_buys.append(merchant_buy)
-                continue
-            if target_key in state.quarantined_purchase_targets:
-                continue
-            remaining_authorized = max(
-                0,
-                int(state.purchase_budget_by_target.get(target_key, 0)),
-            )
-            remaining_quantity = min(max(0, int(merchant_buy.quantity)), remaining_authorized)
-            if remaining_quantity <= 0:
-                continue
-            if remaining_quantity != int(merchant_buy.quantity):
-                merchant_buy = replace(merchant_buy, quantity=remaining_quantity)
-            clamped_buys.append(merchant_buy)
-        plan.merchant_stock_buys = clamped_buys
+        return _early_kit_authorization.clamp(
+            plan,
+            state,
+            policy=_EARLY_KIT_POLICY,
+            key=lambda: self._early_kit_purchase_target_key,
+        )
 
     def _quarantine_early_kit_purchase_target(
         self,
         state: EarlyKitExecutionState,
         merchant_buy: PlannedMerchantBuy,
     ) -> None:
-        cleanup = merchant_buy.cleanup
-        if str(getattr(cleanup, "rule_kind", "")) != BUY_KIND_MERCHANT_STOCK:
-            return
-        state.quarantined_purchase_targets.add(self._early_kit_purchase_target_key(cleanup))
+        return _early_kit_authorization.quarantine(
+            state,
+            merchant_buy,
+            policy=_EARLY_KIT_POLICY,
+            key=lambda: self._early_kit_purchase_target_key,
+        )
 
     def _consume_early_kit_purchase_budget(
         self,
@@ -16226,15 +16181,12 @@ class MerchantRulesWidget:
         merchant_buy: PlannedMerchantBuy,
         completed: int,
     ) -> None:
-        cleanup = merchant_buy.cleanup
-        if str(getattr(cleanup, "rule_kind", "")) != BUY_KIND_MERCHANT_STOCK:
-            return
-        target_key = self._early_kit_purchase_target_key(cleanup)
-        if target_key not in state.purchase_budget_ready:
-            return
-        state.purchase_budget_by_target[target_key] = max(
-            0,
-            int(state.purchase_budget_by_target.get(target_key, 0)) - max(0, int(completed)),
+        return _early_kit_authorization.consume(
+            state,
+            merchant_buy,
+            completed,
+            policy=_EARLY_KIT_POLICY,
+            key=lambda: self._early_kit_purchase_target_key,
         )
 
     def _record_early_kit_deferred_cleanup(
@@ -16243,36 +16195,22 @@ class MerchantRulesWidget:
         merchant_buy: PlannedMerchantBuy,
         completed: int,
     ) -> None:
-        if max(0, int(completed)) <= 0:
-            return
-        cleanup = merchant_buy.cleanup
-        if (
-            _normalize_after_purchase_action(getattr(cleanup, "after_purchase", AFTER_PURCHASE_KEEP))
-            == AFTER_PURCHASE_KEEP
-            or not bool(getattr(cleanup, "completes_target", False))
-            or bool(getattr(cleanup, "xunlai_involved", False))
-        ):
-            return
-        state.deferred_cleanups[self._early_kit_purchase_target_key(cleanup)] = cleanup
+        return _early_kit_authorization.record_cleanup(
+            state,
+            merchant_buy,
+            completed,
+            policy=_EARLY_KIT_POLICY,
+            key=lambda: self._early_kit_purchase_target_key,
+        )
 
     def _apply_deferred_early_kit_cleanups(self, state: EarlyKitExecutionState) -> None:
-        for cleanup in list(state.deferred_cleanups.values()):
-            model_id = max(0, _safe_int(getattr(cleanup, "target_key", 0), 0))
-            target_count = max(0, int(getattr(cleanup, "target_count", 0)))
-            if model_id <= 0 or target_count <= 0:
-                continue
-            try:
-                carried_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(model_id)))
-            except Exception:
-                continue
-            if carried_count < target_count:
-                continue
-            cleanup_applied = self._apply_after_purchase_cleanup(
-                cleanup,
-                label=self._format_model_label(model_id),
-            )
-            if cleanup_applied:
-                state.deferred_cleanups.pop(self._early_kit_purchase_target_key(cleanup), None)
+        return _early_kit_authorization.apply_deferred(
+            state,
+            policy=_EARLY_KIT_POLICY,
+            key=lambda: self._early_kit_purchase_target_key,
+            apply=lambda: self._apply_after_purchase_cleanup,
+            label=lambda: self._format_model_label,
+        )
 
     def _clear_satisfied_early_kit_cleanup(
         self,
@@ -16280,64 +16218,27 @@ class MerchantRulesWidget:
         merchant_buy: PlannedMerchantBuy,
         completed: int,
     ) -> None:
-        if max(0, int(completed)) <= 0:
-            return
-        cleanup = merchant_buy.cleanup
-        if (
-            _normalize_after_purchase_action(getattr(cleanup, "after_purchase", AFTER_PURCHASE_KEEP))
-            == AFTER_PURCHASE_KEEP
-            or not bool(getattr(cleanup, "completes_target", False))
-            or bool(getattr(cleanup, "xunlai_involved", False))
-        ):
-            return
-        model_id = max(0, _safe_int(getattr(cleanup, "target_key", 0), 0))
-        target_count = max(0, int(getattr(cleanup, "target_count", 0)))
-        if model_id <= 0 or target_count <= 0:
-            return
-        try:
-            carried_count = max(0, int(GLOBAL_CACHE.Inventory.GetModelCount(model_id)))
-        except Exception:
-            return
-        if carried_count >= target_count:
-            state.deferred_cleanups.pop(self._early_kit_purchase_target_key(cleanup), None)
+        return _early_kit_authorization.clear_satisfied(
+            state,
+            merchant_buy,
+            completed,
+            policy=_EARLY_KIT_POLICY,
+            key=lambda: self._early_kit_purchase_target_key,
+        )
 
     def _filter_blocked_early_kit_xunlai_actions(
         self,
         plan: PlanResult,
         blocked_models: set[int],
     ) -> None:
-        if not blocked_models:
-            return
-        plan.storage_transfers = [
-            transfer
-            for transfer in plan.storage_transfers
-            if not (
-                bool(transfer.xunlai_first_merchant_stock)
-                and max(0, int(transfer.model_id)) in blocked_models
-            )
-        ]
-        plan.merchant_stock_buys = [
-            merchant_buy
-            for merchant_buy in plan.merchant_stock_buys
-            if not (
-                bool(merchant_buy.check_xunlai_first)
-                and max(0, int(merchant_buy.model_id)) in blocked_models
-            )
-        ]
+        return _early_kit_authorization.filter_blocked(plan, blocked_models)
 
     def _plan_has_early_kit_xunlai_target(
         self,
         plan: PlanResult,
         model_ids: set[int],
     ) -> bool:
-        if bool(plan.storage_exact):
-            return False
-        if any(
-            max(0, int(model_id)) in model_ids
-            for model_id in plan.xunlai_first_merchant_stock_targets
-        ):
-            return True
-        return False
+        return _early_kit_authorization.has_xunlai_target(plan, model_ids)
 
     def _get_early_salvage_kit_categories(
         self,
@@ -16374,18 +16275,13 @@ class MerchantRulesWidget:
         category: str,
         blocked_models: set[int],
     ) -> PlannedStorageTransfer | None:
-        model_ids = set(self._early_kit_model_ids(category))
-        for transfer in plan.storage_transfers:
-            model_id = max(0, int(transfer.model_id))
-            if (
-                str(transfer.direction) == STORAGE_TRANSFER_WITHDRAW
-                and bool(transfer.xunlai_first_merchant_stock)
-                and model_id in model_ids
-                and model_id not in blocked_models
-                and max(0, int(transfer.quantity)) > 0
-            ):
-                return transfer
-        return None
+        return _early_kit_authorization.storage_source(
+            plan,
+            category,
+            blocked_models,
+            policy=_EARLY_KIT_POLICY,
+            models=lambda: self._early_kit_model_ids,
+        )
 
     def _get_early_kit_merchant_source(
         self,
@@ -16394,22 +16290,15 @@ class MerchantRulesWidget:
         state: EarlyKitExecutionState,
         blocked_models: set[int],
     ) -> PlannedMerchantBuy | None:
-        model_ids = set(self._early_kit_model_ids(category))
-        for merchant_buy in plan.merchant_stock_buys:
-            model_id = max(0, int(merchant_buy.model_id))
-            cleanup = merchant_buy.cleanup
-            target_key = self._early_kit_purchase_target_key(cleanup)
-            if (
-                model_id in model_ids
-                and model_id not in blocked_models
-                and str(getattr(cleanup, "rule_kind", "")) == BUY_KIND_MERCHANT_STOCK
-                and target_key in state.purchase_budget_ready
-                and target_key not in state.quarantined_purchase_targets
-                and max(0, int(state.purchase_budget_by_target.get(target_key, 0))) > 0
-                and max(0, int(merchant_buy.quantity)) > 0
-            ):
-                return merchant_buy
-        return None
+        return _early_kit_authorization.merchant_source(
+            plan,
+            category,
+            state,
+            blocked_models,
+            policy=_EARLY_KIT_POLICY,
+            models=lambda: self._early_kit_model_ids,
+            key=lambda: self._early_kit_purchase_target_key,
+        )
 
     def _early_kit_is_usable(self, category: str) -> bool:
         normalized_category = str(category or "").strip().lower()

@@ -82059,6 +82059,7 @@ def _cp23_widget_inverse(raw: bytes) -> bytes:
     from hashlib import sha256
     from zlib import decompress
 
+    raw = _cp24_widget_inverse(raw)
     forms: dict[str, tuple[tuple[int, ...], str]] = {
         "8a28373fd7a21be09429153676e3fcf842c9ad40cc791f144949a0ea2df2fc0b": (
             (3393, 190830, 1100269, 1123552, 1123976, 1124458),
@@ -82152,6 +82153,7 @@ def _cp23_widget_inverse(raw: bytes) -> bytes:
 def _cp23_harness_inverse(raw: bytes) -> bytes:
     from hashlib import sha256
 
+    raw = _cp24_harness_inverse(raw)
     first = b"\r\ndef " + b"_cp23_widget_inverse("
     main = b"\r\ndef " + b"main() -> int:\r\n"
     _expect(raw.count(first) == raw.count(main) == 1, "CP23 unique definition interval")
@@ -83293,6 +83295,1746 @@ def _test_cp23_overlap_destroy(module: types.ModuleType) -> None:
 
 def _test_cp23_overlap_late_caller(module: types.ModuleType) -> None:
     _cp23_overlap_trace(module, "late_caller")
+
+
+def _cp24_widget_inverse(raw: bytes) -> bytes:
+    from base64 import b85decode
+    from hashlib import sha256
+    from zlib import decompress
+
+    forms: dict[str, tuple[tuple[int, ...], str]] = {
+        "5a08ba4cd90de34a515fecb39bddb7ba9148b4af4e9167436cf28ad968e2312b": (
+            (
+                2823,
+                192227,
+                733811,
+                735049,
+                735572,
+                735935,
+                736333,
+                736752,
+                737084,
+                737575,
+                737962,
+                738174,
+                739530,
+                739984,
+            ),
+            "8a28373fd7a21be09429153676e3fcf842c9ad40cc791f144949a0ea2df2fc0b",
+        ),
+        "a661abe23d3cb020dc2e09a94160522d702ef5ab71e39b78a4a1d3c3800be3e7": (
+            (
+                2823,
+                192155,
+                733739,
+                734977,
+                735500,
+                735863,
+                736261,
+                736680,
+                737012,
+                737503,
+                737890,
+                738102,
+                739458,
+                739912,
+            ),
+            "26dd51baf879e5ac1ed729665736a159b4648448008f83214c8ea5c12c9504a6",
+        ),
+    }
+    raw_pin = sha256(raw).hexdigest()
+    _expect(raw_pin in forms, f"CP24 unrecognized widget input {raw_pin}")
+    offsets, target = forms[raw_pin]
+    # Each tuple binds one current span and its exact CP23 replacement, including line endings.
+    spans: tuple[tuple[int, str, bytes], ...] = (
+        (
+            94,
+            "806e3bf0cc5aae18485d26a6ad237a54938d1905365de86415b5e46c2090cc01",
+            b"c-jL100001",
+        ),
+        (
+            507,
+            "513299f5ca17bc9ce023ff1ef3a8f4aa78117b8a301b84fce27f0bee039e1d05",
+            b"c-jL100001",
+        ),
+        (
+            61,
+            "fb9a929679d30332c6584bd5fe072ac07ab8cabaf49d7fbcd28495925d1adb68",
+            b"c-m7?fPkXZlG36)1r1&<1tgG}SE7-gT9Q~&QlycblbV=UTA-t#R8*Ri8lRb$l3Jmpqo8Z3si}jis~D&nQ&&l15l}EbJGBz1OG!yn"
+            b"A-@PjA?elR<pKbLtt62",
+        ),
+        (
+            382,
+            "6bf4c158391811212c3948419e466dd1125c7d494450bbd794b28ce7db566e0e",
+            b"c-pO1+fLg+5Pe7DAEx1<wi+z@io`>qm0BTaMXA&Zq1DEo;8mPmvzI2J>c4l^cPBOtY9mE~*_|_IX3ow4l%L6Da=~-!Gy?KCg;*_f"
+            b"ZpAD^uv|Z&eQjVaw6VoWh8Cw_tkV1ekNJv|8+SHUT0D`Lk`dt@9vmK2=#XbzN=(?J<I)PdVY3Y@aZe!;vAwg7K<|XK9#-E^f&RRQ"
+            b"Gx+tp1(_=iOVn{n7;NS?bf*B08Y3}^7yihcwr>6tXUL_?39t(gRp$O(G4~V#;>IogR(GZ_(Jn)_5Hgw2Ka((oS7&hk?FYO3bp4)P"
+            b"eYm;!`0o0aeZBpBak&+~pr9yo>2N2QR2B?o^N0z<kn3ziK`dLU1T!X*pvSnjhI>aS%gh$Iq3p{zZIIk~Y=f-5RVN(wVa7Xn*ZTU7"
+            b"1-rzSd>xz=Ee*zDBKig`)D%v_Fx<s@(?#o*riR@13cEr)f*X8vXza0xRgMW<RS@viYp1G~ft3G5>I~$ljWCujmM4JHY9cpt7Ho<_"
+            b"ccH(O$<>hOB+*)U#)>S1m}@Q2cuzQf3u+}%gGjL89rcyoEk&JLt@x1&3X4k<Y)gYA*3keV7!o!{P3vba@rN3Dve{cz!x&?l=(KFC"
+            b"OV5ysc#?FK(d(zLRPiq9S>k#Mny<VVn78>{Q92R{K?jBO>m##Wq{inAm{fYnGx3BCQqYABcgouaG;pmX0+I5sy0%9sIZe{U+Z&r7"
+            b"B>!WAv|91`cF1o{#Y)*hLtyxPXt2~nr{Bp+bj?H>c&z(Ow`T_0c+wSkFzho^Dy!+mDN=H4Co?WsvBAP&Cr<4si4GQq8JFiuThqg8"
+            b">5qdJO7M(|T~#ejhHD-VQ5mbl5!|MuySTr6y$pTOg;XoAJ8)FO%nzM0Xk62b6Y>EHR`9*Z5KPP^4MIZ?Ohzy5PH*i5UN7x44T~io"
+            b"{6#tcGPIuO_VVF19N}a-Y=8Np8vqLT<vlVZ{{Xcr@sa",
+        ),
+        (
+            199,
+            "3550f127cfce543a629c3f031deb2cad162134c2748fb8ad9d652bacb52cda3a",
+            b"c-obd+iHVA5Qgsqd55W2E{Nnh)Qg^=rSw1#7o~({)k(WVSG$K&`}Cb{Orp_1D}>-U|2O~6%mS>RAPDX?exkCVF?F)AkX2<ZtV|1p"
+            b"8`Rmmpl^@1%2rSpLK#@<s-)yhBW0;KFtt|;XWuI=zbRI!n6T5ybkY`qtPo|5IZs_<=1@puU+;;fFyB--b<F}2cwOv7%SuDpe)dX`"
+            b">eoTM4I1xi4c*Ds^-w5R6R-=2+i*YE3jKzbudtzXgT*rDD0I>Am9)HeUT%=@vci_a`WU%{upjY{u{tE3u=L;RA_%lAknk!G=p|qb"
+            b"juJS1e&N?wx99xk;^FM_<o1a_KHZ&N50TWBj%8I@-xotAFy6XNUG5WTLV43Cu=$YKolY!j8fPAM`^H8jm7>`@9Q2@LZENep2`zj+"
+            b")!1vOng5lou@q9#zVXebVeaQEzDC+Ui-s|&Y&hPgv}xVM^b2<<h+xLp9*G@tMTaEY)-O>hRp@=qqTiyu72Ko|c=Slatr{tDoWN}U"
+            b"kD-hpXyXoh8)5e@VnRf^i5d3v5o`d-upryNpnqPuLsy<$bScxx4-mI<Oa",
+        ),
+        (
+            212,
+            "0c81ae0b221632dbf39e7779179604b32ece076d9d6052dc39d925eba2506f3c",
+            b"c-mb~O$&lR6ub-mhnFW8Vt+v3p)4pQgR(=X$L2mu+!ou9ga5vj457I^-pnvF0AJLKg!VmT@FG(`g?4!N1E1(PnrzTEV4X=H<b(@%"
+            b"(wC4JuL!$V%OpGrW3b3zbG>14D7Sdro%8*=tngBu@?tf|jWFcA(KBa5H1W3=Cah>RN$mYN$r3tYLbK&U%G8o-IFc}G2)*v#gdGjP"
+            b"d5p!;2l&59rT",
+        ),
+        (
+            233,
+            "aac06473d7c1dff18677c8244f5c31aeced1bd2324181c58bf496c56661786ee",
+            b"c-n=KQA@)x5P;tW|HIj*25RZEum{}+%5Z}@A4KFx+nbhUSxGNo{=L^(%?g7Zgm9O;FCPc+8<in#eG3!VldHb8Wh{Njhw}B+&<4#G"
+            b"I(F$Nv1Yl4_Y4x}4dJe_bs|Zk6x>YU;q?s{Ps<rT&)3t(`{f2-Hmm94F5>!d#NOFhW9<ZwI|^dck=f=*+L<79#@6?C9bxSHlTahe"
+            b"6N)`BG*-MdQ~nPqecd-W(sj6Cbbhi7gT#CM>!V+w{!YidA{*z8<@5qGmy<?r28FEj_Q)=>BcM9$TSH8>QYUy>!ViHFjMx",
+        ),
+        (
+            240,
+            "e2d30a754e82a556a03cac122567e0fd2ff8b5fcb606b6920a84fe42ea64ab2b",
+            b"c-n=LK}*9x5QXo8|6%AU3nBDe%%Mn%;H9*B5*fD1M3-)M!|bFq{(4uM8Y2<sHZza!4Q~K0Wol^jIa#J)oFt`hT1!HeQgD~Ua&>zH"
+            b"KZ;2@cH^wHq+QoS4h?bnuASha>$71z>Y_<9C86`&Xlp(QbuGl$c3*%H+fs~o$s36l;bdT?u$bx=DXce7#SXX6yZeXrzQD(#*eW%("
+            b"$@4kYRO1<(7dUutXI!s|1QgA29ep?22Kwz3DSr^oowM4YaVKw2RLud@KRJiUq^zQvn5n{n9bN+2Iz!TIdpsH$L%iIIN9wPKsMq+V"
+            b"@5g)s9?X_t",
+        ),
+        (
+            305,
+            "828ae86f5b449b454f0761dd61d009517420fcc842d40c16f5bdb457cb571310",
+            b"c-oDUO=`n15QX=J-eJf}hG4QT$s!FQEu`%c#MB<QBC;f;afokU`6sxx(-MI(){H*CH+lfwDy)Z06Pn6_GN4sp5g3`$oC@-ua@m(d"
+            b"dPZGQ5J~d%_yE6FX>-z2<*<PgFJiR>8L%L!42v&{F!rK{EMdXu<EA`Oy;#C3X`W=v>pL=A86KGb(%RmZH-)KU(6`>e3ZmiB51P%1"
+            b"p=M>)urd`*r1|<*FM6+<NzD}>jvvq4qugzGFZ=Y>oXN2Db$TFvYgFx;6XGgxCY~-CIfi}vQr6t9GrAs&T8~WM&FKd%(K#Jq(OV#0"
+            b"r0sVtv0(DjRX+R1K-Zv%8}R<V<`s>fq&FQjX0b$;-89<5Fqz5G`6W-3-f;L=tethD6F}&rtCQlv(~#C{=wf2ut)Zyk2ih&~0R",
+        ),
+        (
+            241,
+            "6fbe347e1f38ed3ae2b23f5a5e4ab3c18f9168cab714807d3676758b485a5917",
+            b"c-oCp(MrQG6nz)`hp?v>M%lAip_XnFr;e%5A!~0nEKN#!J66BmWL;@9t20nal5@{FIrkFME}oNu9lY6;aEV^3ic$bV=KJI}B(t0A"
+            b"D>7Ibu-39aO9e1lmn0+w==76Gq}#d)PRBjYh<Gj&l}Z;(@Gqb&N6@saEkR|rDRL#f4?u>fy%X1zOkCV#N}~B&vZ3quO}va=6Z)7W"
+            b"Yu|Te!f*`bVw5IQA=xS=MpU~*DvC^-Yoj}7qJncJ!}1Hmp_YPi%H>{(J!E49{)L<im4To<vq87bq7}=5+LrwkY>m<#G)8OY+i#$C"
+            b"x=mFrvFH1f>4-gY4T<dJbiVAY*a#f*e+&@n<_wWCtvO_4{uZm3`)EbuC|)MPgWQ8erJG;@_+)*=w!-TyIacA2LWv|f{>*e;aAjWR"
+            b"+PDjymz|YYCN>B%$U$pc(#BT>r7FD&L>^FJS~PUWu^;okNnPHiQO`<(vHcBWRSfa",
+        ),
+        (
+            78,
+            "c306420c83a047c86bd9113e6e67a8c62254bdb4ee60b187f84c02562f3b736a",
+            b"c-oziK?=e!5JmTbcbH`hQd|q3L?on1YD3dRCMne0o2qRywjw&q`S~xy19*<Ez`6jXaiUR@wN5JI58DkSgDP}r=iSwCTlnCRUla?-"
+            b"t*;b%IKqkc#)xh!hf@ODexT9L>&lF7hbf&i+1M)j&Kj;+rO^l0Dik%hfkn7z@@1D>2`%rl{Vv`SX39eX(=yM8`=}a9NucL9KlFE2"
+            b"cDEHn)1w$KEv4yXYK8lgs}x#@T17@`?Ykxd_*c~(VHL2a",
+        ),
+        (
+            76,
+            "2c1f3a5c4b24cdccb899c85e1fab8eb5637ae0ddfbc068519ac0e794373d0973",
+            b"c-nQ3O$tIW421WBcgV62L|l6SPvE}9zVun_kEAK|-QKFG?ZVj&GYQ`SyyYxhQu6BVG48V@#)ULhG%_8x8|cI&g(IBMXZj`W9^<OU"
+            b"YQU-vJ8)4{NHclu=4omcJ}!@aoA?_&YcH5uqDQB#<19K5n=3}q4bj}RATK1{mp`y)E*<N*-~q?(M}+",
+        ),
+        (
+            233,
+            "10a511fc9ad80e1d12c5090f4ae52915b3330a9af383c8851b72ec3c16a46903",
+            b"c-n<gO^d=X5WNfjhdCy&6wg8z3hRDcT&M+)AvRMt7!#dLLI3@xXj?^>eaF0y$-Du$U>^)RWle+}BC?3+noOZ4cUC*gYT!k!8MlGX"
+            b"QcfpVGc<vKN&DC!f%R~3+Gmji=`E_Bi1X2KJ2Fk&>ywzhBqxhro%QtXoDQ}DasSdGGL2Sa32U~&OUQFrRo`Xtu~1c6ELZP~QmwzL"
+            b"&$qHzKc;AJU=xBHqfV`N+N#D<OeG-IKiacOtJORC+&`?9dKg;!N9qH2@{LQeXf9>{<#|%ou}z<{oK6C-FuV83`C|?tx8#S5je;w&"
+            b"3?8SGUx2BX(*",
+        ),
+        (
+            316,
+            "812292f7239ddefc1e2c65e20321163a7210eaa262ebabb6e22392bfef0448b2",
+            b"c-n<h%WA_g5WENS4@*um1e0?hg*GX)gr?A@hn|FNZBi3icJ+Yj@4IePKk^^~W2Bv#ommOsxXMbR;)S%Z0E>=URJ)X;Fe>mv;donT"
+            b"xp26zOh}UPD3W1U87R@@UqU;c`2dB6S_z%Dht^g3p()vUN9#AHzNPqKvng>M>x-rTkbcKz<qC!Nb;In#<M9ydgxRCx2Mm7!hv919"
+            b"&@J)~#iGhd%VGy?crwU9vD-nN!-SR{R9CKnXNu;6@;Kis9P11tTf)&l+M2?|c!lI%%L#2JNdk)nJbZle_48)MUmo9<PxqTGf8V|?"
+            b"*Oz5`BOxP}^f7HGk$Kq^4GI}<(qopR#J3lQuA<PC>SVCjX42jJWfxh90x5m0YdnQnLc#A~c2jupLdYT+bm0;=nV)MJbl&K}E9*e9"
+            b"xT!RbN5A^S`C0",
+        ),
+    )
+    for offset, (size, current_pin, previous) in reversed(list(zip(offsets, spans, strict=True))):
+        current = raw[offset : offset + size]
+        _expect(sha256(current).hexdigest() == current_pin and raw.count(current) == 1, f"CP24 widget span at {offset}")
+        raw = raw[:offset] + decompress(b85decode(previous)) + raw[offset + size :]
+    _expect(sha256(raw).hexdigest() == target, "CP24 exact CP23 widget projection")
+    return raw
+
+
+def _cp24_harness_inverse(raw: bytes) -> bytes:
+    from hashlib import sha256
+
+    first = b"\r\ndef " + b"_cp24_widget_inverse("
+    main = b"\r\ndef " + b"main() -> int:\r\n"
+    _expect(raw.count(first) == raw.count(main) == 1, "CP24 unique definition interval")
+    start, stop = raw.index(first) + 2, raw.index(main) + 2
+    block = raw[start:stop]
+    digest = "007ee512b7dffe8845d43f6ba22e68f6aa375b2661e8dc7de4183842ba1ac0ab"
+    literal = digest.encode("ascii")
+    _expect(block.count(literal) == 1, "CP24 unique self-pin")
+    _expect(sha256(block.replace(literal, b"0" * 64)).hexdigest() == digest, "CP24 definition block bytes")
+    raw = raw[:start] + raw[stop:]
+    rows = b"".join(
+        f'                ("{name}", lambda: _test_{name}(module)),\r\n'.encode("ascii")
+        for suffix in ("owner_route", "capture_clamp", "sources_filter", "settlement", "execute_callers")
+        for name in ("cp24_kit_" + suffix,)
+    )
+    for addition in (
+        rows,
+        b"    raw = " + b"_cp24_widget_inverse(raw)\r\n",
+        b"    raw = " + b"_cp24_harness_inverse(raw)\r\n",
+    ):
+        _expect(raw.count(addition) == 1, f"CP24 exact unique harness addition {addition!r}")
+        raw = raw.replace(addition, b"", 1)
+    _expect(
+        sha256(raw).hexdigest() == "929b83baff0cb74adc97663992ac70f25ed10716a49b9b372258358558b5ac32",
+        "CP24 restores every byte of the CP23 harness",
+    )
+    return raw
+
+
+def _test_cp24_kit_owner_route(module: types.ModuleType) -> None:
+    from hashlib import sha256
+    from inspect import Parameter
+    from inspect import signature
+    from unittest.mock import patch
+
+    package = "Sources.icefox.MerchantRules"
+    owner = sys.modules[package + ".early_kit_authorization"]
+    path = REPO_ROOT / "Sources/icefox/MerchantRules/early_kit_authorization.py"
+    _expect(module._early_kit_authorization is owner and Path(str(owner.__file__)).resolve() == path, "CP24 owner")
+    _expect(
+        sha256(path.read_bytes()).hexdigest() == "5ae085d7b1a56a1ba8566d6662e05edecd1b594ddbf190ce4a2771aec5819a14",
+        "CP24 actual owner bytes",
+    )
+    raw = MERCHANT_RULES_PATH.read_bytes()
+    tree = ast.parse(raw)
+    widget_class = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MerchantRulesWidget")
+    methods = {n.name: n for n in widget_class.body if isinstance(n, ast.FunctionDef)}
+    routes = (
+        ("_early_kit_purchase_target_key", "target_key", "cleanup", ""),
+        ("_capture_early_kit_purchase_budgets", "capture", "plan state", "policy rules is_kit key supports"),
+        ("_clamp_early_kit_merchant_buys", "clamp", "plan state", "policy key"),
+        ("_quarantine_early_kit_purchase_target", "quarantine", "state merchant_buy", "policy key"),
+        ("_consume_early_kit_purchase_budget", "consume", "state merchant_buy completed", "policy key"),
+        ("_record_early_kit_deferred_cleanup", "record_cleanup", "state merchant_buy completed", "policy key"),
+        ("_apply_deferred_early_kit_cleanups", "apply_deferred", "state", "policy key apply label"),
+        ("_clear_satisfied_early_kit_cleanup", "clear_satisfied", "state merchant_buy completed", "policy key"),
+        ("_filter_blocked_early_kit_xunlai_actions", "filter_blocked", "plan blocked_models", ""),
+        ("_plan_has_early_kit_xunlai_target", "has_xunlai_target", "plan model_ids", ""),
+        ("_get_early_kit_storage_source", "storage_source", "plan category blocked_models", "policy models"),
+        (
+            "_get_early_kit_merchant_source",
+            "merchant_source",
+            "plan category state blocked_models",
+            "policy models key",
+        ),
+    )
+    fields = {
+        "buy_rule": "_normalize_buy_rule",
+        "merchant_targets": "_normalize_merchant_stock_targets",
+        "after_purchase": "_normalize_after_purchase_action",
+        "safe_int": "_safe_int",
+        "replace_buy": "replace",
+        "model_count": "GLOBAL_CACHE.Inventory.GetModelCount",
+        "merchant_kind": "BUY_KIND_MERCHANT_STOCK",
+        "keep": "AFTER_PURCHASE_KEEP",
+        "withdraw": "STORAGE_TRANSFER_WITHDRAW",
+    }
+    per_call = {
+        "rules": "buy_rules",
+        "is_kit": "_is_early_kit_model_id",
+        "key": "_early_kit_purchase_target_key",
+        "supports": "_merchant_stock_target_supports_xunlai_first",
+        "models": "_early_kit_model_ids",
+        "apply": "_apply_after_purchase_cleanup",
+        "label": "_format_model_label",
+    }
+    policy = module._EARLY_KIT_POLICY
+    _expect(type(policy) is owner.EarlyKitPolicy and owner.EarlyKitPolicy.__dataclass_params__.frozen, "CP24 policy")
+    _expect(set(owner.EarlyKitPolicy.__dataclass_fields__) == set(fields), "CP24 finite policy members")
+    (construction,) = (
+        n.value
+        for n in tree.body
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "_EARLY_KIT_POLICY" for t in n.targets)
+    )
+    assert isinstance(construction, ast.Call)
+    _expect(not construction.args and len(construction.keywords) == len(fields), "CP24 passive construction")
+    for kw in construction.keywords:
+        assert kw.arg is not None and isinstance(kw.value, ast.Lambda)
+        _expect(not ast.unparse(kw.value.args) and ast.unparse(kw.value.body) == fields[kw.arg], f"CP24 thunk {kw.arg}")
+    # Only the owner is bound. Any eager provider read during construction raises.
+    passive = eval(compile(ast.Expression(construction), "<cp24-policy>", "eval"), {"_early_kit_authorization": owner})
+    _expect(type(passive) is type(policy), "CP24 no provider read during construction")
+    for field, binding in fields.items():
+        resolver = getattr(policy, field)
+        if field == "model_count":
+
+            def original_count(_model: int) -> int:
+                return 3
+
+            def replacement_count(_model: int) -> int:
+                return 7
+
+            cache = types.SimpleNamespace(Inventory=types.SimpleNamespace(GetModelCount=original_count))
+            with patch.object(module, "GLOBAL_CACHE", cache):
+                _expect(resolver() is original_count, "CP24 original inventory endpoint")
+                with patch.object(cache, "Inventory", types.SimpleNamespace(GetModelCount=replacement_count)):
+                    _expect(resolver() is replacement_count and module._EARLY_KIT_POLICY is policy, "CP24 inventory")
+                _expect(resolver() is original_count, "CP24 restored inventory endpoint")
+            continue
+        original = getattr(module, binding)
+        _expect(resolver() is original, f"CP24 initial {field}")
+        with patch.object(module, binding, object()) as installed:
+            _expect(resolver() is installed and module._EARLY_KIT_POLICY is policy, f"CP24 late {field}")
+        _expect(resolver() is original, f"CP24 restored {field}")
+
+    widget = types.SimpleNamespace()
+    headers: list[bytes] = []
+    source_lines = raw.splitlines(keepends=True)
+    for facade, symbol, args_text, keys_text in routes:
+        node = methods[facade]
+        headers.append(b"".join(source_lines[node.lineno - 1 : node.body[0].lineno - 1]))
+        _expect(
+            [ast.unparse(d) for d in node.decorator_list] == (["staticmethod"] if symbol == "target_key" else []),
+            facade,
+        )
+        (statement,) = node.body
+        assert isinstance(statement, ast.Return) and isinstance(statement.value, ast.Call)
+        _expect(ast.unparse(statement.value.func) == "_early_kit_authorization." + symbol, f"CP24 direct {symbol}")
+        original = getattr(owner, symbol)
+        _expect(original.__globals__ is vars(owner), f"CP24 defining globals {symbol}")
+        positional, keywords = args_text.split(), keys_text.split()
+        params = signature(original).parameters
+        _expect(list(params) == positional + keywords, f"CP24 owner parameters {symbol}")
+        _expect(all(params[n].kind == Parameter.KEYWORD_ONLY for n in keywords), f"CP24 keyword bindings {symbol}")
+        inputs = tuple(object() for _ in positional)
+        result = object()
+        seen: list[tuple[tuple[object, ...], dict[str, Any]]] = []
+
+        def receive(*args: object, **kwargs: Any) -> object:
+            seen.append((args, kwargs))
+            return result
+
+        with patch.object(owner, symbol, receive):
+            method = getattr(module.MerchantRulesWidget, facade)
+            returned = method(*inputs) if symbol == "target_key" else method(widget, *inputs)
+        _expect(returned is result and len(seen) == 1, f"CP24 direct sentinel {facade}")
+        args, bindings = seen[0]
+        _expect(len(args) == len(inputs) and all(a is b for a, b in zip(args, inputs, strict=True)), facade)
+        _expect(set(bindings) == set(keywords), f"CP24 exact suppliers {facade}")
+        for name in keywords:
+            if name == "policy":
+                _expect(bindings[name] is policy, f"CP24 borrowed policy {symbol}")
+            else:
+                attribute = per_call[name]
+                for token in (object(), object()):
+                    with patch.object(widget, attribute, token, create=True):
+                        _expect(bindings[name]() is token, f"CP24 instance replacement {symbol}.{name}")
+    _expect(
+        sha256(b"".join(headers)).hexdigest() == "44cc83d789b1191838f8ffd9195a2afb49b64a869af380a68da3c2daaf18d868",
+        "CP24 original facade signatures",
+    )
+    _cp24_widget_inverse(raw)
+    _cp24_harness_inverse(Path(__file__).read_bytes())
+    cold = """import importlib, os, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root))
+pkg = "Sources.icefox.MerchantRules"
+allowed = {"Sources", "Sources.icefox", pkg, pkg + ".early_kit_authorization"}
+class Guard:
+    def find_spec(self, fullname, path, target=None):
+        if fullname.split(".")[0] not in sys.stdlib_module_names and fullname not in allowed:
+            raise AssertionError(fullname)
+sys.meta_path.insert(0, Guard())
+assert not any(key.startswith("MERCHANT_RULES_") for key in os.environ)
+owner = importlib.import_module(pkg + ".early_kit_authorization")
+assert pathlib.Path(owner.__file__).resolve() == root / "Sources/icefox/MerchantRules/early_kit_authorization.py"
+assert all(getattr(owner, n).__globals__ is vars(owner) for n in ["target_key","capture","clamp","quarantine","consume","record_cleanup","apply_deferred","clear_satisfied","filter_blocked","has_xunlai_target","storage_source","merchant_source"])
+assert not any(n.startswith(("PySystem", "Py4GW", "PyImGui")) for n in sys.modules)
+"""
+    env = {key: val for key, val in os.environ.items() if not key.startswith("MERCHANT_RULES_")}
+    completed = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", "-X", "utf8", "-c", cold, str(REPO_ROOT)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    _expect(
+        completed.returncode == 0 and not completed.stdout and not completed.stderr,
+        f"CP24 cold owner import: exit={completed.returncode} stdout={completed.stdout!r} stderr={completed.stderr!r}",
+    )
+
+
+def _cp24_early_kit_trace(module: types.ModuleType, group: str, root: Path) -> list[object]:
+    if group in {"capture_clamp", "sources_filter", "settlement"}:
+        from unittest.mock import patch
+
+        def common_cases() -> list[object]:
+            widget = _cp15_widget(module)
+            widget.buy_rules = []
+            observed: list[object] = []
+
+            def witness(name: str, actual: object, expected: object) -> None:
+                _expect(actual == expected, f"CP24 {group}/{name}: expected {expected!r}, observed {actual!r}")
+                observed.append([name, actual])
+
+            def buy(owner: int = 0, model: int = 2989, qty: int = 1, action: str = "remove_entry") -> Any:
+                cleanup = module.PurchaseTargetCleanup(
+                    rule_kind=module.BUY_KIND_MERCHANT_STOCK,
+                    rule_index=owner,
+                    target_key=str(model),
+                    target_count=1,
+                    max_per_run=1,
+                    after_purchase=action,
+                    completes_target=True,
+                )
+                return module.PlannedMerchantBuy(model_id=model, quantity=qty, label=f"kit-{model}", cleanup=cleanup)
+
+            def transfer(model: int, qty: int = 1) -> Any:
+                return module.PlannedStorageTransfer(
+                    direction=module.STORAGE_TRANSFER_WITHDRAW,
+                    key=f"model:{model}",
+                    label=f"kit-{model}",
+                    item_id=900,
+                    quantity=qty,
+                    model_id=model,
+                    xunlai_first_merchant_stock=True,
+                )
+
+            def finish(iterator: Generator[object, None, Any]) -> Any:
+                try:
+                    while True:
+                        next(iterator)
+                except StopIteration as stopped:
+                    return stopped.value
+
+            def raises_same(name: str, fault: Exception, call: Callable[[], object]) -> None:
+                try:
+                    call()
+                except Exception as caught:
+                    witness(
+                        name,
+                        [caught is fault, type(caught).__name__, str(caught)],
+                        [True, type(fault).__name__, str(fault)],
+                    )
+                else:
+                    raise AssertionError(f"CP24 {group}/{name}: expected {fault!r}")
+
+            def capture_clamp() -> None:
+                state = module.EarlyKitExecutionState()
+                request = (-1, "2989")
+                other = (1, "2989")
+                a, b, sibling = buy(-1), buy(-1, qty=2), buy(1, qty=4)
+                widget._capture_early_kit_purchase_budgets(
+                    module.PlanResult(merchant_stock_buys=[a, b, sibling]), state
+                )
+                witness(
+                    "aggregate",
+                    [state.purchase_budget_by_target[request], state.purchase_budget_by_target[other]],
+                    [3, 4],
+                )
+                widget._consume_early_kit_purchase_budget(state, a, 1)
+                c, d = buy(-1, qty=3), buy(-1, qty=3)
+                unready, foreign, blocked, zero = buy(4), buy(-1), buy(2), buy(3)
+                foreign.cleanup.rule_kind = "foreign"
+                widget._capture_early_kit_purchase_budgets(
+                    module.PlanResult(merchant_stock_buys=[c, d, blocked, zero]), state
+                )
+                widget._quarantine_early_kit_purchase_target(state, blocked)
+                widget._consume_early_kit_purchase_budget(state, zero, 1)
+                before = [c, d, sibling, unready, foreign, blocked, zero]
+                plan = module.PlanResult(merchant_stock_buys=before)
+                replacements: list[object] = []
+                saved_replace = module.replace
+
+                def replace_row(row: Any, *, quantity: int) -> Any:
+                    replacements.append([row is c, row is d, quantity])
+                    return saved_replace(row, quantity=quantity)
+
+                with patch.object(module, "replace", replace_row):
+                    widget._clamp_early_kit_merchant_buys(plan, state)
+                after = cast(list[Any], plan.merchant_stock_buys)
+                witness("replace-calls", replacements, [[True, False, 2], [False, True, 2]])
+                witness("clamp-quantities", [row.quantity for row in after], [2, 2, 4, 1, 1])
+                witness(
+                    "clamp-identity",
+                    [
+                        after is not before,
+                        after[0] is not c,
+                        after[1] is not d,
+                        after[0] is not after[1],
+                        after[0].cleanup is c.cleanup,
+                        after[1].cleanup is d.cleanup,
+                        after[2] is sibling,
+                        after[3] is unready,
+                        after[4] is foreign,
+                        state.purchase_budget_by_target[request],
+                        state.purchase_budget_by_target[other],
+                    ],
+                    [True, True, True, True, True, True, True, True, True, 2, 4],
+                )
+                empty_before: list[Any] = [blocked, zero]
+                empty_plan = module.PlanResult(merchant_stock_buys=empty_before)
+                widget._clamp_early_kit_merchant_buys(empty_plan, state)
+                witness(
+                    "publish-empty",
+                    [empty_plan.merchant_stock_buys is not empty_before, empty_plan.merchant_stock_buys],
+                    [True, list[object]()],
+                )
+
+                def rule(name: str, *, enabled: bool = True) -> Any:
+                    return module.BuyRule(
+                        name=name,
+                        enabled=enabled,
+                        kind=module.BUY_KIND_MERCHANT_STOCK,
+                        merchant_stock_targets=[
+                            module.MerchantStockTarget(2989, target_count=1, check_xunlai_first=True)
+                        ],
+                    )
+
+                stored = rule(" stored ")
+                widget.buy_rules = [stored]
+                target = (0, "2989")
+                partial = module.EarlyKitExecutionState()
+                widget.catalog_merchant_essentials = [{"model_id": 2989, "item_type": "Kit"}]
+                supported = widget._merchant_stock_target_supports_xunlai_first(2989)
+                widget._capture_early_kit_purchase_budgets(module.PlanResult(storage_exact=False), partial)
+                witness("partial", [supported, target in partial.purchase_budget_ready], [True, False])
+                widget._capture_early_kit_purchase_budgets(module.PlanResult(storage_exact=True), partial)
+                widget._capture_early_kit_purchase_budgets(module.PlanResult(merchant_stock_buys=[buy(qty=9)]), partial)
+                witness(
+                    "ready-zero",
+                    [target in partial.purchase_budget_ready, partial.purchase_budget_by_target[target]],
+                    [True, 0],
+                )
+                planned_first = module.EarlyKitExecutionState()
+                widget._capture_early_kit_purchase_budgets(
+                    module.PlanResult(merchant_stock_buys=[buy(qty=2)]), planned_first
+                )
+                witness(
+                    "planned-on-inexact",
+                    [target in planned_first.purchase_budget_ready, planned_first.purchase_budget_by_target[target]],
+                    [True, 2],
+                )
+
+                disabled = rule("  Disabled  ", enabled=False)
+                old_target = disabled.merchant_stock_targets[0]
+                legacy = module.BuyRule(
+                    kind=module._configuration.LEGACY_BUY_KIND_ID_KITS, name="  Legacy  ", model_id=2989
+                )
+                third = rule("  Third  ")
+                prior_rows = [disabled, legacy, third]
+                new_rows = [rule("Replacement")]
+                widget.buy_rules = prior_rows
+                events: list[object] = []
+                real_normalize = module._normalize_buy_rule
+                fault = RuntimeError("capture-prefix")
+                capturing = module.EarlyKitExecutionState()
+                partial_plan = module.PlanResult(merchant_stock_buys=[a], storage_exact=True)
+
+                def next_normalize(raw: Any) -> Any:
+                    result = real_normalize(raw)
+                    events.append(["later", raw is legacy, raw is third, result is raw, result is None, raw.name])
+                    if raw is third:
+                        raise fault
+                    return result
+
+                def first_normalize(raw: Any) -> Any:
+                    result = real_normalize(raw)
+                    events.append(
+                        ["first", raw is disabled, result is raw, raw.name, request in capturing.purchase_budget_ready]
+                    )
+                    widget.buy_rules = new_rows
+                    setattr(module, "_normalize_buy_rule", next_normalize)
+                    return result
+
+                with patch.object(module, "_normalize_buy_rule", first_normalize):
+                    raises_same(
+                        "capture-fault",
+                        fault,
+                        lambda: widget._capture_early_kit_purchase_budgets(partial_plan, capturing),
+                    )
+                witness(
+                    "rule-iteration",
+                    events,
+                    [
+                        ["first", True, True, "Disabled", True],
+                        ["later", True, False, False, True, "  Legacy  "],
+                        ["later", False, True, True, False, "Third"],
+                    ],
+                )
+                witness(
+                    "capture-effects",
+                    [
+                        widget.buy_rules is new_rows,
+                        disabled.merchant_stock_targets[0] is not old_target,
+                        list(capturing.purchase_budget_ready) == [request],
+                        capturing.purchase_budget_by_target[request],
+                    ],
+                    [True, True, True, 1],
+                )
+
+            def sources_filter() -> None:
+                state = module.EarlyKitExecutionState()
+                a, b = buy(0, model=2992), buy(1)
+                peer, zero, wrong_owner = buy(2), buy(3, qty=0), buy(4)
+                plan = module.PlanResult(merchant_stock_buys=[a, b, peer, zero, wrong_owner])
+                widget._capture_early_kit_purchase_budgets(plan, state)
+                traces: list[str] = []
+                key_of = widget._early_kit_purchase_target_key
+                models_of = widget._early_kit_model_ids
+                fault = RuntimeError("out-of-category-key")
+                fail_key = False
+
+                class ModelProbe:
+                    def __init__(self, label: str, model: int) -> None:
+                        self.label = label
+                        self.model = model
+
+                    def __int__(self) -> int:
+                        traces.append(f"int {self.label} {self.model}")
+                        return self.model
+
+                def forbid_kind(self: Any, name: str) -> Any:
+                    if name == "rule_kind":
+                        raise AssertionError("ineligible merchant kind read")
+                    return object.__getattribute__(self, name)
+
+                def ordered_key(cleanup: Any) -> Any:
+                    if cleanup is a.cleanup:
+                        traces.append("key A")
+                        if fail_key:
+                            raise fault
+                    elif cleanup is b.cleanup:
+                        traces.append("key B")
+                    else:
+                        raise AssertionError("scanned beyond first match")
+                    return key_of(cleanup)
+
+                def ordered_models(category: str) -> Any:
+                    traces.append(f"models {category}")
+                    return models_of(category)
+
+                guarded_type = type(
+                    "GuardedCleanup", (module.PurchaseTargetCleanup,), {"__getattribute__": forbid_kind}
+                )
+                a.cleanup = guarded_type(**vars(a.cleanup))
+                a.model_id = ModelProbe("A", 2992)
+                b.model_id = ModelProbe("B", 2989)
+                quantity_reads: list[str] = []
+
+                def guard_quantity(row: Any, name: str) -> Any:
+                    if row is a and name == "quantity":
+                        quantity_reads.append(name)
+                        raise AssertionError("rejected merchant quantity read")
+                    return object.__getattribute__(row, name)
+
+                def select_merchant() -> Any:
+                    with patch.object(type(a), "__getattribute__", guard_quantity):
+                        return widget._get_early_kit_merchant_source(plan, "identification", state, set())
+
+                with (
+                    patch.object(widget, "_early_kit_model_ids", ordered_models),
+                    patch.object(widget, "_early_kit_purchase_target_key", ordered_key),
+                ):
+                    selected = select_merchant()
+                    witness(
+                        "merchant-order",
+                        [*traces, selected is b],
+                        ["models identification", "int A 2992", "key A", "int B 2989", "key B", True],
+                    )
+                    traces.clear()
+                    fail_key = True
+                    raises_same(
+                        "merchant-key-fault",
+                        fault,
+                        select_merchant,
+                    )
+                    witness("merchant-fault-prefix", list(traces), ["models identification", "int A 2992", "key A"])
+                witness("rejected-quantity", [a.quantity, quantity_reads], [1, list[str]()])
+                b.model_id = 2989
+                state.quarantined_purchase_targets.add((4, "2989"))
+                plan.merchant_stock_buys = [zero, wrong_owner, b, peer]
+                witness(
+                    "merchant-filters",
+                    [
+                        widget._get_early_kit_merchant_source(plan, "identification", state, set()) is b,
+                        widget._get_early_kit_merchant_source(plan, "identification", state, {2989}) is None,
+                    ],
+                    [True, True],
+                )
+                expert = int(module.ModelID.Expert_Salvage_Kit.value)
+                perfect = int(module.ModelID.Perfect_Salvage_Kit.value)
+                first, later = transfer(2992, 3), transfer(2992, 2)
+                unflagged, deposit = transfer(2992), transfer(2992)
+                unflagged.xunlai_first_merchant_stock = False
+                deposit.direction = "deposit"
+                expert_transfer, perfect_transfer = transfer(expert), transfer(perfect)
+                plan.storage_transfers = [unflagged, deposit, transfer(2992, 0), expert_transfer, first, later]
+                witness(
+                    "storage-filters",
+                    [
+                        widget._get_early_kit_storage_source(plan, "normal_salvage", set()) is first,
+                        widget._get_early_kit_storage_source(plan, "normal_salvage", {2992}) is None,
+                        widget._get_early_kit_storage_source(plan, "upgrade_salvage", set()) is expert_transfer,
+                        widget._get_early_kit_storage_source(
+                            module.PlanResult(storage_transfers=[perfect_transfer]), "upgrade_salvage", set()
+                        )
+                        is None,
+                    ],
+                    [True, True, True, True],
+                )
+                plan.xunlai_first_merchant_stock_targets = [2992, object()]
+                plan.storage_exact = False
+                partial = widget._plan_has_early_kit_xunlai_target(plan, {2992})
+                plan.storage_exact = True
+                witness("short-circuit", [partial, widget._plan_has_early_kit_xunlai_target(plan, {12})], [True, False])
+
+                buy_normal = buy(7, model=2992, qty=3)
+                plan.merchant_stock_buys = [buy_normal]
+                widget._capture_early_kit_purchase_budgets(plan, state)
+                phase: list[object] = []
+                usable = False
+
+                def withdraw(rows: list[Any], *, phase_label: str) -> Generator[object, None, Any]:
+                    nonlocal usable
+                    phase.append(
+                        ["withdraw", len(rows), rows[0] is not first, rows[0].model_id, rows[0].quantity, phase_label]
+                    )
+                    usable = True
+                    yield "withdraw"
+                    return module.ExecutionPhaseOutcome(label=phase_label, attempted=1, completed=1)
+
+                def open_merchant(coords: object) -> Generator[object, None, list[int]]:
+                    phase.append(["open", coords])
+                    yield "open"
+                    return [9001]
+
+                def purchase(model: int, qty: int, **options: Any) -> Generator[object, None, Any]:
+                    nonlocal usable
+                    phase.append(
+                        ["buy", model, qty, options["offered_items"], options["cleanup"], options["live_target_count"]]
+                    )
+                    usable = True
+                    yield "buy"
+                    return module.ExecutionPhaseOutcome(label="buy", dispatched=1, completed=1)
+
+                widget._get_normal_salvage_kit_id = lambda: 91 if usable else 0
+                widget._execute_storage_transfers = withdraw
+                widget._open_merchant = open_merchant
+                widget._buy_merchant_model = purchase
+                plan.coords = {module.MERCHANT_TYPE_MERCHANT: (1, 1)}
+                result = finish(widget._execute_early_kit_prerequisite(plan, "normal_salvage", state, set()))
+                witness(
+                    "storage-priority",
+                    [*phase, result.acquired, result.xunlai_model_id],
+                    [["withdraw", 1, True, 2992, 1, "Early normal_salvage kit withdrawal"], True, 2992],
+                )
+                phase.clear()
+                usable = False
+                plan.storage_transfers = [unflagged, deposit, expert_transfer]
+                result = finish(widget._execute_early_kit_prerequisite(plan, "normal_salvage", state, set()))
+                witness(
+                    "merchant-fallback",
+                    [
+                        *phase,
+                        result.acquired,
+                        result.verified_merchant_purchase_count,
+                        state.purchase_budget_by_target[(7, "2992")],
+                    ],
+                    [["open", (1, 1)], ["buy", 2992, 1, [9001], None, 1], True, 1, 2],
+                )
+
+                before_transfers = [first, unflagged, expert_transfer]
+                flagged, retained = buy(model=2992), buy(model=2992)
+                flagged.check_xunlai_first = True
+                before_buys = [flagged, retained, peer]
+                plan.storage_transfers, plan.merchant_stock_buys = before_transfers, before_buys
+                widget._filter_blocked_early_kit_xunlai_actions(plan, set())
+                witness(
+                    "empty-block-identities",
+                    [plan.storage_transfers is before_transfers, plan.merchant_stock_buys is before_buys],
+                    [True, True],
+                )
+                conversion_fault = ValueError("flagged-model")
+
+                class BadModel:
+                    def __int__(self) -> int:
+                        raise conversion_fault
+
+                flagged.model_id = BadModel()
+                raises_same(
+                    "filter-fault",
+                    conversion_fault,
+                    lambda: widget._filter_blocked_early_kit_xunlai_actions(plan, {2992}),
+                )
+                witness(
+                    "partial-filter",
+                    [
+                        plan.storage_transfers is not before_transfers,
+                        len(plan.storage_transfers),
+                        plan.storage_transfers[0] is unflagged,
+                        plan.storage_transfers[1] is expert_transfer,
+                        plan.merchant_stock_buys is before_buys,
+                    ],
+                    [True, 2, True, True, True],
+                )
+                flagged.model_id = 2992
+                widget._filter_blocked_early_kit_xunlai_actions(plan, {2992})
+                witness(
+                    "filtered-buys",
+                    [
+                        plan.merchant_stock_buys is not before_buys,
+                        len(plan.merchant_stock_buys),
+                        plan.merchant_stock_buys[0] is retained,
+                        plan.merchant_stock_buys[1] is peer,
+                    ],
+                    [True, 2, True, True],
+                )
+
+            def settlement() -> None:
+                row, sibling = buy(), buy(1)
+                state = module.EarlyKitExecutionState()
+                key, sibling_key = (0, "2989"), (1, "2989")
+                widget._capture_early_kit_purchase_budgets(module.PlanResult(merchant_stock_buys=[row, sibling]), state)
+                events: list[object] = []
+                seed = (9, "seed")
+                replacement = {seed}
+
+                class QuarantineSet(set[tuple[int, str]]):
+                    def __getattribute__(self, name: str) -> Any:
+                        if name == "add":
+                            events.append("select O.add")
+                        return super().__getattribute__(name)
+
+                    def add(self, element: tuple[int, str], /) -> None:
+                        events.append(["O.add", element])
+                        super().add(element)
+
+                original = QuarantineSet()
+                state.quarantined_purchase_targets = original
+
+                def change_quarantine(cleanup: Any) -> tuple[int, str]:
+                    events.append(["key", cleanup is row.cleanup])
+                    state.quarantined_purchase_targets = replacement
+                    events.append("install N")
+                    return key
+
+                with patch.object(widget, "_early_kit_purchase_target_key", change_quarantine):
+                    widget._quarantine_early_kit_purchase_target(state, row)
+                witness(
+                    "selected-add",
+                    [
+                        *events,
+                        original == {key},
+                        state.quarantined_purchase_targets is replacement,
+                        replacement == {seed},
+                    ],
+                    ["select O.add", ["key", True], "install N", ["O.add", key], True, True, True],
+                )
+                ready_later = module.EarlyKitExecutionState()
+                widget._quarantine_early_kit_purchase_target(ready_later, row)
+                witness(
+                    "early-quarantine",
+                    [key in ready_later.quarantined_purchase_targets, key in ready_later.purchase_budget_ready],
+                    [True, False],
+                )
+                state.quarantined_purchase_targets = original
+                widget._consume_early_kit_purchase_budget(state, row, 23)
+                witness(
+                    "confirmed-depletion",
+                    [
+                        state.purchase_budget_by_target[key],
+                        state.purchase_budget_by_target[sibling_key],
+                        sibling_key in original,
+                    ],
+                    [0, 1, False],
+                )
+
+                plan = module.PlanResult(
+                    merchant_stock_buys=[row, sibling], coords={module.MERCHANT_TYPE_MERCHANT: (1, 1)}
+                )
+                widget._get_id_kit_id = lambda: 0
+
+                def open_items(_coords: object) -> Generator[object, None, list[int]]:
+                    yield "open"
+                    return [9001]
+
+                widget._open_merchant = open_items
+                for dispatched in (1, 0):
+                    fresh = module.EarlyKitExecutionState()
+                    widget._capture_early_kit_purchase_budgets(plan, fresh)
+
+                    def unverified(*_args: object, **_kwargs: object) -> Generator[object, None, Any]:
+                        yield "buy"
+                        return module.ExecutionPhaseOutcome(label="unverified", dispatched=dispatched, completed=0)
+
+                    widget._buy_merchant_model = unverified
+                    result = finish(widget._execute_early_kit_prerequisite(plan, "identification", fresh, set()))
+                    witness(
+                        f"dispatch-{dispatched}",
+                        [
+                            result.attempted,
+                            result.purchase_unverified,
+                            key in fresh.quarantined_purchase_targets,
+                            sibling_key in fresh.quarantined_purchase_targets,
+                            fresh.purchase_budget_by_target[key],
+                            fresh.purchase_budget_by_target[sibling_key],
+                            bool(fresh.deferred_cleanups),
+                        ],
+                        [True, bool(dispatched), bool(dispatched), False, 1, 1, False],
+                    )
+                for action, completed, completes, xunlai, expected in (
+                    ("reset_quantity", 1, True, False, True),
+                    ("remove_entry", 1, True, False, True),
+                    ("keep", 1, True, False, False),
+                    ("remove_entry", 0, True, False, False),
+                    ("remove_entry", 1, False, False, False),
+                    ("remove_entry", 1, True, True, False),
+                ):
+                    record = buy(action=action)
+                    record.cleanup.completes_target = completes
+                    record.cleanup.xunlai_involved = xunlai
+                    state.deferred_cleanups = dict[tuple[int, str], Any]()
+                    widget._record_early_kit_deferred_cleanup(state, record, completed)
+                    witness(
+                        f"record-{action}-{completed}-{completes}-{xunlai}",
+                        [key in state.deferred_cleanups, state.deferred_cleanups.get(key) is record.cleanup],
+                        [expected, expected],
+                    )
+
+                def missing_action(self: Any, name: str) -> Any:
+                    if name == "after_purchase":
+                        raise AttributeError(name)
+                    return object.__getattribute__(self, name)
+
+                subtype = type("MissingAction", (module.PurchaseTargetCleanup,), {"__getattribute__": missing_action})
+                record = buy()
+                record.cleanup = subtype(**vars(record.cleanup))
+                real_normalize = module._normalize_after_purchase_action
+                original_key = widget._early_kit_purchase_target_key
+
+                class Compared(str):
+                    def __eq__(self, other: object, /) -> bool:
+                        result = super().__eq__(other)
+                        events.append(["compare", str(self), other, result])
+                        return result
+
+                def changing_keep(value: str) -> str:
+                    events.append(["default", value])
+                    result = real_normalize(value)
+                    setattr(module, "AFTER_PURCHASE_KEEP", "keep")
+                    events.append(["normalize/install", result, module.AFTER_PURCHASE_KEEP])
+                    return Compared(result)
+
+                def log_key(cleanup: Any) -> Any:
+                    events.append(["key", cleanup is record.cleanup])
+                    return original_key(cleanup)
+
+                def count(model: int) -> int:
+                    events.append(["count", model])
+                    return 1
+
+                inventory = types.SimpleNamespace(GetModelCount=count)
+                cache = types.SimpleNamespace(Inventory=inventory)
+
+                def no_apply(*_args: object, **_kw: object) -> bool:
+                    raise AssertionError("clear invoked apply")
+
+                for operation, initial in (("record", "remove_entry"), ("clear", "reset_quantity")):
+                    state.deferred_cleanups = {} if operation == "record" else {key: record.cleanup}
+                    events.clear()
+                    with (
+                        patch.object(module, "AFTER_PURCHASE_KEEP", initial),
+                        patch.object(module, "_normalize_after_purchase_action", changing_keep),
+                        patch.object(module, "GLOBAL_CACHE", cache),
+                        patch.object(widget, "_early_kit_purchase_target_key", log_key),
+                        patch.object(widget, "_apply_after_purchase_cleanup", no_apply),
+                    ):
+                        if operation == "record":
+                            widget._record_early_kit_deferred_cleanup(state, record, 1)
+                            effect = state.deferred_cleanups.get(key) is record.cleanup
+                        else:
+                            widget._clear_satisfied_early_kit_cleanup(state, record, 1)
+                            effect = key not in state.deferred_cleanups
+                    expected_events: list[object] = [
+                        ["default", initial],
+                        ["normalize/install", initial, "keep"],
+                        ["compare", initial, "keep", False],
+                    ]
+                    if operation == "clear":
+                        expected_events.append(["count", 2989])
+                    witness(f"{operation}-keep", [*events, effect], [*expected_events, ["key", True], True])
+
+                first, second, third = buy(0), buy(1, model=2992), buy(2)
+                k1, k2, k3 = original_key(first.cleanup), original_key(second.cleanup), original_key(third.cleanup)
+                old_map = {k1: first.cleanup, k2: second.cleanup}
+                new_map = {**old_map, k3: third.cleanup}
+                state.deferred_cleanups = old_map
+                events.clear()
+
+                second_cleanup = second.cleanup
+
+                def observe_cleanup_field(cleanup: Any, name: str) -> Any:
+                    value = object.__getattribute__(cleanup, name)
+                    if cleanup is second_cleanup and name == "target_count":
+                        events.append(["read second target_count", value])
+                    return value
+
+                def apply_a(cleanup: Any, *, label: str) -> bool:
+                    events.append(["A", cleanup is first.cleanup, label])
+                    second.cleanup.target_count = 2
+                    events.append(["set second target_count", 2])
+                    return True
+
+                def apply_b(cleanup: Any, *, label: str) -> bool:
+                    events.append(["B", cleanup is second.cleanup, label])
+                    return True
+
+                def format_label(model: int) -> str:
+                    events.append(["label", model])
+                    widget._apply_after_purchase_cleanup = apply_b
+                    return f"label-{model}"
+
+                def select_pop(cleanup: Any) -> Any:
+                    events.append(["pop-key", cleanup.rule_index])
+                    if cleanup is first.cleanup:
+                        state.deferred_cleanups = new_map
+                    return original_key(cleanup)
+
+                def enough(model: int) -> int:
+                    events.append(["count", model])
+                    return 2
+
+                inventory.GetModelCount = enough
+                with (
+                    patch.object(module, "GLOBAL_CACHE", cache),
+                    patch.object(widget, "_apply_after_purchase_cleanup", apply_a),
+                    patch.object(widget, "_format_model_label", format_label),
+                    patch.object(widget, "_early_kit_purchase_target_key", select_pop),
+                    patch.object(type(second_cleanup), "__getattribute__", observe_cleanup_field),
+                ):
+                    widget._apply_deferred_early_kit_cleanups(state)
+                witness(
+                    "snapshot-bound-apply-and-pop",
+                    [
+                        *events,
+                        list(old_map),
+                        list(new_map),
+                        state.deferred_cleanups is new_map,
+                        second.cleanup.target_count,
+                    ],
+                    [
+                        ["count", 2989],
+                        ["label", 2989],
+                        ["A", True, "label-2989"],
+                        ["set second target_count", 2],
+                        ["pop-key", 0],
+                        ["read second target_count", 2],
+                        ["count", 2992],
+                        ["label", 2992],
+                        ["B", True, "label-2992"],
+                        ["pop-key", 1],
+                        [k2],
+                        [k1, k3],
+                        True,
+                        2,
+                    ],
+                )
+
+                class BrokenCount:
+                    def __int__(self) -> int:
+                        raise ValueError("bad-count")
+
+                class CountViews:
+                    def __init__(self, mode: str) -> None:
+                        self.mode = mode
+                        self.lookups = 0
+
+                    @property
+                    def Inventory(self) -> Any:
+                        self.lookups += 1
+                        events.append(["inventory", self.lookups])
+                        if self.lookups == 1 and self.mode == "lookup":
+                            raise RuntimeError("absent-inventory")
+                        return types.SimpleNamespace(GetModelCount=self.get_count)
+
+                    def get_count(self, model: int) -> Any:
+                        events.append(["count", model])
+                        if self.lookups == 1:
+                            return BrokenCount() if self.mode == "conversion" else 0
+                        return 2
+
+                def always_apply(cleanup: Any, *, label: str) -> bool:
+                    events.append(["apply", cleanup.rule_index, label])
+                    return True
+
+                for mode in ("lookup", "conversion", "unsatisfied"):
+                    for operation in ("apply", "clear"):
+                        state.deferred_cleanups = {k1: first.cleanup, k2: second.cleanup}
+                        views = CountViews(mode)
+                        events.clear()
+                        with (
+                            patch.object(module, "GLOBAL_CACHE", views),
+                            patch.object(widget, "_apply_after_purchase_cleanup", always_apply),
+                            patch.object(widget, "_format_model_label", str),
+                        ):
+                            if operation == "apply":
+                                widget._apply_deferred_early_kit_cleanups(state)
+                            else:
+                                widget._clear_satisfied_early_kit_cleanup(state, first, 1)
+                                widget._clear_satisfied_early_kit_cleanup(state, second, 1)
+                        prefix: list[object] = [["inventory", 1]]
+                        if mode != "lookup":
+                            prefix.append(["count", 2989])
+                        prefix.extend([["inventory", 2], ["count", 2992]])
+                        if operation == "apply":
+                            prefix.append(["apply", 1, "2992"])
+                        witness(f"{operation}-{mode}", [*events, list(state.deferred_cleanups)], [*prefix, [k1]])
+
+                for site, fault in (
+                    ("label", StopIteration("sync-label")),
+                    ("apply", RuntimeError("apply-fault")),
+                    ("key", RuntimeError("key-fault")),
+                ):
+                    state.deferred_cleanups = {k1: first.cleanup, k2: second.cleanup}
+                    events.clear()
+
+                    def label_fault(model: int) -> str:
+                        events.append(["label", model])
+                        if site == "label" and model == 2992:
+                            raise fault
+                        return str(model)
+
+                    def apply_fault(cleanup: Any, *, label: str) -> bool:
+                        events.append(["apply", cleanup.rule_index, label])
+                        if site == "apply" and cleanup is second.cleanup:
+                            raise fault
+                        return True
+
+                    def key_fault(cleanup: Any) -> Any:
+                        events.append(["key", cleanup.rule_index])
+                        if site == "key" and cleanup is second.cleanup:
+                            raise fault
+                        return original_key(cleanup)
+
+                    with (
+                        patch.object(module, "GLOBAL_CACHE", cache),
+                        patch.object(widget, "_apply_after_purchase_cleanup", apply_fault),
+                        patch.object(widget, "_format_model_label", label_fault),
+                        patch.object(widget, "_early_kit_purchase_target_key", key_fault),
+                    ):
+                        raises_same(f"sync-{site}", fault, lambda: widget._apply_deferred_early_kit_cleanups(state))
+                    ordered: list[object] = [
+                        ["count", 2989],
+                        ["label", 2989],
+                        ["apply", 0, "2989"],
+                        ["key", 0],
+                        ["count", 2992],
+                        ["label", 2992],
+                    ]
+                    if site != "label":
+                        ordered.append(["apply", 1, "2992"])
+                    if site == "key":
+                        ordered.append(["key", 1])
+                    witness(f"{site}-partial", [*events, list(state.deferred_cleanups)], [*ordered, [k2]])
+
+            if group == "capture_clamp":
+                capture_clamp()
+            elif group == "sources_filter":
+                sources_filter()
+            else:
+                settlement()
+            return observed
+
+        return common_cases()
+
+    if group == "execute_callers":
+        from contextlib import ExitStack
+        from unittest.mock import patch
+
+        def caller_lane(lane: str) -> list[object]:
+            remote = lane in ("follower", "unmet")
+            gain = lane != "unmet"
+            model = 2989 if remote else 2992
+            key = (-1 if remote else 0, str(model))
+            action = "reset_quantity" if lane == "reset" else "remove_entry"
+            qty = int(remote)
+            events: list[object] = []
+            dispatch: list[object] = []
+            settlement: list[str] = []
+            plans: list[Any] = []
+            states: list[Any] = []
+            messages: list[Any] = []
+            release: list[Any] = []
+            debits: list[object] = []
+            live_calls: list[object] = []
+            saved_handles: list[Any] = []
+            logs: list[str] = []
+            manager: Any = _CP15Manager()
+            coroutines: list[Any] = []
+            hero = types.SimpleNamespace(Following=True, Avoidance=False, Looting=True, Targeting=True, Combat=False)
+            hero_names = ("Following", "Avoidance", "Looting", "Targeting", "Combat")
+            paused = types.SimpleNamespace(enabled=True, is_paused=False)
+            in_cleanup = False
+            in_save = False
+            queue_drained = False
+            active_callbacks: list[Any] = []
+            api: Any = module
+            make_widget = cast(Callable[..., Any], _make_widget)
+            prime = cast(Callable[..., Any], _prime_initialized_widget)
+            make_item = cast(Callable[..., Any], _make_item)
+
+            def check(name: str, actual: Any, expected: Any) -> None:
+                if actual != expected:
+                    raise AssertionError(f"CP24 {lane}/{name}: expected {expected!r}, observed {actual!r}")
+                events.append([name, actual])
+
+            with ExitStack() as stack:
+
+                def bind(obj: Any, attr: str, value: Any) -> None:
+                    stack.enter_context(patch.object(obj, attr, value, create=True))
+
+                factory = api.JsonFactory
+                for field in ("_documents", "_persisted_documents", "_save_calls"):
+                    bind(factory, field, {})
+                widget = prime(api, make_widget(api, use_json_factory=True))
+                widget.gold_balance_enabled = False
+                widget.gold_balance_after_mr_trading = False
+                widget.destroy_include_protected_items = False
+                widget.destroy_instant_enabled = True
+                widget.buy_rules = []
+                widget.sell_rules = []
+                widget.destroy_rules = []
+                widget.cleanup_targets = []
+                widget.cleanup_protection_sources = []
+                widget.identify_settings = api.IdentifySettings()
+                widget.salvage_settings = api.SalvageSettings()
+                widget.preview_ready = True
+                widget.catalog_by_model_id[model] = {
+                    "model_id": model,
+                    "name": "Identification Kit" if remote else "Salvage Kit",
+                }
+                sibling = 222
+                if not remote:
+                    widget.salvage_settings = api.SalvageSettings(
+                        rules=[
+                            api.SalvageRule(enabled=True, model_ids=[700], salvage_option=api.SALVAGE_OPTION_MATERIALS)
+                        ]
+                    )
+                    widget.buy_rules = [
+                        api.BuyRule(
+                            enabled=True,
+                            kind=api.BUY_KIND_MERCHANT_STOCK,
+                            merchant_stock_targets=[
+                                api.MerchantStockTarget(
+                                    model_id=model, target_count=1, max_per_run=1, after_purchase=action
+                                ),
+                                api.MerchantStockTarget(model_id=sibling, target_count=1),
+                            ],
+                        )
+                    ]
+                prior = widget._normalize_profile_payload(widget._build_profile_payload())
+                live = widget._live_config_doc()
+                backup = widget._backup_doc()
+                live_key = live._storage_key()
+                backup_key = backup._storage_key()
+                live.set_json("", prior)
+                seed = make_item(api, item_id=722, model_id=sibling, name="Bone", quantity=1)
+                weapon = make_item(
+                    api,
+                    item_id=2001,
+                    model_id=700,
+                    name="Gold Sword",
+                    rarity="Gold",
+                    identified=True,
+                    salvageable=True,
+                    is_weapon_like=True,
+                    item_type_id=int(api.ItemType.Sword),
+                    item_type_name="Sword",
+                )
+
+                def items() -> list[Any]:
+                    rows: list[Any] = [] if remote else [seed]
+                    if not remote and qty == 0:
+                        rows.append(weapon)
+                    if qty:
+                        rows.append(
+                            make_item(
+                                api,
+                                item_id=8100,
+                                model_id=model,
+                                name=widget.catalog_by_model_id[model]["name"],
+                                quantity=qty,
+                                is_id_kit=remote,
+                                is_salvage_kit=not remote,
+                                rarity="White",
+                            )
+                        )
+                    return rows
+
+                def model_count(mid: int) -> int:
+                    if (
+                        mid == model
+                        and queue_drained
+                        and not any(isinstance(entry, list) and entry[:1] == ["verified count"] for entry in dispatch)
+                    ):
+                        dispatch.append(["verified count", qty])
+                    return qty if mid == model else int(mid == sibling)
+
+                def buy(item_id: int, price: int) -> None:
+                    def purchased() -> None:
+                        nonlocal qty
+                        dispatch.append(["callback", item_id, price, qty])
+                        qty += int(gain)
+
+                    dispatch.append(["enqueue", item_id, price, qty])
+                    manager.AddAction("ACTION", purchased)
+                    active_callbacks.append(manager.entries[-1][2])
+
+                def empty(queue: str) -> bool:
+                    nonlocal queue_drained
+                    clear = not manager.entries
+                    if queue == "ACTION" and active_callbacks and clear and not queue_drained:
+                        queue_drained = True
+                        dispatch.append(["drained", queue])
+                    return clear
+
+                def wait(_ms: int) -> Iterator[None]:
+                    yield None
+
+                def interact(x: float, y: float) -> Generator[None, None, bool]:
+                    check("merchant XY", [x, y], [1.0, 1.0])
+                    yield None
+                    return True
+
+                def options() -> list[bool]:
+                    return [bool(getattr(hero, name)) for name in hero_names]
+
+                def send(sender: str, target: str, command: Any, params: Any, extra: Any) -> int:
+                    received = [
+                        sender,
+                        target,
+                        command == api.SharedCommandType.MerchantRules,
+                        list(params),
+                        list(extra),
+                    ]
+                    messages.append(received)
+                    saved_handles.append(widget.preview_plan)
+                    check(
+                        "send flags",
+                        [widget.destroy_include_protected_items, widget.destroy_instant_enabled, options()],
+                        [True, False, [False] * 5],
+                    )
+                    return len(messages)
+
+                def resume() -> None:
+                    release.append(
+                        ["resume", paused.is_paused, widget.execution_running, widget.execute_reservation_scope_active]
+                    )
+                    paused.is_paused = False
+
+                def widget_info(_name: str) -> Any:
+                    return paused
+
+                def item_model(item_id: int) -> int:
+                    return model if item_id in (9001, 8100) else 0
+
+                def uses(item_id: int) -> int:
+                    return 10 if item_id == 8100 and qty else 0
+
+                def value(item_id: int) -> int:
+                    return 5 if item_id == 9001 else 0
+
+                def hero_options(_email: str) -> Any:
+                    return hero
+
+                def context(*, passive: bool = False) -> tuple[bool, str, dict[str, tuple[float, float]]]:
+                    return True, "Ready", {api.MERCHANT_TYPE_MERCHANT: (1.0, 1.0)}
+
+                paused.pause = lambda: setattr(paused, "is_paused", True)
+                paused.resume = resume
+                bind(
+                    api,
+                    "get_widget_handler",
+                    lambda: types.SimpleNamespace(optional_widgets_paused=False, get_widget_info=widget_info),
+                )
+                bind(manager, "IsEmpty", empty)
+                bind(api, "ActionQueueManager", lambda: manager)
+                bind(api.GLOBAL_CACHE, "Coroutines", coroutines)
+                bind(
+                    api.GLOBAL_CACHE,
+                    "Item",
+                    types.SimpleNamespace(
+                        GetModelID=item_model,
+                        Usage=types.SimpleNamespace(GetUses=uses),
+                        Properties=types.SimpleNamespace(GetValue=value),
+                    ),
+                )
+                bind(
+                    api.GLOBAL_CACHE,
+                    "Inventory",
+                    types.SimpleNamespace(
+                        GetModelCount=model_count,
+                        GetGoldOnCharacter=lambda: 100,
+                        GetGoldInStorage=lambda: 0,
+                        IsStorageOpen=lambda: False,
+                        GetFirstIDKit=lambda: 8100 if qty and remote else 0,
+                    ),
+                )
+                bind(
+                    api.GLOBAL_CACHE,
+                    "Trading",
+                    types.SimpleNamespace(Merchant=types.SimpleNamespace(GetOfferedItems=lambda: [9001], BuyItem=buy)),
+                )
+                bind(
+                    api.GLOBAL_CACHE,
+                    "ShMem",
+                    types.SimpleNamespace(GetHeroAIOptionsFromEmail=hero_options, SendMessage=send),
+                )
+                bind(api.Routines.Yield, "wait", wait)
+                bind(api.Routines.Yield.Agents, "InteractWithAgentXY", interact)
+                bind(
+                    widget,
+                    "_get_supported_context",
+                    context,
+                )
+                bind(widget, "_get_preview_here_availability", lambda: {api.MERCHANT_TYPE_MERCHANT: True})
+                bind(widget, "_collect_inventory_items", items)
+                bind(widget, "_get_inventory_item_ids", lambda: [row.item_id for row in items()])
+
+                def console(_name: str, msg: str, _level: Any) -> None:
+                    logs.append(str(msg))
+
+                bind(api, "ConsoleLog", console)
+                capture = widget._capture_early_kit_purchase_budgets
+                consume = widget._consume_early_kit_purchase_budget
+                apply = widget._apply_after_purchase_cleanup
+                save = widget._save_profile
+                build = widget._active_configuration.build_payload
+                get = factory.get_json
+                put = factory.set_json
+
+                def on_capture(plan: Any, state: Any) -> None:
+                    capture(plan, state)
+                    plans.append(plan)
+                    states.append(state)
+                    check(
+                        "ready",
+                        [key in state.purchase_budget_ready, state.purchase_budget_by_target[key]],
+                        [True, 1 if len(plans) == 1 else 0],
+                    )
+                    if len(plans) == 1:
+                        check(
+                            "planned row",
+                            [
+                                [b.model_id, b.quantity, b.cleanup.rule_index, b.cleanup.target_key]
+                                for b in plan.merchant_stock_buys
+                            ],
+                            [[model, 1, key[0], key[1]]],
+                        )
+                    else:
+                        check(
+                            "rebuild",
+                            [state is states[0], plan.has_actions, widget._get_normal_salvage_kit_id()],
+                            [True, False, 8100],
+                        )
+
+                def on_consume(state: Any, row: Any, count: int) -> None:
+                    before = state.purchase_budget_by_target[key]
+                    consume(state, row, count)
+                    debits.append(
+                        [
+                            state is states[0],
+                            row is plans[0].merchant_stock_buys[0],
+                            count,
+                            before,
+                            state.purchase_budget_by_target[key],
+                        ]
+                    )
+
+                def on_apply(cleanup: Any, *, label: str = "") -> bool:
+                    nonlocal in_cleanup
+                    if remote:
+                        return bool(apply(cleanup, label=label))
+                    check(
+                        "borrowed cleanup",
+                        [
+                            cleanup is plans[0].merchant_stock_buys[0].cleanup,
+                            cleanup is states[0].deferred_cleanups[key],
+                        ],
+                        [True, True],
+                    )
+                    in_cleanup = True
+                    try:
+                        result = apply(cleanup, label=label)
+                        settlement.append("cleanup " + str(result))
+                        return bool(result)
+                    finally:
+                        in_cleanup = False
+
+                def on_save() -> bool:
+                    nonlocal in_save
+                    in_save = True
+                    settlement.append("widget save")
+                    try:
+                        result = save()
+                        settlement.append("save " + str(result))
+                        return bool(result)
+                    finally:
+                        in_save = False
+
+                def observe_widget(method: str, event: str) -> None:
+                    original = getattr(widget, method)
+
+                    def observed(*args: Any, **kwargs: Any) -> Any:
+                        result = original(*args, **kwargs)
+                        if in_cleanup and (method != "_merchant_rules_is_generation_current" or in_save):
+                            if event == "projection":
+                                check("invalidated before projection", widget.preview_ready, False)
+                            settlement.append(event)
+                        return result
+
+                    bind(widget, method, observed)
+
+                def on_build(_session: Any) -> Any:
+                    if in_save:
+                        settlement.append("build payload")
+                        if lane == "payload":
+                            raise RuntimeError("cp24-payload")
+                    return build()
+
+                def on_get(doc: Any, path: str = "", default: Any = None) -> Any:
+                    if in_save:
+                        live_calls.append(["get", doc._storage_key(), path])
+                    return get(doc, path, default)
+
+                def on_put(doc: Any, path: str, value: Any) -> None:
+                    if in_save:
+                        doc_key = doc._storage_key()
+                        live_calls.append(["set", doc_key, path])
+                        if lane == "live" and doc_key == live_key and path == "":
+                            raise RuntimeError("cp24-live")
+                    put(doc, path, value)
+
+                bind(widget, "_capture_early_kit_purchase_budgets", on_capture)
+                bind(widget, "_consume_early_kit_purchase_budget", on_consume)
+                bind(widget, "_apply_after_purchase_cleanup", on_apply)
+                bind(widget, "_save_profile", on_save)
+                bind(type(widget._active_configuration), "build_payload", on_build)
+                bind(factory, "get_json", on_get)
+                bind(factory, "set_json", on_put)
+                observe_widget("_set_buy_rule_merchant_stock_targets", "setter")
+                observe_widget("_clear_preview_projection_state", "projection")
+                observe_widget("_clear_preview_inventory_diff", "diff")
+                observe_widget("_debug_log", "debug")
+                observe_widget("_merchant_rules_is_generation_current", "generation")
+                if remote:
+                    message = types.SimpleNamespace(
+                        SenderEmail="leader@example.com",
+                        ReceiverEmail=api.Player.GetAccountEmail(),
+                        Params=(3.0, 0.0, 0.0, 0.0),
+                        ExtraData=("cp24-r", "stock:2989:2", "1", "0"),
+                    )
+                    handle = widget.handle_shared_multibox_message(message)
+                    check("identification kit", widget._get_id_kit_id(), 8100)
+                else:
+                    widget._queue_execute_here()
+                    check("queued wrapper", len(coroutines), 1)
+                    handle = coroutines.pop()
+                check("lease after admission", widget.merchant_rules_owned_work_count, 1)
+                steps = 0
+                saw_final = False
+                for _tick in handle:
+                    steps += 1
+                    if steps > 500:
+                        raise AssertionError(f"{lane}: unexpected scheduler loop at {widget.status_message}")
+                    if manager.entries:
+                        name, _delay, callback, args, kwargs = manager.entries.pop(0)
+                        check("exact queued callback", [name, callback is active_callbacks[-1]], ["ACTION", True])
+                        callback(*args, **kwargs)
+                    if states and not widget.execution_running:
+                        check(
+                            "final yield",
+                            [
+                                widget.execute_reservation_scope_active,
+                                paused.is_paused,
+                                widget.merchant_rules_owned_work_count,
+                            ],
+                            [False, False, 1],
+                        )
+                        saw_final = True
+                check("exhausted", [saw_final, widget.merchant_rules_owned_work_count], [True, 0])
+                check(
+                    "dispatch",
+                    dispatch,
+                    [
+                        ["enqueue", 9001, 10, int(remote)],
+                        ["callback", 9001, 10, int(remote)],
+                        ["drained", "ACTION"],
+                        ["verified count", int(remote) + int(gain)],
+                    ],
+                )
+                check("debit", debits, [[True, True, int(gain), 1, 1 - int(gain)]])
+                check("resume", release, [["resume", True, False, False]])
+                if remote:
+                    check(
+                        "wire headers",
+                        [[m[0], m[1], m[2], m[4][0]] for m in messages],
+                        [[api.Player.GetAccountEmail(), "leader@example.com", True, "cp24-r"]] * 2,
+                    )
+                    check(
+                        "wire results",
+                        [messages[0][4][1], messages[1][3][0], messages[1][3][3]],
+                        ["Starting", 102 if gain else 199, int(gain)],
+                    )
+                    if not gain:
+                        check("unmet", [messages[1][4][1], "1/2" in messages[1][4][3]], ["Stock Unmet", True])
+                    check(
+                        "restored",
+                        [
+                            widget.destroy_include_protected_items,
+                            widget.destroy_instant_enabled,
+                            options(),
+                            widget.preview_ready,
+                            widget.preview_plan is saved_handles[-1],
+                            saved_handles[-1] is plans[-1],
+                            widget.preview_plan.entries,
+                            widget.last_error,
+                        ],
+                        [False, True, [True, False, True, True, False], False, False, True, [], ""],
+                    )
+                    check(
+                        "transient rules",
+                        [widget._build_profile_payload()["buy_rules"], live.get_json("", None) == prior],
+                        [[], True],
+                    )
+                    events.append(["transport", messages])
+                else:
+                    failed = lane == "payload"
+                    caught = lane == "live"
+                    prefix = ["setter", "projection", "diff", "debug", "widget save", "generation", "build payload"]
+                    check(
+                        "settlement",
+                        settlement,
+                        prefix + ([] if failed else ["save " + str(not caught), "cleanup True"]),
+                    )
+                    check(
+                        "document effects",
+                        live_calls,
+                        (
+                            []
+                            if failed
+                            else [
+                                ["get", live_key, ""],
+                                ["get", backup_key, ""],
+                                ["set", backup_key, ""],
+                                ["set", live_key, ""],
+                            ]
+                        ),
+                    )
+                    check("forced saves", factory._save_calls, {})
+                    target_pairs = [[r.model_id, r.target_count] for r in widget.buy_rules[0].merchant_stock_targets]
+                    expected_pairs = ([[model, 0]] if action == "reset_quantity" else []) + [[sibling, 1]]
+                    check("memory targets", target_pairs, expected_pairs)
+                    expected_payload = json.loads(json.dumps(prior))
+                    target_values = expected_payload["buy_rules"][0]["merchant_stock_targets"]
+                    if action == "reset_quantity":
+                        target_values[0]["target_count"] = 0
+                    else:
+                        del target_values[0]
+                    check(
+                        "saved rule and sibling values",
+                        widget._normalize_profile_payload(widget._build_profile_payload()) == expected_payload,
+                        True,
+                    )
+                    check(
+                        "live publication",
+                        live.get_json("", None) == (prior if caught or failed else expected_payload),
+                        True,
+                    )
+                    last_good = backup.get_json("last_known_good/payload", None)
+                    check("last known good", last_good == (None if failed else prior), True)
+                    check(
+                        "deferred entry",
+                        [
+                            key in states[0].deferred_cleanups,
+                            states[0].deferred_cleanups.get(key) is plans[0].merchant_stock_buys[0].cleanup,
+                        ],
+                        [failed, failed],
+                    )
+                    check(
+                        "completion",
+                        [
+                            widget.execution_completed_successfully,
+                            widget.execution_currency_changing_work_completed,
+                            widget.preview_ready,
+                            widget.last_error,
+                            widget.status_message,
+                        ],
+                        [
+                            not failed,
+                            True,
+                            False,
+                            "cp24-payload" if failed else "",
+                            (
+                                "Execution failed. See the console log for details."
+                                if failed
+                                else "Nothing to execute for the current rules and inventory state."
+                            ),
+                        ],
+                    )
+                    check(
+                        "save warning",
+                        widget.profile_warning,
+                        "Failed to save Merchant Rules live config safely: cp24-live" if caught else "",
+                    )
+                    if caught:
+                        check("caught log", f"Failed to save live config {widget.config_path}: cp24-live" in logs, True)
+                    if failed:
+                        check(
+                            "escaped log",
+                            [
+                                logs[-2],
+                                "Traceback (most recent call last)" in logs[-1],
+                                logs[-1].strip().endswith("RuntimeError: cp24-payload"),
+                            ],
+                            ["Execution error: cp24-payload", True, True],
+                        )
+            return [lane, events]
+
+        return [caller_lane(lane) for lane in ("remove", "reset", "live", "payload", "follower", "unmet")]
+
+    raise AssertionError(f"Unknown CP24 trace group {group!r}")
+
+
+def _test_cp24_kit_capture_clamp(module: types.ModuleType) -> None:
+    root = SCRIPT_DIR / "_merchant_rules_regression_tmp" / "cp24-capture_clamp"
+    root.mkdir()
+    _cp24_early_kit_trace(module, "capture_clamp", root)
+
+
+def _test_cp24_kit_sources_filter(module: types.ModuleType) -> None:
+    root = SCRIPT_DIR / "_merchant_rules_regression_tmp" / "cp24-sources_filter"
+    root.mkdir()
+    _cp24_early_kit_trace(module, "sources_filter", root)
+
+
+def _test_cp24_kit_settlement(module: types.ModuleType) -> None:
+    root = SCRIPT_DIR / "_merchant_rules_regression_tmp" / "cp24-settlement"
+    root.mkdir()
+    _cp24_early_kit_trace(module, "settlement", root)
+
+
+def _test_cp24_kit_execute_callers(module: types.ModuleType) -> None:
+    root = SCRIPT_DIR / "_merchant_rules_regression_tmp" / "cp24-execute_callers"
+    root.mkdir()
+    _cp24_early_kit_trace(module, "execute_callers", root)
 
 
 def main() -> int:
@@ -85071,6 +86813,11 @@ def main() -> int:
                 ("cp23_overlap_sell", lambda: _test_cp23_overlap_sell(module)),
                 ("cp23_overlap_destroy", lambda: _test_cp23_overlap_destroy(module)),
                 ("cp23_overlap_late_caller", lambda: _test_cp23_overlap_late_caller(module)),
+                ("cp24_kit_owner_route", lambda: _test_cp24_kit_owner_route(module)),
+                ("cp24_kit_capture_clamp", lambda: _test_cp24_kit_capture_clamp(module)),
+                ("cp24_kit_sources_filter", lambda: _test_cp24_kit_sources_filter(module)),
+                ("cp24_kit_settlement", lambda: _test_cp24_kit_settlement(module)),
+                ("cp24_kit_execute_callers", lambda: _test_cp24_kit_execute_callers(module)),
             ]
         )
         catalog_contract_tests = [
